@@ -127,7 +127,7 @@ No new workspace crate is expected. Existing Connections, Access, Context, Exper
 
 | Checkpoint | Responsibility | Status |
 |---|---|---|
-| 00 | [Baseline, executable regressions and contract freeze](00-baseline-and-contract-freeze.md) | Not started |
+| 00 | [Baseline, executable regressions and contract freeze](00-baseline-and-contract-freeze.md) | Complete |
 | 01 | [Connection-owned source/resource authority](01-connection-resource-authority.md) | Not started |
 | 02 | [Stable grant source and dependency semantics](02-grant-and-dependency-cutover.md) | Not started |
 | 03 | [Native Calendar vertical cutover](03-native-calendar-vertical.md) | Not started |

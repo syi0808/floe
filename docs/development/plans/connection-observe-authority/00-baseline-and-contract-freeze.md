@@ -2,7 +2,7 @@
 
 Prerequisite: none.
 
-Status: Not started.
+Status: Complete.
 
 Planning base: main at eb55389dc66ce30ad9693f739569dc1b58f2b2f3 on 2026-09-28.
 
@@ -454,6 +454,56 @@ docs: complete connection observe checkpoint 00
 ~~~
 
 Stop after 00. Do not begin checkpoint 01 in the same execution.
+
+## Checkpoint 00 execution evidence
+
+Executed 2026-09-28 on macOS arm64. Start local HEAD and `origin/main` were both `51441b8f9c7900be4217f95280c0c0bc5f848c7e` after `git fetch origin`; `main` tracked `origin/main`, and `git status --short --branch` showed a clean worktree. `git log -1 --oneline` was `51441b8f docs: detail connection observe checkpoint 00`. The planning base `eb55389dc66ce30ad9693f739569dc1b58f2b2f3` is an ancestor. Actual symbols were re-resolved on the start HEAD; the listed owner paths and semantics had not drifted from the planning-base anchors.
+
+Toolchain: `rustc 1.93.1`, `cargo 1.93.1`, Flutter `3.47.2` stable / Dart `3.13.2`, Go `1.25.5 darwin/arm64`, Xcode `26.2` build `17C52`; `uname -a` reported Darwin `25.5.0` / `RELEASE_ARM64_T6020`, and `uname -m` reported `arm64`. `cargo metadata --no-deps --format-version 1` succeeded. Initial `python3 tools/architecture/check_boundaries.py` returned zero errors and zero warnings.
+
+### Executable results
+
+| Command | Actual result |
+|---|---|
+| `git show --stat --oneline eb55389dc66ce30ad9693f739569dc1b58f2b2f3`; `git show --format=fuller --no-ext-diff eb55389dc66ce30ad9693f739569dc1b58f2b2f3` | Passed; inspected the 25-file fixed-count removal and regression additions. |
+| `cargo test -p floe-context --test native_calendar_read native_admission_preserves_more_than_128_selected_calendars` | Passed, 1 test. |
+| `cargo test -p floe-context --test calendar_timeline timeline_grant_accepts_more_than_four_exact_calendars` | Passed, 1 test. |
+| `cargo test -p floe-context-contract grant_scope_accepts_more_than_128_distinct_resources_within_byte_budget` | Passed, 1 test. |
+| `cargo test -p floe-protocol --test local_owner_wire calendar_access_kinds_roundtrip_and_reject_stale_shapes` | Passed, 1 test; the targeted test includes 129-ID preview/review wire assertions. |
+| `flutter test test/features/connections/native_calendar_access_test.dart` | Passed, 5 tests, including 11-ID preview. |
+| `flutter test test/features/connections/connector_screen_test.dart` | Passed, 13 tests, including 11-ID Device Calendar review UI. |
+| `rg -n 'MAX_ACQUISITION_CALENDARS\|MAX_RESOURCE_HANDLES\|calendar_ids\.len\(\) > 4\|calendarIds\.length > 4\|calendarIDs\.count <= 4\|availableCalendarIDs\.count <= 128' crates apps/client` | No matches (expected `rg` exit 1); no live fixed-count selection guard found in Rust, wire, Flutter or Apple paths. Remaining identifier, byte, item and provider budgets are not count-cap regressions. |
+| `RUST_BACKTRACE=1 cargo test -p floe-app native_calendar_observe_accepts_connection_with_eleven_resources -- --nocapture` | Expected red diagnostic: 1 failed, `Err(InvalidInput)`; temporary test removed afterward. |
+| `cargo test -p floe-context calendar_addition_produces_a_new_candidate_without_changing_the_old_reference` | Passed, 1 matching test (other targets had zero matches). |
+| `cargo test -p floe-app native_calendar_access` | Passed, 11 matching tests. |
+| `cargo test -p floe-app first_party_observe` | Passed, 8 matching tests. |
+| `cargo test -p floe-context source_candidates` | Passed, 4 matching tests. |
+| `cargo test -p floe-context --test native_calendar_read` | Passed, 12 tests. |
+| `cargo test -p floe-context --test calendar_timeline` | Passed, 22 tests. |
+| `cargo test -p floe-vault calendar_grant` | Passed, 28 matching tests. |
+| `cargo test -p floe-protocol --test local_owner_wire` | Passed, 6 tests. |
+
+The temporary diagnostic used the existing `Fixture::new()` and `FloeCore::set_calendar_scope` to set revision 2 with `home` plus `calendar-1` through `calendar-10`, kept Expert bindings on `home`, re-inspected the current SourceAuthority, and used `FixtureSubject`'s deterministic 64-character fingerprint through the real preview. Direct policy probes returned `home` consumers `floe.builtin.commitments`, `floe.builtin.focus-attention`, `floe.builtin.schedule`, `floe.builtin.wellbeing`; `calendar-1` returned `[]`; the eleven-ID target returned `[]`. `Fixture::review` then returned `Err(InvalidInput)`. The source-level owner chain is `CalendarAccessChange::Review` → `apply_calendar_access` → `native_calendar_policy_for_target` → per-resource `selected_shipped_consumers` intersection → `review_native_calendar_grant` → `calendar_binding` → `GrantScope::try_new`: the last rejects empty consumers as `MissingScope`, and Vault maps that validation failure to `AgentFailure::InvalidInput`. The diagnostic result is consistent with this path; no production path was altered.
+
+`discover_source_candidates` still loops over `CalendarConnection.calendars` for `calendar.timeline`. Its passing test proves `[A]` emits one candidate with resource `A`, while `[A,B]` emits two: the `A` candidate remains equal and `B` has a distinct `candidate_id`. Checkpoint 03 must instead assert one `calendar.timeline:<connection>` candidate whose identity and Expert binding revision remain unchanged by leaf additions.
+
+### Contract freeze and disposition
+
+No contradiction with the target contracts or `docs/architecture/authority-recovery.md` was found. Current `GrantSourceBinding` still stores `SourceAuthority`, and constructors/source-authority access span Access, Context, Vault, App, providers and runtime/provenance fixtures; checkpoint 02 must remove that field and migrate the callers rather than wrap it. Current `ContextDependency` still carries `ConsumerPolicyAuthority` and lacks separate exact observed `source_resources`; checkpoints 02/05 must split logical grant resources from current source authority/resources while retaining exact-recipient provenance. Day's `CalendarConnection` still owns calendars, revision and SourceAuthority; checkpoint 01 moves standing source authority to Connections. `policy_fingerprint` is compare-only review identity but native Calendar target calculation still derives consumers from leaf selection; the final digest excludes leaf and assignment selection and never grants authority. Trusted shipped manifests/capabilities may contribute first-party consumers; arbitrary extensions cannot, and `assistant` is not a Calendar fallback. Existing generic `remote_view_resource(view_id, connection_id)` demonstrates the logical View contract, while Calendar-specific remote grant paths remain for checkpoint 04. Access exact-recipient consent, Context provenance, Act authority and uncertain-write recovery remain separate.
+
+Additional dispositions beyond the baseline table:
+
+| Current surface | Disposition | Owner |
+|---|---|---|
+| `crates/app/src/vault_host/review_snapshot.rs` native Calendar per-leaf review members and target-derived fingerprint | REWRITE to logical View review digest/member | 03 / 05 |
+| `crates/app/src/vault_host/interaction_owners.rs` live Calendar target/inline per-leaf fingerprint refresh | REWRITE to logical View policy comparison | 03 / 05 |
+| `crates/contracts/context/src/processing.rs` reviewed processing source scope deriving source authority from `GrantSourceBinding` | REWRITE to explicit current SourceAuthority and exact observed source resources; RETAIN exact-recipient restriction | 02 / 05 |
+| `crates/adapters/vault/src/vault/access_grants.rs` source-epoch columns and source-bound grant lookup/update | REWRITE around stable source identity and standing GrantAuthority; DELETE source-epoch-as-grant-identity semantics | 02 |
+| `crates/app/src/vault_host/remote_observe.rs` target policy fingerprint/member review composition | REWRITE to canonical logical View digest in remote cutover; RETAIN compare-only review drift check | 04 / 05 |
+
+The temporary `native_calendar_observe_accepts_connection_with_eleven_resources` hunk was removed after evidence capture. `git diff --exit-code -- crates/app/src/vault_host/tests/native_calendar_access.rs` passed; no temporary red test, diagnostic assertion, helper or production patch remains. The final worktree/close-gate results and completion commit SHA are reported at handoff after committing this self-describing evidence (a commit cannot contain its own SHA). Checkpoint 01 remains Not started.
+
+Immediately before the completion commit, `git status --short --branch` showed only this file and the parent plan README modified. The close gate `python3 tools/architecture/check_boundaries.py` passed with zero errors/warnings; `git diff --check` passed. The post-commit worktree and exact commit SHA are captured in the execution handoff.
 
 ## Required agent report
 
