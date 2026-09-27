@@ -1600,6 +1600,36 @@ mod capture_tests {
         }
     }
 
+    fn duplicate_calendar_runner<'turn, 'model, 'msg, 'call>(
+        host: &'call DelegatedMessageExperts<'turn, 'model, 'msg>,
+        request: &'call BuiltinExpertRequest,
+    ) -> BoxFuture<'call, Result<BuiltinExpertOutput, AgentFailure>> {
+        Box::pin(async move {
+            for (key, expected) in [("calendar_a", "calendar-a"), ("calendar_b", "calendar-b")] {
+                let outcome = host
+                    .read_requirement(
+                        request,
+                        key,
+                        serde_json::to_value(request.nearby_calendar_query()?)
+                            .map_err(|_| AgentFailure::InvalidInput)?,
+                    )
+                    .await?;
+                let floe_experts::RequirementReadOutcome::Ready(read) = outcome else {
+                    return Err(AgentFailure::StaleContext);
+                };
+                if read.payload()[0]["source_handle"] != format!("calendar:{expected}") {
+                    return Err(AgentFailure::StaleContext);
+                }
+            }
+            BuiltinExpertOutput::from_result(
+                "duplicate-calendar",
+                "application/vnd.example.result+json",
+                "exact selected calendars".into(),
+                &serde_json::json!({"keys": ["calendar_a", "calendar_b"]}),
+            )
+        })
+    }
+
     #[tokio::test]
     async fn product_host_keeps_duplicate_calendar_keys_and_dependencies_distinct() {
         let mut manifest = floe_experts_builtin::manifests()
@@ -1724,29 +1754,14 @@ mod capture_tests {
             deadline: scope.deadline(),
             cancellation: floe_execution::Cancellation::default(),
         };
-        for (key, expected) in [("calendar_a", "calendar-a"), ("calendar_b", "calendar-b")] {
-            let outcome = BuiltinExpertHost::read_requirement(
-                &host,
-                &request,
-                key,
-                serde_json::to_value(request.nearby_calendar_query().unwrap()).unwrap(),
-            )
+        BoundExpertRunner::Supplied(duplicate_calendar_runner)
+            .run(&host, &request)
             .await
             .unwrap();
-            let floe_experts::RequirementReadOutcome::Ready(read) = outcome else {
-                panic!("expected ready selected Calendar read")
-            };
-            assert_eq!(
-                read.payload()[0]["source_handle"],
-                format!("calendar:{expected}")
-            );
-            let dependencies = captured.lock().unwrap();
-            assert_eq!(
-                dependencies.last().unwrap().resources()[0].as_str(),
-                expected
-            );
-        }
-        assert_eq!(captured.lock().unwrap().len(), 2);
+        let dependencies = captured.lock().unwrap();
+        assert_eq!(dependencies.len(), 2);
+        assert_eq!(dependencies[0].resources()[0].as_str(), "calendar-a");
+        assert_eq!(dependencies[1].resources()[0].as_str(), "calendar-b");
     }
 
     struct ReadyAttention;
