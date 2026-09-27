@@ -250,7 +250,7 @@ The tracked product-boundary fixture is:
 Run:
 
 \`\`\`sh
-cargo test -p floe-app schedule_settlement_binds_evidence_to_the_exact_grant_policy_dependency --lib -- --test-threads=1
+cargo test -p floe-app --lib schedule_settlement_binds_evidence_to_the_exact_grant_policy_dependency -- --test-threads=1
 cd apps/client
 flutter test test/features/conversation/agent_delegation_fixture_test.dart
 cd ../..
@@ -289,19 +289,19 @@ cargo test -p floe-context work_view_ignores_unrelated_mail_grants -- --nocaptur
 cargo test -p floe-context selected_a_ignores_unselected_b_even_if_b_is_blocked -- --nocapture
 cargo test -p floe-context selected_missing_a_does_not_adopt_live_b -- --nocapture
 cargo test -p floe-context admitted_sources_keep_their_own_bindings -- --nocapture
-cargo test -p floe-context selected_native_calendar_subset_survives_read_and_reauthorization --test native_calendar_read -- --nocapture
+cargo test -p floe-context --test native_calendar_read selected_native_calendar_subset_survives_read_and_reauthorization -- --nocapture
 \`\`\`
 
 App:
 
 \`\`\`sh
-cargo test -p floe-app manager_mail_read_requires_assistant_in_reviewed_product_policy --lib -- --test-threads=1
-cargo test -p floe-app registered_runner_nonbuiltin_extension_chain_reads_only_its_exact_selection --lib -- --test-threads=1
-cargo test -p floe-app registered_runner_extension_cannot_read_another_experts_selection --lib -- --test-threads=1
-cargo test -p floe-app registered_runner_builtin_prefix_does_not_grant_first_party_observe --lib -- --test-threads=1
-cargo test -p floe-app registered_runner_extension_does_not_change_first_party_observe_policy --lib -- --test-threads=1
-cargo test -p floe-app hosted_calendar_settings_use_product_connection_and_pinned_producer --lib -- --test-threads=1
-cargo test -p floe-app expert_settings_resolve_only_current_candidate_ids_and_rejoin_exact_save --lib -- --test-threads=1
+cargo test -p floe-app --lib manager_mail_read_requires_assistant_in_reviewed_product_policy -- --test-threads=1
+cargo test -p floe-app --lib registered_runner_nonbuiltin_extension_chain_reads_only_its_exact_selection -- --test-threads=1
+cargo test -p floe-app --lib registered_runner_extension_cannot_read_another_experts_selection -- --test-threads=1
+cargo test -p floe-app --lib registered_runner_builtin_prefix_does_not_grant_first_party_observe -- --test-threads=1
+cargo test -p floe-app --lib registered_runner_extension_does_not_change_first_party_observe_policy -- --test-threads=1
+cargo test -p floe-app --lib hosted_calendar_settings_use_product_connection_and_pinned_producer -- --test-threads=1
+cargo test -p floe-app --lib expert_settings_resolve_only_current_candidate_ids_and_rejoin_exact_save -- --test-threads=1
 \`\`\`
 
 Acceptance:
@@ -321,12 +321,12 @@ Run:
 \`\`\`sh
 cargo test -p floe-inference execution_fence_rejects_handoff_without_transport_or_fallback -- --nocapture
 
-cargo test -p floe-app read_a_then_rebind_b_fences_expert_model_dispatch --lib -- --test-threads=1
-cargo test -p floe-app rebound_selection_discards_runner_result_before_final_release --lib -- --test-threads=1
-cargo test -p floe-app completed_task_replays_historical_result_after_rebinding_and_disable --lib -- --test-threads=1
-cargo test -p floe-app binding_operation_rejoins_exactly_and_stale_task_admission_never_reroutes --lib -- --test-threads=1
-cargo test -p floe-app stateless_completed_cas_rejects_rebound_selection_but_records_failure --lib -- --test-threads=1
-cargo test -p floe-app settlement_rolls_back_registry_and_task_on_failure_and_stale_cas --lib -- --test-threads=1
+cargo test -p floe-app --lib read_a_then_rebind_b_fences_expert_model_dispatch -- --test-threads=1
+cargo test -p floe-app --lib rebound_selection_discards_runner_result_before_final_release -- --test-threads=1
+cargo test -p floe-app --lib completed_task_replays_historical_result_after_rebinding_and_disable -- --test-threads=1
+cargo test -p floe-app --lib binding_operation_rejoins_exactly_and_stale_task_admission_never_reroutes -- --test-threads=1
+cargo test -p floe-app --lib stateless_completed_cas_rejects_rebound_selection_but_records_failure -- --test-threads=1
+cargo test -p floe-app --lib settlement_rolls_back_registry_and_task_on_failure_and_stale_cas -- --test-threads=1
 \`\`\`
 
 Acceptance:
@@ -343,11 +343,11 @@ Acceptance:
 Run:
 
 \`\`\`sh
-cargo test -p floe-app superseded_expert_selection_cannot_enable_reviewed_source --lib -- --test-threads=1
-cargo test -p floe-app gmail_views_allow_enables_bundle_atomically_and_resolves --lib -- --test-threads=1
-cargo test -p floe-app gmail_commit_then_crash_reopens_and_resolves_without_second_mutation --lib -- --test-threads=1
-cargo test -p floe-app nonbuiltin_model_consent_resolves_into_fresh_linked_task --lib -- --test-threads=1
-cargo test -p floe-app revoked_consent_blocks_child_fresh_without_stale_release --lib -- --test-threads=1
+cargo test -p floe-app --lib superseded_expert_selection_cannot_enable_reviewed_source -- --test-threads=1
+cargo test -p floe-app --lib gmail_views_allow_enables_bundle_atomically_and_resolves -- --test-threads=1
+cargo test -p floe-app --lib gmail_commit_then_crash_reopens_and_resolves_without_second_mutation -- --test-threads=1
+cargo test -p floe-app --lib nonbuiltin_model_consent_resolves_into_fresh_linked_task -- --test-threads=1
+cargo test -p floe-app --lib revoked_consent_blocks_child_fresh_without_stale_release -- --test-threads=1
 cargo test -p floe-conversation linked_resume_runs_original_intent_with_marker_and_no_user_restatement -- --nocapture
 cargo test -p floe-vault resume_slot_survives_vault_reopen_and_rejoins -- --nocapture
 \`\`\`
@@ -369,18 +369,18 @@ Acceptance:
 Run:
 
 \`\`\`sh
-cargo test -p floe-app schedule_settlement_binds_evidence_to_the_exact_grant_policy_dependency --lib -- --test-threads=1
-cargo test -p floe-app proposal_publication_rejects_forged_and_ambiguous_artifacts --lib -- --test-threads=1
-cargo test -p floe-app governed_action_owner_approval_dispatch_and_recovery_are_durable --lib -- --test-threads=1
-cargo test -p floe-app rebinding_after_proposal_fences_new_dispatch_without_erasing_intent --lib -- --test-threads=1
-cargo test -p floe-app cancellation_after_publication_reports_uncertainty_without_replacing_the_intent --lib -- --test-threads=1
-cargo test -p floe-app old_calendar_receipt_cannot_be_published_against_a_new_connection_revision --lib -- --test-threads=1
+cargo test -p floe-app --lib schedule_settlement_binds_evidence_to_the_exact_grant_policy_dependency -- --test-threads=1
+cargo test -p floe-app --lib proposal_publication_rejects_forged_and_ambiguous_artifacts -- --test-threads=1
+cargo test -p floe-app --lib governed_action_owner_approval_dispatch_and_recovery_are_durable -- --test-threads=1
+cargo test -p floe-app --lib rebinding_after_proposal_fences_new_dispatch_without_erasing_intent -- --test-threads=1
+cargo test -p floe-app --lib cancellation_after_publication_reports_uncertainty_without_replacing_the_intent -- --test-threads=1
+cargo test -p floe-app --lib old_calendar_receipt_cannot_be_published_against_a_new_connection_revision -- --test-threads=1
 \`\`\`
 
 Also run the Tier-B native response-loss test named by \`tools/s3-validation/README.md\`:
 
 \`\`\`sh
-cargo test -p floe-app native_executor_uses_rust_ledger_and_lookup_only_after_response_loss --lib -- --test-threads=1
+cargo test -p floe-app --lib native_executor_uses_rust_ledger_and_lookup_only_after_response_loss -- --test-threads=1
 \`\`\`
 
 Acceptance:
