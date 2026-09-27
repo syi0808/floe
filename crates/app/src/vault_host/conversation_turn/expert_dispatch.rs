@@ -60,6 +60,35 @@ struct BindingFencedInferenceExecutor<'a, Keys: VaultKeyProvider> {
     selection: &'a floe_experts::ExpertExecutionSelection,
 }
 
+struct CurrentBindingExecutionFence<Keys: VaultKeyProvider> {
+    vault: Arc<EncryptedAgentVault<Keys>>,
+    admission: floe_experts::ExpertAdmissionIdentity,
+    selection: floe_experts::ExpertExecutionSelection,
+}
+
+async fn validate_current_binding<Keys: VaultKeyProvider>(
+    vault: &EncryptedAgentVault<Keys>,
+    admission: &floe_experts::ExpertAdmissionIdentity,
+    selection: &floe_experts::ExpertExecutionSelection,
+) -> Result<(), AgentFailure> {
+    let registry = vault
+        .expert_registry()
+        .await?
+        .ok_or(AgentFailure::NotFound)?;
+    floe_experts::AgentRegistry::restore(registry, vault.registry_instance_id())?
+        .validate_current_execution_selection(vault.person_id(), admission, selection, true)
+}
+
+impl<Keys: VaultKeyProvider> floe_inference::InferenceExecutionFence
+    for CurrentBindingExecutionFence<Keys>
+{
+    fn validate<'a>(&'a self) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move {
+            validate_current_binding(&self.vault, &self.admission, &self.selection).await
+        })
+    }
+}
+
 pub(super) trait ExpertBindingFence: Send + Sync {
     fn validate<'a>(&'a self) -> BoxFuture<'a, Result<(), AgentFailure>>;
 }
@@ -72,18 +101,7 @@ impl<Keys: VaultKeyProvider> ExpertBindingFence for BindingFencedInferenceExecut
 
 impl<Keys: VaultKeyProvider> BindingFencedInferenceExecutor<'_, Keys> {
     async fn validate_current(&self) -> Result<(), AgentFailure> {
-        let registry = self
-            .vault
-            .expert_registry()
-            .await?
-            .ok_or(AgentFailure::NotFound)?;
-        floe_experts::AgentRegistry::restore(registry, self.vault.registry_instance_id())?
-            .validate_current_execution_selection(
-                self.vault.person_id(),
-                self.admission,
-                self.selection,
-                true,
-            )
+        validate_current_binding(self.vault, self.admission, self.selection).await
     }
 }
 
@@ -373,7 +391,12 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                     .map(|resolver| resolver as &dyn floe_access::DependencyResolver),
                 calendar: Some(&calendar_resolver),
             };
-            let service = floe_inference::InferenceService::new(provider, resolver, authority);
+            let service = floe_inference::InferenceService::new(provider, resolver, authority)
+                .with_execution_fence(Arc::new(CurrentBindingExecutionFence {
+                    vault: Arc::clone(&self.vault),
+                    admission: self.admission.clone(),
+                    selection: self.selection.clone(),
+                }));
             let attention_reader = PersonalAttentionReader {
                 vault: &self.vault,
                 local_context: &self.local_context,
