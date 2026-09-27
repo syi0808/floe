@@ -728,15 +728,15 @@ Report:
 9. E1 temporary package diff, commands/results and proof of zero common-production changes;
 10. proof the E1 fake package is absent from final HEAD;
 11. E2 non-builtin registration/binding/read/interaction/linked-resume evidence;
-11. proof non-builtin package does not enter first-party Observe policy;
-12. generic result/action artifact evidence;
-13. source-semantic checker rules and negative fixture results;
-14. residual-search classifications and any retained matches with owner/reason;
-15. exact targeted/broad/Flutter/Go commands and results;
-16. ignored/not-run platform/provider tests;
-17. serial-versus-parallel qualification;
-18. proposal-card golden byte comparison;
-19. architecture/docs/status changes;
-20. final local HEAD and clean/dirty worktree;
-21. whether anything was pushed;
-22. checkpoint 06 still Not started.
+12. proof non-builtin package does not enter first-party Observe policy;
+13. generic result/action artifact evidence;
+14. source-semantic checker rules and negative fixture results;
+15. residual-search classifications and any retained matches with owner/reason;
+16. exact targeted/broad/Flutter/Go commands and results;
+17. ignored/not-run platform/provider tests;
+18. serial-versus-parallel qualification;
+19. proposal-card golden byte comparison;
+20. architecture/docs/status changes;
+21. final local HEAD and clean/dirty worktree;
+22. whether anything was pushed;
+23. checkpoint 06 still Not started.
