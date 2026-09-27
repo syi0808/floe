@@ -13,14 +13,24 @@ struct CurrentCandidates {
     definition_revision: u64,
 }
 
-async fn current_candidates<Keys: floe_vault::VaultKeyProvider>(
+struct BindingContext {
+    assignment_id: Uuid,
+    requirement_key: String,
+    capability: String,
+    contract_version: u32,
+    selected: Vec<floe_context_contract::SourceSelectionReference>,
+    binding_revision: u64,
+    package: PackageRef,
+    definition_revision: u64,
+}
+
+async fn binding_context<Keys: floe_vault::VaultKeyProvider>(
     open: &OpenVault<Keys>,
     person_id: PersonId,
     device_id: &str,
     assignment_id: Uuid,
     requirement_key: &str,
-    cancellation: &floe_execution::Cancellation,
-) -> Result<CurrentCandidates, AgentFailure> {
+) -> Result<BindingContext, AgentFailure> {
     if person_id != open.vault.person_id()
         || device_id.is_empty()
         || assignment_id.is_nil()
@@ -69,7 +79,63 @@ async fn current_candidates<Keys: floe_vault::VaultKeyProvider>(
         .iter()
         .find(|entry| entry.requirement_key == requirement_key)
         .ok_or(AgentFailure::NotFound)?;
-    let calendar_connection = if requirement.capability == "calendar.timeline" {
+    Ok(BindingContext {
+        assignment_id,
+        requirement_key: requirement_key.into(),
+        capability: requirement.capability.clone(),
+        contract_version: requirement.contract_version,
+        selected: binding.selected.clone(),
+        binding_revision: assignment.binding.revision,
+        package: installation.package.clone(),
+        definition_revision: manifest.definition.definition_revision,
+    })
+}
+
+fn candidate_catalog(
+    context: &BindingContext,
+    live: &[floe_context::SourceCandidate],
+) -> Result<crate::ExpertCandidateCatalog, AgentFailure> {
+    let mut candidates = live
+        .iter()
+        .map(|candidate| crate::ExpertSourceCandidateView {
+            candidate_id: candidate.candidate_id.clone(),
+            title: candidate.title.clone(),
+            detail: candidate.detail.clone(),
+            availability: "available".into(),
+            selected: context.selected.contains(&candidate.reference),
+        })
+        .collect::<Vec<_>>();
+    for selected in &context.selected {
+        if live
+            .iter()
+            .any(|candidate| candidate.reference == *selected)
+        {
+            continue;
+        }
+        candidates.push(crate::ExpertSourceCandidateView {
+            candidate_id: floe_context::source_candidate_id(selected)?,
+            title: "Saved source".into(),
+            detail: "Unavailable; choose another source or remove it".into(),
+            availability: "unavailable".into(),
+            selected: true,
+        });
+    }
+    Ok(crate::ExpertCandidateCatalog {
+        assignment_id: context.assignment_id,
+        requirement_key: context.requirement_key.clone(),
+        binding_revision: context.binding_revision,
+        candidates,
+    })
+}
+
+async fn discover_live_candidates<Keys: floe_vault::VaultKeyProvider>(
+    open: &OpenVault<Keys>,
+    person_id: PersonId,
+    device_id: &str,
+    context: &BindingContext,
+    cancellation: &floe_execution::Cancellation,
+) -> Result<Vec<floe_context::SourceCandidate>, AgentFailure> {
+    let calendar_connection = if context.capability == "calendar.timeline" {
         open.core
             .calendar_connection(person_id)
             .await
@@ -78,7 +144,7 @@ async fn current_candidates<Keys: floe_vault::VaultKeyProvider>(
         None
     };
     let remote = if matches!(
-        requirement.capability.as_str(),
+        context.capability.as_str(),
         "mail.communication" | "work.context" | "life.logistics"
     ) {
         if let Some(client) =
@@ -104,50 +170,66 @@ async fn current_candidates<Keys: floe_vault::VaultKeyProvider>(
     } else {
         (Vec::new(), None)
     };
-    let live = floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+    let remote_execution_owner = if context.capability == "calendar.timeline"
+        && calendar_connection.as_ref().is_some_and(|connection| {
+            floe_context::current_calendar_connector(connection)
+                .is_some_and(|connector| connector != "calendar.event_kit")
+        }) {
+        floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
+            &open.connections,
+            &person_id.to_string(),
+            device_id,
+        )?
+        .ok_or(AgentFailure::CapabilityUnavailable)?;
+        Some(open.vault.remote_pinned_producer().await?.execution_owner)
+    } else {
+        remote.1
+    };
+    floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
         person_id,
         device_id,
-        capability: &requirement.capability,
-        contract_version: requirement.contract_version,
+        capability: &context.capability,
+        contract_version: context.contract_version,
         remote_connections: &remote.0,
-        remote_execution_owner: remote.1.as_deref(),
+        remote_execution_owner: remote_execution_owner.as_deref(),
         calendar_connection: calendar_connection.as_ref(),
-    })?;
-    let mut candidates = live
-        .iter()
-        .map(|candidate| crate::ExpertSourceCandidateView {
-            candidate_id: candidate.candidate_id.clone(),
-            title: candidate.title.clone(),
-            detail: candidate.detail.clone(),
-            availability: "available".into(),
-            selected: binding.selected.contains(&candidate.reference),
-        })
-        .collect::<Vec<_>>();
-    for selected in &binding.selected {
-        if live
-            .iter()
-            .any(|candidate| candidate.reference == *selected)
-        {
-            continue;
-        }
-        candidates.push(crate::ExpertSourceCandidateView {
-            candidate_id: floe_context::source_candidate_id(selected)?,
-            title: "Saved source".into(),
-            detail: "Unavailable; choose another source or remove it".into(),
-            availability: "unavailable".into(),
-            selected: true,
-        });
-    }
+    })
+}
+
+async fn current_candidates<Keys: floe_vault::VaultKeyProvider>(
+    open: &OpenVault<Keys>,
+    person_id: PersonId,
+    device_id: &str,
+    assignment_id: Uuid,
+    requirement_key: &str,
+    cancellation: &floe_execution::Cancellation,
+) -> Result<CurrentCandidates, AgentFailure> {
+    let context =
+        binding_context(open, person_id, device_id, assignment_id, requirement_key).await?;
+    let live =
+        match discover_live_candidates(open, person_id, device_id, &context, cancellation).await {
+            Ok(live) => live,
+            Err(failure)
+                if !context.selected.is_empty()
+                    && matches!(
+                        failure,
+                        AgentFailure::CapabilityUnavailable
+                            | AgentFailure::StorageUnavailable
+                            | AgentFailure::VaultUnavailable
+                            | AgentFailure::ServerModelUnavailable
+                            | AgentFailure::ServerModelTimeout
+                            | AgentFailure::DeadlineExceeded
+                    ) =>
+            {
+                Vec::new()
+            }
+            Err(failure) => return Err(failure),
+        };
     Ok(CurrentCandidates {
-        catalog: crate::ExpertCandidateCatalog {
-            assignment_id,
-            requirement_key: requirement_key.into(),
-            binding_revision: assignment.binding.revision,
-            candidates,
-        },
+        catalog: candidate_catalog(&context, &live)?,
         live,
-        package: installation.package.clone(),
-        definition_revision: manifest.definition.definition_revision,
+        package: context.package,
+        definition_revision: context.definition_revision,
     })
 }
 
@@ -297,6 +379,21 @@ pub(super) async fn replace<Keys: floe_vault::VaultKeyProvider + 'static>(
     {
         return Err(AgentFailure::InvalidInput);
     }
+    let context = binding_context(
+        open,
+        person_id,
+        device_id,
+        change.assignment_id,
+        &change.requirement_key,
+    )
+    .await?;
+    if context.package.id != change.package_id
+        || context.package.version != change.package_version
+        || context.package.kind != PackageKind::Expert
+        || context.definition_revision != change.definition_revision
+    {
+        return Err(AgentFailure::Conflict);
+    }
     if let Some(snapshot) = open.vault.expert_registry().await?
         && let Some(assignment) = snapshot
             .assignments
@@ -345,6 +442,9 @@ pub(super) async fn replace<Keys: floe_vault::VaultKeyProvider + 'static>(
                 },
             )
             .await?;
+        if requested.is_empty() {
+            return candidate_catalog(&context, &[]);
+        }
         return Ok(current_candidates(
             open,
             person_id,
@@ -355,6 +455,31 @@ pub(super) async fn replace<Keys: floe_vault::VaultKeyProvider + 'static>(
         )
         .await?
         .catalog);
+    }
+    if change.candidate_ids.is_empty() {
+        open.vault
+            .replace_expert_binding(
+                operation_id,
+                floe_experts::ExpertBindingCommand {
+                    assignment_id: change.assignment_id,
+                    package: context.package,
+                    definition_revision: change.definition_revision,
+                    requirement_key: change.requirement_key.clone(),
+                    expected_binding_revision: change.expected_binding_revision,
+                    selected: Vec::new(),
+                },
+            )
+            .await?;
+        open.publish_expert_directory(&open.registrations).await?;
+        let updated = binding_context(
+            open,
+            person_id,
+            device_id,
+            change.assignment_id,
+            &change.requirement_key,
+        )
+        .await?;
+        return candidate_catalog(&updated, &[]);
     }
     let current = current_candidates(
         open,

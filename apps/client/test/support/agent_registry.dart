@@ -54,6 +54,7 @@ final class TestRegistryGateway extends TestVaultGateway
   Map<String, dynamic>? snapshot = registryFixture();
   Completer<void>? registryGate;
   String? registryError;
+  String? candidateError;
   int reads = 0;
   int changes = 0;
   final candidateId = 'a' * 64;
@@ -109,21 +110,27 @@ final class TestRegistryGateway extends TestVaultGateway
     String personId, {
     required String assignmentId,
     required String requirementKey,
-  }) async => AgentCandidateCatalog.fromJson({
-    'assignment_id': assignmentId,
-    'requirement_key': requirementKey,
-    'binding_revision':
-        ((snapshot!['assignments'] as List).single as Map)['binding_revision'],
-    'candidates': [
-      {
-        'candidate_id': candidateId,
-        'title': 'Attention',
-        'detail': 'This device',
-        'availability': 'available',
-        'selected': selectedCandidateIds.contains(candidateId),
-      },
-    ],
-  });
+  }) async {
+    if (candidateError case final String error) {
+      throw AgentVaultException(error);
+    }
+    return AgentCandidateCatalog.fromJson({
+      'assignment_id': assignmentId,
+      'requirement_key': requirementKey,
+      'binding_revision':
+          ((snapshot!['assignments'] as List).single
+              as Map)['binding_revision'],
+      'candidates': [
+        {
+          'candidate_id': candidateId,
+          'title': 'Attention',
+          'detail': 'This device',
+          'availability': 'available',
+          'selected': selectedCandidateIds.contains(candidateId),
+        },
+      ],
+    });
+  }
 
   @override
   Future<AgentCandidateCatalog> replaceSelection(
@@ -146,6 +153,14 @@ final class TestRegistryGateway extends TestVaultGateway
     ((entry['requirements'] as List).single as Map)['selected_count'] =
         candidateIds.length;
     snapshot!['revision'] = (snapshot!['revision'] as int) + 1;
+    if (candidateIds.isEmpty && candidateError != null) {
+      return AgentCandidateCatalog.fromJson({
+        'assignment_id': assignment.id,
+        'requirement_key': requirement.key,
+        'binding_revision': entry['binding_revision'],
+        'candidates': <Object>[],
+      });
+    }
     return readCandidates(
       personId,
       assignmentId: assignment.id,

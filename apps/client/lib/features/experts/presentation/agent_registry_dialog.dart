@@ -246,6 +246,8 @@ class _RequirementPickerState extends State<_RequirementPicker> {
           const CircularProgressIndicator(),
         if (widget.controller.expertCandidateFailure != null)
           Text(strings.agentRegistryFailure),
+        if (current == null && widget.requirement.selectedCount > 0)
+          Text(strings.expertSourceUnavailable),
         if (current != null && current.candidates.isEmpty)
           Text(strings.expertSourceNoCompatible),
         if (current != null)
@@ -311,6 +313,21 @@ class _RequirementPickerState extends State<_RequirementPicker> {
                 child: Text(strings.expertSourceRemove),
               ),
             ],
+          ),
+        if (current == null && widget.requirement.selectedCount > 0)
+          FloeButton.text(
+            onPressed:
+                widget.controller.canManageRegistry &&
+                    !widget.controller.expertCandidateBusy
+                ? () => widget.controller.replaceExpertSelection(
+                    widget.installation,
+                    widget.definition,
+                    widget.assignment,
+                    widget.requirement,
+                    const [],
+                  )
+                : null,
+            child: Text(strings.expertSourceRemove),
           ),
       ],
     );

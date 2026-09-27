@@ -72,14 +72,15 @@ final class AgentRegistryController extends ChangeNotifier {
   ) async {
     if (!canManage || candidateBusy) return;
     final current = candidateCatalog;
-    if (current == null ||
-        current.assignmentId != assignment.id ||
-        current.requirementKey != requirement.key ||
-        current.bindingRevision != assignment.bindingRevision ||
+    if ((candidateIds.isNotEmpty && current == null) ||
+        (current != null &&
+            (current.assignmentId != assignment.id ||
+                current.requirementKey != requirement.key ||
+                current.bindingRevision != assignment.bindingRevision)) ||
         candidateIds.length > requirement.maximumSources ||
         candidateIds.toSet().length != candidateIds.length ||
         candidateIds.any(
-          (id) => !current.candidates.any(
+          (id) => !current!.candidates.any(
             (candidate) =>
                 candidate.id == id && candidate.availability == 'available',
           ),

@@ -1411,6 +1411,242 @@ async fn expert_settings_resolve_only_current_candidate_ids_and_rejoin_exact_sav
             .count(),
         1
     );
+    let remove = crate::ExpertBindingSelectionIntent {
+        expected_binding_revision: saved.binding_revision,
+        candidate_ids: vec![],
+        ..intent
+    };
+    let remove_operation = Uuid::new_v4();
+    let removed = crate::vault_host::expert_binding_settings::replace(
+        &open,
+        person,
+        "other-device",
+        remove_operation,
+        &remove,
+        &cancellation,
+    )
+    .await
+    .unwrap();
+    assert!(removed.candidates.is_empty());
+    assert_eq!(removed.binding_revision, saved.binding_revision + 1);
+    let rejoined = crate::vault_host::expert_binding_settings::replace(
+        &open,
+        person,
+        "other-device",
+        remove_operation,
+        &remove,
+        &cancellation,
+    )
+    .await
+    .unwrap();
+    assert_eq!(rejoined, removed);
+}
+
+#[tokio::test]
+async fn hosted_calendar_settings_use_product_connection_and_pinned_producer() {
+    use base64::Engine;
+    use sha2::Digest;
+
+    let person = PersonId::new();
+    let root = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let vault = EncryptedAgentVault::create(root.path(), person, Keys::default())
+        .await
+        .unwrap();
+    let instance_id = Uuid::new_v4();
+    let execution_owner = Uuid::new_v4().to_string();
+    let public_key = [7u8; 32];
+    vault
+        .remote_pin_producer(floe_access::RemoteProducerIdentity {
+            schema_version: 1,
+            instance_id: instance_id.to_string(),
+            execution_owner: execution_owner.clone(),
+            audience: format!("floe.server:{instance_id}"),
+            key_id: Uuid::new_v4().to_string(),
+            public_key: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(public_key),
+            fingerprint: format!("{:x}", sha2::Sha256::digest(public_key)),
+        })
+        .await
+        .unwrap();
+    let core = Arc::new(FloeCore::open(":memory:").await.unwrap());
+    let calendar_connection_id = Uuid::new_v4().to_string();
+    core.set_calendar_scope(
+        person,
+        calendar_connection_id.clone(),
+        1,
+        "mac-local".into(),
+        floe_context_contract::CalendarProvider::Google,
+        vec![floe_day::CalendarSelection {
+            calendar_id: "primary".into(),
+            calendar_name: "Primary".into(),
+        }],
+        floe_context_contract::CalendarScope::Selected,
+    )
+    .await
+    .unwrap();
+    let registration = super::conversation_turn::expert_dispatch::shipped_registrations()
+        .into_iter()
+        .find(|entry| entry.manifest.package.id == "floe.builtin.commitments")
+        .unwrap();
+    let manifest = registration.manifest.clone();
+    let open = OpenVault::activate(
+        vault,
+        core,
+        Arc::new(LocalContextHost::default()),
+        CurrentSavedConnectionStore::fixed(Some(floe_inference::SavedServerConnection {
+            base_url: "http://127.0.0.1:39275".into(),
+            token: "t".repeat(32),
+            client_id: "paired-client".into(),
+            person_id: person.to_string(),
+            device_id: "mac-local".into(),
+        })),
+        vec![registration],
+    )
+    .await
+    .unwrap();
+    open.vault
+        .install_expert_bundle(
+            floe_experts::ExpertInstallOperation {
+                instance_id: open.vault.registry_instance_id(),
+                expected_revision: 0,
+                operation_id: Uuid::new_v4(),
+            },
+            &[manifest],
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    let assignment_id = open
+        .vault
+        .expert_registry()
+        .await
+        .unwrap()
+        .unwrap()
+        .assignments[0]
+        .id;
+    let catalog = crate::vault_host::expert_binding_settings::inspect(
+        &open,
+        person,
+        "mac-local",
+        assignment_id,
+        "floe.source.calendar",
+        &Cancellation::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(catalog.candidates.len(), 1);
+    assert_eq!(catalog.candidates[0].availability, "available");
+    let reference =
+        floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+            person_id: person,
+            device_id: "mac-local",
+            capability: "calendar.timeline",
+            contract_version: 1,
+            remote_connections: &[],
+            remote_execution_owner: Some(&execution_owner),
+            calendar_connection: open
+                .core
+                .calendar_connection(person)
+                .await
+                .unwrap()
+                .as_ref(),
+        })
+        .unwrap()
+        .remove(0);
+    assert_eq!(catalog.candidates[0].candidate_id, reference.candidate_id);
+    assert_eq!(
+        reference.reference.connection_id.as_str(),
+        calendar_connection_id
+    );
+
+    let registry = open.vault.expert_registry().await.unwrap().unwrap();
+    let assignment = &registry.assignments[0];
+    let package = registry.installations[0].package.clone();
+    let saved_mail = floe_context_contract::SourceSelectionReference {
+        connector_id: floe_context_contract::ConnectorId::try_new("mail.google").unwrap(),
+        connection_id: floe_context_contract::ConnectionId::try_new("mail-account").unwrap(),
+        execution_owner_id: floe_context_contract::ExecutionOwnerId::try_new(&execution_owner)
+            .unwrap(),
+        capability_id: "mail.communication".into(),
+        resource: floe_context_contract::ResourceHandle::try_new("mail:mail-account").unwrap(),
+        contract_version: 1,
+    };
+    let binding = open
+        .vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id,
+                package: package.clone(),
+                definition_revision: 1,
+                requirement_key: "floe.source.mail".into(),
+                expected_binding_revision: assignment.binding.revision,
+                selected: vec![saved_mail.clone()],
+            },
+        )
+        .await
+        .unwrap();
+    let offline = crate::vault_host::expert_binding_settings::inspect(
+        &open,
+        person,
+        "mac-local",
+        assignment_id,
+        "floe.source.mail",
+        &Cancellation::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(offline.candidates.len(), 1);
+    assert!(offline.candidates[0].selected);
+    assert_eq!(offline.candidates[0].availability, "unavailable");
+    let remove = crate::ExpertBindingSelectionIntent {
+        assignment_id,
+        package_id: package.id,
+        package_version: package.version,
+        definition_revision: 1,
+        requirement_key: "floe.source.mail".into(),
+        expected_binding_revision: binding.revision,
+        candidate_ids: vec![],
+    };
+    let remove_operation = Uuid::new_v4();
+    let removed = crate::vault_host::expert_binding_settings::replace(
+        &open,
+        person,
+        "mac-local",
+        remove_operation,
+        &remove,
+        &Cancellation::default(),
+    )
+    .await
+    .unwrap();
+    assert!(removed.candidates.is_empty());
+    assert_eq!(removed.binding_revision, binding.revision + 1);
+    let retry = crate::vault_host::expert_binding_settings::replace(
+        &open,
+        person,
+        "mac-local",
+        remove_operation,
+        &remove,
+        &Cancellation::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(retry, removed);
+    let mut select_offline = remove;
+    select_offline.expected_binding_revision = removed.binding_revision;
+    select_offline.candidate_ids = vec![floe_context::source_candidate_id(&saved_mail).unwrap()];
+    assert_eq!(
+        crate::vault_host::expert_binding_settings::replace(
+            &open,
+            person,
+            "mac-local",
+            Uuid::new_v4(),
+            &select_offline,
+            &Cancellation::default(),
+        )
+        .await,
+        Err(AgentFailure::CapabilityUnavailable),
+    );
 }
 
 #[tokio::test]

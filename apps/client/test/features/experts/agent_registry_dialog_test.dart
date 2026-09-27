@@ -165,4 +165,41 @@ void main() {
       1,
     );
   });
+
+  testWidgets('saved source can be removed when candidate discovery fails', (
+    tester,
+  ) async {
+    final gateway = TestRegistryGateway()
+      ..selectedCandidateIds = ['a' * 64]
+      ..candidateError = 'capability_unavailable';
+    final assignment = (gateway.snapshot!['assignments'] as List).single as Map;
+    (assignment['requirements'] as List).add({
+      'key': 'required_attention',
+      'capability': 'attention.coarse',
+      'contract_version': 1,
+      'minimum_sources': 1,
+      'maximum_sources': 1,
+      'selected_count': 1,
+    });
+    final controller = AgentController(
+      gateway: gateway,
+      personId: registryPerson,
+    );
+    addTearDown(controller.dispose);
+    await controller.load();
+    await controller.loadRegistry();
+    await tester.pumpWidget(app(controller, 1));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('required_attention'));
+    await tester.pumpAndSettle();
+    expect(controller.expertCandidateFailure, 'capability_unavailable');
+    expect(find.text('Remove selection'), findsOneWidget);
+    await tester.tap(find.text('Remove selection'));
+    await tester.pumpAndSettle();
+    expect(
+      controller.registry!.assignments.single.requirements.single.selectedCount,
+      0,
+    );
+    expect(gateway.selectedCandidateIds, isEmpty);
+  });
 }
