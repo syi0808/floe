@@ -2,7 +2,7 @@
 
 Prerequisite: 01 complete.
 
-Status: Not started.
+Status: Complete.
 
 Planning base: `main` at `582d1548d0ed8b9d63bc723076f6ed0dbda21cae` on 2026-09-28.
 
@@ -1855,3 +1855,21 @@ Report:
 19. checkpoint commit SHA(s);
 20. clean worktree confirmation;
 21. confirmation that checkpoint 03 was not started.
+
+## Execution evidence — 2026-09-28
+
+- Start local HEAD and fetched `origin/main`: `e014cb150daf56fdf2c40a94325889782c9caa6f`; implementation commit: `4637ba2d9548ecd3dbb8fac26d2a3439fe0fc4e9`.
+- `GrantSourceBinding` is exactly Person, Connection, Connector and execution owner. `DataAccessGrant` review/activation mutations accept scope, never a replacement source; a different source requires a new grant.
+- `ContextDependency` stores stable source, logical grant `resources`, explicit `source_authority`, canonical exact `source_resources`, and retained `consumer_policy`. Old serialized dependencies fail closed; provenance participates in canonical conflict detection.
+- `connection_view_resource` and its strict parser in `floe-context-contract` are the sole generic View resource formatter/parser. Generic remote View candidates, grants, reads, review and App callers use the shared helper; their grants survive source-epoch changes while existing evidence stales.
+- Fresh `data_access_grants` columns are `grant_id`, `person_id`, `authority_owner`, `connection_id`, `connector`, `execution_owner`, `grant_incarnation`, `access_epoch`, `state`, `payload`. Source lookup predicates use stable source fields only. Fresh `remote_view_grant_mappings` columns are `grant_id`, `person_id`, `view_id`, `connector`, `connection_id`, `execution_owner`, `policy_incarnation`, `policy_epoch`, `payload`. Both schemas use marker 2, with no old decoder or fallback query.
+- Native Calendar dependencies record the current Connections authority and exact selected Calendar IDs in `source_resources`; the leaf grant scope remains until 03. Remote Calendar dependencies record signed source authority and the exact remote Calendar leaf; its special leaf grant stack remains until 04.
+- Personal source authority is temporarily owned by `personal_grant_policies.source_incarnation/source_epoch` (marker 5), advanced by source subject/selection changes rather than consumer-only policy changes. Checkpoint 06 removes this interim owner when standing personal sources move to Connections.
+- `ProcessingSourceScope` carries `grant_resources`, exact `source_resources`, `source_authority` and retained policy authority. Exact-recipient consent identity changes with either resource set or source authority; the FFI consent projection shows physical source resources.
+- Context owner-specific resolvers reload current source facts independently of grant authority at read, projection, history and model fences. Final Vault transactions validate grant/policy state only, with no provider/current-source I/O inside them. Action physical-resource checks use `source_resources`.
+- Deleted `ReplayRequest`, `ReplayTrust`, `admit_replay`, grant-source `same_identity`, and duplicated `remote_view_resource` helpers. Consumer policy remains until 05; native/remote leaf grants remain until 03/04; personal interim authority remains until 06. No 03 implementation was started.
+- Residual audit: 30 `source_incarnation/source_epoch` matches in crates belong to signed remote challenge/proof, personal interim policy, provider transport, Access remote-auth DTOs, or test names; none is standing grant or generic View mapping identity. All 19 `dependency.resources()` uses are grant permission-scope checks, propagation or assertions. Physical-resource comparisons use `source_resources`. Removed-symbol search returned no matches.
+- Current architecture updated in `docs/architecture/modules.md` and `docs/architecture/authority-recovery.md`.
+- PASS: each of the ten targeted crate `cargo test -p` commands in Verification, `cargo check --workspace`, `cargo check --workspace --lib`, `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast -- --test-threads=1`, both architecture scripts, `git diff --check`, `cargo build -p floe-ffi`, `flutter analyze`, `flutter test test/features/connections`, `flutter test test/features/conversation`, and `flutter build macos`.
+- Full `flutter test` has 364 passes and one reproducible 29-pixel (0.02%) golden mismatch in the unchanged `agent_registry_dialog_test.dart` at width 520.0. No Flutter source or golden changed in this checkpoint; the failure is reported rather than altering an unrelated assertion. Live EventKit smoke was SKIPPED because no authorized device/read was available; it is not required for 02.
+- Closure commit records this evidence and the parent README status. The worktree is clean after closure; checkpoint 03 remains Not started.
