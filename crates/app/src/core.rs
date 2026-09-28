@@ -33,6 +33,10 @@ impl FloeCore {
         floe_day::DayService::new(&self.store)
     }
 
+    pub fn source_service(&self) -> floe_connections::SourceConnectionService<'_, TursoStore> {
+        floe_connections::SourceConnectionService::new(&self.store)
+    }
+
     pub async fn submit_capture(
         &self,
         person_id: PersonId,

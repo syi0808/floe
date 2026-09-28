@@ -95,6 +95,20 @@ impl<'a, Repository: SourceRepository + ?Sized> SourceConnectionService<'a, Repo
         Ok(source)
     }
 
+    pub async fn reconcile_inventory(
+        &self,
+        person_id: PersonId,
+        connection_id: &ConnectionId,
+        expected_revision: u64,
+        resources: Vec<ConnectionResource>,
+    ) -> Result<SourceConnection, SourceServiceError> {
+        let mut source = self.current(person_id, connection_id).await?;
+        if source.reconcile_inventory(expected_revision, resources)? {
+            self.repository.update(&source, expected_revision).await?;
+        }
+        Ok(source)
+    }
+
     pub async fn disconnect(
         &self,
         person_id: PersonId,

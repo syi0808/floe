@@ -45,7 +45,7 @@ mod vault_host;
 mod vault_services;
 mod worker;
 
-pub use floe_context_contract::{CalendarProvider, CalendarScope, SourceAuthority};
+pub use floe_context_contract::{CalendarProvider, CalendarScope, ResourceHandle, SourceAuthority};
 /// The values this host's own API names at its boundary.
 ///
 /// A binding reads a receipt and reports a failure; it does not reach past the
@@ -73,7 +73,10 @@ pub use floe_access::{
 };
 pub use floe_actions::{ActionAuthorityMode, CalendarAction, CalendarActionState};
 pub use floe_agent_contract::UserInteractionKind;
-pub use floe_connections::{CalendarConnectionRef, PairingIssuer, PairingStatus};
+pub use floe_connections::{
+    CalendarConnectionRef, ConnectionId, ConnectionResource, PairingIssuer, PairingStatus,
+    ResourceMode, SourceConnection, SourceState,
+};
 pub use floe_context_contract::{
     DataClass, GrantConsumer, ProcessingSourceScope, RecipientLineage,
 };
@@ -96,7 +99,10 @@ pub use connection_observe::{
     ConnectionObserveMember, ConnectionObserveOverview, ConnectionObserveStatus,
 };
 #[cfg(unix)]
-pub use connection_services::{ConnectionsQueries, ConnectionsResult};
+pub use connection_services::{
+    ConnectionsQueries, ConnectionsResult, NativeCalendarSourceCommands,
+    NativeCalendarSourceMutation,
+};
 #[cfg(unix)]
 pub use context_services::{
     AttentionCompletion, CalendarCompletion, ContextCommand, ContextQuery, LocalContextCommands,

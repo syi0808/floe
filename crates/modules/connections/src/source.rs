@@ -277,6 +277,17 @@ impl SourceConnection {
         Ok(true)
     }
 
+    pub fn reconcile_inventory(
+        &mut self,
+        expected_revision: u64,
+        resources: Vec<ConnectionResource>,
+    ) -> Result<bool, SourceConnectionError> {
+        if self.resource_mode != ResourceMode::AllAvailable {
+            return Err(SourceConnectionError::InvalidResource);
+        }
+        self.configure(expected_revision, ResourceMode::AllAvailable, resources)
+    }
+
     pub fn update_native_subject(
         &mut self,
         expected_revision: u64,

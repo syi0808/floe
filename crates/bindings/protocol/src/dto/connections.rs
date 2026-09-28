@@ -1,4 +1,148 @@
+use floe_context_contract::SourceAuthority;
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceResourceModeDto {
+    Selected,
+    AllAvailable,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceLifecycleDto {
+    Pending,
+    Ready,
+    Disconnected,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectionResourceDto {
+    pub handle: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceConnectionDto {
+    pub connector_id: String,
+    pub connection_id: String,
+    pub execution_owner_id: String,
+    pub state: SourceLifecycleDto,
+    pub revision: u64,
+    pub source_authority: SourceAuthority,
+    pub resource_mode: SourceResourceModeDto,
+    pub resources: Vec<ConnectionResourceDto>,
+    pub native_subject_fingerprint: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum NativeCalendarSourceMutationDto {
+    Establish {
+        resource_mode: SourceResourceModeDto,
+        resources: Vec<ConnectionResourceDto>,
+    },
+    Configure {
+        connection_id: String,
+        expected_revision: u64,
+        resource_mode: SourceResourceModeDto,
+        resources: Vec<ConnectionResourceDto>,
+    },
+    ReconcileInventory {
+        connection_id: String,
+        expected_revision: u64,
+        resources: Vec<ConnectionResourceDto>,
+    },
+    Disconnect {
+        connection_id: String,
+        expected_revision: u64,
+    },
+}
+
+impl NativeCalendarSourceMutationDto {
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        let (connection_id, revision, resources) = match self {
+            Self::Establish { resources, .. } => (None, None, Some(resources)),
+            Self::Configure {
+                connection_id,
+                expected_revision,
+                resources,
+                ..
+            }
+            | Self::ReconcileInventory {
+                connection_id,
+                expected_revision,
+                resources,
+            } => (
+                Some(connection_id),
+                Some(*expected_revision),
+                Some(resources),
+            ),
+            Self::Disconnect {
+                connection_id,
+                expected_revision,
+            } => (Some(connection_id), Some(*expected_revision), None),
+        };
+        if connection_id.is_some_and(|id| !valid_source_text(id, 256))
+            || revision.is_some_and(|revision| revision == 0 || revision > i64::MAX as u64)
+        {
+            return Err("command.source_identity");
+        }
+        if let Some(resources) = resources {
+            if resources.len() > 4096 {
+                return Err("command.resources");
+            }
+            let mut seen = std::collections::HashSet::new();
+            for resource in resources {
+                if !valid_source_text(&resource.handle, 256)
+                    || resource.handle == "*"
+                    || !valid_source_text(&resource.label, 256)
+                    || !seen.insert(&resource.handle)
+                {
+                    return Err("command.resources");
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn valid_source_text(value: &str, maximum: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::*;
+
+    #[test]
+    fn source_mutation_accepts_expected_revision_but_not_authority_or_next_revision() {
+        let valid = serde_json::json!({
+            "type": "configure",
+            "connection_id": "calendar-primary",
+            "expected_revision": 3,
+            "resource_mode": "selected",
+            "resources": [{"handle": "home", "label": "Home"}]
+        });
+        let mutation: NativeCalendarSourceMutationDto =
+            serde_json::from_value(valid.clone()).unwrap();
+        mutation.validate().unwrap();
+        for extra in ["source_authority", "next_revision", "connection_revision"] {
+            let mut rejected = valid.clone();
+            rejected[extra] = serde_json::json!(4);
+            assert!(serde_json::from_value::<NativeCalendarSourceMutationDto>(rejected).is_err());
+        }
+        let mut invalid = valid;
+        invalid["expected_revision"] = serde_json::json!(0);
+        let mutation: NativeCalendarSourceMutationDto = serde_json::from_value(invalid).unwrap();
+        assert_eq!(mutation.validate(), Err("command.source_identity"));
+    }
+}
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionsResultDto {

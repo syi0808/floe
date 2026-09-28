@@ -181,3 +181,33 @@ fn duplicate_resource_and_invalid_native_subject_fail_closed() {
     );
     assert_eq!(native.revision(), 1);
 }
+
+#[test]
+fn inventory_reconciliation_requires_all_available_scope() {
+    let mut connection = source("calendar.fixture", vec![resource("a", "A")]);
+    assert_eq!(
+        connection.reconcile_inventory(1, vec![resource("a", "A"), resource("b", "B")]),
+        Err(SourceConnectionError::InvalidResource)
+    );
+    assert!(
+        connection
+            .configure(1, ResourceMode::AllAvailable, vec![resource("a", "A")])
+            .unwrap()
+    );
+    let authority = connection.source_authority();
+    assert!(
+        connection
+            .reconcile_inventory(2, vec![resource("a", "A"), resource("b", "B")])
+            .unwrap()
+    );
+    assert_eq!(
+        connection.source_authority().epoch().get(),
+        authority.epoch().get() + 1
+    );
+    assert!(
+        !connection
+            .reconcile_inventory(3, vec![resource("b", "B"), resource("a", "A")])
+            .unwrap()
+    );
+    assert_eq!(connection.revision(), 3);
+}

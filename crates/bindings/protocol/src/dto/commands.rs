@@ -44,6 +44,10 @@ pub enum AppCommandDto {
         day: super::DayQueryDto,
         mutation: super::DayMutationDto,
     },
+    #[serde(rename = "connections.native_calendar.mutate")]
+    NativeCalendarSourceMutate {
+        mutation: super::NativeCalendarSourceMutationDto,
+    },
     #[serde(rename = "knowledge.memory.decide")]
     KnowledgeMemoryDecide {
         candidate_id: Uuid,
@@ -130,6 +134,7 @@ impl AppCommandDto {
             Self::ContextApply { .. } => Ok(()),
             Self::ActionsCalendar { operation } => super::actions::validate_command(operation),
             Self::DayMutate { mutation, .. } => mutation.validate(),
+            Self::NativeCalendarSourceMutate { mutation } => mutation.validate(),
             Self::KnowledgeMemoryDecide { candidate_id, .. } => {
                 if candidate_id.is_nil() {
                     Err("command.candidate_id")
@@ -378,6 +383,10 @@ pub enum AppCommandResultDto {
     DayMutation {
         command_id: Uuid,
         mutation: super::MutationResultDto,
+    },
+    NativeCalendarSource {
+        command_id: Uuid,
+        source: super::SourceConnectionDto,
     },
     KnowledgeOperation {
         #[serde(flatten)]
