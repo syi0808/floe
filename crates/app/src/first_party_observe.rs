@@ -454,6 +454,64 @@ mod tests {
                 &[manifest],
             )
             .unwrap();
+        let mut extension = floe_experts_builtin::manifests()
+            .into_iter()
+            .find(|manifest| manifest.package.id == "floe.builtin.schedule")
+            .unwrap();
+        extension.package.id = "example.calendar.extension".into();
+        extension.definition.card.id = extension.package.id.clone();
+        extension.publisher = "example".into();
+        extension.validate().unwrap();
+        registry
+            .install_bundle(
+                person,
+                &floe_experts::ExpertInstallOperation {
+                    instance_id: registry.snapshot().instance_id,
+                    expected_revision: registry.snapshot().revision,
+                    operation_id: uuid::Uuid::new_v4(),
+                },
+                &[extension.clone()],
+            )
+            .unwrap();
+        let snapshot = registry.snapshot();
+        let installation = snapshot
+            .installations
+            .iter()
+            .find(|installation| installation.package == extension.package)
+            .unwrap();
+        let assignment = snapshot
+            .assignments
+            .iter()
+            .find(|assignment| assignment.installation_id == installation.id)
+            .unwrap();
+        registry
+            .replace_binding(
+                person,
+                uuid::Uuid::new_v4(),
+                floe_experts::ExpertBindingCommand {
+                    assignment_id: assignment.id,
+                    package: extension.package.clone(),
+                    definition_revision: extension.definition.definition_revision,
+                    requirement_key: "floe.source.calendar".into(),
+                    expected_binding_revision: assignment.binding.revision,
+                    selected: vec![floe_context_contract::SourceSelectionReference {
+                        connector_id: floe_context_contract::ConnectorId::try_new(
+                            "calendar.event_kit",
+                        )
+                        .unwrap(),
+                        connection_id: floe_context_contract::ConnectionId::try_new("extension")
+                            .unwrap(),
+                        execution_owner_id: floe_context_contract::ExecutionOwnerId::try_new(
+                            "device",
+                        )
+                        .unwrap(),
+                        capability_id: "calendar.timeline".into(),
+                        resource: floe_access::native_calendar_resource("extension").unwrap(),
+                        contract_version: 1,
+                    }],
+                },
+            )
+            .unwrap();
         assert_eq!(calendar_policy().unwrap(), before);
         assert_eq!(
             policy_fingerprint(&calendar_policy().unwrap()).unwrap(),
