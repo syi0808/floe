@@ -4,8 +4,7 @@ mod ports;
 pub mod domain;
 
 pub use application::{
-    CalendarObservation, CalendarTimelineGrant, Classification, DayService,
-    MAX_TIMELINE_GRANT_DAYS, range_bounds,
+    CalendarTimelineGrant, Classification, DayService, MAX_TIMELINE_GRANT_DAYS, range_bounds,
 };
 pub use domain::{
     AllDaySchedule, CalendarBatch, CalendarConnection, CalendarFailure, CalendarMirror,

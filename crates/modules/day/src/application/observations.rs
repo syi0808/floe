@@ -11,57 +11,7 @@ use floe_context_contract::SourceAuthority;
 use floe_context_contract::{CalendarProvider, CalendarScope};
 use floe_kernel::PersonId;
 
-#[derive(Clone, Debug)]
-pub struct CalendarObservation {
-    pub connection_id: String,
-    pub provider: CalendarProvider,
-    pub source_authority: SourceAuthority,
-    pub revision: u64,
-    pub range: CalendarRange,
-    pub batches: Vec<CalendarBatch>,
-}
-
 impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
-    pub async fn apply_observation(
-        &self,
-        person_id: PersonId,
-        observation: CalendarObservation,
-        now: DateTime<Utc>,
-    ) -> Result<(), DayError> {
-        let mirror = self
-            .repository
-            .calendar_mirror(person_id)
-            .await?
-            .ok_or_else(|| {
-                DayError::new(
-                    crate::ports::DayErrorCode::NotFound,
-                    "select a calendar first",
-                )
-            })?;
-        if mirror.connection.connection_id != observation.connection_id
-            || mirror.connection.provider != observation.provider
-            || mirror.connection.source_authority != observation.source_authority
-            || mirror.connection.revision != observation.revision
-        {
-            return Err(DayError::conflict(
-                "calendar observation identity or revision is stale",
-            ));
-        }
-        self.import_calendar_sources_with_identity(
-            person_id,
-            observation.revision,
-            observation.range,
-            observation.batches,
-            now,
-            Some((
-                &observation.connection_id,
-                observation.provider,
-                observation.source_authority,
-            )),
-        )
-        .await
-    }
-
     pub async fn calendar_connection(
         &self,
         person_id: PersonId,
@@ -406,26 +356,6 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
         batches: Vec<CalendarBatch>,
         now: DateTime<Utc>,
     ) -> Result<(), DayError> {
-        self.import_calendar_sources_with_identity(
-            person_id,
-            expected_revision,
-            range,
-            batches,
-            now,
-            None,
-        )
-        .await
-    }
-
-    async fn import_calendar_sources_with_identity(
-        &self,
-        person_id: PersonId,
-        expected_revision: u64,
-        range: CalendarRange,
-        batches: Vec<CalendarBatch>,
-        now: DateTime<Utc>,
-        identity: Option<(&str, CalendarProvider, SourceAuthority)>,
-    ) -> Result<(), DayError> {
         if !range.is_valid()
             || batches
                 .iter()
@@ -438,15 +368,6 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
         let mut mirror = self
             .calendar_at_revision(person_id, expected_revision)
             .await?;
-        if let Some((connection_id, provider, source_authority)) = identity
-            && (mirror.connection.connection_id != connection_id
-                || mirror.connection.provider != provider
-                || mirror.connection.source_authority != source_authority)
-        {
-            return Err(DayError::conflict(
-                "calendar observation identity or revision is stale",
-            ));
-        }
         let previous = mirror.clone();
         let calendars = mirror.connection.calendars.clone();
         let expected: HashSet<_> = calendars

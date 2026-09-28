@@ -218,8 +218,7 @@ pub(crate) fn day_error(error: floe_day::DayError) -> CoreError {
 mod tests {
     use super::*;
     use chrono::TimeZone;
-    use floe_context_contract::CalendarProvider;
-    use floe_day::{CalendarBatch, CalendarRange, SourceRef};
+    use floe_day::SourceRef;
 
     #[tokio::test]
     async fn capture_classification_persists_across_reopen() {
@@ -321,58 +320,6 @@ mod tests {
         );
         let stored = core.store.get_task(task.id).await.unwrap().unwrap();
         assert_eq!(stored.completed_at, completed.completed_at);
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[tokio::test]
-    async fn stale_observation_identity_is_rejected_at_day_boundary() {
-        let path = std::env::temp_dir().join(format!("floe-{}.db", uuid::Uuid::new_v4()));
-        let person_id = PersonId::new();
-        let now = Utc.with_ymd_and_hms(2026, 9, 2, 9, 0, 0).unwrap();
-        let core = FloeCore::open(&path).await.unwrap();
-        core.select_calendar(
-            person_id,
-            CalendarProvider::Fixture,
-            "home".into(),
-            "Home".into(),
-        )
-        .await
-        .unwrap();
-        let connection = core.calendar_connection(person_id).await.unwrap().unwrap();
-        let error = core
-            .day_service()
-            .apply_observation(
-                person_id,
-                floe_day::CalendarObservation {
-                    connection_id: "calendar.fixture.rebound".into(),
-                    provider: connection.provider,
-                    source_authority: connection.source_authority,
-                    revision: connection.revision,
-                    range: CalendarRange {
-                        start_date: now.date_naive(),
-                        end_date_exclusive: now.date_naive().succ_opt().unwrap(),
-                        timezone_offset_seconds: 0,
-                        end_timezone_offset_seconds: None,
-                    },
-                    batches: vec![CalendarBatch {
-                        calendar_id: "home".into(),
-                        records: vec![],
-                        failure: None,
-                    }],
-                },
-                now,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, floe_day::DayErrorCode::Conflict);
-        assert_eq!(
-            core.calendar_connection(person_id)
-                .await
-                .unwrap()
-                .unwrap()
-                .revision,
-            connection.revision
-        );
         let _ = std::fs::remove_file(path);
     }
 
