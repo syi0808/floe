@@ -422,21 +422,34 @@ impl RemoteCalendarEvidence {
 pub(super) async fn remote_calendar_evidence(
     core: &FloeCore,
     person_id: PersonId,
+    connector_id: &str,
+    connection_id: &str,
 ) -> Result<RemoteCalendarEvidence, AgentFailure> {
-    let connection = core
-        .calendar_connection(person_id)
+    let provider = match connector_id {
+        "calendar.google" => floe_context_contract::CalendarProvider::Google,
+        "calendar.microsoft" => floe_context_contract::CalendarProvider::Microsoft,
+        _ => return Err(AgentFailure::CapabilityUnavailable),
+    };
+    let identity = floe_context_contract::ConnectionId::try_new(connection_id)
+        .map_err(|_| AgentFailure::InvalidInput)?;
+    let source = core
+        .source_service()
+        .load(person_id, &identity)
         .await
         .map_err(|_| AgentFailure::StorageUnavailable)?
         .ok_or(AgentFailure::AccessReviewRequired)?;
+    if source.connector_id().as_str() != connector_id {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
     Ok(RemoteCalendarEvidence {
-        provider: connection.provider,
-        connection_id: connection.connection_id,
-        calendar_ids: connection
-            .calendars
-            .into_iter()
-            .map(|calendar| calendar.calendar_id)
+        provider,
+        connection_id: source.connection_id().as_str().to_owned(),
+        calendar_ids: source
+            .resources()
+            .iter()
+            .map(|calendar| calendar.handle().as_str().to_owned())
             .collect(),
-        disconnected: connection.disconnected,
+        disconnected: source.state() == floe_connections::SourceState::Disconnected,
     })
 }
 

@@ -485,23 +485,24 @@ where
         if member.member_id != "calendar.timeline" {
             return Ok(Self::unusable());
         }
+        let connection_id = floe_context_contract::ConnectionId::try_new(&target.connection_id)
+            .map_err(|_| AgentFailure::InvalidInput)?;
         let live = self
             .core
-            .calendar_connection(person_id)
+            .source_service()
+            .load(person_id, &connection_id)
             .await
             .map_err(|_| AgentFailure::StorageUnavailable)?;
         let Some(connection) = live else {
             return Ok(Self::unusable());
         };
-        if connection.connection_id != target.connection_id
-            || connection.disconnected
-            || connection.revision == 0
-            || floe_access::hosted_calendar_connector(connection.provider).as_deref()
-                != Some(connector)
+        if !connection.is_serving()
+            || connection.connector_id().as_str() != connector
+            || !matches!(connector, "calendar.google" | "calendar.microsoft")
             || !connection
-                .calendars
+                .resources()
                 .iter()
-                .any(|calendar| calendar.calendar_id == member.resource)
+                .any(|calendar| calendar.handle().as_str() == member.resource)
         {
             return Ok(Self::unusable());
         }
@@ -519,7 +520,7 @@ where
             .await?;
         Ok(LiveInlineState {
             members: vec![probed],
-            connection_revision: Some(connection.revision),
+            connection_revision: Some(connection.revision()),
             producer_fingerprint: Some(producer_fingerprint),
             native_subject: None,
             connection_usable: true,

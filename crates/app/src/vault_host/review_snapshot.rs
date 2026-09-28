@@ -553,26 +553,27 @@ where
         requirement: &SourceAccessRequirement,
         resource: &str,
     ) -> Result<u64, AgentFailure> {
+        let identity = floe_context_contract::ConnectionId::try_new(connection)
+            .map_err(|_| AgentFailure::InvalidInput)?;
         let live = self
             .core
-            .calendar_connection(person_id)
+            .source_service()
+            .load(person_id, &identity)
             .await
             .map_err(|_| AgentFailure::StorageUnavailable)?
             .ok_or(AgentFailure::AccessReviewRequired)?;
-        let hosted = floe_access::hosted_calendar_connector(live.provider);
-        if live.connection_id != connection
-            || live.disconnected
-            || live.revision == 0
-            || hosted != Some(connector)
-            || requirement.source_authority() != Some(live.source_authority)
+        if !live.is_serving()
+            || live.connector_id().as_str() != connector
+            || !matches!(connector, "calendar.google" | "calendar.microsoft")
+            || requirement.source_authority() != Some(live.source_authority())
             || !live
-                .calendars
+                .resources()
                 .iter()
-                .any(|calendar| calendar.calendar_id == resource)
+                .any(|calendar| calendar.handle().as_str() == resource)
         {
             return Err(AgentFailure::AccessReviewRequired);
         }
-        Ok(live.revision)
+        Ok(live.revision())
     }
 
     async fn calendar_policy(

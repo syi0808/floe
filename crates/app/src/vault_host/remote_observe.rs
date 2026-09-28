@@ -458,8 +458,13 @@ where
     Transport: floe_access::RemoteGrantTransport,
 {
     let consumers = policy.consumers.clone();
-    let evidence =
-        super::calendar_access::remote_calendar_evidence(ctx.core, ctx.person_id).await?;
+    let evidence = super::calendar_access::remote_calendar_evidence(
+        ctx.core,
+        ctx.person_id,
+        ctx.connector_id,
+        ctx.connection_id,
+    )
+    .await?;
     let request = floe_access::RemoteCalendarGrantRequest {
         person_id: ctx.person_id,
         pairing: ctx.pairing,
@@ -557,8 +562,13 @@ where
 {
     let resource = ctx.resource.ok_or(AgentFailure::InvalidInput)?;
     let consumers = policy.consumers.clone();
-    let evidence =
-        super::calendar_access::remote_calendar_evidence(ctx.core, ctx.person_id).await?;
+    let evidence = super::calendar_access::remote_calendar_evidence(
+        ctx.core,
+        ctx.person_id,
+        ctx.connector_id,
+        ctx.connection_id,
+    )
+    .await?;
     floe_access::review_and_activate_remote_calendar_grant(
         ctx.vault,
         transport,
@@ -604,20 +614,30 @@ async fn live_member_grants<Keys: VaultKeyProvider>(
 async fn local_calendar_revision<Keys: VaultKeyProvider>(
     ctx: &RemoteObserveContext<'_, Keys>,
 ) -> Result<u64, AgentFailure> {
+    let connection_id = floe_context_contract::ConnectionId::try_new(ctx.connection_id)
+        .map_err(|_| AgentFailure::InvalidInput)?;
     let live = ctx
         .core
-        .calendar_connection(ctx.person_id)
+        .source_service()
+        .load(ctx.person_id, &connection_id)
         .await
         .map_err(|_| AgentFailure::StorageUnavailable)?
         .ok_or(AgentFailure::AccessReviewRequired)?;
-    if live.connection_id != ctx.connection_id
-        || live.disconnected
-        || live.revision == 0
-        || !live.source_authority.is_valid()
+    if live.connector_id().as_str() != ctx.connector_id
+        || !live.is_serving()
+        || !live.source_authority().is_valid()
+        || live.execution_owner_id().as_str()
+            != ctx.vault.remote_pinned_producer().await?.execution_owner
+        || ctx.resource.is_some_and(|resource| {
+            !live
+                .resources()
+                .iter()
+                .any(|entry| entry.handle().as_str() == resource)
+        })
     {
         return Err(AgentFailure::AccessReviewRequired);
     }
-    Ok(live.revision)
+    Ok(live.revision())
 }
 
 #[cfg(test)]

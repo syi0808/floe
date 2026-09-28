@@ -1663,7 +1663,8 @@ impl HostFixture {
         let core = crate::FloeCore::open(core_dir.path().join("core.db"))
             .await
             .unwrap();
-        let source = core.source_service()
+        let source = core
+            .source_service()
             .establish(
                 base.person,
                 floe_context_contract::ConnectorId::try_new("calendar.event_kit").unwrap(),
@@ -3419,6 +3420,28 @@ async fn remote_calendar_allow_resolves_through_hosted_connection() {
         )
         .await
         .unwrap();
+    let source = host
+        .core
+        .source_service()
+        .establish(
+            host.base.person,
+            floe_context_contract::ConnectorId::try_new("calendar.google").unwrap(),
+            floe_context_contract::ConnectionId::try_new(&host.connection_id).unwrap(),
+            floe_context_contract::ExecutionOwnerId::try_new(
+                &host.transport.producer.execution_owner,
+            )
+            .unwrap(),
+            floe_connections::ResourceMode::Selected,
+            vec![
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new("primary").unwrap(),
+                    "Primary".into(),
+                )
+                .unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
     let manifest = floe_experts_builtin::manifests()
         .into_iter()
         .find(|manifest| manifest.package.id == "floe.builtin.schedule")
@@ -3480,7 +3503,7 @@ async fn remote_calendar_allow_resolves_through_hosted_connection() {
         connector_id: Some("calendar.google".into()),
         consumer: "floe.builtin.schedule".into(),
         purpose: "scheduling".into(),
-        connection_revision: Some(9),
+        connection_revision: Some(source.revision()),
         reviewed_producer_fingerprint: Some(host.transport.producer.fingerprint.clone()),
         reviewed_native_subject: None,
         members: vec![floe_conversation::ReviewedBundleMember {
