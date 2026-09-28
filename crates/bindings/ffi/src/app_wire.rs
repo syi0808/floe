@@ -1186,7 +1186,9 @@ fn remote_source_mutation(
     })
 }
 
-fn source_connection_dto(source: &floe_app::SourceConnection) -> floe_protocol::SourceConnectionDto {
+fn source_connection_dto(
+    source: &floe_app::SourceConnection,
+) -> floe_protocol::SourceConnectionDto {
     floe_protocol::SourceConnectionDto {
         connector_id: source.connector_id().as_str().into(),
         connection_id: source.connection_id().as_str().into(),

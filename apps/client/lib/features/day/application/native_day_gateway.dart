@@ -387,7 +387,7 @@ DaySnapshot _decodeSnapshot(Map<String, dynamic> json) {
     overdueTaskCount: json['overdue_task_count']! as int,
     calendar: json['calendar'] == null
         ? null
-        : _decodeCalendar(_asMap(json['calendar'])),
+        : _decodeCalendarMirror(_asMap(json['calendar'])),
     calendarMirrorRevision: json['calendar_mirror_revision'] as int?,
   );
 }
@@ -444,7 +444,7 @@ EventItem _decodeEvent(Map<String, dynamic> json, DateTime createdAt) {
   );
 }
 
-CalendarMirrorState _decodeCalendar(Map<String, dynamic> json) =>
+CalendarMirrorState _decodeCalendarMirror(Map<String, dynamic> json) =>
     CalendarMirrorState(
       sourceConnectionId: json['source_connection_id']! as String,
       provider: json['provider']! as String,
