@@ -93,9 +93,7 @@ pub trait NativeCalendarGrantReader: Sync {
         &self,
         connection: &SourceConnection,
         person_id: PersonId,
-        calendar_ids: &[String],
         consumer: &str,
-        native_subject_fingerprint: &str,
     ) -> impl Future<Output = Result<CalendarReadAccessAdmission, AgentFailure>> + Send;
 }
 
@@ -112,7 +110,6 @@ pub async fn admit_current_native_calendar_read(
     person_id: PersonId,
     device_id: &str,
     consumer: &str,
-    expected_calendar_ids: Option<&[String]>,
     window: &RemoteCallWindow,
 ) -> Result<AdmittedNativeCalendarRead, AgentFailure> {
     check_window(window)?;
@@ -133,17 +130,14 @@ pub async fn admit_current_native_calendar_read(
     {
         return Err(AgentFailure::AccessReviewRequired);
     }
-    let current_calendar_ids = connection_calendar_ids(&connection);
-    let mut calendar_ids = expected_calendar_ids
-        .map(<[String]>::to_vec)
-        .unwrap_or_else(|| current_calendar_ids.clone());
+    let mut calendar_ids = connection_calendar_ids(&connection);
     calendar_ids.sort();
     if calendar_ids.is_empty()
         || calendar_ids.windows(2).any(|pair| pair[0] == pair[1])
         || calendar_ids.iter().any(|identifier| {
             identifier.trim().is_empty()
                 || identifier.len() > 512
-                || !current_calendar_ids.contains(identifier)
+                || identifier.chars().any(char::is_control)
         })
     {
         return Err(AgentFailure::AccessReviewRequired);
@@ -185,15 +179,7 @@ pub async fn admit_current_native_calendar_read(
     if connection.native_subject_fingerprint() != Some(stamp.native_subject_fingerprint.as_str()) {
         return Err(AgentFailure::AccessReviewRequired);
     }
-    let admission = grants
-        .admit(
-            &connection,
-            person_id,
-            &calendar_ids,
-            consumer,
-            &stamp.native_subject_fingerprint,
-        )
-        .await?;
+    let admission = grants.admit(&connection, person_id, consumer).await?;
     admits_native_calendar_read(
         &admission,
         person_id,

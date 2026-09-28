@@ -2,6 +2,7 @@ mod application {
     pub mod archive;
     pub mod assembler;
     pub mod calendar_connector;
+    mod calendar_lease;
     pub mod calendar_timeline;
     pub mod consumed;
     pub mod coverage;

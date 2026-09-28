@@ -1,5 +1,4 @@
 pub mod authority;
-pub mod calendar_lease;
 pub mod calendar_read;
 pub mod dependency;
 pub mod grants;

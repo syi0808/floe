@@ -99,7 +99,6 @@ pub use ports::remote_grants::{
     SignedSourcePreview,
 };
 
-pub use application::calendar_lease::{CalendarLeaseKey, calendar_lease_dependency};
 pub use application::calendar_read::{
     CalendarReadAccessAdmission, CalendarReadAccessRequest, CalendarReadAdmission,
     admission_matches, admission_matches_dependency, admits_calendar_read,

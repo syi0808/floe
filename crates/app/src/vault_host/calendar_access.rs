@@ -73,9 +73,7 @@ impl<Keys: VaultKeyProvider> NativeCalendarGrantReader for VaultNativeCalendarGr
         &self,
         connection: &floe_connections::SourceConnection,
         person_id: PersonId,
-        _calendar_ids: &[String],
         consumer: &str,
-        _native_subject_fingerprint: &str,
     ) -> Result<floe_access::CalendarReadAccessAdmission, AgentFailure> {
         if person_id != self.vault.person_id() {
             return Err(AgentFailure::CapabilityDenied);

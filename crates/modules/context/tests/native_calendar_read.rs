@@ -44,6 +44,8 @@ struct Device {
     fingerprint: String,
     checks: AtomicUsize,
     observations: AtomicUsize,
+    checked_calendar_ids: Mutex<Vec<Vec<String>>>,
+    observed_calendar_ids: Mutex<Vec<Vec<String>>>,
     partial_batch: AtomicBool,
     failure: Mutex<Option<CalendarFailure>>,
     records: Mutex<Vec<CalendarRecord>>,
@@ -55,6 +57,10 @@ impl CalendarSource for Device {
         request: CalendarReadAccessRequest,
     ) -> Result<CalendarReadAccessStamp, AgentFailure> {
         self.checks.fetch_add(1, Ordering::SeqCst);
+        self.checked_calendar_ids
+            .lock()
+            .unwrap()
+            .push(request.calendar_ids.clone());
         Ok(CalendarReadAccessStamp {
             schema_version: 1,
             person_id: self.person_id,
@@ -71,6 +77,10 @@ impl CalendarSource for Device {
         request: CalendarObserveRequest,
     ) -> Result<Option<CalendarObservation>, AgentFailure> {
         self.observations.fetch_add(1, Ordering::SeqCst);
+        self.observed_calendar_ids
+            .lock()
+            .unwrap()
+            .push(request.calendar_ids.clone());
         if request.expected_native_subject_fingerprint.as_deref() != Some(self.fingerprint.as_str())
         {
             return Err(AgentFailure::AccessReviewRequired);
@@ -81,7 +91,7 @@ impl CalendarSource for Device {
                 person_id: self.person_id,
                 device_id: request.device_id,
                 provider: request.provider,
-                calendar_ids: request.calendar_ids,
+                calendar_ids: request.calendar_ids.clone(),
                 native_subject_fingerprint: self.fingerprint.clone(),
                 generation: "generation-1".into(),
             },
@@ -89,11 +99,23 @@ impl CalendarSource for Device {
             batches: if self.partial_batch.load(Ordering::SeqCst) {
                 vec![]
             } else {
-                vec![CalendarBatch {
-                    calendar_id: "primary".into(),
-                    records: std::mem::take(&mut *self.records.lock().unwrap()),
-                    failure: self.failure.lock().unwrap().take(),
-                }]
+                request
+                    .calendar_ids
+                    .into_iter()
+                    .map(|calendar_id| CalendarBatch {
+                        records: if calendar_id == "primary" {
+                            std::mem::take(&mut *self.records.lock().unwrap())
+                        } else {
+                            vec![]
+                        },
+                        failure: if calendar_id == "primary" {
+                            self.failure.lock().unwrap().take()
+                        } else {
+                            None
+                        },
+                        calendar_id,
+                    })
+                    .collect()
             },
         }))
     }
@@ -116,14 +138,9 @@ impl NativeCalendarGrantReader for Grants {
         &self,
         connection: &SourceConnection,
         person_id: PersonId,
-        calendar_ids: &[String],
         consumer: &str,
-        native_subject_fingerprint: &str,
     ) -> Result<CalendarReadAccessAdmission, AgentFailure> {
         let call_number = self.calls.fetch_add(1, Ordering::SeqCst);
-        if native_subject_fingerprint != "a".repeat(64) {
-            return Err(AgentFailure::AccessReviewRequired);
-        }
         if self.change_connection.load(Ordering::SeqCst)
             || self.change_on_second_call.load(Ordering::SeqCst) && call_number == 1
         {
@@ -157,10 +174,9 @@ impl NativeCalendarGrantReader for Grants {
         )
         .unwrap();
         let scope = GrantScope::try_new(
-            calendar_ids
-                .iter()
-                .map(|calendar_id| ResourceHandle::try_new(calendar_id.clone()).unwrap())
-                .collect(),
+            vec![floe_access::native_calendar_resource(
+                connection.connection_id().as_str(),
+            )?],
             vec![GrantDataCategory::Metadata, GrantDataCategory::Content],
             vec![GrantOperation::Read],
             vec![GrantPurpose::Assistant],
@@ -204,6 +220,8 @@ fn fixture() -> (Connections, Device, Grants, PersonId) {
             fingerprint: "a".repeat(64),
             checks: AtomicUsize::new(0),
             observations: AtomicUsize::new(0),
+            checked_calendar_ids: Mutex::new(vec![]),
+            observed_calendar_ids: Mutex::new(vec![]),
             partial_batch: AtomicBool::new(false),
             failure: Mutex::new(None),
             records: Mutex::new(vec![]),
@@ -244,7 +262,6 @@ async fn native_admission_checks_subject_grant_and_current_connection() {
         person_id,
         "device",
         "floe.builtin.schedule",
-        None,
         &window(),
     )
     .await
@@ -252,7 +269,9 @@ async fn native_admission_checks_subject_grant_and_current_connection() {
     assert_eq!(admitted.stamp.native_subject_fingerprint, "a".repeat(64));
     assert_eq!(
         admitted.admission.scope().resources()[0].as_str(),
-        "primary"
+        floe_access::native_calendar_resource(admitted.connection.connection_id().as_str())
+            .unwrap()
+            .as_str()
     );
     assert_eq!(connections.reads.load(Ordering::SeqCst), 2);
     assert_eq!(device.checks.load(Ordering::SeqCst), 1);
@@ -269,7 +288,6 @@ async fn native_admission_serves_two_canonical_consumers_under_one_grant() {
         person_id,
         "device",
         "floe.builtin.schedule",
-        None,
         &window(),
     )
     .await
@@ -281,7 +299,6 @@ async fn native_admission_serves_two_canonical_consumers_under_one_grant() {
         person_id,
         "device",
         "floe.builtin.focus-attention",
-        None,
         &window(),
     )
     .await
@@ -298,7 +315,7 @@ async fn native_admission_serves_two_canonical_consumers_under_one_grant() {
 }
 
 #[tokio::test]
-async fn native_admission_preserves_more_than_128_selected_calendars() {
+async fn native_admission_reads_more_than_128_current_calendars_under_one_logical_grant() {
     let (connections, device, grants, person_id) = fixture();
     let mut stored = connections.value.lock().unwrap();
     let source = stored.as_mut().unwrap();
@@ -320,14 +337,13 @@ async fn native_admission_preserves_more_than_128_selected_calendars() {
         person_id,
         "device",
         "floe.builtin.schedule",
-        None,
         &window(),
     )
     .await
     .unwrap();
 
     assert_eq!(admitted.stamp.calendar_ids.len(), 129);
-    assert_eq!(admitted.admission.scope().resources().len(), 129);
+    assert_eq!(admitted.admission.scope().resources().len(), 1);
 }
 
 #[tokio::test]
@@ -342,7 +358,6 @@ async fn native_admission_rejects_missing_or_changed_authority() {
             person_id,
             "device",
             "floe.builtin.schedule",
-            None,
             &window(),
         )
         .await,
@@ -360,7 +375,6 @@ async fn native_admission_rejects_missing_or_changed_authority() {
             person_id,
             "device",
             "floe.builtin.schedule",
-            None,
             &window(),
         )
         .await,
@@ -381,7 +395,6 @@ async fn native_admission_rejects_unbound_stamp_and_grant() {
             person_id,
             "device",
             "floe.builtin.schedule",
-            None,
             &window(),
         )
         .await,
@@ -399,7 +412,6 @@ async fn native_admission_rejects_unbound_stamp_and_grant() {
             person_id,
             "device",
             "floe.builtin.schedule",
-            None,
             &window(),
         )
         .await,
@@ -416,7 +428,6 @@ async fn native_admission_rejects_unbound_stamp_and_grant() {
             person_id,
             "device",
             "floe.builtin.schedule",
-            None,
             &window(),
         )
         .await,
@@ -439,7 +450,6 @@ async fn native_view_records_complete_empty_coverage_and_exact_dependency() {
             person_id,
             device_id: "device",
             consumer: "floe.builtin.schedule",
-            selected_calendar_ids: None,
             query: &query,
             window: &window(),
         },
@@ -463,25 +473,56 @@ async fn native_view_records_complete_empty_coverage_and_exact_dependency() {
 }
 
 #[tokio::test]
-async fn selected_native_calendar_subset_survives_read_and_reauthorization() {
+async fn current_resource_growth_reads_all_calendars_and_stales_old_dependency() {
     let (connections, device, grants, person_id) = fixture();
-    let mut stored = connections.value.lock().unwrap();
-    let source = stored.as_mut().unwrap();
-    source
-        .configure(
-            source.revision(),
-            ResourceMode::Selected,
-            vec![
-                resource("primary", "Primary"),
-                resource("secondary", "Secondary"),
-            ],
-        )
-        .unwrap();
-    drop(stored);
-    let selected = vec!["primary".to_owned()];
     let now = chrono::Utc::now().timestamp_millis();
     let query = CalendarViewQuery::try_new(now - 60_000, now + 60_000, None, 8).unwrap();
     let leases = SourceLeaseRegistry::new();
+    let first_window = window();
+    let (_, old_dependency) = read_native_calendar_view(
+        &connections,
+        &device,
+        &grants,
+        &leases,
+        NativeCalendarViewRead {
+            person_id,
+            device_id: "device",
+            consumer: "floe.builtin.schedule",
+            query: &query,
+            window: &first_window,
+        },
+    )
+    .await
+    .unwrap();
+    let old_source_authority = old_dependency.source_authority();
+    {
+        let mut stored = connections.value.lock().unwrap();
+        let source = stored.as_mut().unwrap();
+        source
+            .configure(
+                source.revision(),
+                ResourceMode::Selected,
+                vec![
+                    resource("primary", "Primary"),
+                    resource("secondary", "Secondary"),
+                ],
+            )
+            .unwrap();
+    }
+    assert_ne!(view_source_authority(&connections), old_source_authority);
+    assert_eq!(
+        authorize_native_calendar_dependency(
+            &connections,
+            &device,
+            &grants,
+            &leases,
+            &old_dependency,
+            &window(),
+        )
+        .await,
+        Err(AgentFailure::StaleContext),
+    );
+    let next_window = window();
     let (view, dependency) = read_native_calendar_view(
         &connections,
         &device,
@@ -491,21 +532,53 @@ async fn selected_native_calendar_subset_survives_read_and_reauthorization() {
             person_id,
             device_id: "device",
             consumer: "floe.builtin.schedule",
-            selected_calendar_ids: Some(&selected),
             query: &query,
-            window: &window(),
+            window: &next_window,
         },
     )
     .await
     .unwrap();
     assert!(view.items.is_empty());
+    let expected_ids = vec!["primary", "secondary"];
+    assert_eq!(
+        device.checked_calendar_ids.lock().unwrap().last().unwrap(),
+        &expected_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        device.observed_calendar_ids.lock().unwrap().last().unwrap(),
+        &expected_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        dependency.resources(),
+        &[floe_access::native_calendar_resource(
+            connections
+                .value
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .connection_id()
+                .as_str()
+        )
+        .unwrap()],
+    );
     assert_eq!(
         dependency
-            .resources()
+            .source_resources()
             .iter()
             .map(|resource| resource.as_str())
             .collect::<Vec<_>>(),
-        vec!["primary"]
+        expected_ids,
+    );
+    assert_eq!(
+        dependency.source_authority(),
+        view_source_authority(&connections)
     );
     authorize_native_calendar_dependency(
         &connections,
@@ -517,10 +590,7 @@ async fn selected_native_calendar_subset_survives_read_and_reauthorization() {
     )
     .await
     .unwrap();
-    assert_eq!(device.checks.load(Ordering::SeqCst), 3);
-    assert_eq!(grants.calls.load(Ordering::SeqCst), 3);
 }
-
 fn view_source_authority(connections: &Connections) -> SourceAuthority {
     connections
         .value
@@ -547,7 +617,6 @@ async fn native_view_rejects_partial_batch_and_unpageable_cursor() {
                 person_id,
                 device_id: "device",
                 consumer: "floe.builtin.schedule",
-                selected_calendar_ids: None,
                 query: &query,
                 window: &window(),
             },
@@ -568,7 +637,6 @@ async fn native_view_rejects_partial_batch_and_unpageable_cursor() {
                 person_id,
                 device_id: "device",
                 consumer: "floe.builtin.schedule",
-                selected_calendar_ids: None,
                 query: &query,
                 window: &window(),
             },
@@ -596,7 +664,6 @@ async fn native_permission_denial_requires_review_without_issuing_a_view() {
                 person_id,
                 device_id: "device",
                 consumer: "floe.builtin.schedule",
-                selected_calendar_ids: None,
                 query: &query,
                 window: &window(),
             },
@@ -640,7 +707,6 @@ async fn native_view_preserves_all_day_calendar_evidence() {
             person_id,
             device_id: "device",
             consumer: "floe.builtin.schedule",
-            selected_calendar_ids: None,
             query: &query,
             window: &window(),
         },
@@ -669,7 +735,6 @@ async fn native_dependency_rechecks_the_current_grant_source() {
             person_id,
             device_id: "device",
             consumer: "floe.builtin.schedule",
-            selected_calendar_ids: None,
             query: &query,
             window: &window(),
         },
@@ -729,7 +794,6 @@ async fn native_view_rejects_connection_change_after_observation() {
                 person_id,
                 device_id: "device",
                 consumer: "floe.builtin.schedule",
-                selected_calendar_ids: None,
                 query: &query,
                 window: &window(),
             },

@@ -1,9 +1,7 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Local, TimeZone, Utc};
-use floe_access::{
-    CalendarLeaseKey, RemoteCallWindow, admission_matches_dependency, calendar_lease_dependency,
-};
+use floe_access::{RemoteCallWindow, admission_matches_dependency};
 use floe_agent_contract::{AgentFailure, PersonId};
 use floe_context_contract::{
     CALENDAR_CONTEXT_VIEW_ID, CalendarContextItem, CalendarContextView, CalendarProvider,
@@ -14,6 +12,7 @@ use floe_day::{CalendarBatch, CalendarFailure, EventSchedule};
 use tokio::time::Instant;
 use uuid::Uuid;
 
+use super::calendar_lease::{CalendarQueryKey, calendar_dependency};
 use crate::{
     CalendarConnectionReader, CalendarObserveRequest, CalendarSource, NativeCalendarGrantReader,
     SourceLeaseRegistry, admit_current_native_calendar_read,
@@ -23,7 +22,6 @@ pub struct NativeCalendarViewRead<'a> {
     pub person_id: PersonId,
     pub device_id: &'a str,
     pub consumer: &'a str,
-    pub selected_calendar_ids: Option<&'a [String]>,
     pub query: &'a CalendarViewQuery,
     pub window: &'a RemoteCallWindow,
 }
@@ -47,7 +45,6 @@ pub async fn read_native_calendar_view(
         read.person_id,
         read.device_id,
         read.consumer,
-        read.selected_calendar_ids,
         read.window,
     )
     .await?;
@@ -99,7 +96,6 @@ pub async fn read_native_calendar_view(
         read.person_id,
         read.device_id,
         read.consumer,
-        read.selected_calendar_ids,
         read.window,
     )
     .await?;
@@ -128,7 +124,7 @@ pub async fn read_native_calendar_view(
     };
     validate_calendar_context_view_for_query(&view, read.query, Utc::now().timestamp_millis())?;
     let invocation_id = Uuid::new_v4();
-    let key = CalendarLeaseKey {
+    let key = CalendarQueryKey {
         invocation_id,
         person_id: read.person_id,
         handle: Uuid::new_v5(
@@ -147,7 +143,7 @@ pub async fn read_native_calendar_view(
         max_items: read.query.limit(),
         max_bytes: MAX_CALENDAR_CONTEXT_BYTES,
     };
-    let dependency = calendar_lease_dependency(
+    let dependency = calendar_dependency(
         invocation_id,
         leases.process_incarnation(),
         observation_id,
@@ -190,11 +186,6 @@ pub async fn authorize_native_calendar_dependency(
         return Err(AgentFailure::CapabilityDenied);
     }
     let (_, subject_fingerprint) = leases.observation(dependency)?;
-    let selected_calendar_ids = dependency
-        .source_resources()
-        .iter()
-        .map(|resource| resource.as_str().to_owned())
-        .collect::<Vec<_>>();
     let admitted = admit_current_native_calendar_read(
         connections,
         source,
@@ -202,11 +193,22 @@ pub async fn authorize_native_calendar_dependency(
         dependency.person_id(),
         dependency.source().execution_owner().as_str(),
         dependency.consumer().identifier(),
-        Some(&selected_calendar_ids),
         window,
     )
     .await?;
+    let current_calendar_ids = admitted
+        .stamp
+        .calendar_ids
+        .iter()
+        .map(|calendar_id| calendar_id.as_str())
+        .collect::<Vec<_>>();
+    let observed_calendar_ids = dependency
+        .source_resources()
+        .iter()
+        .map(|resource| resource.as_str())
+        .collect::<Vec<_>>();
     if admitted.stamp.native_subject_fingerprint != subject_fingerprint
+        || current_calendar_ids != observed_calendar_ids
         || !admission_matches_dependency(&admitted.admission, dependency)
     {
         return Err(AgentFailure::StaleContext);

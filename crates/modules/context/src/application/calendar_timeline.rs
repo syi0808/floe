@@ -27,11 +27,11 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use floe_access::{
-    CalendarLeaseKey, CalendarReadAccessAdmission, CalendarReadAccessRequest,
-    CalendarReadAccessStamp, CalendarReadAdmission, admission_matches,
-    admission_matches_dependency, calendar_lease_dependency,
+    CalendarReadAccessAdmission, CalendarReadAccessRequest, CalendarReadAccessStamp,
+    CalendarReadAdmission, admission_matches, admission_matches_dependency,
 };
 
+use super::calendar_lease::{CalendarQueryKey, calendar_dependency};
 use crate::application::consumed::ConsumedLineage;
 use crate::application::leases::{SourceLeaseRegistry, SourceLeaseReservation};
 use crate::application::source_view::SourceView;
@@ -50,7 +50,7 @@ pub struct CalendarTimelineViews<'host, Access, Mirror, Clock> {
     live_observation_expires_at: Mutex<Option<DateTime<Utc>>>,
     invocation_id: Uuid,
     process_incarnation: Uuid,
-    leases: Mutex<HashMap<CalendarLeaseKey, Arc<SourceView<ExpertTimelineView>>>>,
+    leases: Mutex<HashMap<CalendarQueryKey, Arc<SourceView<ExpertTimelineView>>>>,
     consumed: ConsumedLineage,
     acquisition: tokio::sync::Mutex<()>,
     source_observed: AtomicBool,
@@ -232,8 +232,8 @@ impl<
         request: &TimelineViewRead,
         range_start: DateTime<Utc>,
         range_end: DateTime<Utc>,
-    ) -> Result<CalendarLeaseKey, AgentFailure> {
-        Ok(CalendarLeaseKey {
+    ) -> Result<CalendarQueryKey, AgentFailure> {
+        Ok(CalendarQueryKey {
             invocation_id: self.invocation_id,
             person_id: self.grant.person_id,
             handle: self.grant.handle,
@@ -255,7 +255,7 @@ impl<
 
     fn cached_lease(
         &self,
-        key: &CalendarLeaseKey,
+        key: &CalendarQueryKey,
     ) -> Result<Option<Arc<SourceView<ExpertTimelineView>>>, AgentFailure> {
         let mut leases = self
             .leases
@@ -298,7 +298,7 @@ impl<
 
     async fn finish_lease(
         &self,
-        key: CalendarLeaseKey,
+        key: CalendarQueryKey,
         before: AuthorizedRead,
         after: AuthorizedRead,
         mut view: ExpertTimelineView,
@@ -346,7 +346,7 @@ impl<
         }
         let observation_id = Uuid::new_v4();
         view.source_handle = format!("calendar.lease:{observation_id}");
-        let dependency = calendar_lease_dependency(
+        let dependency = calendar_dependency(
             self.invocation_id,
             self.process_incarnation,
             observation_id,
@@ -843,7 +843,7 @@ impl<
         range_start: DateTime<Utc>,
         range_end: DateTime<Utc>,
         before: AuthorizedRead,
-        key: CalendarLeaseKey,
+        key: CalendarQueryKey,
         reservation: Option<SourceLeaseReservation>,
         mut observation: CalendarObservation,
         acquisition_wall: DateTime<Utc>,
@@ -976,7 +976,7 @@ impl<
         range_start: DateTime<Utc>,
         range_end: DateTime<Utc>,
         before: AuthorizedRead,
-        key: CalendarLeaseKey,
+        key: CalendarQueryKey,
         reservation: Option<SourceLeaseReservation>,
         mut observation: ProjectedCalendarObservation,
         acquisition_wall: DateTime<Utc>,

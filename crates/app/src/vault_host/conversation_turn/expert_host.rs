@@ -934,16 +934,28 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
             let connection = connection.ok_or(AgentFailure::CapabilityUnavailable)?;
             let connector_id =
                 calendar_connector_id(&connection).ok_or(AgentFailure::CapabilityUnavailable)?;
+            let native = connector_id == "calendar.event_kit";
+            let native_resource = if native {
+                Some(floe_access::native_calendar_resource(
+                    connection.connection_id().as_str(),
+                )?)
+            } else {
+                None
+            };
             if !connection.is_serving()
+                || native
+                    && (selected.len() != 1
+                        || selected[0].resource != *native_resource.as_ref().unwrap())
                 || selected.iter().any(|source| {
                     source.capability_id != "calendar.timeline"
                         || source.contract_version != 1
                         || source.connector_id.as_str() != connector_id
                         || source.connection_id != *connection.connection_id()
-                        || !connection
-                            .resources()
-                            .iter()
-                            .any(|calendar| calendar.handle() == &source.resource)
+                        || !native
+                            && !connection
+                                .resources()
+                                .iter()
+                                .any(|calendar| calendar.handle() == &source.resource)
                 })
             {
                 return Err(AgentFailure::StaleContext);
@@ -971,9 +983,10 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                     let grants = crate::vault_host::calendar_access::VaultNativeCalendarGrants {
                         vault: self.vault,
                     };
-                    let calendar_ids: Vec<String> = selected
+                    let calendar_ids: Vec<String> = connection
+                        .resources()
                         .iter()
-                        .map(|source| source.resource.as_str().to_owned())
+                        .map(|calendar| calendar.handle().as_str().to_owned())
                         .collect();
                     let source = floe_provider_adapters::sources::native_calendar::NativeCalendarReadAccess::new(
                         person_id,
@@ -996,7 +1009,6 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                             person_id,
                             device_id: self.device_id,
                             consumer,
-                            selected_calendar_ids: Some(&calendar_ids),
                             query,
                             window: &window,
                         },
@@ -1366,7 +1378,7 @@ mod tests {
             connection_id: floe_context_contract::ConnectionId::try_new("connection").unwrap(),
             execution_owner_id: floe_context_contract::ExecutionOwnerId::try_new("device").unwrap(),
             capability_id: "calendar.timeline".into(),
-            resource: floe_context_contract::ResourceHandle::try_new("primary").unwrap(),
+            resource: floe_access::native_calendar_resource("connection").unwrap(),
             contract_version: 1,
         }]
     }
@@ -1412,7 +1424,10 @@ mod tests {
             "calendar.event_kit"
         );
         assert_eq!(requirement.connection_id().unwrap().as_str(), "connection");
-        assert_eq!(requirement.resources()[0].as_str(), "primary");
+        assert_eq!(
+            requirement.resources()[0].as_str(),
+            "calendar.timeline:connection"
+        );
         assert_eq!(
             requirement.source_authority(),
             Some(connection.source_authority())
@@ -1441,11 +1456,14 @@ mod tests {
         let requirement = blockers_requirement(outcome);
         assert_eq!(requirement.source_id(), "floe.source.calendar");
         assert_eq!(requirement.consumer().identifier(), "example.test.expert");
-        assert_eq!(requirement.resources()[0].as_str(), "primary");
+        assert_eq!(
+            requirement.resources()[0].as_str(),
+            "calendar.timeline:connection"
+        );
     }
 
     #[test]
-    fn calendar_review_does_not_expand_when_another_resource_is_added() {
+    fn calendar_review_keeps_one_logical_resource_when_another_leaf_is_added() {
         let mut connection = calendar_connection();
         connection
             .configure(
@@ -1481,7 +1499,10 @@ mod tests {
         .unwrap();
         let requirement = blockers_requirement(outcome);
         assert_eq!(requirement.resources().len(), 1);
-        assert_eq!(requirement.resources()[0].as_str(), "primary");
+        assert_eq!(
+            requirement.resources()[0].as_str(),
+            "calendar.timeline:connection"
+        );
     }
 
     #[test]
@@ -1603,9 +1624,7 @@ mod tests {
         )
         .unwrap();
         if state == floe_access::GrantState::Active {
-            grant
-                .activate_review(grant.authority(), scope)
-                .unwrap();
+            grant.activate_review(grant.authority(), scope).unwrap();
         }
         grant
     }

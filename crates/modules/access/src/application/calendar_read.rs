@@ -107,6 +107,14 @@ impl CalendarReadAccessAdmission {
         self.grant_id
     }
 
+    pub fn grant_authority(&self) -> GrantAuthority {
+        self.grant_authority
+    }
+
+    pub fn consumer_policy(&self) -> ConsumerPolicyAuthority {
+        self.consumer_policy
+    }
+
     pub fn source(&self) -> &GrantSourceBinding {
         &self.source
     }
