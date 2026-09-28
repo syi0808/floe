@@ -45,6 +45,9 @@ pub fn project_calendar_connector(
     now: DateTime<Utc>,
 ) -> Result<ConnectorSnapshot, ConnectorProjectionError> {
     validate_connector_device(device_id)?;
+    if source.execution_owner_id().as_str() != device_id {
+        return Err(ConnectorProjectionError::InvalidObservation);
+    }
     let connector_id = source.connector_id().as_str();
     let provider =
         provider_for_connector(connector_id).ok_or(ConnectorProjectionError::InvalidObservation)?;
@@ -324,6 +327,26 @@ mod tests {
         );
         assert!(snapshot.views.is_empty());
         assert_eq!(source, before);
+    }
+
+    #[test]
+    fn foreign_device_cannot_project_calendar_source() {
+        let source = SourceConnection::establish(
+            PersonId::new(),
+            ConnectorId::try_new("calendar.event_kit").unwrap(),
+            ConnectionId::try_new("calendar-source").unwrap(),
+            ExecutionOwnerId::try_new("device-a").unwrap(),
+            ResourceMode::Selected,
+            vec![
+                ConnectionResource::new(ResourceHandle::try_new("home").unwrap(), "Home".into())
+                    .unwrap(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            project_calendar_connector(&source, None, "device-b", Utc::now()),
+            Err(ConnectorProjectionError::InvalidObservation)
+        );
     }
 
     #[test]
