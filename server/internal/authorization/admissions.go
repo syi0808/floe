@@ -13,7 +13,6 @@ import (
 // of the client's view.
 type Admissions struct {
 	mu         sync.Mutex
-	calendar   map[string]calendarAdmissionState
 	remoteView map[string]remoteViewAdmissionState
 
 	producer            *ProducerIdentity
@@ -23,24 +22,8 @@ type Admissions struct {
 
 func NewAdmissions() *Admissions {
 	return &Admissions{
-		calendar:   map[string]calendarAdmissionState{},
 		remoteView: map[string]remoteViewAdmissionState{},
 	}
-}
-
-// CalendarAdmission returns the recorded calendar admission for a key.
-func (admissions *Admissions) CalendarAdmission(key string) (calendarAdmissionState, bool) {
-	admissions.mu.Lock()
-	defer admissions.mu.Unlock()
-	state, ok := admissions.calendar[key]
-	return state, ok
-}
-
-// RecordCalendarAdmission stores a calendar admission.
-func (admissions *Admissions) RecordCalendarAdmission(key string, state calendarAdmissionState) {
-	admissions.mu.Lock()
-	defer admissions.mu.Unlock()
-	admissions.calendar[key] = state
 }
 
 // RemoteViewAdmission returns the recorded view admission for a key.

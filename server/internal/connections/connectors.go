@@ -1,10 +1,15 @@
 package connections
 
 import (
+	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
+
+const MaxCalendarResourceSetBytes = 12 * 1024
 
 type Definition struct {
 	ID              string
@@ -22,8 +27,8 @@ var Definitions = []Definition{
 	{ID: "github.issues", Name: "GitHub Issues", AuthKind: "oauth_device", OAuthCredential: "FLOE_GITHUB_OAUTH", RequiredScopes: []string{"github.issues.read"}, ScopeFields: []string{"owner", "repository"}},
 	{ID: "slack.conversations", Name: "Slack", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_SLACK_OAUTH", RequiredScopes: []string{"channels:history", "groups:history"}, ScopeFields: []string{"channel", "thread"}},
 	{ID: "google_drive.files", Name: "Google Drive", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_DRIVE_OAUTH", RequiredScopes: []string{"https://www.googleapis.com/auth/drive.readonly"}, ScopeFields: []string{"folder_id"}},
-	{ID: "calendar.google", Name: "Google Calendar", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_GOOGLE_CALENDAR_OAUTH", RequiredScopes: []string{"https://www.googleapis.com/auth/calendar.readonly"}, ScopeFields: []string{"calendar_id"}},
-	{ID: "calendar.microsoft", Name: "Microsoft Calendar", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_MICROSOFT_CALENDAR_OAUTH", RequiredScopes: []string{"Calendars.Read"}, ScopeFields: []string{"calendar_id"}},
+	{ID: "calendar.google", Name: "Google Calendar", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_GOOGLE_CALENDAR_OAUTH", RequiredScopes: []string{"https://www.googleapis.com/auth/calendar.readonly"}, ScopeFields: []string{"calendar_ids"}},
+	{ID: "calendar.microsoft", Name: "Microsoft Calendar", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_MICROSOFT_CALENDAR_OAUTH", RequiredScopes: []string{"Calendars.Read"}, ScopeFields: []string{"calendar_ids"}},
 	{ID: "microsoft.teams", Name: "Microsoft Teams", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_MICROSOFT_TEAMS_OAUTH", RequiredScopes: []string{"ChannelMessage.Read.All"}, ScopeFields: []string{"team_id", "channel_id"}},
 	{ID: "home_assistant.states", Name: "Home Assistant", AuthKind: "secret", CredentialName: HomeTokenKey, RequiredScopes: []string{"home.states.read"}, ScopeFields: []string{"base_url", "entities"}},
 }
@@ -167,18 +172,27 @@ func ValidatedConnectorScope(definition Definition, scope map[string]any) (map[s
 			return nil, errors.New("invalid drive scope")
 		}
 		return map[string]any{"folder_id": folderID}, nil
-	case "calendar.google":
-		calendarID, ok := ScopeString(scope, "calendar_id")
-		if !ok || calendarID == "" || len(calendarID) > 256 {
+	case "calendar.google", "calendar.microsoft":
+		calendarIDs, ok := ConnectorScopeStrings(scope["calendar_ids"])
+		if !ok || len(calendarIDs) == 0 {
 			return nil, errors.New("invalid calendar scope")
 		}
-		return map[string]any{"calendar_id": calendarID}, nil
-	case "calendar.microsoft":
-		calendarID, ok := ScopeString(scope, "calendar_id")
-		if !ok || calendarID == "" || len(calendarID) > 256 {
-			return nil, errors.New("invalid calendar scope")
+		for _, calendarID := range calendarIDs {
+			if calendarID == "" || calendarID != strings.TrimSpace(calendarID) || len(calendarID) > 256 || calendarID == "*" || strings.ContainsFunc(calendarID, unicode.IsControl) {
+				return nil, errors.New("invalid calendar scope")
+			}
 		}
-		return map[string]any{"calendar_id": calendarID}, nil
+		sort.Strings(calendarIDs)
+		for index := 1; index < len(calendarIDs); index++ {
+			if calendarIDs[index] == calendarIDs[index-1] {
+				return nil, errors.New("duplicate calendar scope")
+			}
+		}
+		encoded, err := json.Marshal(calendarIDs)
+		if err != nil || len(encoded) > MaxCalendarResourceSetBytes {
+			return nil, errors.New("calendar scope exceeds source proof budget")
+		}
+		return map[string]any{"calendar_ids": calendarIDs}, nil
 	case "microsoft.teams":
 		teamID, teamOK := ScopeString(scope, "team_id")
 		channelID, channelOK := ScopeString(scope, "channel_id")

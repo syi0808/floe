@@ -85,11 +85,19 @@ func (console *Console) rebuildConnectorRuntime(connection connections.Record) e
 		if console.calendarAuth == nil {
 			return nil
 		}
-		client, err := calendarconnector.New(console.calendarAuth, scope["calendar_id"].(string), connection.ConnectionID)
-		if err != nil {
-			return err
+		calendarIDs, ok := connections.ConnectorScopeStrings(scope["calendar_ids"])
+		if !ok || len(calendarIDs) == 0 {
+			return errors.New("invalid calendar scope")
 		}
-		service, err := calendarconnector.NewService(client)
+		clients := make([]*calendarconnector.Client, len(calendarIDs))
+		for index, calendarID := range calendarIDs {
+			client, err := calendarconnector.New(console.calendarAuth, calendarID, connection.ConnectionID)
+			if err != nil {
+				return err
+			}
+			clients[index] = client
+		}
+		service, err := calendarconnector.NewService(clients...)
 		if err == nil {
 			console.calendars[connection.ConnectionID] = service
 		}
@@ -98,11 +106,19 @@ func (console *Console) rebuildConnectorRuntime(connection connections.Record) e
 		if console.microsoftCalendarAuth == nil {
 			return nil
 		}
-		client, err := microsoftcalendarconnector.New(console.microsoftCalendarAuth, scope["calendar_id"].(string), connection.ConnectionID)
-		if err != nil {
-			return err
+		calendarIDs, ok := connections.ConnectorScopeStrings(scope["calendar_ids"])
+		if !ok || len(calendarIDs) == 0 {
+			return errors.New("invalid calendar scope")
 		}
-		service, err := microsoftcalendarconnector.NewService(client)
+		clients := make([]*microsoftcalendarconnector.Client, len(calendarIDs))
+		for index, calendarID := range calendarIDs {
+			client, err := microsoftcalendarconnector.New(console.microsoftCalendarAuth, calendarID, connection.ConnectionID)
+			if err != nil {
+				return err
+			}
+			clients[index] = client
+		}
+		service, err := microsoftcalendarconnector.NewService(clients...)
 		if err == nil {
 			console.calendars[connection.ConnectionID] = service
 		}

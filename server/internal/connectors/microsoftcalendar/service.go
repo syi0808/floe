@@ -10,23 +10,40 @@ import (
 )
 
 type Service struct {
-	client    *Client
+	pager     *common.CalendarPager
 	clock     func() time.Time
 	operation sync.Mutex
 	last      *CalendarView
 }
 
-func NewService(client *Client) (*Service, error) {
-	if client == nil {
+func NewService(clients ...*Client) (*Service, error) {
+	if len(clients) == 0 {
 		return nil, ErrInvalidInput
 	}
-	return &Service{client: client, clock: time.Now}, nil
+	leaves := make([]common.CalendarLeaf, len(clients))
+	for index, client := range clients {
+		if client == nil || client.connectionID != clients[0].connectionID {
+			return nil, ErrInvalidInput
+		}
+		leaves[index] = common.CalendarLeaf{ResourceID: client.calendarID, Read: client.Calendar}
+	}
+	pager, err := common.NewCalendarPager(clients[0].connectionID, leaves)
+	if err != nil {
+		return nil, ErrInvalidInput
+	}
+	return &Service{pager: pager, clock: time.Now}, nil
 }
 
 func (service *Service) ReadCalendarView(ctx context.Context, rangeStart, rangeEnd time.Time, cursor string, limit int) (any, error) {
 	service.operation.Lock()
 	defer service.operation.Unlock()
-	view, err := service.client.Calendar(ctx, rangeStart, rangeEnd, cursor, limit, service.clock())
+	view, err := service.pager.Read(ctx, rangeStart, rangeEnd, cursor, limit, service.clock())
+	if errors.Is(err, common.ErrCalendarCursor) {
+		return nil, ErrInvalidInput
+	}
+	if errors.Is(err, common.ErrCalendarResult) {
+		return nil, ErrInvalidResponse
+	}
 	if err == nil {
 		service.last = &view
 	}
@@ -37,7 +54,7 @@ func (service *Service) ConnectionSnapshot(ctx context.Context) (any, error) {
 	service.operation.Lock()
 	defer service.operation.Unlock()
 	now := service.clock()
-	view, err := service.client.Calendar(ctx, now.Add(-24*time.Hour), now.Add(31*24*time.Hour), "", 25, now)
+	view, err := service.pager.Read(ctx, now.Add(-24*time.Hour), now.Add(31*24*time.Hour), "", 25, now)
 	if err == nil {
 		service.last = &view
 		return ConnectionSnapshot(view)
@@ -50,7 +67,7 @@ func (service *Service) ConnectionSnapshot(ctx context.Context) (any, error) {
 		kind = "permission_denied"
 	case errors.Is(err, ErrRateLimited):
 		kind = "rate_limited"
-	case errors.Is(err, ErrInvalidResponse):
+	case errors.Is(err, ErrInvalidResponse), errors.Is(err, common.ErrCalendarResult):
 		kind = "partial_fetch"
 	}
 	observed := now.UnixMilli()

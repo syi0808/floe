@@ -164,15 +164,6 @@ func (handler *Handler) serveClient(writer http.ResponseWriter, request *http.Re
 	if client.Authority.ServeClient(writer, request, principal) {
 		return
 	}
-	if request.URL.Path == "/v1/authority/calendar/source" && request.Method == http.MethodPost {
-		var input authorization.SourcePreview
-		if !strictDecode(writer, request, &input) {
-			failure(writer, http.StatusBadRequest, "validation")
-			return
-		}
-		writeResult(writer, client.Sources.PreviewCalendar(principal, input))
-		return
-	}
 	if strings.HasPrefix(request.URL.Path, "/v1/connectors") {
 		ServeConnectors(writer, request, client.Connectors)
 		return

@@ -122,7 +122,7 @@ func (client *Client) Calendar(ctx context.Context, rangeStart, rangeEnd time.Ti
 			return CalendarView{}, ErrInvalidResponse
 		}
 		seen[event.ID] = true
-		view.Items = append(view.Items, CalendarItem{EvidenceHandle: handle("calendar.event", client.connectionID+":"+event.ID), UntrustedTitle: truncate(event.Summary, 1024), StartsAtUnixMS: starts.UnixMilli(), EndsAtUnixMS: ends.UnixMilli(), AllDay: startAllDay})
+		view.Items = append(view.Items, CalendarItem{EvidenceHandle: handle("calendar.event", client.connectionID+":"+client.calendarID+":"+event.ID), UntrustedTitle: truncate(event.Summary, 1024), StartsAtUnixMS: starts.UnixMilli(), EndsAtUnixMS: ends.UnixMilli(), AllDay: startAllDay})
 	}
 	encoded, err := json.Marshal(view)
 	if err != nil || len(encoded) > 65_536 {

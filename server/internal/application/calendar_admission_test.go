@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -43,7 +44,7 @@ func TestCalendarSourcePreviewIsProducerSignedAndUsesVerifiedIdentity(t *testing
 	fixture.console.calendarAuth = &calendarAuthorityIdentityRuntime{identity: "google:subject-a"}
 	fixture.console.mu.Lock()
 	record := fixture.console.state.Connections[connectionID]
-	record.Scope = map[string]any{"calendar_id": "primary"}
+	record.Scope = map[string]any{"calendar_ids": []string{"primary"}}
 	record.Incarnation = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 	record.Epoch = 7
 	record.Credential = "calendar-test-credential"
@@ -55,11 +56,14 @@ func TestCalendarSourcePreviewIsProducerSignedAndUsesVerifiedIdentity(t *testing
 	if err := fixture.console.WithCurrentSource(principal, authorization.SourceReference{ConnectorID: "calendar.google", ConnectionID: connectionID, ExecutionOwner: fixture.console.state.ExecutionOwnerID, Incarnation: record.Incarnation, Epoch: record.Epoch}, func(authorization.SourceSnapshot) error { return nil }); err != nil {
 		t.Fatalf("direct source fence: %v", err)
 	}
-	response := fixture.call(http.MethodPost, "/v1/authority/calendar/source", map[string]any{
-		"connector_id": "calendar.google", "connection_id": connectionID, "resource": "primary",
+	response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline/source-preview", map[string]any{
+		"connector_id": "calendar.google", "connection_id": connectionID, "resource": "calendar.timeline:" + connectionID,
 	}, token)
 	if response.Code != http.StatusOK {
 		t.Fatalf("source preview: %d %s", response.Code, response.Body.String())
+	}
+	if legacy := fixture.call(http.MethodPost, "/v1/authority/calendar/source", map[string]any{"connector_id": "calendar.google", "connection_id": connectionID, "resource": "primary"}, token); legacy.Code != http.StatusNotFound {
+		t.Fatalf("removed calendar route still available: %d", legacy.Code)
 	}
 	var value map[string]any
 	if err := json.Unmarshal(response.Body.Bytes(), &value); err != nil {
@@ -91,7 +95,7 @@ func TestCalendarSourcePreviewIsProducerSignedAndUsesVerifiedIdentity(t *testing
 		t.Fatal("source descriptor signature did not verify")
 	}
 	var fields map[string]any
-	if err := json.Unmarshal(descriptor, &fields); err != nil || fields["provider_identity"] != "google:subject-a" || fields["epoch"] != float64(7) {
+	if err := json.Unmarshal(descriptor, &fields); err != nil || fields["provider_identity"] != "google:subject-a" || fields["epoch"] != float64(7) || fields["resource"] != "calendar.timeline:"+connectionID || !reflect.DeepEqual(fields["source_resources"], []any{"primary"}) {
 		t.Fatalf("unexpected source descriptor: %s", descriptor)
 	}
 	fixture.console.mu.Lock()
@@ -101,8 +105,8 @@ func TestCalendarSourcePreviewIsProducerSignedAndUsesVerifiedIdentity(t *testing
 	fixture.console.state.Connections[connectionID] = record
 	fixture.console.mu.Unlock()
 	fixture.console.calendarAuth = &calendarAuthorityIdentityRuntime{identity: "google:subject-b"}
-	replaced := fixture.call(http.MethodPost, "/v1/authority/calendar/source", map[string]any{
-		"connector_id": "calendar.google", "connection_id": connectionID, "resource": "primary",
+	replaced := fixture.call(http.MethodPost, "/v1/views/calendar.timeline/source-preview", map[string]any{
+		"connector_id": "calendar.google", "connection_id": connectionID, "resource": "calendar.timeline:" + connectionID,
 	}, token)
 	if replaced.Code != http.StatusOK {
 		t.Fatalf("replacement source preview: %d %s", replaced.Code, replaced.Body.String())
@@ -133,7 +137,7 @@ func TestCalendarAuthoritySignedAdmissionReadRelease(t *testing.T) {
 	fixture.console.mu.Lock()
 	fixture.console.calendarAuth = identityRuntime
 	record := fixture.console.state.Connections[connectionID]
-	record.Scope = map[string]any{"calendar_id": "primary"}
+	record.Scope = map[string]any{"calendar_ids": []string{"primary"}}
 	record.Credential = "calendar-test-credential"
 	record.Incarnation = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 	record.Epoch = 1
@@ -166,7 +170,7 @@ func TestCalendarAuthoritySignedAdmissionReadRelease(t *testing.T) {
 	start := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC).UnixMilli()
 	admitBody := map[string]any{
 		"schema_version": 1, "connector_id": "calendar.google", "connection_id": connectionID,
-		"connection_revision": 1, "resources": []string{"primary"},
+		"connection_revision": 1, "resources": []string{"calendar.timeline:" + connectionID},
 		"policy":  map[string]any{"incarnation": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "epoch": 1},
 		"grant":   map[string]any{"id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "incarnation": "dddddddd-dddd-4ddd-8ddd-dddddddddddd", "epoch": 1},
 		"purpose": "everyday_assistance", "consumer": "floe.builtin.schedule", "max_items": 25, "max_bytes": 65536,

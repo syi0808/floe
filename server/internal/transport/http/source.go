@@ -14,14 +14,6 @@ func serveSource(writer http.ResponseWriter, request *http.Request, principal au
 		failure(writer, http.StatusNotFound, "not_found")
 		return
 	}
-	if len(parts) == 1 && viewID != "calendar.timeline" {
-		failure(writer, http.StatusBadRequest, "admission_required")
-		return
-	}
-	if viewID == "calendar.timeline" && len(service.Calendars) == 0 && (len(parts) != 2 || parts[1] != "source-preview") {
-		failure(writer, http.StatusNotFound, "calendar_connector_not_found")
-		return
-	}
 	if request.Method != http.MethodPost {
 		failure(writer, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
@@ -37,38 +29,27 @@ func serveSource(writer http.ResponseWriter, request *http.Request, principal au
 	switch parts[1] {
 	case "source-preview":
 		var input authorization.SourcePreview
-		if !decodeCalendarEnvelope(writer, request, map[string]struct{}{"connector_id": {}, "connection_id": {}, "resource": {}}, &input) {
+		if !decodeSourceEnvelope(writer, request, map[string]struct{}{"connector_id": {}, "connection_id": {}, "resource": {}}, &input) {
 			failure(writer, http.StatusBadRequest, "validation")
 			return
 		}
 		writeResult(writer, service.PreviewView(principal, viewID, input))
 	case "admit":
 		allowed := map[string]struct{}{"schema_version": {}, "connector_id": {}, "connection_id": {}, "connection_revision": {}, "resources": {}, "policy": {}, "grant": {}, "purpose": {}, "consumer": {}, "max_items": {}, "max_bytes": {}, "query": {}}
-		if viewID == "calendar.timeline" {
-			var input authorization.CalendarAdmission
-			if !decodeCalendarEnvelope(writer, request, allowed, &input) {
-				failure(writer, http.StatusBadRequest, "validation")
-				return
-			}
-			writeResult(writer, service.AdmitCalendar(request.Context(), principal, input))
-		} else {
-			var input authorization.ViewAdmission
-			if !decodeCalendarEnvelope(writer, request, allowed, &input) {
-				failure(writer, http.StatusBadRequest, "validation")
-				return
-			}
-			writeResult(writer, service.AdmitView(principal, viewID, input))
+		var input authorization.ViewAdmission
+		if !decodeSourceEnvelope(writer, request, allowed, &input) {
+			failure(writer, http.StatusBadRequest, "validation")
+			return
 		}
+		writeResult(writer, service.AdmitView(request.Context(), principal, viewID, input))
 	case "read", "release":
-		proof, ok := decodeCalendarProof(writer, request)
+		proof, ok := decodeSourceProof(writer, request)
 		if !ok {
 			failure(writer, http.StatusBadRequest, "validation")
 			return
 		}
 		if parts[1] == "release" {
 			writeResult(writer, service.Release(principal, proof))
-		} else if viewID == "calendar.timeline" {
-			writeResult(writer, service.ReadCalendar(request.Context(), principal, proof))
 		} else {
 			writeResult(writer, service.ReadView(request.Context(), principal, viewID, proof))
 		}

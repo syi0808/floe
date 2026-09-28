@@ -46,7 +46,7 @@ func TestOAuthCompletionPersistsVerifiedProviderIdentityAcrossReopen(t *testing.
 	fixture.console.mu.Lock()
 	fixture.console.calendarAuth = runtime
 	fixture.console.state.Clients["fixture-client"] = pairedClient{ClientID: "fixture-client", TokenHash: digest("fixture-token"), PersonID: fixturePersonID, DeviceID: fixtureDeviceID}
-	scope := map[string]any{"calendar_id": "primary"}
+	scope := map[string]any{"calendar_ids": []any{"primary"}}
 	fixture.console.connections.PutAttempt(attemptID, &connections.Attempt{ID: attemptID, ConnectorID: "calendar.google", ConnectionID: connectionID, PersonID: fixturePersonID, Scope: scope, Credential: credential, Status: "connected"})
 	fixture.console.state.Attempts[attemptID] = connectionAttemptRecord{AttemptID: attemptID, ConnectorID: "calendar.google", ConnectionID: connectionID, PersonID: fixturePersonID, Incarnation: "00000000-0000-4000-8000-000000000099", Epoch: 1, Scope: scope, Credential: credential}
 	fixture.console.mu.Unlock()
@@ -97,7 +97,7 @@ func TestOAuthCompletionMissingProviderIdentityPersistsProtectedDeny(t *testing.
 	fixture.console.mu.Lock()
 	fixture.console.calendarAuth = runtime
 	fixture.console.state.Clients["fixture-client"] = pairedClient{ClientID: "fixture-client", TokenHash: digest("fixture-token"), PersonID: fixturePersonID, DeviceID: fixtureDeviceID}
-	scope := map[string]any{"calendar_id": "primary"}
+	scope := map[string]any{"calendar_ids": []any{"primary"}}
 	fixture.console.connections.PutAttempt(attemptID, &connections.Attempt{ID: attemptID, ConnectorID: "calendar.google", ConnectionID: connectionID, PersonID: fixturePersonID, Scope: scope, Credential: credential, Status: "connected"})
 	fixture.console.state.Attempts[attemptID] = connectionAttemptRecord{AttemptID: attemptID, ConnectorID: "calendar.google", ConnectionID: connectionID, PersonID: fixturePersonID, Incarnation: "00000000-0000-4000-8000-000000000098", Epoch: 1, Scope: scope, Credential: credential}
 	fixture.console.mu.Unlock()
