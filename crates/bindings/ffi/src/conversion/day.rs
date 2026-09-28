@@ -6,7 +6,7 @@
 #[cfg(test)]
 use floe_app::Revision;
 use floe_app::{
-    AllDaySchedule, CalendarBatch, CalendarConnection, CalendarFailure, CalendarRange,
+    AllDaySchedule, CalendarBatch, CalendarFailure, CalendarMirrorState, CalendarRange,
     CalendarRecord, CalendarSelection, CalendarSource, CalendarSyncStatus, Capture,
     CaptureProcessing, CaptureSource, Classification, DaySnapshot, DomainError, DomainRef, Event,
     EventId, EventSchedule, Note, NoteId, Priority, SourceRef, Task, TaskId, TimedSchedule,
@@ -16,7 +16,7 @@ use floe_protocol::conversion::{
     ProtocolConversionError, parse_date, parse_timestamp, parse_uuid, timestamp,
 };
 use floe_protocol::{
-    CalendarBatchDto, CalendarConnectionDto, CalendarFailureDto, CalendarRangeDto,
+    CalendarBatchDto, CalendarFailureDto, CalendarMirrorStateDto, CalendarRangeDto,
     CalendarRecordDto, CalendarSelectionDto, CalendarSourceDto, CalendarSyncStatusDto, CaptureDto,
     CaptureProcessingDto, CaptureSourceDto, ClassificationDto, DaySnapshotDto, DomainRefDto,
     EventDto, EventScheduleDto, NoteDto, PROTOCOL_VERSION, PriorityDto, SourceRefDto, TaskDto,
@@ -150,20 +150,10 @@ pub fn calendar_sync_status_from_dto(value: CalendarSyncStatusDto) -> CalendarSy
     }
 }
 
-pub fn calendar_connection_to_dto(value: CalendarConnection) -> CalendarConnectionDto {
-    CalendarConnectionDto {
-        connection_id: value.connection_id,
-        device_id: value.device_id,
-        disconnected: value.disconnected,
-        scope: calendar_scope_to_dto(value.scope),
+pub fn calendar_mirror_state_to_dto(value: CalendarMirrorState) -> CalendarMirrorStateDto {
+    CalendarMirrorStateDto {
+        source_connection_id: value.source_connection_id,
         provider: calendar_provider_to_dto(value.provider),
-        calendars: value
-            .calendars
-            .into_iter()
-            .map(calendar_selection_to_dto)
-            .collect(),
-        revision: value.revision,
-        source_authority: value.source_authority,
         last_success_at: value.last_success_at,
         last_range: value.last_range.map(calendar_range_to_dto),
         error: value.error.map(calendar_failure_to_dto),
@@ -177,20 +167,10 @@ pub fn calendar_connection_to_dto(value: CalendarConnection) -> CalendarConnecti
 }
 
 #[cfg(test)]
-pub fn calendar_connection_from_dto(value: CalendarConnectionDto) -> CalendarConnection {
-    CalendarConnection {
-        connection_id: value.connection_id,
-        device_id: value.device_id,
-        disconnected: value.disconnected,
-        scope: calendar_scope_from_dto(value.scope),
+pub fn calendar_mirror_state_from_dto(value: CalendarMirrorStateDto) -> CalendarMirrorState {
+    CalendarMirrorState {
+        source_connection_id: value.source_connection_id,
         provider: calendar_provider_from_dto(value.provider),
-        calendars: value
-            .calendars
-            .into_iter()
-            .map(calendar_selection_from_dto)
-            .collect(),
-        revision: value.revision,
-        source_authority: value.source_authority,
         last_success_at: value.last_success_at,
         last_range: value.last_range.map(calendar_range_from_dto),
         error: value.error.map(calendar_failure_from_dto),
@@ -594,7 +574,7 @@ pub fn day_snapshot_to_dto(value: DaySnapshot) -> Result<DaySnapshotDto, Protoco
             }
         })?,
         items: value.items.into_iter().map(timeline_item_to_dto).collect(),
-        calendar: value.calendar.map(calendar_connection_to_dto),
+        calendar: value.calendar.map(calendar_mirror_state_to_dto),
         calendar_mirror_revision: value.calendar_mirror_revision,
     })
 }
@@ -612,7 +592,7 @@ pub fn day_snapshot_from_dto(
     Ok(DaySnapshot {
         person_id: parse_person_id(&value.person_id, "person_id")?,
         date: parse_date(&value.date, "date")?,
-        calendar: value.calendar.map(calendar_connection_from_dto),
+        calendar: value.calendar.map(calendar_mirror_state_from_dto),
         calendar_mirror_revision: value.calendar_mirror_revision,
         generated_at: parse_timestamp(&value.generated_at, "generated_at")?,
         timezone_offset_seconds: value.timezone_offset_seconds,
@@ -642,10 +622,9 @@ mod tests {
 
     use chrono::{TimeZone, Utc};
     use floe_app::{
-        CalendarConnection, CalendarFailure, CalendarProvider, CalendarRange, CalendarScope,
-        CalendarSelection, CalendarSyncStatus, Capture, CaptureId, CaptureSource, DaySnapshot,
-        DomainRef, Event, EventId, EventSchedule, Note, PersonId, Priority, SourceRef, Task,
-        TimedSchedule, TimelineItem,
+        CalendarFailure, CalendarMirrorState, CalendarProvider, CalendarRange, CalendarSyncStatus,
+        Capture, CaptureId, CaptureSource, DaySnapshot, DomainRef, Event, EventId, EventSchedule,
+        Note, PersonId, Priority, SourceRef, Task, TimedSchedule, TimelineItem,
     };
     use floe_protocol::{CalendarProviderDto, DaySnapshotDto, EventScheduleDto, SourceRefDto};
     use uuid::Uuid;
@@ -749,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn calendar_connection_conversion_preserves_wire_json_shape() {
+    fn calendar_mirror_state_conversion_preserves_wire_json_shape() {
         let now = Utc.with_ymd_and_hms(2026, 9, 2, 10, 30, 0).unwrap();
         let range = CalendarRange {
             start_date: now.date_naive(),
@@ -757,18 +736,9 @@ mod tests {
             timezone_offset_seconds: 32_400,
             end_timezone_offset_seconds: Some(28_800),
         };
-        let connection = CalendarConnection {
-            connection_id: "connection-1".into(),
-            device_id: "mac-local".into(),
-            disconnected: false,
-            scope: CalendarScope::Selected,
+        let state = CalendarMirrorState {
+            source_connection_id: "connection-1".into(),
             provider: CalendarProvider::Google,
-            calendars: vec![CalendarSelection {
-                calendar_id: "primary".into(),
-                calendar_name: "Primary".into(),
-            }],
-            revision: 7,
-            source_authority: floe_app::SourceAuthority::new(),
             last_success_at: Some(now),
             last_range: Some(range.clone()),
             error: Some(CalendarFailure::ProviderUnavailable),
@@ -785,10 +755,10 @@ mod tests {
             .into_iter()
             .collect::<BTreeMap<_, _>>(),
         };
-        let dto = calendar_connection_to_dto(connection.clone());
+        let dto = calendar_mirror_state_to_dto(state.clone());
         assert_eq!(
             serde_json::to_value(&dto).unwrap(),
-            serde_json::to_value(&connection).unwrap()
+            serde_json::to_value(&state).unwrap()
         );
         assert_eq!(dto.provider, CalendarProviderDto::Google);
         assert_eq!(
@@ -799,6 +769,6 @@ mod tests {
             serde_json::to_value(CalendarProviderDto::Microsoft).unwrap(),
             serde_json::json!("microsoft_calendar")
         );
-        assert_eq!(calendar_connection_from_dto(dto), connection);
+        assert_eq!(calendar_mirror_state_from_dto(dto), state);
     }
 }

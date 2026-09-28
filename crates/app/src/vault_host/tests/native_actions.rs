@@ -87,21 +87,6 @@ impl NativeActions {
             )
             .await
             .unwrap();
-        self.core
-            .set_calendar_scope(
-                person,
-                connection_id.into(),
-                1,
-                self.caller.device_id().into(),
-                CalendarProvider::EventKit,
-                vec![crate::CalendarSelection {
-                    calendar_id: calendar_id.into(),
-                    calendar_name: label.into(),
-                }],
-                crate::CalendarScope::Selected,
-            )
-            .await
-            .unwrap();
     }
 
     fn open(path: &std::path::Path, keys: Keys, create: bool) -> Self {

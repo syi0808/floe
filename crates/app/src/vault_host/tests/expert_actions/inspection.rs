@@ -6,7 +6,6 @@ use floe_actions::CalendarActionState;
 use floe_actions::ExpertCalendarInspection;
 use floe_agent_contract::AgentFailure;
 use floe_agent_contract::Cancellation;
-use floe_context_contract::CalendarProvider;
 use floe_context_contract::PersonId;
 use floe_experts::AgentRegistry;
 use uuid::Uuid;
@@ -80,13 +79,38 @@ async fn inspection_recovers_original_action_after_reopen_revocation_and_connect
         .save_expert_registry(snapshot.revision, &registry.snapshot())
         .await
         .unwrap();
+    let current = fixture
+        .core
+        .source_service()
+        .load(
+            fixture.person,
+            &floe_context_contract::ConnectionId::try_new("eventkit-connection").unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
     fixture
         .core
-        .select_calendar(
+        .source_service()
+        .disconnect(fixture.person, current.connection_id(), current.revision())
+        .await
+        .unwrap();
+    fixture
+        .core
+        .source_service()
+        .establish(
             fixture.person,
-            CalendarProvider::Fixture,
-            "another".into(),
-            "Another".into(),
+            floe_context_contract::ConnectorId::try_new("calendar.fixture").unwrap(),
+            floe_context_contract::ConnectionId::try_new("another-connection").unwrap(),
+            floe_context_contract::ExecutionOwnerId::try_new("test-device").unwrap(),
+            floe_connections::ResourceMode::Selected,
+            vec![
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new("another").unwrap(),
+                    "Another".into(),
+                )
+                .unwrap(),
+            ],
         )
         .await
         .unwrap();

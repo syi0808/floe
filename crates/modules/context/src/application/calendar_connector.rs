@@ -52,8 +52,8 @@ pub fn project_calendar_connector(
     let provider =
         provider_for_connector(connector_id).ok_or(ConnectorProjectionError::InvalidObservation)?;
     let mirror = mirror.filter(|mirror| {
-        mirror.connection.connection_id == source.connection_id().as_str()
-            && mirror.connection.provider == provider
+        mirror.state.source_connection_id == source.connection_id().as_str()
+            && mirror.state.provider == provider
     });
     let now_unix_ms = milliseconds(now)?;
     let statuses: BTreeMap<_, _> = source
@@ -62,21 +62,21 @@ pub fn project_calendar_connector(
         .map(|calendar| {
             let calendar_id = calendar.handle().as_str().to_owned();
             let status = mirror
-                .and_then(|mirror| mirror.connection.source_statuses.get(&calendar_id))
+                .and_then(|mirror| mirror.state.source_statuses.get(&calendar_id))
                 .cloned()
                 .unwrap_or_else(|| CalendarSyncStatus {
                     last_success_at: mirror
-                        .filter(|mirror| mirror.connection.source_statuses.is_empty())
-                        .and_then(|mirror| mirror.connection.last_success_at),
+                        .filter(|mirror| mirror.state.source_statuses.is_empty())
+                        .and_then(|mirror| mirror.state.last_success_at),
                     last_range: mirror
-                        .filter(|mirror| mirror.connection.source_statuses.is_empty())
-                        .and_then(|mirror| mirror.connection.last_range.clone()),
+                        .filter(|mirror| mirror.state.source_statuses.is_empty())
+                        .and_then(|mirror| mirror.state.last_range.clone()),
                     error: mirror
-                        .filter(|mirror| mirror.connection.source_statuses.is_empty())
-                        .and_then(|mirror| mirror.connection.error),
+                        .filter(|mirror| mirror.state.source_statuses.is_empty())
+                        .and_then(|mirror| mirror.state.error),
                     error_at: mirror
-                        .filter(|mirror| mirror.connection.source_statuses.is_empty())
-                        .and_then(|mirror| mirror.connection.error_at),
+                        .filter(|mirror| mirror.state.source_statuses.is_empty())
+                        .and_then(|mirror| mirror.state.error_at),
                 });
             (calendar_id, status)
         })
@@ -118,11 +118,11 @@ pub fn project_calendar_connector(
     } else {
         ConnectionState::Pending
     };
-    let last_failure = if let Some(failure) = mirror.and_then(|mirror| mirror.connection.error) {
+    let last_failure = if let Some(failure) = mirror.and_then(|mirror| mirror.state.error) {
         Some(SourceFailure {
             kind: source_failure_kind(failure),
             observed_at_unix_ms: mirror
-                .and_then(|mirror| mirror.connection.error_at)
+                .and_then(|mirror| mirror.state.error_at)
                 .map(milliseconds)
                 .transpose()?
                 .unwrap_or(now_unix_ms),
@@ -376,15 +376,9 @@ mod tests {
         };
         let mirror = CalendarMirror {
             mirror_revision: 1,
-            connection: floe_day::CalendarConnection {
-                connection_id: "calendar-source".into(),
-                device_id: "device".into(),
-                disconnected: false,
-                scope: floe_context_contract::CalendarScope::Selected,
+            state: floe_day::CalendarMirrorState {
+                source_connection_id: "calendar-source".into(),
                 provider: CalendarProvider::EventKit,
-                calendars: vec![],
-                revision: 1,
-                source_authority: floe_context_contract::SourceAuthority::new(),
                 last_success_at: Some(now),
                 last_range: None,
                 error: None,

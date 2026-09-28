@@ -193,7 +193,7 @@ fn native_connector() -> ConnectorId {
     ConnectorId::try_new(EVENT_KIT_CONNECTOR).expect("constant connector ID")
 }
 
-fn source_error(error: SourceServiceError) -> CoreError {
+pub(crate) fn source_error(error: SourceServiceError) -> CoreError {
     let code = match error {
         SourceServiceError::NotFound => ErrorCode::NotFound,
         SourceServiceError::Invalid(

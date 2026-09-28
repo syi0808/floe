@@ -64,7 +64,7 @@ pub use agent::{
     RegistryConfigurationTargetDto, RegistryOverviewDto,
 };
 pub use calendar::{
-    CalendarConnectionDto, CalendarFailureDto, CalendarProviderDto, CalendarRangeDto,
+    CalendarFailureDto, CalendarMirrorStateDto, CalendarProviderDto, CalendarRangeDto,
     CalendarScopeDto, CalendarSelectionDto, CalendarSourceDto, CalendarSyncStatusDto,
 };
 pub use commands::{

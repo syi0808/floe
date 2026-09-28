@@ -2,7 +2,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use floe_kernel::{EventId, PersonId};
 use serde::{Deserialize, Serialize};
 
-use super::{CalendarConnection, Event, EventSchedule, Note, Task};
+use super::{CalendarMirrorState, Event, EventSchedule, Note, Task};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum TimelineItem {
@@ -22,7 +22,7 @@ pub struct DaySnapshot {
     pub overdue_task_count: usize,
     pub items: Vec<TimelineItem>,
     #[serde(default)]
-    pub calendar: Option<CalendarConnection>,
+    pub calendar: Option<CalendarMirrorState>,
     pub calendar_mirror_revision: Option<u64>,
 }
 

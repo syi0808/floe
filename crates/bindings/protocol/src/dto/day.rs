@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::calendar::{CalendarConnectionDto, CalendarFailureDto, CalendarSourceDto};
+use super::calendar::{CalendarFailureDto, CalendarMirrorStateDto, CalendarSourceDto};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -22,7 +22,7 @@ pub struct DaySnapshotDto {
     pub next_event_id: Option<String>,
     pub overdue_task_count: u32,
     pub items: Vec<TimelineItemDto>,
-    pub calendar: Option<CalendarConnectionDto>,
+    pub calendar: Option<CalendarMirrorStateDto>,
     pub calendar_mirror_revision: Option<u64>,
 }
 

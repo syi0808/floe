@@ -1,9 +1,9 @@
 use chrono::{Duration, TimeZone, Utc};
-use floe_context_contract::{CalendarProvider, CalendarScope};
+use floe_context_contract::CalendarProvider;
 use floe_day::{
-    CalendarBatch, CalendarFailure, CalendarRange, CalendarRecord, CalendarSelection,
-    DayErrorCode as ErrorCode, DayService, EventSchedule, PersonId, TimedSchedule, TimelineItem,
-    TimelineRepository,
+    CalendarBatch, CalendarFailure, CalendarMirrorInput, CalendarRange, CalendarRecord,
+    CalendarSelection, DayErrorCode, DayService, EventSchedule, PersonId, TimedSchedule,
+    TimelineItem, TimelineRepository,
 };
 
 mod support;
@@ -22,13 +22,27 @@ fn range() -> CalendarRange {
     }
 }
 
+fn input() -> CalendarMirrorInput {
+    CalendarMirrorInput {
+        source_connection_id: "source-1".into(),
+        provider: CalendarProvider::Fixture,
+        calendars: ["home", "work"]
+            .into_iter()
+            .map(|id| CalendarSelection {
+                calendar_id: id.into(),
+                calendar_name: id.into(),
+            })
+            .collect(),
+    }
+}
+
 fn batch(calendar: &str, title: &str) -> CalendarBatch {
     CalendarBatch {
         calendar_id: calendar.into(),
         records: vec![CalendarRecord {
             can_modify: false,
             calendar_id: calendar.into(),
-            external_id: "same-provider-id".into(),
+            external_id: "shared-provider-id".into(),
             external_revision: title.into(),
             title: title.into(),
             schedule: EventSchedule::Timed(
@@ -44,25 +58,10 @@ async fn setup(
 ) -> (DayService<'_, TestTimelineRepository>, PersonId) {
     let core = DayService::new(timeline);
     let person = PersonId::new();
-    core.select_calendars(
-        person,
-        CalendarProvider::Fixture,
-        vec![
-            CalendarSelection {
-                calendar_id: "home".into(),
-                calendar_name: "Home".into(),
-            },
-            CalendarSelection {
-                calendar_id: "work".into(),
-                calendar_name: "Work".into(),
-            },
-        ],
-    )
-    .await
-    .unwrap();
     core.import_calendar_sources(
         person,
-        1,
+        None,
+        input(),
         range(),
         vec![batch("home", "Home"), batch("work", "Work")],
         now(),
@@ -73,190 +72,64 @@ async fn setup(
 }
 
 #[tokio::test]
-async fn disconnect_removes_imports_and_reconnect_never_reuses_a_revision() {
+async fn partial_success_preserves_failed_source_and_updates_statuses() {
     let timeline = TestTimelineRepository::new();
     let (core, person) = setup(&timeline).await;
-    core.disconnect_calendar(person, 2).await.unwrap();
-    let snapshot = core
-        .day_snapshot(person, now().date_naive(), 0, now())
-        .await
-        .unwrap();
-    assert!(snapshot.calendar.is_none());
-    assert!(snapshot.items.is_empty());
-    assert!(
-        core.import_calendar_sources(
-            person,
-            2,
-            range(),
-            vec![batch("home", "Late"), batch("work", "Late")],
-            now()
-        )
-        .await
-        .is_err()
-    );
-    core.select_calendar(
-        person,
-        CalendarProvider::Fixture,
-        "home".into(),
-        "Home".into(),
-    )
-    .await
-    .unwrap();
-    let snapshot = core
-        .day_snapshot(person, now().date_naive(), 0, now())
-        .await
-        .unwrap();
-    assert_eq!(snapshot.calendar.unwrap().revision, 3);
-    assert_eq!(snapshot.calendar_mirror_revision, Some(4));
-    assert_eq!(
-        core.import_calendar_sources(person, 2, range(), vec![batch("home", "Late")], now())
-            .await
-            .unwrap_err()
-            .code,
-        ErrorCode::Conflict
-    );
-    core.import_calendar_sources(person, 4, range(), vec![batch("home", "Fresh")], now())
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn sync_denials_do_not_advance_source_authority() {
-    let timeline = TestTimelineRepository::new();
-    let (core, person) = setup(&timeline).await;
-    let initial = core.calendar_connection(person).await.unwrap().unwrap();
-    core.import_calendar_sources(
-        person,
-        timeline
-            .calendar_mirror(person)
-            .await
-            .unwrap()
-            .unwrap()
-            .mirror_revision,
-        range(),
-        vec![
-            CalendarBatch {
-                calendar_id: "home".into(),
-                records: vec![],
-                failure: Some(CalendarFailure::PermissionDenied),
-            },
-            batch("work", "Work"),
-        ],
-        now(),
-    )
-    .await
-    .unwrap();
-    let partial = core.calendar_connection(person).await.unwrap().unwrap();
-    assert_eq!(initial.source_authority, partial.source_authority);
-    core.record_calendar_failure(
-        person,
-        timeline
-            .calendar_mirror(person)
-            .await
-            .unwrap()
-            .unwrap()
-            .mirror_revision,
-        CalendarFailure::PermissionDenied,
-        now(),
-    )
-    .await
-    .unwrap();
-    let all_denied = core.calendar_connection(person).await.unwrap().unwrap();
-    assert_eq!(partial.source_authority, all_denied.source_authority);
-    core.import_calendar_sources(
-        person,
-        timeline
-            .calendar_mirror(person)
-            .await
-            .unwrap()
-            .unwrap()
-            .mirror_revision,
-        range(),
-        vec![batch("home", "Home"), batch("work", "Work")],
-        now(),
-    )
-    .await
-    .unwrap();
-    let recovered = core.calendar_connection(person).await.unwrap().unwrap();
-    assert_eq!(recovered.source_authority, all_denied.source_authority);
-}
-
-#[tokio::test]
-async fn partial_success_commits_only_healthy_source_and_survives_restart() {
-    let timeline = TestTimelineRepository::new();
-    let (core, person) = setup(&timeline).await;
-    let baseline = core
-        .day_snapshot(person, now().date_naive(), 0, now())
-        .await
-        .unwrap();
-    let failure = CalendarBatch {
-        calendar_id: "work".into(),
-        records: vec![],
-        failure: Some(CalendarFailure::PermissionDenied),
-    };
+    let before = timeline.calendar_mirror(person).await.unwrap().unwrap();
     let updated_at = now() + Duration::minutes(1);
     core.import_calendar_sources(
         person,
-        2,
+        Some(1),
+        input(),
         range(),
-        vec![batch("home", "Updated"), failure],
+        vec![
+            batch("home", "Updated"),
+            CalendarBatch {
+                calendar_id: "work".into(),
+                records: vec![],
+                failure: Some(CalendarFailure::PermissionDenied),
+            },
+        ],
         updated_at,
     )
     .await
     .unwrap();
-    let after = core
-        .day_snapshot(person, now().date_naive(), 0, now())
-        .await
+    let after = timeline.calendar_mirror(person).await.unwrap().unwrap();
+    assert_eq!(after.mirror_revision, 2);
+    assert_eq!(after.events.len(), 2);
+    let original_work = before
+        .events
+        .iter()
+        .find(|event| event.title == "Work")
         .unwrap();
-    assert_eq!(after.items.len(), 2);
-    for old in &baseline.items {
-        let TimelineItem::Event(old) = old else {
-            panic!()
-        };
-        let new = after
-            .items
-            .iter()
-            .find_map(|item| match item {
-                TimelineItem::Event(event) if event.id == old.id => Some(event),
-                _ => None,
-            })
-            .unwrap();
-        if old.title == "Work" {
-            assert_eq!(old, new);
-        } else {
-            assert_eq!(new.title, "Updated");
-        }
-    }
-    let connection = after.calendar.unwrap();
+    assert!(after.events.contains(original_work));
+    assert!(after.events.iter().any(|event| event.title == "Updated"));
     assert_eq!(
-        connection.source_statuses["home"].last_success_at,
+        after.state.source_statuses["home"].last_success_at,
         Some(updated_at)
     );
     assert_eq!(
-        connection.source_statuses["work"].last_success_at,
+        after.state.source_statuses["work"].last_success_at,
         Some(now())
     );
     assert_eq!(
-        connection.source_statuses["work"].error,
+        after.state.source_statuses["work"].error,
         Some(CalendarFailure::PermissionDenied)
     );
-    assert_eq!(
-        connection.source_statuses["work"].error_at,
-        Some(updated_at)
-    );
-    assert_eq!(connection.error_at, Some(updated_at));
-    assert_eq!(connection.last_success_at, Some(now()));
+    assert_eq!(after.state.error_at, Some(updated_at));
+    assert_eq!(after.state.last_success_at, Some(now()));
 }
 
 #[tokio::test]
-async fn invalid_source_is_preserved_while_healthy_empty_result_deletes_only_its_source() {
+async fn malformed_source_is_preserved_while_healthy_empty_result_removes_only_its_events() {
     let timeline = TestTimelineRepository::new();
     let (core, person) = setup(&timeline).await;
     let mut invalid = batch("work", "Invalid");
     invalid.records[0].calendar_id = "home".into();
     core.import_calendar_sources(
         person,
-        2,
+        Some(1),
+        input(),
         range(),
         vec![
             CalendarBatch {
@@ -275,10 +148,7 @@ async fn invalid_source_is_preserved_while_healthy_empty_result_deletes_only_its
         .await
         .unwrap();
     assert_eq!(snapshot.items.len(), 1);
-    let TimelineItem::Event(event) = &snapshot.items[0] else {
-        panic!()
-    };
-    assert_eq!(event.title, "Work");
+    assert!(matches!(&snapshot.items[0], TimelineItem::Event(event) if event.title == "Work"));
     assert_eq!(
         snapshot.calendar.unwrap().source_statuses["work"].error,
         Some(CalendarFailure::ProviderUnavailable)
@@ -286,41 +156,31 @@ async fn invalid_source_is_preserved_while_healthy_empty_result_deletes_only_its
 }
 
 #[tokio::test]
-async fn missing_source_is_not_empty_and_stale_or_incomplete_batches_are_rejected() {
+async fn complete_exact_batch_and_mirror_cas_are_required() {
     let timeline = TestTimelineRepository::new();
     let (core, person) = setup(&timeline).await;
+    let before = timeline.calendar_mirror(person).await.unwrap().unwrap();
     for batches in [
         vec![batch("home", "No")],
         vec![batch("home", "No"), batch("home", "No")],
     ] {
         assert_eq!(
-            core.import_calendar_sources(person, 2, range(), batches, now())
+            core.import_calendar_sources(person, Some(1), input(), range(), batches, now())
                 .await
                 .unwrap_err()
                 .code,
-            ErrorCode::Validation
+            DayErrorCode::Validation
+        );
+        assert_eq!(
+            timeline.calendar_mirror(person).await.unwrap(),
+            Some(before.clone())
         );
     }
-    core.import_calendar_sources(
-        person,
-        2,
-        range(),
-        vec![
-            batch("home", "Home"),
-            CalendarBatch {
-                calendar_id: "work".into(),
-                records: vec![],
-                failure: Some(CalendarFailure::CalendarUnavailable),
-            },
-        ],
-        now(),
-    )
-    .await
-    .unwrap();
     assert_eq!(
         core.import_calendar_sources(
             person,
-            2,
+            None,
+            input(),
             range(),
             vec![batch("home", "No"), batch("work", "No")],
             now()
@@ -328,97 +188,34 @@ async fn missing_source_is_not_empty_and_stale_or_incomplete_batches_are_rejecte
         .await
         .unwrap_err()
         .code,
-        ErrorCode::Conflict
+        DayErrorCode::Conflict
     );
-    let snapshot = core
-        .day_snapshot(person, now().date_naive(), 0, now())
-        .await
-        .unwrap();
-    assert_eq!(snapshot.items.len(), 2);
     assert_eq!(
-        snapshot.calendar.unwrap().source_statuses["work"].error,
-        Some(CalendarFailure::CalendarUnavailable)
-    );
-    core.import_calendar_sources(
-        person,
-        3,
-        range(),
-        vec![batch("home", "Home"), batch("work", "Work")],
-        now(),
-    )
-    .await
-    .unwrap();
-    assert!(
-        core.day_snapshot(person, now().date_naive(), 0, now())
-            .await
-            .unwrap()
-            .calendar
-            .unwrap()
-            .error
-            .is_none()
+        timeline.calendar_mirror(person).await.unwrap(),
+        Some(before)
     );
 }
 
 #[tokio::test]
-async fn only_explicit_all_scope_discovers_new_sources_and_mode_survives_restart() {
+async fn current_input_prunes_removed_resource_without_storing_an_authority_list() {
     let timeline = TestTimelineRepository::new();
     let (core, person) = setup(&timeline).await;
-    let new_calendar = CalendarSelection {
-        calendar_id: "new".into(),
-        calendar_name: "New".into(),
-    };
-    assert_eq!(
-        core.discover_calendars(person, 2, vec![new_calendar.clone()])
-            .await
-            .unwrap_err()
-            .code,
-        ErrorCode::Validation
-    );
-    let old = core
-        .day_snapshot(person, now().date_naive(), 0, now())
-        .await
-        .unwrap()
-        .calendar
-        .unwrap();
-    core.set_calendar_scope(
+    let mut current = input();
+    current
+        .calendars
+        .retain(|calendar| calendar.calendar_id == "home");
+    core.import_calendar_sources(
         person,
-        "00000000-0000-4000-8000-000000000010".into(),
-        old.revision + 1,
-        "fixture-device".into(),
-        CalendarProvider::Fixture,
-        old.calendars,
-        CalendarScope::All,
+        Some(1),
+        current,
+        range(),
+        vec![batch("home", "Home")],
+        now(),
     )
     .await
     .unwrap();
-    core.discover_calendars(person, 3, vec![new_calendar.clone()])
-        .await
-        .unwrap();
-    let snapshot = core
-        .day_snapshot(person, now().date_naive(), 0, now())
-        .await
-        .unwrap();
-    let connection = snapshot.calendar.unwrap();
-    assert_eq!(connection.scope, CalendarScope::All);
-    assert_eq!(connection.calendars.len(), 3);
-    assert!(connection.source_statuses["new"].last_success_at.is_none());
-    assert_eq!(snapshot.items.len(), 2);
-    core.set_calendar_scope(
-        person,
-        "00000000-0000-4000-8000-000000000010".into(),
-        connection.revision + 1,
-        "fixture-device".into(),
-        CalendarProvider::Fixture,
-        vec![new_calendar.clone()],
-        CalendarScope::Selected,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        core.discover_calendars(person, 4, vec![new_calendar])
-            .await
-            .unwrap_err()
-            .code,
-        ErrorCode::Conflict
-    );
+    let mirror = timeline.calendar_mirror(person).await.unwrap().unwrap();
+    assert_eq!(mirror.events.len(), 1);
+    assert!(!mirror.state.source_statuses.contains_key("work"));
+    assert_eq!(mirror.state.source_connection_id, "source-1");
 }

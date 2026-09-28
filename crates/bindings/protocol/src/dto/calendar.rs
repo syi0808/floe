@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, NaiveDate, Utc};
-use floe_context_contract::SourceAuthority;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -58,15 +57,9 @@ pub enum CalendarScopeDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CalendarConnectionDto {
-    pub connection_id: String,
-    pub device_id: String,
-    pub disconnected: bool,
-    pub scope: CalendarScopeDto,
+pub struct CalendarMirrorStateDto {
+    pub source_connection_id: String,
     pub provider: CalendarProviderDto,
-    pub calendars: Vec<CalendarSelectionDto>,
-    pub revision: u64,
-    pub source_authority: SourceAuthority,
     pub last_success_at: Option<DateTime<Utc>>,
     pub last_range: Option<CalendarRangeDto>,
     pub error: Option<CalendarFailureDto>,

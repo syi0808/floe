@@ -2657,25 +2657,25 @@ fn direct_endpoint_fixture_for(person: PersonId) -> DirectEndpointFixture {
 
 #[test]
 fn common_schedule_endpoint_publishes_binding_setup_before_source_review() {
-    use floe_context_contract::{CalendarProvider, CalendarScope};
-    use floe_day::CalendarSelection;
-
     let person = PersonId::new();
     let fixture = direct_endpoint_fixture_for(person);
     fixture.runtime.block_on(async {
         fixture
             .core
-            .set_calendar_scope(
+            .source_service()
+            .establish(
                 person,
-                Uuid::new_v4().to_string(),
-                1,
-                "mac-local".into(),
-                CalendarProvider::Google,
-                vec![CalendarSelection {
-                    calendar_id: "home".into(),
-                    calendar_name: "Home".into(),
-                }],
-                CalendarScope::Selected,
+                floe_context_contract::ConnectorId::try_new("calendar.google").unwrap(),
+                floe_context_contract::ConnectionId::new(),
+                floe_context_contract::ExecutionOwnerId::try_new("mac-local").unwrap(),
+                floe_connections::ResourceMode::Selected,
+                vec![
+                    floe_connections::ConnectionResource::new(
+                        floe_context_contract::ResourceHandle::try_new("home").unwrap(),
+                        "Home".into(),
+                    )
+                    .unwrap(),
+                ],
             )
             .await
             .unwrap();
@@ -2842,9 +2842,6 @@ fn common_schedule_endpoint_publishes_binding_setup_before_source_review() {
 
 #[test]
 fn common_schedule_review_requirement_completes_root_run() {
-    use floe_context_contract::{CalendarProvider, CalendarScope};
-    use floe_day::CalendarSelection;
-
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("vaults");
     let person = PersonId::new();
@@ -2859,25 +2856,29 @@ fn common_schedule_review_requirement_completes_root_run() {
             .unwrap(),
     );
     let device_id = format!("local-{}", std::env::consts::OS);
-    runtime
-        .block_on(core.set_calendar_scope(
+    let source = runtime
+        .block_on(core.source_service().establish(
             person,
-            Uuid::new_v4().to_string(),
-            1,
-            device_id.clone(),
-            CalendarProvider::Google,
-            vec![CalendarSelection {
-                calendar_id: "home".into(),
-                calendar_name: "Home".into(),
-            }],
-            CalendarScope::Selected,
+            floe_context_contract::ConnectorId::try_new("calendar.google").unwrap(),
+            floe_context_contract::ConnectionId::new(),
+            floe_context_contract::ExecutionOwnerId::try_new(&device_id).unwrap(),
+            floe_connections::ResourceMode::Selected,
+            vec![
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new("home").unwrap(),
+                    "Home".into(),
+                )
+                .unwrap(),
+            ],
         ))
         .unwrap();
     let local = chrono::Local::now();
     runtime
         .block_on(core.import_calendar(
             person,
-            1,
+            source.connection_id(),
+            &device_id,
+            None,
             floe_day::CalendarRange {
                 start_date: local.date_naive(),
                 end_date_exclusive: local.date_naive() + chrono::Duration::days(1),

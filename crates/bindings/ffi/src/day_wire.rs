@@ -1,5 +1,7 @@
 use crate::conversion;
-use floe_protocol::wire::{WireResult, conversion_error, parse_date, parse_id, parse_time};
+use floe_protocol::wire::{
+    WireResult, conversion_error, invalid, parse_date, parse_id, parse_time,
+};
 use floe_protocol::{DayMutationDto, DayQueryDto};
 
 pub(crate) fn read(day: DayQueryDto) -> WireResult<floe_app::DayRead> {
@@ -13,42 +15,16 @@ pub(crate) fn read(day: DayQueryDto) -> WireResult<floe_app::DayRead> {
 
 pub(crate) fn mutation(mutation: DayMutationDto) -> WireResult<floe_app::DayMutation> {
     Ok(match mutation {
-        DayMutationDto::DisconnectCalendar { expected_revision } => {
-            floe_app::DayMutation::DisconnectCalendar { expected_revision }
-        }
-        DayMutationDto::SetCalendarScope {
-            connection_id,
-            connection_revision,
-            provider,
-            calendars,
-            scope,
-        } => floe_app::DayMutation::SetCalendarScope {
-            connection_id,
-            connection_revision,
-            provider: conversion::calendar_provider_from_dto(provider),
-            calendars: calendars
-                .into_iter()
-                .map(conversion::calendar_selection_from_dto)
-                .collect(),
-            scope: conversion::calendar_scope_from_dto(scope),
-        },
-        DayMutationDto::DiscoverCalendars {
-            expected_revision,
-            calendars,
-        } => floe_app::DayMutation::DiscoverCalendars {
-            expected_revision,
-            calendars: calendars
-                .into_iter()
-                .map(conversion::calendar_selection_from_dto)
-                .collect(),
-        },
         DayMutationDto::ImportCalendarSources {
-            expected_revision,
+            connection_id,
+            expected_mirror_revision,
             range,
             batches,
             occurred_at,
         } => floe_app::DayMutation::ImportCalendarSources {
-            expected_revision,
+            connection_id: floe_app::ConnectionId::try_new(connection_id)
+                .map_err(|_| invalid("connection_id", "invalid Calendar connection"))?,
+            expected_mirror_revision,
             range: conversion::calendar_range_from_dto(range),
             batches: batches
                 .into_iter()
@@ -57,12 +33,15 @@ pub(crate) fn mutation(mutation: DayMutationDto) -> WireResult<floe_app::DayMuta
             occurred_at: parse_time(&occurred_at, "occurred_at")?,
         },
         DayMutationDto::ImportCalendar {
-            expected_revision,
+            connection_id,
+            expected_mirror_revision,
             range,
             records,
             occurred_at,
         } => floe_app::DayMutation::ImportCalendar {
-            expected_revision,
+            connection_id: floe_app::ConnectionId::try_new(connection_id)
+                .map_err(|_| invalid("connection_id", "invalid Calendar connection"))?,
+            expected_mirror_revision,
             range: conversion::calendar_range_from_dto(range),
             records: records
                 .into_iter()
@@ -72,10 +51,13 @@ pub(crate) fn mutation(mutation: DayMutationDto) -> WireResult<floe_app::DayMuta
             occurred_at: parse_time(&occurred_at, "occurred_at")?,
         },
         DayMutationDto::CalendarFailed {
-            expected_revision,
+            connection_id,
+            expected_mirror_revision,
             failure,
         } => floe_app::DayMutation::CalendarFailed {
-            expected_revision,
+            connection_id: floe_app::ConnectionId::try_new(connection_id)
+                .map_err(|_| invalid("connection_id", "invalid Calendar connection"))?,
+            expected_mirror_revision,
             failure: conversion::calendar_failure_from_dto(failure),
         },
         DayMutationDto::SubmitCapture { input, occurred_at } => {

@@ -469,9 +469,9 @@ impl<
             .map_err(agent_error)?
             .ok_or(AgentFailure::CapabilityUnavailable)?;
         if destination.connection_revision != connection.revision()
-            || mirror.connection.error.is_some()
+            || mirror.state.error.is_some()
             || mirror
-                .connection
+                .state
                 .source_statuses
                 .get(&destination.calendar_id)
                 .is_some_and(|status| status.error.is_some())

@@ -1,5 +1,5 @@
 use chrono::{DateTime, Duration, NaiveDate, Utc};
-use floe_context_contract::{CalendarProvider, CalendarScope, SourceAuthority};
+use floe_context_contract::CalendarProvider;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -80,15 +80,16 @@ pub struct CalendarSelection {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CalendarConnection {
-    pub connection_id: String,
-    pub device_id: String,
-    pub disconnected: bool,
-    pub scope: CalendarScope,
+pub struct CalendarMirrorInput {
+    pub source_connection_id: String,
     pub provider: CalendarProvider,
     pub calendars: Vec<CalendarSelection>,
-    pub revision: u64,
-    pub source_authority: SourceAuthority,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CalendarMirrorState {
+    pub source_connection_id: String,
+    pub provider: CalendarProvider,
     pub last_success_at: Option<DateTime<Utc>>,
     pub last_range: Option<CalendarRange>,
     pub error: Option<CalendarFailure>,
@@ -114,7 +115,7 @@ pub struct CalendarBatch {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarMirror {
     pub mirror_revision: u64,
-    pub connection: CalendarConnection,
+    pub state: CalendarMirrorState,
     pub events: Vec<Event>,
 }
 

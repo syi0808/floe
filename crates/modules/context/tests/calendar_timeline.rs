@@ -26,9 +26,9 @@ use floe_context::{
 };
 use floe_context_contract::CalendarProvider;
 use floe_day::{
-    AllDaySchedule, CalendarBatch, CalendarFailure, CalendarMirror, CalendarRange, CalendarRecord,
-    CalendarSelection, CalendarTimelineGrant, DayService, EventSchedule, PersonId, TimedSchedule,
-    TimelineRepository, range_bounds,
+    AllDaySchedule, CalendarBatch, CalendarFailure, CalendarMirror, CalendarMirrorInput,
+    CalendarRange, CalendarRecord, CalendarSelection, CalendarTimelineGrant, DayService,
+    EventSchedule, PersonId, TimedSchedule, TimelineRepository, range_bounds,
 };
 use floe_execution::Cancellation;
 use tokio::time::Instant;
@@ -55,6 +55,23 @@ fn day() -> CalendarRange {
         end_date_exclusive: (now() + TimeDelta::days(1)).date_naive(),
         timezone_offset_seconds: 0,
         end_timezone_offset_seconds: None,
+    }
+}
+
+fn mirror_input(provider: CalendarProvider) -> CalendarMirrorInput {
+    CalendarMirrorInput {
+        source_connection_id: "calendar-source".into(),
+        provider,
+        calendars: vec![
+            CalendarSelection {
+                calendar_id: "home-secret-id".into(),
+                calendar_name: "Private home calendar".into(),
+            },
+            CalendarSelection {
+                calendar_id: "work-secret-id".into(),
+                calendar_name: "Private work calendar".into(),
+            },
+        ],
     }
 }
 
@@ -93,27 +110,10 @@ impl Fixture {
         };
         fixture
             .day()
-            .select_calendars(
-                fixture.person,
-                CalendarProvider::Fixture,
-                vec![
-                    CalendarSelection {
-                        calendar_id: "home-secret-id".into(),
-                        calendar_name: "Private home calendar".into(),
-                    },
-                    CalendarSelection {
-                        calendar_id: "work-secret-id".into(),
-                        calendar_name: "Private work calendar".into(),
-                    },
-                ],
-            )
-            .await
-            .unwrap();
-        fixture
-            .day()
             .import_calendar(
                 fixture.person,
-                1,
+                None,
+                mirror_input(CalendarProvider::Fixture),
                 day(),
                 vec![
                     record(
@@ -414,7 +414,7 @@ async fn projection_is_scoped_clipped_bounded_and_contains_no_provider_native_me
 }
 
 #[tokio::test]
-async fn mirror_connection_metadata_cannot_override_access_source_authority() {
+async fn mirror_provenance_cannot_override_access_source_authority() {
     let fixture = Fixture::new().await;
     let previous = fixture
         .timeline
@@ -423,9 +423,8 @@ async fn mirror_connection_metadata_cannot_override_access_source_authority() {
         .unwrap()
         .unwrap();
     let mut mirror = previous.clone();
-    mirror.connection.disconnected = true;
-    mirror.connection.revision += 1;
-    mirror.connection.calendars.clear();
+    mirror.state.source_connection_id = "other-source".into();
+    mirror.mirror_revision += 1;
     fixture
         .timeline
         .put_calendar_mirror(fixture.person, &mirror, Some(&previous))
@@ -620,7 +619,8 @@ async fn projection_reads_events_across_a_bounded_multi_day_range() {
         .day()
         .import_calendar(
             fixture.person,
-            2,
+            Some(1),
+            mirror_input(CalendarProvider::Fixture),
             range.clone(),
             vec![
                 record("home-secret-id", "first-day", "First day", 60, 90),
@@ -755,7 +755,8 @@ async fn failed_other_calendar_does_not_poison_a_healthy_explicit_subset() {
         .day()
         .import_calendar_sources(
             fixture.person,
-            2,
+            Some(1),
+            mirror_input(CalendarProvider::Fixture),
             day(),
             vec![
                 CalendarBatch {
@@ -915,7 +916,8 @@ async fn all_day_and_long_events_block_the_entire_requested_window_without_false
         .day()
         .import_calendar(
             fixture.person,
-            2,
+            Some(1),
+            mirror_input(CalendarProvider::Fixture),
             day(),
             vec![all_day, record("home-secret-id", "long", "Long", -60, 720)],
             now(),
@@ -944,7 +946,8 @@ async fn oversized_titles_are_unicode_safe_but_overfull_calendars_are_not_trunca
         .day()
         .import_calendar(
             fixture.person,
-            2,
+            Some(1),
+            mirror_input(CalendarProvider::Fixture),
             day(),
             vec![record(
                 "home-secret-id",
@@ -970,7 +973,14 @@ async fn oversized_titles_are_unicode_safe_but_overfull_calendars_are_not_trunca
         .collect();
     fixture
         .day()
-        .import_calendar(fixture.person, 3, day(), records, now())
+        .import_calendar(
+            fixture.person,
+            Some(2),
+            mirror_input(CalendarProvider::Fixture),
+            day(),
+            records,
+            now(),
+        )
         .await
         .unwrap();
     grant.connection_revision = 4;
@@ -1099,7 +1109,8 @@ async fn mirror_size_and_invalid_grants_fail_without_partial_projection() {
         .day()
         .import_calendar(
             fixture.person,
-            2,
+            Some(1),
+            mirror_input(CalendarProvider::Fixture),
             day(),
             vec![record(
                 "home-secret-id",
@@ -1128,19 +1139,10 @@ async fn native_eventkit_without_observation_does_not_use_mirror_payload() {
     let fixture = Fixture::new().await;
     fixture
         .day()
-        .select_calendar(
-            fixture.person,
-            CalendarProvider::EventKit,
-            "home-secret-id".into(),
-            "Fake EventKit".into(),
-        )
-        .await
-        .unwrap();
-    fixture
-        .day()
         .import_calendar(
             fixture.person,
-            3,
+            Some(1),
+            mirror_input(CalendarProvider::EventKit),
             day(),
             vec![record(
                 "home-secret-id",

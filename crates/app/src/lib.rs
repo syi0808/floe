@@ -53,11 +53,11 @@ pub use floe_context_contract::{CalendarProvider, CalendarScope, ResourceHandle,
 /// are named here — never a module, and never a concrete adapter.
 pub use floe_conversation::{RunReceipt, RunState};
 pub use floe_day::{
-    AllDaySchedule, CalendarBatch, CalendarConnection, CalendarFailure, CalendarRange,
-    CalendarRecord, CalendarSelection, CalendarSource, CalendarSyncStatus, Capture, CaptureId,
-    CaptureProcessing, CaptureSource, DaySnapshot, DomainError, DomainRef, Event, EventId,
-    EventSchedule, Note, NoteId, Priority, Revision, SourceRef, Task, TaskId, TimedSchedule,
-    TimelineItem,
+    AllDaySchedule, CalendarBatch, CalendarFailure, CalendarMirrorInput, CalendarMirrorState,
+    CalendarRange, CalendarRecord, CalendarSelection, CalendarSource, CalendarSyncStatus, Capture,
+    CaptureId, CaptureProcessing, CaptureSource, DaySnapshot, DomainError, DomainRef, Event,
+    EventId, EventSchedule, Note, NoteId, Priority, Revision, SourceRef, Task, TaskId,
+    TimedSchedule, TimelineItem,
 };
 pub use floe_diagnostics::{PanicRecord, TraceContext, instrument, panic_record};
 

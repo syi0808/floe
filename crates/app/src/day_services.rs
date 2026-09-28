@@ -1,8 +1,7 @@
 use crate::{
-    AppComposition, CalendarBatch, CalendarFailure, CalendarProvider, CalendarRange,
-    CalendarRecord, CalendarScope, CalendarSelection, CallerContext, CaptureId, Classification,
-    CoreError, DomainRef, ErrorCode, EventId, EventSchedule, NoteId, PersonId, Priority, Revision,
-    TaskId, TimelineItem,
+    AppComposition, CalendarBatch, CalendarFailure, CalendarRange, CalendarRecord, CallerContext,
+    CaptureId, Classification, ConnectionId, CoreError, DomainRef, ErrorCode, EventId,
+    EventSchedule, NoteId, PersonId, Priority, Revision, TaskId, TimelineItem,
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use floe_day::TimelineRepository;
@@ -22,34 +21,23 @@ pub struct DayMutationRequest {
 }
 
 pub enum DayMutation {
-    DisconnectCalendar {
-        expected_revision: u64,
-    },
-    SetCalendarScope {
-        connection_id: String,
-        connection_revision: u64,
-        provider: CalendarProvider,
-        calendars: Vec<CalendarSelection>,
-        scope: CalendarScope,
-    },
-    DiscoverCalendars {
-        expected_revision: u64,
-        calendars: Vec<CalendarSelection>,
-    },
     ImportCalendarSources {
-        expected_revision: u64,
+        connection_id: ConnectionId,
+        expected_mirror_revision: Option<u64>,
         range: CalendarRange,
         batches: Vec<CalendarBatch>,
         occurred_at: DateTime<Utc>,
     },
     ImportCalendar {
-        expected_revision: u64,
+        connection_id: ConnectionId,
+        expected_mirror_revision: Option<u64>,
         range: CalendarRange,
         records: Vec<CalendarRecord>,
         occurred_at: DateTime<Utc>,
     },
     CalendarFailed {
-        expected_revision: u64,
+        connection_id: ConnectionId,
+        expected_mirror_revision: Option<u64>,
         failure: CalendarFailure,
     },
     SubmitCapture {
@@ -184,43 +172,18 @@ impl DayCommands for AppComposition {
             let mut changed_item = None;
             let mut capture = None;
             match request.mutation {
-                DayMutation::DisconnectCalendar { expected_revision } => {
-                    core.disconnect_calendar(person, expected_revision).await?;
-                }
-                DayMutation::SetCalendarScope {
-                    connection_id,
-                    connection_revision,
-                    provider,
-                    calendars,
-                    scope,
-                } => {
-                    core.set_calendar_scope(
-                        person,
-                        connection_id,
-                        connection_revision,
-                        caller.device_id().into(),
-                        provider,
-                        calendars,
-                        scope,
-                    )
-                    .await?;
-                }
-                DayMutation::DiscoverCalendars {
-                    expected_revision,
-                    calendars,
-                } => {
-                    core.discover_calendars(person, expected_revision, calendars)
-                        .await?;
-                }
                 DayMutation::ImportCalendarSources {
-                    expected_revision,
+                    connection_id,
+                    expected_mirror_revision,
                     range,
                     batches,
                     occurred_at,
                 } => {
                     core.import_calendar_sources(
                         person,
-                        expected_revision,
+                        &connection_id,
+                        caller.device_id(),
+                        expected_mirror_revision,
                         range,
                         batches,
                         occurred_at,
@@ -228,21 +191,33 @@ impl DayCommands for AppComposition {
                     .await?;
                 }
                 DayMutation::ImportCalendar {
-                    expected_revision,
+                    connection_id,
+                    expected_mirror_revision,
                     range,
                     records,
                     occurred_at,
                 } => {
-                    core.import_calendar(person, expected_revision, range, records, occurred_at)
-                        .await?;
+                    core.import_calendar(
+                        person,
+                        &connection_id,
+                        caller.device_id(),
+                        expected_mirror_revision,
+                        range,
+                        records,
+                        occurred_at,
+                    )
+                    .await?;
                 }
                 DayMutation::CalendarFailed {
-                    expected_revision,
+                    connection_id,
+                    expected_mirror_revision,
                     failure,
                 } => {
                     core.record_calendar_failure(
                         person,
-                        expected_revision,
+                        &connection_id,
+                        caller.device_id(),
+                        expected_mirror_revision,
                         failure,
                         request.day.now,
                     )

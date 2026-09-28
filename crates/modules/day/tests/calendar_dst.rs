@@ -1,6 +1,9 @@
 use chrono::{Duration, TimeZone, Utc};
 use floe_context_contract::CalendarProvider;
-use floe_day::{CalendarRange, CalendarRecord, DayService, EventSchedule, PersonId, TimedSchedule};
+use floe_day::{
+    CalendarMirrorInput, CalendarRange, CalendarRecord, CalendarSelection, DayService,
+    EventSchedule, PersonId, TimedSchedule,
+};
 
 mod support;
 use support::TestTimelineRepository;
@@ -13,14 +16,6 @@ async fn dst_days_import_and_project_the_exact_23_or_25_hour_interval() {
         let timeline = TestTimelineRepository::new();
         let core = DayService::new(&timeline);
         let person = PersonId::new();
-        core.select_calendar(
-            person,
-            CalendarProvider::Fixture,
-            "dst".into(),
-            "DST".into(),
-        )
-        .await
-        .unwrap();
         let date = Utc.with_ymd_and_hms(2026, month, day, 0, 0, 0).unwrap();
         let start = date - Duration::seconds(start_offset.into());
         let end = start + Duration::hours(hours);
@@ -34,7 +29,15 @@ async fn dst_days_import_and_project_the_exact_23_or_25_hour_interval() {
             TimedSchedule::new(end - Duration::minutes(15), end, "America/Los_Angeles").unwrap();
         core.import_calendar(
             person,
-            1,
+            None,
+            CalendarMirrorInput {
+                source_connection_id: "dst-source".into(),
+                provider: CalendarProvider::Fixture,
+                calendars: vec![CalendarSelection {
+                    calendar_id: "dst".into(),
+                    calendar_name: "DST".into(),
+                }],
+            },
             range.clone(),
             vec![CalendarRecord {
                 can_modify: false,

@@ -1,41 +1,29 @@
 use super::{
-    CalendarBatchDto, CalendarFailureDto, CalendarProviderDto, CalendarRangeDto, CalendarRecordDto,
-    CalendarScopeDto, CalendarSelectionDto, ClassificationDto, DomainRefDto, EventScheduleDto,
-    PriorityDto,
+    CalendarBatchDto, CalendarFailureDto, CalendarRangeDto, CalendarRecordDto, ClassificationDto,
+    DomainRefDto, EventScheduleDto, PriorityDto,
 };
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DayMutationDto {
-    DisconnectCalendar {
-        expected_revision: u64,
-    },
-    SetCalendarScope {
-        connection_id: String,
-        connection_revision: u64,
-        provider: CalendarProviderDto,
-        calendars: Vec<CalendarSelectionDto>,
-        scope: CalendarScopeDto,
-    },
-    DiscoverCalendars {
-        expected_revision: u64,
-        calendars: Vec<CalendarSelectionDto>,
-    },
     ImportCalendarSources {
-        expected_revision: u64,
+        connection_id: String,
+        expected_mirror_revision: Option<u64>,
         range: CalendarRangeDto,
         batches: Vec<CalendarBatchDto>,
         occurred_at: String,
     },
     ImportCalendar {
-        expected_revision: u64,
+        connection_id: String,
+        expected_mirror_revision: Option<u64>,
         range: CalendarRangeDto,
         records: Vec<CalendarRecordDto>,
         occurred_at: String,
     },
     CalendarFailed {
-        expected_revision: u64,
+        connection_id: String,
+        expected_mirror_revision: Option<u64>,
         failure: CalendarFailureDto,
     },
     SubmitCapture {
@@ -102,6 +90,13 @@ impl DayMutationDto {
         let invalid_id =
             |value: &str| uuid::Uuid::parse_str(value).map_or(true, |value| value.is_nil());
         match self {
+            Self::ImportCalendarSources { connection_id, .. }
+            | Self::ImportCalendar { connection_id, .. }
+            | Self::CalendarFailed { connection_id, .. }
+                if connection_id.trim().is_empty() =>
+            {
+                return Err("command.connection_id");
+            }
             Self::ClassifyCapture { capture_id, .. } if invalid_id(capture_id) => {
                 return Err("command.capture_id");
             }
@@ -127,24 +122,7 @@ impl DayMutationDto {
             _ => {}
         }
         let revision = match self {
-            Self::SetCalendarScope {
-                connection_revision,
-                ..
-            } => Some(*connection_revision),
-            Self::DisconnectCalendar { expected_revision }
-            | Self::DiscoverCalendars {
-                expected_revision, ..
-            }
-            | Self::ImportCalendarSources {
-                expected_revision, ..
-            }
-            | Self::ImportCalendar {
-                expected_revision, ..
-            }
-            | Self::CalendarFailed {
-                expected_revision, ..
-            }
-            | Self::ClassifyCapture {
+            Self::ClassifyCapture {
                 expected_revision, ..
             }
             | Self::UpdateEvent {
@@ -171,5 +149,56 @@ impl DayMutationDto {
             return Err("command.mutation");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DayMutationDto;
+    use serde_json::json;
+
+    #[test]
+    fn day_wire_rejects_removed_source_configuration_commands() {
+        for mutation in [
+            json!({"type": "disconnect_calendar", "expected_revision": 1}),
+            json!({
+                "type": "set_calendar_scope",
+                "connection_id": "old",
+                "connection_revision": 1,
+                "provider": "event_kit",
+                "calendars": [],
+                "scope": "selected"
+            }),
+            json!({"type": "discover_calendars", "expected_revision": 1, "calendars": []}),
+        ] {
+            assert!(serde_json::from_value::<DayMutationDto>(mutation).is_err());
+        }
+    }
+
+    #[test]
+    fn day_import_carries_source_identity_and_mirror_cas_only() {
+        let mutation = json!({
+            "type": "import_calendar_sources",
+            "connection_id": "calendar-source",
+            "expected_mirror_revision": null,
+            "range": {
+                "start_date": "2026-09-05",
+                "end_date_exclusive": "2026-09-06",
+                "timezone_offset_seconds": 0,
+                "end_timezone_offset_seconds": null
+            },
+            "batches": [],
+            "occurred_at": "2026-09-05T00:00:00Z"
+        });
+        let decoded: DayMutationDto = serde_json::from_value(mutation).unwrap();
+        assert!(decoded.validate().is_ok());
+        assert!(matches!(
+            decoded,
+            DayMutationDto::ImportCalendarSources {
+                connection_id,
+                expected_mirror_revision: None,
+                ..
+            } if connection_id == "calendar-source"
+        ));
     }
 }

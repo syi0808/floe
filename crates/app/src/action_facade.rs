@@ -357,25 +357,55 @@ impl FloeCore {
     ) -> Result<Option<floe_connections::ConnectorSnapshot>, AgentFailure> {
         floe_context::validate_connector_device(device_id)
             .map_err(|_| AgentFailure::InvalidInput)?;
-        let connector = floe_context_contract::ConnectorId::try_new("calendar.event_kit")
-            .map_err(|_| AgentFailure::InvalidInput)?;
-        let mut sources = self
-            .source_service()
-            .list_current(person_id, &connector)
-            .await
-            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        let mut sources = Vec::new();
+        for connector in [
+            "calendar.event_kit",
+            "calendar.google",
+            "calendar.microsoft",
+            "calendar.fixture",
+        ] {
+            let connector = floe_context_contract::ConnectorId::try_new(connector)
+                .map_err(|_| AgentFailure::InvalidInput)?;
+            sources.extend(
+                self.source_service()
+                    .list_current(person_id, &connector)
+                    .await
+                    .map_err(|_| AgentFailure::StorageUnavailable)?,
+            );
+        }
         if sources.len() > 1 {
             return Err(AgentFailure::Conflict);
-        }
-        let Some(source) = sources.pop() else {
-            return Ok(None);
-        };
-        if source.execution_owner_id().as_str() != device_id {
-            return Err(AgentFailure::CapabilityDenied);
         }
         let mirror = floe_day::TimelineRepository::calendar_mirror(&self.store, person_id)
             .await
             .map_err(|_| AgentFailure::StorageUnavailable)?;
+        let source = match sources.pop() {
+            Some(source) => source,
+            None => {
+                let Some(mirror) = mirror.as_ref() else {
+                    return Ok(None);
+                };
+                let connection_id = floe_context_contract::ConnectionId::try_new(
+                    &mirror.state.source_connection_id,
+                )
+                .map_err(|_| AgentFailure::StorageUnavailable)?;
+                let Some(source) = self
+                    .source_service()
+                    .load(person_id, &connection_id)
+                    .await
+                    .map_err(|_| AgentFailure::StorageUnavailable)?
+                else {
+                    return Ok(None);
+                };
+                if source.state() != floe_connections::SourceState::Disconnected {
+                    return Ok(None);
+                }
+                source
+            }
+        };
+        if source.execution_owner_id().as_str() != device_id {
+            return Err(AgentFailure::CapabilityDenied);
+        }
         floe_context::project_calendar_connector(&source, mirror.as_ref(), device_id, now)
             .map(Some)
             .map_err(|_| AgentFailure::StorageUnavailable)

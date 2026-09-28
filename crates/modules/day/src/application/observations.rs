@@ -3,341 +3,66 @@ use std::collections::HashSet;
 use chrono::{DateTime, Utc};
 
 use crate::{
-    CalendarBatch, CalendarConnection, CalendarFailure, CalendarMirror, CalendarRange,
-    CalendarRecord, CalendarSelection, CalendarSource, CalendarSyncStatus, DayError, DayService,
-    Event, EventSchedule, SourceRef, TimelineRepository,
+    CalendarBatch, CalendarFailure, CalendarMirror, CalendarMirrorInput, CalendarMirrorState,
+    CalendarRange, CalendarRecord, CalendarSelection, CalendarSource, CalendarSyncStatus, DayError,
+    DayService, Event, EventSchedule, SourceRef, TimelineRepository,
 };
-use floe_context_contract::SourceAuthority;
-use floe_context_contract::{CalendarProvider, CalendarScope};
 use floe_kernel::PersonId;
 
-impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
-    pub async fn calendar_connection(
-        &self,
-        person_id: PersonId,
-    ) -> Result<Option<CalendarConnection>, DayError> {
-        Ok(self
-            .repository
-            .calendar_mirror(person_id)
-            .await?
-            .map(|mirror| mirror.connection))
-    }
-
-    pub async fn select_calendar(
-        &self,
-        person_id: PersonId,
-        provider: CalendarProvider,
-        calendar_id: String,
-        calendar_name: String,
-    ) -> Result<(), DayError> {
-        self.select_calendars(
-            person_id,
-            provider,
-            vec![CalendarSelection {
-                calendar_id,
-                calendar_name,
-            }],
-        )
-        .await
-    }
-
-    pub async fn select_calendars(
-        &self,
-        person_id: PersonId,
-        provider: CalendarProvider,
-        mut calendars: Vec<CalendarSelection>,
-    ) -> Result<(), DayError> {
-        calendars.sort_by(|left, right| left.calendar_id.cmp(&right.calendar_id));
-        let previous = self.repository.calendar_mirror(person_id).await?;
-        let revision = previous.as_ref().map_or(1, |mirror| {
-            if mirror.connection.provider == provider
-                && !mirror.connection.disconnected
-                && mirror.connection.calendars == calendars
-            {
-                mirror.connection.revision
-            } else {
-                mirror.connection.revision + 1
-            }
-        });
-        self.set_calendar_scope(
-            person_id,
-            format!("calendar.{}", provider_identifier(provider)),
-            revision,
-            "fixture-device".into(),
-            provider,
-            calendars,
-            CalendarScope::Selected,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn set_calendar_scope(
-        &self,
-        person_id: PersonId,
-        connection_id: String,
-        connection_revision: u64,
-        device_id: String,
-        provider: CalendarProvider,
-        mut calendars: Vec<CalendarSelection>,
-        scope: CalendarScope,
-    ) -> Result<(), DayError> {
-        calendars.sort_by(|left, right| left.calendar_id.cmp(&right.calendar_id));
-        let mut identifiers = HashSet::new();
-        if connection_id.trim().is_empty()
-            || device_id.trim().is_empty()
-            || connection_revision == 0
-            || calendars.is_empty()
-            || calendars.iter().any(|calendar| {
-                calendar.calendar_id.trim().is_empty()
-                    || calendar.calendar_name.trim().is_empty()
-                    || !identifiers.insert(calendar.calendar_id.clone())
-            })
-        {
-            return Err(validation("calendar identity must not be empty"));
-        }
-        let previous = self.repository.calendar_mirror(person_id).await?;
-        if previous.as_ref().is_some_and(|mirror| {
-            mirror.connection.connection_id == connection_id
-                && mirror.connection.device_id == device_id
-                && mirror.connection.revision == connection_revision
-                && mirror.connection.provider == provider
-                && !mirror.connection.disconnected
-                && mirror.connection.scope == scope
-                && mirror.connection.calendars == calendars
-        }) {
-            return Ok(());
-        }
-        if let Some(previous) = previous
-            .as_ref()
-            .filter(|mirror| mirror.connection.connection_id == connection_id)
-        {
-            if connection_revision < previous.connection.revision {
-                return Err(DayError::conflict(
-                    "calendar connection revision cannot decrease",
-                ));
-            }
-            if connection_revision == previous.connection.revision {
-                return Err(DayError::conflict(
-                    "equal calendar connection revision requires an identical binding and scope",
-                ));
-            }
-        }
-        let events = previous.as_ref().map_or_else(Vec::new, |mirror| mirror.events.iter().filter(|event| matches!(&event.source, SourceRef::Calendar(source) if source.provider == provider && identifiers.contains(&source.calendar_id))).cloned().collect());
-        let source_authority = match previous.as_ref() {
-            Some(previous)
-                if previous.connection.connection_id == connection_id
-                    && previous.connection.device_id == device_id
-                    && previous.connection.provider == provider =>
-            {
-                if !previous.connection.disconnected
-                    && previous.connection.scope == scope
-                    && previous
-                        .connection
-                        .calendars
-                        .iter()
-                        .map(|calendar| &calendar.calendar_id)
-                        .eq(calendars.iter().map(|calendar| &calendar.calendar_id))
-                {
-                    previous.connection.source_authority
-                } else {
-                    next_authority(previous.connection.source_authority)?
-                }
-            }
-            _ => SourceAuthority::new(),
-        };
-        self.repository
-            .put_calendar_mirror(
-                person_id,
-                &CalendarMirror {
-                    mirror_revision: previous
-                        .as_ref()
-                        .map_or(Ok(1), |mirror| next_mirror_revision(mirror.mirror_revision))?,
-                    connection: CalendarConnection {
-                        connection_id,
-                        device_id,
-                        disconnected: false,
-                        scope,
-                        provider,
-                        calendars,
-                        revision: connection_revision,
-                        source_authority,
-                        last_success_at: None,
-                        last_range: None,
-                        error: None,
-                        error_at: None,
-                        source_statuses: previous.as_ref().map_or_else(
-                            Default::default,
-                            |mirror| {
-                                mirror
-                                    .connection
-                                    .source_statuses
-                                    .iter()
-                                    .filter(|(identifier, _)| identifiers.contains(*identifier))
-                                    .map(|(identifier, status)| {
-                                        (identifier.clone(), status.clone())
-                                    })
-                                    .collect()
-                            },
-                        ),
-                    },
-                    events,
-                },
-                previous.as_ref(),
-            )
-            .await
-    }
-
-    pub async fn disconnect_calendar(
-        &self,
-        person_id: PersonId,
-        expected_revision: u64,
-    ) -> Result<(), DayError> {
-        let mut mirror = self
-            .calendar_at_revision(person_id, expected_revision)
-            .await?;
-        let previous = mirror.clone();
-        mirror.events.clear();
-        mirror.connection.disconnected = true;
-        mirror.connection.source_authority = next_authority(mirror.connection.source_authority)?;
-        mirror.connection.revision += 1;
-        mirror.mirror_revision = next_mirror_revision(mirror.mirror_revision)?;
-        mirror.connection.calendars.clear();
-        mirror.connection.source_statuses.clear();
-        mirror.connection.last_success_at = None;
-        mirror.connection.last_range = None;
-        mirror.connection.error = None;
-        mirror.connection.error_at = None;
-        self.repository
-            .put_calendar_mirror(person_id, &mirror, Some(&previous))
-            .await
-    }
-
-    pub async fn discover_calendars(
-        &self,
-        person_id: PersonId,
-        expected_revision: u64,
-        calendars: Vec<CalendarSelection>,
-    ) -> Result<(), DayError> {
-        let mut mirror = self
-            .calendar_at_revision(person_id, expected_revision)
-            .await?;
-        if mirror.connection.scope != CalendarScope::All {
-            return Err(validation(
-                "discovery cannot expand selected-calendar scope",
-            ));
-        }
-        let previous = mirror.clone();
-        let mut seen = HashSet::new();
-        let mut included: std::collections::BTreeMap<_, _> = mirror
-            .connection
-            .calendars
-            .iter()
-            .cloned()
-            .map(|calendar| (calendar.calendar_id.clone(), calendar))
-            .collect();
-        for calendar in calendars {
-            if calendar.calendar_id.trim().is_empty()
-                || calendar.calendar_name.trim().is_empty()
-                || !seen.insert(calendar.calendar_id.clone())
-            {
-                return Err(validation("invalid calendar inventory"));
-            }
-            if !included.contains_key(&calendar.calendar_id) {
-                mirror.connection.source_statuses.insert(
-                    calendar.calendar_id.clone(),
-                    CalendarSyncStatus {
-                        last_success_at: None,
-                        last_range: None,
-                        error: None,
-                        error_at: None,
-                    },
-                );
-            }
-            included.insert(calendar.calendar_id.clone(), calendar);
-        }
-        mirror.connection.calendars = included.into_values().collect();
-        if mirror.connection.calendars == previous.connection.calendars {
-            return Ok(());
-        }
-        let previous_ids: HashSet<_> = previous
-            .connection
-            .calendars
-            .iter()
-            .map(|calendar| &calendar.calendar_id)
-            .collect();
-        let current_ids: HashSet<_> = mirror
-            .connection
-            .calendars
-            .iter()
-            .map(|calendar| &calendar.calendar_id)
-            .collect();
-        if previous_ids != current_ids {
-            mirror.connection.source_authority =
-                next_authority(mirror.connection.source_authority)?;
-        }
-        mirror.connection.revision += 1;
-        mirror.mirror_revision = next_mirror_revision(mirror.mirror_revision)?;
-        self.repository
-            .put_calendar_mirror(person_id, &mirror, Some(&previous))
-            .await
-    }
-
+impl<'a, Repository: TimelineRepository + ?Sized> DayService<'a, Repository> {
     pub async fn record_calendar_failure(
         &self,
         person_id: PersonId,
-        expected_revision: u64,
+        expected_mirror_revision: Option<u64>,
+        input: CalendarMirrorInput,
         failure: CalendarFailure,
         now: DateTime<Utc>,
     ) -> Result<(), DayError> {
-        let mut mirror = self
-            .calendar_at_revision(person_id, expected_revision)
+        let (mut mirror, previous) = self
+            .calendar_at_revision(person_id, expected_mirror_revision, &input)
             .await?;
-        let previous = mirror.clone();
-        mirror.connection.error = Some(failure);
-        mirror.connection.error_at = Some(now);
-        for calendar in &mirror.connection.calendars {
+        mirror.state.error = Some(failure);
+        mirror.state.error_at = Some(now);
+        for calendar in &input.calendars {
             let status = mirror
-                .connection
+                .state
                 .source_statuses
                 .entry(calendar.calendar_id.clone())
                 .or_insert(CalendarSyncStatus {
-                    last_success_at: mirror.connection.last_success_at,
-                    last_range: mirror.connection.last_range.clone(),
+                    last_success_at: mirror.state.last_success_at,
+                    last_range: mirror.state.last_range.clone(),
                     error: None,
                     error_at: None,
                 });
             status.error = Some(failure);
             status.error_at = Some(now);
         }
-        mirror.mirror_revision = next_mirror_revision(mirror.mirror_revision)?;
-        self.repository
-            .put_calendar_mirror(person_id, &mirror, Some(&previous))
-            .await
+        self.put_calendar_mirror(person_id, mirror, previous).await
     }
 
     pub async fn import_calendar(
         &self,
         person_id: PersonId,
-        expected_revision: u64,
+        expected_mirror_revision: Option<u64>,
+        input: CalendarMirrorInput,
         range: CalendarRange,
         records: Vec<CalendarRecord>,
         now: DateTime<Utc>,
     ) -> Result<(), DayError> {
         if !range.is_valid() || records.len() > 10_000 {
-            return Err(validation("invalid calendar range or batch size"));
+            return Err(validation("invalid calendar range, source, or batch size"));
         }
-        let mut mirror = self
-            .calendar_at_revision(person_id, expected_revision)
+        let (mut mirror, previous) = self
+            .calendar_at_revision(person_id, expected_mirror_revision, &input)
             .await?;
-        let previous = mirror.clone();
-        mirror.events = reconcile_records(person_id, &mirror, &range, records, now)?;
-        mirror.connection.last_success_at = Some(now);
-        mirror.connection.last_range = Some(range.clone());
-        mirror.connection.error = None;
-        mirror.connection.error_at = None;
-        for calendar in &mirror.connection.calendars {
-            mirror.connection.source_statuses.insert(
+        mirror.events =
+            reconcile_records(person_id, &mirror, &input.calendars, &range, records, now)?;
+        mirror.state.last_success_at = Some(now);
+        mirror.state.last_range = Some(range.clone());
+        mirror.state.error = None;
+        mirror.state.error_at = None;
+        for calendar in &input.calendars {
+            mirror.state.source_statuses.insert(
                 calendar.calendar_id.clone(),
                 CalendarSyncStatus {
                     last_success_at: Some(now),
@@ -347,16 +72,14 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
                 },
             );
         }
-        mirror.mirror_revision = next_mirror_revision(mirror.mirror_revision)?;
-        self.repository
-            .put_calendar_mirror(person_id, &mirror, Some(&previous))
-            .await
+        self.put_calendar_mirror(person_id, mirror, previous).await
     }
 
     pub async fn import_calendar_sources(
         &self,
         person_id: PersonId,
-        expected_revision: u64,
+        expected_mirror_revision: Option<u64>,
+        input: CalendarMirrorInput,
         range: CalendarRange,
         batches: Vec<CalendarBatch>,
         now: DateTime<Utc>,
@@ -370,12 +93,11 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
         {
             return Err(validation("invalid range or batch size"));
         }
-        let mut mirror = self
-            .calendar_at_revision(person_id, expected_revision)
+        let (mut mirror, previous) = self
+            .calendar_at_revision(person_id, expected_mirror_revision, &input)
             .await?;
-        let previous = mirror.clone();
-        let calendars = mirror.connection.calendars.clone();
-        let expected: HashSet<_> = calendars
+        let expected: HashSet<_> = input
+            .calendars
             .iter()
             .map(|calendar| calendar.calendar_id.as_str())
             .collect();
@@ -394,26 +116,37 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
             ));
         }
         for batch in batches {
-            let calendar = calendars
+            let calendar = input
+                .calendars
                 .iter()
                 .find(|calendar| calendar.calendar_id == batch.calendar_id)
-                .unwrap();
+                .expect("batch handles validated against source input");
             let mut source = mirror.clone();
-            source.connection.calendars = vec![calendar.clone()];
             source.events.retain(|event| matches!(&event.source, SourceRef::Calendar(origin) if origin.calendar_id == batch.calendar_id));
             let result = if let Some(failure) = batch.failure {
                 Err(failure)
             } else {
-                reconcile_records(person_id, &source, &range, batch.records, now)
-                    .map_err(|_| CalendarFailure::ProviderUnavailable)
+                reconcile_records(
+                    person_id,
+                    &source,
+                    std::slice::from_ref(calendar),
+                    &range,
+                    batch.records,
+                    now,
+                )
+                .map_err(|_| CalendarFailure::ProviderUnavailable)
             };
             let status = mirror
-                .connection
+                .state
                 .source_statuses
                 .entry(batch.calendar_id.clone())
                 .or_insert(CalendarSyncStatus {
-                    last_success_at: previous.connection.last_success_at,
-                    last_range: previous.connection.last_range.clone(),
+                    last_success_at: previous
+                        .as_ref()
+                        .and_then(|mirror| mirror.state.last_success_at),
+                    last_range: previous
+                        .as_ref()
+                        .and_then(|mirror| mirror.state.last_range.clone()),
                     error: None,
                     error_at: None,
                 });
@@ -434,58 +167,97 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
                 }
             }
         }
-        mirror.connection.error = mirror
-            .connection
+        mirror.state.error = mirror
+            .state
             .source_statuses
             .values()
             .find_map(|status| status.error);
-        mirror.connection.error_at = mirror
-            .connection
+        mirror.state.error_at = mirror
+            .state
             .source_statuses
             .values()
             .filter_map(|status| status.error_at)
             .max();
-        if mirror.connection.error.is_none() {
-            mirror.connection.last_success_at = Some(now);
-            mirror.connection.last_range = Some(range);
+        if mirror.state.error.is_none() {
+            mirror.state.last_success_at = Some(now);
+            mirror.state.last_range = Some(range);
         }
-        mirror.mirror_revision = next_mirror_revision(mirror.mirror_revision)?;
-        self.repository
-            .put_calendar_mirror(person_id, &mirror, Some(&previous))
-            .await
+        self.put_calendar_mirror(person_id, mirror, previous).await
     }
 
     async fn calendar_at_revision(
         &self,
         person_id: PersonId,
-        expected_revision: u64,
-    ) -> Result<CalendarMirror, DayError> {
-        let mirror = self
-            .repository
-            .calendar_mirror(person_id)
-            .await?
-            .ok_or_else(|| {
-                DayError::new(
-                    crate::ports::DayErrorCode::NotFound,
-                    "select a calendar first",
-                )
-            })?;
-        if mirror.connection.disconnected || mirror.mirror_revision != expected_revision {
+        expected_revision: Option<u64>,
+        input: &CalendarMirrorInput,
+    ) -> Result<(CalendarMirror, Option<CalendarMirror>), DayError> {
+        validate_input(input)?;
+        let previous = self.repository.calendar_mirror(person_id).await?;
+        if previous.as_ref().map(|mirror| mirror.mirror_revision) != expected_revision {
             return Err(DayError::conflict(
-                "calendar selection or sync has changed; reload and retry",
+                "calendar mirror changed; reload and retry",
             ));
         }
-        Ok(mirror)
+        let same_source = previous.as_ref().is_some_and(|mirror| {
+            mirror.state.source_connection_id == input.source_connection_id
+                && mirror.state.provider == input.provider
+        });
+        let mut mirror = if same_source {
+            previous.as_ref().expect("same source has mirror").clone()
+        } else {
+            CalendarMirror {
+                mirror_revision: previous.as_ref().map_or(0, |mirror| mirror.mirror_revision),
+                state: CalendarMirrorState {
+                    source_connection_id: input.source_connection_id.clone(),
+                    provider: input.provider,
+                    last_success_at: None,
+                    last_range: None,
+                    error: None,
+                    error_at: None,
+                    source_statuses: Default::default(),
+                },
+                events: Vec::new(),
+            }
+        };
+        let handles: HashSet<_> = input
+            .calendars
+            .iter()
+            .map(|calendar| calendar.calendar_id.as_str())
+            .collect();
+        mirror.events.retain(|event| matches!(&event.source, SourceRef::Calendar(source) if source.provider == input.provider && handles.contains(source.calendar_id.as_str())));
+        mirror
+            .state
+            .source_statuses
+            .retain(|handle, _| handles.contains(handle.as_str()));
+        Ok((mirror, previous))
+    }
+
+    async fn put_calendar_mirror(
+        &self,
+        person_id: PersonId,
+        mut mirror: CalendarMirror,
+        previous: Option<CalendarMirror>,
+    ) -> Result<(), DayError> {
+        mirror.mirror_revision = next_mirror_revision(mirror.mirror_revision)?;
+        self.repository
+            .put_calendar_mirror(person_id, &mirror, previous.as_ref())
+            .await
     }
 }
 
-fn next_authority(current: SourceAuthority) -> Result<SourceAuthority, DayError> {
-    if !current.is_valid() {
-        return Err(validation("invalid source authority"));
+fn validate_input(input: &CalendarMirrorInput) -> Result<(), DayError> {
+    if input.source_connection_id.trim().is_empty() {
+        return Err(validation("calendar source identity is empty"));
     }
-    current
-        .advance()
-        .ok_or_else(|| validation("source authority exhausted"))
+    let mut handles = HashSet::new();
+    if input.calendars.iter().any(|calendar| {
+        calendar.calendar_id.trim().is_empty()
+            || calendar.calendar_name.trim().is_empty()
+            || !handles.insert(calendar.calendar_id.as_str())
+    }) {
+        return Err(validation("invalid calendar source input"));
+    }
+    Ok(())
 }
 
 fn next_mirror_revision(current: u64) -> Result<u64, DayError> {
@@ -495,19 +267,10 @@ fn next_mirror_revision(current: u64) -> Result<u64, DayError> {
         .ok_or_else(|| validation("calendar mirror revision exhausted"))
 }
 
-fn provider_identifier(provider: CalendarProvider) -> &'static str {
-    match provider {
-        CalendarProvider::Fixture => "fixture",
-        CalendarProvider::EventKit => "event_kit",
-        CalendarProvider::Google => "google",
-        CalendarProvider::Microsoft => "microsoft",
-        CalendarProvider::Android => "android",
-    }
-}
-
 fn reconcile_records(
     person_id: PersonId,
     mirror: &CalendarMirror,
+    calendars: &[CalendarSelection],
     range: &CalendarRange,
     records: Vec<CalendarRecord>,
     now: DateTime<Utc>,
@@ -515,12 +278,10 @@ fn reconcile_records(
     let mut seen = HashSet::new();
     let mut imported = Vec::new();
     for record in records {
-        let calendar = mirror
-            .connection
-            .calendars
+        let calendar = calendars
             .iter()
             .find(|calendar| calendar.calendar_id == record.calendar_id)
-            .ok_or_else(|| validation("calendar is not selected"))?;
+            .ok_or_else(|| validation("calendar is not in the current source input"))?;
         if record.external_id.trim().is_empty()
             || record.external_revision.trim().is_empty()
             || !seen.insert((record.calendar_id.clone(), record.external_id.clone()))
@@ -540,7 +301,7 @@ fn reconcile_records(
         }
         let source = SourceRef::Calendar(CalendarSource {
             can_modify: record.can_modify,
-            provider: mirror.connection.provider,
+            provider: mirror.state.provider,
             calendar_id: calendar.calendar_id.clone(),
             calendar_name: calendar.calendar_name.clone(),
             external_id: record.external_id.clone(),

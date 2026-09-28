@@ -172,7 +172,7 @@ impl<'a, Repository: ActionRepository + ?Sized, Sources: CalendarSourceReader + 
                 .calendar_mirror(person_id)
                 .await?
                 .ok_or_else(|| ActionError::not_found("event not found"))?;
-            if mirror.connection.connection_id != source.connection_id().as_str() {
+            if mirror.state.source_connection_id != source.connection_id().as_str() {
                 return Err(ActionError::conflict(
                     "calendar source changed; reload before editing",
                 ));
@@ -414,20 +414,20 @@ impl<'a, Repository: ActionRepository + ?Sized, Sources: CalendarSourceReader + 
         let mirror = self.repository.calendar_mirror(action.person_id).await?;
         if let Some(mutation) = &action.mutation
             && mirror.as_ref().is_none_or(|mirror| {
-                mirror.connection.connection_id != action.connection_id.as_str()
+                mirror.state.source_connection_id != action.connection_id.as_str()
                     || !mirror.events.contains(&mutation.original)
             })
         {
             return Ok(Some(ActionBlockReason::CalendarChanged));
         }
         if mirror.as_ref().is_some_and(|mirror| {
-            mirror.connection.connection_id == action.connection_id.as_str()
+            mirror.state.source_connection_id == action.connection_id.as_str()
                 && (mirror
-                    .connection
+                    .state
                     .source_statuses
                     .get(&action.calendar_id)
                     .is_some_and(|status| status.error.is_some())
-                    || mirror.connection.error.is_some())
+                    || mirror.state.error.is_some())
         }) {
             return Ok(Some(ActionBlockReason::CalendarChanged));
         }

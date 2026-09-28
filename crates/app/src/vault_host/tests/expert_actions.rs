@@ -43,7 +43,6 @@ use floe_context_contract::PersonId;
 use floe_context_contract::ProcessingRestriction;
 use floe_conversation::AgentMessage;
 use floe_conversation::AgentSession;
-use floe_day::CalendarSelection;
 use floe_day::Event;
 use floe_experts::A2APart;
 use floe_experts::AgentRegistry;
@@ -85,7 +84,8 @@ async fn establish_native_source(
         )
         .await
         .unwrap();
-    core.source_service()
+    let source = core
+        .source_service()
         .update_native_subject(
             person,
             source.connection_id(),
@@ -93,7 +93,27 @@ async fn establish_native_source(
             "a".repeat(64),
         )
         .await
-        .unwrap()
+        .unwrap();
+    core.import_calendar(
+        person,
+        source.connection_id(),
+        "test-device",
+        floe_day::TimelineRepository::calendar_mirror(&core.store, person)
+            .await
+            .unwrap()
+            .map(|mirror| mirror.mirror_revision),
+        floe_day::CalendarRange {
+            start_date: now().date_naive(),
+            end_date_exclusive: (now() + chrono::Duration::days(1)).date_naive(),
+            timezone_offset_seconds: 0,
+            end_timezone_offset_seconds: None,
+        },
+        vec![],
+        now(),
+    )
+    .await
+    .unwrap();
+    source
 }
 
 #[derive(Clone, Default)]
@@ -242,20 +262,6 @@ impl Fixture {
         let invocation_id = Uuid::new_v4();
         let task_id = Uuid::new_v4();
         let core = FloeCore::open(root.path().join("core.db")).await.unwrap();
-        core.set_calendar_scope(
-            person,
-            "eventkit-connection".into(),
-            1,
-            "test-device".into(),
-            CalendarProvider::EventKit,
-            vec![CalendarSelection {
-                calendar_id: "home".into(),
-                calendar_name: "Home".into(),
-            }],
-            floe_context_contract::CalendarScope::Selected,
-        )
-        .await
-        .unwrap();
         let connection =
             establish_native_source(&core, person, "eventkit-connection", &[("home", "Home")])
                 .await;
@@ -1351,26 +1357,6 @@ impl GovernedFocus {
             .await
             .unwrap();
         let core = FloeCore::open(root.path().join("core.db")).await.unwrap();
-        core.set_calendar_scope(
-            person,
-            "eventkit-connection".into(),
-            1,
-            "test-device".into(),
-            CalendarProvider::EventKit,
-            vec![
-                CalendarSelection {
-                    calendar_id: "home".into(),
-                    calendar_name: "Home".into(),
-                },
-                CalendarSelection {
-                    calendar_id: "away".into(),
-                    calendar_name: "Away".into(),
-                },
-            ],
-            floe_context_contract::CalendarScope::Selected,
-        )
-        .await
-        .unwrap();
         let connection = establish_native_source(
             &core,
             person,

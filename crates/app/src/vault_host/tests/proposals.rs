@@ -9,7 +9,7 @@ use floe_context_contract::{
     ProcessingRestriction,
 };
 use floe_conversation::AgentMessage;
-use floe_day::{CalendarRange, CalendarSelection};
+use floe_day::CalendarRange;
 use floe_experts::{AgentRegistry, RegistryConfiguration, RegistryConfigurationTarget};
 
 use super::expert_evidence::{delegation_message, record_proposal_task};
@@ -53,20 +53,6 @@ async fn seed(
         timezone_offset_seconds: 0,
         end_timezone_offset_seconds: None,
     };
-    core.set_calendar_scope(
-        person,
-        "eventkit-connection".into(),
-        1,
-        "test-device".into(),
-        CalendarProvider::EventKit,
-        vec![CalendarSelection {
-            calendar_id: "home".into(),
-            calendar_name: "Home".into(),
-        }],
-        floe_context_contract::CalendarScope::Selected,
-    )
-    .await
-    .unwrap();
     let source = core
         .source_service()
         .establish(
@@ -95,15 +81,17 @@ async fn seed(
         )
         .await
         .unwrap();
-    let revision = core
-        .calendar_connection(person)
-        .await
-        .unwrap()
-        .unwrap()
-        .revision;
-    core.import_calendar(person, revision, day.clone(), vec![], now)
-        .await
-        .unwrap();
+    core.import_calendar(
+        person,
+        source.connection_id(),
+        "test-device",
+        None,
+        day.clone(),
+        vec![],
+        now,
+    )
+    .await
+    .unwrap();
     let snapshot = vault.expert_registry().await.unwrap().unwrap();
     let mut registry = AgentRegistry::restore(snapshot, vault.registry_instance_id()).unwrap();
     let package = seeded.manifests[0].package.clone();
@@ -243,11 +231,15 @@ async fn source_resource_change_blocks_old_calendar_receipt_without_mirror_revis
         .unwrap();
     core.import_calendar(
         person,
-        floe_day::TimelineRepository::calendar_mirror(&core.store, person)
-            .await
-            .unwrap()
-            .unwrap()
-            .mirror_revision,
+        source.connection_id(),
+        "test-device",
+        Some(
+            floe_day::TimelineRepository::calendar_mirror(&core.store, person)
+                .await
+                .unwrap()
+                .unwrap()
+                .mirror_revision,
+        ),
         CalendarRange {
             start_date: fixture_now().date_naive(),
             end_date_exclusive: (fixture_now() + chrono::Duration::days(1)).date_naive(),
@@ -271,7 +263,7 @@ async fn source_resource_change_blocks_old_calendar_receipt_without_mirror_revis
         .unwrap()
         .unwrap()
         .mirror_revision;
-    assert_eq!(mirror_revision, 3);
+    assert_eq!(mirror_revision, 2);
     let updated = core
         .source_service()
         .configure(

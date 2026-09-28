@@ -504,7 +504,7 @@ impl<
         now: DateTime<Utc>,
     ) -> Result<DateTime<Utc>, AgentFailure> {
         self.grant.validate(now)?;
-        let statuses = &mirror.connection.source_statuses;
+        let statuses = &mirror.state.source_statuses;
         let mut expiry = self.grant.expires_at;
         for identifier in &self.grant.calendar_ids {
             let status = statuses.get(identifier).ok_or(AgentFailure::StaleContext)?;

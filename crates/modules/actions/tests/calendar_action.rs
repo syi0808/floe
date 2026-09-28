@@ -15,6 +15,17 @@ fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 5, 0, 0, 0).unwrap()
 }
 
+fn mirror_input() -> CalendarMirrorInput {
+    CalendarMirrorInput {
+        source_connection_id: "calendar.fixture".into(),
+        provider: CalendarProvider::Fixture,
+        calendars: vec![CalendarSelection {
+            calendar_id: "calendar-1".into(),
+            calendar_name: "Test".into(),
+        }],
+    }
+}
+
 #[derive(Default)]
 struct Provider {
     creates: AtomicUsize,
@@ -103,11 +114,18 @@ async fn fixture(
     let person = PersonId::new();
     store
         .day()
-        .select_calendar(
+        .import_calendar(
             person,
-            CalendarProvider::Fixture,
-            "calendar-1".into(),
-            "Test".into(),
+            None,
+            mirror_input(),
+            CalendarRange {
+                start_date: now().date_naive(),
+                end_date_exclusive: (now() + Duration::days(1)).date_naive(),
+                timezone_offset_seconds: 0,
+                end_timezone_offset_seconds: None,
+            },
+            Vec::new(),
+            now(),
         )
         .await
         .unwrap();
@@ -226,7 +244,8 @@ async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targe
         .day()
         .import_calendar(
             proposal.person_id,
-            proposal.connection_revision,
+            Some(1),
+            mirror_input(),
             range.clone(),
             records.clone(),
             now(),
@@ -296,7 +315,14 @@ async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targe
     read_only[0].can_modify = false;
     store
         .day()
-        .import_calendar(proposal.person_id, mirror_revision, range, read_only, now())
+        .import_calendar(
+            proposal.person_id,
+            Some(mirror_revision),
+            mirror_input(),
+            range,
+            read_only,
+            now(),
+        )
         .await
         .unwrap();
     let blocked = core
@@ -415,7 +441,8 @@ async fn success_is_durable_and_receipt_can_be_reimported() {
         .day()
         .import_calendar(
             action.person_id,
-            action.connection_revision,
+            Some(1),
+            mirror_input(),
             range.clone(),
             records.clone(),
             now(),
@@ -426,7 +453,8 @@ async fn success_is_durable_and_receipt_can_be_reimported() {
         .day()
         .import_calendar(
             action.person_id,
-            action.connection_revision + 1,
+            Some(2),
+            mirror_input(),
             range,
             records,
             now(),
@@ -510,7 +538,8 @@ async fn mirror_sync_does_not_invalidate_source_bound_action() {
         .day()
         .import_calendar(
             action.person_id,
-            mirror_before.mirror_revision,
+            Some(mirror_before.mirror_revision),
+            mirror_input(),
             CalendarRange {
                 start_date: now().date_naive(),
                 end_date_exclusive: (now() + Duration::days(1)).date_naive(),

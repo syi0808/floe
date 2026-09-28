@@ -3405,21 +3405,6 @@ async fn gmail_bad_signature_never_mutates_nor_resolves() {
 #[tokio::test]
 async fn remote_calendar_allow_resolves_through_hosted_connection() {
     let host = RemoteFixture::open().await;
-    host.core
-        .set_calendar_scope(
-            host.base.person,
-            host.connection_id.clone(),
-            9,
-            DEVICE.into(),
-            floe_context_contract::CalendarProvider::Google,
-            vec![floe_day::CalendarSelection {
-                calendar_id: "primary".into(),
-                calendar_name: "Primary".into(),
-            }],
-            floe_context_contract::CalendarScope::Selected,
-        )
-        .await
-        .unwrap();
     let source = host
         .core
         .source_service()
