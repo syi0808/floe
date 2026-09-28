@@ -30,8 +30,8 @@ pub struct RemoteViewGrantRequest<'a> {
     pub connection_id: &'a str,
     pub resource: &'a str,
     pub consumers: &'a [GrantConsumer],
-    /// The data category this view's contents fall under.
-    pub data_category: floe_context_contract::GrantDataCategory,
+    /// The exact data categories this view's contents fall under.
+    pub data_categories: &'a [floe_context_contract::GrantDataCategory],
 }
 
 /// What the Person is being shown before they decide.
@@ -210,9 +210,8 @@ pub async fn prepare_remote_view_grant_activation(
     }
     let scope = remote_view_scope(
         request.resource,
-        request.data_category,
+        request.data_categories,
         request.consumers.to_vec(),
-        preview.producer.audience.clone(),
     )?;
     let source = remote_view_source(&preview.reference)?;
     let existing = store

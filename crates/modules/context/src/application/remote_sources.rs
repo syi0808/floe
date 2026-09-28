@@ -20,8 +20,8 @@ use floe_context_contract::{
     ContextDependency, GrantConsumer, GrantOperation, GrantPurpose, GrantScope,
     MAX_CALENDAR_CONTEXT_BYTES, MAX_SOURCE_ACCESS_BLOCKERS, ObservedGrant, ProcessingRestriction,
     ResourceHandle, SourceAccessBlockers, SourceAccessRequirement, SourceAccessRequirementKind,
-    SourceReadOutcome, SourceSelectionReference, SourceUnavailable,
-    connection_view_resource, split_connection_view_resource, source_access_id_for_capability,
+    SourceReadOutcome, SourceSelectionReference, SourceUnavailable, connection_view_resource,
+    source_access_id_for_capability, split_connection_view_resource,
     validate_calendar_context_view_for_query,
 };
 use serde_json::Value;
@@ -30,8 +30,8 @@ use uuid::Uuid;
 #[cfg(test)]
 use crate::application::remote_views::{LOGISTICS_VIEW, MAIL_VIEW, WORK_VIEW};
 use crate::application::remote_views::{
-    is_remote_view, merge_remote_views, remote_view_data_category, remote_view_dependency, validate_remote_view,
-    validate_remote_view_query,
+    is_remote_view, merge_remote_views, remote_view_data_categories, remote_view_dependency,
+    validate_remote_view, validate_remote_view_query,
 };
 
 /// The read a remote transport performs once the grant has admitted it.
@@ -114,11 +114,7 @@ pub async fn read_remote_calendar_view(
         return Err(AgentFailure::StaleContext);
     }
     let binding = store
-        .calendar_grant_binding(
-            read.connector_id,
-            read.connection_id,
-            read.resource,
-        )
+        .calendar_grant_binding(read.connector_id, read.connection_id, read.resource)
         .await?;
     admit_remote_view_binding(&binding.grant, &grant, grant.source(), read.resource)?;
     let query = serde_json::json!({
@@ -170,11 +166,7 @@ pub async fn read_remote_calendar_view(
         return Err(AgentFailure::StaleContext);
     }
     let current_binding = store
-        .calendar_grant_binding(
-            read.connector_id,
-            read.connection_id,
-            read.resource,
-        )
+        .calendar_grant_binding(read.connector_id, read.connection_id, read.resource)
         .await?;
     admit_remote_view_binding(
         &current_binding.grant,
@@ -323,7 +315,7 @@ fn classify_remote_sources(
         let expected = connection_view_resource(view_id, &grant.source().connection_id())
             .map_err(|_| AgentFailure::InvalidInput)?;
         if remote_grant_admits(grant, person_id, consumer, expected.as_str())
-            && grant.scope().categories() == [remote_view_data_category(view_id)]
+            && grant.scope().categories() == remote_view_data_categories(view_id)
         {
             admitted.push((*grant).clone());
             continue;
@@ -401,7 +393,7 @@ fn classify_selected_remote_sources(
             _ => return Err(AgentFailure::Conflict),
         };
         if remote_grant_admits(grant, person_id, consumer, target.resource.as_str())
-            && grant.scope().categories() == [remote_view_data_category(view_id)]
+            && grant.scope().categories() == remote_view_data_categories(view_id)
         {
             admitted.push(grant.clone());
         } else {
@@ -459,11 +451,7 @@ async fn read_one_remote_source(
         .await?;
     admit_remote_view_source(&reference, source)?;
     let binding = store
-        .view_grant_binding(
-            view_id,
-            source.connector().as_str(),
-            connection_id_text,
-        )
+        .view_grant_binding(view_id, source.connector().as_str(), connection_id_text)
         .await?;
     admit_remote_view_binding(&binding.grant, grant, source, &resource)?;
     let raw = transport
@@ -483,7 +471,8 @@ async fn read_one_remote_source(
             window,
         )
         .await?;
-    let (value, observed, expires) = validate_remote_view(view_id, raw, now, max_items, max_bytes)?;
+    let (value, observed, expires) =
+        validate_remote_view(view_id, raw, query, now, max_items, max_bytes)?;
     let dependency = remote_view_dependency(
         person_id,
         &binding.grant,
@@ -699,7 +688,7 @@ async fn read_classified_remote_view(
         return blocked_outcome(reconnect);
     }
     Ok(SourceReadOutcome::Ready((
-        merge_remote_views(view_id, values, now, max_items, max_bytes)?,
+        merge_remote_views(view_id, values, &query, now, max_items, max_bytes)?,
         bindings,
     )))
 }
@@ -737,7 +726,8 @@ pub async fn authorize_remote_dependency(
         dependency.source().connector().as_str(),
         "calendar.google" | "calendar.microsoft"
     );
-    let resource_handle = ResourceHandle::try_new(resource).map_err(|_| AgentFailure::PolicyDenied)?;
+    let resource_handle =
+        ResourceHandle::try_new(resource).map_err(|_| AgentFailure::PolicyDenied)?;
     let view_id = if calendar {
         CALENDAR_CONTEXT_VIEW_ID
     } else {
@@ -861,9 +851,7 @@ mod calendar_tests {
                 scope.clone(),
             )
             .unwrap();
-            grant
-                .activate_review(grant.authority(), scope)
-                .unwrap();
+            grant.activate_review(grant.authority(), scope).unwrap();
             let now = Utc::now().timestamp_millis();
             Self {
                 grant,
@@ -930,9 +918,7 @@ mod calendar_tests {
                 scope.clone(),
             )
             .unwrap();
-            grant
-                .activate_review(grant.authority(), scope)
-                .unwrap();
+            grant.activate_review(grant.authority(), scope).unwrap();
             let mut view = self.view.clone();
             view.source_handle = format!("calendar:{resource}");
             view.items = vec![CalendarContextItem {
@@ -1554,7 +1540,7 @@ mod remote_view_tests {
             let resource = fixture_view_resource(view_id, connection_id);
             let scope = GrantScope::try_new(
                 vec![ResourceHandle::try_new(&resource).unwrap()],
-                vec![remote_view_data_category(view_id)],
+                remote_view_data_categories(view_id).to_vec(),
                 vec![GrantOperation::Read],
                 vec![GrantPurpose::Assistant],
                 vec![GrantConsumer::builtin("assistant").unwrap()],
@@ -1569,9 +1555,7 @@ mod remote_view_tests {
             )
             .unwrap();
             if active {
-                grant
-                    .activate_review(grant.authority(), scope)
-                    .unwrap();
+                grant.activate_review(grant.authority(), scope).unwrap();
             }
             let now = Utc::now().timestamp_millis();
             let view = match view_id {

@@ -413,11 +413,7 @@ where
         connection_id: ctx.connection_id,
         resource: &resource,
         consumers: &consumers,
-        data_category: policy
-            .categories
-            .first()
-            .cloned()
-            .ok_or(AgentFailure::InvalidInput)?,
+        data_categories: &policy.categories,
     };
     let preview = floe_access::preview_remote_view_grant(
         ctx.vault, transport, request, true, true, ctx.window,
@@ -532,11 +528,7 @@ where
         connection_id: ctx.connection_id,
         resource: &member.resource,
         consumers: &consumers,
-        data_category: policy
-            .categories
-            .first()
-            .cloned()
-            .ok_or(AgentFailure::InvalidInput)?,
+        data_categories: &policy.categories,
     };
     let expected_grant = match (member.expected_grant_id, member.expected_grant_authority) {
         (Some(id), Some(authority)) => Some((id, authority)),

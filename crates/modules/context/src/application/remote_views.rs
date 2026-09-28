@@ -12,9 +12,11 @@ use serde_json::Value;
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
 use floe_context_contract::{
-    CommunicationView, GrantDataCategory, LogisticsView, MAX_COMMUNICATION_BYTES,
+    CALENDAR_CONTEXT_VIEW_ID, CalendarContextView, CalendarViewQuery, CommunicationView,
+    GrantDataCategory, LogisticsView, MAX_CALENDAR_CONTEXT_BYTES, MAX_COMMUNICATION_BYTES,
     MAX_COMMUNICATION_ITEMS, MAX_PORTFOLIO_VIEW_BYTES, WorkContextView,
-    validate_communication_view, validate_logistics_view, validate_work_context_view,
+    validate_calendar_context_view_for_query, validate_communication_view, validate_logistics_view,
+    validate_work_context_view,
 };
 use sha2::{Digest, Sha256};
 
@@ -24,18 +26,22 @@ pub const LOGISTICS_VIEW: &str = "life.logistics";
 
 /// Whether this is a remote view a Person can hold a grant for at all.
 pub fn is_remote_view(view_id: &str) -> bool {
-    matches!(view_id, MAIL_VIEW | WORK_VIEW | LOGISTICS_VIEW)
+    matches!(
+        view_id,
+        MAIL_VIEW | WORK_VIEW | LOGISTICS_VIEW | CALENDAR_CONTEXT_VIEW_ID
+    )
 }
 
 /// What a grant for this view covers.
 ///
 /// A communication view carries the Person's own correspondence, so a grant for
 /// it is a grant over content; the other views are derived projections.
-pub fn remote_view_data_category(view_id: &str) -> GrantDataCategory {
-    if view_id == MAIL_VIEW {
-        GrantDataCategory::Content
-    } else {
-        GrantDataCategory::Derived
+pub fn remote_view_data_categories(view_id: &str) -> &'static [GrantDataCategory] {
+    match view_id {
+        MAIL_VIEW => &[GrantDataCategory::Content],
+        WORK_VIEW | LOGISTICS_VIEW => &[GrantDataCategory::Derived],
+        CALENDAR_CONTEXT_VIEW_ID => &[GrantDataCategory::Metadata, GrantDataCategory::Content],
+        _ => &[],
     }
 }
 
@@ -72,6 +78,12 @@ pub fn validate_remote_view_query(
         {
             Ok((1, MAX_PORTFOLIO_VIEW_BYTES))
         }
+        CALENDAR_CONTEXT_VIEW_ID => {
+            let query: CalendarViewQuery =
+                serde_json::from_value(query.clone()).map_err(|_| AgentFailure::InvalidInput)?;
+            query.validate()?;
+            Ok((query.limit(), MAX_CALENDAR_CONTEXT_BYTES))
+        }
         _ => Err(AgentFailure::InvalidInput),
     }
 }
@@ -81,6 +93,7 @@ pub fn validate_remote_view_query(
 pub fn validate_remote_view(
     view_id: &str,
     value: Value,
+    query: &Value,
     now: i64,
     max_items: usize,
     max_bytes: usize,
@@ -110,6 +123,16 @@ pub fn validate_remote_view(
                 serde_json::to_value(&view).map_err(|_| AgentFailure::InvalidModelOutput)?;
             Ok((result, view.observed_at_unix_ms, view.expires_at_unix_ms))
         }
+        CALENDAR_CONTEXT_VIEW_ID => {
+            let query: CalendarViewQuery =
+                serde_json::from_value(query.clone()).map_err(|_| AgentFailure::InvalidInput)?;
+            let view: CalendarContextView =
+                serde_json::from_value(value).map_err(|_| AgentFailure::CapabilityUnavailable)?;
+            validate_calendar_context_view_for_query(&view, &query, now)?;
+            let result =
+                serde_json::to_value(&view).map_err(|_| AgentFailure::InvalidModelOutput)?;
+            Ok((result, view.observed_at_unix_ms, view.expires_at_unix_ms))
+        }
         _ => Err(AgentFailure::InvalidInput),
     }
 }
@@ -117,6 +140,7 @@ pub fn validate_remote_view(
 pub fn merge_remote_views(
     view_id: &str,
     values: Vec<Value>,
+    query: &Value,
     now: i64,
     max_items: usize,
     max_bytes: usize,
@@ -128,11 +152,15 @@ pub fn merge_remote_views(
         return validate_remote_view(
             view_id,
             values.into_iter().next().unwrap(),
+            query,
             now,
             max_items,
             max_bytes,
         )
         .map(|result| result.0);
+    }
+    if view_id == CALENDAR_CONTEXT_VIEW_ID {
+        return Err(AgentFailure::Conflict);
     }
     let mut source_handles = values
         .iter()
@@ -381,6 +409,7 @@ mod merge_tests {
                 mail("gmail:one", "gmail:message", 20, true),
                 mail("microsoft:one", "microsoft:message", 30, false),
             ],
+            &serde_json::json!({"schema_version": AGENT_VERSION, "query": "", "cursor": 0, "limit": 8}),
             2_000,
             8,
             MAX_COMMUNICATION_BYTES,
@@ -391,5 +420,63 @@ mod merge_tests {
         assert_eq!(view.items[0].evidence_handle, "microsoft:message");
         assert!(!view.coverage_complete);
         assert!(view.source_handle.starts_with("multi:mail.communication:"));
+    }
+}
+
+#[cfg(test)]
+mod calendar_remote_view_tests {
+    use super::*;
+
+    #[test]
+    fn calendar_contract_requires_exact_categories_query_and_result() {
+        assert!(is_remote_view(CALENDAR_CONTEXT_VIEW_ID));
+        assert_eq!(
+            remote_view_data_categories(CALENDAR_CONTEXT_VIEW_ID),
+            &[GrantDataCategory::Metadata, GrantDataCategory::Content]
+        );
+        let query = serde_json::json!({
+            "range_start_unix_ms": 1_000,
+            "range_end_unix_ms": 2_000,
+            "cursor": null,
+            "limit": 1
+        });
+        assert_eq!(
+            validate_remote_view_query(CALENDAR_CONTEXT_VIEW_ID, &query),
+            Ok((1, MAX_CALENDAR_CONTEXT_BYTES))
+        );
+        let view = serde_json::json!({
+            "schema_version": AGENT_VERSION,
+            "view_id": CALENDAR_CONTEXT_VIEW_ID,
+            "source_handle": "calendar:source",
+            "observed_at_unix_ms": 1_000,
+            "expires_at_unix_ms": 2_000,
+            "range_start_unix_ms": 1_000,
+            "range_end_unix_ms": 2_000,
+            "coverage_complete": true,
+            "items": []
+        });
+        assert!(
+            validate_remote_view(
+                CALENDAR_CONTEXT_VIEW_ID,
+                view.clone(),
+                &query,
+                1_500,
+                1,
+                MAX_CALENDAR_CONTEXT_BYTES,
+            )
+            .is_ok()
+        );
+        let wrong_query = serde_json::json!({"range_start_unix_ms": 1_000, "range_end_unix_ms": 3_000, "cursor": null, "limit": 1});
+        assert_eq!(
+            validate_remote_view(
+                CALENDAR_CONTEXT_VIEW_ID,
+                view,
+                &wrong_query,
+                1_500,
+                1,
+                MAX_CALENDAR_CONTEXT_BYTES
+            ),
+            Err(AgentFailure::StaleContext)
+        );
     }
 }

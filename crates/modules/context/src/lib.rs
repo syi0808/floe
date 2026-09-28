@@ -100,9 +100,8 @@ pub use application::remote_sources::{
     read_remote_calendar_view, read_remote_view, read_selected_remote_view,
 };
 pub use application::remote_views::{
-    LOGISTICS_VIEW, MAIL_VIEW, WORK_VIEW, is_remote_view, remote_view_data_category,
-    remote_view_dependency, validate_remote_view,
-    validate_remote_view_query,
+    LOGISTICS_VIEW, MAIL_VIEW, WORK_VIEW, is_remote_view, remote_view_data_categories,
+    remote_view_dependency, validate_remote_view, validate_remote_view_query,
 };
 pub use application::service::{ContextService, PreparedContext};
 pub use application::source_candidates::{

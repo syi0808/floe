@@ -132,26 +132,47 @@ pub fn remote_view_source(
 
 /// The scope one reviewed remote view grant carries.
 ///
-/// The recipient is part of the grant, not a property of the transport: the
-/// Person approved this data reaching that audience and no other.
+/// The source audience is reviewed separately from the standing grant. The
+/// grant authorizes local use; model-recipient consent is a separate decision.
 pub fn remote_view_scope(
     resource: &str,
-    category: GrantDataCategory,
+    categories: &[GrantDataCategory],
     consumers: Vec<GrantConsumer>,
-    recipient: String,
 ) -> Result<GrantScope, AgentFailure> {
-    if recipient.is_empty() {
+    if categories.is_empty() {
         return Err(AgentFailure::InvalidInput);
     }
     GrantScope::try_new(
         vec![ResourceHandle::try_new(resource).map_err(|_| AgentFailure::InvalidInput)?],
-        vec![category.clone()],
+        categories.to_vec(),
         vec![GrantOperation::Read],
         vec![GrantPurpose::Assistant],
         consumers,
         ProcessingRestriction::LocalOnly,
     )
     .map_err(|_| AgentFailure::InvalidInput)
+}
+
+#[cfg(test)]
+mod remote_view_scope_tests {
+    use super::*;
+
+    #[test]
+    fn logical_calendar_scope_keeps_both_categories_and_local_processing() {
+        let scope = remote_view_scope(
+            "calendar.timeline:connection-one",
+            &[GrantDataCategory::Metadata, GrantDataCategory::Content],
+            vec![GrantConsumer::builtin("calendar.expert").unwrap()],
+        )
+        .unwrap();
+        assert_eq!(scope.resources()[0].as_str(), "calendar.timeline:connection-one");
+        assert_eq!(scope.categories(), &[GrantDataCategory::Metadata, GrantDataCategory::Content]);
+        assert_eq!(scope.processing(), &ProcessingRestriction::LocalOnly);
+        assert_eq!(
+            remote_view_scope("calendar.timeline:connection-one", &[], vec![GrantConsumer::builtin("calendar.expert").unwrap()]),
+            Err(AgentFailure::InvalidInput)
+        );
+    }
 }
 
 /// What a review does to the grant the Person already holds for this view.
