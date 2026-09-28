@@ -6,11 +6,10 @@ use floe_access::{
 use floe_agent_contract::{AgentFailure, PersonId};
 use floe_connections::{ConnectorSnapshot, SourceConnection};
 use floe_context_contract::{
-    ConnectionId, ConnectorId, ExecutionOwnerId, ResourceHandle, SourceSelectionReference,
-    connection_view_resource,
+    CALENDAR_CONTEXT_VIEW_ID, ConnectionId, ConnectorId, ExecutionOwnerId, ResourceHandle,
+    SourceSelectionReference, connection_view_resource,
 };
 use sha2::{Digest, Sha256};
-
 
 pub const LOCAL_CONTEXT_CONNECTOR: &str = "floe.local.context";
 
@@ -170,15 +169,31 @@ pub fn discover_source_candidates(
                             | "calendar.fixture"
                     )
                 {
-                    for calendar in connection.resources() {
+                    if connector == "calendar.event_kit" {
+                        let resource = connection_view_resource(
+                            CALENDAR_CONTEXT_VIEW_ID,
+                            connection.connection_id(),
+                        )
+                        .map_err(|_| AgentFailure::InvalidInput)?;
                         add(
                             connector,
                             connection.connection_id().as_str(),
                             connection.execution_owner_id().as_str(),
-                            calendar.handle().as_str(),
-                            calendar.label().into(),
-                            "Selected calendar".into(),
+                            resource.as_str(),
+                            "Calendar".into(),
+                            "Connected calendar device".into(),
                         )?;
+                    } else {
+                        for calendar in connection.resources() {
+                            add(
+                                connector,
+                                connection.connection_id().as_str(),
+                                connection.execution_owner_id().as_str(),
+                                calendar.handle().as_str(),
+                                calendar.label().into(),
+                                "Selected calendar".into(),
+                            )?;
+                        }
                     }
                 }
             }
@@ -318,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn calendar_addition_produces_a_new_candidate_without_changing_the_old_reference() {
+    fn native_calendar_resource_change_preserves_single_connection_view_candidate() {
         let person_id = PersonId::new();
         let mut connection = SourceConnection::establish(
             person_id,
@@ -340,6 +355,10 @@ mod tests {
             discover_source_candidates(request(person_id, "calendar.timeline", Some(&connection)))
                 .unwrap();
         assert_eq!(initial.len(), 1);
+        assert_eq!(
+            initial[0].reference.resource.as_str(),
+            "calendar.timeline:calendar-account"
+        );
         assert!(
             discover_source_candidates(request(
                 PersonId::new(),
@@ -377,9 +396,68 @@ mod tests {
         let refreshed =
             discover_source_candidates(request(person_id, "calendar.timeline", Some(&connection)))
                 .unwrap();
-        assert_eq!(refreshed.len(), 2);
+        assert_eq!(refreshed.len(), 1);
         assert_eq!(refreshed[0], initial[0]);
-        assert_ne!(refreshed[0].candidate_id, refreshed[1].candidate_id);
+        connection
+            .configure(
+                3,
+                ResourceMode::Selected,
+                vec![
+                    ConnectionResource::new(
+                        ResourceHandle::try_new("calendar-a").unwrap(),
+                        "Renamed".into(),
+                    )
+                    .unwrap(),
+                    ConnectionResource::new(
+                        ResourceHandle::try_new("calendar-b").unwrap(),
+                        "Work".into(),
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            discover_source_candidates(request(person_id, "calendar.timeline", Some(&connection)))
+                .unwrap(),
+            initial
+        );
+        connection.disconnect(4).unwrap();
+        assert!(
+            discover_source_candidates(request(person_id, "calendar.timeline", Some(&connection)))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn hosted_calendar_candidates_remain_leaf_scoped_until_remote_cutover() {
+        let person_id = PersonId::new();
+        let connection = SourceConnection::establish(
+            person_id,
+            ConnectorId::try_new("calendar.google").unwrap(),
+            ConnectionId::try_new("calendar-account").unwrap(),
+            ExecutionOwnerId::try_new("server-owner").unwrap(),
+            ResourceMode::Selected,
+            vec![
+                ConnectionResource::new(
+                    ResourceHandle::try_new("calendar-a").unwrap(),
+                    "Personal".into(),
+                )
+                .unwrap(),
+                ConnectionResource::new(
+                    ResourceHandle::try_new("calendar-b").unwrap(),
+                    "Work".into(),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        let mut candidate_request = request(person_id, "calendar.timeline", Some(&connection));
+        candidate_request.remote_execution_owner = Some("server-owner");
+        let candidates = discover_source_candidates(candidate_request).unwrap();
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].reference.resource.as_str(), "calendar-a");
+        assert_eq!(candidates[1].reference.resource.as_str(), "calendar-b");
     }
 
     #[test]
