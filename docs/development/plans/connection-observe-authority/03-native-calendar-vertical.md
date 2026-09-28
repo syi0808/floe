@@ -6,6 +6,8 @@ Status: Not started.
 
 Planning base: `main` at `2e6a0a79d9b391eaba2a813b8f4ed43ef6ab06aa` on 2026-09-28.
 
+Planning reconciliation: `5ebedec41362f1b3d8ea784f65cd9f530fe83b40` was a documentation-only expansion of this checkpoint plan on top of that code baseline. The production source tree was unchanged; the caller map and line anchors below were rechecked against the same `2e6a0a79` implementation on 2026-09-28.
+
 Checkpoint 01 moved native Calendar source/resource authority to Connections. Checkpoint 02 made standing grant source identity stable and split `ContextDependency` permission resources from current `SourceAuthority` and exact observed `source_resources`.
 
 Checkpoint 03 is therefore no longer a foundational authority migration. It is the first complete product vertical that consumes those foundations: native EventKit Calendar must stop treating leaf Calendar IDs as Expert configuration or Access permission and instead use one `calendar.timeline:<connection-id>` View permission while Context acquires every current Calendar resource from Connections at read time.
@@ -191,7 +193,7 @@ At acquisition:
 connection = reload current SourceConnection
 calendar_ids = all current sorted connection.resources handles
 source_authority = connection.source_authority
-```
+~~~
 
 After provider/native subject checks and grant admission:
 
@@ -204,7 +206,7 @@ ContextDependency.source_authority
 
 ContextDependency.source_resources
   = exact calendar_ids passed to provider/read
-```
+~~~
 
 The provider source stamp must quote exactly the same Calendar IDs.
 
@@ -214,7 +216,7 @@ Canonical helper:
 
 ~~~
 trusted_shipped_consumers(capability)
-```
+~~~
 
 or an equivalently named function owned by App product policy.
 
@@ -226,7 +228,7 @@ floe_experts_builtin::manifests()
   -> manifest.source_requirements contains capability
   -> GrantConsumer::builtin(manifest.package.id)
   -> sort + dedupe
-```
+~~~
 
 It does not read:
 
@@ -244,7 +246,7 @@ floe.builtin.schedule
 floe.builtin.commitments
 floe.builtin.focus-attention
 floe.builtin.wellbeing
-```
+~~~
 
 Verify this from the actual execution HEAD instead of hard-coding an unexplained list. Tests should assert the product declaration remains the source of truth.
 
@@ -436,7 +438,7 @@ git rev-parse HEAD
 git rev-parse origin/main
 git log -1 --oneline
 python3 tools/architecture/check_boundaries.py
-```
+~~~
 
 Read:
 
@@ -450,7 +452,7 @@ docs/architecture/invariants.md
 docs/architecture/modules.md
 docs/architecture/runtime.md
 docs/architecture/authority-recovery.md
-```
+~~~
 
 Record a pre-edit inventory:
 
@@ -464,7 +466,7 @@ rg -n "calendar_ids.*GrantScope|GrantScope.*calendar_ids" crates
 rg -n "source_resources\(\).*selected\.resource|selected\.resource.*source_resources" crates
 rg -n "reconcileCalendarAfterExplicitChange|_reconcileExplicitCalendarChange" apps/client
 rg -n "granted_resources|grantedResources" crates apps/client
-```
+~~~
 
 Classify every native Calendar leaf-semantic match. Hosted Calendar matches assigned to 04 and temporary DTO matches assigned to 07 are allowed only when explicitly documented.
 
@@ -474,7 +476,7 @@ Modify:
 
 ~~~
 crates/modules/context/src/application/source_candidates.rs
-```
+~~~
 
 ### Native candidate construction
 
@@ -493,7 +495,7 @@ add(
     connection/provider title,
     "Connected calendar account/device"
 )
-```
+~~~
 
 Use the shared contract helper from 02. Do not manually format the resource string.
 
@@ -518,13 +520,13 @@ Replace:
 
 ~~~
 calendar_addition_produces_a_new_candidate_without_changing_the_old_reference
-```
+~~~
 
 with a regression such as:
 
 ~~~
 native_calendar_resource_change_preserves_single_connection_view_candidate
-```
+~~~
 
 Required assertions:
 
@@ -547,7 +549,7 @@ Primary files:
 crates/app/src/vault_host/expert_binding_settings.rs
 crates/app/src/vault_host/tests/registered_runner.rs
 relevant Expert registry/binding tests
-```
+~~~
 
 ### Initial defaults
 
@@ -590,7 +592,7 @@ Primary file:
 
 ~~~
 crates/app/src/first_party_observe.rs
-```
+~~~
 
 ### Canonical helper
 
@@ -618,7 +620,7 @@ floe.builtin.commitments
 floe.builtin.focus-attention
 floe.builtin.schedule
 floe.builtin.wellbeing
-```
+~~~
 
 Canonical sort order is whatever `GrantConsumer` ordering produces; tests should compare canonical IDs rather than relying on declaration order unless the contract explicitly sorts.
 
@@ -630,7 +632,7 @@ Delete:
 
 ~~~
 native_calendar_policy_for_target
-```
+~~~
 
 All native Calendar policy callers use `calendar_policy()` / the canonical capability policy.
 
@@ -656,7 +658,7 @@ Delete/rewrite:
 
 ~~~
 shipped_consumer_requires_active_exact_binding
-```
+~~~
 
 Add:
 
@@ -680,7 +682,7 @@ Modify:
 crates/adapters/vault/src/vault/calendar_grants.rs
 crates/app/src/vault_host/calendar_access.rs
 crates/modules/access/src/application/calendar_read.rs
-```
+~~~
 
 ### Canonical logical resource
 
@@ -691,7 +693,7 @@ connection_view_resource(
   CALENDAR_CONTEXT_VIEW_ID,
   &ConnectionId::try_new(connection_id)?
 )
-```
+~~~
 
 Do not create a Calendar-specific formatter.
 
@@ -707,7 +709,7 @@ native_calendar_binding(
   connection_id,
   consumers
 ) -> (GrantSourceBinding, GrantScope)
-```
+~~~
 
 The resulting scope has one resource: `calendar.timeline:<connection>`.
 
@@ -776,7 +778,7 @@ Modify:
 ~~~
 crates/app/src/vault_host/calendar_access.rs
 crates/app/src/local_access_services.rs only if comments/contracts need correction
-```
+~~~
 
 ### Review input semantics until 07
 
@@ -786,7 +788,7 @@ For a native connection-wide grant, require exact canonical equality with the cu
 
 ~~~
 reviewed_calendar_ids == current_connection_resources
-```
+~~~
 
 after sorting/deduping.
 
@@ -837,7 +839,7 @@ Files:
 crates/app/src/vault_host/calendar_access.rs
 crates/app/src/connection_observe.rs
 apps/client/lib/features/connections/presentation/connector_screen.dart
-```
+~~~
 
 07 deletes `selected_resources` / `granted_resources`; 03 only prevents them from becoming false authority/UI semantics.
 
@@ -847,7 +849,7 @@ Do not populate `CalendarAccessOverview.granted_resources` by reading `grant.sco
 
 ~~~
 ["calendar.timeline:<connection>"]
-```
+~~~
 
 as if one Calendar leaf were granted.
 
@@ -869,7 +871,7 @@ The existing:
 
 ~~~
 Using ${grantedResources.length} of ${selectedResources.length} selected calendars.
-```
+~~~
 
 must not be allowed to render “1 of 11” from a logical grant.
 
@@ -887,7 +889,7 @@ Modify:
 crates/app/src/vault_host/review_snapshot.rs
 crates/app/src/vault_host/interaction_owners.rs
 relevant Conversation interaction tests
-```
+~~~
 
 ### Capture
 
@@ -934,7 +936,7 @@ one current usable Connection
 + one active logical calendar.timeline grant
 + one current native subject probe over all current resources
 = satisfied
-```
+~~~
 
 A resource update should not make this false merely because the grant does not list the new leaf.
 
@@ -947,7 +949,7 @@ crates/modules/context/src/application/native_calendar.rs
 crates/modules/context/src/application/native_calendar_view.rs
 crates/app/src/vault_host/conversation_turn/expert_host.rs
 crates/app/src/vault_host/calendar_access.rs
-```
+~~~
 
 ### `admit_current_native_calendar_read`
 
@@ -955,13 +957,13 @@ Delete:
 
 ~~~
 expected_calendar_ids: Option<&[String]>
-```
+~~~
 
 Always:
 
 ~~~
 calendar_ids = connection_calendar_ids(&connection)
-```
+~~~
 
 Require:
 - non-empty;
@@ -978,7 +980,7 @@ Delete:
 
 ~~~
 selected_calendar_ids
-```
+~~~
 
 Callers provide:
 - Person;
@@ -1013,7 +1015,7 @@ admit(
   person_id,
   consumer
 ) -> CalendarReadAccessAdmission
-```
+~~~
 
 or equivalent.
 
@@ -1054,7 +1056,7 @@ A native successful read records:
 resources = admission.scope.resources()
 source_authority = admission.source_authority
 source_resources = exact calendar_ids used in source.check/source.observe
-```
+~~~
 
 After logical grant cutover `resources` has one connection/View resource.
 
@@ -1064,7 +1066,7 @@ Current:
 
 ~~~
 crates/modules/access/src/application/calendar_lease.rs
-```
+~~~
 
 owns `CalendarLeaseKey` and `calendar_lease_dependency`, despite the key describing Context query/acquisition provenance.
 
@@ -1072,16 +1074,25 @@ Search callers first:
 
 ~~~
 rg -n "CalendarLeaseKey|calendar_lease_dependency" crates
-```
+~~~
 
-If, as on the planning base, only native Context acquisition and tests use them:
+On the planning base the production callers are both Context-owned:
 
-1. move the query fingerprint struct to Context as a private/internal type near `native_calendar_view.rs` or an existing Context lease helper;
-2. construct `ContextDependency` in Context using the admitted grant + exact source resources;
-3. remove `calendar_lease_dependency`;
-4. remove `CalendarLeaseKey` from Access public surface;
-5. delete `crates/modules/access/src/application/calendar_lease.rs`;
-6. remove exports from Access.
+- `crates/modules/context/src/application/native_calendar_view.rs` constructs dependency provenance for the direct native Calendar View read;
+- `crates/modules/context/src/application/calendar_timeline.rs` uses `CalendarLeaseKey` as its governed timeline lease/cache key and constructs the same dependency shape.
+
+Migrate both callers in one cutover:
+
+1. move the query/lease key to Context as one private/internal Context-owned type shared by `native_calendar_view.rs` and `calendar_timeline.rs`, or place it in the existing Context lease module if that avoids a duplicate key;
+2. keep exactly one canonical serialization for the query fingerprint used by both paths;
+3. construct `ContextDependency` in Context using the admitted logical grant + exact source resources;
+4. migrate the `calendar_timeline.rs` lease map/key type in the same change;
+5. remove `calendar_lease_dependency`;
+6. remove `CalendarLeaseKey` from Access public surface;
+7. delete `crates/modules/access/src/application/calendar_lease.rs`;
+8. remove exports/imports/tests that exist only for the Access-owned helper.
+
+Do not duplicate one key/fingerprint type per Context caller merely to delete the Access module.
 
 Keep the query fingerprint deterministic and bound to:
 - invocation;
@@ -1101,7 +1112,7 @@ Modify the native branch of:
 
 ~~~
 crates/app/src/vault_host/conversation_turn/expert_host.rs
-```
+~~~
 
 ### Selection validation
 
@@ -1122,7 +1133,7 @@ Delete:
 
 ~~~
 selected -> calendar_ids
-```
+~~~
 
 Do not construct provider access from selected resources.
 
@@ -1153,7 +1164,7 @@ Modify:
 ~~~
 crates/adapters/vault/src/vault/agent_actions.rs
 crates/modules/actions/src/application/expert.rs
-```
+~~~
 
 ### Expert execution selection
 
@@ -1161,7 +1172,7 @@ After native selected refs become logical, this check:
 
 ~~~
 selected.resource ∈ dependency.source_resources
-```
+~~~
 
 is wrong.
 
@@ -1169,7 +1180,7 @@ For native Calendar, selection is permission/configuration identity, so validate
 
 ~~~
 selected.resource ∈ dependency.resources
-```
+~~~
 
 With the bounded 04 transition this also works for hosted Calendar while its dependency permission resource remains the special leaf resource.
 
@@ -1183,7 +1194,7 @@ Keep `validate_context_calendar_source` checking:
 dependency.source_resources contains destination calendar_id
 current SourceConnection.resources contains destination calendar_id
 dependency.source_authority == current SourceAuthority
-```
+~~~
 
 Observe still does not imply Act. Preserve all proposal approval/durable intent/idempotency/uncertain-result recovery gates.
 
@@ -1194,14 +1205,14 @@ Modify:
 ~~~
 apps/client/lib/features/connections/presentation/connector_screen.dart
 relevant connector_screen tests
-```
+~~~
 
 Delete the behavior represented by:
 
 ~~~
 reconcileCalendarAfterExplicitChange
 _reconcileExplicitCalendarChange
-```
+~~~
 
 A successful Calendar source configuration change should:
 
@@ -1271,7 +1282,7 @@ Promote checkpoint-00 temporary reproduction into a permanent positive test in:
 
 ~~~
 crates/app/src/vault_host/tests/native_calendar_access.rs
-```
+~~~
 
 Required setup:
 
@@ -1373,7 +1384,7 @@ rg -n "reconcileCalendarAfterExplicitChange|_reconcileExplicitCalendarChange" ap
 rg -n "Using .*grantedResources|grantedResources\.length" apps/client
 rg -n "CalendarLeaseKey|calendar_lease_dependency" crates
 rg -n "\"calendar.timeline\".*ResourceHandle::try_new\(\"(home|primary|calendar-)" crates
-```
+~~~
 
 ### Required zero matches in production
 
@@ -1411,7 +1422,7 @@ Update in the same implementation change:
 docs/architecture/runtime.md
 docs/architecture/modules.md
 docs/architecture/authority-recovery.md
-```
+~~~
 
 After 03 current docs must state:
 
@@ -1444,7 +1455,7 @@ Suggested commit:
 
 ~~~
 experts: bind native calendar by connection view
-```
+~~~
 
 ### 03-B — trusted first-party policy
 
@@ -1458,7 +1469,7 @@ Suggested commit:
 
 ~~~
 access: derive first party consumers from shipped manifests
-```
+~~~
 
 ### 03-C — logical native Calendar grant
 
@@ -1472,7 +1483,7 @@ Suggested commit:
 
 ~~~
 access: grant native calendar logical view
-```
+~~~
 
 ### 03-D — current-resource native acquisition
 
@@ -1486,7 +1497,7 @@ Suggested commit:
 
 ~~~
 context: read all current native calendars
-```
+~~~
 
 ### 03-E — Expert/interaction/Action convergence
 
@@ -1500,7 +1511,7 @@ Suggested commit:
 
 ~~~
 app: converge native calendar view authority
-```
+~~~
 
 ### 03-F — product invariant and acceptance
 
@@ -1514,7 +1525,7 @@ Suggested commit:
 
 ~~~
 client: keep calendar grant stable across resource edits
-```
+~~~
 
 ### 03-G — residual/docs/closure
 
@@ -1527,7 +1538,7 @@ Suggested commit:
 
 ~~~
 docs: complete connection observe checkpoint 03
-```
+~~~
 
 Combine slices where a smaller coherent change results. Do not create compatibility wrappers between slices.
 
@@ -1539,11 +1550,12 @@ Minimum Rust close gate:
 
 ~~~
 cargo test -p floe-context source_candidates
-cargo test -p floe-context native_calendar
+cargo test -p floe-context --test native_calendar_read
+cargo test -p floe-context --test calendar_timeline
 cargo test -p floe-access calendar
 cargo test -p floe-vault calendar
 cargo test -p floe-actions calendar
-cargo test -p floe-app native_calendar
+cargo test -p floe-app native_calendar_access
 cargo test -p floe-app first_party_observe
 cargo test -p floe-app registered_runner
 cargo test -p floe-conversation
@@ -1551,7 +1563,7 @@ cargo check --workspace --lib
 python3 tools/architecture/check_boundaries.py
 python3 tools/architecture/check_expert_extensibility.py
 git diff --check
-```
+~~~
 
 If Cargo test filters match zero tests, use the nearest exact target/test command and record it. A zero-match filter is not evidence.
 
@@ -1565,7 +1577,7 @@ flutter analyze
 flutter test test/features/connections/native_calendar_access_test.dart
 flutter test test/features/connections/connector_screen_test.dart
 flutter build macos
-```
+~~~
 
 Run full affected Flutter connection tests when the exact paths differ.
 
@@ -1573,7 +1585,7 @@ Broad Rust gate before closure:
 
 ~~~
 CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast -- --test-threads=1
-```
+~~~
 
 If the known default-parallel shared-counter flake is also run, report its result separately. Do not hide it and do not weaken the test.
 
