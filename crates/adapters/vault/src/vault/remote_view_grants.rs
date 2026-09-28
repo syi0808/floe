@@ -408,6 +408,22 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if expected_policy.is_some() {
                 return Err(AgentFailure::Conflict);
             }
+            let mut source_rows = transaction
+                .query(
+                    "SELECT grant_id FROM remote_view_grant_mappings WHERE person_id = ? AND view_id = ? AND connector = ? AND connection_id = ? AND execution_owner = ?",
+                    (
+                        self.person_id.to_string(),
+                        view_id,
+                        source.connector().as_str(),
+                        source.connection_id().as_str(),
+                        source.execution_owner().as_str(),
+                    ),
+                )
+                .await
+                .map_err(super::storage)?;
+            if source_rows.next().await.map_err(super::storage)?.is_some() {
+                return Err(AgentFailure::Conflict);
+            }
             ConsumerPolicyAuthority::new()
         };
         let mapping = RemoteViewGrantMapping {
@@ -657,6 +673,92 @@ mod tests {
                 .await,
             Err(AgentFailure::AccessReviewRequired)
         ));
+    }
+
+    #[tokio::test]
+    async fn hosted_calendar_uses_one_logical_view_mapping_with_stable_policy() {
+        let (_root, vault, person) = vault().await;
+        let source = GrantSourceBinding::try_new(
+            person,
+            ConnectionId::try_new("calendar.connection").unwrap(),
+            ConnectorId::try_new("calendar.google").unwrap(),
+            ExecutionOwnerId::try_new("server:calendar").unwrap(),
+        )
+        .unwrap();
+        let scope = GrantScope::try_new(
+            vec![ResourceHandle::try_new("calendar.timeline:calendar.connection").unwrap()],
+            vec![GrantDataCategory::Metadata, GrantDataCategory::Content],
+            vec![GrantOperation::Read],
+            vec![GrantPurpose::Assistant],
+            vec![GrantConsumer::builtin("floe.builtin.schedule").unwrap()],
+            ProcessingRestriction::LocalOnly,
+        )
+        .unwrap();
+        let active = vault
+            .review_and_activate_remote_view_grant(
+                "calendar.timeline",
+                GrantId::new(),
+                None,
+                source.clone(),
+                scope.clone(),
+                None,
+            )
+            .await
+            .unwrap();
+        let binding = vault
+            .remote_view_grant_binding("calendar.timeline", "calendar.google", "calendar.connection")
+            .await
+            .unwrap();
+        assert_eq!(binding.grant.id(), active.id());
+        assert_eq!(binding.grant.scope().resources(), scope.resources());
+        assert!(matches!(
+            vault
+                .review_and_activate_remote_view_grant(
+                    "calendar.timeline",
+                    GrantId::new(),
+                    None,
+                    source.clone(),
+                    scope.clone(),
+                    None,
+                )
+                .await,
+            Err(AgentFailure::Conflict)
+        ));
+        let paused = vault
+            .pause_remote_view_grant(active.id(), active.authority())
+            .await
+            .unwrap();
+        assert!(matches!(
+            vault
+                .review_and_activate_remote_view_grant(
+                    "calendar.timeline",
+                    active.id(),
+                    Some(active.authority()),
+                    source.clone(),
+                    scope.clone(),
+                    None,
+                )
+                .await,
+            Err(AgentFailure::Conflict)
+        ));
+        let reactivated = vault
+            .review_and_activate_remote_view_grant(
+                "calendar.timeline",
+                paused.id(),
+                Some(paused.authority()),
+                source,
+                scope,
+                None,
+            )
+            .await
+            .unwrap();
+        let after = vault
+            .remote_view_grant_binding("calendar.timeline", "calendar.google", "calendar.connection")
+            .await
+            .unwrap();
+        assert_eq!(after.grant.id(), active.id());
+        assert_eq!(after.grant.authority(), reactivated.authority());
+        assert_eq!(after.consumer_policy, binding.consumer_policy);
     }
 
     #[tokio::test]

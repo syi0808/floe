@@ -2590,36 +2590,6 @@ impl ScriptedRemoteTransport {
         }
     }
 
-    fn calendar_preview(
-        &self,
-        query: floe_access::RemoteCalendarQuery<'_>,
-    ) -> floe_access::SignedCalendarPreview {
-        let authority = *self.authority.lock().unwrap();
-        let descriptor = serde_json::json!({
-            "v": 1,
-            "operation": "calendar_source_preview",
-            "challenge_id": Uuid::new_v4().to_string(),
-            "nonce": URL_SAFE_NO_PAD.encode([7u8; 32]),
-            "person_id": self.person_id.to_string(),
-            "client_id": REMOTE_CLIENT_ID,
-            "device_id": DEVICE,
-            "audience": self.producer.audience,
-            "connector_id": query.connector_id,
-            "connection_id": query.connection_id,
-            "execution_owner": self.producer.execution_owner,
-            "incarnation": authority.incarnation().to_string(),
-            "epoch": authority.epoch().get(),
-            "resource": query.resource,
-            "provider_identity": self.provider_identity.lock().unwrap().clone(),
-            "issued_at_unix_ms": 1_700_000_000_000i64,
-        });
-        let bytes = serde_json::to_vec(&descriptor).unwrap();
-        floe_access::SignedCalendarPreview {
-            descriptor_b64url: URL_SAFE_NO_PAD.encode(&bytes),
-            producer_signature: self.sign(&bytes),
-            producer: self.producer.clone(),
-        }
-    }
 }
 
 impl floe_access::RemoteGrantTransport for ScriptedRemoteTransport {
@@ -2640,14 +2610,6 @@ impl floe_access::RemoteGrantTransport for ScriptedRemoteTransport {
         Box::pin(async move { Ok(preview) })
     }
 
-    fn calendar_source_preview<'a>(
-        &'a self,
-        query: floe_access::RemoteCalendarQuery<'a>,
-        _window: &'a floe_access::RemoteCallWindow,
-    ) -> BoxFuture<'a, Result<floe_access::SignedCalendarPreview, AgentFailure>> {
-        let preview = self.calendar_preview(query);
-        Box::pin(async move { Ok(preview) })
-    }
 }
 
 impl floe_context::RemoteViewTransport for ScriptedRemoteTransport {

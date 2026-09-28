@@ -2,9 +2,9 @@ use std::{sync::OnceLock, time::Duration};
 
 use crate::control::PreparedServerSource;
 use crate::control::authorization::{
-    RemoteAuthorizationClient, RemoteViewAuthorizationRequest, parse_calendar_challenge,
+    RemoteAuthorizationClient, RemoteViewAuthorizationRequest, parse_remote_view_challenge,
 };
-use floe_access::{RemoteAuthorizationKeys, RemoteCalendarAuthorizationExpectation};
+use floe_access::{RemoteAuthorizationKeys, RemoteViewAuthorizationExpectation};
 use floe_agent_contract::AgentFailure;
 use floe_connections::{CalendarConnectionRef, ConnectorCatalogObservation, ConnectorSnapshot};
 use floe_execution::limits::{CallLimiter, CallLimits};
@@ -146,7 +146,7 @@ impl ServerSourceClient {
         let max_items = u32::try_from(read.max_items).map_err(|_| AgentFailure::BudgetExceeded)?;
         let max_bytes = u32::try_from(read.max_bytes).map_err(|_| AgentFailure::BudgetExceeded)?;
         let path = format!("/v1/views/{}/admit", read.view_id);
-        let expected = RemoteCalendarAuthorizationExpectation {
+        let expected = RemoteViewAuthorizationExpectation {
             operation: "".into(),
             client_id: read.client_id.into(),
             device_id: read.device_id.into(),
@@ -177,11 +177,7 @@ impl ServerSourceClient {
             grant_id: &grant_id,
             grant_incarnation: &grant_incarnation,
             grant_epoch: read.grant.authority().access_epoch().get(),
-            purpose: if read.view_id == floe_context::CALENDAR_CONTEXT_VIEW_ID {
-                "everyday_assistance"
-            } else {
-                "assistant"
-            },
+            purpose: "everyday_assistance",
             consumer: read.consumer,
             max_items,
             max_bytes,
@@ -195,7 +191,7 @@ impl ServerSourceClient {
         &self,
         keys: &Keys,
         request: RemoteViewAuthorizationRequest<'_>,
-        mut expected: RemoteCalendarAuthorizationExpectation,
+        mut expected: RemoteViewAuthorizationExpectation,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<serde_json::Value, AgentFailure> {
@@ -216,7 +212,7 @@ impl ServerSourceClient {
         let challenge = client
             .begin_view_admission(request, deadline, cancellation)
             .await?;
-        let parts = parse_calendar_challenge(&challenge.challenge_b64url)?;
+        let parts = parse_remote_view_challenge(&challenge.challenge_b64url)?;
         if parts.operation != "admission"
             || parts.query_sha256 != query_digest
             || parts.source.connector_id != expected.source_connector
@@ -245,7 +241,7 @@ impl ServerSourceClient {
                 cancellation,
             )
             .await?;
-        let release_parts = parse_calendar_challenge(&release.challenge_b64url)?;
+        let release_parts = parse_remote_view_challenge(&release.challenge_b64url)?;
         if release_parts.operation != "release"
             || release_parts.admission_id != parts.challenge_id
             || release_parts.query_sha256 != expected.query_sha256
@@ -498,7 +494,7 @@ mod tests {
             max_bytes: 1024,
             query: json!({"schema_version": 1}),
         };
-        let expected = RemoteCalendarAuthorizationExpectation {
+        let expected = RemoteViewAuthorizationExpectation {
             operation: String::new(),
             client_id: "paired-client".into(),
             device_id: DEVICE.into(),
@@ -853,31 +849,6 @@ impl<Keys: RemoteAuthorizationKeys> floe_access::RemoteGrantTransport
         })
     }
 
-    fn calendar_source_preview<'a>(
-        &'a self,
-        query: floe_access::RemoteCalendarQuery<'a>,
-        window: &'a floe_access::RemoteCallWindow,
-    ) -> floe_agent_contract::BoxFuture<'a, Result<floe_access::SignedCalendarPreview, AgentFailure>>
-    {
-        Box::pin(async move {
-            let preview = self
-                .client
-                .authorization_client()?
-                .calendar_source_preview(
-                    query.connector_id,
-                    query.connection_id,
-                    query.resource,
-                    window.deadline,
-                    &window.cancellation,
-                )
-                .await?;
-            Ok(floe_access::SignedCalendarPreview {
-                descriptor_b64url: preview.descriptor_b64url,
-                producer_signature: preview.producer_signature,
-                producer: observed_producer(&preview.producer),
-            })
-        })
-    }
 }
 
 impl<Keys: RemoteAuthorizationKeys> floe_context::RemoteViewTransport

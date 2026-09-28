@@ -51,14 +51,6 @@ pub use application::{
     reviewed_native_subject,
 };
 pub use application::{
-    REMOTE_CALENDAR_RECIPIENT, RemoteCalendarConnection, RemoteCalendarGrantPreview,
-    RemoteCalendarGrantRequest, RemoteCalendarGrantReviewExpectation,
-    RemoteCalendarSourceReference, admit_remote_calendar_read, admits_remote_calendar_connection,
-    hosted_calendar_connector, pause_remote_calendar_grant, preview_remote_calendar_grant,
-    remote_calendar_dependency_source_admits, remote_calendar_grant, remote_calendar_scope,
-    remote_calendar_source, review_and_activate_remote_calendar_grant,
-};
-pub use application::{
     RemoteAuthorityEnrollment, RemoteAuthorityInspection, admit_device_pairing,
     admit_enrollment_pairing, inspect_remote_authority, remote_enrollment_status,
     review_and_enroll_remote_authority,
@@ -90,13 +82,12 @@ pub use ports::recipient_consent::{
 };
 pub use ports::remote_authorization::{
     RemoteAuthorityStore, RemoteAuthorityTransport, RemoteAuthorizationKeys,
-    RemoteCalendarAuthorizationExpectation, RemoteEnrollmentSignature, RemoteEnrollmentStatus,
+    RemoteViewAuthorizationExpectation, RemoteEnrollmentSignature, RemoteEnrollmentStatus,
     RemoteOwnerPublicKey, RemotePairingChallenge,
 };
 pub use ports::remote_grants::{
-    BoxFuture, RemoteCalendarQuery, RemoteCallWindow, RemoteGrantBinding, RemoteGrantStore,
-    RemoteGrantTransport, RemotePairingIdentity, RemoteSourceQuery, SignedCalendarPreview,
-    SignedSourcePreview,
+    BoxFuture, RemoteCallWindow, RemoteGrantBinding, RemoteGrantStore, RemoteGrantTransport,
+    RemotePairingIdentity, RemoteSourceQuery, SignedSourcePreview,
 };
 
 pub use application::calendar_read::{

@@ -98,9 +98,14 @@ before Gmail evidence is available to Floe clients.
 
 The same Google client registration also enables a separate **Google Calendar** connection in the
 app. That flow stores an independently scoped credential and requests only
-`calendar.readonly`. Select one calendar ID in the app; paired clients may then request a
-bounded `calendar.timeline` range of up to 32 days. Floe exports title and timing only—calendar IDs,
-provider event IDs, descriptions, locations and attendees are excluded from Agent context.
+`calendar.readonly`. Configure one or more Calendar IDs in the app, one opaque ID per line; commas
+inside an ID are preserved. The server stores a canonical `calendar_ids` set on the connection.
+Adding or removing an ID advances its connection revision and source epoch, while reordering does not.
+Paired clients use the generic `calendar.timeline` View preview/admit/read/release flow with one logical
+permission resource per connection. The signed preview names the exact current Calendar IDs; a bounded
+composite cursor pages across all configured Calendars. Requests cover up to 32 days. Floe exports title
+and timing only—calendar IDs, provider event IDs, descriptions, locations and attendees are excluded from
+Agent context. Editing source IDs does not automatically re-review an active Observe grant.
 
 ### Microsoft Mail read-only OAuth
 
@@ -122,8 +127,8 @@ failure. Disconnect in Floe deletes the local credential; revoke the application
 Microsoft account when the remote grant must also be invalidated.
 
 The same Microsoft application registration enables a separate **Microsoft Calendar** connection
-with its own Person-scoped Keychain credential and exact `Calendars.Read` scope. Select
-one calendar ID in the app. The paired timeline route tries configured Google Calendar first
+with its own Person-scoped Keychain credential and exact `Calendars.Read` scope. Configure its
+`calendar_ids` set in the app as for Google Calendar. The paired timeline route tries configured Google Calendar first
 and Microsoft Calendar second, returning the first healthy bounded View without exposing routing
 policy, calendar IDs, bodies, locations or attendees to Agent context.
 

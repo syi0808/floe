@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use floe_access::{
-    RemoteAuthorizationKeys, RemoteCalendarAuthorizationExpectation, RemoteEnrollmentSignature,
+    RemoteAuthorizationKeys, RemoteViewAuthorizationExpectation, RemoteEnrollmentSignature,
     RemoteOwnerPublicKey, RemoteProducerIdentity,
 };
 use floe_agent_contract::AgentFailure;
@@ -45,22 +45,13 @@ pub struct ProducerIdentityResponse {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct CalendarSourcePreviewResponse {
-    pub descriptor_b64url: String,
-    pub producer_signature: String,
-    #[serde(flatten)]
-    pub producer: ProducerIdentityResponse,
-    pub expires_at_unix_ms: i64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-#[serde(deny_unknown_fields)]
 pub struct RemoteViewSourcePreviewResponse {
     pub descriptor_b64url: String,
     pub producer_signature: String,
     #[serde(flatten)]
     pub producer: ProducerIdentityResponse,
     pub connection_revision: u64,
+    pub source_resources: Vec<String>,
     pub expires_at_unix_ms: i64,
 }
 
@@ -149,7 +140,7 @@ pub struct PairingStatusResponse {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct CalendarChallengeResponse {
+pub struct RemoteViewChallengeResponse {
     pub schema_version: u32,
     pub operation: String,
     pub challenge_id: String,
@@ -161,7 +152,7 @@ pub struct CalendarChallengeResponse {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct CalendarChallengeParts {
+pub struct RemoteViewChallengeParts {
     pub v: u32,
     pub operation: String,
     pub challenge_id: String,
@@ -173,9 +164,9 @@ pub struct CalendarChallengeParts {
     pub audience: String,
     pub purpose: String,
     pub consumer: String,
-    pub policy: CalendarPolicyParts,
-    pub source: CalendarSourceParts,
-    pub grant: CalendarGrantParts,
+    pub policy: RemoteViewPolicyParts,
+    pub source: RemoteViewSourceParts,
+    pub grant: RemoteViewGrantParts,
     pub resources: Vec<String>,
     pub query_sha256: String,
     pub max_items: u32,
@@ -188,14 +179,14 @@ pub struct CalendarChallengeParts {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct CalendarPolicyParts {
+pub struct RemoteViewPolicyParts {
     pub incarnation: String,
     pub epoch: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct CalendarSourceParts {
+pub struct RemoteViewSourceParts {
     pub connector_id: String,
     pub connection_id: String,
     pub execution_owner: String,
@@ -205,15 +196,15 @@ pub struct CalendarSourceParts {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct CalendarGrantParts {
+pub struct RemoteViewGrantParts {
     pub id: String,
     pub incarnation: String,
     pub epoch: u64,
 }
 
-pub fn parse_calendar_challenge(
+pub fn parse_remote_view_challenge(
     challenge_b64url: &str,
-) -> Result<CalendarChallengeParts, AgentFailure> {
+) -> Result<RemoteViewChallengeParts, AgentFailure> {
     if challenge_b64url.is_empty() || challenge_b64url.len() > 96 * 1024 {
         return Err(AgentFailure::InvalidInput);
     }
@@ -229,23 +220,6 @@ pub fn parse_calendar_challenge(
     serde_json::from_slice(&bytes).map_err(|_| AgentFailure::InvalidInput)
 }
 
-pub fn calendar_query_sha256(
-    range_start_unix_ms: i64,
-    range_end_unix_ms: i64,
-    cursor: &str,
-    limit: usize,
-) -> Result<String, AgentFailure> {
-    let query = CalendarQueryRequest {
-        range_start_unix_ms,
-        range_end_unix_ms,
-        cursor,
-        limit,
-    };
-    let query = serde_json::to_value(query).map_err(|_| AgentFailure::InvalidInput)?;
-    let bytes = serde_json::to_vec(&query).map_err(|_| AgentFailure::InvalidInput)?;
-    Ok(sha256_hex(&bytes))
-}
-
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
 
@@ -256,50 +230,13 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 #[derive(Serialize)]
-struct CalendarAdmissionRequest<'value> {
+struct RemoteViewProofRequest<'value> {
     schema_version: u32,
-    connector_id: &'value str,
-    connection_id: &'value str,
-    connection_revision: u64,
-    resources: Vec<&'value str>,
-    policy: CalendarPolicyRequest<'value>,
-    grant: CalendarGrantRequest<'value>,
-    purpose: &'value str,
-    consumer: &'value str,
-    max_items: u32,
-    max_bytes: u32,
-    query: CalendarQueryRequest<'value>,
+    proof: RemoteViewProof<'value>,
 }
 
 #[derive(Serialize)]
-struct CalendarPolicyRequest<'value> {
-    incarnation: &'value str,
-    epoch: u64,
-}
-
-#[derive(Serialize)]
-struct CalendarGrantRequest<'value> {
-    id: &'value str,
-    incarnation: &'value str,
-    epoch: u64,
-}
-
-#[derive(Serialize)]
-struct CalendarQueryRequest<'value> {
-    range_start_unix_ms: i64,
-    range_end_unix_ms: i64,
-    cursor: &'value str,
-    limit: usize,
-}
-
-#[derive(Serialize)]
-struct CalendarProofRequest<'value> {
-    schema_version: u32,
-    proof: CalendarProof<'value>,
-}
-
-#[derive(Serialize)]
-struct CalendarProof<'value> {
+struct RemoteViewProof<'value> {
     challenge_id: &'value str,
     key_id: &'value str,
     signature: &'value str,
@@ -385,46 +322,6 @@ impl RemoteAuthorizationClient {
         .await
     }
 
-    pub async fn calendar_source_preview(
-        &self,
-        connector_id: &str,
-        connection_id: &str,
-        resource: &str,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<CalendarSourcePreviewResponse, AgentFailure> {
-        if !matches!(connector_id, "calendar.google" | "calendar.microsoft")
-            || !valid_connection_id(connection_id)
-            || resource.is_empty()
-            || resource.len() > 256
-            || resource.chars().any(char::is_control)
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let body = serde_json::json!({
-            "connector_id": connector_id,
-            "connection_id": connection_id,
-            "resource": resource,
-        });
-        let response: CalendarSourcePreviewResponse = self
-            .request(
-                "POST",
-                "/v1/authority/calendar/source",
-                Some(body),
-                deadline,
-                cancellation,
-            )
-            .await?;
-        if response.producer.schema_version != 1
-            || response.descriptor_b64url.is_empty()
-            || response.producer_signature.is_empty()
-            || response.expires_at_unix_ms <= 0
-        {
-            return Err(AgentFailure::CapabilityUnavailable);
-        }
-        Ok(response)
-    }
-
     pub async fn view_source_preview(
         &self,
         view_id: &str,
@@ -463,6 +360,14 @@ impl RemoteAuthorizationClient {
             || response.descriptor_b64url.is_empty()
             || response.producer_signature.is_empty()
             || response.connection_revision == 0
+            || response.source_resources.is_empty()
+            || response
+                .source_resources
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+            || response.source_resources.iter().any(|resource| {
+                floe_access::ResourceHandle::try_new(resource.as_str()).is_err()
+            })
             || response.expires_at_unix_ms <= 0
         {
             return Err(AgentFailure::CapabilityUnavailable);
@@ -589,98 +494,18 @@ impl RemoteAuthorizationClient {
             .await
     }
 
-    pub async fn begin_calendar_admission(
-        &self,
-        connector_id: &str,
-        connection_id: &str,
-        connection_revision: u64,
-        resource: &str,
-        policy_incarnation: &str,
-        policy_epoch: u64,
-        grant_id: &str,
-        grant_incarnation: &str,
-        grant_epoch: u64,
-        purpose: &str,
-        consumer: &str,
-        max_items: u32,
-        max_bytes: u32,
-        range_start_unix_ms: i64,
-        range_end_unix_ms: i64,
-        cursor: &str,
-        limit: usize,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<CalendarChallengeResponse, AgentFailure> {
-        if !matches!(connector_id, "calendar.google" | "calendar.microsoft")
-            || !valid_connection_id(connection_id)
-            || connection_revision == 0
-            || resource.is_empty()
-            || resource.len() > 256
-            || policy_incarnation.is_empty()
-            || grant_id.is_empty()
-            || grant_incarnation.is_empty()
-            || purpose.is_empty()
-            || consumer.is_empty()
-            || max_items == 0
-            || max_items > 128
-            || max_bytes == 0
-            || max_bytes > 1 << 20
-            || range_start_unix_ms < 0
-            || range_end_unix_ms <= range_start_unix_ms
-            || range_end_unix_ms - range_start_unix_ms > 32 * 86_400_000
-            || cursor.len() > 2048
-            || cursor.chars().any(char::is_control)
-            || !(1..=128).contains(&limit)
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let body = CalendarAdmissionRequest {
-            schema_version: 1,
-            connector_id,
-            connection_id,
-            connection_revision,
-            resources: vec![resource],
-            policy: CalendarPolicyRequest {
-                incarnation: policy_incarnation,
-                epoch: policy_epoch,
-            },
-            grant: CalendarGrantRequest {
-                id: grant_id,
-                incarnation: grant_incarnation,
-                epoch: grant_epoch,
-            },
-            purpose,
-            consumer,
-            max_items,
-            max_bytes,
-            query: CalendarQueryRequest {
-                range_start_unix_ms,
-                range_end_unix_ms,
-                cursor,
-                limit,
-            },
-        };
-        self.request(
-            "POST",
-            "/v1/views/calendar.timeline/admit",
-            Some(serde_json::to_value(body).map_err(|_| AgentFailure::InvalidInput)?),
-            deadline,
-            cancellation,
-        )
-        .await
-    }
-
     pub async fn begin_view_admission(
         &self,
         request: RemoteViewAuthorizationRequest<'_>,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
-    ) -> Result<CalendarChallengeResponse, AgentFailure> {
+    ) -> Result<RemoteViewChallengeResponse, AgentFailure> {
         if !matches!(
             request.path,
             "/v1/views/mail.communication/admit"
                 | "/v1/views/work.context/admit"
                 | "/v1/views/life.logistics/admit"
+                | "/v1/views/calendar.timeline/admit"
         ) || request.connector_id.is_empty()
             || !valid_connection_id(request.connection_id)
             || request.connection_revision == 0
@@ -700,34 +525,27 @@ impl RemoteAuthorizationClient {
         {
             return Err(AgentFailure::InvalidInput);
         }
-        let body = CalendarAdmissionRequest {
-            schema_version: 1,
-            connector_id: request.connector_id,
-            connection_id: request.connection_id,
-            connection_revision: request.connection_revision,
-            resources: vec![request.resource],
-            policy: CalendarPolicyRequest {
-                incarnation: request.policy_incarnation,
-                epoch: request.policy_epoch,
+        let encoded = serde_json::json!({
+            "schema_version": 1,
+            "connector_id": request.connector_id,
+            "connection_id": request.connection_id,
+            "connection_revision": request.connection_revision,
+            "resources": [request.resource],
+            "policy": {
+                "incarnation": request.policy_incarnation,
+                "epoch": request.policy_epoch,
             },
-            grant: CalendarGrantRequest {
-                id: request.grant_id,
-                incarnation: request.grant_incarnation,
-                epoch: request.grant_epoch,
+            "grant": {
+                "id": request.grant_id,
+                "incarnation": request.grant_incarnation,
+                "epoch": request.grant_epoch,
             },
-            purpose: request.purpose,
-            consumer: request.consumer,
-            max_items: request.max_items,
-            max_bytes: request.max_bytes,
-            query: CalendarQueryRequest {
-                range_start_unix_ms: 0,
-                range_end_unix_ms: 1,
-                cursor: "",
-                limit: 1,
-            },
-        };
-        let mut encoded = serde_json::to_value(body).map_err(|_| AgentFailure::InvalidInput)?;
-        encoded["query"] = request.query;
+            "purpose": request.purpose,
+            "consumer": request.consumer,
+            "max_items": request.max_items,
+            "max_bytes": request.max_bytes,
+            "query": request.query,
+        });
         self.request("POST", request.path, Some(encoded), deadline, cancellation)
             .await
     }
@@ -735,25 +553,25 @@ impl RemoteAuthorizationClient {
     pub async fn read_view_admission<Keys: RemoteAuthorizationKeys>(
         &self,
         keys: &Keys,
-        expected: &RemoteCalendarAuthorizationExpectation,
-        challenge: &CalendarChallengeResponse,
+        expected: &RemoteViewAuthorizationExpectation,
+        challenge: &RemoteViewChallengeResponse,
         path: &str,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
-    ) -> Result<CalendarChallengeResponse, AgentFailure> {
+    ) -> Result<RemoteViewChallengeResponse, AgentFailure> {
         if !path.ends_with("/read") || challenge.operation != "admission" {
             return Err(AgentFailure::InvalidInput);
         }
         let signature = keys
-            .sign_calendar_authorization(
+            .sign_remote_view_authorization(
                 expected,
                 &challenge.challenge_b64url,
                 &challenge.producer_signature,
             )
             .await?;
-        let body = CalendarProofRequest {
+        let body = RemoteViewProofRequest {
             schema_version: 1,
-            proof: CalendarProof {
+            proof: RemoteViewProof {
                 challenge_id: &challenge.challenge_id,
                 key_id: &signature.key_id,
                 signature: &signature.signature,
@@ -772,8 +590,8 @@ impl RemoteAuthorizationClient {
     pub async fn release_view<Keys: RemoteAuthorizationKeys>(
         &self,
         keys: &Keys,
-        expected: &RemoteCalendarAuthorizationExpectation,
-        challenge: &CalendarChallengeResponse,
+        expected: &RemoteViewAuthorizationExpectation,
+        challenge: &RemoteViewChallengeResponse,
         path: &str,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
@@ -782,15 +600,15 @@ impl RemoteAuthorizationClient {
             return Err(AgentFailure::InvalidInput);
         }
         let signature = keys
-            .sign_calendar_authorization(
+            .sign_remote_view_authorization(
                 expected,
                 &challenge.challenge_b64url,
                 &challenge.producer_signature,
             )
             .await?;
-        let body = CalendarProofRequest {
+        let body = RemoteViewProofRequest {
             schema_version: 1,
-            proof: CalendarProof {
+            proof: RemoteViewProof {
                 challenge_id: &challenge.challenge_id,
                 key_id: &signature.key_id,
                 signature: &signature.signature,
@@ -806,92 +624,6 @@ impl RemoteAuthorizationClient {
             .request(
                 "POST",
                 path,
-                Some(serde_json::to_value(body).map_err(|_| AgentFailure::InvalidInput)?),
-                deadline,
-                cancellation,
-            )
-            .await?;
-        if response.schema_version != 1 {
-            return Err(AgentFailure::CapabilityUnavailable);
-        }
-        if sha256_hex(response.view.get().as_bytes()) != expected.result_sha256 {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        serde_json::from_str(response.view.get()).map_err(|_| AgentFailure::CapabilityUnavailable)
-    }
-
-    pub async fn read_calendar_admission<Keys: RemoteAuthorizationKeys>(
-        &self,
-        keys: &Keys,
-        expected: &RemoteCalendarAuthorizationExpectation,
-        challenge: &CalendarChallengeResponse,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<CalendarChallengeResponse, AgentFailure> {
-        if challenge.operation != "admission" {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let signature = keys
-            .sign_calendar_authorization(
-                expected,
-                &challenge.challenge_b64url,
-                &challenge.producer_signature,
-            )
-            .await?;
-        let body = CalendarProofRequest {
-            schema_version: 1,
-            proof: CalendarProof {
-                challenge_id: &challenge.challenge_id,
-                key_id: &signature.key_id,
-                signature: &signature.signature,
-            },
-        };
-        self.request(
-            "POST",
-            "/v1/views/calendar.timeline/read",
-            Some(serde_json::to_value(body).map_err(|_| AgentFailure::InvalidInput)?),
-            deadline,
-            cancellation,
-        )
-        .await
-    }
-
-    pub async fn release_calendar<Keys: RemoteAuthorizationKeys>(
-        &self,
-        keys: &Keys,
-        expected: &RemoteCalendarAuthorizationExpectation,
-        challenge: &CalendarChallengeResponse,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<serde_json::Value, AgentFailure> {
-        if challenge.operation != "release" {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let signature = keys
-            .sign_calendar_authorization(
-                expected,
-                &challenge.challenge_b64url,
-                &challenge.producer_signature,
-            )
-            .await?;
-        let body = CalendarProofRequest {
-            schema_version: 1,
-            proof: CalendarProof {
-                challenge_id: &challenge.challenge_id,
-                key_id: &signature.key_id,
-                signature: &signature.signature,
-            },
-        };
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct CalendarViewResponse {
-            schema_version: u32,
-            view: Box<serde_json::value::RawValue>,
-        }
-        let response: CalendarViewResponse = self
-            .request(
-                "POST",
-                "/v1/views/calendar.timeline/release",
                 Some(serde_json::to_value(body).map_err(|_| AgentFailure::InvalidInput)?),
                 deadline,
                 cancellation,
@@ -1800,29 +1532,6 @@ impl<Keys: RemoteAuthorizationKeys> floe_access::RemoteGrantTransport
         })
     }
 
-    fn calendar_source_preview<'a>(
-        &'a self,
-        query: floe_access::RemoteCalendarQuery<'a>,
-        window: &'a floe_access::RemoteCallWindow,
-    ) -> floe_access::BoxFuture<'a, Result<floe_access::SignedCalendarPreview, AgentFailure>> {
-        Box::pin(async move {
-            let preview = self
-                .client
-                .calendar_source_preview(
-                    query.connector_id,
-                    query.connection_id,
-                    query.resource,
-                    bounded(window, PRODUCER_IDENTITY_BUDGET),
-                    &window.cancellation,
-                )
-                .await?;
-            Ok(floe_access::SignedCalendarPreview {
-                descriptor_b64url: preview.descriptor_b64url,
-                producer_signature: preview.producer_signature,
-                producer: access_producer_identity(&preview.producer),
-            })
-        })
-    }
 }
 
 impl std::fmt::Debug for PairingStatusResponse {

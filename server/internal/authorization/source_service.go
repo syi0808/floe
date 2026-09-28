@@ -385,6 +385,7 @@ func (service *SourceService) PreviewView(principal Principal, viewID string, in
 	metadata["producer_signature"] = base64.RawURLEncoding.EncodeToString(service.Admissions.Producer().SignChallenge(descriptorBytes))
 	metadata["expires_at_unix_ms"] = time.Now().Add(30 * time.Second).UnixMilli()
 	metadata["connection_revision"] = record.Revision
+	metadata["source_resources"] = sourceResources
 	outcome = operation.Result{Category: operation.Ready, Value: metadata}
 	return
 }

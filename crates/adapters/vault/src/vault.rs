@@ -34,7 +34,6 @@ mod personal_grants;
 mod recipient_consents;
 mod registry;
 mod remote_authority;
-mod remote_calendar_grants;
 mod remote_view_grants;
 mod session_archive;
 mod tasks;
@@ -51,11 +50,9 @@ pub use floe_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use keyring::KeyringVaultKeys;
 pub use personal_grants::FeasibilityGrantQuery;
 pub use remote_authority::{
-    RemoteCalendarAuthorizationExpectation, RemoteCalendarSourceReference,
-    RemoteEnrollmentSignature, RemoteOwnerPublicKey, RemotePairingChallenge,
+    RemoteViewAuthorizationExpectation, RemoteEnrollmentSignature, RemoteOwnerPublicKey, RemotePairingChallenge,
     RemoteProducerIdentity, RemoteViewSourceReference,
 };
-pub use remote_calendar_grants::RemoteCalendarGrantBinding;
 pub use remote_view_grants::RemoteViewGrantBinding;
 pub use session_archive::*;
 pub use tasks::{VaultTaskActivation, VaultTaskAdmission, VaultTaskRecord};

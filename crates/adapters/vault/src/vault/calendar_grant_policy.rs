@@ -24,25 +24,26 @@ pub struct CalendarGrantPolicy {
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub async fn calendar_grant_policy_authority(
+        &self,
+        grant_id: GrantId,
+    ) -> Result<ConsumerPolicyAuthority, AgentFailure> {
+        if !grant_id.is_valid() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        self.calendar_grant_policy(grant_id)
+            .await
+            .map(|policy| policy.consumer_policy)
+            .map_err(|failure| match failure {
+                AgentFailure::AccessReviewRequired => AgentFailure::VaultUnavailable,
+                other => other,
+            })
+    }
+
     pub(super) async fn initialize_calendar_grant_policy_store(
         &self,
         fresh: bool,
     ) -> Result<(), AgentFailure> {
-        // Old profiles that still carry either mapping table cannot be read:
-        // there is no migration from setup-bound rows to source-bound policy.
-        let probe = self.connection()?;
-        let mut legacy = probe
-            .query(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('calendar_grant_mappings', 'remote_calendar_grant_mappings', 'calendar_grant_schema', 'remote_calendar_grant_schema')",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        if legacy.next().await.map_err(storage)?.is_some() {
-            return Err(AgentFailure::UnsupportedVersion);
-        }
-        drop(probe);
-
         let mut connection = self.connection()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)

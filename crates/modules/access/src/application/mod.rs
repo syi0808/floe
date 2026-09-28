@@ -10,7 +10,6 @@ pub mod personal_sources;
 pub mod recipient_consent;
 pub mod release;
 pub mod remote_authority;
-pub mod remote_calendar;
 pub mod remote_grants;
 pub mod remote_view;
 
@@ -50,14 +49,6 @@ pub use remote_authority::{
     RemoteAuthorityEnrollment, RemoteAuthorityInspection, admit_device_pairing,
     admit_enrollment_pairing, inspect_remote_authority, remote_enrollment_status,
     review_and_enroll_remote_authority,
-};
-pub use remote_calendar::{
-    REMOTE_CALENDAR_RECIPIENT, RemoteCalendarConnection, RemoteCalendarGrantPreview,
-    RemoteCalendarGrantRequest, RemoteCalendarGrantReviewExpectation,
-    RemoteCalendarSourceReference, admit_remote_calendar_read, admits_remote_calendar_connection,
-    hosted_calendar_connector, pause_remote_calendar_grant, preview_remote_calendar_grant,
-    remote_calendar_dependency_source_admits, remote_calendar_grant, remote_calendar_scope,
-    remote_calendar_source, review_and_activate_remote_calendar_grant,
 };
 pub use remote_grants::{
     RemoteViewGrantActivation, RemoteViewGrantExpectation, RemoteViewGrantPreparation,

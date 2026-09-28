@@ -6,8 +6,7 @@ use floe_access::{GrantOperation, GrantPurpose, ProcessingRestriction, SourceAut
 /// The remote authority values this vault stores. Who a producer is and what a
 /// signed source names are Access's; this module holds and signs the records.
 pub use floe_access::{
-    RemoteCalendarAuthorizationExpectation, RemoteCalendarSourceReference,
-    RemoteEnrollmentSignature, RemoteOwnerPublicKey, RemotePairingChallenge,
+    RemoteViewAuthorizationExpectation, RemoteEnrollmentSignature, RemoteOwnerPublicKey, RemotePairingChallenge,
     RemoteProducerIdentity, RemoteViewSourceReference,
 };
 use ring::{
@@ -31,27 +30,6 @@ const MAX_SOURCE_PREVIEW_PROOF_BYTES: usize = 16 * 1024;
 const OWNER_WRAP_CONTEXT: &[u8] = b"floe.remote.owner-key.wrap.v1\0";
 const PRODUCER_SIGNATURE_DOMAIN: &[u8] = b"floe.remote.producer.v1\0";
 const OWNER_SIGNATURE_DOMAIN: &[u8] = b"floe.remote.authorization.v1\0";
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CalendarSourcePreviewWire {
-    v: u32,
-    operation: String,
-    challenge_id: String,
-    nonce: String,
-    person_id: String,
-    client_id: String,
-    device_id: String,
-    audience: String,
-    connector_id: String,
-    connection_id: String,
-    execution_owner: String,
-    incarnation: String,
-    epoch: u64,
-    resource: String,
-    provider_identity: String,
-    issued_at_unix_ms: i64,
-}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -505,69 +483,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(identity)
     }
 
-    pub async fn verify_remote_calendar_source_preview(
-        &self,
-        descriptor_b64url: &str,
-        producer_signature_b64url: &str,
-        person_id: &str,
-        client_id: &str,
-        device_id: &str,
-        connector_id: &str,
-        connection_id: &str,
-        resource: &str,
-    ) -> Result<RemoteCalendarSourceReference, AgentFailure> {
-        let descriptor = decode_canonical(descriptor_b64url, MAX_PRODUCER_PROOF_BYTES)?;
-        let producer_signature = decode_exact(producer_signature_b64url, 64)?;
-        strict_json_bytes(&descriptor, MAX_PRODUCER_PROOF_BYTES)?;
-        let wire: CalendarSourcePreviewWire =
-            serde_json::from_slice(&descriptor).map_err(|_| AgentFailure::InvalidInput)?;
-        let producer = self.remote_pinned_producer().await?;
-        let producer_key = decode_exact(&producer.public_key, 32)?;
-        let mut message = Vec::with_capacity(PRODUCER_SIGNATURE_DOMAIN.len() + descriptor.len());
-        message.extend_from_slice(PRODUCER_SIGNATURE_DOMAIN);
-        message.extend_from_slice(&descriptor);
-        signature::UnparsedPublicKey::new(&signature::ED25519, producer_key)
-            .verify(&message, &producer_signature)
-            .map_err(|_| AgentFailure::PolicyDenied)?;
-        if wire.v != 1
-            || wire.operation != "calendar_source_preview"
-            || Uuid::parse_str(&wire.challenge_id).is_ok_and(|identifier| identifier.is_nil())
-            || decode_exact(&wire.nonce, 32).is_err()
-            || wire.person_id != person_id
-            || wire.client_id != client_id
-            || wire.device_id != device_id
-            || wire.audience != producer.audience
-            || wire.connector_id != connector_id
-            || wire.connection_id != connection_id
-            || wire.resource != resource
-            || wire.execution_owner != producer.execution_owner
-            || !valid_text(&wire.provider_identity, 256)
-            || wire.issued_at_unix_ms <= 0
-            || Uuid::parse_str(&wire.incarnation).is_err()
-            || Uuid::parse_str(&wire.incarnation).is_ok_and(|identifier| identifier.is_nil())
-            || wire.epoch == 0
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        let source_authority = SourceAuthority::from_parts(
-            Uuid::parse_str(&wire.incarnation).map_err(|_| AgentFailure::PolicyDenied)?,
-            std::num::NonZeroU64::new(wire.epoch).ok_or(AgentFailure::PolicyDenied)?,
-        )
-        .ok_or(AgentFailure::PolicyDenied)?;
-        Ok(RemoteCalendarSourceReference {
-            person_id: wire.person_id,
-            client_id: wire.client_id,
-            device_id: wire.device_id,
-            audience: wire.audience,
-            connector_id: wire.connector_id,
-            connection_id: wire.connection_id,
-            execution_owner: wire.execution_owner,
-            source_authority,
-            resource: wire.resource,
-            provider_identity: wire.provider_identity,
-        })
-    }
-
     pub async fn remote_sign_enrollment(
         &self,
         client_id: &str,
@@ -852,9 +767,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(challenge.producer.clone())
     }
 
-    pub async fn remote_sign_calendar_authorization(
+    pub async fn remote_sign_view_authorization(
         &self,
-        expected: &RemoteCalendarAuthorizationExpectation,
+        expected: &RemoteViewAuthorizationExpectation,
         challenge_b64url: &str,
         producer_signature_b64url: &str,
     ) -> Result<RemoteEnrollmentSignature, AgentFailure> {
@@ -937,7 +852,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 self.validate_release_binding_in_transaction(&transaction, &wire, now)
                     .await?;
             }
-            self.validate_remote_calendar_grant_in_transaction(&transaction, &wire)
+            self.validate_remote_view_grant_in_transaction(&transaction, &wire)
                 .await?;
             let mut count_rows = transaction
                 .query("SELECT COUNT(*) FROM remote_authority_challenges", ())
@@ -986,7 +901,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         })
     }
 
-    async fn validate_remote_calendar_grant_in_transaction(
+    async fn validate_remote_view_grant_in_transaction(
         &self,
         transaction: &turso::transaction::Transaction<'_>,
         wire: &ChallengeWire,
@@ -1005,7 +920,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         let mut policy_rows = transaction
             .query(
-                "SELECT policy_incarnation, policy_epoch FROM calendar_grant_policies WHERE grant_id = ? AND person_id = ?",
+                "SELECT view_id, connector, connection_id, execution_owner, policy_incarnation, policy_epoch FROM remote_view_grant_mappings WHERE grant_id = ? AND person_id = ?",
                 (grant_wire.id.clone(), self.person_id.to_string()),
             )
             .await
@@ -1015,13 +930,29 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(|_| AgentFailure::PolicyDenied)?
             .ok_or(AgentFailure::PolicyDenied)?;
+        let mapped_view = policy_row.get::<String>(0).map_err(|_| AgentFailure::PolicyDenied)?;
+        let mapped_connector = policy_row.get::<String>(1).map_err(|_| AgentFailure::PolicyDenied)?;
+        let mapped_connection = policy_row.get::<String>(2).map_err(|_| AgentFailure::PolicyDenied)?;
+        let mapped_owner = policy_row.get::<String>(3).map_err(|_| AgentFailure::PolicyDenied)?;
         let mapped_policy_incarnation = policy_row
-            .get::<String>(0)
+            .get::<String>(4)
             .map_err(|_| AgentFailure::PolicyDenied)?;
         let mapped_policy_epoch = policy_row
-            .get::<i64>(1)
+            .get::<i64>(5)
             .map_err(|_| AgentFailure::PolicyDenied)?;
-        if mapped_policy_incarnation != policy.incarnation
+        if mapped_view.contains(':')
+            || mapped_connection.contains(':')
+            || floe_access::ConnectionId::try_new(mapped_connection.as_str()).is_err()
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let logical_resource = format!("{mapped_view}:{mapped_connection}");
+        if mapped_connector != source.connector_id
+            || mapped_connection != source.connection_id
+            || mapped_owner != source.execution_owner
+            || wire.resources.len() != 1
+            || wire.resources[0] != logical_resource
+            || mapped_policy_incarnation != policy.incarnation
             || mapped_policy_epoch <= 0
             || mapped_policy_epoch as u64 != policy.epoch
         {
@@ -1846,7 +1777,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn signed_calendar_source_preview_binds_pairing_and_exact_source() {
+    async fn signed_view_source_preview_binds_pairing_and_exact_calendar_resources() {
         let root = tempdir().unwrap();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let person_id = PersonId::new();
@@ -1869,19 +1800,22 @@ mod tests {
         vault.remote_pin_producer(producer.clone()).await.unwrap();
         let descriptor = serde_json::json!({
             "v": 1,
-            "operation": "calendar_source_preview",
+            "operation": "remote_view_source_preview",
             "challenge_id": "00000000-0000-4000-8000-000000000024",
             "nonce": URL_SAFE_NO_PAD.encode([7u8; 32]),
+            "view_id": "calendar.timeline",
             "person_id": person_id.to_string(),
             "client_id": "paired-client",
             "device_id": "paired-device",
             "audience": producer.audience,
             "connector_id": "calendar.google",
             "connection_id": "00000000-0000-4000-8000-000000000025",
+            "connection_revision": 3,
             "execution_owner": producer.execution_owner,
             "incarnation": "00000000-0000-4000-8000-000000000026",
             "epoch": 7,
-            "resource": "primary",
+            "resource": "calendar.timeline:00000000-0000-4000-8000-000000000025",
+            "source_resources": ["opaque,id", "primary"],
             "provider_identity": "google:subject-a",
             "issued_at_unix_ms": 1_700_000_000_000i64,
         });
@@ -1890,34 +1824,37 @@ mod tests {
         signed.extend_from_slice(&descriptor_bytes);
         let signature = producer_pair.sign(&signed);
         let reference = vault
-            .verify_remote_calendar_source_preview(
+            .verify_remote_view_source_preview(
                 &URL_SAFE_NO_PAD.encode(&descriptor_bytes),
                 &URL_SAFE_NO_PAD.encode(signature.as_ref()),
                 &person_id.to_string(),
                 "paired-client",
                 "paired-device",
+                "calendar.timeline",
                 "calendar.google",
                 "00000000-0000-4000-8000-000000000025",
-                "primary",
+                "calendar.timeline:00000000-0000-4000-8000-000000000025",
             )
             .await
             .unwrap();
         assert_eq!(reference.provider_identity, "google:subject-a");
         assert_eq!(reference.source_authority.epoch().get(), 7);
+        assert_eq!(reference.source_resources.iter().map(|item| item.as_str()).collect::<Vec<_>>(), ["opaque,id", "primary"]);
         let mut changed = descriptor.clone();
-        changed["resource"] = serde_json::Value::String("other".into());
+        changed["source_resources"] = serde_json::json!(["opaque,id", "other"]);
         let changed_bytes = serde_json::to_vec(&changed).unwrap();
         assert!(
             vault
-                .verify_remote_calendar_source_preview(
+                .verify_remote_view_source_preview(
                     &URL_SAFE_NO_PAD.encode(&changed_bytes),
                     &URL_SAFE_NO_PAD.encode(signature.as_ref()),
                     &person_id.to_string(),
                     "paired-client",
                     "paired-device",
+                    "calendar.timeline",
                     "calendar.google",
                     "00000000-0000-4000-8000-000000000025",
-                    "primary",
+                    "calendar.timeline:00000000-0000-4000-8000-000000000025",
                 )
                 .await
                 .is_err()
@@ -2289,19 +2226,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_calendar_admission_and_release_are_grant_fenced_for_google_and_microsoft() {
-        for (connector, connection_id, resource) in [
+    async fn remote_view_admission_and_release_are_grant_fenced_for_calendar_and_mail() {
+        for (connector, view_id, connection_id) in [
             (
                 "calendar.google",
+                "calendar.timeline",
                 "00000000-0000-4000-8000-000000000101",
-                "primary",
             ),
             (
                 "calendar.microsoft",
+                "calendar.timeline",
                 "00000000-0000-4000-8000-000000000102",
-                "work",
+            ),
+            (
+                "gmail",
+                "mail.communication",
+                "00000000-0000-4000-8000-000000000103",
             ),
         ] {
+            let resource = format!("{view_id}:{connection_id}");
             let root = tempdir().unwrap();
             fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
             let person_id = PersonId::new();
@@ -2341,10 +2284,19 @@ mod tests {
                 ExecutionOwnerId::try_new(producer.execution_owner.clone()).unwrap(),
             )
             .unwrap();
-            let consumer = GrantConsumer::builtin("floe.builtin.schedule").unwrap();
+            let consumer = GrantConsumer::builtin(if view_id == "calendar.timeline" {
+                "floe.builtin.schedule"
+            } else {
+                "assistant"
+            })
+            .unwrap();
             let scope = GrantScope::try_new(
-                vec![ResourceHandle::try_new(resource).unwrap()],
-                vec![GrantDataCategory::Content],
+                vec![ResourceHandle::try_new(resource.clone()).unwrap()],
+                if view_id == "calendar.timeline" {
+                    vec![GrantDataCategory::Metadata, GrantDataCategory::Content]
+                } else {
+                    vec![GrantDataCategory::Content]
+                },
                 vec![GrantOperation::Read],
                 vec![GrantPurpose::Assistant],
                 vec![consumer.clone()],
@@ -2352,7 +2304,8 @@ mod tests {
             )
             .unwrap();
             let grant = vault
-                .review_and_activate_remote_calendar_grant(
+                .review_and_activate_remote_view_grant(
+                    view_id,
                     GrantId::new(),
                     None,
                     source.clone(),
@@ -2362,7 +2315,7 @@ mod tests {
                 .await
                 .unwrap();
             let binding = vault
-                .remote_calendar_grant_binding(connector, connection_id, resource)
+                .remote_view_grant_binding(view_id, connector, connection_id)
                 .await
                 .unwrap();
             let owner_key = vault.remote_owner_public_key().await.unwrap();
@@ -2409,7 +2362,7 @@ mod tests {
             let admission_id = Uuid::new_v4();
             let admission = base_challenge("admission", admission_id, "", "");
             let (admission_bytes, admission_signature) = sign_challenge(&admission);
-            let admission_expected = RemoteCalendarAuthorizationExpectation {
+            let admission_expected = RemoteViewAuthorizationExpectation {
                 operation: "admission".into(),
                 client_id: "paired-client".into(),
                 device_id: "paired-device".into(),
@@ -2425,12 +2378,12 @@ mod tests {
                 source_execution_owner: source.execution_owner().as_str().into(),
                 source_incarnation: source_authority.incarnation().to_string(),
                 source_epoch: source_authority.epoch().get(),
-                resources: vec![resource.into()],
+                resources: vec![resource.clone()],
                 max_items: 1,
                 max_bytes: 4096,
             };
             let owner_signature = vault
-                .remote_sign_calendar_authorization(
+                .remote_sign_view_authorization(
                     &admission_expected,
                     &URL_SAFE_NO_PAD.encode(&admission_bytes),
                     &URL_SAFE_NO_PAD.encode(admission_signature.as_ref()),
@@ -2455,7 +2408,7 @@ mod tests {
             release_expected.result_sha256 = result_digest;
             assert!(
                 vault
-                    .remote_sign_calendar_authorization(
+                    .remote_sign_view_authorization(
                         &release_expected,
                         &URL_SAFE_NO_PAD.encode(&release_bytes),
                         &URL_SAFE_NO_PAD.encode(release_signature.as_ref()),
@@ -2465,7 +2418,7 @@ mod tests {
             );
             assert_eq!(
                 vault
-                    .remote_sign_calendar_authorization(
+                    .remote_sign_view_authorization(
                         &release_expected,
                         &URL_SAFE_NO_PAD.encode(&release_bytes),
                         &URL_SAFE_NO_PAD.encode(release_signature.as_ref()),
@@ -2478,7 +2431,7 @@ mod tests {
             altered.query_sha256 = "0".repeat(64);
             assert_eq!(
                 vault
-                    .remote_sign_calendar_authorization(
+                    .remote_sign_view_authorization(
                         &altered,
                         &URL_SAFE_NO_PAD.encode(&admission_bytes),
                         &URL_SAFE_NO_PAD.encode(admission_signature.as_ref()),
@@ -2492,7 +2445,7 @@ mod tests {
                 sign_challenge(&wrong_recipient);
             assert_eq!(
                 vault
-                    .remote_sign_calendar_authorization(
+                    .remote_sign_view_authorization(
                         &admission_expected,
                         &URL_SAFE_NO_PAD.encode(&wrong_recipient_bytes),
                         &URL_SAFE_NO_PAD.encode(wrong_recipient_signature.as_ref()),
@@ -2505,7 +2458,7 @@ mod tests {
             let (wrong_resource_bytes, wrong_resource_signature) = sign_challenge(&wrong_resource);
             assert_eq!(
                 vault
-                    .remote_sign_calendar_authorization(
+                    .remote_sign_view_authorization(
                         &admission_expected,
                         &URL_SAFE_NO_PAD.encode(&wrong_resource_bytes),
                         &URL_SAFE_NO_PAD.encode(wrong_resource_signature.as_ref()),
@@ -2534,7 +2487,7 @@ mod tests {
                     .unwrap();
             }
             vault
-                .remote_sign_calendar_authorization(
+                .remote_sign_view_authorization(
                     &second_admission_expected,
                     &URL_SAFE_NO_PAD.encode(&second_admission_bytes),
                     &URL_SAFE_NO_PAD.encode(second_admission_signature.as_ref()),
@@ -2570,12 +2523,12 @@ mod tests {
             second_release_expected.admission_id = second_admission_id.to_string();
             second_release_expected.result_sha256 = second_result_digest;
             let paused = vault
-                .pause_remote_calendar_grant(grant.id(), grant.authority())
+                .pause_remote_view_grant(grant.id(), grant.authority())
                 .await
                 .unwrap();
             assert_eq!(
                 vault
-                    .remote_sign_calendar_authorization(
+                    .remote_sign_view_authorization(
                         &second_release_expected,
                         &URL_SAFE_NO_PAD.encode(&second_release_bytes),
                         &URL_SAFE_NO_PAD.encode(second_release_signature.as_ref()),
@@ -2588,17 +2541,19 @@ mod tests {
             let corruption_connection = vault.database.connect().unwrap();
             corruption_connection
                 .execute(
-                    "UPDATE calendar_grant_policies SET payload = '{}' WHERE grant_id = ?",
+                    "UPDATE remote_view_grant_mappings SET payload = '{}' WHERE grant_id = ?",
                     [grant.id().as_uuid().to_string()],
                 )
                 .await
                 .unwrap();
             drop(vault);
-            assert!(
-                EncryptedAgentVault::open(root.path(), person_id, keys)
-                    .await
-                    .is_err()
-            );
+            let reopened = EncryptedAgentVault::open(root.path(), person_id, keys)
+                .await
+                .unwrap();
+            assert!(reopened
+                .remote_view_grant_binding(view_id, connector, connection_id)
+                .await
+                .is_err());
         }
     }
 }
@@ -2631,13 +2586,13 @@ impl<Keys: VaultKeyProvider> floe_access::RemoteAuthorizationKeys for EncryptedA
         .await
     }
 
-    async fn sign_calendar_authorization(
+    async fn sign_remote_view_authorization(
         &self,
-        expected: &RemoteCalendarAuthorizationExpectation,
+        expected: &RemoteViewAuthorizationExpectation,
         challenge_b64url: &str,
         producer_signature_b64url: &str,
     ) -> Result<RemoteEnrollmentSignature, AgentFailure> {
-        self.remote_sign_calendar_authorization(
+        self.remote_sign_view_authorization(
             expected,
             challenge_b64url,
             producer_signature_b64url,

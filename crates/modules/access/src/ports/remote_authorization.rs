@@ -67,7 +67,7 @@ pub struct RemoteEnrollmentSignature {
 /// re-checks every field against the producer's challenge before signing. It is
 /// stated in full here so neither side can narrow it.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RemoteCalendarAuthorizationExpectation {
+pub struct RemoteViewAuthorizationExpectation {
     pub operation: String,
     pub client_id: String,
     pub device_id: String,
@@ -109,9 +109,9 @@ pub trait RemoteAuthorizationKeys: Sync {
 
     /// Sign one authorization, but only if the producer's challenge still says
     /// exactly what `expected` says.
-    fn sign_calendar_authorization(
+    fn sign_remote_view_authorization(
         &self,
-        expected: &RemoteCalendarAuthorizationExpectation,
+        expected: &RemoteViewAuthorizationExpectation,
         challenge_b64url: &str,
         producer_signature_b64url: &str,
     ) -> impl Future<Output = Result<RemoteEnrollmentSignature, AgentFailure>> + Send;

@@ -844,13 +844,6 @@ mod remote_view_tests {
             })
         }
 
-        fn calendar_source_preview<'a>(
-            &'a self,
-            _: floe_access::RemoteCalendarQuery<'a>,
-            _: &'a RemoteCallWindow,
-        ) -> BoxFuture<'a, Result<floe_access::SignedCalendarPreview, AgentFailure>> {
-            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
-        }
     }
 
     impl RemoteViewTransport for ViewFixture {
@@ -937,57 +930,6 @@ mod remote_view_tests {
             Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
         }
 
-        fn verify_calendar_source_preview<'a>(
-            &'a self,
-            _: &'a floe_access::SignedCalendarPreview,
-            _: RemotePairingIdentity<'a>,
-            _: floe_access::RemoteCalendarQuery<'a>,
-        ) -> BoxFuture<'a, Result<floe_access::RemoteCalendarSourceReference, AgentFailure>>
-        {
-            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
-        }
-
-        fn activate_calendar_grant<'a>(
-            &'a self,
-            _: GrantId,
-            _: Option<GrantAuthority>,
-            _: GrantSourceBinding,
-            _: GrantScope,
-            _: Option<ConsumerPolicyAuthority>,
-        ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
-            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
-        }
-
-        fn find_calendar_grant<'a>(
-            &'a self,
-            _: &'a GrantSourceBinding,
-            _: &'a str,
-        ) -> BoxFuture<'a, Result<Option<DataAccessGrant>, AgentFailure>> {
-            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
-        }
-
-        fn calendar_grant_policy<'a>(
-            &'a self,
-            _: GrantId,
-        ) -> BoxFuture<'a, Result<ConsumerPolicyAuthority, AgentFailure>> {
-            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
-        }
-
-        fn calendar_grant<'a>(
-            &'a self,
-            _: GrantId,
-        ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
-            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
-        }
-
-        fn pause_calendar_grant<'a>(
-            &'a self,
-            _: GrantId,
-            _: GrantAuthority,
-        ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
-            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
-        }
-
         fn view_grant_binding<'a>(
             &'a self,
             view_id: &'a str,
@@ -1016,14 +958,6 @@ mod remote_view_tests {
             })
         }
 
-        fn calendar_grant_binding<'a>(
-            &'a self,
-            _: &'a str,
-            _: &'a str,
-            _: &'a str,
-        ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>> {
-            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
-        }
     }
 
     async fn read_mail(

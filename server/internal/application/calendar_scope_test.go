@@ -59,6 +59,9 @@ func TestCalendarResourceSetEditAdvancesOnlySourceAuthority(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &preview); err != nil {
 		t.Fatal(err)
 	}
+	if !reflect.DeepEqual(preview["source_resources"], []any{"A", "B"}) {
+		t.Fatalf("preview response did not expose the current source set: %v", preview["source_resources"])
+	}
 	descriptor, err := base64.RawURLEncoding.DecodeString(preview["descriptor_b64url"].(string))
 	if err != nil {
 		t.Fatal(err)

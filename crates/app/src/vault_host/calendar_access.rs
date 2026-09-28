@@ -286,8 +286,6 @@ impl<'host> DeviceCalendarAdmission<'host> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use floe_experts_builtin::BuiltinExpertKind;
 
     #[test]
     fn calendar_template_grants_trusted_shipped_consumers() {
@@ -302,91 +300,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn remote_calendar_scope_uses_exact_canonical_consumers() {
-        use floe_access::{
-            ConnectionId, ConnectorId, DataAccessGrant, ExecutionOwnerId, GrantId,
-            GrantSourceBinding,
-        };
-
-        let person_id = PersonId::new();
-        let source = GrantSourceBinding::try_new(
-            person_id,
-            ConnectionId::try_new("remote-calendar").unwrap(),
-            ConnectorId::try_new("calendar.google").unwrap(),
-            ExecutionOwnerId::try_new("server-owner").unwrap(),
-        )
-        .unwrap();
-        let consumers = vec![
-            floe_access::GrantConsumer::builtin(BuiltinExpertKind::Schedule.package_id()).unwrap(),
-        ];
-        let scope = floe_access::remote_calendar_scope("primary", &consumers).unwrap();
-        let mut grant = DataAccessGrant::new(
-            GrantId::new(),
-            uuid::Uuid::new_v4(),
-            source.clone(),
-            scope.clone(),
-        )
-        .unwrap();
-        grant.activate_review(grant.authority(), scope).unwrap();
-
-        for consumer in &consumers {
-            floe_access::admit_remote_calendar_read(&grant, consumer, "primary").unwrap();
-        }
-        assert!(
-            consumers.iter().any(|consumer| {
-                consumer.identifier() == BuiltinExpertKind::Schedule.package_id()
-            })
-        );
-        assert_eq!(
-            floe_access::admit_remote_calendar_read(
-                &grant,
-                &floe_access::GrantConsumer::extension("third-party.schedule").unwrap(),
-                "primary",
-            ),
-            Err(AgentFailure::PolicyDenied)
-        );
-    }
-
-    #[test]
-    fn legacy_calendar_expert_scope_does_not_admit_schedule() {
-        use floe_access::{
-            ConnectionId, ConnectorId, DataAccessGrant, ExecutionOwnerId, GrantId,
-            GrantSourceBinding,
-        };
-
-        let person_id = PersonId::new();
-        let source = GrantSourceBinding::try_new(
-            person_id,
-            ConnectionId::try_new("legacy-calendar").unwrap(),
-            ConnectorId::try_new("calendar.google").unwrap(),
-            ExecutionOwnerId::try_new("server-owner").unwrap(),
-        )
-        .unwrap();
-        let scope = floe_access::remote_calendar_scope(
-            "primary",
-            &[floe_access::GrantConsumer::builtin("calendar.expert").unwrap()],
-        )
-        .unwrap();
-        let mut grant = DataAccessGrant::new(
-            GrantId::new(),
-            uuid::Uuid::new_v4(),
-            source.clone(),
-            scope.clone(),
-        )
-        .unwrap();
-        grant.activate_review(grant.authority(), scope).unwrap();
-
-        assert_eq!(
-            floe_access::admit_remote_calendar_read(
-                &grant,
-                &floe_access::GrantConsumer::builtin(BuiltinExpertKind::Schedule.package_id())
-                    .unwrap(),
-                "primary",
-            ),
-            Err(AgentFailure::PolicyDenied)
-        );
-    }
 }
 
 /// Run one native Calendar Observe change: inspect, review, pause or remove.

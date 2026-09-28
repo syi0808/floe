@@ -529,4 +529,67 @@ mod source_tests {
             ErrorCode::NotFound
         );
     }
+
+    #[tokio::test]
+    async fn remote_calendar_resource_set_advances_local_source_authority_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = crate::FloeCore::open(directory.path().join("remote-source.db"))
+            .await
+            .unwrap();
+        let service = core.source_service();
+        let person_id = PersonId::new();
+        let resource = |handle: &str| {
+            ConnectionResource::new(
+                ResourceHandle::try_new(handle).unwrap(),
+                handle.into(),
+            )
+            .unwrap()
+        };
+        let initial = service
+            .establish(
+                person_id,
+                ConnectorId::try_new("calendar.google").unwrap(),
+                ConnectionId::new(),
+                ExecutionOwnerId::try_new("server-owner").unwrap(),
+                ResourceMode::Selected,
+                vec![resource("A")],
+            )
+            .await
+            .unwrap();
+        let expanded = service
+            .configure(
+                person_id,
+                initial.connection_id(),
+                initial.revision(),
+                ResourceMode::Selected,
+                vec![resource("B"), resource("A")],
+            )
+            .await
+            .unwrap();
+        assert_eq!(expanded.revision(), initial.revision() + 1);
+        assert_eq!(
+            expanded.source_authority().incarnation(),
+            initial.source_authority().incarnation()
+        );
+        assert_eq!(
+            expanded.source_authority().epoch().get(),
+            initial.source_authority().epoch().get() + 1
+        );
+        assert_eq!(
+            expanded.resources().iter().map(|item| item.handle().as_str()).collect::<Vec<_>>(),
+            ["A", "B"]
+        );
+        let reordered = service
+            .configure(
+                person_id,
+                initial.connection_id(),
+                expanded.revision(),
+                ResourceMode::Selected,
+                vec![resource("A"), resource("B")],
+            )
+            .await
+            .unwrap();
+        assert_eq!(reordered.revision(), expanded.revision());
+        assert_eq!(reordered.source_authority(), expanded.source_authority());
+    }
 }

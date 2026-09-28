@@ -5,10 +5,10 @@ pub mod recipient_authority;
 pub mod server_connection;
 
 pub use authorization::{
-    CalendarChallengeParts, HttpRemoteControl, PairingConfirmationResponse, PairingIssuerResponse,
+    RemoteViewChallengeParts, HttpRemoteControl, PairingConfirmationResponse, PairingIssuerResponse,
     PairingStartResponse, PairingStatusResponse, RemoteAuthorityEndpoint,
     RemoteAuthorizationClient, RemoteViewAuthorizationRequest, RemoteViewSourcePreviewResponse,
-    calendar_query_sha256, parse_calendar_challenge,
+    parse_remote_view_challenge,
 };
 
 pub use recipient_authority::{

@@ -503,8 +503,7 @@ mod tests {
 
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     use floe_access::{
-        BoxFuture, RemoteCalendarQuery, RemoteGrantTransport, RemoteSourceQuery,
-        SignedCalendarPreview, SignedSourcePreview,
+        BoxFuture, RemoteGrantTransport, RemoteSourceQuery, SignedSourcePreview,
     };
     use floe_context_contract::{
         ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory,
@@ -560,8 +559,10 @@ mod tests {
         pkcs8: Vec<u8>,
         person_id: PersonId,
         connection_id: String,
+        connector_id: String,
         revision: Mutex<u64>,
         authority: Mutex<SourceAuthority>,
+        source_resources: Mutex<Vec<String>>,
         provider_identity: Mutex<String>,
         view_probes: Mutex<u64>,
     }
@@ -588,14 +589,18 @@ mod tests {
                 "client_id": CLIENT_ID,
                 "device_id": DEVICE_ID,
                 "audience": self.producer.audience,
-                "connector_id": "gmail",
+                "connector_id": self.connector_id,
                 "connection_id": self.connection_id,
                 "connection_revision": revision,
                 "execution_owner": self.producer.execution_owner,
                 "incarnation": authority.incarnation().to_string(),
                 "epoch": authority.epoch().get(),
                 "resource": resource,
-                "source_resources": [resource],
+                "source_resources": if view_id == "calendar.timeline" {
+                    self.source_resources.lock().unwrap().clone()
+                } else {
+                    vec![resource.to_owned()]
+                },
                 "provider_identity": self.provider_identity.lock().unwrap().clone(),
                 "issued_at_unix_ms": 1_700_000_000_000i64,
             });
@@ -627,19 +632,13 @@ mod tests {
             Box::pin(async move { Ok(preview) })
         }
 
-        fn calendar_source_preview<'a>(
-            &'a self,
-            _query: RemoteCalendarQuery<'a>,
-            _window: &'a floe_access::RemoteCallWindow,
-        ) -> BoxFuture<'a, Result<SignedCalendarPreview, AgentFailure>> {
-            Box::pin(async move { Err(AgentFailure::CapabilityUnavailable) })
-        }
     }
 
     struct Fixture {
         vault: EncryptedAgentVault<Keys>,
         person_id: PersonId,
         connection_id: String,
+        connector_id: String,
         transport: ScriptedTransport,
         _root: tempfile::TempDir,
     }
@@ -676,8 +675,10 @@ mod tests {
                 pkcs8: pkcs8.as_ref().to_vec(),
                 person_id,
                 connection_id: connection_id.clone(),
+                connector_id: "gmail".into(),
                 revision: Mutex::new(11),
                 authority: Mutex::new(SourceAuthority::new()),
+                source_resources: Mutex::new(vec!["calendar-a".into()]),
                 provider_identity: Mutex::new("google:subject-a".into()),
                 view_probes: Mutex::new(0),
             };
@@ -685,9 +686,17 @@ mod tests {
                 vault,
                 person_id,
                 connection_id,
+                connector_id: "gmail".into(),
                 transport,
                 _root: root,
             }
+        }
+
+        async fn open_calendar() -> Self {
+            let mut fixture = Self::open().await;
+            fixture.connector_id = "calendar.google".into();
+            fixture.transport.connector_id = fixture.connector_id.clone();
+            fixture
         }
 
         fn ctx<'a>(
@@ -700,7 +709,7 @@ mod tests {
                 vault: &self.vault,
                 person_id: self.person_id,
                 pairing,
-                connector_id: "gmail",
+                connector_id: &self.connector_id,
                 connection_id: &self.connection_id,
                 resource,
                 window,
@@ -771,6 +780,75 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(status, "active");
+    }
+
+    #[tokio::test]
+    async fn calendar_resource_edit_keeps_logical_grant_and_policy_without_automatic_review() {
+        let fixture = Fixture::open_calendar().await;
+        let cancellation = floe_execution::Cancellation::default();
+        let window = window(&cancellation);
+        let person = fixture.person_id.to_string();
+        let ctx = fixture.ctx(&window, fixture.pairing(&person), None);
+        let reviewed = review_bundle(&ctx, &fixture.transport).await.unwrap();
+        assert_eq!(reviewed.members.len(), 1);
+        let logical_resource = format!("calendar.timeline:{}", fixture.connection_id);
+        assert_eq!(reviewed.members[0].resource, logical_resource);
+        enable_bundle(&ctx, &fixture.transport, &reviewed)
+            .await
+            .unwrap();
+        let before = fixture.live_grants().await;
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].scope().resources()[0].as_str(), logical_resource);
+        assert_eq!(
+            before[0].scope().categories(),
+            &[GrantDataCategory::Metadata, GrantDataCategory::Content]
+        );
+        let (_, policy_before) = fixture
+            .vault
+            .remote_view_grant_policy(
+                "calendar.timeline",
+                "calendar.google",
+                &fixture.connection_id,
+            )
+            .await
+            .unwrap();
+        *fixture.transport.source_resources.lock().unwrap() =
+            vec!["calendar-a".into(), "calendar-b".into()];
+        *fixture.transport.revision.lock().unwrap() += 1;
+        *fixture.transport.authority.lock().unwrap() = SourceAuthority::new();
+        assert_eq!(fixture.live_grants().await[0].authority(), before[0].authority());
+        assert_eq!(
+            observe_status(
+                &fixture.vault,
+                fixture.person_id,
+                "calendar.google",
+                &fixture.connection_id,
+                None,
+            )
+            .await
+            .unwrap(),
+            "active"
+        );
+        let next = review_bundle(&ctx, &fixture.transport).await.unwrap();
+        assert_eq!(next.members[0].expected_grant_id, Some(before[0].id()));
+        assert_eq!(next.members[0].expected_policy, Some(policy_before));
+        assert_ne!(next.members[0].source_authority, reviewed.members[0].source_authority);
+        assert_eq!(fixture.live_grants().await.len(), 1);
+        let (_, policy_after) = fixture
+            .vault
+            .remote_view_grant_policy(
+                "calendar.timeline",
+                "calendar.google",
+                &fixture.connection_id,
+            )
+            .await
+            .unwrap();
+        assert_eq!(policy_after, policy_before);
+        let legacy = fixture.ctx(&window, fixture.pairing(&person), Some("calendar-a"));
+        assert!(matches!(
+            review_bundle(&legacy, &fixture.transport).await,
+            Err(AgentFailure::InvalidInput)
+        ));
     }
 
     #[tokio::test]
