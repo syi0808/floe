@@ -106,8 +106,8 @@ impl<'a, Repository: ActionRepository + ?Sized, Sources: CalendarSourceReader + 
             .current_calendar_source(person_id, &connector_id(provider))
             .await?
             .ok_or_else(|| ActionError::not_found("connect a calendar first"))?;
-        if source.state() == floe_connections::SourceState::Disconnected {
-            return Err(ActionError::conflict("calendar source is disconnected"));
+        if !source.is_serving() {
+            return Err(ActionError::conflict("calendar source is not ready"));
         }
         let calendar = source
             .resources()
@@ -158,8 +158,8 @@ impl<'a, Repository: ActionRepository + ?Sized, Sources: CalendarSourceReader + 
             .current_calendar_source(person_id, &connector_id(provider))
             .await?
             .ok_or_else(|| ActionError::not_found("connect a calendar first"))?;
-        if source.state() == floe_connections::SourceState::Disconnected {
-            return Err(ActionError::conflict("calendar source is disconnected"));
+        if !source.is_serving() {
+            return Err(ActionError::conflict("calendar source is not ready"));
         }
         let calendar = source
             .resources()
@@ -402,7 +402,7 @@ impl<'a, Repository: ActionRepository + ?Sized, Sources: CalendarSourceReader + 
         if source.is_none_or(|source| {
             source.person_id() != action.person_id
                 || source.connector_id().as_str() != connector_for_provider(action.provider)
-                || source.state() == floe_connections::SourceState::Disconnected
+                || !source.is_serving()
                 || source.revision() != action.connection_revision
                 || !source
                     .resources()

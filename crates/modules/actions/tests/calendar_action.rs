@@ -496,6 +496,52 @@ async fn policy_and_connection_changes_block_execution() {
 }
 
 #[tokio::test]
+async fn mirror_sync_does_not_invalidate_source_bound_action() {
+    let store = TestActionStore::new();
+    let (core, action, policy) = fixture(&store).await;
+    approve(&core, &action).await;
+    let mirror_before = store
+        .timeline
+        .calendar_mirror(action.person_id)
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .day()
+        .import_calendar(
+            action.person_id,
+            mirror_before.mirror_revision,
+            CalendarRange {
+                start_date: now().date_naive(),
+                end_date_exclusive: (now() + Duration::days(1)).date_naive(),
+                timezone_offset_seconds: 0,
+                end_timezone_offset_seconds: None,
+            },
+            Vec::new(),
+            now(),
+        )
+        .await
+        .unwrap();
+    let mirror_after = store
+        .timeline
+        .calendar_mirror(action.person_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(mirror_after.mirror_revision > mirror_before.mirror_revision);
+    let provider = Provider::default();
+    let result = core
+        .execute_calendar_action(action.person_id, action.id, &policy, &provider, now)
+        .await
+        .unwrap();
+    assert!(matches!(
+        result.state,
+        CalendarActionState::Succeeded { .. }
+    ));
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn preflight_failures_require_new_proposal_and_approval() {
     for reason in [
         ActionBlockReason::PermissionDenied,

@@ -22,9 +22,7 @@ use floe_actions::{
     CalendarSourceReader,
 };
 use floe_connections::{ConnectionResource, ResourceMode, SourceConnection};
-use floe_context_contract::{
-    CalendarProvider, ConnectionId, ConnectorId, ExecutionOwnerId, ResourceHandle,
-};
+use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId, ResourceHandle};
 use floe_day::{CalendarMirror, DayService, Event, PersonId, TimelineRepository};
 use uuid::Uuid;
 
