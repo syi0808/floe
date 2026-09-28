@@ -935,27 +935,19 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
             let connector_id =
                 calendar_connector_id(&connection).ok_or(AgentFailure::CapabilityUnavailable)?;
             let native = connector_id == "calendar.event_kit";
-            let native_resource = if native {
-                Some(floe_access::native_calendar_resource(
-                    connection.connection_id().as_str(),
-                )?)
-            } else {
-                None
-            };
+            let logical_resource = floe_context_contract::connection_view_resource(
+                "calendar.timeline",
+                connection.connection_id(),
+            )
+            .map_err(|_| AgentFailure::InvalidInput)?;
             if !connection.is_serving()
-                || native
-                    && (selected.len() != 1
-                        || selected[0].resource != *native_resource.as_ref().unwrap())
+                || selected.len() != 1
+                || selected[0].resource != logical_resource
                 || selected.iter().any(|source| {
                     source.capability_id != "calendar.timeline"
                         || source.contract_version != 1
                         || source.connector_id.as_str() != connector_id
                         || source.connection_id != *connection.connection_id()
-                        || !native
-                            && !connection
-                                .resources()
-                                .iter()
-                                .any(|calendar| calendar.handle() == &source.resource)
                 })
             {
                 return Err(AgentFailure::StaleContext);
@@ -971,6 +963,62 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                     .any(|source| source.execution_owner_id.as_str() != expected_owner)
             {
                 return Err(AgentFailure::StaleContext);
+            }
+            if !native {
+                let source_client = self.source_client.ok_or(AgentFailure::CapabilityUnavailable)?;
+                if source_client.source().person_id() != person_id.to_string()
+                    || source_client.source().device_id() != self.device_id
+                {
+                    return Err(AgentFailure::CapabilityDenied);
+                }
+                let person_text = person_id.to_string();
+                let pairing = floe_context::RemotePairingIdentity {
+                    person_id: &person_text,
+                    client_id: source_client.source().client_id(),
+                    device_id: self.device_id,
+                };
+                let window = floe_context::RemoteCallWindow {
+                    deadline,
+                    cancellation: cancellation.clone(),
+                };
+                let authorized_client = floe_provider_adapters::sources::AuthorizedSourceClient::new(
+                    source_client,
+                    self.vault,
+                );
+                let query_bytes = serde_json::to_vec(query).map_err(|_| AgentFailure::InvalidInput)?;
+                let outcome = floe_context::read_selected_remote_view(
+                    self.vault,
+                    &authorized_client,
+                    person_id,
+                    pairing,
+                    "calendar.timeline",
+                    consumer,
+                    selected,
+                    serde_json::to_value(query).map_err(|_| AgentFailure::InvalidInput)?,
+                    &window,
+                    self.core.lease_registry.process_incarnation(),
+                    &query_bytes,
+                )
+                .await?;
+                return match outcome {
+                    floe_context_contract::SourceReadOutcome::Ready((payload, bindings)) => {
+                        let view: CalendarContextView = serde_json::from_value(payload)
+                            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+                        if bindings.len() != 1 {
+                            return Err(AgentFailure::Conflict);
+                        }
+                        Ok(floe_context_contract::SourceReadOutcome::Ready(vec![(
+                            view,
+                            bindings.into_iter().next().unwrap().dependency,
+                        )]))
+                    }
+                    floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
+                        Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers))
+                    }
+                    floe_context_contract::SourceReadOutcome::Unavailable(reason) => {
+                        Ok(floe_context_contract::SourceReadOutcome::Unavailable(reason))
+                    }
+                };
             }
             let result = async {
                 if connector_id == "calendar.event_kit" {
@@ -1021,64 +1069,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                     return Err(AgentFailure::CapabilityUnavailable);
                 }
                 }
-            let source_client = self
-                .source_client
-                .ok_or(AgentFailure::CapabilityUnavailable)?;
-            if source_client.source().person_id() != person_id.to_string()
-                || source_client.source().device_id() != self.device_id
-            {
-                return Err(AgentFailure::CapabilityDenied);
-            }
-            if !matches!(connector_id, "calendar.google" | "calendar.microsoft") {
-                return Err(AgentFailure::CapabilityUnavailable);
-            }
-            let catalog = source_client
-                .observe_calendar_connections(deadline, cancellation)
-                .await?;
-            let producer_revision = catalog
-                .iter()
-                .find(|entry| {
-                    entry.connector_id == connector_id
-                        && entry.connection_id == connection.connection_id().as_str()
-                })
-                .ok_or(AgentFailure::StaleContext)?
-                .connection_revision;
-            let person_text = person_id.to_string();
-            let pairing = floe_context::RemotePairingIdentity {
-                person_id: &person_text,
-                client_id: source_client.source().client_id(),
-                device_id: self.device_id,
-            };
-            let window = floe_context::RemoteCallWindow {
-                deadline,
-                cancellation: cancellation.clone(),
-            };
-            let authorized_client = floe_provider_adapters::sources::AuthorizedSourceClient::new(
-                source_client,
-                self.vault,
-            );
-            let mut reads = Vec::with_capacity(selected.len());
-            for source in selected {
-                let (view, dependency, _) = floe_context::read_remote_calendar_view(
-                    self.vault,
-                    &authorized_client,
-                    floe_context::RemoteCalendarViewRead {
-                        person_id,
-                        pairing,
-                        connector_id,
-                        connection_id: connection.connection_id().as_str(),
-                        connection_revision: producer_revision,
-                        resource: source.resource.as_str(),
-                        consumer_name: consumer,
-                        query,
-                        window: &window,
-                        process_incarnation_id: self.core.lease_registry.process_incarnation(),
-                    },
-                )
-                .await?;
-                reads.push((view, dependency));
-            }
-                Ok(reads)
+            Err(AgentFailure::CapabilityUnavailable)
             }
             .await;
             // Reviewable failures classify against current grant facts; every

@@ -169,32 +169,23 @@ pub fn discover_source_candidates(
                             | "calendar.fixture"
                     )
                 {
-                    if connector == "calendar.event_kit" {
-                        let resource = connection_view_resource(
-                            CALENDAR_CONTEXT_VIEW_ID,
-                            connection.connection_id(),
-                        )
-                        .map_err(|_| AgentFailure::InvalidInput)?;
-                        add(
-                            connector,
-                            connection.connection_id().as_str(),
-                            connection.execution_owner_id().as_str(),
-                            resource.as_str(),
-                            "Calendar".into(),
-                            "Connected calendar device".into(),
-                        )?;
-                    } else {
-                        for calendar in connection.resources() {
-                            add(
-                                connector,
-                                connection.connection_id().as_str(),
-                                connection.execution_owner_id().as_str(),
-                                calendar.handle().as_str(),
-                                calendar.label().into(),
-                                "Selected calendar".into(),
-                            )?;
-                        }
-                    }
+                    let resource = connection_view_resource(
+                        CALENDAR_CONTEXT_VIEW_ID,
+                        connection.connection_id(),
+                    )
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+                    add(
+                        connector,
+                        connection.connection_id().as_str(),
+                        connection.execution_owner_id().as_str(),
+                        resource.as_str(),
+                        "Calendar".into(),
+                        if connector == "calendar.event_kit" {
+                            "Connected calendar device".into()
+                        } else {
+                            "Connected calendar account".into()
+                        },
+                    )?;
                 }
             }
         }
@@ -430,34 +421,33 @@ mod tests {
     }
 
     #[test]
-    fn hosted_calendar_candidates_remain_leaf_scoped_until_remote_cutover() {
+    fn hosted_calendar_resource_change_preserves_one_logical_candidate() {
         let person_id = PersonId::new();
-        let connection = SourceConnection::establish(
-            person_id,
-            ConnectorId::try_new("calendar.google").unwrap(),
-            ConnectionId::try_new("calendar-account").unwrap(),
-            ExecutionOwnerId::try_new("server-owner").unwrap(),
-            ResourceMode::Selected,
-            vec![
-                ConnectionResource::new(
-                    ResourceHandle::try_new("calendar-a").unwrap(),
-                    "Personal".into(),
-                )
-                .unwrap(),
-                ConnectionResource::new(
-                    ResourceHandle::try_new("calendar-b").unwrap(),
-                    "Work".into(),
-                )
-                .unwrap(),
-            ],
-        )
-        .unwrap();
-        let mut candidate_request = request(person_id, "calendar.timeline", Some(&connection));
-        candidate_request.remote_execution_owner = Some("server-owner");
-        let candidates = discover_source_candidates(candidate_request).unwrap();
-        assert_eq!(candidates.len(), 2);
-        assert_eq!(candidates[0].reference.resource.as_str(), "calendar-a");
-        assert_eq!(candidates[1].reference.resource.as_str(), "calendar-b");
+        for connector in ["calendar.google", "calendar.microsoft"] {
+            let mut connection = SourceConnection::establish(
+                person_id,
+                ConnectorId::try_new(connector).unwrap(),
+                ConnectionId::try_new("calendar-account").unwrap(),
+                ExecutionOwnerId::try_new("server-owner").unwrap(),
+                ResourceMode::Selected,
+                vec![ConnectionResource::new(ResourceHandle::try_new("calendar-a").unwrap(), "Personal".into()).unwrap()],
+            )
+            .unwrap();
+            let candidates = |connection: &SourceConnection| {
+                let mut candidate_request = request(person_id, "calendar.timeline", Some(connection));
+                candidate_request.remote_execution_owner = Some("server-owner");
+                discover_source_candidates(candidate_request).unwrap()
+            };
+            let initial = candidates(&connection);
+            assert_eq!(initial.len(), 1);
+            assert_eq!(initial[0].reference.resource.as_str(), "calendar.timeline:calendar-account");
+            let revision = connection.revision();
+            connection.configure(revision, ResourceMode::Selected, vec![
+                ConnectionResource::new(ResourceHandle::try_new("calendar-a").unwrap(), "Personal".into()).unwrap(),
+                ConnectionResource::new(ResourceHandle::try_new("calendar-b").unwrap(), "Work".into()).unwrap(),
+            ]).unwrap();
+            assert_eq!(candidates(&connection), initial);
+        }
     }
 
     #[test]
