@@ -47,6 +47,7 @@ struct Device {
     checked_calendar_ids: Mutex<Vec<Vec<String>>>,
     observed_calendar_ids: Mutex<Vec<Vec<String>>>,
     partial_batch: AtomicBool,
+    generation_drift: AtomicBool,
     failure: Mutex<Option<CalendarFailure>>,
     records: Mutex<Vec<CalendarRecord>>,
 }
@@ -93,7 +94,11 @@ impl CalendarSource for Device {
                 provider: request.provider,
                 calendar_ids: request.calendar_ids.clone(),
                 native_subject_fingerprint: self.fingerprint.clone(),
-                generation: "generation-1".into(),
+                generation: if self.generation_drift.load(Ordering::SeqCst) {
+                    "generation-2".into()
+                } else {
+                    "generation-1".into()
+                },
             },
             observed_at: chrono::Utc::now(),
             batches: if self.partial_batch.load(Ordering::SeqCst) {
@@ -223,6 +228,7 @@ fn fixture() -> (Connections, Device, Grants, PersonId) {
             checked_calendar_ids: Mutex::new(vec![]),
             observed_calendar_ids: Mutex::new(vec![]),
             partial_batch: AtomicBool::new(false),
+            generation_drift: AtomicBool::new(false),
             failure: Mutex::new(None),
             records: Mutex::new(vec![]),
         },
@@ -803,4 +809,30 @@ async fn native_view_rejects_connection_change_after_observation() {
     ));
     assert_eq!(device.observations.load(Ordering::SeqCst), 1);
     assert_eq!(grants.calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn native_view_rejects_device_generation_drift() {
+    let (connections, device, grants, person_id) = fixture();
+    let now = chrono::Utc::now().timestamp_millis();
+    let query = CalendarViewQuery::try_new(now - 60_000, now + 60_000, None, 8).unwrap();
+    device.generation_drift.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        read_native_calendar_view(
+            &connections,
+            &device,
+            &grants,
+            &SourceLeaseRegistry::new(),
+            NativeCalendarViewRead {
+                person_id,
+                device_id: "device",
+                consumer: "floe.builtin.schedule",
+                query: &query,
+                window: &window(),
+            },
+        )
+        .await,
+        Err(AgentFailure::StaleContext)
+    ));
+    assert_eq!(device.observations.load(Ordering::SeqCst), 1);
 }

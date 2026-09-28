@@ -343,6 +343,58 @@ fn pause_and_remove_leave_the_connection_intact() {
 #[test]
 fn resource_change_stales_review_but_preserves_standing_grant() {
     let fixture = Fixture::new();
+    let unobserved = fixture.connection();
+    fixture
+        .runtime
+        .block_on(fixture.core.source_service().update_native_subject(
+            fixture.person,
+            unobserved.connection_id(),
+            unobserved.revision(),
+            "a".repeat(64),
+        ))
+        .unwrap();
+    let before_connection = fixture.connection();
+    let candidate =
+        floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+            person_id: fixture.person,
+            device_id: &fixture.device_id,
+            capability: "calendar.timeline",
+            contract_version: 1,
+            remote_connections: &[],
+            remote_execution_owner: None,
+            calendar_connection: Some(&before_connection),
+        })
+        .unwrap()
+        .remove(0);
+    let registry = fixture
+        .runtime
+        .block_on(fixture.vault.expert_registry())
+        .unwrap()
+        .unwrap();
+    let installation = registry
+        .installations
+        .iter()
+        .find(|installation| installation.package.id == "floe.builtin.schedule")
+        .unwrap();
+    let assignment = registry
+        .assignments
+        .iter()
+        .find(|assignment| assignment.installation_id == installation.id)
+        .unwrap();
+    let binding = fixture
+        .runtime
+        .block_on(fixture.vault.replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: assignment.id,
+                package: installation.package.clone(),
+                definition_revision: 1,
+                requirement_key: "floe.source.calendar".into(),
+                expected_binding_revision: assignment.binding.revision,
+                selected: vec![candidate.reference.clone()],
+            },
+        ))
+        .unwrap();
     let inspected = fixture.apply(CalendarAccessChange::Inspect).unwrap();
     let active = fixture
         .review(&inspected, &["home".to_owned()], &"a".repeat(64))
@@ -379,6 +431,35 @@ fn resource_change_stales_review_but_preserves_standing_grant() {
     );
     let current = fixture.apply(CalendarAccessChange::Inspect).unwrap();
     assert_ne!(current.source_authority, active.source_authority);
+    let after_connection = fixture.connection();
+    let refreshed_candidate =
+        floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+            person_id: fixture.person,
+            device_id: &fixture.device_id,
+            capability: "calendar.timeline",
+            contract_version: 1,
+            remote_connections: &[],
+            remote_execution_owner: None,
+            calendar_connection: Some(&after_connection),
+        })
+        .unwrap()
+        .remove(0);
+    assert_eq!(refreshed_candidate, candidate);
+    let refreshed_registry = fixture
+        .runtime
+        .block_on(fixture.vault.expert_registry())
+        .unwrap()
+        .unwrap();
+    let refreshed_assignment = refreshed_registry
+        .assignments
+        .iter()
+        .find(|entry| entry.id == assignment.id)
+        .unwrap();
+    assert_eq!(refreshed_assignment.binding.revision, binding.revision);
+    assert_eq!(
+        refreshed_assignment.binding.entries[0].selected,
+        vec![candidate.reference]
+    );
     assert_eq!(
         current.state,
         CalendarAccessState::Active,
