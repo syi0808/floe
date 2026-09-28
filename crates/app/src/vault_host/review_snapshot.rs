@@ -372,37 +372,16 @@ where
         }
         let producer = self.vault.remote_pinned_producer().await?;
         let mut members = Vec::with_capacity(policies.len());
-        let mut connection_revision = None;
+        let connection_revision = None;
         for policy in &policies {
-            let resource = if policy.view_id == "calendar.timeline" {
-                if connector == "calendar.google" || connector == "calendar.microsoft" {
-                    if requested.len() != 1 {
-                        return Err(AgentFailure::CapabilityUnavailable);
-                    }
-                    connection_revision = Some(
-                        self.verified_remote_calendar_resource(
-                            person_id,
-                            connector,
-                            connection,
-                            requirement,
-                            &requested[0],
-                        )
-                        .await?,
-                    );
-                    requested[0].clone()
-                } else {
-                    return Err(AgentFailure::InvalidInput);
-                }
-            } else {
-                floe_context_contract::connection_view_resource(
-                    policy.view_id,
-                    &floe_context_contract::ConnectionId::try_new(connection)
-                        .map_err(|_| AgentFailure::InvalidInput)?,
-                )
-                .map_err(|_| AgentFailure::InvalidInput)?
-                .as_str()
-                .to_owned()
-            };
+            let resource = floe_context_contract::connection_view_resource(
+                policy.view_id,
+                &floe_context_contract::ConnectionId::try_new(connection)
+                    .map_err(|_| AgentFailure::InvalidInput)?,
+            )
+            .map_err(|_| AgentFailure::InvalidInput)?
+            .as_str()
+            .to_owned();
             let blocked = requested.contains(&resource);
             let expected = if blocked {
                 let expected = observed_expectation(requirement);
@@ -413,18 +392,14 @@ where
                 self.sibling_grant(person_id, connector, connection, &resource)
                     .await?
             };
-            let policy_authority = if policy.view_id == "calendar.timeline" {
-                self.calendar_policy(expected).await?
-            } else {
-                self.remote_view_policy(
-                    policy.view_id,
-                    connector,
-                    connection,
-                    requirement,
-                    expected,
-                )
-                .await?
-            };
+            let policy_authority = self.remote_view_policy(
+                policy.view_id,
+                connector,
+                connection,
+                requirement,
+                expected,
+            )
+            .await?;
             members.push(SnapshotMember {
                 member_id: policy.view_id.to_owned(),
                 policy_fingerprint: crate::first_party_observe::policy_fingerprint(policy)?,
@@ -532,41 +507,6 @@ where
             [grant] => Ok(Some((grant.id(), grant.authority()))),
             _ => Err(AgentFailure::Conflict),
         }
-    }
-
-    /// The reviewed remote calendar still names the reviewed connection and
-    /// calendar. The authoritative descriptor revision is server-owned, so
-    /// the review also binds the local connection revision: a scope update
-    /// between capture and decision fails the enable instead of widening it.
-    async fn verified_remote_calendar_resource(
-        &self,
-        person_id: PersonId,
-        connector: &str,
-        connection: &str,
-        requirement: &SourceAccessRequirement,
-        resource: &str,
-    ) -> Result<u64, AgentFailure> {
-        let identity = floe_context_contract::ConnectionId::try_new(connection)
-            .map_err(|_| AgentFailure::InvalidInput)?;
-        let live = self
-            .core
-            .source_service()
-            .load(person_id, &identity)
-            .await
-            .map_err(|_| AgentFailure::StorageUnavailable)?
-            .ok_or(AgentFailure::AccessReviewRequired)?;
-        if !live.is_serving()
-            || live.connector_id().as_str() != connector
-            || !matches!(connector, "calendar.google" | "calendar.microsoft")
-            || requirement.source_authority() != Some(live.source_authority())
-            || !live
-                .resources()
-                .iter()
-                .any(|calendar| calendar.handle().as_str() == resource)
-        {
-            return Err(AgentFailure::AccessReviewRequired);
-        }
-        Ok(live.revision())
     }
 
     async fn calendar_policy(

@@ -2942,64 +2942,34 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                             if policies.is_empty() {
                                 return Err(AgentFailure::InvalidInput);
                             }
-                            let calendar =
-                                policies.len() == 1 && policies[0].view_id == "calendar.timeline";
-                            if calendar {
-                                let transport = RemoteAuthorityEndpoint::from_current_connection(
-                                    connections,
-                                    &person_text,
-                                    caller.device_id(),
-                                    Some(vault),
-                                )?;
-                                let window =
-                                    remote_authority::authority_window(job.cancellation.clone());
-                                let pairing = floe_access::RemotePairingIdentity {
-                                    person_id: &person_text,
-                                    device_id: caller.device_id(),
-                                    client_id: transport.client_id(),
-                                };
-                                let ctx = remote_observe::RemoteObserveContext {
-                                    core,
+                            let source_client = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
+                                connections, &person_text, caller.device_id(),
+                            )?
+                            .ok_or(AgentFailure::PolicyDenied)?;
+                            let transport =
+                                floe_provider_adapters::sources::AuthorizedSourceClient::new(
+                                    &source_client,
                                     vault,
-                                    person_id: job.person,
-                                    pairing,
-                                    connector_id,
-                                    connection_id,
-                                    resource: resource.as_deref(),
-                                    window: &window,
-                                };
-                                remote_observe::enable_bundle(&ctx, &transport, expected).await?;
-                            } else {
-                                let source_client = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
-                                    connections, &person_text, caller.device_id(),
-                                )?
-                                .ok_or(AgentFailure::PolicyDenied)?;
-                                let transport =
-                                    floe_provider_adapters::sources::AuthorizedSourceClient::new(
-                                        &source_client,
-                                        vault,
-                                    );
-                                let window = floe_access::RemoteCallWindow {
-                                    deadline: tokio::time::Instant::now() + Duration::from_secs(30),
-                                    cancellation: job.cancellation.clone(),
-                                };
-                                let pairing = floe_access::RemotePairingIdentity {
-                                    person_id: &person_text,
-                                    client_id: source_client.source().client_id(),
-                                    device_id: caller.device_id(),
-                                };
-                                let ctx = remote_observe::RemoteObserveContext {
-                                    core,
-                                    vault,
-                                    person_id: job.person,
-                                    pairing,
-                                    connector_id,
-                                    connection_id,
-                                    resource: resource.as_deref(),
-                                    window: &window,
-                                };
-                                remote_observe::enable_bundle(&ctx, &transport, expected).await?;
-                            }
+                                );
+                            let window = floe_access::RemoteCallWindow {
+                                deadline: tokio::time::Instant::now() + Duration::from_secs(30),
+                                cancellation: job.cancellation.clone(),
+                            };
+                            let pairing = floe_access::RemotePairingIdentity {
+                                person_id: &person_text,
+                                client_id: source_client.source().client_id(),
+                                device_id: caller.device_id(),
+                            };
+                            let ctx = remote_observe::RemoteObserveContext {
+                                vault,
+                                person_id: job.person,
+                                pairing,
+                                connector_id,
+                                connection_id,
+                                resource: resource.as_deref(),
+                                window: &window,
+                            };
+                            remote_observe::enable_bundle(&ctx, &transport, expected).await?;
                             let status = remote_observe::observe_status(
                                 vault,
                                 job.person,
@@ -3057,63 +3027,33 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     if policies.is_empty() {
                         return Err(AgentFailure::InvalidInput);
                     }
-                    let calendar =
-                        policies.len() == 1 && policies[0].view_id == "calendar.timeline";
-                    let bundle = if calendar {
-                        let transport = RemoteAuthorityEndpoint::from_current_connection(
-                            connections,
-                            &person_text,
-                            caller.device_id(),
-                            Some(vault),
-                        )?;
-                        let window = remote_authority::authority_window(job.cancellation.clone());
-                        let pairing = floe_access::RemotePairingIdentity {
-                            person_id: &person_text,
-                            device_id: caller.device_id(),
-                            client_id: transport.client_id(),
-                        };
-                        let ctx = remote_observe::RemoteObserveContext {
-                            core,
-                            vault,
-                            person_id: job.person,
-                            pairing,
-                            connector_id,
-                            connection_id,
-                            resource: resource.as_deref(),
-                            window: &window,
-                        };
-                        remote_observe::review_bundle(&ctx, &transport).await?
-                    } else {
-                        let source_client = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
-                            connections, &person_text, caller.device_id(),
-                        )?
-                        .ok_or(AgentFailure::PolicyDenied)?;
-                        let transport =
-                            floe_provider_adapters::sources::AuthorizedSourceClient::new(
-                                &source_client,
-                                vault,
-                            );
-                        let window = floe_access::RemoteCallWindow {
-                            deadline: tokio::time::Instant::now() + Duration::from_secs(30),
-                            cancellation: job.cancellation.clone(),
-                        };
-                        let pairing = floe_access::RemotePairingIdentity {
-                            person_id: &person_text,
-                            client_id: source_client.source().client_id(),
-                            device_id: caller.device_id(),
-                        };
-                        let ctx = remote_observe::RemoteObserveContext {
-                            core,
-                            vault,
-                            person_id: job.person,
-                            pairing,
-                            connector_id,
-                            connection_id,
-                            resource: resource.as_deref(),
-                            window: &window,
-                        };
-                        remote_observe::review_bundle(&ctx, &transport).await?
+                    let source_client = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
+                        connections, &person_text, caller.device_id(),
+                    )?
+                    .ok_or(AgentFailure::PolicyDenied)?;
+                    let transport = floe_provider_adapters::sources::AuthorizedSourceClient::new(
+                        &source_client,
+                        vault,
+                    );
+                    let window = floe_access::RemoteCallWindow {
+                        deadline: tokio::time::Instant::now() + Duration::from_secs(30),
+                        cancellation: job.cancellation.clone(),
                     };
+                    let pairing = floe_access::RemotePairingIdentity {
+                        person_id: &person_text,
+                        client_id: source_client.source().client_id(),
+                        device_id: caller.device_id(),
+                    };
+                    let ctx = remote_observe::RemoteObserveContext {
+                        vault,
+                        person_id: job.person,
+                        pairing,
+                        connector_id,
+                        connection_id,
+                        resource: resource.as_deref(),
+                        window: &window,
+                    };
+                    let bundle = remote_observe::review_bundle(&ctx, &transport).await?;
                     Ok(VaultExecutionResult {
                         reviewed_observe_bundle: Some(bundle),
                         ..VaultExecutionResult::ready()

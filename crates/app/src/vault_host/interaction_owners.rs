@@ -440,70 +440,8 @@ where
             Ok(producer) => producer,
             Err(_) => return Ok(Self::unusable()),
         };
-        let calendar = policies.len() == 1 && policies[0].view_id == "calendar.timeline";
-        if calendar {
-            return self
-                .read_remote_calendar(target, connector, person_id, producer.fingerprint)
-                .await;
-        }
         self.read_remote_views(target, connector, person_id, producer.fingerprint)
             .await
-    }
-
-    async fn read_remote_calendar(
-        &self,
-        target: &floe_conversation::InlineObserveTarget,
-        connector: &str,
-        person_id: PersonId,
-        producer_fingerprint: String,
-    ) -> Result<LiveInlineState, AgentFailure> {
-        if target.members.len() != 1 {
-            return Ok(Self::unusable());
-        }
-        let member = &target.members[0];
-        if member.member_id != "calendar.timeline" {
-            return Ok(Self::unusable());
-        }
-        let connection_id = floe_context_contract::ConnectionId::try_new(&target.connection_id)
-            .map_err(|_| AgentFailure::InvalidInput)?;
-        let live = self
-            .core
-            .source_service()
-            .load(person_id, &connection_id)
-            .await
-            .map_err(|_| AgentFailure::StorageUnavailable)?;
-        let Some(connection) = live else {
-            return Ok(Self::unusable());
-        };
-        if !connection.is_serving()
-            || connection.connector_id().as_str() != connector
-            || !matches!(connector, "calendar.google" | "calendar.microsoft")
-            || !connection
-                .resources()
-                .iter()
-                .any(|calendar| calendar.handle().as_str() == member.resource)
-        {
-            return Ok(Self::unusable());
-        }
-        let probed = self
-            .probed_member(
-                connector,
-                &target.connection_id,
-                &member.member_id,
-                &member.resource,
-                None,
-                person_id,
-                PolicyStore::Calendar,
-                None,
-            )
-            .await?;
-        Ok(LiveInlineState {
-            members: vec![probed],
-            connection_revision: Some(connection.revision()),
-            producer_fingerprint: Some(producer_fingerprint),
-            native_subject: None,
-            connection_usable: true,
-        })
     }
 
     async fn read_remote_views(
@@ -1247,38 +1185,7 @@ where
             return Err(AgentFailure::InvalidInput);
         }
         let person_text = person_id.to_string();
-        let calendar = policies.len() == 1 && policies[0].view_id == "calendar.timeline";
-        if calendar {
-            if target.members.len() != 1 {
-                return Err(AgentFailure::InvalidInput);
-            }
-            let resource = target.members[0].resource.as_str();
-            let transport =
-                floe_provider_adapters::control::authorization::RemoteAuthorityEndpoint::from_current_connection(
-                    self.connections,
-                    &person_text,
-                    device_id,
-                    Some(self.vault),
-                )?;
-            let window = super::remote_authority::authority_window(cancellation.clone());
-            let pairing = floe_access::RemotePairingIdentity {
-                person_id: &person_text,
-                device_id,
-                client_id: transport.client_id(),
-            };
-            let ctx = super::remote_observe::RemoteObserveContext {
-                core: self.core,
-                vault: self.vault,
-                person_id,
-                pairing,
-                connector_id: connector,
-                connection_id: target.connection_id.as_str(),
-                resource: Some(resource),
-                window: &window,
-            };
-            enable_remote_reviewed(&ctx, &transport, target).await?;
-            Ok(())
-        } else {
+        {
             let source_client =
                 floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
                     self.connections,
@@ -1300,7 +1207,6 @@ where
                 client_id: source_client.source().client_id(),
             };
             let ctx = super::remote_observe::RemoteObserveContext {
-                core: self.core,
                 vault: self.vault,
                 person_id,
                 pairing,

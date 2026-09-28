@@ -96,8 +96,8 @@ pub use application::personal_sources::{
 };
 pub use application::projection::{CoverageProjection, project_coverage};
 pub use application::remote_sources::{
-    AdmittedRemoteRead, RemoteCalendarViewRead, RemoteViewTransport, authorize_remote_dependency,
-    read_remote_calendar_view, read_remote_view, read_selected_remote_view,
+    AdmittedRemoteRead, RemoteViewTransport, authorize_remote_dependency, read_remote_view,
+    read_selected_remote_view,
 };
 pub use application::remote_views::{
     LOGISTICS_VIEW, MAIL_VIEW, WORK_VIEW, is_remote_view, remote_view_data_categories,

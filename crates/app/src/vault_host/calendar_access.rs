@@ -389,65 +389,6 @@ mod tests {
     }
 }
 
-/// What this device records about the calendar connection a remote grant would
-/// name, with nothing judged about it.
-pub(super) struct RemoteCalendarEvidence {
-    provider: floe_context_contract::CalendarProvider,
-    connection_id: String,
-    calendar_ids: Vec<String>,
-    disconnected: bool,
-}
-
-impl RemoteCalendarEvidence {
-    /// The same evidence, stated the way Access reads one.
-    pub(super) fn as_access(&self) -> floe_access::RemoteCalendarConnection<'_> {
-        floe_access::RemoteCalendarConnection {
-            provider: self.provider,
-            connection_id: &self.connection_id,
-            calendar_ids: &self.calendar_ids,
-            disconnected: self.disconnected,
-        }
-    }
-}
-
-/// Read what this device currently records about the Person's calendar.
-///
-/// Having no connection at all is a review they owe rather than a storage
-/// failure: nothing on this device says which calendar a grant would name.
-pub(super) async fn remote_calendar_evidence(
-    core: &FloeCore,
-    person_id: PersonId,
-    connector_id: &str,
-    connection_id: &str,
-) -> Result<RemoteCalendarEvidence, AgentFailure> {
-    let provider = match connector_id {
-        "calendar.google" => floe_context_contract::CalendarProvider::Google,
-        "calendar.microsoft" => floe_context_contract::CalendarProvider::Microsoft,
-        _ => return Err(AgentFailure::CapabilityUnavailable),
-    };
-    let identity = floe_context_contract::ConnectionId::try_new(connection_id)
-        .map_err(|_| AgentFailure::InvalidInput)?;
-    let source = core
-        .source_service()
-        .load(person_id, &identity)
-        .await
-        .map_err(|_| AgentFailure::StorageUnavailable)?
-        .ok_or(AgentFailure::AccessReviewRequired)?;
-    if source.connector_id().as_str() != connector_id {
-        return Err(AgentFailure::AccessReviewRequired);
-    }
-    Ok(RemoteCalendarEvidence {
-        provider,
-        connection_id: source.connection_id().as_str().to_owned(),
-        calendar_ids: source
-            .resources()
-            .iter()
-            .map(|calendar| calendar.handle().as_str().to_owned())
-            .collect(),
-        disconnected: source.state() == floe_connections::SourceState::Disconnected,
-    })
-}
-
 /// Run one native Calendar Observe change: inspect, review, pause or remove.
 ///
 /// The backend is authoritative for the current connection, the admitted

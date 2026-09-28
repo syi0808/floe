@@ -20,7 +20,6 @@ use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 
 /// Everything a remote Observe review or enable judges.
 pub(crate) struct RemoteObserveContext<'a, Keys: VaultKeyProvider> {
-    pub core: &'a crate::FloeCore,
     pub vault: &'a EncryptedAgentVault<Keys>,
     pub person_id: PersonId,
     pub pairing: floe_access::RemotePairingIdentity<'a>,
@@ -40,7 +39,7 @@ pub(crate) fn validate_observe_identity(
         || connector_id.len() > 256
         || connection_id.trim().is_empty()
         || connection_id.len() > 256
-        || resource.is_some_and(|resource| resource.trim().is_empty() || resource.len() > 256)
+        || resource.is_some()
     {
         return Err(AgentFailure::InvalidInput);
     }
@@ -194,10 +193,6 @@ where
             return Err(AgentFailure::AccessReviewRequired);
         }
     }
-    let calendar = policies.len() == 1 && policies[0].view_id == "calendar.timeline";
-    if calendar != (ctx.resource.is_some()) {
-        return Err(AgentFailure::InvalidInput);
-    }
     // No live grant outside the reviewed set: an unreviewed grant refuses
     // the enable instead of being silently revoked or adopted.
     for member in &expected.members {
@@ -214,19 +209,7 @@ where
             (Some(id), [grant]) if grant.id() == *id => {}
             _ => return Err(AgentFailure::AccessReviewRequired),
         }
-        if calendar {
-            let resource = ctx.resource.ok_or(AgentFailure::InvalidInput)?;
-            if member.view_id != "calendar.timeline" || member.resource != resource {
-                return Err(AgentFailure::InvalidInput);
-            }
-            let live_revision = local_calendar_revision(ctx).await?;
-            if member
-                .connection_revision
-                .is_some_and(|revision| revision != live_revision)
-            {
-                return Err(AgentFailure::AccessReviewRequired);
-            }
-        } else if !floe_context::is_remote_view(&member.view_id)
+        if !floe_context::is_remote_view(&member.view_id)
             || member.resource
                 != floe_context_contract::connection_view_resource(
                     &member.view_id,
@@ -246,9 +229,7 @@ where
             .iter()
             .find(|member| member.view_id == policy.view_id)
             .ok_or(AgentFailure::InvalidInput)?;
-        if calendar {
-            enable_calendar_member(ctx, transport, policy, member).await?;
-        } else if let Some(activation) = prepare_view_member(ctx, transport, policy, member).await?
+        if let Some(activation) = prepare_view_member(ctx, transport, policy, member).await?
         {
             activations.push(activation);
         }
@@ -291,15 +272,11 @@ pub(crate) async fn disable_bundle<Keys: VaultKeyProvider>(
                     floe_context_contract::connection_view_resource(view, &connection)
                         .is_ok_and(|expected| &expected == value)
                 })
-            }) || expected_views == ["calendar.timeline"])
+            }))
         {
             if disconnecting {
                 vault
                     .revoke_data_access_grant(grant.id(), grant.authority())
-                    .await?;
-            } else if expected_views == ["calendar.timeline"] {
-                vault
-                    .pause_remote_calendar_grant(grant.id(), grant.authority())
                     .await?;
             } else {
                 vault
@@ -345,13 +322,12 @@ pub(crate) async fn observe_status<Keys: VaultKeyProvider>(
                 && grant.source().connector().as_str() == connector_id
                 && grant.source().connection_id().as_str() == connection_id
                 && grant.state() != floe_access::GrantState::Revoked
-                && (expected_views == ["calendar.timeline"]
-                    || grant.scope().resources().iter().any(|value| {
+                && grant.scope().resources().iter().any(|value| {
                         expected_views.iter().any(|view| {
                             floe_context_contract::connection_view_resource(view, &connection)
                                 .is_ok_and(|expected| &expected == value)
                         })
-                    }))
+                    })
         })
         .collect::<Vec<_>>();
     let status = if relevant.len() != policies.len() {
@@ -388,11 +364,6 @@ where
     Keys: VaultKeyProvider,
     Transport: floe_access::RemoteGrantTransport,
 {
-    let calendar = policy.view_id == "calendar.timeline";
-    if calendar {
-        let resource = ctx.resource.ok_or(AgentFailure::InvalidInput)?;
-        return review_calendar_member(ctx, transport, policy, resource).await;
-    }
     if ctx.resource.is_some() || !floe_context::is_remote_view(policy.view_id) {
         return Err(AgentFailure::InvalidInput);
     }
@@ -460,55 +431,6 @@ where
     })
 }
 
-async fn review_calendar_member<Keys, Transport>(
-    ctx: &RemoteObserveContext<'_, Keys>,
-    transport: &Transport,
-    policy: &crate::first_party_observe::FirstPartyObservePolicy,
-    resource: &str,
-) -> Result<crate::RemoteObserveMemberExpectation, AgentFailure>
-where
-    Keys: VaultKeyProvider,
-    Transport: floe_access::RemoteGrantTransport,
-{
-    let consumers = policy.consumers.clone();
-    let evidence = super::calendar_access::remote_calendar_evidence(
-        ctx.core,
-        ctx.person_id,
-        ctx.connector_id,
-        ctx.connection_id,
-    )
-    .await?;
-    let request = floe_access::RemoteCalendarGrantRequest {
-        person_id: ctx.person_id,
-        pairing: ctx.pairing,
-        connector_id: ctx.connector_id,
-        connection_id: ctx.connection_id,
-        resource,
-    };
-    let preview = floe_access::preview_remote_calendar_grant(
-        ctx.vault,
-        transport,
-        request,
-        evidence.as_access(),
-        &consumers,
-        ctx.window,
-    )
-    .await?;
-    Ok(crate::RemoteObserveMemberExpectation {
-        view_id: policy.view_id.to_owned(),
-        policy_fingerprint: crate::first_party_observe::policy_fingerprint(policy)?,
-        resource: resource.to_owned(),
-        producer_fingerprint: preview.producer.fingerprint,
-        source_authority: preview.reference.source_authority,
-        connection_revision: Some(local_calendar_revision(ctx).await?),
-        provider_identity: preview.reference.provider_identity,
-        recipient: preview.recipient,
-        expected_grant_id: preview.grant_id,
-        expected_grant_authority: preview.grant_authority,
-        expected_policy: preview.consumer_policy,
-    })
-}
-
 async fn prepare_view_member<Keys, Transport>(
     ctx: &RemoteObserveContext<'_, Keys>,
     transport: &Transport,
@@ -559,50 +481,6 @@ where
     }
 }
 
-async fn enable_calendar_member<Keys, Transport>(
-    ctx: &RemoteObserveContext<'_, Keys>,
-    transport: &Transport,
-    policy: &crate::first_party_observe::FirstPartyObservePolicy,
-    member: &crate::RemoteObserveMemberExpectation,
-) -> Result<(), AgentFailure>
-where
-    Keys: VaultKeyProvider,
-    Transport: floe_access::RemoteGrantTransport,
-{
-    let resource = ctx.resource.ok_or(AgentFailure::InvalidInput)?;
-    let consumers = policy.consumers.clone();
-    let evidence = super::calendar_access::remote_calendar_evidence(
-        ctx.core,
-        ctx.person_id,
-        ctx.connector_id,
-        ctx.connection_id,
-    )
-    .await?;
-    floe_access::review_and_activate_remote_calendar_grant(
-        ctx.vault,
-        transport,
-        floe_access::RemoteCalendarGrantRequest {
-            person_id: ctx.person_id,
-            pairing: ctx.pairing,
-            connector_id: ctx.connector_id,
-            connection_id: ctx.connection_id,
-            resource,
-        },
-        evidence.as_access(),
-        &consumers,
-        floe_access::RemoteCalendarGrantReviewExpectation {
-            producer_fingerprint: &member.producer_fingerprint,
-            source_authority: member.source_authority,
-            grant_id: member.expected_grant_id,
-            grant_authority: member.expected_grant_authority,
-            consumer_policy: member.expected_policy,
-        },
-        ctx.window,
-    )
-    .await?;
-    Ok(())
-}
-
 async fn live_member_grants<Keys: VaultKeyProvider>(
     vault: &EncryptedAgentVault<Keys>,
     person_id: PersonId,
@@ -618,35 +496,6 @@ async fn live_member_grants<Keys: VaultKeyProvider>(
         resource,
     )
     .await
-}
-
-async fn local_calendar_revision<Keys: VaultKeyProvider>(
-    ctx: &RemoteObserveContext<'_, Keys>,
-) -> Result<u64, AgentFailure> {
-    let connection_id = floe_context_contract::ConnectionId::try_new(ctx.connection_id)
-        .map_err(|_| AgentFailure::InvalidInput)?;
-    let live = ctx
-        .core
-        .source_service()
-        .load(ctx.person_id, &connection_id)
-        .await
-        .map_err(|_| AgentFailure::StorageUnavailable)?
-        .ok_or(AgentFailure::AccessReviewRequired)?;
-    if live.connector_id().as_str() != ctx.connector_id
-        || !live.is_serving()
-        || !live.source_authority().is_valid()
-        || live.execution_owner_id().as_str()
-            != ctx.vault.remote_pinned_producer().await?.execution_owner
-        || ctx.resource.is_some_and(|resource| {
-            !live
-                .resources()
-                .iter()
-                .any(|entry| entry.handle().as_str() == resource)
-        })
-    {
-        return Err(AgentFailure::AccessReviewRequired);
-    }
-    Ok(live.revision())
 }
 
 #[cfg(test)]
@@ -791,7 +640,6 @@ mod tests {
     }
 
     struct Fixture {
-        core: crate::FloeCore,
         vault: EncryptedAgentVault<Keys>,
         person_id: PersonId,
         connection_id: String,
@@ -801,7 +649,6 @@ mod tests {
 
     impl Fixture {
         async fn open() -> Self {
-            let core = crate::FloeCore::open(":memory:").await.unwrap();
             let root = tempfile::tempdir().unwrap();
             std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
             let person_id = PersonId::new();
@@ -838,7 +685,6 @@ mod tests {
                 view_probes: Mutex::new(0),
             };
             Self {
-                core,
                 vault,
                 person_id,
                 connection_id,
@@ -854,7 +700,6 @@ mod tests {
             resource: Option<&'a str>,
         ) -> RemoteObserveContext<'a, Keys> {
             RemoteObserveContext {
-                core: &self.core,
                 vault: &self.vault,
                 person_id: self.person_id,
                 pairing,

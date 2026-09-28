@@ -2998,7 +2998,6 @@ impl InlineOwnerMutation for RemoteTestOwners<'_> {
                 client_id: REMOTE_CLIENT_ID,
             };
             let ctx = RemoteObserveContext {
-                core: self.core,
                 vault: self.vault,
                 person_id,
                 pairing,
@@ -3130,7 +3129,6 @@ async fn gmail_connection_review_rejects_changed_policy_before_enable() {
         cancellation: host.base.cancellation.clone(),
     };
     let ctx = RemoteObserveContext {
-        core: &host.core,
         vault: &host.base.vault,
         person_id: host.base.person,
         pairing: floe_access::RemotePairingIdentity {
@@ -3170,7 +3168,6 @@ async fn manager_mail_read_requires_assistant_in_reviewed_product_policy() {
         cancellation: host.base.cancellation.clone(),
     };
     let ctx = RemoteObserveContext {
-        core: &host.core,
         vault: &host.base.vault,
         person_id: host.base.person,
         pairing: floe_access::RemotePairingIdentity {

@@ -306,15 +306,10 @@ pub fn remote_dependency_source_admits(
         || dependency.source_resources() != reference.source_resources
         || reference.execution_owner != dependency.source().execution_owner().as_str()
         || reference.connection_revision != connection_revision
+        || reference.audience != recipient
+        || dependency.processing() != &ProcessingRestriction::LocalOnly
     {
         return Err(AgentFailure::PolicyDenied);
-    }
-    match dependency.processing() {
-        ProcessingRestriction::ApprovedRecipient {
-            recipient: approved,
-            ..
-        } if approved == recipient => {}
-        _ => return Err(AgentFailure::PolicyDenied),
     }
     Ok(())
 }
