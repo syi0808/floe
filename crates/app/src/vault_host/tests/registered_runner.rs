@@ -1828,6 +1828,49 @@ async fn hosted_calendar_settings_use_product_connection_and_pinned_producer() {
         reference.reference.connection_id.as_str(),
         calendar_connection_id
     );
+    let source_service = open.core.source_service();
+    let source = source_service
+        .load(
+            person,
+            &floe_context_contract::ConnectionId::try_new(calendar_connection_id.clone()).unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let expanded = source_service
+        .configure(
+            person,
+            source.connection_id(),
+            source.revision(),
+            floe_connections::ResourceMode::Selected,
+            vec![
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new("primary").unwrap(),
+                    "Primary".into(),
+                )
+                .unwrap(),
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new("work").unwrap(),
+                    "Work".into(),
+                )
+                .unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(expanded.revision(), source.revision() + 1);
+    let expanded_catalog = crate::vault_host::expert_binding_settings::inspect(
+        &open,
+        person,
+        "mac-local",
+        assignment_id,
+        "floe.source.calendar",
+        &Cancellation::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(expanded_catalog.binding_revision, catalog.binding_revision);
+    assert_eq!(expanded_catalog.candidates, catalog.candidates);
 
     let registry = open.vault.expert_registry().await.unwrap().unwrap();
     let assignment = &registry.assignments[0];

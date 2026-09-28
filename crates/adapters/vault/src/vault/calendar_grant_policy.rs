@@ -44,6 +44,19 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         fresh: bool,
     ) -> Result<(), AgentFailure> {
+        let probe = self.connection()?;
+        let mut legacy = probe
+            .query(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('calendar_grant_mappings', 'calendar_grant_schema')",
+                (),
+            )
+            .await
+            .map_err(storage)?;
+        if legacy.next().await.map_err(storage)?.is_some() {
+            return Err(AgentFailure::UnsupportedVersion);
+        }
+        drop(probe);
+
         let mut connection = self.connection()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
