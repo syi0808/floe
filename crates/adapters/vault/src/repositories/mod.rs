@@ -1,6 +1,7 @@
 //! Owner-scoped repository implementations over the local encrypted engine.
 
 mod actions;
+mod connections;
 #[cfg(unix)]
 mod context_evidence;
 #[cfg(unix)]

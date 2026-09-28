@@ -50,6 +50,14 @@ impl TursoStore {
                 .await
                 .map_err(storage_error)?;
         }
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS source_connections (connection_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, connector_id TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL)",
+            (),
+        ).await.map_err(storage_error)?;
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS source_connections_person_connector ON source_connections(person_id, connector_id)",
+            (),
+        ).await.map_err(storage_error)?;
         Ok(())
     }
 

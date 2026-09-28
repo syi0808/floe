@@ -734,6 +734,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "thiserror",
  "tokio",
  "uuid",
 ]
@@ -993,6 +994,7 @@ dependencies = [
  "floe-actions",
  "floe-agent-contract",
  "floe-agent-runtime",
+ "floe-connections",
  "floe-context",
  "floe-context-contract",
  "floe-conversation",

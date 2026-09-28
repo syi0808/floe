@@ -1,6 +1,11 @@
 mod api;
 pub mod application;
 mod ports;
+mod source;
+
+pub use source::{
+    ConnectionResource, ResourceMode, SourceConnection, SourceConnectionError, SourceState,
+};
 
 pub use api::{
     CalendarConnectionRef, ConnectorCatalogObservation, PAIRING_REPORT_VERSION,
@@ -16,7 +21,7 @@ pub use application::remote_pairing::{
     PairingIdentity, PairingOwnerKeys, admit_pairing_report, confirm_pairing, finalize_pairing,
     read_pairing_status,
 };
-pub use ports::RemoteControl;
+pub use ports::{RemoteControl, SourceRepository, SourceRepositoryError};
 
 pub use application::connected_context::{
     CONNECTED_CONTEXT_VERSION, CapabilityAuthority, ConformanceCode, ConformanceViolation,
@@ -33,4 +38,4 @@ pub use application::authorization::{
     ObservedConnectorStatus, cancel_authorization, observe_authorization, start_authorization,
     valid_authorization_url,
 };
-pub use floe_context_contract::ConnectionId;
+pub use floe_context_contract::{ConnectionId, ConnectorId};

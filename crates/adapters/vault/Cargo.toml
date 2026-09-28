@@ -12,6 +12,7 @@ floe-access = { path = "../../modules/access" }
 floe-actions = { path = "../../modules/actions" }
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-context = { path = "../../modules/context" }
+floe-connections = { path = "../../modules/connections" }
 floe-conversation = { path = "../../modules/conversation" }
 floe-day = { path = "../../modules/day" }
 floe-execution = { path = "../../runtime/execution" }
