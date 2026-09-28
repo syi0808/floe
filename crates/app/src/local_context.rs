@@ -166,7 +166,7 @@ impl LocalContextHost {
         &self,
         person_id: PersonId,
         command: LocalContextCommand,
-        connection: Option<&floe_day::CalendarConnection>,
+        connection: Option<&floe_connections::SourceConnection>,
     ) -> Result<LocalContextOutcome, AgentFailure> {
         let now_unix_ms = chrono::Utc::now().timestamp_millis();
         match command {
@@ -308,7 +308,7 @@ impl LocalContextHost {
                     &device_id,
                     PublishedCalendarObservation {
                         connection_id: observation.connection_id,
-                        source_authority: connection.source_authority,
+                        source_authority: connection.source_authority(),
                         connection_revision: observation.connection_revision,
                         provider: observation.provider,
                         calendar_ids: observation.calendar_ids,

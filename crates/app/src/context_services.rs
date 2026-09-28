@@ -286,16 +286,20 @@ impl LocalContextCommands for AppComposition {
         command: ContextCommand,
     ) -> Result<LocalContextOutcome, AgentFailure> {
         let person = PersonId(caller.person_id());
-        let connection = if matches!(command, ContextCommand::PublishCalendarObservation { .. }) {
-            Some(
-                self.runtime
-                    .block_on(self.core.calendar_connection(person))
-                    .map_err(|_| AgentFailure::StorageUnavailable)?
-                    .ok_or(AgentFailure::CapabilityUnavailable)?,
-            )
-        } else {
-            None
-        };
+        let connection =
+            if let ContextCommand::PublishCalendarObservation { observation } = &command {
+                let connection_id =
+                    floe_connections::ConnectionId::try_new(observation.connection_id.clone())
+                        .map_err(|_| AgentFailure::InvalidInput)?;
+                Some(
+                    self.runtime
+                        .block_on(self.core.source_service().load(person, &connection_id))
+                        .map_err(|_| AgentFailure::StorageUnavailable)?
+                        .ok_or(AgentFailure::CapabilityUnavailable)?,
+                )
+            } else {
+                None
+            };
         self.local_context
             .execute(person, command.bind(caller), connection.as_ref())
     }
