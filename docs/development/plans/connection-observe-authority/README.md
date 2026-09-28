@@ -130,7 +130,7 @@ No new workspace crate is expected. Existing Connections, Access, Context, Exper
 | 00 | [Baseline, executable regressions and contract freeze](00-baseline-and-contract-freeze.md) | Complete |
 | 01 | [Connection-owned source/resource authority](01-connection-resource-authority.md) | Complete |
 | 02 | [Stable grant source and dependency semantics](02-grant-and-dependency-cutover.md) | Complete |
-| 03 | [Native Calendar vertical cutover](03-native-calendar-vertical.md) | Not started |
+| 03 | [Native Calendar vertical cutover](03-native-calendar-vertical.md) | Complete |
 | 04 | [Remote Calendar -> generic remote View](04-remote-observe-unification.md) | Not started |
 | 05 | [ConsumerPolicyAuthority elimination](05-consumer-policy-elimination.md) | Not started |
 | 06 | [Standing personal Observe convergence](06-personal-observe-convergence.md) | Not started |
