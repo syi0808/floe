@@ -9,11 +9,13 @@ use floe_context_contract::CalendarProvider;
 use floe_context_contract::DataClass;
 use floe_day::{CalendarFailure, CalendarMirror, CalendarSyncStatus, SourceRef};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 use floe_connections::{
     CONNECTED_CONTEXT_VERSION, CapabilityAuthority, ConnectionState, ConnectorCapabilityDescriptor,
     ConnectorConnectionSnapshot, ConnectorDescriptor, ConnectorSnapshot, ExecutionLocation,
-    RetentionClass, SourceFailure, SourceFailureKind, ViewDescriptor, ViewSnapshot,
+    RetentionClass, SourceConnection, SourceFailure, SourceFailureKind, SourceState,
+    ViewDescriptor, ViewSnapshot,
 };
 
 /// Rejected when the caller's device identity is not usable.
@@ -37,32 +39,45 @@ pub fn validate_connector_device(device_id: &str) -> Result<(), ConnectorProject
 }
 
 pub fn project_calendar_connector(
-    mirror: &CalendarMirror,
+    source: &SourceConnection,
+    mirror: Option<&CalendarMirror>,
     device_id: &str,
     now: DateTime<Utc>,
 ) -> Result<ConnectorSnapshot, ConnectorProjectionError> {
-    let connection = &mirror.connection;
-    let connector_id = connector_id(connection.provider);
+    validate_connector_device(device_id)?;
+    let connector_id = source.connector_id().as_str();
+    let provider =
+        provider_for_connector(connector_id).ok_or(ConnectorProjectionError::InvalidObservation)?;
+    let mirror = mirror.filter(|mirror| {
+        mirror.connection.connection_id == source.connection_id().as_str()
+            && mirror.connection.provider == provider
+    });
     let now_unix_ms = milliseconds(now)?;
-    let statuses = if connection.source_statuses.is_empty() && !connection.disconnected {
-        connection
-            .calendars
-            .iter()
-            .map(|calendar| {
-                (
-                    calendar.calendar_id.clone(),
-                    CalendarSyncStatus {
-                        last_success_at: connection.last_success_at,
-                        last_range: connection.last_range.clone(),
-                        error: connection.error,
-                        error_at: connection.error_at,
-                    },
-                )
-            })
-            .collect()
-    } else {
-        connection.source_statuses.clone()
-    };
+    let statuses: BTreeMap<_, _> = source
+        .resources()
+        .iter()
+        .map(|calendar| {
+            let calendar_id = calendar.handle().as_str().to_owned();
+            let status = mirror
+                .and_then(|mirror| mirror.connection.source_statuses.get(&calendar_id))
+                .cloned()
+                .unwrap_or_else(|| CalendarSyncStatus {
+                    last_success_at: mirror
+                        .filter(|mirror| mirror.connection.source_statuses.is_empty())
+                        .and_then(|mirror| mirror.connection.last_success_at),
+                    last_range: mirror
+                        .filter(|mirror| mirror.connection.source_statuses.is_empty())
+                        .and_then(|mirror| mirror.connection.last_range.clone()),
+                    error: mirror
+                        .filter(|mirror| mirror.connection.source_statuses.is_empty())
+                        .and_then(|mirror| mirror.connection.error),
+                    error_at: mirror
+                        .filter(|mirror| mirror.connection.source_statuses.is_empty())
+                        .and_then(|mirror| mirror.connection.error_at),
+                });
+            (calendar_id, status)
+        })
+        .collect();
     let healthy_source_exists = statuses.values().any(|status| {
         status.error.is_none()
             && status.last_success_at.is_some_and(|success| {
@@ -85,8 +100,10 @@ pub fn project_calendar_connector(
     let pending_source_exists = statuses
         .values()
         .any(|status| status.error.is_none() && status.last_success_at.is_none());
-    let state = if connection.disconnected {
+    let state = if source.state() == SourceState::Disconnected {
         ConnectionState::Disconnected
+    } else if source.state() == SourceState::Pending {
+        ConnectionState::Pending
     } else if healthy_source_exists
         && (failed_source_exists || stale_source_exists || pending_source_exists)
     {
@@ -98,11 +115,11 @@ pub fn project_calendar_connector(
     } else {
         ConnectionState::Pending
     };
-    let last_failure = if let Some(failure) = connection.error {
+    let last_failure = if let Some(failure) = mirror.and_then(|mirror| mirror.connection.error) {
         Some(SourceFailure {
             kind: source_failure_kind(failure),
-            observed_at_unix_ms: connection
-                .error_at
+            observed_at_unix_ms: mirror
+                .and_then(|mirror| mirror.connection.error_at)
                 .map(milliseconds)
                 .transpose()?
                 .unwrap_or(now_unix_ms),
@@ -124,13 +141,13 @@ pub fn project_calendar_connector(
         .values()
         .filter_map(|status| status.last_success_at)
         .max();
-    let granted_scopes = if connection.disconnected {
+    let granted_scopes = if source.state() == SourceState::Disconnected {
         Vec::new()
     } else {
         vec!["calendar.events.read".into()]
     };
     let mut views = Vec::new();
-    if !connection.disconnected {
+    if source.is_serving() {
         for (calendar_id, status) in statuses {
             if status.error.is_some() {
                 continue;
@@ -139,11 +156,11 @@ pub fn project_calendar_connector(
                 continue;
             };
             let source_events: Vec<_> = mirror
-                .events
-                .iter()
+                .into_iter()
+                .flat_map(|mirror| mirror.events.iter())
                 .filter(|event| {
                     matches!(&event.source, SourceRef::Calendar(source)
-                        if source.provider == connection.provider
+                        if source.provider == provider
                             && source.calendar_id == calendar_id)
                 })
                 .collect();
@@ -157,7 +174,7 @@ pub fn project_calendar_connector(
             views.push(ViewSnapshot {
                 schema_version: CONNECTED_CONTEXT_VERSION,
                 view_id: CALENDAR_VIEW_ID.into(),
-                source_handle: source_handle(connection.provider, &calendar_id),
+                source_handle: source_handle(provider, &calendar_id),
                 observed_at_unix_ms: milliseconds(success)?,
                 expires_at_unix_ms: milliseconds(
                     success
@@ -177,7 +194,7 @@ pub fn project_calendar_connector(
             schema_version: CONNECTED_CONTEXT_VERSION,
             id: connector_id.into(),
             version: "1.0.0".into(),
-            provider: provider_name(connection.provider).into(),
+            provider: provider_name(provider).into(),
             execution: ExecutionLocation::Device {
                 device_id: device_id.into(),
             },
@@ -203,7 +220,7 @@ pub fn project_calendar_connector(
                 schema_version: CONNECTED_CONTEXT_VERSION,
                 id: CALENDAR_VIEW_ID.into(),
                 version: "1.0.0".into(),
-                data_class: match connection.provider {
+                data_class: match provider {
                     CalendarProvider::Fixture => DataClass::Synthetic,
                     CalendarProvider::EventKit
                     | CalendarProvider::Google
@@ -220,8 +237,8 @@ pub fn project_calendar_connector(
         connection: ConnectorConnectionSnapshot {
             schema_version: CONNECTED_CONTEXT_VERSION,
             connector_id: connector_id.into(),
-            connection_id: None,
-            person_id: None,
+            connection_id: Some(source.connection_id().as_str().to_owned()),
+            person_id: Some(source.person_id().to_string()),
             device_binding: None,
             state,
             granted_scopes,
@@ -233,13 +250,14 @@ pub fn project_calendar_connector(
     })
 }
 
-fn connector_id(provider: CalendarProvider) -> &'static str {
-    match provider {
-        CalendarProvider::Fixture => "calendar.fixture",
-        CalendarProvider::EventKit => "calendar.event_kit",
-        CalendarProvider::Google => "calendar.google",
-        CalendarProvider::Microsoft => "calendar.microsoft",
-        CalendarProvider::Android => "calendar.android",
+fn provider_for_connector(connector_id: &str) -> Option<CalendarProvider> {
+    match connector_id {
+        "calendar.fixture" => Some(CalendarProvider::Fixture),
+        "calendar.event_kit" => Some(CalendarProvider::EventKit),
+        "calendar.google" => Some(CalendarProvider::Google),
+        "calendar.microsoft" => Some(CalendarProvider::Microsoft),
+        "calendar.android" => Some(CalendarProvider::Android),
+        _ => None,
     }
 }
 
@@ -269,4 +287,93 @@ fn source_handle(provider: CalendarProvider, calendar_id: &str) -> String {
 
 fn milliseconds(time: DateTime<Utc>) -> Result<u64, ConnectorProjectionError> {
     u64::try_from(time.timestamp_millis()).map_err(|_| ConnectorProjectionError::InvalidObservation)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use floe_connections::{ConnectionResource, ResourceMode};
+    use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId, ResourceHandle};
+    use floe_kernel::PersonId;
+
+    #[test]
+    fn source_identity_projects_without_a_mirror() {
+        let person = PersonId::new();
+        let source = SourceConnection::establish(
+            person,
+            ConnectorId::try_new("calendar.event_kit").unwrap(),
+            ConnectionId::try_new("calendar-source").unwrap(),
+            ExecutionOwnerId::try_new("device").unwrap(),
+            ResourceMode::Selected,
+            vec![
+                ConnectionResource::new(ResourceHandle::try_new("home").unwrap(), "Home".into())
+                    .unwrap(),
+            ],
+        )
+        .unwrap();
+        let before = source.clone();
+        let snapshot = project_calendar_connector(&source, None, "device", Utc::now()).unwrap();
+        assert_eq!(snapshot.connection.state, ConnectionState::Pending);
+        assert_eq!(
+            snapshot.connection.connection_id.as_deref(),
+            Some("calendar-source")
+        );
+        assert_eq!(
+            snapshot.connection.person_id.as_deref(),
+            Some(person.to_string().as_str())
+        );
+        assert!(snapshot.views.is_empty());
+        assert_eq!(source, before);
+    }
+
+    #[test]
+    fn stale_mirror_status_cannot_expand_source_resources() {
+        let person = PersonId::new();
+        let mut source = SourceConnection::establish(
+            person,
+            ConnectorId::try_new("calendar.event_kit").unwrap(),
+            ConnectionId::try_new("calendar-source").unwrap(),
+            ExecutionOwnerId::try_new("device").unwrap(),
+            ResourceMode::Selected,
+            vec![
+                ConnectionResource::new(ResourceHandle::try_new("home").unwrap(), "Home".into())
+                    .unwrap(),
+            ],
+        )
+        .unwrap();
+        source
+            .update_native_subject(source.revision(), "a".repeat(64))
+            .unwrap();
+        let now = Utc::now();
+        let status = CalendarSyncStatus {
+            last_success_at: Some(now),
+            last_range: None,
+            error: None,
+            error_at: None,
+        };
+        let mirror = CalendarMirror {
+            connection: floe_day::CalendarConnection {
+                connection_id: "calendar-source".into(),
+                device_id: "device".into(),
+                disconnected: false,
+                scope: floe_context_contract::CalendarScope::Selected,
+                provider: CalendarProvider::EventKit,
+                calendars: vec![],
+                revision: 1,
+                source_authority: floe_context_contract::SourceAuthority::new(),
+                last_success_at: Some(now),
+                last_range: None,
+                error: None,
+                error_at: None,
+                source_statuses: BTreeMap::from([
+                    ("home".into(), status.clone()),
+                    ("work".into(), status),
+                ]),
+            },
+            events: vec![],
+        };
+        let snapshot = project_calendar_connector(&source, Some(&mirror), "device", now).unwrap();
+        assert_eq!(snapshot.connection.state, ConnectionState::Ready);
+        assert_eq!(snapshot.views.len(), 1);
+    }
 }
