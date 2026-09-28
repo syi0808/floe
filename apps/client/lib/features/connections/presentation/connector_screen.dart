@@ -100,7 +100,6 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
   Future<NativeCalendarAccessOverview>? observeFuture;
   String? observeError;
   bool observeBusy = false;
-  bool reconcileCalendarAfterExplicitChange = false;
 
   bool get supportsDeviceCalendar =>
       effectivePlatform == TargetPlatform.iOS ||
@@ -151,11 +150,9 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         widget.initialDeviceCalendarDetail) {
       deviceCalendarDetail = widget.initialDeviceCalendarDetail;
     }
-    if (reconcileCalendarAfterExplicitChange &&
-        oldWidget.connection != widget.connection &&
-        deviceCalendarConnection != null) {
-      reconcileCalendarAfterExplicitChange = false;
-      unawaited(_reconcileExplicitCalendarChange(deviceCalendarConnection!));
+    if (oldWidget.connection != widget.connection) {
+      observeFuture = null;
+      observeError = null;
     }
   }
 
@@ -774,8 +771,9 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
                   Text(_observeStateLabel(overview), style: FloeType.bodySmall),
                   SizedBox(height: FloeSpace.sm),
                   Text(
-                    'Using ${overview.grantedResources.length} of '
-                    '${overview.selectedResources.length} selected calendars.',
+                    overview.state == 'active' && !overview.reviewRequired
+                        ? 'Floe uses the current calendars in this connection.'
+                        : 'Floe is not using this calendar connection.',
                     style: FloeType.bodySmall.copyWith(
                       color: FloePalette.neutral600,
                     ),
@@ -875,41 +873,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
   }
 
   Future<void> _calendarChangedExplicitly() async {
-    final gateway = widget.nativeCalendarAccessGateway;
-    if (deviceCalendarConnection == null) {
-      reconcileCalendarAfterExplicitChange = true;
-    } else if (gateway != null) {
-      try {
-        final current = await gateway.inspectCalendarAccess(
-          widget.query.personId,
-        );
-        reconcileCalendarAfterExplicitChange =
-            current.state == 'active' && !current.reviewRequired;
-      } on Object {
-        reconcileCalendarAfterExplicitChange = false;
-      }
-    }
     await widget.onChanged();
-  }
-
-  Future<void> _reconcileExplicitCalendarChange(
-    CalendarConnectionView connection,
-  ) async {
-    final gateway = widget.nativeCalendarAccessGateway;
-    if (gateway == null) return;
-    try {
-      final overview = await gateway.inspectCalendarAccess(
-        widget.query.personId,
-      );
-      await _reviewObserve(connection, overview);
-    } on Object catch (error) {
-      if (mounted) {
-        setState(() {
-          observeFuture = null;
-          observeError = error.toString();
-        });
-      }
-    }
   }
 
   Future<void> _pauseObserve(NativeCalendarAccessOverview overview) async {

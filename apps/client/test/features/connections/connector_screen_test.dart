@@ -279,6 +279,92 @@ void main() {
     expect(find.text('Paused'), findsOneWidget);
   });
 
+  testWidgets(
+    'calendar resource refresh preserves active Observe without review',
+    (tester) async {
+      final access = _StubCalendarAccessGateway();
+      final initial = access.overview;
+      access.overview = NativeCalendarAccessOverview(
+        personId: initial.personId,
+        provider: initial.provider,
+        connectionId: initial.connectionId,
+        selectedResources: const ['home'],
+        grantedResources: const ['home'],
+        sourceAuthority: initial.sourceAuthority,
+        state: 'active',
+        reviewRequired: false,
+        grantId: 'grant',
+        grantAuthority: const {'access_epoch': 1},
+        consumerPolicy: const {'epoch': 1},
+      );
+      Widget screen(List<String> calendarIds, int revision) => MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ConnectorScreen(
+              gateway: _DeviceCalendarGateway(),
+              query: DayQuery(
+                personId: 'person',
+                date: DateTime.utc(2026, 9, 4),
+                now: DateTime.utc(2026, 9, 4),
+                timezoneOffsetSeconds: 0,
+              ),
+              connection: CalendarConnectionView(
+                connectionId: 'connection',
+                deviceId: 'test-device',
+                provider: 'event_kit',
+                revision: revision,
+                sourceAuthority: CalendarSourceAuthority(
+                  incarnation: '00000000-0000-4000-8000-000000000009',
+                  epoch: revision,
+                ),
+                calendars: [
+                  for (final calendarId in calendarIds)
+                    ConnectedCalendar(id: calendarId, name: calendarId),
+                ],
+              ),
+              onChanged: () async {},
+              platform: TargetPlatform.macOS,
+              initialDeviceCalendarDetail: true,
+              nativeCalendarAccessGateway: access,
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpWidget(screen(const ['home'], 1));
+      await tester.pumpAndSettle();
+      expect(access.calls, ['inspect']);
+      access.overview = NativeCalendarAccessOverview(
+        personId: initial.personId,
+        provider: initial.provider,
+        connectionId: initial.connectionId,
+        selectedResources: const ['home', 'work'],
+        grantedResources: const ['home', 'work'],
+        sourceAuthority: const {
+          'incarnation': '00000000-0000-4000-8000-000000000009',
+          'epoch': 2,
+        },
+        state: 'active',
+        reviewRequired: false,
+        grantId: 'grant',
+        grantAuthority: const {'access_epoch': 1},
+        consumerPolicy: const {'epoch': 1},
+      );
+      await tester.pumpWidget(screen(const ['home', 'work'], 2));
+      await tester.pumpAndSettle();
+      expect(access.calls, ['inspect', 'inspect']);
+      expect(find.text('Active'), findsOneWidget);
+      expect(
+        find.text('Floe uses the current calendars in this connection.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Using 1 of 2'), findsNothing);
+    },
+  );
+
   testWidgets('device-native and disconnected server catalog are composed', (
     tester,
   ) async {
@@ -854,7 +940,7 @@ final class _StubCalendarAccessGateway implements NativeCalendarAccessGateway {
         provider: overview.provider,
         connectionId: overview.connectionId,
         selectedResources: overview.selectedResources,
-        grantedResources: const ['home'],
+        grantedResources: overview.selectedResources,
         sourceAuthority: overview.sourceAuthority,
         state: state,
         reviewRequired: false,
