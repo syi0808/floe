@@ -1731,8 +1731,7 @@ impl HostFixture {
                             )
                             .unwrap(),
                             capability_id: "calendar.timeline".into(),
-                            resource: floe_context_contract::ResourceHandle::try_new("personal")
-                                .unwrap(),
+                            resource: floe_access::native_calendar_resource("connection").unwrap(),
                             contract_version: 1,
                         }],
                     },
@@ -1791,21 +1790,20 @@ impl HostFixture {
             connection_revision: Some(live.revision()),
             reviewed_producer_fingerprint: None,
             reviewed_native_subject: Some(fingerprint.into()),
-            members: live
-                .resources()
-                .iter()
-                .map(|calendar| floe_conversation::ReviewedBundleMember {
-                    member_id: "calendar.timeline".into(),
-                    policy_fingerprint: policy_fingerprint.clone(),
-                    resource: calendar.handle().as_str().to_owned(),
-                    source_revision: Some(floe_conversation::AuthorityRevision {
-                        incarnation: live.source_authority().incarnation(),
-                        epoch: live.source_authority().epoch().get(),
-                    }),
-                    expected_grant: floe_conversation::ExpectedGrantState::Absent,
-                    policy_authority: None,
-                })
-                .collect(),
+            members: vec![floe_conversation::ReviewedBundleMember {
+                member_id: "calendar.timeline".into(),
+                policy_fingerprint,
+                resource: floe_access::native_calendar_resource("connection")
+                    .unwrap()
+                    .as_str()
+                    .to_owned(),
+                source_revision: Some(floe_conversation::AuthorityRevision {
+                    incarnation: live.source_authority().incarnation(),
+                    epoch: live.source_authority().epoch().get(),
+                }),
+                expected_grant: floe_conversation::ExpectedGrantState::Absent,
+                policy_authority: None,
+            }],
         }
     }
 }
@@ -1857,8 +1855,8 @@ async fn native_allow_creates_exact_grant_and_resolves() {
             .scope()
             .resources()
             .iter()
-            .any(|value| value.as_str() == "personal"),
-        "grant covers the reviewed resource"
+            .any(|value| value.as_str() == "calendar.timeline:connection"),
+        "grant covers the reviewed logical View"
     );
     let stored =
         floe_conversation::load_interaction(&host.base.repo, &host.base.principal(), unrelated.id)
@@ -2274,8 +2272,8 @@ async fn native_deselected_scope_supersedes_without_mutation() {
         .base
         .seed_inline(target, "floe.source.calendar", "connection")
         .await;
-    // The reviewed resource leaves the selection: the review no longer
-    // binds anything, so it supersedes instead of resolving.
+    // The resource set changes after review, so the reviewed source revision
+    // supersedes instead of resolving.
     host.core
         .source_service()
         .configure(
@@ -2327,7 +2325,7 @@ async fn native_deselected_scope_supersedes_without_mutation() {
     .unwrap();
     match outcome {
         ResolveOutcome::Superseded { reason, .. } => {
-            assert_eq!(reason, DriftReason::ConnectionUnusable);
+            assert_eq!(reason, DriftReason::ConnectionRevision);
         }
         other => panic!("must supersede: {other:?}"),
     }

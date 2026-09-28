@@ -162,8 +162,8 @@ where
         Err(AgentFailure::CapabilityUnavailable)
     }
 
-    /// Native calendar: members are the reviewed calendars, the subject is
-    /// probed live, and the local connection revision binds the review.
+    /// Native Calendar reviews one logical View after probing every current
+    /// Calendar resource under the local connection revision.
     async fn capture_native_calendar(
         &self,
         requirement: &SourceAccessRequirement,
@@ -191,17 +191,13 @@ where
         {
             return Err(AgentFailure::AccessReviewRequired);
         }
-        let selected: Vec<String> = live
+        let calendar_ids: Vec<String> = live
             .resources()
             .iter()
             .map(|calendar| calendar.handle().as_str().to_owned())
             .collect();
-        let reviewed: Vec<String> = requirement
-            .resources()
-            .iter()
-            .map(|resource| resource.as_str().to_owned())
-            .collect();
-        if !reviewed.iter().all(|id| selected.contains(id)) {
+        let logical_resource = floe_access::native_calendar_resource(connection_id)?;
+        if requirement.resources() != [logical_resource.clone()] {
             return Err(AgentFailure::AccessReviewRequired);
         }
         let observation = floe_context::preview_native_calendar_subject(
@@ -214,7 +210,7 @@ where
                 person_id,
                 provider: floe_context_contract::CalendarProvider::EventKit,
                 device_id: device_id.to_owned(),
-                calendar_ids: reviewed.clone(),
+                calendar_ids,
                 connection_scope: match live.resource_mode() {
                     floe_connections::ResourceMode::Selected => {
                         floe_context_contract::CalendarScope::Selected
@@ -256,24 +252,22 @@ where
         } else {
             None
         };
-        self.verify_observed_live(person_id, connector, connection_id, expected)
-            .await?;
-        let mut members = Vec::with_capacity(reviewed.len());
-        for resource in reviewed {
-            members.push(SnapshotMember {
-                member_id: "calendar.timeline".to_owned(),
-                policy_fingerprint: policy_fingerprint.clone(),
-                resource,
-                source_revision: Some(current.source_authority()),
-                expected_grant: expected,
-                policy_authority: self.calendar_policy(expected).await?,
-            });
-        }
-        members.sort_by(|left, right| {
-            left.member_id
-                .cmp(&right.member_id)
-                .then_with(|| left.resource.cmp(&right.resource))
-        });
+        self.verify_blocked_grant(
+            person_id,
+            connector,
+            connection_id,
+            logical_resource.as_str(),
+            expected,
+        )
+        .await?;
+        let members = vec![SnapshotMember {
+            member_id: "calendar.timeline".to_owned(),
+            policy_fingerprint,
+            resource: logical_resource.as_str().to_owned(),
+            source_revision: Some(current.source_authority()),
+            expected_grant: expected,
+            policy_authority: self.calendar_policy(expected).await?,
+        }];
         Ok(InlineReviewSnapshot {
             members,
             connection_revision: Some(current.revision()),

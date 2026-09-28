@@ -296,22 +296,17 @@ where
         {
             return Ok(Self::unusable());
         }
-        let selected: Vec<&str> = connection
-            .resources()
-            .iter()
-            .map(|calendar| calendar.handle().as_str())
-            .collect();
-        if !target
-            .members
-            .iter()
-            .all(|member| selected.contains(&member.resource.as_str()))
+        let logical_resource = floe_access::native_calendar_resource(&target.connection_id)?;
+        if target.members.len() != 1
+            || target.members[0].member_id != "calendar.timeline"
+            || target.members[0].resource != logical_resource.as_str()
         {
             return Ok(Self::unusable());
         }
-        let calendar_ids: Vec<String> = target
-            .members
+        let calendar_ids: Vec<String> = connection
+            .resources()
             .iter()
-            .map(|member| member.resource.clone())
+            .map(|calendar| calendar.handle().as_str().to_owned())
             .collect();
         let observation = floe_context::preview_native_calendar_subject(
             &super::calendar_access::CoreCalendarConnections {
@@ -338,25 +333,22 @@ where
         let policy_fingerprint = crate::first_party_observe::policy_fingerprint(
             &crate::first_party_observe::calendar_policy()?,
         )?;
-        let mut members = Vec::with_capacity(target.members.len());
-        for member in &target.members {
-            let mut live = self
-                .probed_member(
-                    connector,
-                    &target.connection_id,
-                    &member.member_id,
-                    &member.resource,
-                    Some(connection.source_authority()),
-                    person_id,
-                    PolicyStore::Calendar,
-                    Some(device_id),
-                )
-                .await?;
-            live.policy_fingerprint = policy_fingerprint.clone();
-            members.push(live);
-        }
+        let member = &target.members[0];
+        let mut live = self
+            .probed_member(
+                connector,
+                &target.connection_id,
+                &member.member_id,
+                &member.resource,
+                Some(connection.source_authority()),
+                person_id,
+                PolicyStore::Calendar,
+                Some(device_id),
+            )
+            .await?;
+        live.policy_fingerprint = policy_fingerprint;
         Ok(LiveInlineState {
-            members,
+            members: vec![live],
             connection_revision: Some(connection.revision()),
             producer_fingerprint: None,
             native_subject: Some(observation.native_subject_fingerprint),
@@ -765,9 +757,8 @@ where
         self.remote_scope_satisfied(connection_id, person_id).await
     }
 
-    /// Native satisfaction: every selected calendar covered by exactly one
-    /// live grant under a single connector, and the device subject
-    /// readable. A probe failure is not satisfaction.
+    /// Native satisfaction: one active logical View grant and a current
+    /// subject probe over every Calendar resource.
     async fn native_scope_satisfied(
         &self,
         connection: &floe_connections::SourceConnection,
@@ -778,24 +769,25 @@ where
         if connection.resources().is_empty() {
             return Ok(false);
         }
-        let mut connector: Option<String> = None;
-        for calendar in connection.resources() {
-            let covering = self
-                .grants_for_connection_resource(
-                    person_id,
-                    connection.connection_id().as_str(),
-                    calendar.handle().as_str(),
-                )
-                .await?;
-            let [grant] = covering.as_slice() else {
-                return Ok(false);
-            };
-            let grant_connector = grant.source().connector().as_str().to_owned();
-            match &connector {
-                None => connector = Some(grant_connector),
-                Some(known) if *known == grant_connector => {}
-                Some(_) => return Ok(false),
-            }
+        let logical_resource =
+            floe_access::native_calendar_resource(connection.connection_id().as_str())?;
+        let covering = super::review_snapshot::live_grants_for_member(
+            self.vault,
+            person_id,
+            "calendar.event_kit",
+            connection.connection_id().as_str(),
+            logical_resource.as_str(),
+        )
+        .await?;
+        let [grant] = covering.as_slice() else {
+            return Ok(false);
+        };
+        if grant.source().execution_owner() != connection.execution_owner_id()
+            || grant.state() != floe_access::GrantState::Active
+            || grant.review_required()
+            || grant.scope().resources() != [logical_resource]
+        {
+            return Ok(false);
         }
         let calendar_ids: Vec<String> = connection
             .resources()
@@ -941,33 +933,6 @@ where
         Ok(false)
     }
 
-    /// Live non-revoked grants for one connection resource across every
-    /// connector. Callers attribute the connector from the grants'
-    /// own source bindings.
-    async fn grants_for_connection_resource(
-        &self,
-        person_id: PersonId,
-        connection_id: &str,
-        resource: &str,
-    ) -> Result<Vec<floe_access::DataAccessGrant>, AgentFailure> {
-        Ok(self
-            .vault
-            .list_data_access_grants(128)
-            .await?
-            .into_iter()
-            .filter(|grant| {
-                grant.source().person_id() == person_id
-                    && grant.source().connection_id().as_str() == connection_id
-                    && grant.state() != floe_access::GrantState::Revoked
-                    && grant
-                        .scope()
-                        .resources()
-                        .iter()
-                        .any(|value| value.as_str() == resource)
-            })
-            .collect())
-    }
-
     async fn enable(
         &self,
         target: &floe_conversation::InlineObserveTarget,
@@ -1100,9 +1065,8 @@ where
         Ok(admitted.client_id)
     }
 
-    /// Native enable through the canonical Calendar Review: the reviewed
-    /// selection, source authority, native subject and grant expectation
-    /// travel verbatim into the same operation the connection screen uses.
+    /// Native enable through the canonical Calendar Review. The one member
+    /// binds logical permission; current leaves are compare-only source proof.
     async fn enable_native_calendar(
         &self,
         target: &floe_conversation::InlineObserveTarget,
@@ -1110,13 +1074,14 @@ where
         device_id: &str,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<(), AgentFailure> {
-        let first = target.members.first().ok_or(AgentFailure::InvalidInput)?;
-        for member in &target.members {
-            if member.source_revision != first.source_revision
-                || member.expected_grant != first.expected_grant
-            {
-                return Err(AgentFailure::InvalidInput);
-            }
+        let [first] = target.members.as_slice() else {
+            return Err(AgentFailure::InvalidInput);
+        };
+        if first.member_id != "calendar.timeline"
+            || first.resource
+                != floe_access::native_calendar_resource(&target.connection_id)?.as_str()
+        {
+            return Err(AgentFailure::InvalidInput);
         }
         let source_authority = first
             .source_revision
@@ -1147,10 +1112,25 @@ where
             .reviewed_native_subject
             .clone()
             .ok_or(AgentFailure::InvalidInput)?;
-        let calendar_ids: Vec<String> = target
-            .members
+        let connection = floe_context::CalendarConnectionReader::calendar_connection(
+            &super::calendar_access::CoreCalendarConnections {
+                core: self.core,
+                person_id,
+            },
+        )
+        .await?
+        .ok_or(AgentFailure::StaleContext)?;
+        if connection.connection_id().as_str() != target.connection_id
+            || connection.execution_owner_id().as_str() != device_id
+            || connection.source_authority() != source_authority
+            || !connection.is_serving()
+        {
+            return Err(AgentFailure::StaleContext);
+        }
+        let calendar_ids: Vec<String> = connection
+            .resources()
             .iter()
-            .map(|member| member.resource.clone())
+            .map(|calendar| calendar.handle().as_str().to_owned())
             .collect();
         super::calendar_access::apply_calendar_access(
             self.core,

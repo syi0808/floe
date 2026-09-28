@@ -174,6 +174,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     if current.id() != expected_id || current.authority() != expected_authority {
                         return Err(AgentFailure::Conflict);
                     }
+                    if current.scope().resources() != scope.resources() {
+                        return Err(AgentFailure::AccessReviewRequired);
+                    }
                     let previous_policy = self
                         .maybe_calendar_grant_policy_in_transaction(&transaction, current.id())
                         .await?;
@@ -647,6 +650,44 @@ mod tests {
             )
             .await,
             Err(AgentFailure::PolicyDenied)
+        );
+    }
+
+    #[tokio::test]
+    async fn leaf_scoped_grant_cannot_be_adopted_by_logical_review() {
+        let (_root, vault, _) = fresh_vault().await;
+        let source = calendar_source(
+            vault.person_id,
+            "opaque-eventkit-connection",
+            CalendarProvider::EventKit,
+            "test-device",
+        )
+        .unwrap();
+        let scope = GrantScope::try_new(
+            vec![floe_access::ResourceHandle::try_new("home").unwrap()],
+            vec![GrantDataCategory::Metadata, GrantDataCategory::Content],
+            vec![GrantOperation::Read],
+            vec![GrantPurpose::Assistant],
+            calendar_consumers(),
+            ProcessingRestriction::LocalOnly,
+        )
+        .unwrap();
+        let leaf = vault.create_data_access_grant(source, scope).await.unwrap();
+        assert_eq!(
+            vault
+                .review_native_calendar_grant(
+                    "opaque-eventkit-connection",
+                    CalendarProvider::EventKit,
+                    "test-device",
+                    &calendar_consumers(),
+                    Some((leaf.id(), leaf.authority())),
+                )
+                .await,
+            Err(AgentFailure::AccessReviewRequired)
+        );
+        assert_eq!(
+            vault.list_data_access_grants(128).await.unwrap(),
+            vec![leaf]
         );
     }
 
