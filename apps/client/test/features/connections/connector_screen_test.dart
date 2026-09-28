@@ -568,7 +568,9 @@ void main() {
             ),
             connection: null,
             onChanged: () async => changed++,
-            serverClient: _CalendarCatalogClient(),
+            serverClient: _CalendarCatalogClient(
+              connectors: const [_multiGoogleCalendarConnector],
+            ),
             platform: TargetPlatform.macOS,
           ),
         ),
@@ -579,7 +581,10 @@ void main() {
     expect(gateway.expectedRevision, isNull);
     expect(gateway.deviceId, 'local-test-device');
     expect(gateway.provider, 'google_calendar');
-    expect(gateway.boundCalendars.single.id, 'primary@example.test');
+    expect(gateway.boundCalendars.map((calendar) => calendar.id).toList(), [
+      'opaque,id',
+      'primary@example.test',
+    ]);
     expect(changed, 1);
   });
 
@@ -1123,16 +1128,39 @@ const _googleCalendarConnector = ServerConnector(
   available: true,
   status: ServerConnectorStatus.connected,
   requiredScopes: ['calendar.readonly'],
-  scopeFields: ['calendar_id'],
+  scopeFields: ['calendar_ids'],
   capabilities: ServerConnectorCapabilities(
     connect: true,
     cancel: true,
     disconnect: true,
     scopeUpdate: true,
   ),
-  scope: {'calendar_id': 'primary@example.test'},
+  scope: {
+    'calendar_ids': ['primary@example.test'],
+  },
   connectionId: '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
   connectionRevision: 7,
+);
+
+const _multiGoogleCalendarConnector = ServerConnector(
+  id: 'calendar.google',
+  name: 'Google Calendar',
+  authKind: 'oauth_pkce',
+  available: true,
+  status: ServerConnectorStatus.connected,
+  requiredScopes: ['calendar.readonly'],
+  scopeFields: ['calendar_ids'],
+  capabilities: ServerConnectorCapabilities(
+    connect: true,
+    cancel: true,
+    disconnect: true,
+    scopeUpdate: true,
+  ),
+  scope: {
+    'calendar_ids': ['opaque,id', 'primary@example.test'],
+  },
+  connectionId: '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
+  connectionRevision: 8,
 );
 
 const _microsoftCalendarConnector = ServerConnector(
@@ -1142,14 +1170,16 @@ const _microsoftCalendarConnector = ServerConnector(
   available: true,
   status: ServerConnectorStatus.connected,
   requiredScopes: ['calendar.readonly'],
-  scopeFields: ['calendar_id'],
+  scopeFields: ['calendar_ids'],
   capabilities: ServerConnectorCapabilities(
     connect: true,
     cancel: true,
     disconnect: true,
     scopeUpdate: true,
   ),
-  scope: {'calendar_id': 'calendar@microsoft.test'},
+  scope: {
+    'calendar_ids': ['calendar@microsoft.test'],
+  },
   connectionId: '3d2e7a71-194b-4b47-84cc-b58c5ce17772',
   connectionRevision: 11,
 );

@@ -252,6 +252,47 @@ void main() {
     expect(actions.last['enabled'], isNull);
   });
 
+  testWidgets('Calendar scope edit never reviews active Observe', (
+    tester,
+  ) async {
+    final client = _ConnectorClient(
+      startResult: _attempt(ServerConnectorStatus.connected),
+    );
+    final operations = <Map<String, Object?>>[];
+    final gateway = NativeRemoteAccessGateway((request) async {
+      final operation = Map<String, Object?>.from(request['operation']! as Map);
+      if (operation['kind'] != 'read_result') operations.add(operation);
+      return _grantSuccess(request, {'connection_observe_status': 'active'});
+    });
+    await tester.pumpWidget(
+      _host(
+        ServerConnectorPanel(
+          authorization: _Authorization(),
+          connector: _calendarConnector('00000000-0000-4000-8000-000000000011'),
+          connection: _connection,
+          client: client,
+          remoteAccessGateway: gateway,
+          onBack: () {},
+          onChanged: () async {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(operations, hasLength(1));
+    expect(operations.single['resource'], isNull);
+    await tester.enterText(
+      find.byKey(const Key('connector-scope-calendar_ids')),
+      'opaque,id\nprimary\nopaque,id',
+    );
+    await tester.ensureVisible(find.text('Update scope'));
+    await tester.tap(find.text('Update scope'));
+    await tester.pumpAndSettle();
+    expect(client.updatedScope, {
+      'calendar_ids': ['opaque,id', 'primary'],
+    });
+    expect(operations, hasLength(1));
+  });
+
   testWidgets('enabling reviews the bundle and echoes it back', (tester) async {
     final actions = <Map<String, Object?>>[];
     Map<String, Object?> bundle() => {
@@ -425,9 +466,11 @@ ServerConnector _calendarConnector(String connectionId) => ServerConnector(
   available: true,
   status: ServerConnectorStatus.connected,
   requiredScopes: const ['calendar.read'],
-  scopeFields: const ['calendar_id'],
+  scopeFields: const ['calendar_ids'],
   capabilities: _capabilities,
-  scope: const {'calendar_id': 'primary'},
+  scope: const {
+    'calendar_ids': ['primary'],
+  },
   connectionId: connectionId,
   connectionRevision: 1,
 );
@@ -487,6 +530,7 @@ final class _ConnectorClient extends LocalServerClient {
   final ServerConnectorAttempt? cancelResult;
   String? receivedSecret;
   Map<String, Object?>? receivedScope;
+  Map<String, Object?>? updatedScope;
   String? polledAttempt;
   String? cancelledAttempt;
 
@@ -520,6 +564,18 @@ final class _ConnectorClient extends LocalServerClient {
   }) async {
     cancelledAttempt = attemptId;
     return cancelResult ?? startResult;
+  }
+
+  @override
+  Future<Map<String, Object?>> updateConnectorScope({
+    required ServerConnection connection,
+    required String connectorId,
+    required String connectionId,
+    required int connectionRevision,
+    required Map<String, Object?> scope,
+  }) async {
+    updatedScope = scope;
+    return {};
   }
 }
 

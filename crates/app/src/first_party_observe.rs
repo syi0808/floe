@@ -185,12 +185,10 @@ pub(crate) async fn remote_policies_for_target<Keys: floe_vault::VaultKeyProvide
     person_id: PersonId,
     connector_id: &str,
     connection_id: &str,
-    calendar_resource: Option<&str>,
 ) -> Result<Vec<FirstPartyObservePolicy>, AgentFailure> {
     if vault.person_id() != person_id || connection_id.is_empty() {
         return Err(AgentFailure::CapabilityDenied);
     }
-    let _ = calendar_resource;
     let mut policies = remote_policies(connector_id)?;
     for policy in &mut policies {
         policy
@@ -210,15 +208,12 @@ pub(crate) async fn remote_member_policy_fingerprint_for_target<
     connector_id: &str,
     connection_id: &str,
     view_id: &str,
-    resource: &str,
 ) -> Result<String, AgentFailure> {
-    let calendar_resource = (view_id == "calendar.timeline").then_some(resource);
     let policy = remote_policies_for_target(
         vault,
         person_id,
         connector_id,
         connection_id,
-        calendar_resource,
     )
     .await?
     .into_iter()

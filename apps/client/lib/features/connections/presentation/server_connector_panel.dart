@@ -82,7 +82,9 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
     for (final field in widget.connector.scopeFields) {
       final value = widget.connector.scope[field];
       scope[field] = TextEditingController(
-        text: value is List ? value.join(', ') : value?.toString() ?? '',
+        text: value is List
+            ? value.join(field == 'calendar_ids' ? '\n' : ', ')
+            : value?.toString() ?? '',
       );
     }
   }
@@ -105,6 +107,8 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
                 .map((value) => value.trim())
                 .where((value) => value.isNotEmpty)
                 .toList(growable: false)
+          : entry.key == 'calendar_ids'
+          ? _calendarScopeIds(entry.value.text)
           : entry.value.text.trim(),
   };
 
@@ -257,7 +261,6 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
     if (connectionId == null || connectionRevision == null) {
       throw const ServerConnectionException('connection_changed');
     }
-    final observeStatus = await _connectionObserveStatus();
     await widget.client.updateConnectorScope(
       connection: widget.connection,
       connectorId: widget.connector.id,
@@ -266,9 +269,6 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
       scope: _scopeValue(),
     );
     await widget.onChanged();
-    if (observeStatus == 'active') {
-      await _setConnectionObserve(true);
-    }
   });
 
   Future<void> _disconnect() => _run(() async {
@@ -307,28 +307,6 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
     await widget.onChanged();
   });
 
-  String? get _observeResource {
-    if (widget.connector.id != 'calendar.google' &&
-        widget.connector.id != 'calendar.microsoft') {
-      return null;
-    }
-    final selected = scope['calendar_id']?.text.trim();
-    if (selected != null && selected.isNotEmpty) return selected;
-    final value = widget.connector.scope['calendar_id'];
-    return value is String && value.isNotEmpty ? value : null;
-  }
-
-  Future<String?> _connectionObserveStatus() async {
-    final gateway = widget.remoteAccessGateway;
-    final connectionId = widget.connector.connectionId;
-    if (gateway == null || connectionId == null) return null;
-    return gateway.connectionObserve(
-      connectorId: widget.connector.id,
-      connectionId: connectionId,
-      resource: _observeResource,
-    );
-  }
-
   Future<void> _setConnectionObserve(
     bool enabled, {
     String? connectionId,
@@ -344,13 +322,13 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
         ? await gateway.connectionObserveReview(
             connectorId: widget.connector.id,
             connectionId: connectionId,
-            resource: _observeResource,
+            resource: null,
           )
         : null;
     await gateway.connectionObserve(
       connectorId: widget.connector.id,
       connectionId: connectionId,
-      resource: _observeResource,
+      resource: null,
       enabled: enabled,
       disconnecting: disconnecting,
       expected: expected,
@@ -436,6 +414,11 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
                     label: _scopeLabel(field),
                     controller: scope[field]!,
                     enabled: !busy && widget.connector.available,
+                    keyboardType: field == 'calendar_ids'
+                        ? TextInputType.multiline
+                        : null,
+                    minLines: field == 'calendar_ids' ? 3 : null,
+                    maxLines: field == 'calendar_ids' ? 6 : 1,
                     autocorrect: false,
                     enableSuggestions: false,
                   ),
@@ -560,15 +543,6 @@ final class _ConnectionObserveControlState
   bool busy = true;
   String? error;
 
-  String? get resource {
-    if (widget.connector.id != 'calendar.google' &&
-        widget.connector.id != 'calendar.microsoft') {
-      return null;
-    }
-    final value = widget.connector.scope['calendar_id'];
-    return value is String && value.isNotEmpty ? value : null;
-  }
-
   @override
   void initState() {
     super.initState();
@@ -592,7 +566,7 @@ final class _ConnectionObserveControlState
       final next = await widget.gateway.connectionObserve(
         connectorId: widget.connector.id,
         connectionId: connectionId,
-        resource: resource,
+        resource: null,
       );
       if (mounted && connectionId == widget.connector.connectionId) {
         setState(() {
@@ -621,7 +595,7 @@ final class _ConnectionObserveControlState
           ? await widget.gateway.connectionObserveReview(
               connectorId: widget.connector.id,
               connectionId: connectionId,
-              resource: resource,
+              resource: null,
             )
           : null;
       if (enabled && expected != null && mounted) {
@@ -637,7 +611,7 @@ final class _ConnectionObserveControlState
       final next = await widget.gateway.connectionObserve(
         connectorId: widget.connector.id,
         connectionId: connectionId,
-        resource: resource,
+        resource: null,
         enabled: enabled,
         expected: expected,
       );
@@ -742,13 +716,22 @@ String _scopeLabel(String value) => switch (value) {
   'channel' => 'Channel',
   'thread' => 'Thread (optional)',
   'folder_id' => 'Folder ID',
-  'calendar_id' => 'Calendar ID',
+  'calendar_ids' => 'Calendar IDs (one per line)',
   'team_id' => 'Team ID',
   'channel_id' => 'Channel ID',
   'base_url' => 'Home Assistant URL',
   'entities' => 'Entity IDs (comma-separated)',
   _ => value,
 };
+
+List<String> _calendarScopeIds(String text) =>
+    (text
+        .split('\n')
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort());
 
 String connectorErrorMessage(String code) => switch (code) {
   'unauthorized' =>

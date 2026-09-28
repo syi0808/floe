@@ -312,10 +312,11 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     ServerConnection server,
     ServerConnector selected,
   ) async {
-    final calendarId = selected.scope['calendar_id'];
+    final calendarIds = selected.scope['calendar_ids'];
     final connectionId = selected.connectionId;
-    if (calendarId is! String ||
-        calendarId.isEmpty ||
+    if (calendarIds is! List ||
+        calendarIds.isEmpty ||
+        calendarIds.any((value) => value is! String || value.isEmpty) ||
         connectionId == null ||
         !const {
           'calendar.google',
@@ -332,9 +333,10 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     if (current?.connectionId == connectionId &&
         current?.executionOwnerId == server.deviceId &&
         current?.provider == provider &&
-        current?.selectedCalendarIds.length == 1 &&
-        current?.selectedCalendarIds.single == calendarId &&
-        current?.resources.single.label == selected.name) {
+        listEquals(current!.selectedCalendarIds, calendarIds.cast<String>()) &&
+        current.resources.every(
+          (resource) => resource.label == selected.name,
+        )) {
       return false;
     }
     if (current != null && current.connectionId != connectionId) {
@@ -350,7 +352,8 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
           ? current
           : null,
       resources: [
-        CalendarSourceResource(handle: calendarId, label: selected.name),
+        for (final calendarId in calendarIds.cast<String>())
+          CalendarSourceResource(handle: calendarId, label: selected.name),
       ],
     );
     return true;

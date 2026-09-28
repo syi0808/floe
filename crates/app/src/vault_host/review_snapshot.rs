@@ -364,7 +364,6 @@ where
             person_id,
             connector,
             connection,
-            requested.first().map(String::as_str),
         )
         .await?;
         if policies.is_empty() {

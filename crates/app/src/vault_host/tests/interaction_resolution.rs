@@ -2555,6 +2555,7 @@ impl ScriptedRemoteTransport {
         query: floe_access::RemoteSourceQuery<'_>,
     ) -> floe_access::SignedSourcePreview {
         let authority = *self.authority.lock().unwrap();
+        let connection_revision = if query.view_id == "calendar.timeline" { 1 } else { 11 };
         let descriptor = serde_json::json!({
             "v": 1,
             "operation": "remote_view_source_preview",
@@ -2567,12 +2568,16 @@ impl ScriptedRemoteTransport {
             "audience": self.producer.audience,
             "connector_id": query.connector_id,
             "connection_id": query.connection_id,
-            "connection_revision": 11u64,
+            "connection_revision": connection_revision,
             "execution_owner": self.producer.execution_owner,
             "incarnation": authority.incarnation().to_string(),
             "epoch": authority.epoch().get(),
             "resource": query.resource,
-            "source_resources": [query.resource],
+            "source_resources": if query.view_id == "calendar.timeline" {
+                vec!["primary"]
+            } else {
+                vec![query.resource]
+            },
             "provider_identity": self.provider_identity.lock().unwrap().clone(),
             "issued_at_unix_ms": 1_700_000_000_000i64,
         });
@@ -2580,7 +2585,7 @@ impl ScriptedRemoteTransport {
         floe_access::SignedSourcePreview {
             descriptor_b64url: URL_SAFE_NO_PAD.encode(&bytes),
             producer_signature: self.sign(&bytes),
-            connection_revision: 11,
+            connection_revision,
             producer: self.producer.clone(),
         }
     }
@@ -2807,7 +2812,6 @@ impl RemoteFixture {
             self.base.person,
             "gmail",
             &self.connection_id,
-            None,
         )
         .await
         .unwrap();
@@ -2974,19 +2978,6 @@ impl InlineOwnerMutation for RemoteTestOwners<'_> {
                     .enable_reviewed(target, person_id, device_id, cancellation)
                     .await;
             }
-            let calendar = policies.len() == 1 && policies[0].view_id == "calendar.timeline";
-            let resource = if calendar {
-                Some(
-                    target
-                        .members
-                        .first()
-                        .ok_or(AgentFailure::InvalidInput)?
-                        .resource
-                        .as_str(),
-                )
-            } else {
-                None
-            };
             let person_text = person_id.to_string();
             let window = floe_access::RemoteCallWindow {
                 deadline: self.deadline,
@@ -3003,7 +2994,7 @@ impl InlineOwnerMutation for RemoteTestOwners<'_> {
                 pairing,
                 connector_id: connector,
                 connection_id: target.connection_id.as_str(),
-                resource,
+                resource: None,
                 window: &window,
             };
             enable_remote_reviewed(&ctx, self.transport, target).await
@@ -3386,7 +3377,7 @@ async fn gmail_bad_signature_never_mutates_nor_resolves() {
 #[tokio::test]
 async fn remote_calendar_allow_resolves_through_hosted_connection() {
     let host = RemoteFixture::open().await;
-    let source = host
+    let _source = host
         .core
         .source_service()
         .establish(
@@ -3454,7 +3445,11 @@ async fn remote_calendar_allow_resolves_through_hosted_connection() {
                     )
                     .unwrap(),
                     capability_id: "calendar.timeline".into(),
-                    resource: floe_context_contract::ResourceHandle::try_new("primary").unwrap(),
+                    resource: floe_context_contract::connection_view_resource(
+                        "calendar.timeline",
+                        &floe_context_contract::ConnectionId::try_new(&host.connection_id).unwrap(),
+                    )
+                    .unwrap(),
                     contract_version: 1,
                 }],
             },
@@ -3462,6 +3457,11 @@ async fn remote_calendar_allow_resolves_through_hosted_connection() {
         .await
         .unwrap();
     let authority = *host.transport.authority.lock().unwrap();
+    let logical_resource = floe_context_contract::connection_view_resource(
+        "calendar.timeline",
+        &floe_context_contract::ConnectionId::try_new(&host.connection_id).unwrap(),
+    )
+    .unwrap();
     let target = floe_conversation::InlineObserveTarget {
         connection_id: host.connection_id.clone(),
         device_id: Some(DEVICE.into()),
@@ -3469,7 +3469,7 @@ async fn remote_calendar_allow_resolves_through_hosted_connection() {
         connector_id: Some("calendar.google".into()),
         consumer: "floe.builtin.schedule".into(),
         purpose: "scheduling".into(),
-        connection_revision: Some(source.revision()),
+        connection_revision: None,
         reviewed_producer_fingerprint: Some(host.transport.producer.fingerprint.clone()),
         reviewed_native_subject: None,
         members: vec![floe_conversation::ReviewedBundleMember {
@@ -3481,11 +3481,10 @@ async fn remote_calendar_allow_resolves_through_hosted_connection() {
                     "calendar.google",
                     &host.connection_id,
                     "calendar.timeline",
-                    "primary",
                 )
                 .await
                 .unwrap(),
-            resource: "primary".into(),
+            resource: logical_resource.as_str().into(),
             source_revision: Some(floe_conversation::AuthorityRevision {
                 incarnation: authority.incarnation(),
                 epoch: authority.epoch().get(),

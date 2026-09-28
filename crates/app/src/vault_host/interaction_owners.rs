@@ -427,10 +427,6 @@ where
             person_id,
             connector,
             &target.connection_id,
-            target
-                .members
-                .first()
-                .map(|member| member.resource.as_str()),
         )
         .await?;
         if policies.is_empty() {
@@ -456,7 +452,6 @@ where
             person_id,
             connector,
             &target.connection_id,
-            None,
         )
         .await?;
         let connection_id = floe_context_contract::ConnectionId::try_new(&target.connection_id)
@@ -601,7 +596,6 @@ where
                     connector,
                     connection_id,
                     member_id,
-                    resource,
                 )
                 .await?
             },
@@ -1175,10 +1169,6 @@ where
             person_id,
             connector,
             &target.connection_id,
-            target
-                .members
-                .first()
-                .map(|member| member.resource.as_str()),
         )
         .await?;
         if policies.is_empty() {

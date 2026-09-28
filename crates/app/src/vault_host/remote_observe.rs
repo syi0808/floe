@@ -125,7 +125,6 @@ where
         ctx.person_id,
         ctx.connector_id,
         ctx.connection_id,
-        ctx.resource,
     )
     .await?;
     if policies.is_empty() {
@@ -166,7 +165,6 @@ where
         ctx.person_id,
         ctx.connector_id,
         ctx.connection_id,
-        ctx.resource,
     )
     .await?;
     if policies.is_empty() {
@@ -305,7 +303,6 @@ pub(crate) async fn observe_status<Keys: VaultKeyProvider>(
         person_id,
         connector_id,
         connection_id,
-        resource,
     )
     .await?;
     if policies.is_empty() {
