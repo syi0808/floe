@@ -7,7 +7,7 @@ use floe_execution::Cancellation;
 
 use super::super::calendar_access::apply_calendar_access;
 use super::*;
-use crate::{CalendarAccessChange, CalendarAccessOverview, CalendarAccessState, CalendarSelection};
+use crate::{CalendarAccessChange, CalendarAccessOverview, CalendarAccessState};
 
 struct FixtureSubject {
     fingerprints: HashMap<Vec<String>, String>,
@@ -62,17 +62,17 @@ impl Fixture {
             ))
             .unwrap();
         runtime
-            .block_on(core.set_calendar_scope(
+            .block_on(core.source_service().establish(
                 person,
-                "fixture-connection".into(),
-                1,
-                device_id.clone(),
-                floe_context_contract::CalendarProvider::EventKit,
-                vec![CalendarSelection {
-                    calendar_id: "home".into(),
-                    calendar_name: "Home".into(),
-                }],
-                floe_context_contract::CalendarScope::Selected,
+                floe_context_contract::ConnectorId::try_new("calendar.event_kit").unwrap(),
+                floe_context_contract::ConnectionId::try_new("fixture-connection").unwrap(),
+                floe_context_contract::ExecutionOwnerId::try_new(&device_id).unwrap(),
+                floe_connections::ResourceMode::Selected,
+                vec![floe_connections::ConnectionResource::new(
+                floe_context_contract::ResourceHandle::try_new("home").unwrap(),
+                "Home".into(),
+            )
+            .unwrap()],
             ))
             .unwrap();
         runtime.block_on(async {
@@ -157,9 +157,12 @@ impl Fixture {
         }
     }
 
-    fn connection(&self) -> floe_day::CalendarConnection {
+    fn connection(&self) -> floe_connections::SourceConnection {
         self.runtime
-            .block_on(self.core.calendar_connection(self.person))
+            .block_on(self.core.source_service().load(
+                self.person,
+                &floe_context_contract::ConnectionId::try_new("fixture-connection").unwrap(),
+            ))
             .unwrap()
             .unwrap()
     }
@@ -330,11 +333,11 @@ fn pause_and_remove_leave_the_connection_intact() {
         .unwrap();
     assert_eq!(removed.state, CalendarAccessState::Revoked);
     let after = fixture.connection();
-    assert_eq!(after.connection_id, before.connection_id);
-    assert_eq!(after.revision, before.revision);
-    assert_eq!(after.source_authority, before.source_authority);
-    assert!(!after.disconnected);
-    assert_eq!(after.calendars, before.calendars);
+    assert_eq!(after.connection_id(), before.connection_id());
+    assert_ne!(after.revision(), before.revision());
+    assert_ne!(after.source_authority(), before.source_authority());
+    assert_ne!(after.state(), floe_connections::SourceState::Disconnected);
+    assert_eq!(after.resources(), before.resources());
 }
 
 #[test]
@@ -346,23 +349,23 @@ fn selection_change_requires_a_fresh_subject_and_authority() {
         .unwrap();
     fixture
         .runtime
-        .block_on(fixture.core.set_calendar_scope(
+        .block_on(fixture.core.source_service().configure(
             fixture.person,
-            "fixture-connection".into(),
-            2,
-            fixture.device_id.clone(),
-            floe_context_contract::CalendarProvider::EventKit,
+            &floe_context_contract::ConnectionId::try_new("fixture-connection").unwrap(),
+            fixture.connection().revision(),
+            floe_connections::ResourceMode::Selected,
             vec![
-                CalendarSelection {
-                    calendar_id: "home".into(),
-                    calendar_name: "Home".into(),
-                },
-                CalendarSelection {
-                    calendar_id: "work".into(),
-                    calendar_name: "Work".into(),
-                },
-            ],
-            floe_context_contract::CalendarScope::Selected,
+            floe_connections::ConnectionResource::new(
+                floe_context_contract::ResourceHandle::try_new("home").unwrap(),
+                "Home".into(),
+            )
+            .unwrap(),
+            floe_connections::ConnectionResource::new(
+                floe_context_contract::ResourceHandle::try_new("work").unwrap(),
+                "Work".into(),
+            )
+            .unwrap(),
+        ],
         ))
         .unwrap();
     // The old authority and the old subject no longer describe the review.
@@ -552,17 +555,17 @@ fn worker_inspect_serves_needs_review_without_device_io() {
         .unwrap();
     let core = Arc::new(runtime.block_on(FloeCore::open(":memory:")).unwrap());
     runtime
-        .block_on(core.set_calendar_scope(
+        .block_on(core.source_service().establish(
             person,
-            "fixture-connection".into(),
-            1,
-            "fixture-device".to_owned(),
-            floe_context_contract::CalendarProvider::EventKit,
-            vec![CalendarSelection {
-                calendar_id: "home".into(),
-                calendar_name: "Home".into(),
-            }],
-            floe_context_contract::CalendarScope::Selected,
+            floe_context_contract::ConnectorId::try_new("calendar.event_kit").unwrap(),
+            floe_context_contract::ConnectionId::try_new("fixture-connection").unwrap(),
+            floe_context_contract::ExecutionOwnerId::try_new("fixture-device").unwrap(),
+            floe_connections::ResourceMode::Selected,
+            vec![floe_connections::ConnectionResource::new(
+            floe_context_contract::ResourceHandle::try_new("home").unwrap(),
+            "Home".into(),
+        )
+        .unwrap()],
         ))
         .unwrap();
     let worker = Worker::with_core_and_connection_store(

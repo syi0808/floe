@@ -60,7 +60,7 @@ pub async fn read_native_calendar_view(
         .observe(CalendarObserveRequest {
             person_id: read.person_id,
             device_id: read.device_id.to_owned(),
-            provider: before.connection.provider,
+            provider: before.stamp.provider,
             calendar_ids: calendar_ids.clone(),
             expected_native_subject_fingerprint: Some(
                 before.stamp.native_subject_fingerprint.clone(),
@@ -84,8 +84,8 @@ pub async fn read_native_calendar_view(
         return Err(AgentFailure::StaleContext);
     }
     let items = project_native_items(
-        before.connection.provider,
-        &before.connection.connection_id,
+        before.stamp.provider,
+        before.connection.connection_id().as_str(),
         &calendar_ids,
         observation.batches,
         range_start,
@@ -133,7 +133,7 @@ pub async fn read_native_calendar_view(
         person_id: read.person_id,
         handle: Uuid::new_v5(
             &Uuid::NAMESPACE_URL,
-            before.connection.connection_id.as_bytes(),
+            before.connection.connection_id().as_str().as_bytes(),
         ),
         device_id: read.device_id.to_owned(),
         calendar_ids,

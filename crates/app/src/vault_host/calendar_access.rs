@@ -9,8 +9,8 @@
 use std::{future::Future, pin::Pin, time::Duration};
 
 use floe_access::{
-    ConnectionId, ExecutionOwnerId, GrantSourceBinding, RemoteCallWindow,
-    native_calendar_connector, valid_subject_fingerprint, validate_grant_expectation,
+    ExecutionOwnerId, GrantSourceBinding, RemoteCallWindow, valid_subject_fingerprint,
+    validate_grant_expectation,
 };
 use floe_agent_contract::AgentFailure;
 use floe_context::{
@@ -48,11 +48,19 @@ pub(super) struct CoreCalendarConnections<'a> {
 impl CalendarConnectionReader for CoreCalendarConnections<'_> {
     async fn calendar_connection(
         &self,
-    ) -> Result<Option<floe_day::CalendarConnection>, AgentFailure> {
-        self.core
-            .calendar_connection(self.person_id)
+    ) -> Result<Option<floe_connections::SourceConnection>, AgentFailure> {
+        let connector = floe_context_contract::ConnectorId::try_new("calendar.event_kit")
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        let mut sources = self
+            .core
+            .source_service()
+            .list_current(self.person_id, &connector)
             .await
-            .map_err(|_| AgentFailure::StorageUnavailable)
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        if sources.len() > 1 {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(sources.pop())
     }
 }
 
@@ -63,7 +71,7 @@ pub(super) struct VaultNativeCalendarGrants<'a, Keys: VaultKeyProvider> {
 impl<Keys: VaultKeyProvider> NativeCalendarGrantReader for VaultNativeCalendarGrants<'_, Keys> {
     async fn admit(
         &self,
-        connection: &floe_day::CalendarConnection,
+        connection: &floe_connections::SourceConnection,
         person_id: PersonId,
         calendar_ids: &[String],
         consumer: &str,
@@ -77,11 +85,11 @@ impl<Keys: VaultKeyProvider> NativeCalendarGrantReader for VaultNativeCalendarGr
         let admission = self
             .vault
             .authorize_current_native_calendar_grant(
-                &connection.connection_id,
-                connection.provider,
-                &connection.device_id,
+                connection.connection_id().as_str(),
+                floe_context_contract::CalendarProvider::EventKit,
+                connection.execution_owner_id().as_str(),
                 calendar_ids,
-                connection.source_authority,
+                connection.source_authority(),
                 floe_access::GrantOperation::Read,
                 floe_access::GrantPurpose::Assistant,
                 consumer.clone(),
@@ -132,21 +140,21 @@ impl<Keys: VaultKeyProvider> floe_access::DependencyResolver
                     floe_context::CalendarConnectionReader::calendar_connection(&connections)
                         .await?
                         .ok_or(AgentFailure::AccessReviewRequired)?;
-                if connection.provider != floe_context_contract::CalendarProvider::EventKit {
+                if connection.connector_id().as_str() != "calendar.event_kit" {
                     return Err(AgentFailure::StaleContext);
                 }
                 let source =
                     floe_provider_adapters::sources::native_calendar::NativeCalendarReadAccess::new(
                         self.person_id,
                         self.device_id.to_owned(),
-                        connection.provider,
+                        floe_context_contract::CalendarProvider::EventKit,
                         dependency
                             .resources()
                             .iter()
                             .map(|resource| resource.as_str().to_owned())
                             .collect(),
-                        connection.connection_id,
-                        connection.revision,
+                        connection.connection_id().as_str().to_owned(),
+                        connection.revision(),
                     );
                 let grants = VaultNativeCalendarGrants { vault: self.vault };
                 return floe_context::authorize_native_calendar_dependency(
@@ -490,15 +498,15 @@ where
             let expected_grant =
                 validate_grant_expectation(expected_grant_id, expected_grant_authority)?;
             let connection = usable_native_connection(core, person_id).await?;
-            if connection.connection_id != connection_id
-                || connection.source_authority != expected_source_authority
+            if connection.connection_id().as_str() != connection_id
+                || connection.source_authority() != expected_source_authority
             {
                 return Err(AgentFailure::StaleContext);
             }
             let selected = connection
-                .calendars
+                .resources()
                 .iter()
-                .map(|calendar| calendar.calendar_id.clone())
+                .map(|calendar| calendar.handle().as_str().to_owned())
                 .collect::<Vec<_>>();
             if !calendar_ids.iter().all(|id| selected.contains(id)) {
                 return Err(AgentFailure::StaleContext);
@@ -508,13 +516,20 @@ where
                 subject,
                 &NativeCalendarSourceRequest {
                     person_id,
-                    provider: connection.provider,
+                    provider: floe_context_contract::CalendarProvider::EventKit,
                     device_id: device_id.clone(),
                     calendar_ids: calendar_ids.clone(),
-                    connection_scope: connection.scope,
-                    source_authority: Some(connection.source_authority),
+                    connection_scope: match connection.resource_mode() {
+                        floe_connections::ResourceMode::Selected => {
+                            floe_context_contract::CalendarScope::Selected
+                        }
+                        floe_connections::ResourceMode::AllAvailable => {
+                            floe_context_contract::CalendarScope::All
+                        }
+                    },
+                    source_authority: Some(connection.source_authority()),
                     reviewed_native_subject_fingerprint: None,
-                    connection_id: Some(connection.connection_id.clone()),
+                    connection_id: Some(connection.connection_id().as_str().to_owned()),
                 },
                 &subject_window(cancellation),
             )
@@ -522,30 +537,41 @@ where
             if fresh.native_subject_fingerprint != expected_native_subject_fingerprint {
                 return Err(AgentFailure::AccessReviewRequired);
             }
+            let consumers = crate::first_party_observe::native_calendar_policy_for_target(
+                vault,
+                person_id,
+                "calendar.event_kit",
+                connection.connection_id().as_str(),
+                &device_id,
+                &calendar_ids,
+            )
+            .await?
+            .consumers;
+            if consumers.is_empty() {
+                return Err(AgentFailure::InvalidInput);
+            }
             let current = usable_native_connection(core, person_id).await?;
-            if current.connection_id != connection.connection_id
-                || current.source_authority != connection.source_authority
-                || current.revision != connection.revision
-            {
+            if current != connection {
                 return Err(AgentFailure::StaleContext);
             }
+            let current = core
+                .source_service()
+                .update_native_subject(
+                    person_id,
+                    current.connection_id(),
+                    current.revision(),
+                    fresh.native_subject_fingerprint,
+                )
+                .await
+                .map_err(|_| AgentFailure::StaleContext)?;
             let grant = vault
                 .review_native_calendar_grant(
-                    &current.connection_id,
-                    current.provider,
+                    current.connection_id().as_str(),
+                    floe_context_contract::CalendarProvider::EventKit,
                     &device_id,
                     &calendar_ids,
-                    current.source_authority,
-                    &crate::first_party_observe::native_calendar_policy_for_target(
-                        vault,
-                        person_id,
-                        "calendar.event_kit",
-                        &current.connection_id,
-                        &device_id,
-                        &calendar_ids,
-                    )
-                    .await?
-                    .consumers,
+                    current.source_authority(),
+                    &consumers,
                     &expected_native_subject_fingerprint,
                     expected_grant,
                 )
@@ -564,10 +590,10 @@ where
                 .pause_native_calendar_grant(
                     grant_id,
                     expected_grant_authority,
-                    &current.connection_id,
-                    current.provider,
+                    current.connection_id().as_str(),
+                    floe_context_contract::CalendarProvider::EventKit,
                     &device_id,
-                    current.source_authority,
+                    current.source_authority(),
                 )
                 .await?;
             overview(person_id, &current, Some(&grant), vault).await
@@ -584,10 +610,10 @@ where
                 .revoke_native_calendar_grant(
                     grant_id,
                     expected_grant_authority,
-                    &current.connection_id,
-                    current.provider,
+                    current.connection_id().as_str(),
+                    floe_context_contract::CalendarProvider::EventKit,
                     &device_id,
-                    current.source_authority,
+                    current.source_authority(),
                 )
                 .await?;
             overview(person_id, &current, Some(&grant), vault).await
@@ -598,20 +624,18 @@ where
 async fn usable_native_connection(
     core: &FloeCore,
     person_id: PersonId,
-) -> Result<floe_day::CalendarConnection, AgentFailure> {
-    let connection = core
-        .calendar_connection(person_id)
-        .await
-        .map_err(|_| AgentFailure::StorageUnavailable)?
+) -> Result<floe_connections::SourceConnection, AgentFailure> {
+    let connection =
+        floe_context::CalendarConnectionReader::calendar_connection(&CoreCalendarConnections {
+            core,
+            person_id,
+        })
+        .await?
         .ok_or(AgentFailure::AccessReviewRequired)?;
-    if !matches!(
-        connection.provider,
-        floe_context_contract::CalendarProvider::EventKit
-            | floe_context_contract::CalendarProvider::Android
-    ) {
+    if connection.connector_id().as_str() != "calendar.event_kit" {
         return Err(AgentFailure::CapabilityUnavailable);
     }
-    if connection.disconnected {
+    if connection.state() == floe_connections::SourceState::Disconnected {
         return Err(AgentFailure::AccessReviewRequired);
     }
     Ok(connection)
@@ -620,23 +644,25 @@ async fn usable_native_connection(
 fn native_grant_source(
     person_id: PersonId,
     device_id: &str,
-    connection: &floe_day::CalendarConnection,
+    connection: &floe_connections::SourceConnection,
 ) -> Result<GrantSourceBinding, AgentFailure> {
-    let connector = native_calendar_connector(connection.provider)
-        .ok_or(AgentFailure::CapabilityUnavailable)?;
+    if connection.execution_owner_id().as_str() != device_id || connection.person_id() != person_id
+    {
+        return Err(AgentFailure::CapabilityDenied);
+    }
     GrantSourceBinding::try_new(
         person_id,
-        ConnectionId::try_new(&connection.connection_id).map_err(|_| AgentFailure::InvalidInput)?,
-        floe_access::ConnectorId::try_new(connector).map_err(|_| AgentFailure::InvalidInput)?,
+        connection.connection_id().clone(),
+        connection.connector_id().clone(),
         ExecutionOwnerId::try_new(device_id).map_err(|_| AgentFailure::InvalidInput)?,
-        connection.source_authority,
+        connection.source_authority(),
     )
     .map_err(|_| AgentFailure::InvalidInput)
 }
 
 async fn overview<Keys: VaultKeyProvider>(
     person_id: PersonId,
-    connection: &floe_day::CalendarConnection,
+    connection: &floe_connections::SourceConnection,
     grant: Option<&floe_access::DataAccessGrant>,
     vault: &EncryptedAgentVault<Keys>,
 ) -> Result<CalendarAccessOverview, AgentFailure> {
@@ -674,15 +700,15 @@ async fn overview<Keys: VaultKeyProvider>(
     };
     Ok(CalendarAccessOverview {
         person_id,
-        provider: connection.provider,
-        connection_id: connection.connection_id.clone(),
+        provider: floe_context_contract::CalendarProvider::EventKit,
+        connection_id: connection.connection_id().as_str().to_owned(),
         selected_resources: connection
-            .calendars
+            .resources()
             .iter()
-            .map(|calendar| calendar.calendar_id.clone())
+            .map(|calendar| calendar.handle().as_str().to_owned())
             .collect(),
         granted_resources: granted,
-        source_authority: connection.source_authority,
+        source_authority: connection.source_authority(),
         grant_id,
         grant_authority,
         consumer_policy,

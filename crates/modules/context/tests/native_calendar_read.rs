@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeMap,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -15,31 +14,26 @@ use floe_access::{
     GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction,
     RemoteCallWindow, ResourceHandle,
 };
+use floe_connections::{ConnectionResource, ResourceMode, SourceConnection};
 use floe_context::{
     CalendarConnectionReader, CalendarObservation, CalendarObserveRequest, CalendarSource,
     NativeCalendarGrantReader, NativeCalendarViewRead, SourceLeaseRegistry,
     admit_current_native_calendar_read, authorize_native_calendar_dependency,
     read_native_calendar_view,
 };
-use floe_context_contract::{
-    CalendarProvider, CalendarReadAccessStamp, CalendarScope, CalendarViewQuery, SourceAuthority,
-};
-use floe_day::{
-    AllDaySchedule, CalendarBatch, CalendarConnection, CalendarFailure, CalendarRecord,
-    CalendarSelection, EventSchedule,
-};
+use floe_context_contract::{CalendarReadAccessStamp, CalendarViewQuery, SourceAuthority};
+use floe_day::{AllDaySchedule, CalendarBatch, CalendarFailure, CalendarRecord, EventSchedule};
 use floe_execution::Cancellation;
 use floe_kernel::{AgentFailure, PersonId};
 use tokio::time::Instant;
-use uuid::Uuid;
 
 struct Connections {
-    value: Arc<Mutex<Option<CalendarConnection>>>,
+    value: Arc<Mutex<Option<SourceConnection>>>,
     reads: AtomicUsize,
 }
 
 impl CalendarConnectionReader for Connections {
-    async fn calendar_connection(&self) -> Result<Option<CalendarConnection>, AgentFailure> {
+    async fn calendar_connection(&self) -> Result<Option<SourceConnection>, AgentFailure> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         Ok(self.value.lock().unwrap().clone())
     }
@@ -106,7 +100,7 @@ impl CalendarSource for Device {
 }
 
 struct Grants {
-    connections: Arc<Mutex<Option<CalendarConnection>>>,
+    connections: Arc<Mutex<Option<SourceConnection>>>,
     change_connection: AtomicBool,
     change_on_second_call: AtomicBool,
     wrong_source: AtomicBool,
@@ -120,7 +114,7 @@ struct Grants {
 impl NativeCalendarGrantReader for Grants {
     async fn admit(
         &self,
-        connection: &CalendarConnection,
+        connection: &SourceConnection,
         person_id: PersonId,
         calendar_ids: &[String],
         consumer: &str,
@@ -133,7 +127,15 @@ impl NativeCalendarGrantReader for Grants {
         if self.change_connection.load(Ordering::SeqCst)
             || self.change_on_second_call.load(Ordering::SeqCst) && call_number == 1
         {
-            self.connections.lock().unwrap().as_mut().unwrap().revision += 1;
+            let mut stored = self.connections.lock().unwrap();
+            let source = stored.as_mut().unwrap();
+            source
+                .configure(
+                    source.revision(),
+                    ResourceMode::Selected,
+                    vec![resource("primary", "Renamed")],
+                )
+                .unwrap();
         }
         let consumer = GrantConsumer::builtin(if self.wrong_consumer.load(Ordering::SeqCst) {
             "another.expert"
@@ -144,15 +146,15 @@ impl NativeCalendarGrantReader for Grants {
         let consumers = vec![consumer.clone()];
         let source = GrantSourceBinding::try_new(
             person_id,
-            ConnectionId::try_new(&connection.connection_id).unwrap(),
+            connection.connection_id().clone(),
             ConnectorId::try_new("calendar.event_kit").unwrap(),
             ExecutionOwnerId::try_new(if self.wrong_source.load(Ordering::SeqCst) {
                 "another-device"
             } else {
-                &connection.device_id
+                connection.execution_owner_id().as_str()
             })
             .unwrap(),
-            connection.source_authority,
+            connection.source_authority(),
         )
         .unwrap();
         let scope = GrantScope::try_new(
@@ -181,24 +183,17 @@ impl NativeCalendarGrantReader for Grants {
 
 fn fixture() -> (Connections, Device, Grants, PersonId) {
     let person_id = PersonId::new();
-    let value = Arc::new(Mutex::new(Some(CalendarConnection {
-        connection_id: Uuid::new_v4().to_string(),
-        device_id: "device".into(),
-        disconnected: false,
-        scope: CalendarScope::Selected,
-        provider: CalendarProvider::EventKit,
-        calendars: vec![CalendarSelection {
-            calendar_id: "primary".into(),
-            calendar_name: "Primary".into(),
-        }],
-        revision: 1,
-        source_authority: SourceAuthority::new(),
-        last_success_at: None,
-        last_range: None,
-        error: None,
-        error_at: None,
-        source_statuses: BTreeMap::new(),
-    })));
+    let mut source = SourceConnection::establish(
+        person_id,
+        ConnectorId::try_new("calendar.event_kit").unwrap(),
+        ConnectionId::new(),
+        ExecutionOwnerId::try_new("device").unwrap(),
+        ResourceMode::Selected,
+        vec![resource("primary", "Primary")],
+    )
+    .unwrap();
+    source.update_native_subject(1, "a".repeat(64)).unwrap();
+    let value = Arc::new(Mutex::new(Some(source)));
     (
         Connections {
             value: Arc::clone(&value),
@@ -226,6 +221,10 @@ fn fixture() -> (Connections, Device, Grants, PersonId) {
         },
         person_id,
     )
+}
+
+fn resource(handle: &str, label: &str) -> ConnectionResource {
+    ConnectionResource::new(ResourceHandle::try_new(handle).unwrap(), label.into()).unwrap()
 }
 
 fn window() -> RemoteCallWindow {
@@ -301,18 +300,18 @@ async fn native_admission_serves_two_canonical_consumers_under_one_grant() {
 #[tokio::test]
 async fn native_admission_preserves_more_than_128_selected_calendars() {
     let (connections, device, grants, person_id) = fixture();
-    connections
-        .value
-        .lock()
-        .unwrap()
-        .as_mut()
-        .unwrap()
-        .calendars = (0..129)
-        .map(|index| CalendarSelection {
-            calendar_id: format!("calendar-{index}"),
-            calendar_name: format!("Calendar {index}"),
-        })
-        .collect();
+    let mut stored = connections.value.lock().unwrap();
+    let source = stored.as_mut().unwrap();
+    source
+        .configure(
+            source.revision(),
+            ResourceMode::Selected,
+            (0..129)
+                .map(|index| resource(&format!("calendar-{index}"), &format!("Calendar {index}")))
+                .collect(),
+        )
+        .unwrap();
+    drop(stored);
 
     let admitted = admit_current_native_calendar_read(
         &connections,
@@ -466,17 +465,19 @@ async fn native_view_records_complete_empty_coverage_and_exact_dependency() {
 #[tokio::test]
 async fn selected_native_calendar_subset_survives_read_and_reauthorization() {
     let (connections, device, grants, person_id) = fixture();
-    connections
-        .value
-        .lock()
-        .unwrap()
-        .as_mut()
-        .unwrap()
-        .calendars
-        .push(CalendarSelection {
-            calendar_id: "secondary".into(),
-            calendar_name: "Secondary".into(),
-        });
+    let mut stored = connections.value.lock().unwrap();
+    let source = stored.as_mut().unwrap();
+    source
+        .configure(
+            source.revision(),
+            ResourceMode::Selected,
+            vec![
+                resource("primary", "Primary"),
+                resource("secondary", "Secondary"),
+            ],
+        )
+        .unwrap();
+    drop(stored);
     let selected = vec!["primary".to_owned()];
     let now = chrono::Utc::now().timestamp_millis();
     let query = CalendarViewQuery::try_new(now - 60_000, now + 60_000, None, 8).unwrap();
@@ -527,7 +528,7 @@ fn view_source_authority(connections: &Connections) -> SourceAuthority {
         .unwrap()
         .as_ref()
         .unwrap()
-        .source_authority
+        .source_authority()
 }
 
 #[tokio::test]
@@ -685,13 +686,19 @@ async fn native_dependency_rechecks_the_current_grant_source() {
     )
     .await
     .unwrap();
-    connections
-        .value
-        .lock()
-        .unwrap()
-        .as_mut()
-        .unwrap()
-        .source_authority = SourceAuthority::new();
+    let mut stored = connections.value.lock().unwrap();
+    let source = stored.as_mut().unwrap();
+    source
+        .configure(
+            source.revision(),
+            ResourceMode::Selected,
+            vec![
+                resource("primary", "Primary"),
+                resource("secondary", "Secondary"),
+            ],
+        )
+        .unwrap();
+    drop(stored);
     assert!(matches!(
         authorize_native_calendar_dependency(
             &connections,

@@ -16,10 +16,10 @@ use floe_access::{
     validate_read_authority,
 };
 use floe_agent_contract::{AgentFailure, PersonId};
+use floe_connections::{ResourceMode, SourceConnection, SourceState};
 use floe_context_contract::{
     CalendarProvider, CalendarReadAccessStamp, CalendarScope, SourceAuthority,
 };
-use floe_day::CalendarConnection;
 
 use crate::CalendarSource;
 
@@ -77,7 +77,7 @@ pub struct NativeSubjectObservation {
 pub trait CalendarConnectionReader: Sync {
     fn calendar_connection(
         &self,
-    ) -> impl Future<Output = Result<Option<CalendarConnection>, AgentFailure>> + Send;
+    ) -> impl Future<Output = Result<Option<SourceConnection>, AgentFailure>> + Send;
 }
 
 /// The device this Person's calendar subject is asked of.
@@ -91,7 +91,7 @@ pub trait NativeCalendarSubjectSource: Sync {
 pub trait NativeCalendarGrantReader: Sync {
     fn admit(
         &self,
-        connection: &CalendarConnection,
+        connection: &SourceConnection,
         person_id: PersonId,
         calendar_ids: &[String],
         consumer: &str,
@@ -100,7 +100,7 @@ pub trait NativeCalendarGrantReader: Sync {
 }
 
 pub struct AdmittedNativeCalendarRead {
-    pub connection: CalendarConnection,
+    pub connection: SourceConnection,
     pub stamp: CalendarReadAccessStamp,
     pub admission: CalendarReadAccessAdmission,
 }
@@ -120,13 +120,16 @@ pub async fn admit_current_native_calendar_read(
         .calendar_connection()
         .await?
         .ok_or(AgentFailure::AccessReviewRequired)?;
-    if !is_native_calendar(connection.provider) {
+    let provider = native_provider(&connection)?;
+    if !is_native_calendar(provider) {
         return Err(AgentFailure::CapabilityUnavailable);
     }
-    if connection.disconnected
-        || connection.device_id != device_id
-        || connection.revision == 0
-        || !connection.source_authority.is_valid()
+    if !connection.is_serving()
+        || connection.person_id() != person_id
+        || connection.execution_owner_id().as_str() != device_id
+        || connection.revision() == 0
+        || !connection.source_authority().is_valid()
+        || connection.native_subject_fingerprint().is_none()
     {
         return Err(AgentFailure::AccessReviewRequired);
     }
@@ -151,7 +154,7 @@ pub async fn admit_current_native_calendar_read(
         .check(CalendarReadAccessRequest {
             person_id,
             device_id: device_id.to_owned(),
-            provider: connection.provider,
+            provider,
             calendar_ids: calendar_ids.clone(),
             expected_native_subject_fingerprint: None,
             deadline: window.deadline,
@@ -164,7 +167,7 @@ pub async fn admit_current_native_calendar_read(
         &ReadAuthorityIdentity {
             person_id,
             device_id,
-            provider: &connection.provider,
+            provider: &provider,
             resource_ids: &calendar_ids,
         },
         &ReadAuthorityEvidence {
@@ -179,6 +182,9 @@ pub async fn admit_current_native_calendar_read(
             generation: &stamp.generation,
         },
     )?;
+    if connection.native_subject_fingerprint() != Some(stamp.native_subject_fingerprint.as_str()) {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
     let admission = grants
         .admit(
             &connection,
@@ -191,11 +197,11 @@ pub async fn admit_current_native_calendar_read(
     admits_native_calendar_read(
         &admission,
         person_id,
-        &connection.connection_id,
-        connection.provider,
+        connection.connection_id().as_str(),
+        provider,
         device_id,
         &calendar_ids,
-        connection.source_authority,
+        connection.source_authority(),
         &consumer_identity,
     )?;
     check_window(window)?;
@@ -224,25 +230,40 @@ fn check_window(window: &RemoteCallWindow) -> Result<(), AgentFailure> {
     Ok(())
 }
 
-fn evidence(connection: &CalendarConnection) -> NativeCalendarConnection<'_> {
-    NativeCalendarConnection {
-        connection_id: &connection.connection_id,
-        device_id: &connection.device_id,
-        disconnected: connection.disconnected,
-        provider: connection.provider,
-        scope: connection.scope,
-        source_authority: connection.source_authority,
+fn evidence(connection: &SourceConnection) -> Result<NativeCalendarConnection<'_>, AgentFailure> {
+    Ok(NativeCalendarConnection {
+        connection_id: connection.connection_id().as_str(),
+        device_id: connection.execution_owner_id().as_str(),
+        disconnected: connection.state() == SourceState::Disconnected,
+        provider: native_provider(connection)?,
+        scope: native_scope(connection),
+        source_authority: connection.source_authority(),
         calendar_ids: &[],
-    }
+    })
 }
 
 /// The calendars a connection carries, in the shape Access compares them in.
-fn connection_calendar_ids(connection: &CalendarConnection) -> Vec<String> {
+fn connection_calendar_ids(connection: &SourceConnection) -> Vec<String> {
     connection
-        .calendars
+        .resources()
         .iter()
-        .map(|calendar| calendar.calendar_id.clone())
+        .map(|calendar| calendar.handle().as_str().to_owned())
         .collect()
+}
+
+fn native_provider(connection: &SourceConnection) -> Result<CalendarProvider, AgentFailure> {
+    match connection.connector_id().as_str() {
+        "calendar.event_kit" => Ok(CalendarProvider::EventKit),
+        "calendar.android" => Ok(CalendarProvider::Android),
+        _ => Err(AgentFailure::CapabilityUnavailable),
+    }
+}
+
+fn native_scope(connection: &SourceConnection) -> CalendarScope {
+    match connection.resource_mode() {
+        ResourceMode::Selected => CalendarScope::Selected,
+        ResourceMode::AllAvailable => CalendarScope::All,
+    }
 }
 
 impl NativeCalendarSourceRequest {
@@ -363,7 +384,7 @@ async fn acquire(
     let authority = (acquisition.admit)(
         NativeCalendarConnection {
             calendar_ids: &calendar_ids,
-            ..evidence(&connection)
+            ..evidence(&connection)?
         },
         review,
     )?;
@@ -378,8 +399,8 @@ async fn acquire(
             device_id: request.device_id.clone(),
             provider: request.provider,
             calendar_ids: request.sorted_calendar_ids(),
-            connection_id: connection.connection_id.clone(),
-            connection_revision: connection.revision,
+            connection_id: connection.connection_id().as_str().to_owned(),
+            connection_revision: connection.revision(),
             window: window.clone(),
         })
         .await?;
@@ -391,7 +412,10 @@ async fn acquire(
     {
         return Err(AgentFailure::StaleContext);
     }
-    if reviewed.is_some_and(|reviewed| observed.before != reviewed) {
+    if reviewed.is_some_and(|reviewed| observed.before != reviewed)
+        || (acquisition.compare_reviewed_subject
+            && connection.native_subject_fingerprint() != Some(observed.before.as_str()))
+    {
         return Err(AgentFailure::AccessReviewRequired);
     }
     let refreshed = connections
@@ -402,9 +426,9 @@ async fn acquire(
     native_calendar_connection_unchanged(
         NativeCalendarConnection {
             calendar_ids: &refreshed_ids,
-            ..evidence(&refreshed)
+            ..evidence(&refreshed)?
         },
-        &connection.connection_id,
+        connection.connection_id().as_str(),
         review,
         authority,
     )?;
@@ -412,9 +436,9 @@ async fn acquire(
         provider: request.provider,
         device_id: request.device_id.clone(),
         calendar_ids: request.sorted_calendar_ids(),
-        connection_id: refreshed.connection_id,
-        connection_revision: refreshed.revision,
-        connection_scope: refreshed.scope,
+        connection_id: refreshed.connection_id().as_str().to_owned(),
+        connection_revision: refreshed.revision(),
+        connection_scope: native_scope(&refreshed),
         source_authority: authority,
         native_subject_fingerprint: observed.before,
     })

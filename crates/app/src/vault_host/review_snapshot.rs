@@ -175,25 +175,26 @@ where
             .connection_id()
             .map(|id| id.as_str())
             .ok_or(AgentFailure::InvalidInput)?;
-        let live = self
-            .core
-            .calendar_connection(person_id)
-            .await
-            .map_err(|_| AgentFailure::StorageUnavailable)?
-            .ok_or(AgentFailure::AccessReviewRequired)?;
-        if live.connection_id != connection_id
-            || live.device_id != device_id
-            || live.disconnected
-            || live.revision == 0
-            || !live.source_authority.is_valid()
-            || requirement.source_authority() != Some(live.source_authority)
+        let live = floe_context::CalendarConnectionReader::calendar_connection(
+            &super::calendar_access::CoreCalendarConnections {
+                core: self.core,
+                person_id,
+            },
+        )
+        .await?
+        .ok_or(AgentFailure::AccessReviewRequired)?;
+        if live.connection_id().as_str() != connection_id
+            || live.execution_owner_id().as_str() != device_id
+            || live.state() == floe_connections::SourceState::Disconnected
+            || !live.source_authority().is_valid()
+            || requirement.source_authority() != Some(live.source_authority())
         {
             return Err(AgentFailure::AccessReviewRequired);
         }
         let selected: Vec<String> = live
-            .calendars
+            .resources()
             .iter()
-            .map(|calendar| calendar.calendar_id.clone())
+            .map(|calendar| calendar.handle().as_str().to_owned())
             .collect();
         let reviewed: Vec<String> = requirement
             .resources()
@@ -211,13 +212,20 @@ where
             self.calendar_subject,
             &floe_context::NativeCalendarSourceRequest {
                 person_id,
-                provider: live.provider,
+                provider: floe_context_contract::CalendarProvider::EventKit,
                 device_id: device_id.to_owned(),
                 calendar_ids: reviewed.clone(),
-                connection_scope: live.scope,
+                connection_scope: match live.resource_mode() {
+                    floe_connections::ResourceMode::Selected => {
+                        floe_context_contract::CalendarScope::Selected
+                    }
+                    floe_connections::ResourceMode::AllAvailable => {
+                        floe_context_contract::CalendarScope::All
+                    }
+                },
                 source_authority: requirement.source_authority(),
                 reviewed_native_subject_fingerprint: None,
-                connection_id: Some(live.connection_id.clone()),
+                connection_id: Some(live.connection_id().as_str().to_owned()),
             },
             &floe_access::RemoteCallWindow {
                 deadline: self.capture_deadline,
@@ -261,7 +269,7 @@ where
         });
         Ok(InlineReviewSnapshot {
             members,
-            connection_revision: Some(live.revision),
+            connection_revision: Some(live.revision()),
             producer_fingerprint: None,
             native_subject: Some(observation.native_subject_fingerprint),
         })
@@ -895,17 +903,20 @@ mod tests {
         let fixture = Fixture::open().await;
         fixture
             .core
-            .set_calendar_scope(
+            .source_service()
+            .establish(
                 fixture.person_id,
-                "fixture-connection".into(),
-                3,
-                "device".into(),
-                floe_context_contract::CalendarProvider::EventKit,
-                vec![crate::CalendarSelection {
-                    calendar_id: "home".into(),
-                    calendar_name: "Home".into(),
-                }],
-                floe_context_contract::CalendarScope::Selected,
+                ConnectorId::try_new("calendar.event_kit").unwrap(),
+                ConnectionId::try_new("fixture-connection").unwrap(),
+                floe_context_contract::ExecutionOwnerId::try_new("device").unwrap(),
+                floe_connections::ResourceMode::Selected,
+                vec![
+                    floe_connections::ConnectionResource::new(
+                        ResourceHandle::try_new("home").unwrap(),
+                        "Home".into(),
+                    )
+                    .unwrap(),
+                ],
             )
             .await
             .unwrap();
@@ -919,7 +930,11 @@ mod tests {
         let cancellation = floe_execution::Cancellation::default();
         let connection = fixture
             .core
-            .calendar_connection(fixture.person_id)
+            .source_service()
+            .load(
+                fixture.person_id,
+                &ConnectionId::try_new("fixture-connection").unwrap(),
+            )
             .await
             .unwrap()
             .unwrap();
@@ -933,7 +948,7 @@ mod tests {
             vec![ResourceHandle::try_new("home").unwrap()],
             None,
             SourceAccessRequirementKind::EnableObserve,
-            Some(connection.source_authority),
+            Some(connection.source_authority()),
             None,
             true,
         )
@@ -946,7 +961,7 @@ mod tests {
         assert_eq!(snapshot.members[0].member_id, "calendar.timeline");
         assert_eq!(snapshot.members[0].resource, "home");
         assert_eq!(snapshot.members[0].expected_grant, None);
-        assert_eq!(snapshot.connection_revision, Some(connection.revision));
+        assert_eq!(snapshot.connection_revision, Some(connection.revision()));
         assert_eq!(
             snapshot.native_subject.as_deref(),
             Some("d".repeat(64).as_str())
@@ -963,7 +978,7 @@ mod tests {
             vec![ResourceHandle::try_new("elsewhere").unwrap()],
             None,
             SourceAccessRequirementKind::EnableObserve,
-            Some(connection.source_authority),
+            Some(connection.source_authority()),
             None,
             true,
         )
