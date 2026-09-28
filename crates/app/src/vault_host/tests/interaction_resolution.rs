@@ -1663,20 +1663,32 @@ impl HostFixture {
         let core = crate::FloeCore::open(core_dir.path().join("core.db"))
             .await
             .unwrap();
-        core.set_calendar_scope(
-            base.person,
-            "connection".into(),
-            9,
-            DEVICE.into(),
-            floe_context_contract::CalendarProvider::EventKit,
-            vec![floe_day::CalendarSelection {
-                calendar_id: "personal".into(),
-                calendar_name: "Personal".into(),
-            }],
-            floe_context_contract::CalendarScope::Selected,
-        )
-        .await
-        .unwrap();
+        let source = core.source_service()
+            .establish(
+                base.person,
+                floe_context_contract::ConnectorId::try_new("calendar.event_kit").unwrap(),
+                floe_context_contract::ConnectionId::try_new("connection").unwrap(),
+                floe_context_contract::ExecutionOwnerId::try_new(DEVICE).unwrap(),
+                floe_connections::ResourceMode::Selected,
+                vec![
+                    floe_connections::ConnectionResource::new(
+                        floe_context_contract::ResourceHandle::try_new("personal").unwrap(),
+                        "Personal".into(),
+                    )
+                    .unwrap(),
+                ],
+            )
+            .await
+            .unwrap();
+        core.source_service()
+            .update_native_subject(
+                base.person,
+                source.connection_id(),
+                source.revision(),
+                NATIVE_FINGERPRINT.into(),
+            )
+            .await
+            .unwrap();
         base.vault
             .install_expert_bundle(
                 floe_experts::ExpertInstallOperation {
@@ -1769,21 +1781,25 @@ impl HostFixture {
     async fn native_target(&self, fingerprint: &str) -> floe_conversation::InlineObserveTarget {
         let live = self
             .core
-            .calendar_connection(self.base.person)
+            .source_service()
+            .load(
+                self.base.person,
+                &floe_context_contract::ConnectionId::try_new("connection").unwrap(),
+            )
             .await
             .unwrap()
             .unwrap();
         let resources = live
-            .calendars
+            .resources()
             .iter()
-            .map(|calendar| calendar.calendar_id.clone())
+            .map(|calendar| calendar.handle().as_str().to_owned())
             .collect::<Vec<_>>();
         let policy_fingerprint = crate::first_party_observe::policy_fingerprint(
             &crate::first_party_observe::native_calendar_policy_for_target(
                 &self.base.vault,
                 self.base.person,
                 "calendar.event_kit",
-                &live.connection_id,
+                live.connection_id().as_str(),
                 DEVICE,
                 &resources,
             )
@@ -1792,25 +1808,25 @@ impl HostFixture {
         )
         .unwrap();
         floe_conversation::InlineObserveTarget {
-            connection_id: live.connection_id.clone(),
+            connection_id: live.connection_id().as_str().to_owned(),
             device_id: Some(DEVICE.into()),
             source_id: "floe.source.calendar".into(),
             connector_id: Some("calendar.event_kit".into()),
             consumer: "floe.builtin.schedule".into(),
             purpose: "scheduling".into(),
-            connection_revision: Some(live.revision),
+            connection_revision: Some(live.revision()),
             reviewed_producer_fingerprint: None,
             reviewed_native_subject: Some(fingerprint.into()),
             members: live
-                .calendars
+                .resources()
                 .iter()
                 .map(|calendar| floe_conversation::ReviewedBundleMember {
                     member_id: "calendar.timeline".into(),
                     policy_fingerprint: policy_fingerprint.clone(),
-                    resource: calendar.calendar_id.clone(),
+                    resource: calendar.handle().as_str().to_owned(),
                     source_revision: Some(floe_conversation::AuthorityRevision {
-                        incarnation: live.source_authority.incarnation(),
-                        epoch: live.source_authority.epoch().get(),
+                        incarnation: live.source_authority().incarnation(),
+                        epoch: live.source_authority().epoch().get(),
                     }),
                     expected_grant: floe_conversation::ExpectedGrantState::Absent,
                     policy_authority: None,
@@ -2287,17 +2303,28 @@ async fn native_deselected_scope_supersedes_without_mutation() {
     // The reviewed resource leaves the selection: the review no longer
     // binds anything, so it supersedes instead of resolving.
     host.core
-        .set_calendar_scope(
+        .source_service()
+        .configure(
             host.base.person,
-            "connection".into(),
-            10,
-            DEVICE.into(),
-            floe_context_contract::CalendarProvider::EventKit,
-            vec![floe_day::CalendarSelection {
-                calendar_id: "work".into(),
-                calendar_name: "Work".into(),
-            }],
-            floe_context_contract::CalendarScope::Selected,
+            &floe_context_contract::ConnectionId::try_new("connection").unwrap(),
+            host.core
+                .source_service()
+                .load(
+                    host.base.person,
+                    &floe_context_contract::ConnectionId::try_new("connection").unwrap(),
+                )
+                .await
+                .unwrap()
+                .unwrap()
+                .revision(),
+            floe_connections::ResourceMode::Selected,
+            vec![
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new("work").unwrap(),
+                    "Work".into(),
+                )
+                .unwrap(),
+            ],
         )
         .await
         .unwrap();
@@ -3222,7 +3249,10 @@ async fn manager_mail_read_requires_assistant_in_reviewed_product_policy() {
         &[7; 32],
     ).await.unwrap();
     assert!(
-        matches!(extension, floe_context_contract::SourceReadOutcome::NeedsUserAction(_)),
+        matches!(
+            extension,
+            floe_context_contract::SourceReadOutcome::NeedsUserAction(_)
+        ),
         "Manager assistant grant must not authorize the extension: {extension:?}"
     );
     let local_context = crate::local_context::LocalContextHost::default();

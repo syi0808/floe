@@ -28,6 +28,15 @@ use super::interaction_resolution::{
     RecipientConsentOwner,
 };
 
+fn native_source_scope(
+    connection: &floe_connections::SourceConnection,
+) -> floe_context_contract::CalendarScope {
+    match connection.resource_mode() {
+        floe_connections::ResourceMode::Selected => floe_context_contract::CalendarScope::Selected,
+        floe_connections::ResourceMode::AllAvailable => floe_context_contract::CalendarScope::All,
+    }
+}
+
 /// The host's owner access for interaction decisions: core connections,
 /// vault grants, saved-connection transports, and device subject probes.
 pub(crate) struct HostInteractionOwners<'a, Keys, CalendarSubject, PersonalInspector>
@@ -270,26 +279,27 @@ where
         device_id: &str,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<LiveInlineState, AgentFailure> {
-        let live = self
-            .core
-            .calendar_connection(person_id)
-            .await
-            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        let live = floe_context::CalendarConnectionReader::calendar_connection(
+            &super::calendar_access::CoreCalendarConnections {
+                core: self.core,
+                person_id,
+            },
+        )
+        .await?;
         let Some(connection) = live else {
             return Ok(Self::unusable());
         };
-        if connection.connection_id != target.connection_id
-            || connection.device_id != device_id
-            || connection.disconnected
-            || connection.revision == 0
-            || !connection.source_authority.is_valid()
+        if connection.connection_id().as_str() != target.connection_id
+            || connection.execution_owner_id().as_str() != device_id
+            || connection.state() == floe_connections::SourceState::Disconnected
+            || !connection.source_authority().is_valid()
         {
             return Ok(Self::unusable());
         }
         let selected: Vec<&str> = connection
-            .calendars
+            .resources()
             .iter()
-            .map(|calendar| calendar.calendar_id.as_str())
+            .map(|calendar| calendar.handle().as_str())
             .collect();
         if !target
             .members
@@ -311,13 +321,13 @@ where
             self.calendar_subject,
             &floe_context::NativeCalendarSourceRequest {
                 person_id,
-                provider: connection.provider,
+                provider: floe_context_contract::CalendarProvider::EventKit,
                 device_id: device_id.to_owned(),
                 calendar_ids,
-                connection_scope: connection.scope,
-                source_authority: Some(connection.source_authority),
+                connection_scope: native_source_scope(&connection),
+                source_authority: Some(connection.source_authority()),
                 reviewed_native_subject_fingerprint: None,
-                connection_id: Some(connection.connection_id.clone()),
+                connection_id: Some(connection.connection_id().as_str().to_owned()),
             },
             &floe_access::RemoteCallWindow {
                 deadline: self.probe_deadline,
@@ -349,7 +359,7 @@ where
                     &target.connection_id,
                     &member.member_id,
                     &member.resource,
-                    Some(connection.source_authority),
+                    Some(connection.source_authority()),
                     person_id,
                     PolicyStore::Calendar,
                     Some(device_id),
@@ -360,7 +370,7 @@ where
         }
         Ok(LiveInlineState {
             members,
-            connection_revision: Some(connection.revision),
+            connection_revision: Some(connection.revision()),
             producer_fingerprint: None,
             native_subject: Some(observation.native_subject_fingerprint),
             connection_usable: true,
@@ -693,8 +703,17 @@ where
         let Some(connection_id) = target.connection_id.as_deref() else {
             return Ok(true);
         };
-        if let Ok(Some(live)) = self.core.calendar_connection(person_id).await {
-            if live.connection_id == connection_id && !live.disconnected {
+        if let Ok(Some(live)) = floe_context::CalendarConnectionReader::calendar_connection(
+            &super::calendar_access::CoreCalendarConnections {
+                core: self.core,
+                person_id,
+            },
+        )
+        .await
+        {
+            if live.connection_id().as_str() == connection_id
+                && live.state() != floe_connections::SourceState::Disconnected
+            {
                 return Ok(true);
             }
         }
@@ -723,12 +742,18 @@ where
         if self.vault.person_id() != person_id {
             return Err(AgentFailure::CapabilityDenied);
         }
-        if let Ok(Some(live)) = self.core.calendar_connection(person_id).await {
-            if live.connection_id == connection_id
-                && live.device_id == device_id
-                && !live.disconnected
-                && live.revision != 0
-                && live.source_authority.is_valid()
+        if let Ok(Some(live)) = floe_context::CalendarConnectionReader::calendar_connection(
+            &super::calendar_access::CoreCalendarConnections {
+                core: self.core,
+                person_id,
+            },
+        )
+        .await
+        {
+            if live.connection_id().as_str() == connection_id
+                && live.execution_owner_id().as_str() == device_id
+                && live.state() != floe_connections::SourceState::Disconnected
+                && live.source_authority().is_valid()
             {
                 return self
                     .native_scope_satisfied(&live, person_id, device_id, cancellation)
@@ -749,21 +774,21 @@ where
     /// readable. A probe failure is not satisfaction.
     async fn native_scope_satisfied(
         &self,
-        connection: &floe_day::CalendarConnection,
+        connection: &floe_connections::SourceConnection,
         person_id: PersonId,
         device_id: &str,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<bool, AgentFailure> {
-        if connection.calendars.is_empty() {
+        if connection.resources().is_empty() {
             return Ok(false);
         }
         let mut connector: Option<String> = None;
-        for calendar in &connection.calendars {
+        for calendar in connection.resources() {
             let covering = self
                 .grants_for_connection_resource(
                     person_id,
-                    &connection.connection_id,
-                    &calendar.calendar_id,
+                    connection.connection_id().as_str(),
+                    calendar.handle().as_str(),
                 )
                 .await?;
             let [grant] = covering.as_slice() else {
@@ -777,9 +802,9 @@ where
             }
         }
         let calendar_ids: Vec<String> = connection
-            .calendars
+            .resources()
             .iter()
-            .map(|calendar| calendar.calendar_id.clone())
+            .map(|calendar| calendar.handle().as_str().to_owned())
             .collect();
         let observation = floe_context::preview_native_calendar_subject(
             &super::calendar_access::CoreCalendarConnections {
@@ -789,13 +814,13 @@ where
             self.calendar_subject,
             &floe_context::NativeCalendarSourceRequest {
                 person_id,
-                provider: connection.provider,
+                provider: floe_context_contract::CalendarProvider::EventKit,
                 device_id: device_id.to_owned(),
                 calendar_ids,
-                connection_scope: connection.scope,
-                source_authority: Some(connection.source_authority),
+                connection_scope: native_source_scope(connection),
+                source_authority: Some(connection.source_authority()),
                 reviewed_native_subject_fingerprint: None,
-                connection_id: Some(connection.connection_id.clone()),
+                connection_id: Some(connection.connection_id().as_str().to_owned()),
             },
             &floe_access::RemoteCallWindow {
                 deadline: self.probe_deadline,
