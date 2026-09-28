@@ -188,7 +188,7 @@ pub async fn read_remote_calendar_view(
         remote_view_source(&reference)?,
         read.resource,
         reference.source_authority,
-        &reference.resource,
+        &reference.source_resources,
         consumer,
         serde_json::to_vec(read.query).map_err(|_| AgentFailure::InvalidInput)?,
         Uuid::new_v4(),
@@ -480,7 +480,7 @@ async fn read_one_remote_source(
         remote_view_source(&reference)?,
         &resource,
         reference.source_authority,
-        &reference.resource,
+        &reference.source_resources,
         consumer.clone(),
         query_fingerprint.to_vec(),
         Uuid::new_v4(),
@@ -867,6 +867,7 @@ mod calendar_tests {
                     execution_owner: "server-owner".into(),
                     source_authority,
                     resource: "primary".into(),
+                    source_resources: vec![ResourceHandle::try_new("primary").unwrap()],
                     provider_identity: "account".into(),
                 },
                 view: CalendarContextView {
@@ -1615,6 +1616,7 @@ mod remote_view_tests {
                     source.source_authority
                 },
                 resource: fixture_view_resource(view_id, connection_id),
+                source_resources: vec![ResourceHandle::try_new(fixture_view_resource(view_id, connection_id)).unwrap()],
                 provider_identity: "account".into(),
             }
         }

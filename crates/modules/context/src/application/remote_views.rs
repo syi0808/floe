@@ -332,7 +332,7 @@ pub fn remote_view_dependency(
     source: floe_access::GrantSourceBinding,
     resource: &str,
     source_authority: floe_access::SourceAuthority,
-    source_resource: &str,
+    source_resources: &[floe_access::ResourceHandle],
     consumer: floe_access::GrantConsumer,
     query_fingerprint: Vec<u8>,
     lease_invocation_id: uuid::Uuid,
@@ -356,10 +356,7 @@ pub fn remote_view_dependency(
         source,
         grant.scope().resources().to_vec(),
         source_authority,
-        vec![
-            floe_access::ResourceHandle::try_new(source_resource)
-                .map_err(|_| AgentFailure::InvalidInput)?,
-        ],
+        source_resources.to_vec(),
         grant.scope().categories().to_vec(),
         floe_access::GrantOperation::Read,
         floe_access::GrantPurpose::Assistant,

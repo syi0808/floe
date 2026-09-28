@@ -2572,6 +2572,7 @@ impl ScriptedRemoteTransport {
             "incarnation": authority.incarnation().to_string(),
             "epoch": authority.epoch().get(),
             "resource": query.resource,
+            "source_resources": [query.resource],
             "provider_identity": self.provider_identity.lock().unwrap().clone(),
             "issued_at_unix_ms": 1_700_000_000_000i64,
         });

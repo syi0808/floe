@@ -749,6 +749,7 @@ mod tests {
                 "incarnation": authority.incarnation().to_string(),
                 "epoch": authority.epoch().get(),
                 "resource": resource,
+                "source_resources": [resource],
                 "provider_identity": self.provider_identity.lock().unwrap().clone(),
                 "issued_at_unix_ms": 1_700_000_000_000i64,
             });

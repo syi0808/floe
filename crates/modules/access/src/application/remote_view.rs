@@ -44,6 +44,7 @@ pub struct RemoteViewSourceReference {
     pub execution_owner: String,
     pub source_authority: SourceAuthority,
     pub resource: String,
+    pub source_resources: Vec<ResourceHandle>,
     pub provider_identity: String,
 }
 
@@ -222,6 +223,8 @@ pub fn admit_remote_view_source(
         || remote_view_source(reference)? != *source
         || reference.connection_revision == 0
         || reference.provider_identity.is_empty()
+        || reference.source_resources.is_empty()
+        || reference.source_resources.windows(2).any(|pair| pair[0] >= pair[1])
     {
         return Err(AgentFailure::PolicyDenied);
     }
@@ -300,8 +303,7 @@ pub fn remote_dependency_source_admits(
     recipient: &str,
 ) -> Result<(), AgentFailure> {
     if reference.source_authority != dependency.source_authority()
-        || dependency.source_resources().len() != 1
-        || dependency.source_resources()[0].as_str() != reference.resource
+        || dependency.source_resources() != reference.source_resources
         || reference.execution_owner != dependency.source().execution_owner().as_str()
         || reference.connection_revision != connection_revision
     {

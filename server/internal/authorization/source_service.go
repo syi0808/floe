@@ -516,6 +516,7 @@ func (service *SourceService) PreviewView(principal Principal, viewID string, in
 		"connector_id": record.ConnectorID, "connection_id": record.ConnectionID,
 		"connection_revision": record.Revision, "execution_owner": service.ExecutionOwner(),
 		"incarnation": record.Incarnation, "epoch": record.Epoch, "resource": input.Resource,
+		"source_resources": []string{input.Resource},
 		"provider_identity": record.ProviderIdentity, "issued_at_unix_ms": time.Now().UnixMilli(),
 	}
 	descriptorBytes, err := json.Marshal(descriptor)

@@ -27,6 +27,7 @@ const SCHEMA_VERSION: i64 = 1;
 const MAX_CHALLENGE_BYTES: usize = 64 * 1024;
 const MAX_JSON_DEPTH: usize = 16;
 const MAX_PRODUCER_PROOF_BYTES: usize = 4 * 1024;
+const MAX_SOURCE_PREVIEW_PROOF_BYTES: usize = 16 * 1024;
 const OWNER_WRAP_CONTEXT: &[u8] = b"floe.remote.owner-key.wrap.v1\0";
 const PRODUCER_SIGNATURE_DOMAIN: &[u8] = b"floe.remote.producer.v1\0";
 const OWNER_SIGNATURE_DOMAIN: &[u8] = b"floe.remote.authorization.v1\0";
@@ -71,6 +72,7 @@ struct ViewSourcePreviewWire {
     incarnation: String,
     epoch: u64,
     resource: String,
+    source_resources: Vec<String>,
     provider_identity: String,
     issued_at_unix_ms: i64,
 }
@@ -150,9 +152,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         connection_id: &str,
         resource: &str,
     ) -> Result<RemoteViewSourceReference, AgentFailure> {
-        let descriptor = decode_canonical(descriptor_b64url, MAX_PRODUCER_PROOF_BYTES)?;
+        let descriptor = decode_canonical(descriptor_b64url, MAX_SOURCE_PREVIEW_PROOF_BYTES)?;
         let producer_signature = decode_exact(producer_signature_b64url, 64)?;
-        strict_json_bytes(&descriptor, MAX_PRODUCER_PROOF_BYTES)?;
+        strict_json_bytes(&descriptor, MAX_SOURCE_PREVIEW_PROOF_BYTES)?;
         let wire: ViewSourcePreviewWire =
             serde_json::from_slice(&descriptor).map_err(|_| AgentFailure::InvalidInput)?;
         let producer = self.remote_pinned_producer().await?;
@@ -174,6 +176,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             || wire.connector_id != connector_id
             || wire.connection_id != connection_id
             || wire.resource != resource
+            || wire.source_resources.is_empty()
+            || wire.source_resources.windows(2).any(|pair| pair[0] >= pair[1])
             || wire.execution_owner != producer.execution_owner
             || !valid_text(&wire.nonce, 256)
             || wire.connection_revision == 0
@@ -191,6 +195,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             std::num::NonZeroU64::new(wire.epoch).ok_or(AgentFailure::PolicyDenied)?,
         )
         .ok_or(AgentFailure::PolicyDenied)?;
+        let source_resources = wire
+            .source_resources
+            .into_iter()
+            .map(|resource| floe_access::ResourceHandle::try_new(resource).map_err(|_| AgentFailure::PolicyDenied))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(RemoteViewSourceReference {
             view_id: wire.view_id,
             person_id: wire.person_id,
@@ -203,6 +212,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             execution_owner: wire.execution_owner,
             source_authority,
             resource: wire.resource,
+            source_resources,
             provider_identity: wire.provider_identity,
         })
     }
