@@ -1611,16 +1611,22 @@ async fn governed_focus_proposal_rejects_a_stale_consumer_policy() {
             "test-device",
             &["home".into()],
             fixture.admission.source.source_authority(),
-            &[GrantConsumer::builtin(
-                floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
-            )
-            .unwrap()],
-            &"b".repeat(64),
+            &[
+                GrantConsumer::builtin(
+                    floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
+                )
+                .unwrap(),
+                GrantConsumer::builtin(
+                    floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
+                )
+                .unwrap(),
+            ],
+            &"a".repeat(64),
             Some((fixture.admission.grant_id, authority)),
         )
         .await
         .unwrap();
-    assert_eq!(rereviewed.authority(), authority);
+    assert_ne!(rereviewed.authority(), authority);
     let fresh = fixture
         .vault
         .authorize_current_native_calendar_grant(
@@ -1633,7 +1639,7 @@ async fn governed_focus_proposal_rejects_a_stale_consumer_policy() {
             GrantPurpose::Assistant,
             fixture.consumer.clone(),
             ProcessingRestriction::LocalOnly,
-            Some("b".repeat(64).as_str()),
+            Some("a".repeat(64).as_str()),
         )
         .await
         .unwrap();
