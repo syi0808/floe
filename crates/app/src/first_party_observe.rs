@@ -1,6 +1,6 @@
 use floe_access::GrantConsumer;
 use floe_agent_contract::AgentFailure;
-use floe_context_contract::{GrantDataCategory, GrantPurpose};
+use floe_context_contract::{ConnectionId, GrantDataCategory, GrantPurpose, connection_view_resource};
 use floe_kernel::PersonId;
 use sha2::{Digest, Sha256};
 
@@ -275,7 +275,13 @@ pub(crate) async fn remote_policies_for_target<Keys: floe_vault::VaultKeyProvide
                 .ok_or(AgentFailure::InvalidInput)?
                 .to_owned()
         } else {
-            floe_context::remote_view_resource(policy.view_id, connection_id)
+            connection_view_resource(
+                policy.view_id,
+                &ConnectionId::try_new(connection_id).map_err(|_| AgentFailure::InvalidInput)?,
+            )
+            .map_err(|_| AgentFailure::InvalidInput)?
+            .as_str()
+            .to_owned()
         };
         if let Some(execution_owner) = &execution_owner {
             policy.consumers.extend(selected_shipped_consumers(
@@ -419,6 +425,13 @@ pub(crate) async fn native_member_policy_fingerprint_for_target<
 mod tests {
     use super::*;
 
+    fn fixture_view_resource(view_id: &str, connection_id: &str) -> String {
+        connection_view_resource(view_id, &ConnectionId::try_new(connection_id).unwrap())
+            .unwrap()
+            .as_str()
+            .to_owned()
+    }
+
     fn ids(policy: &FirstPartyObservePolicy) -> Vec<&str> {
         policy
             .consumers
@@ -552,7 +565,7 @@ mod tests {
                 "gmail",
                 "account-a",
                 "server:source",
-                &floe_context::remote_view_resource("mail.communication", "account-a"),
+                &fixture_view_resource("mail.communication", "account-a"),
             )
             .unwrap()
             .is_empty()
@@ -577,7 +590,7 @@ mod tests {
                         .unwrap(),
                         capability_id: "mail.communication".into(),
                         resource: floe_context_contract::ResourceHandle::try_new(
-                            floe_context::remote_view_resource("mail.communication", "account-a"),
+                            fixture_view_resource("mail.communication", "account-a"),
                         )
                         .unwrap(),
                         contract_version: 1,
@@ -643,7 +656,7 @@ mod tests {
             "gmail",
             "account-a",
             "server:source",
-            &floe_context::remote_view_resource("mail.communication", "account-a"),
+            &fixture_view_resource("mail.communication", "account-a"),
         )
         .unwrap();
         assert_eq!(
@@ -661,7 +674,7 @@ mod tests {
                 "gmail",
                 "account-a",
                 "server:other",
-                &floe_context::remote_view_resource("mail.communication", "account-a"),
+                &fixture_view_resource("mail.communication", "account-a"),
             )
             .unwrap()
             .is_empty()
@@ -674,7 +687,7 @@ mod tests {
                 "gmail",
                 "account-b",
                 "server:source",
-                &floe_context::remote_view_resource("mail.communication", "account-b"),
+                &fixture_view_resource("mail.communication", "account-b"),
             )
             .unwrap()
             .is_empty()
@@ -703,7 +716,7 @@ mod tests {
                         .unwrap(),
                         capability_id: "mail.communication".into(),
                         resource: floe_context_contract::ResourceHandle::try_new(
-                            floe_context::remote_view_resource("mail.communication", "account-b"),
+                            fixture_view_resource("mail.communication", "account-b"),
                         )
                         .unwrap(),
                         contract_version: 1,
@@ -721,7 +734,7 @@ mod tests {
                 "gmail",
                 "account-a",
                 "server:source",
-                &floe_context::remote_view_resource("mail.communication", "account-a"),
+                &fixture_view_resource("mail.communication", "account-a"),
             )
             .unwrap(),
         );

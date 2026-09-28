@@ -82,7 +82,8 @@ impl RecipientLineage {
 pub struct ProcessingSourceScope {
     connection_id: ConnectionId,
     connector_id: ConnectorId,
-    resources: Vec<ResourceHandle>,
+    grant_resources: Vec<ResourceHandle>,
+    source_resources: Vec<ResourceHandle>,
     categories: Vec<GrantDataCategory>,
     operation: GrantOperation,
     purpose: GrantPurpose,
@@ -98,7 +99,8 @@ impl ProcessingSourceScope {
     pub fn try_new(
         connection_id: ConnectionId,
         connector_id: ConnectorId,
-        mut resources: Vec<ResourceHandle>,
+        mut grant_resources: Vec<ResourceHandle>,
+        mut source_resources: Vec<ResourceHandle>,
         mut categories: Vec<GrantDataCategory>,
         operation: GrantOperation,
         purpose: GrantPurpose,
@@ -108,12 +110,14 @@ impl ProcessingSourceScope {
         source_authority: SourceAuthority,
         policy_authority: ConsumerPolicyAuthority,
     ) -> Result<Self, GrantValidationError> {
-        resources.sort();
+        grant_resources.sort();
+        source_resources.sort();
         categories.sort();
         let scope = Self {
             connection_id,
             connector_id,
-            resources,
+            grant_resources,
+            source_resources,
             categories,
             operation,
             purpose,
@@ -136,13 +140,14 @@ impl ProcessingSourceScope {
             dependency.source().connection_id(),
             dependency.source().connector().clone(),
             dependency.resources().to_vec(),
+            dependency.source_resources().to_vec(),
             dependency.categories().to_vec(),
             dependency.operation(),
             dependency.purpose(),
             dependency.consumer().clone(),
             dependency.grant_id(),
             dependency.grant_authority(),
-            dependency.source().source_authority(),
+            dependency.source_authority(),
             dependency.consumer_policy(),
         )
     }
@@ -150,23 +155,29 @@ impl ProcessingSourceScope {
     pub fn validate(&self) -> Result<(), GrantValidationError> {
         ConnectionId::try_new(self.connection_id.as_str().to_owned())?;
         ConnectorId::try_new(self.connector_id.as_str().to_owned())?;
-        if self.resources.is_empty() {
+        if self.grant_resources.is_empty() || self.source_resources.is_empty() {
             return Err(GrantValidationError::ResourceCount);
         }
         if self.categories.is_empty() {
             return Err(GrantValidationError::MissingScope);
         }
-        for resource in &self.resources {
+        for resource in self.grant_resources.iter().chain(&self.source_resources) {
             ResourceHandle::try_new(resource.as_str().to_owned())?;
         }
-        let mut sorted = self.resources.clone();
-        sorted.sort();
+        let mut sorted_grant_resources = self.grant_resources.clone();
+        sorted_grant_resources.sort();
+        let mut sorted_source_resources = self.source_resources.clone();
+        sorted_source_resources.sort();
         let mut sorted_categories = self.categories.clone();
         sorted_categories.sort();
-        if sorted != self.resources || sorted_categories != self.categories {
+        if sorted_grant_resources != self.grant_resources
+            || sorted_source_resources != self.source_resources
+            || sorted_categories != self.categories
+        {
             return Err(GrantValidationError::InvalidState);
         }
-        super::ensure_unique(&self.resources, "resource")?;
+        super::ensure_unique(&self.grant_resources, "grant resource")?;
+        super::ensure_unique(&self.source_resources, "source resource")?;
         super::ensure_unique(&self.categories, "category")?;
         match &self.consumer {
             GrantConsumer::Builtin(name) => GrantConsumer::builtin(name.clone()),
@@ -194,8 +205,12 @@ impl ProcessingSourceScope {
         &self.connector_id
     }
 
-    pub fn resources(&self) -> &[ResourceHandle] {
-        &self.resources
+    pub fn grant_resources(&self) -> &[ResourceHandle] {
+        &self.grant_resources
+    }
+
+    pub fn source_resources(&self) -> &[ResourceHandle] {
+        &self.source_resources
     }
 
     pub fn categories(&self) -> &[GrantDataCategory] {
@@ -386,7 +401,6 @@ mod tests {
             ConnectionId::try_new("connection").unwrap(),
             ConnectorId::try_new("connector").unwrap(),
             ExecutionOwnerId::try_new("owner").unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap();
         let now = Utc::now();
@@ -395,6 +409,8 @@ mod tests {
             GrantId::new(),
             GrantAuthority::new(),
             source,
+            vec![ResourceHandle::try_new("resource").unwrap()],
+            SourceAuthority::new(),
             vec![ResourceHandle::try_new("resource").unwrap()],
             vec![GrantDataCategory::Metadata],
             GrantOperation::Read,
@@ -444,7 +460,7 @@ mod tests {
     fn dependent_requirement_binds_review_relevant_scope() {
         let person_id = PersonId::new();
         let scope = ProcessingSourceScope::from_dependency(&dependency(person_id)).unwrap();
-        assert_eq!(scope.resources().len(), 1);
+        assert_eq!(scope.grant_resources().len(), 1);
         let requirement = ProcessingRequirement::try_new(
             "model.example",
             "server-model",

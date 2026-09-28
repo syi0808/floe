@@ -7,7 +7,6 @@
 
 use floe_context_contract::{
     ConsumerPolicyAuthority, GrantAuthority, GrantId, GrantScope, GrantSourceBinding,
-    SourceAuthority,
 };
 use floe_execution::Cancellation;
 use floe_kernel::AgentFailure;
@@ -183,14 +182,12 @@ pub trait RemoteGrantStore: Sync {
         view_id: &'a str,
         connector_id: &'a str,
         connection_id: &'a str,
-        source_authority: SourceAuthority,
     ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>>;
 
     fn calendar_grant_binding<'a>(
         &'a self,
         connector_id: &'a str,
         connection_id: &'a str,
-        source_authority: SourceAuthority,
         resource: &'a str,
     ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>>;
 }

@@ -396,6 +396,8 @@ mod tests {
             admission.authority,
             admission.source.clone(),
             admission.scope.resources().to_vec(),
+            floe_context_contract::SourceAuthority::new(),
+            admission.scope.resources().to_vec(),
             admission.scope.categories().to_vec(),
             GrantOperation::Read,
             GrantPurpose::Assistant,

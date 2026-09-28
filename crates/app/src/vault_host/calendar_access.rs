@@ -102,6 +102,7 @@ impl<Keys: VaultKeyProvider> NativeCalendarGrantReader for VaultNativeCalendarGr
             admission.grant_id,
             admission.authority,
             admission.source,
+            connection.source_authority(),
             admission.scope,
             admission.consumer_policy,
             consumer,
@@ -149,7 +150,7 @@ impl<Keys: VaultKeyProvider> floe_access::DependencyResolver
                         self.device_id.to_owned(),
                         floe_context_contract::CalendarProvider::EventKit,
                         dependency
-                            .resources()
+                            .source_resources()
                             .iter()
                             .map(|resource| resource.as_str().to_owned())
                             .collect(),
@@ -305,7 +306,7 @@ mod tests {
     fn remote_calendar_scope_uses_exact_canonical_consumers() {
         use floe_access::{
             ConnectionId, ConnectorId, DataAccessGrant, ExecutionOwnerId, GrantId,
-            GrantSourceBinding, SourceAuthority,
+            GrantSourceBinding,
         };
 
         let person_id = PersonId::new();
@@ -314,7 +315,6 @@ mod tests {
             ConnectionId::try_new("remote-calendar").unwrap(),
             ConnectorId::try_new("calendar.google").unwrap(),
             ExecutionOwnerId::try_new("server-owner").unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap();
         let consumers = vec![
@@ -329,7 +329,7 @@ mod tests {
         )
         .unwrap();
         grant
-            .activate_review(grant.authority(), source, scope)
+            .activate_review(grant.authority(), scope)
             .unwrap();
 
         for consumer in &consumers {
@@ -354,7 +354,7 @@ mod tests {
     fn legacy_calendar_expert_scope_does_not_admit_schedule() {
         use floe_access::{
             ConnectionId, ConnectorId, DataAccessGrant, ExecutionOwnerId, GrantId,
-            GrantSourceBinding, SourceAuthority,
+            GrantSourceBinding,
         };
 
         let person_id = PersonId::new();
@@ -363,7 +363,6 @@ mod tests {
             ConnectionId::try_new("legacy-calendar").unwrap(),
             ConnectorId::try_new("calendar.google").unwrap(),
             ExecutionOwnerId::try_new("server-owner").unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap();
         let scope = floe_access::remote_calendar_scope(
@@ -379,7 +378,7 @@ mod tests {
         )
         .unwrap();
         grant
-            .activate_review(grant.authority(), source, scope)
+            .activate_review(grant.authority(), scope)
             .unwrap();
 
         assert_eq!(
@@ -668,7 +667,6 @@ fn native_grant_source(
         connection.connection_id().clone(),
         connection.connector_id().clone(),
         ExecutionOwnerId::try_new(device_id).map_err(|_| AgentFailure::InvalidInput)?,
-        connection.source_authority(),
     )
     .map_err(|_| AgentFailure::InvalidInput)
 }

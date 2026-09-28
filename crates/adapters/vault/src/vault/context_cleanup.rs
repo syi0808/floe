@@ -687,7 +687,7 @@ mod tests {
     use floe_access::{
         ConnectionId, ConnectorId, ContextDependency, DependencyCoverage, ExecutionOwnerId,
         GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope,
-        GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+        GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
     use floe_agent_contract::AgentFailure;
     use floe_agent_contract::{
@@ -743,7 +743,6 @@ mod tests {
             ConnectionId::new(),
             ConnectorId::try_new("calendar").unwrap(),
             ExecutionOwnerId::try_new("cleanup-test").unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap()
     }
@@ -778,7 +777,7 @@ mod tests {
             .await
             .unwrap();
         let active = vault
-            .activate_data_access_grant(grant.id(), grant.authority(), source, scope())
+            .activate_data_access_grant(grant.id(), grant.authority(), scope())
             .await
             .unwrap();
         let session = vault.create_session().await.unwrap();
@@ -795,6 +794,8 @@ mod tests {
             grant.id(),
             grant.authority(),
             source_binding(person),
+            vec![ResourceHandle::try_new("calendar/main").unwrap()],
+            floe_context_contract::SourceAuthority::new(),
             vec![ResourceHandle::try_new("calendar/main").unwrap()],
             vec![GrantDataCategory::Metadata],
             GrantOperation::Read,
@@ -847,7 +848,7 @@ mod tests {
             .await
             .unwrap();
         let active = vault
-            .activate_data_access_grant(grant.id(), grant.authority(), source.clone(), scope())
+            .activate_data_access_grant(grant.id(), grant.authority(), scope())
             .await
             .unwrap();
         let session = vault.create_session().await.unwrap();
@@ -858,6 +859,8 @@ mod tests {
             active.id(),
             active.authority(),
             source,
+            vec![ResourceHandle::try_new("calendar/main").unwrap()],
+            floe_context_contract::SourceAuthority::new(),
             vec![ResourceHandle::try_new("calendar/main").unwrap()],
             vec![GrantDataCategory::Metadata],
             GrantOperation::Read,
@@ -940,12 +943,7 @@ mod tests {
             .await
             .unwrap();
         let active_b = vault
-            .activate_data_access_grant(
-                grant_b.id(),
-                grant_b.authority(),
-                source_b.clone(),
-                scope(),
-            )
+            .activate_data_access_grant(grant_b.id(), grant_b.authority(), scope())
             .await
             .unwrap();
         let session_b = vault.create_session().await.unwrap();
@@ -955,6 +953,8 @@ mod tests {
             active_b.id(),
             active_b.authority(),
             source_b,
+            vec![ResourceHandle::try_new("calendar/main").unwrap()],
+            floe_context_contract::SourceAuthority::new(),
             vec![ResourceHandle::try_new("calendar/main").unwrap()],
             vec![GrantDataCategory::Metadata],
             GrantOperation::Read,

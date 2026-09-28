@@ -1204,7 +1204,13 @@ fn production_builtin_expert_binding_refresh_links_fresh_selected_task() {
             .unwrap(),
         capability_id: target.capability.clone(),
         resource: floe_context_contract::ResourceHandle::try_new(
-            floe_context::remote_view_resource(&target.capability, "mail-b"),
+            floe_context_contract::connection_view_resource(
+                &target.capability,
+                &floe_context_contract::ConnectionId::try_new("mail-b").unwrap(),
+            )
+            .unwrap()
+            .as_str()
+            .to_owned(),
         )
         .unwrap(),
         contract_version: target.contract_version,

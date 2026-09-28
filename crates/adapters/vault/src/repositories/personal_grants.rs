@@ -40,6 +40,13 @@ impl<Keys: VaultKeyProvider> PersonalGrantRecords for VaultGrantRecords<'_, Keys
         Box::pin(async move { self.vault.personal_grant_consumer_policy(grant).await })
     }
 
+    fn current_source_authority<'a>(
+        &'a self,
+        grant: floe_access::GrantId,
+    ) -> BoxFuture<'a, Result<floe_access::SourceAuthority, AgentFailure>> {
+        Box::pin(async move { self.vault.personal_grant_source_authority(grant).await })
+    }
+
     fn feasibility_query<'a>(
         &'a self,
         grant: floe_access::GrantId,
@@ -72,6 +79,13 @@ impl<Keys: VaultKeyProvider> floe_access::PersonalGrantStore for EncryptedAgentV
         grant: floe_access::GrantId,
     ) -> BoxFuture<'a, Result<String, AgentFailure>> {
         Box::pin(async move { self.personal_grant_subject_fingerprint(grant).await })
+    }
+
+    fn current_source_authority<'a>(
+        &'a self,
+        grant: floe_access::GrantId,
+    ) -> BoxFuture<'a, Result<floe_access::SourceAuthority, AgentFailure>> {
+        Box::pin(async move { self.personal_grant_source_authority(grant).await })
     }
 
     fn selected_handles<'a>(

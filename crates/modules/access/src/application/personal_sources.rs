@@ -5,9 +5,7 @@
 //! being admitted under one, so they are stated once, here, by the owner that
 //! decides what a grant may say.
 
-use floe_context_contract::{
-    ConnectionId, ConnectorId, ExecutionOwnerId, GrantSourceBinding, SourceAuthority,
-};
+use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId, GrantSourceBinding};
 use floe_kernel::{AgentFailure, PersonId};
 
 pub const ATTENTION_CONNECTOR: &str = "attention.macos";
@@ -60,14 +58,12 @@ pub fn source_binding(
     connection: &str,
     connector: &str,
     execution_owner: String,
-    authority: SourceAuthority,
 ) -> Result<GrantSourceBinding, AgentFailure> {
     GrantSourceBinding::try_new(
         person_id,
         ConnectionId::try_new(connection).map_err(|_| AgentFailure::InvalidInput)?,
         ConnectorId::try_new(connector).map_err(|_| AgentFailure::InvalidInput)?,
         ExecutionOwnerId::try_new(execution_owner).map_err(|_| AgentFailure::InvalidInput)?,
-        authority,
     )
     .map_err(|_| AgentFailure::InvalidInput)
 }
@@ -76,14 +72,12 @@ pub fn source_binding(
 pub fn feasibility_source(
     person_id: PersonId,
     device_id: &str,
-    authority: SourceAuthority,
 ) -> Result<GrantSourceBinding, AgentFailure> {
     source_binding(
         person_id,
         FEASIBILITY_CONNECTION,
         FEASIBILITY_CONNECTOR,
         apple_execution_owner(device_id),
-        authority,
     )
 }
 
@@ -91,14 +85,12 @@ pub fn feasibility_source(
 pub fn wellbeing_source(
     person_id: PersonId,
     device_id: &str,
-    authority: SourceAuthority,
 ) -> Result<GrantSourceBinding, AgentFailure> {
     source_binding(
         person_id,
         WELLBEING_CONNECTION,
         WELLBEING_CONNECTOR,
         apple_execution_owner(device_id),
-        authority,
     )
 }
 
@@ -106,14 +98,12 @@ pub fn wellbeing_source(
 pub fn attention_source(
     person_id: PersonId,
     device_id: &str,
-    authority: SourceAuthority,
 ) -> Result<GrantSourceBinding, AgentFailure> {
     source_binding(
         person_id,
         ATTENTION_CONNECTION,
         ATTENTION_CONNECTOR,
         attention_execution_owner(device_id),
-        authority,
     )
 }
 
@@ -122,7 +112,6 @@ pub fn contacts_source(
     person_id: PersonId,
     device_id: &str,
     connector: &str,
-    authority: SourceAuthority,
 ) -> Result<GrantSourceBinding, AgentFailure> {
     if !connector.starts_with("contacts.") {
         return Err(AgentFailure::InvalidInput);
@@ -132,6 +121,5 @@ pub fn contacts_source(
         &contacts_connection(connector),
         connector,
         contacts_execution_owner(connector, device_id),
-        authority,
     )
 }

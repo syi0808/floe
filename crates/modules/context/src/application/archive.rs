@@ -170,7 +170,7 @@ mod tests {
         use floe_context_contract::{
             ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
             GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-            GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+            GrantSourceBinding, ProcessingRestriction, ResourceHandle,
         };
         let person_id = PersonId::new();
         let dependency = floe_context_contract::ContextDependency::try_new(
@@ -182,9 +182,10 @@ mod tests {
                 ConnectionId::try_new("connection").unwrap(),
                 ConnectorId::try_new("connector").unwrap(),
                 ExecutionOwnerId::try_new("owner").unwrap(),
-                SourceAuthority::new(),
             )
             .unwrap(),
+            vec![ResourceHandle::try_new("resource").unwrap()],
+            floe_context_contract::SourceAuthority::new(),
             vec![ResourceHandle::try_new("resource").unwrap()],
             vec![GrantDataCategory::Metadata],
             GrantOperation::Read,

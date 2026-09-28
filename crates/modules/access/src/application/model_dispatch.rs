@@ -300,7 +300,7 @@ mod tests {
     use floe_context_contract::{
         ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, ExecutionOwnerId,
         GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-        GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+        GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
     use floe_execution::Cancellation;
     use floe_kernel::PersonId;
@@ -413,7 +413,6 @@ mod tests {
             ConnectionId::try_new("connection").unwrap(),
             ConnectorId::try_new("connector").unwrap(),
             ExecutionOwnerId::try_new("owner").unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap();
         let now = Utc::now();
@@ -422,6 +421,8 @@ mod tests {
             GrantId::new(),
             GrantAuthority::new(),
             source,
+            vec![ResourceHandle::try_new("resource").unwrap()],
+            floe_context_contract::SourceAuthority::new(),
             vec![ResourceHandle::try_new("resource").unwrap()],
             categories,
             GrantOperation::Read,
@@ -839,7 +840,8 @@ mod tests {
         assert_eq!(requirement.source_scopes().len(), 1);
         let scope = &requirement.source_scopes()[0];
         assert_eq!(scope.connection_id().as_str(), "connection");
-        assert_eq!(scope.resources().len(), 1);
+        assert_eq!(scope.grant_resources().len(), 1);
+        assert_eq!(scope.source_resources().len(), 1);
     }
 
     #[tokio::test]

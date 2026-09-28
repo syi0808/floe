@@ -615,10 +615,14 @@ mod tests {
                         let resource = if calendar {
                             "primary".to_owned()
                         } else {
-                            floe_context::remote_view_resource(
+                            floe_context_contract::connection_view_resource(
                                 &requirement.capability,
-                                "test-connection",
+                                &floe_context_contract::ConnectionId::try_new("test-connection")
+                                    .unwrap(),
                             )
+                            .unwrap()
+                            .as_str()
+                            .to_owned()
                         };
                         vec![floe_context_contract::SourceSelectionReference {
                             connector_id: floe_context_contract::ConnectorId::try_new(
@@ -743,7 +747,6 @@ mod tests {
                         "00000000-0000-4000-8000-000000000098",
                     )
                     .map_err(|_| AgentFailure::InvalidInput)?,
-                    floe_context_contract::SourceAuthority::new(),
                 )
                 .map_err(|_| AgentFailure::InvalidInput)?;
                 let consumer =
@@ -772,6 +775,8 @@ mod tests {
                     floe_context_contract::GrantId::new(),
                     floe_context_contract::GrantAuthority::new(),
                     source,
+                    scope.resources().to_vec(),
+                    floe_context_contract::SourceAuthority::new(),
                     scope.resources().to_vec(),
                     scope.categories().to_vec(),
                     floe_context_contract::GrantOperation::Read,
@@ -869,7 +874,6 @@ mod tests {
                     selected[0].connection_id.clone(),
                     selected[0].connector_id.clone(),
                     selected[0].execution_owner_id.clone(),
-                    floe_context_contract::SourceAuthority::new(),
                 )
                 .map_err(|_| AgentFailure::InvalidInput)?;
                 let resource = selected[0].resource.clone();
@@ -879,6 +883,8 @@ mod tests {
                     floe_context_contract::GrantId::new(),
                     floe_context_contract::GrantAuthority::new(),
                     source,
+                    vec![resource.clone()],
+                    floe_context_contract::SourceAuthority::new(),
                     vec![resource],
                     vec![floe_context_contract::GrantDataCategory::Derived],
                     floe_context_contract::GrantOperation::Read,
@@ -2317,7 +2323,6 @@ mod tests {
                     floe_context_contract::ConnectionId::try_new("connection").unwrap(),
                     floe_context_contract::ConnectorId::try_new("connector").unwrap(),
                     floe_context_contract::ExecutionOwnerId::try_new("owner").unwrap(),
-                    floe_context_contract::SourceAuthority::new(),
                 )
                 .unwrap();
                 let now = chrono::Utc::now();
@@ -2331,6 +2336,8 @@ mod tests {
                     floe_context_contract::GrantId::new(),
                     floe_context_contract::GrantAuthority::new(),
                     source,
+                    vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
+                    floe_context_contract::SourceAuthority::new(),
                     vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
                     vec![floe_context_contract::GrantDataCategory::Metadata],
                     floe_context_contract::GrantOperation::Read,
@@ -2446,7 +2453,6 @@ mod tests {
             floe_context_contract::ConnectionId::try_new("connection").unwrap(),
             floe_context_contract::ConnectorId::try_new("gmail").unwrap(),
             floe_context_contract::ExecutionOwnerId::try_new("owner").unwrap(),
-            floe_context_contract::SourceAuthority::new(),
         )
         .unwrap();
         let now = chrono::Utc::now();
@@ -2455,6 +2461,8 @@ mod tests {
             floe_context_contract::GrantId::new(),
             floe_context_contract::GrantAuthority::new(),
             source,
+            vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
+            floe_context_contract::SourceAuthority::new(),
             vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
             vec![floe_context_contract::GrantDataCategory::Metadata],
             floe_context_contract::GrantOperation::Read,

@@ -14,7 +14,7 @@ use floe_context_contract::CalendarProvider;
 use floe_context_contract::{
     ConnectionId, ContextDependency, GrantAuthority, GrantConsumer, GrantDataCategory,
     GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction,
-    ResourceHandle, SourceAuthority,
+    ResourceHandle,
 };
 use floe_day::TimedSchedule;
 use floe_execution::Cancellation;
@@ -236,7 +236,6 @@ async fn native_action_source_validation_rejects_wrong_subject() {
         ConnectionId::try_new("00000000-0000-4000-8000-000000000010").unwrap(),
         floe_context_contract::ConnectorId::try_new("calendar.event_kit").unwrap(),
         floe_context_contract::ExecutionOwnerId::try_new("test-device").unwrap(),
-        SourceAuthority::new(),
     )
     .unwrap();
     let consumer = GrantConsumer::builtin("floe.builtin.schedule").unwrap();
@@ -254,6 +253,8 @@ async fn native_action_source_validation_rejects_wrong_subject() {
         floe_context_contract::GrantId::new(),
         GrantAuthority::new(),
         source,
+        scope.resources().to_vec(),
+        floe_context_contract::SourceAuthority::new(),
         scope.resources().to_vec(),
         scope.categories().to_vec(),
         GrantOperation::Read,

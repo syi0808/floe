@@ -381,8 +381,8 @@ fn selection_change_requires_a_fresh_subject_and_authority() {
     assert_ne!(current.source_authority, active.source_authority);
     assert_eq!(
         current.state,
-        CalendarAccessState::NeedsReview,
-        "rotated authority selects no grant"
+        CalendarAccessState::Active,
+        "rotated source authority leaves the standing grant active"
     );
     assert_eq!(
         fixture.review(

@@ -103,7 +103,7 @@ mod tests {
     use floe_context_contract::{
         ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
         GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-        GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+        GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
     use uuid::Uuid;
 
@@ -128,9 +128,10 @@ mod tests {
                 ConnectionId::try_new("connection").unwrap(),
                 ConnectorId::try_new("connector").unwrap(),
                 ExecutionOwnerId::try_new("device").unwrap(),
-                SourceAuthority::new(),
             )
             .unwrap(),
+            scope.resources().to_vec(),
+            floe_context_contract::SourceAuthority::new(),
             scope.resources().to_vec(),
             scope.categories().to_vec(),
             GrantOperation::Read,

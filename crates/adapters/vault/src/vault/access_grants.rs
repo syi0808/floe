@@ -2,7 +2,7 @@ pub(super) use floe_access::AccessGrantMutation;
 use floe_access::{
     ConnectionId, ConnectorId, DataAccessGrant, ExecutionOwnerId, GrantAuthority, GrantId,
     GrantPolicyError, GrantScope, GrantSourceBinding, GrantState, GrantTransitionError,
-    GrantValidationError, SourceAuthority, apply_grant_mutation, create_grant,
+    GrantValidationError, apply_grant_mutation, create_grant,
 };
 use serde::{Deserialize, Serialize};
 use turso::{Row, transaction::TransactionBehavior};
@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use super::*;
 
-const ACCESS_GRANT_SCHEMA_VERSION: i64 = 1;
+const ACCESS_GRANT_SCHEMA_VERSION: i64 = 2;
 const MAX_ACCESS_GRANTS: usize = 128;
 const MAX_CLEANUP_ITEMS: usize = 256;
 const MAX_GRANT_PAYLOAD_BYTES: usize = 64 * 1024;
@@ -50,15 +50,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 }
             };
             let result = async {
-            transaction.execute("CREATE TABLE data_access_grant_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))", ()).await.map_err(storage)?;
+            transaction.execute("CREATE TABLE data_access_grant_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))", ()).await.map_err(storage)?;
             transaction
                 .execute(
-                    "INSERT INTO data_access_grant_schema (id, version) VALUES (1, 1)",
+                    "INSERT INTO data_access_grant_schema (id, version) VALUES (1, 2)",
                     (),
                 )
                 .await
                 .map_err(storage)?;
-            transaction.execute("CREATE TABLE data_access_grants (grant_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, authority_owner TEXT NOT NULL, connection_id TEXT NOT NULL, connector TEXT NOT NULL, execution_owner TEXT NOT NULL, source_incarnation TEXT NOT NULL, source_epoch INTEGER NOT NULL, grant_incarnation TEXT NOT NULL, access_epoch INTEGER NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL)", ()).await.map_err(storage)?;
+            transaction.execute("CREATE TABLE data_access_grants (grant_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, authority_owner TEXT NOT NULL, connection_id TEXT NOT NULL, connector TEXT NOT NULL, execution_owner TEXT NOT NULL, grant_incarnation TEXT NOT NULL, access_epoch INTEGER NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL)", ()).await.map_err(storage)?;
             transaction.execute("CREATE INDEX data_access_grants_person_state ON data_access_grants (person_id, state, grant_id)", ()).await.map_err(storage)?;
             transaction.execute("CREATE TABLE data_access_grant_cleanup (cleanup_id TEXT PRIMARY KEY, grant_id TEXT NOT NULL, person_id TEXT NOT NULL, invalidated_incarnation TEXT NOT NULL, invalidated_epoch INTEGER NOT NULL, payload TEXT NOT NULL, UNIQUE(grant_id, invalidated_incarnation, invalidated_epoch))", ()).await.map_err(storage)?;
             transaction.execute("CREATE INDEX data_access_grant_cleanup_ready ON data_access_grant_cleanup (person_id, grant_id, invalidated_epoch)", ()).await.map_err(storage)?;
@@ -139,7 +139,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let count = count_rows.next().await.map_err(storage)?.ok_or(AgentFailure::VaultUnavailable)?.get::<i64>(0).map_err(storage)?;
             if count < 0 || usize::try_from(count).map_err(|_| AgentFailure::VaultUnavailable)? >= MAX_ACCESS_GRANTS { return Err(AgentFailure::BudgetExceeded); }
             let changed = transaction.execute(
-                "INSERT INTO data_access_grants (grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO data_access_grants (grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 grant_values(&grant, payload.clone())?,
             ).await;
             if let Err(error) = changed {
@@ -199,7 +199,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         let inserted = transaction
             .execute(
-                "INSERT INTO data_access_grants (grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO data_access_grants (grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 grant_values(&grant, payload)?,
             )
             .await;
@@ -221,7 +221,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await?;
         let mut rows = transaction
             .query(
-                "SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? AND connection_id = ? AND connector = ? AND execution_owner = ? ORDER BY grant_id",
+                "SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? AND connection_id = ? AND connector = ? AND execution_owner = ? ORDER BY grant_id",
                 (
                     self.person_id.to_string(),
                     self.vault_id.to_string(),
@@ -238,7 +238,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 return Err(AgentFailure::VaultUnavailable);
             }
             let grant = decode_grant(&row)?;
-            if !grant.source().same_identity(source) {
+            if grant.source() != source {
                 return Err(AgentFailure::VaultUnavailable);
             }
             found = Some(grant);
@@ -252,7 +252,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     ) -> Result<DataAccessGrant, AgentFailure> {
         let connection = self.connection()?;
         self.ensure_access_grant_schema(&connection).await?;
-        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ? AND authority_owner = ?", (id.as_uuid().to_string(), self.person_id.to_string(), self.vault_id.to_string())).await.map_err(storage)?;
+        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ? AND authority_owner = ?", (id.as_uuid().to_string(), self.person_id.to_string(), self.vault_id.to_string())).await.map_err(storage)?;
         let row = rows
             .next()
             .await
@@ -272,7 +272,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         let connection = self.connection()?;
         self.ensure_access_grant_schema(&connection).await?;
-        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? ORDER BY grant_id LIMIT ?", (self.person_id.to_string(), self.vault_id.to_string(), i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?)).await.map_err(storage)?;
+        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? ORDER BY grant_id LIMIT ?", (self.person_id.to_string(), self.vault_id.to_string(), i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?)).await.map_err(storage)?;
         let mut grants = Vec::new();
         while let Some(row) = rows.next().await.map_err(storage)? {
             grants.push(
@@ -283,11 +283,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(grants)
     }
 
-    /// Every grant for one exact source identity, newest authority first.
-    ///
-    /// The source must match by full identity (person, connector, connection,
-    /// execution owner, authority). Callers that need one grant fail when the
-    /// source enumerates zero or more than one.
+    /// Every grant for one stable source identity, newest grant authority first.
+    /// Callers requiring one logical resource must filter it and reject ambiguity.
     pub async fn data_access_grants_for_source(
         &self,
         source: &GrantSourceBinding,
@@ -301,12 +298,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         let connection = self.connection()?;
         self.ensure_access_grant_schema(&connection).await?;
-        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? AND connection_id = ? AND connector = ? AND execution_owner = ? AND source_incarnation = ? AND source_epoch = ? ORDER BY access_epoch DESC, grant_id LIMIT ?", (self.person_id.to_string(), self.vault_id.to_string(), source.connection_id().as_str().to_owned(), source.connector().as_str().to_owned(), source.execution_owner().as_str().to_owned(), source.source_authority().incarnation().to_string(), source.source_authority().epoch().get() as i64, i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?)).await.map_err(storage)?;
+        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? AND connection_id = ? AND connector = ? AND execution_owner = ? ORDER BY access_epoch DESC, grant_id LIMIT ?", (self.person_id.to_string(), self.vault_id.to_string(), source.connection_id().as_str().to_owned(), source.connector().as_str().to_owned(), source.execution_owner().as_str().to_owned(), i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?)).await.map_err(storage)?;
         let mut grants = Vec::new();
         while let Some(row) = rows.next().await.map_err(storage)? {
             let grant =
                 decode_grant(&row).map_err(|failure| self.reject_access_corruption(failure))?;
-            if !grant.source().same_identity(source) {
+            if grant.source() != source {
                 return Err(AgentFailure::VaultUnavailable);
             }
             grants.push(grant);
@@ -319,13 +316,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         id: GrantId,
         expected: GrantAuthority,
-        source: GrantSourceBinding,
         scope: GrantScope,
     ) -> Result<DataAccessGrant, AgentFailure> {
         self.mutate_data_access_grant(
             id,
             expected,
-            AccessGrantMutation::Activate { source, scope },
+            AccessGrantMutation::Activate { scope },
         )
         .await
     }
@@ -363,7 +359,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let item = self
                 .decode_cleanup_row(&row)
                 .map_err(|failure| self.reject_access_corruption(failure))?;
-            let mut grants = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ?", (item.grant_id.as_uuid().to_string(), self.person_id.to_string())).await.map_err(storage)?;
+            let mut grants = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ?", (item.grant_id.as_uuid().to_string(), self.person_id.to_string())).await.map_err(storage)?;
             let current = grants
                 .next()
                 .await
@@ -442,7 +438,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .map_err(|failure| self.reject_access_corruption(failure))?;
             let mut grants = transaction
                 .query(
-                    "SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ?",
+                    "SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ?",
                     (
                         item.grant_id.as_uuid().to_string(),
                         self.person_id.to_string(),
@@ -535,7 +531,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     ) -> Result<DataAccessGrant, AgentFailure> {
         self.ensure_access_grant_schema_transaction(transaction)
             .await?;
-        let mut rows = transaction.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ? AND authority_owner = ?", (id.as_uuid().to_string(), self.person_id.to_string(), self.vault_id.to_string())).await.map_err(storage)?;
+        let mut rows = transaction.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ? AND authority_owner = ?", (id.as_uuid().to_string(), self.person_id.to_string(), self.vault_id.to_string())).await.map_err(storage)?;
         let row = rows
             .next()
             .await
@@ -583,7 +579,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 transaction.execute("INSERT INTO data_access_grant_cleanup (cleanup_id, grant_id, person_id, invalidated_incarnation, invalidated_epoch, payload) VALUES (?, ?, ?, ?, ?, ?)", (cleanup_id(&cleanup), id.as_uuid().to_string(), self.person_id.to_string(), previous.authority().incarnation().to_string(), integer(previous.authority().access_epoch().get())?, serde_json::to_string(&cleanup).map_err(|_| AgentFailure::StorageUnavailable)?)).await.map_err(storage)?;
             }
             let payload = grant_payload(&grant)?;
-            let updated = transaction.execute("UPDATE data_access_grants SET grant_incarnation = ?, access_epoch = ?, source_incarnation = ?, source_epoch = ?, state = ?, payload = ? WHERE grant_id = ? AND person_id = ? AND authority_owner = ? AND grant_incarnation = ? AND access_epoch = ?", (grant.authority().incarnation().to_string(), integer(grant.authority().access_epoch().get())?, grant.source().source_authority().incarnation().to_string(), integer(grant.source().source_authority().epoch().get())?, state_name(grant.state()), payload, id.as_uuid().to_string(), self.person_id.to_string(), self.vault_id.to_string(), expected.incarnation().to_string(), integer(expected.access_epoch().get())?)).await.map_err(storage)?;
+            let updated = transaction.execute("UPDATE data_access_grants SET grant_incarnation = ?, access_epoch = ?, state = ?, payload = ? WHERE grant_id = ? AND person_id = ? AND authority_owner = ? AND grant_incarnation = ? AND access_epoch = ?", (grant.authority().incarnation().to_string(), integer(grant.authority().access_epoch().get())?, state_name(grant.state()), payload, id.as_uuid().to_string(), self.person_id.to_string(), self.vault_id.to_string(), expected.incarnation().to_string(), integer(expected.access_epoch().get())?)).await.map_err(storage)?;
             if updated != 1 {
                 return Err(AgentFailure::Conflict);
             }
@@ -599,7 +595,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.ensure_access_grant_schema_transaction(transaction)
             .await?;
         let mut rows = transaction
-            .query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ? AND authority_owner = ?", (id.as_uuid().to_string(), self.person_id.to_string(), self.vault_id.to_string()))
+            .query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ? AND authority_owner = ?", (id.as_uuid().to_string(), self.person_id.to_string(), self.vault_id.to_string()))
             .await
             .map_err(storage)?;
         let row = rows
@@ -693,7 +689,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         connection: &turso::Connection,
     ) -> Result<(), AgentFailure> {
-        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants", ()).await.map_err(storage)?;
+        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants", ()).await.map_err(storage)?;
         let mut count = 0;
         while let Some(row) = rows.next().await.map_err(storage)? {
             count += 1;
@@ -710,7 +706,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let mut cleanup_rows = connection.query("SELECT cleanup_id, grant_id, person_id, invalidated_incarnation, invalidated_epoch, payload FROM data_access_grant_cleanup", ()).await.map_err(storage)?;
         while let Some(row) = cleanup_rows.next().await.map_err(storage)? {
             let item = self.decode_cleanup_row(&row)?;
-            let mut grants = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ?", (item.grant_id.as_uuid().to_string(), self.person_id.to_string())).await.map_err(storage)?;
+            let mut grants = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ?", (item.grant_id.as_uuid().to_string(), self.person_id.to_string())).await.map_err(storage)?;
             let current = grants
                 .next()
                 .await
@@ -831,7 +827,7 @@ fn access_transaction_start_error(error: turso::Error) -> AgentFailure {
 fn grant_transition(error: GrantTransitionError) -> AgentFailure {
     match error {
         GrantTransitionError::Conflict => AgentFailure::Conflict,
-        GrantTransitionError::Terminal | GrantTransitionError::Identity => {
+        GrantTransitionError::Terminal => {
             AgentFailure::PolicyDenied
         }
         GrantTransitionError::Overflow => AgentFailure::Conflict,
@@ -883,8 +879,6 @@ fn grant_values(
         String,
         i64,
         String,
-        i64,
-        String,
         String,
     ),
     AgentFailure,
@@ -896,8 +890,6 @@ fn grant_values(
         grant.source().connection_id().as_str().to_owned(),
         grant.source().connector().as_str().to_string(),
         grant.source().execution_owner().as_str().to_string(),
-        grant.source().source_authority().incarnation().to_string(),
-        integer(grant.source().source_authority().epoch().get())?,
         grant.authority().incarnation().to_string(),
         integer(grant.authority().access_epoch().get())?,
         state_name(grant.state()).to_string(),
@@ -905,7 +897,7 @@ fn grant_values(
     ))
 }
 pub(super) fn decode_grant(row: &Row) -> Result<DataAccessGrant, AgentFailure> {
-    let grant: DataAccessGrant = decode_payload(&row.get::<String>(11).map_err(storage)?)?;
+    let grant: DataAccessGrant = decode_payload(&row.get::<String>(9).map_err(storage)?)?;
     grant
         .validate()
         .map_err(|_| AgentFailure::VaultUnavailable)?;
@@ -923,17 +915,10 @@ pub(super) fn decode_grant(row: &Row) -> Result<DataAccessGrant, AgentFailure> {
         .map_err(|_| AgentFailure::VaultUnavailable)?;
     let execution_owner = ExecutionOwnerId::try_new(row.get::<String>(5).map_err(storage)?)
         .map_err(|_| AgentFailure::VaultUnavailable)?;
-    let source_incarnation =
-        Uuid::parse_str(&row.get::<String>(6).map_err(storage)?).map_err(storage)?;
-    let source_epoch = std::num::NonZeroU64::new(
-        u64::try_from(row.get::<i64>(7).map_err(storage)?)
-            .map_err(|_| AgentFailure::VaultUnavailable)?,
-    )
-    .ok_or(AgentFailure::VaultUnavailable)?;
     let grant_incarnation =
-        Uuid::parse_str(&row.get::<String>(8).map_err(storage)?).map_err(storage)?;
+        Uuid::parse_str(&row.get::<String>(6).map_err(storage)?).map_err(storage)?;
     let access_epoch = std::num::NonZeroU64::new(
-        u64::try_from(row.get::<i64>(9).map_err(storage)?)
+        u64::try_from(row.get::<i64>(7).map_err(storage)?)
             .map_err(|_| AgentFailure::VaultUnavailable)?,
     )
     .ok_or(AgentFailure::VaultUnavailable)?;
@@ -943,13 +928,10 @@ pub(super) fn decode_grant(row: &Row) -> Result<DataAccessGrant, AgentFailure> {
         || grant.source().connection_id() != connection
         || grant.source().connector() != &connector
         || grant.source().execution_owner() != &execution_owner
-        || grant.source().source_authority()
-            != SourceAuthority::from_parts(source_incarnation, source_epoch)
-                .ok_or(AgentFailure::VaultUnavailable)?
         || grant.authority()
             != GrantAuthority::from_parts(grant_incarnation, access_epoch)
                 .ok_or(AgentFailure::VaultUnavailable)?
-        || state_name(grant.state()) != row.get::<String>(10).map_err(storage)?
+        || state_name(grant.state()) != row.get::<String>(8).map_err(storage)?
     {
         return Err(AgentFailure::VaultUnavailable);
     }
@@ -1031,7 +1013,6 @@ mod tests {
             ConnectionId::new(),
             ConnectorId::try_new("calendar").unwrap(),
             ExecutionOwnerId::try_new("opaque-host").unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap();
         let scope = GrantScope::try_new(
@@ -1044,6 +1025,31 @@ mod tests {
         )
         .unwrap();
         (source, scope)
+    }
+
+    #[tokio::test]
+    async fn fresh_grant_schema_indexes_only_stable_source_and_grant_authority() {
+        let root = root();
+        let vault = EncryptedAgentVault::create(
+            root.path(),
+            floe_kernel::PersonId::new(),
+            TestKeys::default(),
+        )
+        .await
+        .unwrap();
+        let connection = vault.database.connect().unwrap();
+        let mut rows = connection.query("PRAGMA table_info(data_access_grants)", ()).await.unwrap();
+        let mut columns = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            columns.push(row.get::<String>(1).unwrap());
+        }
+        assert_eq!(
+            columns,
+            [
+                "grant_id", "person_id", "authority_owner", "connection_id", "connector",
+                "execution_owner", "grant_incarnation", "access_epoch", "state", "payload",
+            ]
+        );
     }
 
     #[tokio::test]
@@ -1069,23 +1075,13 @@ mod tests {
             grant.authority()
         );
         let active = vault
-            .activate_data_access_grant(
-                grant.id(),
-                grant.authority(),
-                source.clone(),
-                scope.clone(),
-            )
+            .activate_data_access_grant(grant.id(), grant.authority(), scope.clone())
             .await
             .unwrap();
         assert_eq!(active.state(), GrantState::Active);
         assert_eq!(
             vault
-                .activate_data_access_grant(
-                    active.id(),
-                    grant.authority(),
-                    source.clone(),
-                    scope.clone()
-                )
+                .activate_data_access_grant(active.id(), grant.authority(), scope.clone())
                 .await
                 .unwrap_err(),
             AgentFailure::Conflict
@@ -1097,7 +1093,7 @@ mod tests {
         let old_cleanup = vault.pending_data_access_grant_cleanup(8).await.unwrap();
         assert_eq!(old_cleanup.len(), 1);
         let resumed = vault
-            .activate_data_access_grant(paused.id(), paused.authority(), source, scope)
+            .activate_data_access_grant(paused.id(), paused.authority(), scope)
             .await
             .unwrap();
         let revoked = vault
@@ -1130,12 +1126,7 @@ mod tests {
         );
         assert_eq!(
             vault
-                .activate_data_access_grant(
-                    revoked.id(),
-                    revoked.authority(),
-                    request(person_id).0,
-                    request(person_id).1
-                )
+                .activate_data_access_grant(revoked.id(), revoked.authority(), request(person_id).1)
                 .await
                 .unwrap_err(),
             AgentFailure::PolicyDenied
@@ -1212,7 +1203,7 @@ mod tests {
             .await
             .unwrap();
         connection
-            .execute("INSERT INTO data_access_grant_schema VALUES (1, 9)", ())
+            .execute("INSERT INTO data_access_grant_schema VALUES (1, 1)", ())
             .await
             .unwrap();
         vault.checkpoint().await.unwrap();
@@ -1234,7 +1225,7 @@ mod tests {
             .await
             .unwrap();
         let active = vault
-            .activate_data_access_grant(grant.id(), grant.authority(), source, scope)
+            .activate_data_access_grant(grant.id(), grant.authority(), scope)
             .await
             .unwrap();
         let connection = vault.database.connect().unwrap();
@@ -1288,7 +1279,7 @@ mod tests {
             .await
             .unwrap();
         let active = vault
-            .activate_data_access_grant(paused.id(), paused.authority(), source, scope)
+            .activate_data_access_grant(paused.id(), paused.authority(), scope)
             .await
             .unwrap();
         let first = vault.pause_data_access_grant(active.id(), active.authority());
@@ -1319,7 +1310,7 @@ mod tests {
             .await
             .unwrap();
         let first = vault
-            .activate_data_access_grant(initial.id(), initial.authority(), source, scope)
+            .activate_data_access_grant(initial.id(), initial.authority(), scope)
             .await
             .unwrap();
         let (second_source, second_scope) = request(person_id);
@@ -1425,7 +1416,7 @@ mod tests {
             .await
             .unwrap();
         let active = vault
-            .activate_data_access_grant(paused.id(), paused.authority(), source, scope)
+            .activate_data_access_grant(paused.id(), paused.authority(), scope)
             .await
             .unwrap();
         let fail_on_call = keys.0.calls.load(Ordering::Acquire) + 2;
@@ -1498,7 +1489,7 @@ mod tests {
             .await
             .unwrap();
         let active = vault
-            .activate_data_access_grant(grant.id(), grant.authority(), source, scope)
+            .activate_data_access_grant(grant.id(), grant.authority(), scope)
             .await
             .unwrap();
         vault

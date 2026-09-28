@@ -7,10 +7,10 @@ use floe_agent_contract::{AgentFailure, PersonId};
 use floe_connections::{ConnectorSnapshot, SourceConnection};
 use floe_context_contract::{
     ConnectionId, ConnectorId, ExecutionOwnerId, ResourceHandle, SourceSelectionReference,
+    connection_view_resource,
 };
 use sha2::{Digest, Sha256};
 
-use crate::application::remote_views::remote_view_resource;
 
 pub const LOCAL_CONTEXT_CONNECTOR: &str = "floe.local.context";
 
@@ -134,11 +134,17 @@ pub fn discover_source_candidates(
                     let Some(connection_id) = connection.connection_id.as_deref() else {
                         continue;
                     };
+                    let resource = connection_view_resource(
+                        request.capability,
+                        &ConnectionId::try_new(connection_id)
+                            .map_err(|_| AgentFailure::InvalidInput)?,
+                    )
+                    .map_err(|_| AgentFailure::InvalidInput)?;
                     add(
                         &connection.connector_id,
                         connection_id,
                         owner,
-                        &remote_view_resource(request.capability, connection_id),
+                        resource.as_str(),
                         snapshot.descriptor.provider.clone(),
                         "Connected account".into(),
                     )?;

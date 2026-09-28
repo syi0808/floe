@@ -1601,7 +1601,6 @@ mod capture_tests {
                     source.connection_id.clone(),
                     source.connector_id.clone(),
                     source.execution_owner_id.clone(),
-                    floe_context_contract::SourceAuthority::new(),
                 )
                 .unwrap();
                 let dependency = floe_context_contract::ContextDependency::try_new(
@@ -1609,6 +1608,8 @@ mod capture_tests {
                     floe_context_contract::GrantId::new(),
                     floe_context_contract::GrantAuthority::new(),
                     binding,
+                    vec![source.resource.clone()],
+                    floe_context_contract::SourceAuthority::new(),
                     vec![source.resource.clone()],
                     vec![floe_context_contract::GrantDataCategory::Metadata],
                     floe_context_contract::GrantOperation::Read,
@@ -1835,7 +1836,6 @@ mod capture_tests {
                 floe_context_contract::ConnectionId::try_new("attention-connection").unwrap(),
                 floe_context_contract::ConnectorId::try_new("attention.macos").unwrap(),
                 floe_context_contract::ExecutionOwnerId::try_new("device").unwrap(),
-                floe_context_contract::SourceAuthority::new(),
             )
             .unwrap();
             let dependency = floe_context_contract::ContextDependency::try_new(
@@ -1843,6 +1843,8 @@ mod capture_tests {
                 floe_context_contract::GrantId::new(),
                 floe_context_contract::GrantAuthority::new(),
                 source,
+                vec![floe_context_contract::ResourceHandle::try_new("attention.coarse").unwrap()],
+                floe_context_contract::SourceAuthority::new(),
                 vec![floe_context_contract::ResourceHandle::try_new("attention.coarse").unwrap()],
                 vec![floe_context_contract::GrantDataCategory::Derived],
                 floe_context_contract::GrantOperation::Read,

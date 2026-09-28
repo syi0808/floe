@@ -542,15 +542,20 @@ where
             None,
         )
         .await?;
+        let connection_id = floe_context_contract::ConnectionId::try_new(&target.connection_id)
+            .map_err(|_| AgentFailure::InvalidInput)?;
         let canonical: Vec<(String, String)> = policies
             .iter()
             .map(|policy| {
-                (
+                Ok((
                     policy.view_id.to_owned(),
-                    floe_context::remote_view_resource(policy.view_id, &target.connection_id),
-                )
+                    floe_context_contract::connection_view_resource(policy.view_id, &connection_id)
+                        .map_err(|_| AgentFailure::InvalidInput)?
+                        .as_str()
+                        .to_owned(),
+                ))
             })
-            .collect();
+            .collect::<Result<_, AgentFailure>>()?;
         // Reviewed keys outside the canonical set cannot bind.
         if !target.members.iter().all(|member| {
             canonical
@@ -638,11 +643,15 @@ where
         .await?
         .into_iter()
         .filter(|grant| grant.state() == floe_access::GrantState::Active)
-        .filter(|grant| {
-            connector != "calendar.event_kit"
-                || source_revision == Some(grant.source().source_authority())
-        })
         .collect::<Vec<_>>();
+        let source_revision = if matches!(policy, PolicyStore::Personal) {
+            match grants.as_slice() {
+                [grant] => Some(self.vault.personal_grant_source_authority(grant.id()).await?),
+                _ => None,
+            }
+        } else {
+            source_revision
+        };
         let policy_authority = match grants.as_slice() {
             [grant] => Some(
                 policy
@@ -690,7 +699,6 @@ where
                 .map(|grant| LiveGrant {
                     id: grant.id(),
                     authority: grant.authority(),
-                    source_authority: grant.source().source_authority(),
                 })
                 .collect(),
             policy_authority,
@@ -922,7 +930,14 @@ where
             }
             let mut covered = true;
             for policy in &policies {
-                let resource = floe_context::remote_view_resource(policy.view_id, connection_id);
+                let resource = floe_context_contract::connection_view_resource(
+                    policy.view_id,
+                    &floe_context_contract::ConnectionId::try_new(connection_id)
+                        .map_err(|_| AgentFailure::InvalidInput)?,
+                )
+                .map_err(|_| AgentFailure::InvalidInput)?
+                .as_str()
+                .to_owned();
                 let grants = super::review_snapshot::live_grants_for_member(
                     self.vault,
                     person_id,
@@ -1383,7 +1398,6 @@ impl PolicyStore {
                         member_id,
                         connector,
                         connection_id,
-                        grant.source().source_authority(),
                     )
                     .await?;
                 if recorded != grant.id() {

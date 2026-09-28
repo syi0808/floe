@@ -19,6 +19,7 @@ use serde::{Deserialize, de::DeserializeOwned};
 pub struct AuthorizedViewRead<'a> {
     pub view_id: &'a str,
     pub grant: &'a floe_access::DataAccessGrant,
+    pub source_authority: floe_context_contract::SourceAuthority,
     pub consumer_policy: floe_access::ConsumerPolicyAuthority,
     pub consumer: &'a str,
     pub resource: &'a str,
@@ -159,8 +160,8 @@ impl ServerSourceClient {
             source_connector: connector.as_str().into(),
             source_connection: connection.as_str().into(),
             source_execution_owner: source.execution_owner().as_str().into(),
-            source_incarnation: source.source_authority().incarnation().to_string(),
-            source_epoch: source.source_authority().epoch().get(),
+            source_incarnation: read.source_authority.incarnation().to_string(),
+            source_epoch: read.source_authority.epoch().get(),
             resources: vec![read.resource.to_owned()],
             max_items,
             max_bytes,
@@ -894,6 +895,7 @@ impl<Keys: RemoteAuthorizationKeys> floe_context::RemoteViewTransport
                     AuthorizedViewRead {
                         view_id: read.view_id,
                         grant: &read.binding.grant,
+                        source_authority: read.source_authority,
                         consumer_policy: read.binding.consumer_policy,
                         consumer: read.consumer,
                         resource: read.resource,

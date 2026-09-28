@@ -153,7 +153,6 @@ pub fn remote_calendar_source(
             .map_err(|_| AgentFailure::InvalidInput)?,
         ExecutionOwnerId::try_new(reference.execution_owner.clone())
             .map_err(|_| AgentFailure::InvalidInput)?,
-        reference.source_authority,
     )
     .map_err(|_| AgentFailure::InvalidInput)
 }
@@ -204,7 +203,9 @@ pub fn remote_calendar_dependency_source_admits(
     connection_revision: u64,
 ) -> Result<(), AgentFailure> {
     if dependency.processing() != &ProcessingRestriction::LocalOnly
-        || reference.source_authority != dependency.source().source_authority()
+        || reference.source_authority != dependency.source_authority()
+        || dependency.source_resources().len() != 1
+        || dependency.source_resources()[0].as_str() != reference.resource
         || reference.execution_owner != dependency.source().execution_owner().as_str()
         || reference.connection_revision != connection_revision
     {
@@ -411,7 +412,6 @@ mod tests {
                 ConnectionId::try_new("connection").unwrap(),
                 ConnectorId::try_new("calendar.google").unwrap(),
                 ExecutionOwnerId::try_new("server-owner").unwrap(),
-                self.reference.source_authority,
             )
             .unwrap();
             let scope = remote_calendar_scope(
@@ -421,9 +421,9 @@ mod tests {
             .unwrap();
             let mut grant =
                 DataAccessGrant::new(GrantId::new(), uuid::Uuid::new_v4(), source, scope).unwrap();
-            let (source, scope) = (grant.source().clone(), grant.scope().clone());
+            let scope = grant.scope().clone();
             grant
-                .activate_review(grant.authority(), source, scope)
+                .activate_review(grant.authority(), scope)
                 .unwrap();
             grant
         }
@@ -614,7 +614,6 @@ mod tests {
             _: &'a str,
             _: &'a str,
             _: &'a str,
-            _: SourceAuthority,
         ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>> {
             Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
         }
@@ -623,7 +622,6 @@ mod tests {
             &'a self,
             _: &'a str,
             _: &'a str,
-            _: SourceAuthority,
             _: &'a str,
         ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>> {
             Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })

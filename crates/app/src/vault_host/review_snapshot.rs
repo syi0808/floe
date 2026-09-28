@@ -408,7 +408,14 @@ where
                     return Err(AgentFailure::InvalidInput);
                 }
             } else {
-                floe_context::remote_view_resource(policy.view_id, connection)
+                floe_context_contract::connection_view_resource(
+                    policy.view_id,
+                    &floe_context_contract::ConnectionId::try_new(connection)
+                        .map_err(|_| AgentFailure::InvalidInput)?,
+                )
+                .map_err(|_| AgentFailure::InvalidInput)?
+                .as_str()
+                .to_owned()
             };
             let blocked = requested.contains(&resource);
             let expected = if blocked {
@@ -612,18 +619,15 @@ where
         view_id: &str,
         connector: &str,
         connection: &str,
-        requirement: &SourceAccessRequirement,
+        _requirement: &SourceAccessRequirement,
         expected: Option<(GrantId, GrantAuthority)>,
     ) -> Result<Option<ConsumerPolicyAuthority>, AgentFailure> {
         let Some((grant_id, _)) = expected else {
             return Ok(None);
         };
-        let authority = requirement
-            .source_authority()
-            .ok_or(AgentFailure::InvalidInput)?;
         let (recorded, policy) = self
             .vault
-            .remote_view_grant_policy(view_id, connector, connection, authority)
+            .remote_view_grant_policy(view_id, connector, connection)
             .await?;
         if recorded != grant_id {
             return Err(AgentFailure::AccessReviewRequired);

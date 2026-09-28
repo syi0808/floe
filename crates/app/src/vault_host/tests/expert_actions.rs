@@ -332,6 +332,8 @@ impl Fixture {
             admission.authority,
             admission.source.clone(),
             admission.scope.resources().to_vec(),
+            connection.source_authority(),
+            admission.scope.resources().to_vec(),
             admission.scope.categories().to_vec(),
             GrantOperation::Read,
             GrantPurpose::Assistant,
@@ -1332,6 +1334,7 @@ struct GovernedFocus {
     consumer: GrantConsumer,
     fingerprint: String,
     source_revision: u64,
+    source_authority: floe_context_contract::SourceAuthority,
     _root: tempfile::TempDir,
 }
 
@@ -1446,6 +1449,7 @@ impl GovernedFocus {
             consumer,
             fingerprint,
             source_revision: connection.revision(),
+            source_authority: connection.source_authority(),
             _root: root,
         }
     }
@@ -1460,6 +1464,8 @@ impl GovernedFocus {
             self.admission.grant_id,
             self.admission.authority,
             self.admission.source.clone(),
+            self.admission.scope.resources().to_vec(),
+            self.source_authority,
             self.admission.scope.resources().to_vec(),
             self.admission.scope.categories().to_vec(),
             GrantOperation::Read,
@@ -1624,7 +1630,7 @@ async fn governed_focus_proposal_rejects_a_stale_consumer_policy() {
             CalendarProvider::EventKit,
             "test-device",
             &["home".into()],
-            fixture.admission.source.source_authority(),
+            fixture.source_authority,
             &[
                 GrantConsumer::builtin(
                     floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
@@ -1648,7 +1654,7 @@ async fn governed_focus_proposal_rejects_a_stale_consumer_policy() {
             CalendarProvider::EventKit,
             "test-device",
             &["home".into()],
-            fixture.admission.source.source_authority(),
+            fixture.source_authority,
             GrantOperation::Read,
             GrantPurpose::Assistant,
             fixture.consumer.clone(),
@@ -1681,7 +1687,7 @@ async fn governed_focus_proposal_rejects_a_paused_grant() {
             "eventkit-connection",
             CalendarProvider::EventKit,
             "test-device",
-            fixture.admission.source.source_authority(),
+            fixture.source_authority,
         )
         .await
         .unwrap();

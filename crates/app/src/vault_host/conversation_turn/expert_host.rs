@@ -1584,7 +1584,6 @@ mod tests {
             floe_context_contract::ConnectionId::try_new("connection").unwrap(),
             floe_context_contract::ConnectorId::try_new("calendar.event_kit").unwrap(),
             floe_context_contract::ExecutionOwnerId::try_new("device").unwrap(),
-            floe_context_contract::SourceAuthority::new(),
         )
         .unwrap();
         let scope = floe_access::GrantScope::try_new(
@@ -1605,7 +1604,7 @@ mod tests {
         .unwrap();
         if state == floe_access::GrantState::Active {
             grant
-                .activate_review(grant.authority(), source, scope)
+                .activate_review(grant.authority(), scope)
                 .unwrap();
         }
         grant
@@ -2088,9 +2087,10 @@ mod tests {
                 floe_context_contract::ConnectionId::try_new("connection").unwrap(),
                 floe_context_contract::ConnectorId::try_new("connector").unwrap(),
                 floe_context_contract::ExecutionOwnerId::try_new("owner").unwrap(),
-                floe_context_contract::SourceAuthority::new(),
             )
             .unwrap(),
+            vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
+            floe_context_contract::SourceAuthority::new(),
             vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
             vec![floe_context_contract::GrantDataCategory::Metadata],
             floe_context_contract::GrantOperation::Read,
@@ -2340,9 +2340,10 @@ mod tests {
                 floe_context_contract::ConnectionId::try_new("connection").unwrap(),
                 floe_context_contract::ConnectorId::try_new("connector").unwrap(),
                 floe_context_contract::ExecutionOwnerId::try_new("owner").unwrap(),
-                floe_context_contract::SourceAuthority::new(),
             )
             .unwrap(),
+            vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
+            floe_context_contract::SourceAuthority::new(),
             vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
             vec![floe_context_contract::GrantDataCategory::Metadata],
             floe_context_contract::GrantOperation::Read,

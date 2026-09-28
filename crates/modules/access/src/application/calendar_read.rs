@@ -34,6 +34,7 @@ pub struct CalendarReadAccessAdmission {
     pub(crate) grant_id: GrantId,
     pub(crate) grant_authority: GrantAuthority,
     pub(crate) source: GrantSourceBinding,
+    pub(crate) source_authority: SourceAuthority,
     pub(crate) scope: GrantScope,
     pub(crate) consumer_policy: ConsumerPolicyAuthority,
     pub(crate) operation: GrantOperation,
@@ -51,6 +52,7 @@ impl CalendarReadAccessAdmission {
         grant_id: GrantId,
         grant_authority: GrantAuthority,
         source: GrantSourceBinding,
+        source_authority: SourceAuthority,
         scope: GrantScope,
         consumer_policy: ConsumerPolicyAuthority,
         consumer: GrantConsumer,
@@ -60,6 +62,7 @@ impl CalendarReadAccessAdmission {
             grant_id,
             grant_authority,
             source,
+            source_authority,
             scope,
             consumer_policy,
             operation: GrantOperation::Read,
@@ -74,6 +77,7 @@ impl CalendarReadAccessAdmission {
         grant_id: GrantId,
         grant_authority: GrantAuthority,
         source: GrantSourceBinding,
+        source_authority: SourceAuthority,
         scope: GrantScope,
         consumer_policy: ConsumerPolicyAuthority,
         consumer: GrantConsumer,
@@ -84,6 +88,7 @@ impl CalendarReadAccessAdmission {
             grant_id,
             grant_authority,
             source,
+            source_authority,
             scope,
             consumer_policy,
             operation: GrantOperation::Read,
@@ -103,6 +108,10 @@ impl CalendarReadAccessAdmission {
 
     pub fn source(&self) -> &GrantSourceBinding {
         &self.source
+    }
+
+    pub fn source_authority(&self) -> SourceAuthority {
+        self.source_authority
     }
 
     pub fn processing(&self) -> &ProcessingRestriction {
@@ -201,7 +210,7 @@ pub fn admits_native_calendar_read(
         || admission.source.connection_id().as_str() != connection_id
         || admission.source.connector().as_str() != connector
         || admission.source.execution_owner().as_str() != device_id
-        || admission.source.source_authority() != source_authority
+        || admission.source_authority != source_authority
         || admission.scope.resources().len() != calendar_ids.len()
         || admission.scope.resources().iter().any(|resource| {
             !calendar_ids
@@ -274,7 +283,13 @@ pub fn admission_matches_dependency(
         && admission.grant_id == dependency.grant_id()
         && admission.grant_authority == dependency.grant_authority()
         && admission.source == dependency.source().clone()
+        && admission.source_authority == dependency.source_authority()
         && admission.scope.resources() == dependency.resources()
+        && !dependency.source_resources().is_empty()
+        && dependency
+            .source_resources()
+            .iter()
+            .all(|resource| admission.scope.resources().contains(resource))
         && admission.scope.categories() == dependency.categories()
         && admission.consumer_policy == dependency.consumer_policy()
         && admission.operation == dependency.operation()

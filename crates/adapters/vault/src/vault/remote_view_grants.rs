@@ -8,7 +8,7 @@ use turso::transaction::TransactionBehavior;
 
 use super::{EncryptedAgentVault, VaultKeyProvider, access_grants::AccessGrantMutation};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const MAX_MAPPINGS: usize = 128;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -71,14 +71,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let connection = self.connection()?;
         let mut rows = connection
             .query(
-                "SELECT grant_id, payload FROM remote_view_grant_mappings WHERE person_id = ? AND view_id = ? AND connector = ? AND connection_id = ? AND source_incarnation = ? AND source_epoch = ?",
+                "SELECT grant_id, payload FROM remote_view_grant_mappings WHERE person_id = ? AND view_id = ? AND connector = ? AND connection_id = ? AND execution_owner = ?",
                 (
                     self.person_id.to_string(),
                     view_id,
                     source.connector().as_str(),
                     source.connection_id().as_str(),
-                    source.source_authority().incarnation().to_string(),
-                    source.source_authority().epoch().get() as i64,
+                    source.execution_owner().as_str(),
                 ),
             )
             .await
@@ -100,8 +99,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if found.is_some() {
                 return Err(AgentFailure::Conflict);
             }
-            let grant_id = mapping.grant_id;
-            found = Some(self.get_data_access_grant(grant_id).await?);
+            let grant = self.get_data_access_grant(mapping.grant_id).await?;
+            if grant.source() != &mapping.source || grant.scope() != &mapping.scope {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            found = Some(grant);
         }
         Ok(found)
     }
@@ -125,7 +127,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     ) -> Result<(), AgentFailure> {
         let mut rows = transaction
             .query(
-                "SELECT policy_incarnation, policy_epoch, source_incarnation, source_epoch FROM remote_view_grant_mappings WHERE grant_id = ? AND person_id = ?",
+                "SELECT policy_incarnation, policy_epoch FROM remote_view_grant_mappings WHERE grant_id = ? AND person_id = ?",
                 (dependency.grant_id().as_uuid().to_string(), self.person_id.to_string()),
             )
             .await
@@ -141,15 +143,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             || row.get::<i64>(1).map_err(super::storage)?
                 != i64::try_from(dependency.consumer_policy().epoch().get())
                     .map_err(|_| AgentFailure::PolicyDenied)?
-            || row.get::<String>(2).map_err(super::storage)?
-                != dependency
-                    .source()
-                    .source_authority()
-                    .incarnation()
-                    .to_string()
-            || row.get::<i64>(3).map_err(super::storage)?
-                != i64::try_from(dependency.source().source_authority().epoch().get())
-                    .map_err(|_| AgentFailure::PolicyDenied)?
         {
             return Err(AgentFailure::PolicyDenied);
         }
@@ -161,22 +154,22 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         view_id: &str,
         connector: &str,
         connection_id: &str,
-        source_authority: floe_access::SourceAuthority,
     ) -> Result<RemoteViewGrantBinding, AgentFailure> {
-        if !valid_view_id(view_id) || connector.is_empty() || connection_id.is_empty() {
+        if !valid_view_id(view_id)
+            || connector.is_empty()
+            || connection_id.is_empty()
+        {
             return Err(AgentFailure::InvalidInput);
         }
         let connection = self.connection()?;
         let mut rows = connection
             .query(
-                "SELECT grant_id, policy_incarnation, policy_epoch, payload FROM remote_view_grant_mappings WHERE person_id = ? AND view_id = ? AND connector = ? AND connection_id = ? AND source_incarnation = ? AND source_epoch = ?",
+                "SELECT grant_id, policy_incarnation, policy_epoch, payload FROM remote_view_grant_mappings WHERE person_id = ? AND view_id = ? AND connector = ? AND connection_id = ?",
                 (
                     self.person_id.to_string(),
                     view_id,
                     connector,
                     connection_id,
-                    source_authority.incarnation().to_string(),
-                    source_authority.epoch().get() as i64,
                 ),
             )
             .await
@@ -202,7 +195,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             || mapping.source.person_id() != self.person_id
             || mapping.source.connector().as_str() != connector
             || mapping.source.connection_id().as_str() != connection_id
-            || mapping.source.source_authority() != source_authority
         {
             return Err(AgentFailure::AccessReviewRequired);
         }
@@ -241,22 +233,22 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         view_id: &str,
         connector: &str,
         connection_id: &str,
-        source_authority: floe_access::SourceAuthority,
     ) -> Result<(GrantId, ConsumerPolicyAuthority), AgentFailure> {
-        if !valid_view_id(view_id) || connector.is_empty() || connection_id.is_empty() {
+        if !valid_view_id(view_id)
+            || connector.is_empty()
+            || connection_id.is_empty()
+        {
             return Err(AgentFailure::InvalidInput);
         }
         let connection = self.connection()?;
         let mut rows = connection
             .query(
-                "SELECT grant_id, policy_incarnation, policy_epoch, payload FROM remote_view_grant_mappings WHERE person_id = ? AND view_id = ? AND connector = ? AND connection_id = ? AND source_incarnation = ? AND source_epoch = ?",
+                "SELECT grant_id, policy_incarnation, policy_epoch, payload FROM remote_view_grant_mappings WHERE person_id = ? AND view_id = ? AND connector = ? AND connection_id = ?",
                 (
                     self.person_id.to_string(),
                     view_id,
                     connector,
                     connection_id,
-                    source_authority.incarnation().to_string(),
-                    source_authority.epoch().get() as i64,
                 ),
             )
             .await
@@ -283,7 +275,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             || mapping.source.person_id() != self.person_id
             || mapping.source.connector().as_str() != connector
             || mapping.source.connection_id().as_str() != connection_id
-            || mapping.source.source_authority() != source_authority
         {
             return Err(AgentFailure::AccessReviewRequired);
         }
@@ -401,12 +392,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 || row.get::<i64>(1).map_err(super::storage)? != current.epoch().get() as i64
                 || previous.grant_id != grant_id
                 || previous.view_id != view_id
-                || previous.source.person_id() != self.person_id
+                || previous.source != source
                 || expected_policy.is_some_and(|expected| expected != current)
             {
                 return Err(AgentFailure::Conflict);
             }
-            if previous.scope == scope && previous.source == source {
+            if previous.scope == scope {
                 current
             } else {
                 current.advance().ok_or(AgentFailure::Conflict)?
@@ -434,7 +425,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     transaction,
                     grant_id,
                     authority,
-                    AccessGrantMutation::Activate { source, scope },
+                    AccessGrantMutation::Activate { scope },
                 )
                 .await?
             }
@@ -451,7 +442,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     transaction,
                     grant_id,
                     created.authority(),
-                    AccessGrantMutation::Activate { source, scope },
+                    AccessGrantMutation::Activate { scope },
                 )
                 .await?
             }
@@ -468,8 +459,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(super::storage)?;
         let updated = transaction
                 .execute(
-                    "UPDATE remote_view_grant_mappings SET view_id = ?, connector = ?, connection_id = ?, execution_owner = ?, source_incarnation = ?, source_epoch = ?, policy_incarnation = ?, policy_epoch = ?, payload = ? WHERE grant_id = ? AND person_id = ?",
-                    (view_id, mapping.source.connector().as_str(), mapping.source.connection_id().as_str(), mapping.source.execution_owner().as_str(), mapping.source.source_authority().incarnation().to_string(), mapping.source.source_authority().epoch().get() as i64, mapping.policy_incarnation.to_string(), mapping.policy_epoch as i64, payload.clone(), grant_id.as_uuid().to_string(), self.person_id.to_string()),
+                    "UPDATE remote_view_grant_mappings SET view_id = ?, connector = ?, connection_id = ?, execution_owner = ?, policy_incarnation = ?, policy_epoch = ?, payload = ? WHERE grant_id = ? AND person_id = ?",
+                    (view_id, mapping.source.connector().as_str(), mapping.source.connection_id().as_str(), mapping.source.execution_owner().as_str(), mapping.policy_incarnation.to_string(), mapping.policy_epoch as i64, payload.clone(), grant_id.as_uuid().to_string(), self.person_id.to_string()),
                 )
                 .await
                 .map_err(super::storage)?;
@@ -479,8 +470,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             transaction
                     .execute(
-                        "INSERT INTO remote_view_grant_mappings (grant_id, person_id, view_id, connector, connection_id, execution_owner, source_incarnation, source_epoch, policy_incarnation, policy_epoch, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (grant_id.as_uuid().to_string(), self.person_id.to_string(), view_id, mapping.source.connector().as_str(), mapping.source.connection_id().as_str(), mapping.source.execution_owner().as_str(), mapping.source.source_authority().incarnation().to_string(), mapping.source.source_authority().epoch().get() as i64, mapping.policy_incarnation.to_string(), mapping.policy_epoch as i64, payload),
+                        "INSERT INTO remote_view_grant_mappings (grant_id, person_id, view_id, connector, connection_id, execution_owner, policy_incarnation, policy_epoch, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (grant_id.as_uuid().to_string(), self.person_id.to_string(), view_id, mapping.source.connector().as_str(), mapping.source.connection_id().as_str(), mapping.source.execution_owner().as_str(), mapping.policy_incarnation.to_string(), mapping.policy_epoch as i64, payload),
                     )
                     .await
                     .map_err(super::storage)?;
@@ -499,10 +490,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(super::storage)?;
         let result = async {
             if fresh {
-                transaction.execute("CREATE TABLE remote_view_grant_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))", ()).await.map_err(super::storage)?;
+                transaction.execute("CREATE TABLE remote_view_grant_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))", ()).await.map_err(super::storage)?;
                 transaction.execute("INSERT INTO remote_view_grant_schema (id, version) VALUES (1, ?)", [SCHEMA_VERSION]).await.map_err(super::storage)?;
-                transaction.execute("CREATE TABLE remote_view_grant_mappings (grant_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, view_id TEXT NOT NULL, connector TEXT NOT NULL, connection_id TEXT NOT NULL, execution_owner TEXT NOT NULL, source_incarnation TEXT NOT NULL, source_epoch INTEGER NOT NULL, policy_incarnation TEXT NOT NULL, policy_epoch INTEGER NOT NULL, payload TEXT NOT NULL, UNIQUE(person_id, view_id, connector, connection_id, execution_owner, source_incarnation, source_epoch))", ()).await.map_err(super::storage)?;
-                transaction.execute("CREATE INDEX remote_view_grant_source ON remote_view_grant_mappings (person_id, view_id, connector, connection_id, source_incarnation, source_epoch)", ()).await.map_err(super::storage)?;
+                transaction.execute("CREATE TABLE remote_view_grant_mappings (grant_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, view_id TEXT NOT NULL, connector TEXT NOT NULL, connection_id TEXT NOT NULL, execution_owner TEXT NOT NULL, policy_incarnation TEXT NOT NULL, policy_epoch INTEGER NOT NULL, payload TEXT NOT NULL, UNIQUE(person_id, view_id, connector, connection_id, execution_owner))", ()).await.map_err(super::storage)?;
+                transaction.execute("CREATE INDEX remote_view_grant_source ON remote_view_grant_mappings (person_id, view_id, connector, connection_id, execution_owner)", ()).await.map_err(super::storage)?;
             } else {
                 let mut marker = transaction.query("SELECT version FROM remote_view_grant_schema WHERE id = 1", ()).await.map_err(super::storage)?;
                 if marker.next().await.map_err(super::storage)?.ok_or(AgentFailure::VaultUnavailable)?.get::<i64>(0).map_err(super::storage)? != SCHEMA_VERSION { return Err(AgentFailure::UnsupportedVersion); }
@@ -518,17 +509,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         transaction: &turso::transaction::Transaction<'_>,
     ) -> Result<(), AgentFailure> {
-        transaction
-            .query(
-                "SELECT version FROM remote_view_grant_schema WHERE id = 1",
-                (),
-            )
+        let mut rows = transaction
+            .query("SELECT version FROM remote_view_grant_schema WHERE id = 1", ())
             .await
-            .map_err(super::storage)?
+            .map_err(super::storage)?;
+        let row = rows
             .next()
             .await
             .map_err(super::storage)?
             .ok_or(AgentFailure::VaultUnavailable)?;
+        if row.get::<i64>(0).map_err(super::storage)? != SCHEMA_VERSION
+            || rows.next().await.map_err(super::storage)?.is_some()
+        {
+            return Err(AgentFailure::UnsupportedVersion);
+        }
         Ok(())
     }
 }
@@ -545,7 +539,7 @@ mod tests {
     use floe_access::{
         ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory,
         GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction,
-        ResourceHandle, SourceAuthority,
+        ResourceHandle,
     };
     use floe_kernel::PersonId;
     use uuid::Uuid;
@@ -580,13 +574,12 @@ mod tests {
         }
     }
 
-    fn source(person: PersonId, authority: SourceAuthority) -> GrantSourceBinding {
+    fn source(person: PersonId) -> GrantSourceBinding {
         GrantSourceBinding::try_new(
             person,
             ConnectionId::try_new("mail.connection").unwrap(),
             ConnectorId::try_new("gmail").unwrap(),
             ExecutionOwnerId::try_new("server:mail").unwrap(),
-            authority,
         )
         .unwrap()
     }
@@ -614,54 +607,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fresh_remote_view_mapping_schema_has_stable_source_columns() {
+        let (_root, vault, _) = vault().await;
+        let connection = vault.database.connect().unwrap();
+        let mut rows = connection
+            .query("PRAGMA table_info(remote_view_grant_mappings)", ())
+            .await
+            .unwrap();
+        let mut columns = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            columns.push(row.get::<String>(1).unwrap());
+        }
+        assert_eq!(
+            columns,
+            [
+                "grant_id", "person_id", "view_id", "connector", "connection_id",
+                "execution_owner", "policy_incarnation", "policy_epoch", "payload",
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn reviewed_mapping_binds_exact_source_and_rejects_selection_tampering() {
         let (_root, vault, person) = vault().await;
-        let authority = SourceAuthority::new();
         let grant = vault
             .review_and_activate_remote_view_grant(
                 "mail.communication",
                 GrantId::new(),
                 None,
-                source(person, authority),
+                source(person),
                 scope(),
                 None,
             )
             .await
             .unwrap();
         let binding = vault
-            .remote_view_grant_binding("mail.communication", "gmail", "mail.connection", authority)
+            .remote_view_grant_binding("mail.communication", "gmail", "mail.connection")
             .await
             .unwrap();
         assert_eq!(binding.grant.id(), grant.id());
-        assert_eq!(binding.grant.source().source_authority(), authority);
+        assert_eq!(binding.grant.source(), grant.source());
         assert!(matches!(
             vault
                 .remote_view_grant_binding(
                     "mail.communication",
                     "gmail",
                     "other.connection",
-                    authority,
                 )
                 .await,
             Err(AgentFailure::AccessReviewRequired)
-        ));
-        assert!(matches!(
-            vault
-                .remote_view_grant_binding(
-                    "mail.communication",
-                    "gmail",
-                    "mail.connection",
-                    SourceAuthority::new(),
-                )
-                .await,
-            Err(AgentFailure::AccessReviewRequired | AgentFailure::Conflict)
         ));
     }
 
     #[tokio::test]
     async fn paused_or_revoked_review_mapping_cannot_be_read() {
         let (_root, vault, person) = vault().await;
-        let authority = SourceAuthority::new();
         let grant = vault
             .review_and_activate_remote_view_grant(
                 "work.context",
@@ -672,7 +672,6 @@ mod tests {
                     ConnectionId::try_new("work.connection").unwrap(),
                     ConnectorId::try_new("linear").unwrap(),
                     ExecutionOwnerId::try_new("server:work").unwrap(),
-                    authority,
                 )
                 .unwrap(),
                 GrantScope::try_new(
@@ -694,7 +693,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             vault
-                .remote_view_grant_binding("work.context", "linear", "work.connection", authority)
+                .remote_view_grant_binding("work.context", "linear", "work.connection")
                 .await,
             Err(AgentFailure::PolicyDenied)
         ));
@@ -703,8 +702,7 @@ mod tests {
     #[tokio::test]
     async fn reactivation_retains_policy_and_consumer_change_advances_it() {
         let (_root, vault, person) = vault().await;
-        let authority = SourceAuthority::new();
-        let source = source(person, authority);
+        let source = source(person);
         let active = vault
             .review_and_activate_remote_view_grant(
                 "mail.communication",
@@ -717,7 +715,7 @@ mod tests {
             .await
             .unwrap();
         let initial_policy = vault
-            .remote_view_grant_binding("mail.communication", "gmail", "mail.connection", authority)
+            .remote_view_grant_binding("mail.communication", "gmail", "mail.connection")
             .await
             .unwrap()
             .consumer_policy;
@@ -737,7 +735,7 @@ mod tests {
             .await
             .unwrap();
         let unchanged_policy = vault
-            .remote_view_grant_binding("mail.communication", "gmail", "mail.connection", authority)
+            .remote_view_grant_binding("mail.communication", "gmail", "mail.connection")
             .await
             .unwrap()
             .consumer_policy;
@@ -767,7 +765,7 @@ mod tests {
             .await
             .unwrap();
         let changed_policy = vault
-            .remote_view_grant_binding("mail.communication", "gmail", "mail.connection", authority)
+            .remote_view_grant_binding("mail.communication", "gmail", "mail.connection")
             .await
             .unwrap()
             .consumer_policy;
@@ -781,20 +779,19 @@ mod tests {
     #[tokio::test]
     async fn bundle_activation_compares_reviewed_policy_atomically() {
         let (_root, vault, person) = vault().await;
-        let authority = SourceAuthority::new();
         let grant = vault
             .review_and_activate_remote_view_grant(
                 "mail.communication",
                 GrantId::new(),
                 None,
-                source(person, authority),
+                source(person),
                 scope(),
                 None,
             )
             .await
             .unwrap();
         let (_, policy) = vault
-            .remote_view_grant_policy("mail.communication", "gmail", "mail.connection", authority)
+            .remote_view_grant_policy("mail.communication", "gmail", "mail.connection")
             .await
             .unwrap();
 
@@ -806,7 +803,7 @@ mod tests {
                     grant_id: grant.id(),
                     expected: Some(grant.authority()),
                     expected_policy: Some(ConsumerPolicyAuthority::new()),
-                    source: source(person, authority),
+                    source: source(person),
                     scope: scope(),
                 },
                 floe_access::RemoteViewGrantActivation {
@@ -814,7 +811,7 @@ mod tests {
                     grant_id: GrantId::new(),
                     expected: None,
                     expected_policy: None,
-                    source: source(person, authority),
+                    source: source(person),
                     scope: scope(),
                 },
             ])
@@ -832,7 +829,7 @@ mod tests {
                 grant_id: grant.id(),
                 expected: Some(grant.authority()),
                 expected_policy: Some(policy),
-                source: source(person, authority),
+                source: source(person),
                 scope: scope(),
             }])
             .await
@@ -844,7 +841,7 @@ mod tests {
     #[tokio::test]
     async fn multi_view_activation_rolls_back_as_one_local_set() {
         let (_root, vault, person) = vault().await;
-        let source = source(person, SourceAuthority::new());
+        let source = source(person);
         let first_id = GrantId::new();
         let result = vault
             .activate_remote_view_grants(vec![

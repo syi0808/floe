@@ -9,18 +9,9 @@ use floe_context_contract::GrantId;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AccessGrantMutation {
-    Review {
-        source: GrantSourceBinding,
-        scope: GrantScope,
-    },
-    Activate {
-        source: GrantSourceBinding,
-        scope: GrantScope,
-    },
-    ReviewActive {
-        source: GrantSourceBinding,
-        scope: GrantScope,
-    },
+    Review { scope: GrantScope },
+    Activate { scope: GrantScope },
+    ReviewActive { scope: GrantScope },
     Pause,
     Revoke,
 }
@@ -94,14 +85,14 @@ pub fn apply_grant_mutation(
 ) -> Result<bool, GrantPolicyError> {
     authorize_grant(grant, person_id, authority_owner)?;
     match mutation {
-        AccessGrantMutation::Review { source, scope } => grant
-            .review(expected, source, scope)
+        AccessGrantMutation::Review { scope } => grant
+            .review(expected, scope)
             .map_err(GrantPolicyError::Transition),
-        AccessGrantMutation::Activate { source, scope } => grant
-            .activate_review(expected, source, scope)
+        AccessGrantMutation::Activate { scope } => grant
+            .activate_review(expected, scope)
             .map_err(GrantPolicyError::Transition),
-        AccessGrantMutation::ReviewActive { source, scope } => grant
-            .review_active(expected, source, scope)
+        AccessGrantMutation::ReviewActive { scope } => grant
+            .review_active(expected, scope)
             .map_err(GrantPolicyError::Transition),
         AccessGrantMutation::Pause => grant.pause(expected).map_err(GrantPolicyError::Transition),
         AccessGrantMutation::Revoke => grant.revoke(expected).map_err(GrantPolicyError::Transition),
@@ -113,7 +104,7 @@ mod tests {
     use super::*;
     use floe_context_contract::{
         ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory,
-        GrantOperation, GrantPurpose, ProcessingRestriction, ResourceHandle, SourceAuthority,
+        GrantOperation, GrantPurpose, ProcessingRestriction, ResourceHandle,
     };
 
     fn fixture() -> (PersonId, DataAccessGrant, GrantScope) {
@@ -123,7 +114,6 @@ mod tests {
             ConnectionId::new(),
             ConnectorId::try_new("calendar").unwrap(),
             ExecutionOwnerId::try_new("host").unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap();
         let scope = GrantScope::try_new(
@@ -150,7 +140,6 @@ mod tests {
     fn mutation_checks_person_owner_and_epoch() {
         let (person, mut grant, scope) = fixture();
         let owner = grant.authority_owner();
-        let source = grant.source().clone();
         let initial_authority = grant.authority();
         let initial = grant.clone();
         assert_eq!(
@@ -159,10 +148,7 @@ mod tests {
                 PersonId::new(),
                 owner,
                 initial_authority,
-                AccessGrantMutation::Activate {
-                    source: source.clone(),
-                    scope: scope.clone()
-                },
+                AccessGrantMutation::Activate { scope: scope.clone() },
             ),
             Err(GrantPolicyError::Unauthorized)
         );
@@ -185,7 +171,7 @@ mod tests {
                 person,
                 owner,
                 active_authority,
-                AccessGrantMutation::Activate { source, scope },
+                AccessGrantMutation::Activate { scope },
             )
             .unwrap()
         );

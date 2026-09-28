@@ -225,7 +225,7 @@ mod tests {
     use floe_context_contract::{
         ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
         GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-        GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+        GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
 
     fn dependency(process_incarnation: Uuid) -> ContextDependency {
@@ -247,9 +247,10 @@ mod tests {
                 ConnectionId::new(),
                 ConnectorId::try_new("fixture.connector").unwrap(),
                 ExecutionOwnerId::try_new("fixture-device").unwrap(),
-                SourceAuthority::new(),
             )
             .unwrap(),
+            vec![ResourceHandle::try_new("source/item").unwrap()],
+            floe_context_contract::SourceAuthority::new(),
             vec![ResourceHandle::try_new("source/item").unwrap()],
             vec![GrantDataCategory::Metadata],
             GrantOperation::Read,
@@ -454,6 +455,8 @@ mod tests {
             dependency.grant_authority(),
             dependency.source().clone(),
             dependency.resources().to_vec(),
+            dependency.source_authority(),
+            dependency.source_resources().to_vec(),
             dependency.categories().to_vec(),
             dependency.operation(),
             dependency.purpose(),

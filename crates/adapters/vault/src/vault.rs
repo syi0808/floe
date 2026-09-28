@@ -148,7 +148,7 @@ impl<Keys: VaultKeyProvider> floe_access::CurrentAuthority
     ) -> Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
         Box::pin(async move {
             self.vault
-                .validate_current_authority_in_transaction(self.transaction, dependency)
+                .validate_grant_policy_authority_in_transaction(self.transaction, dependency)
                 .await
         })
     }

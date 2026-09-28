@@ -5,7 +5,7 @@
 //! device, are the host's; both reach this module as ports so the read itself
 //! names neither a vault nor a native bridge.
 
-use floe_access::{ConsumerPolicyAuthority, DataAccessGrant, FeasibilityGrantQuery, GrantId};
+use floe_access::{ConsumerPolicyAuthority, DataAccessGrant, FeasibilityGrantQuery, GrantId, SourceAuthority};
 use floe_agent_contract::{AgentFailure, BoxFuture, PersonId};
 use floe_execution::Cancellation;
 use serde_json::Value;
@@ -27,6 +27,11 @@ pub trait PersonalGrantRecords: Sync {
         &'a self,
         grant: GrantId,
     ) -> BoxFuture<'a, Result<ConsumerPolicyAuthority, AgentFailure>>;
+
+    fn current_source_authority<'a>(
+        &'a self,
+        grant: GrantId,
+    ) -> BoxFuture<'a, Result<SourceAuthority, AgentFailure>>;
 
     /// The query a feasibility grant admits.
     fn feasibility_query<'a>(

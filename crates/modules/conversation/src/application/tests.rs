@@ -2134,7 +2134,7 @@ fn history_dependency() -> floe_agent_contract::ContextDependency {
     use floe_context_contract::{
         ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
         GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-        GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+        GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
     let person = floe_kernel::PersonId::new();
     let source = GrantSourceBinding::try_new(
@@ -2142,7 +2142,6 @@ fn history_dependency() -> floe_agent_contract::ContextDependency {
         ConnectionId::try_new("connection").unwrap(),
         ConnectorId::try_new("connector").unwrap(),
         ExecutionOwnerId::try_new("owner").unwrap(),
-        SourceAuthority::new(),
     )
     .unwrap();
     let now = chrono::Utc::now();
@@ -2151,6 +2150,8 @@ fn history_dependency() -> floe_agent_contract::ContextDependency {
         GrantId::new(),
         GrantAuthority::new(),
         source,
+        vec![ResourceHandle::try_new("resource").unwrap()],
+        floe_context_contract::SourceAuthority::new(),
         vec![ResourceHandle::try_new("resource").unwrap()],
         vec![GrantDataCategory::Metadata],
         GrantOperation::Read,

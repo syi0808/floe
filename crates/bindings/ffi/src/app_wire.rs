@@ -1395,7 +1395,7 @@ fn interaction_target(target: &floe_app::ReviewedTarget) -> AppInteractionTarget
                     .map(|scope| AppConsentScopeDto {
                         connection_id: scope.connection_id().as_str().into(),
                         resources: scope
-                            .resources()
+                            .source_resources()
                             .iter()
                             .map(|resource| resource.as_str().into())
                             .collect(),
@@ -2616,7 +2616,8 @@ mod tests {
         let scope: floe_app::ProcessingSourceScope = serde_json::from_value(serde_json::json!({
             "connection_id": "calendar-connection",
             "connector_id": "floe.connector.calendar",
-            "resources": ["personal"],
+            "grant_resources": ["personal"],
+            "source_resources": ["home"],
             "categories": ["metadata"],
             "operation": "read",
             "purpose": "scheduling",
@@ -2707,7 +2708,7 @@ mod tests {
         assert_eq!(input_data_classes.as_slice(), ["personal"]);
         assert_eq!(source_scopes.len(), 1);
         assert_eq!(source_scopes[0].connection_id, "calendar-connection");
-        assert_eq!(source_scopes[0].resources.as_slice(), ["personal"]);
+        assert_eq!(source_scopes[0].resources.as_slice(), ["home"]);
         assert_eq!(source_scopes[0].categories.as_slice(), ["metadata"]);
         assert_eq!(source_scopes[0].operation, "read");
         assert_eq!(source_scopes[0].purpose, "scheduling");

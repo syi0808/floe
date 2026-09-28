@@ -199,7 +199,6 @@ pub fn active_resource_grants(
 mod tests {
     use floe_context_contract::{
         ConnectionId, ConnectorId, ExecutionOwnerId, GrantId, GrantScope, ResourceHandle,
-        SourceAuthority,
     };
     use floe_kernel::PersonId;
     use uuid::Uuid;
@@ -216,7 +215,6 @@ mod tests {
             ConnectionId::try_new("attention.macos.local").unwrap(),
             ConnectorId::try_new("attention.macos").unwrap(),
             ExecutionOwnerId::try_new(owner).unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap()
     }
@@ -242,7 +240,7 @@ mod tests {
         )
         .unwrap();
         grant
-            .activate_review(grant.authority(), source, scope(resource))
+            .activate_review(grant.authority(), scope(resource))
             .unwrap();
         grant
     }
@@ -316,7 +314,7 @@ mod tests {
 
         let mut after = before.clone();
         after
-            .review_active(after.authority(), bound, scope("attention.coarse"))
+            .review_active(after.authority(), scope("attention.coarse"))
             .unwrap();
         assert_eq!(
             grant_unchanged(&before, &after),
@@ -402,7 +400,6 @@ mod tests {
                 ConnectionId::try_new(connection).unwrap(),
                 ConnectorId::try_new(connector).unwrap(),
                 ExecutionOwnerId::try_new("server-owner").unwrap(),
-                SourceAuthority::new(),
             )
             .unwrap()
         };

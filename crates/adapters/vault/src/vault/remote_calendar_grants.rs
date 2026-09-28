@@ -18,13 +18,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         connector: &str,
         connection_id: &str,
-        source_authority: floe_access::SourceAuthority,
         resource: &str,
     ) -> Result<RemoteCalendarGrantBinding, AgentFailure> {
-        if connector.is_empty() || connection_id.is_empty() || resource.is_empty() {
+        if connector.is_empty()
+            || connection_id.is_empty()
+            || resource.is_empty()
+        {
             return Err(AgentFailure::InvalidInput);
         }
-        // Exactly one grant for this exact connection, authority and resource,
+        // Exactly one grant for this stable connection and special leaf resource,
         // or no read. Remote execution owners vary by deployment, so the owner
         // is not part of the match; a sibling resource grant is never a match.
         let grants = self.list_data_access_grants(128).await?;
@@ -33,7 +35,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let source = grant.source();
             if source.connector().as_str() == connector
                 && source.connection_id().as_str() == connection_id
-                && source.source_authority() == source_authority
                 && grant.scope().resources().len() == 1
                 && grant.scope().resources()[0].as_str() == resource
             {
@@ -73,7 +74,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let grants = self.list_data_access_grants(128).await?;
         let mut found = None;
         for grant in &grants {
-            if grant.source().same_identity(source)
+            if grant.source() == source
                 && grant.scope().resources().len() == 1
                 && grant.scope().resources()[0].as_str() == resource
             {
@@ -172,7 +173,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                             grant_id,
                             created.authority(),
                             AccessGrantMutation::Activate {
-                                source: source.clone(),
                                 scope: scope.clone(),
                             },
                         )
@@ -221,7 +221,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                             grant_id,
                             authority,
                             AccessGrantMutation::Activate {
-                                source: source.clone(),
                                 scope: scope.clone(),
                             },
                         )
@@ -255,13 +254,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.ensure_access_grant_schema_transaction(transaction)
             .await?;
         let mut rows = transaction
-            .query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? AND connection_id = ? AND connector = ? AND execution_owner = ?", (self.person_id.to_string(), self.vault_id.to_string(), source.connection_id().as_str().to_owned(), source.connector().as_str().to_owned(), source.execution_owner().as_str().to_owned()))
+            .query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? AND connection_id = ? AND connector = ? AND execution_owner = ?", (self.person_id.to_string(), self.vault_id.to_string(), source.connection_id().as_str().to_owned(), source.connector().as_str().to_owned(), source.execution_owner().as_str().to_owned()))
             .await
             .map_err(super::storage)?;
         let mut found = None;
         while let Some(row) = rows.next().await.map_err(super::storage)? {
             let grant = super::access_grants::decode_grant(&row)?;
-            if !grant.source().same_identity(source)
+            if grant.source() != source
                 || grant.scope().resources().len() != 1
                 || grant.scope().resources()[0].as_str() != resource
             {
@@ -305,7 +304,6 @@ mod tests {
     use floe_access::{
         ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory,
         GrantOperation, GrantPurpose, GrantState, ProcessingRestriction, ResourceHandle,
-        SourceAuthority,
     };
 
     use super::*;
@@ -350,13 +348,12 @@ mod tests {
         vec![GrantConsumer::builtin("floe.builtin.schedule").unwrap()]
     }
 
-    fn source(person: floe_kernel::PersonId, authority: SourceAuthority) -> GrantSourceBinding {
+    fn source(person: floe_kernel::PersonId) -> GrantSourceBinding {
         GrantSourceBinding::try_new(
             person,
             ConnectionId::try_new(CONNECTION).unwrap(),
             ConnectorId::try_new(CONNECTOR).unwrap(),
             ExecutionOwnerId::try_new(OWNER).unwrap(),
-            authority,
         )
         .unwrap()
     }
@@ -390,14 +387,13 @@ mod tests {
     async fn fresh_review(
         vault: &EncryptedAgentVault<TestKeys>,
         person: floe_kernel::PersonId,
-        authority: SourceAuthority,
         resource: &str,
     ) -> DataAccessGrant {
         vault
             .review_and_activate_remote_calendar_grant(
                 GrantId::new(),
                 None,
-                source(person, authority),
+                source(person),
                 scope(resource, &consumers()),
                 None,
             )
@@ -408,23 +404,22 @@ mod tests {
     #[tokio::test]
     async fn sibling_resources_bind_independently() {
         let (_root, vault, person) = vault().await;
-        let authority = SourceAuthority::new();
-        let grant_a = fresh_review(&vault, person, authority, "calendar-a").await;
-        let grant_b = fresh_review(&vault, person, authority, "calendar-b").await;
+        let grant_a = fresh_review(&vault, person, "calendar-a").await;
+        let grant_b = fresh_review(&vault, person, "calendar-b").await;
         assert_ne!(grant_a.id(), grant_b.id());
         let binding_a = vault
-            .remote_calendar_grant_binding(CONNECTOR, CONNECTION, authority, "calendar-a")
+            .remote_calendar_grant_binding(CONNECTOR, CONNECTION, "calendar-a")
             .await
             .unwrap();
         assert_eq!(binding_a.grant.id(), grant_a.id());
         let binding_b = vault
-            .remote_calendar_grant_binding(CONNECTOR, CONNECTION, authority, "calendar-b")
+            .remote_calendar_grant_binding(CONNECTOR, CONNECTION, "calendar-b")
             .await
             .unwrap();
         assert_eq!(binding_b.grant.id(), grant_b.id());
         assert_ne!(binding_a.consumer_policy, binding_b.consumer_policy);
         let found = vault
-            .find_remote_calendar_grant(&source(person, authority), "calendar-a")
+            .find_remote_calendar_grant(&source(person), "calendar-a")
             .await
             .unwrap()
             .unwrap();
@@ -434,35 +429,29 @@ mod tests {
     #[tokio::test]
     async fn duplicate_exact_resource_grants_conflict() {
         let (_root, vault, person) = vault().await;
-        let authority = SourceAuthority::new();
-        let first = fresh_review(&vault, person, authority, "primary").await;
+        let first = fresh_review(&vault, person, "primary").await;
         assert_eq!(first.state(), GrantState::Active);
         let duplicate = vault
             .create_data_access_grant_with_id(
                 GrantId::new(),
-                source(person, authority),
+                source(person),
                 scope("primary", &consumers()),
             )
             .await
             .unwrap();
         vault
-            .activate_data_access_grant(
-                duplicate.id(),
-                duplicate.authority(),
-                source(person, authority),
-                scope("primary", &consumers()),
-            )
+            .activate_data_access_grant(duplicate.id(), duplicate.authority(), scope("primary", &consumers()))
             .await
             .unwrap();
         assert_eq!(
             vault
-                .remote_calendar_grant_binding(CONNECTOR, CONNECTION, authority, "primary")
+                .remote_calendar_grant_binding(CONNECTOR, CONNECTION, "primary")
                 .await,
             Err(AgentFailure::Conflict)
         );
         assert_eq!(
             vault
-                .find_remote_calendar_grant(&source(person, authority), "primary")
+                .find_remote_calendar_grant(&source(person), "primary")
                 .await,
             Err(AgentFailure::Conflict)
         );
@@ -471,8 +460,7 @@ mod tests {
     #[tokio::test]
     async fn repeated_review_updates_the_same_grant() {
         let (_root, vault, person) = vault().await;
-        let authority = SourceAuthority::new();
-        let first = fresh_review(&vault, person, authority, "primary").await;
+        let first = fresh_review(&vault, person, "primary").await;
         let policy = vault
             .calendar_grant_policy_authority(first.id())
             .await
@@ -481,7 +469,7 @@ mod tests {
             .review_and_activate_remote_calendar_grant(
                 first.id(),
                 Some(first.authority()),
-                source(person, authority),
+                source(person),
                 scope("primary", &consumers()),
                 Some(policy),
             )
@@ -503,14 +491,13 @@ mod tests {
     #[tokio::test]
     async fn fresh_review_conflicts_when_the_grant_already_exists() {
         let (_root, vault, person) = vault().await;
-        let authority = SourceAuthority::new();
-        fresh_review(&vault, person, authority, "primary").await;
+        fresh_review(&vault, person, "primary").await;
         assert_eq!(
             vault
                 .review_and_activate_remote_calendar_grant(
                     GrantId::new(),
                     None,
-                    source(person, authority),
+                    source(person),
                     scope("primary", &consumers()),
                     None,
                 )
@@ -522,8 +509,7 @@ mod tests {
     #[tokio::test]
     async fn stale_grant_and_policy_expectations_conflict() {
         let (_root, vault, person) = vault().await;
-        let authority = SourceAuthority::new();
-        let grant = fresh_review(&vault, person, authority, "primary").await;
+        let grant = fresh_review(&vault, person, "primary").await;
         let policy = vault
             .calendar_grant_policy_authority(grant.id())
             .await
@@ -537,7 +523,7 @@ mod tests {
                 .review_and_activate_remote_calendar_grant(
                     grant.id(),
                     Some(grant.authority()),
-                    source(person, authority),
+                    source(person),
                     scope("primary", &consumers()),
                     Some(policy),
                 )
@@ -549,7 +535,7 @@ mod tests {
                 .review_and_activate_remote_calendar_grant(
                     grant.id(),
                     Some(paused.authority()),
-                    source(person, authority),
+                    source(person),
                     scope("primary", &consumers()),
                     Some(ConsumerPolicyAuthority::new()),
                 )
@@ -560,7 +546,7 @@ mod tests {
             .review_and_activate_remote_calendar_grant(
                 paused.id(),
                 Some(paused.authority()),
-                source(person, authority),
+                source(person),
                 scope("primary", &consumers()),
                 Some(policy),
             )
@@ -573,9 +559,8 @@ mod tests {
     #[tokio::test]
     async fn review_rejects_a_sibling_resource_grant_id() {
         let (_root, vault, person) = vault().await;
-        let authority = SourceAuthority::new();
-        let grant_a = fresh_review(&vault, person, authority, "calendar-a").await;
-        let grant_b = fresh_review(&vault, person, authority, "calendar-b").await;
+        let grant_a = fresh_review(&vault, person, "calendar-a").await;
+        let grant_b = fresh_review(&vault, person, "calendar-b").await;
         let policy_b = vault
             .calendar_grant_policy_authority(grant_b.id())
             .await
@@ -585,7 +570,7 @@ mod tests {
                 .review_and_activate_remote_calendar_grant(
                     grant_b.id(),
                     Some(grant_b.authority()),
-                    source(person, authority),
+                    source(person),
                     scope("calendar-a", &consumers()),
                     Some(policy_b),
                 )
@@ -594,7 +579,7 @@ mod tests {
         );
         assert_eq!(
             vault
-                .remote_calendar_grant_binding(CONNECTOR, CONNECTION, authority, "calendar-a")
+                .remote_calendar_grant_binding(CONNECTOR, CONNECTION, "calendar-a")
                 .await
                 .unwrap()
                 .grant
@@ -604,35 +589,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn authority_rotation_updates_the_same_grant_and_advances_policy() {
+    async fn repeated_review_does_not_reidentify_the_grant() {
         let (_root, vault, person) = vault().await;
-        let first_authority = SourceAuthority::new();
-        let grant = fresh_review(&vault, person, first_authority, "primary").await;
+        let grant = fresh_review(&vault, person, "primary").await;
         let policy = vault
             .calendar_grant_policy_authority(grant.id())
             .await
             .unwrap();
-        let rotated_authority = SourceAuthority::new();
         let rotated = vault
             .review_and_activate_remote_calendar_grant(
                 grant.id(),
                 Some(grant.authority()),
-                source(person, rotated_authority),
+                source(person),
                 scope("primary", &consumers()),
                 Some(policy),
             )
             .await
             .unwrap();
         assert_eq!(rotated.id(), grant.id());
-        assert_ne!(rotated.authority(), grant.authority());
-        assert_eq!(rotated.source().source_authority(), rotated_authority);
+        assert_eq!(rotated.authority(), grant.authority());
+        assert_eq!(rotated.source(), grant.source());
         let advanced = vault
             .calendar_grant_policy_authority(grant.id())
             .await
             .unwrap();
-        assert_ne!(advanced, policy);
+        assert_eq!(advanced, policy);
         let binding = vault
-            .remote_calendar_grant_binding(CONNECTOR, CONNECTION, rotated_authority, "primary")
+            .remote_calendar_grant_binding(CONNECTOR, CONNECTION, "primary")
             .await
             .unwrap();
         assert_eq!(binding.grant.id(), grant.id());
@@ -642,8 +625,7 @@ mod tests {
     #[tokio::test]
     async fn consumer_change_advances_remote_policy() {
         let (_root, vault, person) = vault().await;
-        let authority = SourceAuthority::new();
-        let grant = fresh_review(&vault, person, authority, "primary").await;
+        let grant = fresh_review(&vault, person, "primary").await;
         let policy = vault
             .calendar_grant_policy_authority(grant.id())
             .await
@@ -656,7 +638,7 @@ mod tests {
             .review_and_activate_remote_calendar_grant(
                 grant.id(),
                 Some(grant.authority()),
-                source(person, authority),
+                source(person),
                 scope("primary", &extended),
                 Some(policy),
             )
@@ -675,8 +657,7 @@ mod tests {
     #[tokio::test]
     async fn missing_remote_policy_fails_closed() {
         let (_root, vault, person) = vault().await;
-        let authority = SourceAuthority::new();
-        let grant = fresh_review(&vault, person, authority, "primary").await;
+        let grant = fresh_review(&vault, person, "primary").await;
         let policy = vault
             .calendar_grant_policy_authority(grant.id())
             .await
@@ -694,7 +675,7 @@ mod tests {
                 .review_and_activate_remote_calendar_grant(
                     grant.id(),
                     Some(grant.authority()),
-                    source(person, authority),
+                    source(person),
                     scope("primary", &consumers()),
                     Some(policy),
                 )
@@ -709,13 +690,12 @@ mod tests {
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let person = floe_kernel::PersonId::new();
         let keys = TestKeys::default();
-        let authority = SourceAuthority::new();
         let (policy_a, policy_b) = {
             let vault = EncryptedAgentVault::create(root.path(), person, keys.clone())
                 .await
                 .unwrap();
-            let grant_a = fresh_review(&vault, person, authority, "calendar-a").await;
-            let grant_b = fresh_review(&vault, person, authority, "calendar-b").await;
+            let grant_a = fresh_review(&vault, person, "calendar-a").await;
+            let grant_b = fresh_review(&vault, person, "calendar-b").await;
             (
                 vault
                     .calendar_grant_policy_authority(grant_a.id())
@@ -731,12 +711,12 @@ mod tests {
             .await
             .unwrap();
         let binding_a = vault
-            .remote_calendar_grant_binding(CONNECTOR, CONNECTION, authority, "calendar-a")
+            .remote_calendar_grant_binding(CONNECTOR, CONNECTION, "calendar-a")
             .await
             .unwrap();
         assert_eq!(binding_a.consumer_policy, policy_a);
         let binding_b = vault
-            .remote_calendar_grant_binding(CONNECTOR, CONNECTION, authority, "calendar-b")
+            .remote_calendar_grant_binding(CONNECTOR, CONNECTION, "calendar-b")
             .await
             .unwrap();
         assert_eq!(binding_b.consumer_policy, policy_b);
@@ -745,8 +725,7 @@ mod tests {
     #[tokio::test]
     async fn mixed_remote_expectation_halves_are_rejected() {
         let (_root, vault, person) = vault().await;
-        let authority = SourceAuthority::new();
-        let grant = fresh_review(&vault, person, authority, "primary").await;
+        let grant = fresh_review(&vault, person, "primary").await;
         let policy = vault
             .calendar_grant_policy_authority(grant.id())
             .await
@@ -757,7 +736,7 @@ mod tests {
                     .review_and_activate_remote_calendar_grant(
                         grant.id(),
                         expected,
-                        source(person, authority),
+                        source(person),
                         scope("primary", &consumers()),
                         expected_policy,
                     )

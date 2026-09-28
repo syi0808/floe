@@ -567,7 +567,7 @@ mod tests {
         )
         .unwrap();
         grant
-            .activate_review(grant.authority(), source, scope)
+            .activate_review(grant.authority(), scope)
             .unwrap();
         grant
     }
@@ -585,15 +585,14 @@ mod tests {
                 person_id,
                 DEVICE,
                 "contacts.apple",
-                SourceAuthority::new(),
             )
             .unwrap();
             let feasibility =
-                floe_access::feasibility_source(person_id, DEVICE, SourceAuthority::new()).unwrap();
+                floe_access::feasibility_source(person_id, DEVICE).unwrap();
             let wellbeing =
-                floe_access::wellbeing_source(person_id, DEVICE, SourceAuthority::new()).unwrap();
+                floe_access::wellbeing_source(person_id, DEVICE).unwrap();
             let attention =
-                floe_access::attention_source(person_id, DEVICE, SourceAuthority::new()).unwrap();
+                floe_access::attention_source(person_id, DEVICE).unwrap();
             Self {
                 grants: vec![
                     active_grant(people, floe_access::PEOPLE_RESOURCE),
@@ -620,6 +619,19 @@ mod tests {
         fn grants<'a>(&'a self) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>> {
             let grants = self.grants.clone();
             Box::pin(async move { Ok(grants) })
+        }
+
+        fn current_source_authority<'a>(
+            &'a self,
+            _: GrantId,
+        ) -> BoxFuture<'a, Result<SourceAuthority, AgentFailure>> {
+            Box::pin(async {
+                Ok(SourceAuthority::from_parts(
+                    Uuid::from_u128(1),
+                    std::num::NonZeroU64::new(1).unwrap(),
+                )
+                .unwrap())
+            })
         }
 
         fn reviewed_subject<'a>(
@@ -876,7 +888,6 @@ mod tests {
                     ConnectionId::try_new("connection").unwrap(),
                     ConnectorId::try_new("connector").unwrap(),
                     ExecutionOwnerId::try_new("owner").unwrap(),
-                    SourceAuthority::new(),
                 )
                 .unwrap();
                 let now = Utc::now();
@@ -890,6 +901,8 @@ mod tests {
                     GrantId::new(),
                     GrantAuthority::new(),
                     source_binding,
+                    vec![ResourceHandle::try_new("resource").unwrap()],
+                    floe_context_contract::SourceAuthority::new(),
                     vec![ResourceHandle::try_new("resource").unwrap()],
                     vec![GrantDataCategory::Metadata],
                     GrantOperation::Read,
@@ -1360,7 +1373,7 @@ mod tests {
     async fn paused_personal_grant_binds_the_observed_grant() {
         let person_id = PersonId::new();
         let source =
-            floe_access::attention_source(person_id, DEVICE, SourceAuthority::new()).unwrap();
+            floe_access::attention_source(person_id, DEVICE).unwrap();
         let scope_fixture = scope_fixture(floe_access::ATTENTION_RESOURCE);
         let paused =
             DataAccessGrant::new(GrantId::new(), Uuid::new_v4(), source, scope_fixture).unwrap();
@@ -1396,7 +1409,7 @@ mod tests {
     async fn duplicate_and_corrupt_personal_authority_fail_closed() {
         let person_id = PersonId::new();
         let source =
-            floe_access::attention_source(person_id, DEVICE, SourceAuthority::new()).unwrap();
+            floe_access::attention_source(person_id, DEVICE).unwrap();
         let grants = vec![
             DataAccessGrant::new(
                 GrantId::new(),
@@ -1437,6 +1450,13 @@ mod tests {
         struct CorruptRecords;
         impl PersonalGrantRecords for CorruptRecords {
             fn grants<'a>(&'a self) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>> {
+                Box::pin(async { Err(AgentFailure::StorageUnavailable) })
+            }
+
+            fn current_source_authority<'a>(
+                &'a self,
+                _: GrantId,
+            ) -> BoxFuture<'a, Result<SourceAuthority, AgentFailure>> {
                 Box::pin(async { Err(AgentFailure::StorageUnavailable) })
             }
 

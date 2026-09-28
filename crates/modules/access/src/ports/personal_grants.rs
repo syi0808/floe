@@ -4,7 +4,7 @@
 //! and the Person's own store, to report what they already granted and to commit
 //! what they just reviewed. Neither decides whether the review is admissible.
 
-use floe_context_contract::{GrantAuthority, GrantId, GrantScope, GrantSourceBinding};
+use floe_context_contract::{GrantAuthority, GrantId, GrantScope, GrantSourceBinding, SourceAuthority};
 use floe_execution::Cancellation;
 use floe_kernel::{AgentFailure, PersonId};
 use tokio::time::Instant;
@@ -59,6 +59,11 @@ pub trait PersonalGrantStore: Sync {
         &'a self,
         grant: GrantId,
     ) -> BoxFuture<'a, Result<String, AgentFailure>>;
+
+    fn current_source_authority<'a>(
+        &'a self,
+        grant: GrantId,
+    ) -> BoxFuture<'a, Result<SourceAuthority, AgentFailure>>;
 
     fn selected_handles<'a>(
         &'a self,

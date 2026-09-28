@@ -145,6 +145,8 @@ async fn seed(
         admission.authority,
         admission.source.clone(),
         admission.scope.resources().to_vec(),
+        source.source_authority(),
+        admission.scope.resources().to_vec(),
         admission.scope.categories().to_vec(),
         GrantOperation::Read,
         GrantPurpose::Assistant,

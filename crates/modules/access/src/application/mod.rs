@@ -1,4 +1,3 @@
-pub mod admission;
 pub mod authority;
 pub mod calendar_lease;
 pub mod calendar_read;
@@ -16,7 +15,6 @@ pub mod remote_calendar;
 pub mod remote_grants;
 pub mod remote_view;
 
-pub use admission::{ReplayRequest, ReplayTrust, admit_replay};
 pub use authority::{
     ReadAuthorityEvidence, ReadAuthorityIdentity, validate_read_authority, validate_read_continuity,
 };

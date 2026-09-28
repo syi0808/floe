@@ -610,11 +610,6 @@ fn live_precondition() -> LiveInlineState {
 
 fn live_satisfied() -> LiveInlineState {
     let (id, authority) = grant_pair();
-    let source = floe_context_contract::SourceAuthority::from_parts(
-        Uuid::new_v4(),
-        NonZeroU64::new(3).unwrap(),
-    )
-    .unwrap();
     LiveInlineState {
         members: vec![LiveMember {
             member_id: "calendar.timeline".into(),
@@ -624,7 +619,6 @@ fn live_satisfied() -> LiveInlineState {
             live_grants: vec![LiveGrant {
                 id,
                 authority,
-                source_authority: source,
             }],
             policy_authority: None,
         }],
@@ -1020,7 +1014,6 @@ async fn fresh_approve_on_unchanged_live_grant_rereviews_and_resolves() {
             live_grants: vec![LiveGrant {
                 id,
                 authority,
-                source_authority: source,
             }],
             policy_authority: None,
         }],
@@ -2846,7 +2839,13 @@ impl RemoteFixture {
             .map(|policy| floe_conversation::ReviewedBundleMember {
                 member_id: policy.view_id.to_owned(),
                 policy_fingerprint: crate::first_party_observe::policy_fingerprint(policy).unwrap(),
-                resource: floe_context::remote_view_resource(policy.view_id, &self.connection_id),
+                resource: floe_context_contract::connection_view_resource(
+                    policy.view_id,
+                    &floe_context_contract::ConnectionId::try_new(&self.connection_id).unwrap(),
+                )
+                .unwrap()
+                .as_str()
+                .to_owned(),
                 source_revision: Some(floe_conversation::AuthorityRevision {
                     incarnation: authority.incarnation(),
                     epoch: authority.epoch().get(),
@@ -3307,7 +3306,13 @@ async fn manager_mail_read_requires_assistant_in_reviewed_product_policy() {
     );
     assert_eq!(
         dependencies[0].resources()[0].as_str(),
-        floe_context::remote_view_resource(floe_context::MAIL_VIEW, &host.connection_id)
+        floe_context_contract::connection_view_resource(
+            floe_context::MAIL_VIEW,
+            &floe_context_contract::ConnectionId::try_new(&host.connection_id).unwrap(),
+        )
+        .unwrap()
+        .as_str()
+        .to_owned()
     );
 }
 

@@ -523,7 +523,11 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    use floe_context_contract::RecipientLineage;
+    use floe_context_contract::{
+        ConnectionId, ConnectorId, ConsumerPolicyAuthority, GrantAuthority, GrantConsumer,
+        GrantDataCategory, GrantId, GrantOperation, GrantPurpose, ProcessingSourceScope,
+        RecipientLineage, ResourceHandle, SourceAuthority,
+    };
     use uuid::Uuid;
 
     use super::*;
@@ -689,6 +693,99 @@ mod tests {
             variant(|consent| consent.lineage =
                 RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4()).unwrap()),
             base.id
+        );
+    }
+
+    #[test]
+    fn consent_identity_binds_grant_and_exact_source_resources_and_authority() {
+        let person = PersonId::new();
+        let lineage = RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4()).unwrap();
+        let grant_id = GrantId::new();
+        let grant_authority = GrantAuthority::new();
+        let source_authority = SourceAuthority::new();
+        let policy_authority = ConsumerPolicyAuthority::new();
+        let scope = |grant_resources: Vec<&str>, source_resources: Vec<&str>, source_authority| {
+            ProcessingSourceScope::try_new(
+                ConnectionId::try_new("account").unwrap(),
+                ConnectorId::try_new("gmail").unwrap(),
+                grant_resources
+                    .into_iter()
+                    .map(|resource| ResourceHandle::try_new(resource).unwrap())
+                    .collect(),
+                source_resources
+                    .into_iter()
+                    .map(|resource| ResourceHandle::try_new(resource).unwrap())
+                    .collect(),
+                vec![GrantDataCategory::Content],
+                GrantOperation::Read,
+                GrantPurpose::Assistant,
+                GrantConsumer::builtin("assistant").unwrap(),
+                grant_id,
+                grant_authority,
+                source_authority,
+                policy_authority,
+            )
+            .unwrap()
+        };
+        let identity = |scope| {
+            RecipientConsent::try_new(
+                person,
+                "device",
+                "client",
+                "model.example",
+                "server-model",
+                "everyday_assistance",
+                "conversation.root",
+                vec![DataClass::Personal],
+                vec![scope],
+                lineage,
+                Uuid::new_v4(),
+                1,
+                now(),
+            )
+            .unwrap()
+            .id()
+        };
+        let base = identity(scope(
+            vec!["mail.communication:account"],
+            vec!["message-a"],
+            source_authority,
+        ));
+        assert_ne!(
+            base,
+            identity(scope(
+                vec!["mail.communication:account"],
+                vec!["message-b"],
+                source_authority,
+            ))
+        );
+        assert_ne!(
+            base,
+            identity(scope(
+                vec!["mail.communication:account"],
+                vec!["message-a"],
+                source_authority.advance().unwrap(),
+            ))
+        );
+        assert_ne!(
+            base,
+            identity(scope(
+                vec!["work.context:account"],
+                vec!["message-a"],
+                source_authority,
+            ))
+        );
+        assert_eq!(
+            identity(scope(
+                vec!["mail.communication:account"],
+                vec!["message-b", "message-a"],
+                source_authority,
+            )),
+            identity(scope(
+                vec!["mail.communication:account"],
+                vec!["message-a", "message-b"],
+                source_authority,
+            ))
         );
     }
 

@@ -191,7 +191,7 @@ pub async fn authorize_native_calendar_dependency(
     }
     let (_, subject_fingerprint) = leases.observation(dependency)?;
     let selected_calendar_ids = dependency
-        .resources()
+        .source_resources()
         .iter()
         .map(|resource| resource.as_str().to_owned())
         .collect::<Vec<_>>();

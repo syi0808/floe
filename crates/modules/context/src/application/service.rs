@@ -196,7 +196,7 @@ mod tests {
     use floe_context_contract::{
         ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
         GrantConsumer, GrantDataCategory, GrantId, GrantPurpose, GrantSourceBinding,
-        ProcessingRestriction, ResourceHandle, SourceAuthority,
+        ProcessingRestriction, ResourceHandle,
     };
     use uuid::Uuid;
 
@@ -282,9 +282,10 @@ mod tests {
                 ConnectionId::new(),
                 ConnectorId::try_new("fixture.connector").unwrap(),
                 ExecutionOwnerId::try_new("fixture-owner").unwrap(),
-                SourceAuthority::new(),
             )
             .unwrap(),
+            vec![ResourceHandle::try_new("fixture/item").unwrap()],
+            floe_context_contract::SourceAuthority::new(),
             vec![ResourceHandle::try_new("fixture/item").unwrap()],
             vec![GrantDataCategory::Metadata],
             GrantOperation::Read,

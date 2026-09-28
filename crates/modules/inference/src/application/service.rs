@@ -588,7 +588,7 @@ mod tests {
     use floe_context_contract::{
         ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, ExecutionOwnerId,
         GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-        GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+        GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
     use floe_execution::{
         Cancellation,
@@ -1059,7 +1059,6 @@ mod tests {
             ConnectionId::try_new("c").unwrap(),
             ConnectorId::try_new("k").unwrap(),
             ExecutionOwnerId::try_new("o").unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap();
         let now = chrono::Utc::now();
@@ -1068,6 +1067,8 @@ mod tests {
             GrantId::new(),
             GrantAuthority::new(),
             source,
+            vec![ResourceHandle::try_new("r").unwrap()],
+            floe_context_contract::SourceAuthority::new(),
             vec![ResourceHandle::try_new("r").unwrap()],
             vec![GrantDataCategory::Metadata],
             GrantOperation::Read,

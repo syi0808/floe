@@ -85,6 +85,7 @@ impl Default for SourceAuthority {
     }
 }
 pub const MAX_RESOURCE_HANDLE_BYTES: usize = 256;
+pub const MAX_SOURCE_RESOURCES: usize = 4096;
 pub const MAX_CONNECTOR_ID_BYTES: usize = 128;
 pub const MAX_EXECUTION_OWNER_BYTES: usize = 256;
 pub const MAX_CONSUMERS: usize = 32;
@@ -274,6 +275,37 @@ impl ResourceHandle {
     }
 }
 
+pub fn connection_view_resource(
+    view_id: &str,
+    connection_id: &ConnectionId,
+) -> Result<ResourceHandle, GrantValidationError> {
+    validate_identifier(view_id, MAX_RESOURCE_HANDLE_BYTES, "view")?;
+    if view_id.contains(':') || connection_id.as_str().contains(':') {
+        return Err(GrantValidationError::InvalidIdentifier("connection view"));
+    }
+    ConnectionId::try_new(connection_id.as_str().to_owned())?;
+    ResourceHandle::try_new(format!(
+        "{view_id}:{connection_id}",
+        connection_id = connection_id.as_str()
+    ))
+}
+
+pub fn split_connection_view_resource<'a>(
+    resource: &'a ResourceHandle,
+    connection_id: &ConnectionId,
+) -> Result<&'a str, GrantValidationError> {
+    let (view_id, named_connection) = resource
+        .as_str()
+        .split_once(':')
+        .ok_or(GrantValidationError::InvalidIdentifier("connection view"))?;
+    if named_connection != connection_id.as_str()
+        || connection_view_resource(view_id, connection_id)? != *resource
+    {
+        return Err(GrantValidationError::InvalidIdentifier("connection view"));
+    }
+    Ok(view_id)
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GrantScope {
@@ -385,7 +417,6 @@ pub struct GrantSourceBinding {
     connection_id: ConnectionId,
     connector: ConnectorId,
     execution_owner: ExecutionOwnerId,
-    source_authority: SourceAuthority,
 }
 
 impl GrantSourceBinding {
@@ -394,9 +425,8 @@ impl GrantSourceBinding {
         connection_id: ConnectionId,
         connector: ConnectorId,
         execution_owner: ExecutionOwnerId,
-        source_authority: SourceAuthority,
     ) -> Result<Self, GrantValidationError> {
-        if person_id.0.is_nil() || !source_authority.is_valid() {
+        if person_id.0.is_nil() {
             return Err(GrantValidationError::Identity);
         }
         ConnectorId::try_new(connector.0.clone())?;
@@ -406,7 +436,6 @@ impl GrantSourceBinding {
             connection_id: connection_id.clone(),
             connector,
             execution_owner,
-            source_authority,
         })
     }
     pub fn person_id(&self) -> PersonId {
@@ -421,22 +450,12 @@ impl GrantSourceBinding {
     pub fn execution_owner(&self) -> &ExecutionOwnerId {
         &self.execution_owner
     }
-    pub fn source_authority(&self) -> SourceAuthority {
-        self.source_authority
-    }
-    pub fn same_identity(&self, other: &Self) -> bool {
-        self.person_id == other.person_id
-            && self.connection_id == other.connection_id
-            && self.connector == other.connector
-            && self.execution_owner == other.execution_owner
-    }
     pub fn validate(&self) -> Result<(), GrantValidationError> {
         Self::try_new(
             self.person_id,
             self.connection_id.clone(),
             self.connector.clone(),
             self.execution_owner.clone(),
-            self.source_authority,
         )
         .map(|_| ())
     }
@@ -650,6 +669,8 @@ pub struct ContextDependency {
     grant_authority: GrantAuthority,
     source: GrantSourceBinding,
     resources: Vec<ResourceHandle>,
+    source_authority: SourceAuthority,
+    source_resources: Vec<ResourceHandle>,
     categories: Vec<GrantDataCategory>,
     operation: GrantOperation,
     purpose: GrantPurpose,
@@ -672,6 +693,8 @@ impl ContextDependency {
         grant_authority: GrantAuthority,
         source: GrantSourceBinding,
         mut resources: Vec<ResourceHandle>,
+        source_authority: SourceAuthority,
+        mut source_resources: Vec<ResourceHandle>,
         mut categories: Vec<GrantDataCategory>,
         operation: GrantOperation,
         purpose: GrantPurpose,
@@ -688,6 +711,7 @@ impl ContextDependency {
         if person_id.0.is_nil()
             || !grant_id.is_valid()
             || !grant_authority.is_valid()
+            || !source_authority.is_valid()
             || !consumer_policy.is_valid()
             || observation_id.is_nil()
             || lease_invocation_id.is_nil()
@@ -703,18 +727,25 @@ impl ContextDependency {
         if source.person_id() != person_id {
             return Err(ContextDependencyError::PersonMismatch);
         }
-        if resources.is_empty() {
+        if resources.is_empty()
+            || source_resources.is_empty()
+            || source_resources.len() > MAX_SOURCE_RESOURCES
+        {
             return Err(ContextDependencyError::InvalidScope);
         }
         if categories.is_empty() {
             return Err(ContextDependencyError::InvalidScope);
         }
-        for resource in &resources {
+        for resource in resources.iter().chain(&source_resources) {
             ResourceHandle::try_new(resource.as_str().to_owned())
                 .map_err(|_| ContextDependencyError::InvalidScope)?;
         }
         resources.sort();
         if resources.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(ContextDependencyError::InvalidScope);
+        }
+        source_resources.sort();
+        if source_resources.windows(2).any(|pair| pair[0] == pair[1]) {
             return Err(ContextDependencyError::InvalidScope);
         }
         categories.sort();
@@ -756,6 +787,8 @@ impl ContextDependency {
             grant_authority,
             source,
             resources,
+            source_authority,
+            source_resources,
             categories,
             operation,
             purpose,
@@ -780,6 +813,8 @@ impl ContextDependency {
             self.grant_authority,
             self.source.clone(),
             self.resources.clone(),
+            self.source_authority,
+            self.source_resources.clone(),
             self.categories.clone(),
             self.operation,
             self.purpose,
@@ -810,8 +845,16 @@ impl ContextDependency {
     pub fn source(&self) -> &GrantSourceBinding {
         &self.source
     }
+    /// Permission resources admitted by the Access grant.
     pub fn resources(&self) -> &[ResourceHandle] {
         &self.resources
+    }
+    pub fn source_authority(&self) -> SourceAuthority {
+        self.source_authority
+    }
+    /// Exact provider or leaf resources observed for this evidence.
+    pub fn source_resources(&self) -> &[ResourceHandle] {
+        &self.source_resources
     }
     pub fn categories(&self) -> &[GrantDataCategory] {
         &self.categories
@@ -862,7 +905,7 @@ impl ContextDependency {
             self.observation_id,
             self.grant_id,
             self.grant_authority,
-            self.source.source_authority(),
+            self.source_authority,
         ))
         .map_err(|_| ContextDependencyError::Corrupt)
     }
@@ -1096,7 +1139,6 @@ mod tests {
             ConnectionId::new(),
             ConnectorId::try_new("calendar").unwrap(),
             ExecutionOwnerId::try_new("device").unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap()
     }
@@ -1112,6 +1154,8 @@ mod tests {
             GrantAuthority::new(),
             source,
             vec![ResourceHandle::try_new("calendar").unwrap()],
+            SourceAuthority::new(),
+            vec![ResourceHandle::try_new("calendar/leaf").unwrap()],
             vec![GrantDataCategory::Metadata, GrantDataCategory::Content],
             GrantOperation::Read,
             GrantPurpose::Assistant,
@@ -1125,6 +1169,117 @@ mod tests {
             observed_at,
             observed_at + Duration::minutes(5),
         )
+    }
+
+    #[test]
+    fn stable_source_and_dependency_provenance_are_distinct() {
+        let source = source();
+        let encoded = serde_json::to_value(&source).unwrap();
+        assert_eq!(encoded.as_object().unwrap().len(), 4);
+        assert!(encoded.get("source_authority").is_none());
+        let mut old_source = encoded;
+        old_source["source_authority"] = serde_json::to_value(SourceAuthority::new()).unwrap();
+        assert!(serde_json::from_value::<GrantSourceBinding>(old_source).is_err());
+
+        let dependency = admit_dependency(source, ProcessingRestriction::LocalOnly).unwrap();
+        assert_ne!(dependency.resources(), dependency.source_resources());
+        let mut old_dependency = serde_json::to_value(dependency).unwrap();
+        old_dependency.as_object_mut().unwrap().remove("source_authority");
+        old_dependency.as_object_mut().unwrap().remove("source_resources");
+        assert!(serde_json::from_value::<ContextDependency>(old_dependency).is_err());
+    }
+
+    #[test]
+    fn dependency_source_resources_are_canonical_and_part_of_identity_conflicts() {
+        let dependency = admit_dependency(source(), ProcessingRestriction::LocalOnly).unwrap();
+        let mut changed = dependency.clone();
+        changed.source_resources = vec![ResourceHandle::try_new("calendar/other").unwrap()];
+        let first = DependencyCoverage::dependent(dependency.clone()).unwrap();
+        let second = DependencyCoverage::dependent(changed).unwrap();
+        assert_eq!(first.merge(&second), Err(ContextDependencyError::Conflict));
+
+        let canonical = ContextDependency::try_new(
+            dependency.person_id,
+            dependency.grant_id,
+            dependency.grant_authority,
+            dependency.source.clone(),
+            vec![
+                ResourceHandle::try_new("permission-b").unwrap(),
+                ResourceHandle::try_new("permission-a").unwrap(),
+            ],
+            dependency.source_authority,
+            vec![
+                ResourceHandle::try_new("leaf-b").unwrap(),
+                ResourceHandle::try_new("leaf-a").unwrap(),
+            ],
+            dependency.categories.clone(),
+            dependency.operation,
+            dependency.purpose,
+            dependency.consumer.clone(),
+            dependency.processing.clone(),
+            dependency.consumer_policy,
+            dependency.observation_id,
+            dependency.query_fingerprint.clone(),
+            dependency.lease_invocation_id,
+            dependency.process_incarnation_id,
+            dependency.observed_at,
+            dependency.expires_at,
+        )
+        .unwrap();
+        assert_eq!(canonical.resources()[0].as_str(), "permission-a");
+        assert_eq!(canonical.source_resources()[0].as_str(), "leaf-a");
+        let mut noncanonical = canonical.clone();
+        noncanonical.source_resources.reverse();
+        assert_eq!(noncanonical.validate(), Err(ContextDependencyError::NonCanonical));
+    }
+
+    #[test]
+    fn persisted_dependency_rejects_old_or_corrupt_source_provenance() {
+        let dependency = admit_dependency(source(), ProcessingRestriction::LocalOnly).unwrap();
+        let coverage = DependencyCoverage::dependent(dependency).unwrap();
+        let canonical = serde_json::to_value(coverage).unwrap();
+        let invalid = |mutate: fn(&mut serde_json::Value)| {
+            let mut value = canonical.clone();
+            mutate(&mut value);
+            let bytes = serde_json::to_vec(&value).unwrap();
+            assert!(DependencyCoverage::from_persisted_bytes(&bytes).is_err());
+        };
+        invalid(|value| {
+            value["dependent"]["dependencies"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("source_authority");
+        });
+        invalid(|value| {
+            value["dependent"]["dependencies"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("source_resources");
+        });
+        invalid(|value| {
+            value["dependent"]["dependencies"][0]["source"]["source_authority"] =
+                serde_json::to_value(SourceAuthority::new()).unwrap();
+        });
+        invalid(|value| {
+            value["dependent"]["dependencies"][0]["source_resources"] =
+                serde_json::json!(["leaf-b", "leaf-a"]);
+        });
+        invalid(|value| {
+            value["dependent"]["dependencies"][0]["source_resources"] =
+                serde_json::json!(["leaf-a", "leaf-a"]);
+        });
+    }
+
+    #[test]
+    fn connection_view_resource_round_trips() {
+        let connection_id = ConnectionId::try_new("connection").unwrap();
+        let resource = connection_view_resource("mail.communication", &connection_id).unwrap();
+        assert_eq!(resource.as_str(), "mail.communication:connection");
+        assert_eq!(
+            split_connection_view_resource(&resource, &connection_id).unwrap(),
+            "mail.communication"
+        );
+        assert!(connection_view_resource("mail:communication", &connection_id).is_err());
     }
 
     #[test]

@@ -422,7 +422,7 @@ fn archive_dependency(person_id: PersonId) -> floe_context::ContextDependency {
     use floe_access::{
         ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
         GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-        GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+        GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
 
     let now = Utc::now();
@@ -435,9 +435,10 @@ fn archive_dependency(person_id: PersonId) -> floe_context::ContextDependency {
             ConnectionId::try_new("archive-connection").unwrap(),
             ConnectorId::try_new("archive-connector").unwrap(),
             ExecutionOwnerId::try_new("archive-owner").unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap(),
+        vec![ResourceHandle::try_new("action/receipt").unwrap()],
+        floe_context_contract::SourceAuthority::new(),
         vec![ResourceHandle::try_new("action/receipt").unwrap()],
         vec![GrantDataCategory::Metadata],
         GrantOperation::Read,

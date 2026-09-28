@@ -82,23 +82,20 @@ impl DataAccessGrant {
     pub fn activate_review(
         &mut self,
         expected: GrantAuthority,
-        source: GrantSourceBinding,
         scope: GrantScope,
     ) -> Result<bool, GrantTransitionError> {
         self.check_expected(expected)?;
-        self.validate_transition_source(&source)?;
         scope.validate().map_err(GrantTransitionError::Invalid)?;
         if self.state == GrantState::Revoked {
             return Err(GrantTransitionError::Terminal);
         }
-        if self.state == GrantState::Active && self.source == source && self.scope == scope {
+        if self.state == GrantState::Active && self.scope == scope {
             return Ok(false);
         }
         self.authority = self
             .authority
             .advance()
             .ok_or(GrantTransitionError::Overflow)?;
-        self.source = source;
         self.scope = scope;
         self.state = GrantState::Active;
         self.review_required = false;
@@ -108,11 +105,9 @@ impl DataAccessGrant {
     pub fn review_active(
         &mut self,
         expected: GrantAuthority,
-        source: GrantSourceBinding,
         scope: GrantScope,
     ) -> Result<bool, GrantTransitionError> {
         self.check_expected(expected)?;
-        self.validate_transition_source(&source)?;
         scope.validate().map_err(GrantTransitionError::Invalid)?;
         if self.state == GrantState::Revoked {
             return Err(GrantTransitionError::Terminal);
@@ -124,7 +119,6 @@ impl DataAccessGrant {
             .authority
             .advance()
             .ok_or(GrantTransitionError::Overflow)?;
-        self.source = source;
         self.scope = scope;
         self.review_required = false;
         Ok(true)
@@ -132,11 +126,9 @@ impl DataAccessGrant {
     pub fn review(
         &mut self,
         expected: GrantAuthority,
-        source: GrantSourceBinding,
         scope: GrantScope,
     ) -> Result<bool, GrantTransitionError> {
         self.check_expected(expected)?;
-        self.validate_transition_source(&source)?;
         scope.validate().map_err(GrantTransitionError::Invalid)?;
         if self.state == GrantState::Revoked {
             return Err(GrantTransitionError::Terminal);
@@ -144,14 +136,13 @@ impl DataAccessGrant {
         if self.state != GrantState::Paused {
             return Err(GrantTransitionError::Conflict);
         }
-        if !self.review_required && self.source == source && self.scope == scope {
+        if !self.review_required && self.scope == scope {
             return Ok(false);
         }
         self.authority = self
             .authority
             .advance()
             .ok_or(GrantTransitionError::Overflow)?;
-        self.source = source;
         self.scope = scope;
         self.review_required = false;
         Ok(true)
@@ -194,24 +185,12 @@ impl DataAccessGrant {
             .then_some(())
             .ok_or(GrantTransitionError::Conflict)
     }
-    fn validate_transition_source(
-        &self,
-        source: &GrantSourceBinding,
-    ) -> Result<(), GrantTransitionError> {
-        source.validate().map_err(GrantTransitionError::Invalid)?;
-        if !self.source.same_identity(source) {
-            return Err(GrantTransitionError::Identity);
-        }
-        Ok(())
-    }
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum GrantTransitionError {
     #[error("stale grant authority")]
     Conflict,
-    #[error("grant identity mismatch")]
-    Identity,
     #[error("revoked grant is terminal")]
     Terminal,
     #[error("grant epoch exhausted")]
@@ -226,7 +205,7 @@ mod tests {
     use floe_context_contract::{
         ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantId,
         GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction,
-        ResourceHandle, SourceAuthority,
+        ResourceHandle,
     };
     use floe_kernel::PersonId;
 
@@ -334,73 +313,21 @@ mod tests {
             ConnectionId::new(),
             ConnectorId::try_new("calendar").unwrap(),
             ExecutionOwnerId::try_new("mac-host").unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap();
-        let connection_id = source.connection_id();
         let mut grant =
             DataAccessGrant::new(GrantId::new(), Uuid::new_v4(), source.clone(), scope()).unwrap();
         assert!(grant.review_required());
         let stamp = grant.authority();
-        assert!(
-            grant
-                .activate_review(stamp, source.clone(), scope())
-                .unwrap()
-        );
+        assert!(grant.activate_review(stamp, scope()).unwrap());
+        assert_eq!(grant.source(), &source);
         let active = grant.authority();
         assert!(!grant.review_required());
-        assert!(!grant.activate_review(active, source, scope()).unwrap());
-        let alternate_connection = GrantSourceBinding::try_new(
-            person,
-            ConnectionId::new(),
-            ConnectorId::try_new("calendar").unwrap(),
-            ExecutionOwnerId::try_new("mac-host").unwrap(),
-            SourceAuthority::new(),
-        )
-        .unwrap();
-        assert_eq!(
-            grant.activate_review(active, alternate_connection, scope()),
-            Err(GrantTransitionError::Identity)
-        );
-        let alternate_connector = GrantSourceBinding::try_new(
-            person,
-            connection_id.clone(),
-            ConnectorId::try_new("other-calendar").unwrap(),
-            ExecutionOwnerId::try_new("mac-host").unwrap(),
-            SourceAuthority::new(),
-        )
-        .unwrap();
-        assert_eq!(
-            grant.activate_review(active, alternate_connector, scope()),
-            Err(GrantTransitionError::Identity)
-        );
-        let alternate_owner = GrantSourceBinding::try_new(
-            person,
-            connection_id.clone(),
-            ConnectorId::try_new("calendar").unwrap(),
-            ExecutionOwnerId::try_new("other-host").unwrap(),
-            SourceAuthority::new(),
-        )
-        .unwrap();
-        assert_eq!(
-            grant.activate_review(active, alternate_owner, scope()),
-            Err(GrantTransitionError::Identity)
-        );
-        let alternate_person = GrantSourceBinding::try_new(
-            PersonId::new(),
-            connection_id,
-            ConnectorId::try_new("calendar").unwrap(),
-            ExecutionOwnerId::try_new("mac-host").unwrap(),
-            SourceAuthority::new(),
-        )
-        .unwrap();
-        assert_eq!(
-            grant.activate_review(active, alternate_person, scope()),
-            Err(GrantTransitionError::Identity)
-        );
+        assert!(!grant.activate_review(active, scope()).unwrap());
+        assert_eq!(grant.source(), &source);
         assert!(grant.revoke(active).unwrap());
         assert_eq!(
-            grant.activate_review(grant.authority(), grant.source().clone(), scope()),
+            grant.activate_review(grant.authority(), scope()),
             Err(GrantTransitionError::Terminal)
         );
     }
@@ -420,7 +347,6 @@ mod tests {
             ConnectionId::new(),
             ConnectorId::try_new("calendar").unwrap(),
             ExecutionOwnerId::try_new("host").unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap();
         let mut source_value = serde_json::to_value(&source).unwrap();

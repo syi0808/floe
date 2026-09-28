@@ -181,7 +181,7 @@ mod tests {
     use floe_context_contract::{
         ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
         GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-        GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+        GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
     use serde::ser::{Error as _, SerializeSeq, Serializer};
     use std::sync::{
@@ -259,9 +259,10 @@ mod tests {
                 ConnectionId::new(),
                 ConnectorId::try_new("fixture.connector").unwrap(),
                 ExecutionOwnerId::try_new("fixture-device").unwrap(),
-                SourceAuthority::new(),
             )
             .unwrap(),
+            scope.resources().to_vec(),
+            floe_context_contract::SourceAuthority::new(),
             scope.resources().to_vec(),
             scope.categories().to_vec(),
             GrantOperation::Read,

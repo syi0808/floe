@@ -280,7 +280,6 @@ mod tests {
             floe_context_contract::ConnectionId::try_new("connection").unwrap(),
             floe_context_contract::ConnectorId::try_new("connector").unwrap(),
             floe_context_contract::ExecutionOwnerId::try_new("owner").unwrap(),
-            floe_context_contract::SourceAuthority::new(),
         )
         .unwrap();
         ContextDependency::try_new(
@@ -288,6 +287,8 @@ mod tests {
             GrantId::new(),
             GrantAuthority::new(),
             source,
+            vec![ResourceHandle::try_new("calendar/a").unwrap()],
+            floe_context_contract::SourceAuthority::new(),
             vec![ResourceHandle::try_new("calendar/a").unwrap()],
             vec![GrantDataCategory::Metadata],
             GrantOperation::Read,

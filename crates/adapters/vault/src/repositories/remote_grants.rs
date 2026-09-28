@@ -9,7 +9,7 @@ use floe_access::{
     RemoteGrantStore, RemotePairingIdentity, RemoteProducerIdentity, RemoteSourceQuery,
     RemoteViewSourceReference, SignedCalendarPreview, SignedSourcePreview,
 };
-use floe_access::{GrantAuthority, GrantId, GrantScope, GrantSourceBinding, SourceAuthority};
+use floe_access::{GrantAuthority, GrantId, GrantScope, GrantSourceBinding};
 use floe_agent_contract::{AgentFailure, BoxFuture};
 
 use crate::{EncryptedAgentVault, VaultKeyProvider};
@@ -151,11 +151,10 @@ impl<Keys: VaultKeyProvider> RemoteGrantStore for EncryptedAgentVault<Keys> {
         view_id: &'a str,
         connector_id: &'a str,
         connection_id: &'a str,
-        source_authority: SourceAuthority,
     ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>> {
         Box::pin(async move {
             let binding = self
-                .remote_view_grant_binding(view_id, connector_id, connection_id, source_authority)
+                .remote_view_grant_binding(view_id, connector_id, connection_id)
                 .await?;
             Ok(RemoteGrantBinding {
                 grant: binding.grant,
@@ -168,7 +167,6 @@ impl<Keys: VaultKeyProvider> RemoteGrantStore for EncryptedAgentVault<Keys> {
         &'a self,
         connector_id: &'a str,
         connection_id: &'a str,
-        source_authority: SourceAuthority,
         resource: &'a str,
     ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>> {
         Box::pin(async move {
@@ -176,7 +174,6 @@ impl<Keys: VaultKeyProvider> RemoteGrantStore for EncryptedAgentVault<Keys> {
                 .remote_calendar_grant_binding(
                     connector_id,
                     connection_id,
-                    source_authority,
                     resource,
                 )
                 .await?;

@@ -100,7 +100,7 @@ pub use application::remote_sources::{
 };
 pub use application::remote_views::{
     LOGISTICS_VIEW, MAIL_VIEW, WORK_VIEW, is_remote_view, remote_view_data_category,
-    remote_view_dependency, remote_view_resource, split_remote_view_resource, validate_remote_view,
+    remote_view_dependency, validate_remote_view,
     validate_remote_view_query,
 };
 pub use application::service::{ContextService, PreparedContext};

@@ -1019,7 +1019,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         let mut grant_rows = transaction
             .query(
-                "SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ? AND authority_owner = ?",
+                "SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ? AND authority_owner = ?",
                 (grant_wire.id.clone(), self.person_id.to_string(), self.vault_id.to_string()),
             )
             .await
@@ -1029,19 +1029,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(|_| AgentFailure::PolicyDenied)?
             .ok_or(AgentFailure::PolicyDenied)?;
-        let grant_payload = grant_row
-            .get::<String>(11)
+        let grant = super::access_grants::decode_grant(&grant_row)
             .map_err(|_| AgentFailure::PolicyDenied)?;
-        let grant: floe_access::DataAccessGrant =
-            serde_json::from_str(&grant_payload).map_err(|_| AgentFailure::PolicyDenied)?;
         if grant.state() != GrantState::Active
             || grant.review_required()
             || grant.source().person_id() != self.person_id
             || grant.source().connection_id().as_str() != source.connection_id
             || grant.source().connector().as_str() != source.connector_id
             || grant.source().execution_owner().as_str() != source.execution_owner
-            || grant.source().source_authority().incarnation().to_string() != source.incarnation
-            || grant.source().source_authority().epoch().get() != source.epoch
             || grant.authority().incarnation().to_string() != grant_wire.incarnation
             || grant.authority().access_epoch().get() != grant_wire.epoch
             || !grant.scope().operations().contains(&GrantOperation::Read)
@@ -2334,7 +2329,6 @@ mod tests {
                 ConnectionId::try_new(connection_id).unwrap(),
                 ConnectorId::try_new(connector).unwrap(),
                 ExecutionOwnerId::try_new(producer.execution_owner.clone()).unwrap(),
-                source_authority,
             )
             .unwrap();
             let consumer = GrantConsumer::builtin("floe.builtin.schedule").unwrap();
@@ -2358,7 +2352,7 @@ mod tests {
                 .await
                 .unwrap();
             let binding = vault
-                .remote_calendar_grant_binding(connector, connection_id, source_authority, resource)
+                .remote_calendar_grant_binding(connector, connection_id, resource)
                 .await
                 .unwrap();
             let owner_key = vault.remote_owner_public_key().await.unwrap();

@@ -228,7 +228,13 @@ where
             }
         } else if !floe_context::is_remote_view(&member.view_id)
             || member.resource
-                != floe_context::remote_view_resource(&member.view_id, ctx.connection_id)
+                != floe_context_contract::connection_view_resource(
+                    &member.view_id,
+                    &floe_context_contract::ConnectionId::try_new(ctx.connection_id)
+                        .map_err(|_| AgentFailure::InvalidInput)?,
+                )
+                .map_err(|_| AgentFailure::InvalidInput)?
+                .as_str()
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -270,6 +276,8 @@ pub(crate) async fn disable_bundle<Keys: VaultKeyProvider>(
         return Err(AgentFailure::CapabilityDenied);
     }
     let policies = crate::first_party_observe::remote_policies(connector_id)?;
+    let connection = floe_context_contract::ConnectionId::try_new(connection_id)
+        .map_err(|_| AgentFailure::InvalidInput)?;
     if policies.is_empty() {
         return Err(AgentFailure::InvalidInput);
     }
@@ -280,7 +288,8 @@ pub(crate) async fn disable_bundle<Keys: VaultKeyProvider>(
             && grant.state() == floe_access::GrantState::Active
             && (grant.scope().resources().iter().any(|value| {
                 expected_views.iter().any(|view| {
-                    value.as_str() == floe_context::remote_view_resource(view, connection_id)
+                    floe_context_contract::connection_view_resource(view, &connection)
+                        .is_ok_and(|expected| &expected == value)
                 })
             }) || expected_views == ["calendar.timeline"])
         {
@@ -326,6 +335,8 @@ pub(crate) async fn observe_status<Keys: VaultKeyProvider>(
         return Err(AgentFailure::InvalidInput);
     }
     let expected_views: Vec<&str> = policies.iter().map(|policy| policy.view_id).collect();
+    let connection = floe_context_contract::ConnectionId::try_new(connection_id)
+        .map_err(|_| AgentFailure::InvalidInput)?;
     let grants = vault.list_data_access_grants(128).await?;
     let relevant = grants
         .iter()
@@ -337,8 +348,8 @@ pub(crate) async fn observe_status<Keys: VaultKeyProvider>(
                 && (expected_views == ["calendar.timeline"]
                     || grant.scope().resources().iter().any(|value| {
                         expected_views.iter().any(|view| {
-                            value.as_str()
-                                == floe_context::remote_view_resource(view, connection_id)
+                            floe_context_contract::connection_view_resource(view, &connection)
+                                .is_ok_and(|expected| &expected == value)
                         })
                     }))
         })
@@ -385,7 +396,14 @@ where
     if ctx.resource.is_some() || !floe_context::is_remote_view(policy.view_id) {
         return Err(AgentFailure::InvalidInput);
     }
-    let resource = floe_context::remote_view_resource(policy.view_id, ctx.connection_id);
+    let resource = floe_context_contract::connection_view_resource(
+        policy.view_id,
+        &floe_context_contract::ConnectionId::try_new(ctx.connection_id)
+            .map_err(|_| AgentFailure::InvalidInput)?,
+    )
+    .map_err(|_| AgentFailure::InvalidInput)?
+    .as_str()
+    .to_owned();
     let consumers = policy.consumers.clone();
     let request = floe_access::RemoteViewGrantRequest {
         person_id: ctx.person_id,
@@ -422,7 +440,6 @@ where
                     policy.view_id,
                     ctx.connector_id,
                     ctx.connection_id,
-                    grant.source().source_authority(),
                 )
                 .await?;
             if recorded != grant.id() {
@@ -993,13 +1010,11 @@ mod tests {
         let reviewed = review_bundle(&ctx, &fixture.transport).await.unwrap();
 
         // A grant appears out of band for one reviewed-absent member.
-        let authority = *fixture.transport.authority.lock().unwrap();
         let source = GrantSourceBinding::try_new(
             fixture.person_id,
             ConnectionId::try_new(fixture.connection_id.clone()).unwrap(),
             ConnectorId::try_new("gmail").unwrap(),
             ExecutionOwnerId::try_new(fixture.transport.producer.execution_owner.clone()).unwrap(),
-            authority,
         )
         .unwrap();
         let scope = GrantScope::try_new(

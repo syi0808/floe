@@ -88,6 +88,7 @@ struct CompletedRead {
     process: Uuid,
     grant: floe_access::DataAccessGrant,
     policy: floe_access::ConsumerPolicyAuthority,
+    source_authority: SourceAuthority,
 }
 
 fn read_requirement<'a>(read: &'a PersonalRead<'a>) -> PersonalReadRequirement<'a> {
@@ -122,6 +123,7 @@ async fn acquire_personal_source(
 ) -> Result<CompletedRead, AgentFailure> {
     within_read_window(read.deadline, cancellation)?;
     let requirement = read_requirement(read);
+    let source_authority = records.current_source_authority(grant.id()).await?;
     let subject = match &read.expected_subject {
         Some(subject) => subject.clone(),
         None => records.reviewed_subject(grant.id()).await?,
@@ -148,6 +150,9 @@ async fn acquire_personal_source(
     // grant the read started under has to be the one it finished under.
     let current = active_read_grant(&records.grants().await?, &requirement)?;
     grant_unchanged(grant, &current)?;
+    if records.current_source_authority(current.id()).await? != source_authority {
+        return Err(AgentFailure::StaleContext);
+    }
     let policy = records.consumer_policy(current.id()).await?;
     Ok(CompletedRead {
         value,
@@ -156,6 +161,7 @@ async fn acquire_personal_source(
         process: driver.process_incarnation(),
         grant: current,
         policy,
+        source_authority,
     })
 }
 
@@ -168,12 +174,23 @@ fn personal_dependency(
     expires_at_unix_ms: i64,
 ) -> Result<ContextDependency, AgentFailure> {
     let (observed, expires) = freshness(observed_at_unix_ms, expires_at_unix_ms)?;
+    let source_resources = if read.domain == PersonalDomain::People {
+        read.selected_handles
+            .iter()
+            .map(|handle| ResourceHandle::try_new(handle.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| AgentFailure::InvalidInput)?
+    } else {
+        vec![ResourceHandle::try_new(read.resource).map_err(|_| AgentFailure::InvalidInput)?]
+    };
     ContextDependency::try_new(
         read.person_id,
         completed.grant.id(),
         completed.grant.authority(),
         completed.grant.source().clone(),
         vec![ResourceHandle::try_new(read.resource).map_err(|_| AgentFailure::InvalidInput)?],
+        completed.source_authority,
+        source_resources,
         vec![GrantDataCategory::Derived],
         GrantOperation::Read,
         GrantPurpose::Assistant,
@@ -320,7 +337,7 @@ pub async fn read_feasibility(
 ) -> Result<(FeasibilityView, ContextDependency), AgentFailure> {
     within_read_window(deadline, cancellation)?;
     let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
-    let source = feasibility_source(person_id, device_id, SourceAuthority::new())?;
+    let source = feasibility_source(person_id, device_id)?;
     let read = PersonalRead {
         person_id,
         device_id,
@@ -395,7 +412,7 @@ pub async fn read_wellbeing(
     let read = PersonalRead {
         person_id,
         device_id,
-        source: wellbeing_source(person_id, device_id, SourceAuthority::new())?,
+        source: wellbeing_source(person_id, device_id)?,
         resource: WELLBEING_RESOURCE,
         domain: PersonalDomain::Wellbeing,
         consumer,
@@ -456,7 +473,7 @@ pub async fn admit_attention(
     use crate::ports::personal_source::AttentionAcquisition;
 
     within_read_window(deadline, cancellation)?;
-    let source = attention_source(person_id, device_id, SourceAuthority::new())?;
+    let source = attention_source(person_id, device_id)?;
     let requirement = PersonalReadRequirement {
         source: &source,
         resource: ATTENTION_RESOURCE,
@@ -465,6 +482,7 @@ pub async fn admit_attention(
         reject_ambiguous: false,
     };
     let grant = active_read_grant(&records.grants().await?, &requirement)?;
+    let source_authority = records.current_source_authority(grant.id()).await?;
     let reviewed_subject = records.reviewed_subject(grant.id()).await?;
     let host_epoch = driver.attention_host_epoch(person_id)?;
     let acquired = driver
@@ -494,6 +512,9 @@ pub async fn admit_attention(
     within_read_window(deadline, cancellation)?;
     let current_grant = active_read_grant(&records.grants().await?, &requirement)?;
     grant_unchanged(&grant, &current_grant)?;
+    if records.current_source_authority(current_grant.id()).await? != source_authority {
+        return Err(AgentFailure::StaleContext);
+    }
     // The reviewed subject is read again, because the Person may have
     // re-reviewed the same grant against a different device while this ran.
     let current_subject = records.reviewed_subject(current_grant.id()).await?;
@@ -513,6 +534,8 @@ pub async fn admit_attention(
         current_grant.id(),
         current_grant.authority(),
         current_grant.source().clone(),
+        vec![ResourceHandle::try_new(ATTENTION_RESOURCE).map_err(|_| AgentFailure::InvalidInput)?],
+        source_authority,
         vec![ResourceHandle::try_new(ATTENTION_RESOURCE).map_err(|_| AgentFailure::InvalidInput)?],
         vec![GrantDataCategory::Derived],
         GrantOperation::Read,
@@ -689,6 +712,28 @@ pub async fn authorize_personal_dependency(
     deadline: Instant,
     cancellation: &Cancellation,
 ) -> Result<(), AgentFailure> {
+    let expected_source_resources = match dependency.source().connector().as_str() {
+        "contacts.apple" | "contacts.android" => records
+            .selected_handles(dependency.grant_id())
+            .await?
+            .into_iter()
+            .map(ResourceHandle::try_new)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| AgentFailure::PolicyDenied)?,
+        FEASIBILITY_CONNECTOR => vec![ResourceHandle::try_new(FEASIBILITY_RESOURCE)
+            .map_err(|_| AgentFailure::PolicyDenied)?],
+        WELLBEING_CONNECTOR => vec![ResourceHandle::try_new(WELLBEING_RESOURCE)
+            .map_err(|_| AgentFailure::PolicyDenied)?],
+        ATTENTION_CONNECTOR => vec![ResourceHandle::try_new(ATTENTION_RESOURCE)
+            .map_err(|_| AgentFailure::PolicyDenied)?],
+        _ => return Err(AgentFailure::PolicyDenied),
+    };
+    if dependency.source_authority()
+        != records.current_source_authority(dependency.grant_id()).await?
+        || dependency.source_resources() != expected_source_resources
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
     if matches!(
         dependency.source().connector().as_str(),
         "contacts.apple" | "contacts.android"
@@ -867,7 +912,7 @@ pub async fn authorize_personal_dependency(
         return Err(AgentFailure::PolicyDenied);
     }
     let grants = records.grants().await?;
-    let attention_source = attention_source(person_id, device_id, SourceAuthority::new())?;
+    let attention_source = attention_source(person_id, device_id)?;
     let grant = active_read_grant(
         &grants,
         &PersonalReadRequirement {
@@ -962,7 +1007,6 @@ fn people_identity(
     person_id: PersonId,
     device_id: &str,
 ) -> Result<PersonalSourceIdentity, AgentFailure> {
-    let authority = SourceAuthority::new();
     let mut expected = Vec::with_capacity(2);
     for connector in ["contacts.apple", "contacts.android"] {
         expected.push(
@@ -976,7 +1020,6 @@ fn people_identity(
                     connector, device_id,
                 ))
                 .map_err(|_| AgentFailure::InvalidInput)?,
-                authority,
             )
             .map_err(|_| AgentFailure::InvalidInput)?,
         );
@@ -998,11 +1041,7 @@ fn feasibility_identity(
     Ok(PersonalSourceIdentity {
         source_id: "floe.source.feasibility",
         resource: FEASIBILITY_RESOURCE,
-        expected: vec![feasibility_source(
-            person_id,
-            device_id,
-            SourceAuthority::new(),
-        )?],
+        expected: vec![feasibility_source(person_id, device_id)?],
         known_identity: Some((FEASIBILITY_CONNECTOR, FEASIBILITY_CONNECTION)),
     })
 }
@@ -1014,11 +1053,7 @@ fn attention_identity(
     Ok(PersonalSourceIdentity {
         source_id: "floe.source.attention",
         resource: ATTENTION_RESOURCE,
-        expected: vec![attention_source(
-            person_id,
-            device_id,
-            SourceAuthority::new(),
-        )?],
+        expected: vec![attention_source(person_id, device_id)?],
         known_identity: Some((ATTENTION_CONNECTOR, ATTENTION_CONNECTION)),
     })
 }
@@ -1030,11 +1065,7 @@ fn wellbeing_identity(
     Ok(PersonalSourceIdentity {
         source_id: "floe.source.wellbeing",
         resource: WELLBEING_RESOURCE,
-        expected: vec![wellbeing_source(
-            person_id,
-            device_id,
-            SourceAuthority::new(),
-        )?],
+        expected: vec![wellbeing_source(person_id, device_id)?],
         known_identity: Some((WELLBEING_CONNECTOR, WELLBEING_CONNECTION)),
     })
 }
@@ -1087,7 +1118,7 @@ fn observe_personal_binding(
             && identity
                 .expected
                 .iter()
-                .any(|expected| grant.source().same_identity(expected))
+                .any(|expected| grant.source() == expected)
     });
     let Some(grant) = binding.next() else {
         return Ok(None);
@@ -1161,6 +1192,10 @@ async fn classify_personal_blocker(
     }
     let grants = records.grants().await?;
     let binding = observe_personal_binding(&grants, identity)?;
+    let source_authority = match &binding {
+        Some(grant) => Some(records.current_source_authority(grant.id()).await?),
+        None => None,
+    };
     let known = |identity: &PersonalSourceIdentity| {
         identity.known_identity.and_then(|(connector, connection)| {
             Some((
@@ -1195,7 +1230,7 @@ async fn classify_personal_blocker(
                     Some(grant.source().connection_id()),
                     consumer,
                     reason,
-                    Some(grant.source().source_authority()),
+                    source_authority,
                     Some(observed_grant(grant)?),
                 )?
             }
@@ -1205,7 +1240,7 @@ async fn classify_personal_blocker(
                 Some(grant) => (
                     Some(grant.source().connector().clone()),
                     Some(grant.source().connection_id()),
-                    Some(grant.source().source_authority()),
+                    source_authority,
                     Some(observed_grant(grant)?),
                 ),
                 None => {
@@ -1231,7 +1266,7 @@ async fn classify_personal_blocker(
                 Some(grant) => (
                     Some(grant.source().connector().clone()),
                     Some(grant.source().connection_id()),
-                    Some(grant.source().source_authority()),
+                    source_authority,
                     Some(observed_grant(grant)?),
                 ),
                 None => {
@@ -1255,7 +1290,7 @@ async fn classify_personal_blocker(
                 Some(grant) => (
                     Some(grant.source().connector().clone()),
                     Some(grant.source().connection_id()),
-                    Some(grant.source().source_authority()),
+                    source_authority,
                     Some(observed_grant(grant)?),
                 ),
                 None => {
@@ -1303,7 +1338,7 @@ async fn classify_people_blocker(
                     Some(grant.source().connection_id()),
                     consumer,
                     SourceAccessRequirementKind::SelectResource,
-                    Some(grant.source().source_authority()),
+                    Some(records.current_source_authority(grant.id()).await?),
                     None,
                 )?;
                 // Selection happens in the picker, never inline.
@@ -1316,7 +1351,7 @@ async fn classify_people_blocker(
                 Some(grant.source().connection_id()),
                 consumer,
                 SourceAccessRequirementKind::ReviewChangedSource,
-                Some(grant.source().source_authority()),
+                Some(records.current_source_authority(grant.id()).await?),
                 Some(observed_grant(&grant)?),
             )?;
             return PersonalBlock::blocked(requirement);
@@ -1420,7 +1455,7 @@ pub async fn read_selected_people_outcome(
             Some(selected.connection_id.clone()),
             consumer,
             floe_context_contract::SourceAccessRequirementKind::SelectResource,
-            Some(grant.source().source_authority()),
+            Some(records.current_source_authority(grant.id()).await?),
             None,
         )?)?
         .into_outcome());
@@ -1593,11 +1628,11 @@ mod tests {
     }
 
     fn active_grant(person_id: PersonId, device_id: &str) -> DataAccessGrant {
-        let source = feasibility_source(person_id, device_id, SourceAuthority::new()).unwrap();
+        let source = feasibility_source(person_id, device_id).unwrap();
         let mut grant =
             DataAccessGrant::new(GrantId::new(), Uuid::new_v4(), source.clone(), scope()).unwrap();
         grant
-            .activate_review(grant.authority(), source, scope())
+            .activate_review(grant.authority(), scope())
             .unwrap();
         grant
     }
@@ -1633,6 +1668,19 @@ mod tests {
             };
             let grant = self.grants[index].clone();
             Box::pin(async move { Ok(vec![grant]) })
+        }
+
+        fn current_source_authority<'a>(
+            &'a self,
+            _: GrantId,
+        ) -> BoxFuture<'a, Result<SourceAuthority, AgentFailure>> {
+            Box::pin(async {
+                Ok(SourceAuthority::from_parts(
+                    Uuid::from_u128(1),
+                    std::num::NonZeroU64::new(1).unwrap(),
+                )
+                .unwrap())
+            })
         }
 
         fn reviewed_subject<'a>(
@@ -1803,7 +1851,6 @@ mod tests {
                 device_id,
             ))
             .unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap();
         let scope = GrantScope::try_new(
@@ -1823,7 +1870,7 @@ mod tests {
         )
         .unwrap();
         grant
-            .activate_review(grant.authority(), source, scope)
+            .activate_review(grant.authority(), scope)
             .unwrap();
         let records = SwappingRecords {
             grants: vec![grant],

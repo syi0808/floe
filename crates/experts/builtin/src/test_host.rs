@@ -13,7 +13,7 @@ use floe_context_contract::{
     ConsumerPolicyAuthority, ContextDependency, ExecutionOwnerId, GrantAuthority, GrantConsumer,
     GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding, HeldGrant,
     PeopleView, ProcessingRestriction, ResourceHandle, SourceAccessBlockers,
-    SourceAccessRequirement, SourceAccessRequirementKind, SourceAuthority, SourceReadOutcome,
+    SourceAccessRequirement, SourceAccessRequirementKind, SourceReadOutcome,
     SourceUnavailable, WellbeingView, WorkContextView,
 };
 use floe_execution::Cancellation;
@@ -296,7 +296,6 @@ pub fn attention_fixture(
         ConnectionId::try_new("attention-connection").unwrap(),
         ConnectorId::try_new("attention.macos").unwrap(),
         ExecutionOwnerId::try_new("device").unwrap(),
-        SourceAuthority::new(),
     )
     .unwrap();
     let dependency = ContextDependency::try_new(
@@ -304,6 +303,8 @@ pub fn attention_fixture(
         GrantId::new(),
         GrantAuthority::new(),
         source,
+        vec![ResourceHandle::try_new("attention.coarse").unwrap()],
+        floe_context_contract::SourceAuthority::new(),
         vec![ResourceHandle::try_new("attention.coarse").unwrap()],
         vec![GrantDataCategory::Derived],
         GrantOperation::Read,

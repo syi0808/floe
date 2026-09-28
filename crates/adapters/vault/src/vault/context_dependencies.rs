@@ -326,7 +326,7 @@ mod tests {
         ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, DependencyCoverage,
         ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
         GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, MAX_CONTEXT_DEPENDENCIES,
-        ProcessingRestriction, ResourceHandle, SourceAuthority,
+        ProcessingRestriction, ResourceHandle,
     };
     use floe_agent_contract::{ModelConversation, ModelConversationEntry};
     use floe_conversation::{AgentBudget, AgentMessage, SessionStore};
@@ -487,7 +487,6 @@ mod tests {
             ConnectionId::new(),
             ConnectorId::try_new("calendar").unwrap(),
             ExecutionOwnerId::try_new("test-host").unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap();
         let observed_at = Utc::now();
@@ -496,6 +495,8 @@ mod tests {
             GrantId::new(),
             GrantAuthority::new(),
             source,
+            vec![ResourceHandle::try_new("calendar/main").unwrap()],
+            floe_context_contract::SourceAuthority::new(),
             vec![ResourceHandle::try_new("calendar/main").unwrap()],
             vec![GrantDataCategory::Metadata],
             GrantOperation::Read,
@@ -519,7 +520,6 @@ mod tests {
             ConnectionId::new(),
             ConnectorId::try_new("attention.macos").unwrap(),
             ExecutionOwnerId::try_new("test-host").unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap();
         let consumer = GrantConsumer::builtin("assistant").unwrap();
@@ -546,6 +546,8 @@ mod tests {
             grant.id(),
             grant.authority(),
             grant.source().clone(),
+            grant.scope().resources().to_vec(),
+            floe_context_contract::SourceAuthority::new(),
             grant.scope().resources().to_vec(),
             grant.scope().categories().to_vec(),
             GrantOperation::Read,

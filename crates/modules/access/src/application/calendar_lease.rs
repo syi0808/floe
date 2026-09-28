@@ -42,6 +42,12 @@ pub fn calendar_lease_dependency(
         admission.grant_authority,
         admission.source.clone(),
         admission.scope.resources().to_vec(),
+        admission.source_authority,
+        key.calendar_ids
+            .iter()
+            .map(|id| floe_context_contract::ResourceHandle::try_new(id.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| AgentFailure::InvalidInput)?,
         admission.scope.categories().to_vec(),
         admission.operation,
         admission.purpose,
@@ -75,7 +81,6 @@ mod tests {
             floe_context_contract::ConnectionId::new(),
             ConnectorId::try_new("calendar.fixture").unwrap(),
             floe_context_contract::ExecutionOwnerId::try_new("fixture-device").unwrap(),
-            SourceAuthority::new(),
         )
         .unwrap();
         let consumer = GrantConsumer::builtin("floe.builtin.schedule").unwrap();
@@ -93,6 +98,7 @@ mod tests {
             GrantId::new(),
             GrantAuthority::new(),
             source,
+            SourceAuthority::new(),
             scope,
             ConsumerPolicyAuthority::new(),
             consumer,
@@ -153,6 +159,8 @@ mod tests {
             dependency.grant_authority(),
             dependency.source().clone(),
             dependency.resources().to_vec(),
+            dependency.source_authority(),
+            dependency.source_resources().to_vec(),
             dependency.categories().to_vec(),
             dependency.operation(),
             dependency.purpose(),

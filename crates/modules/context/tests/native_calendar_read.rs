@@ -154,7 +154,6 @@ impl NativeCalendarGrantReader for Grants {
                 connection.execution_owner_id().as_str()
             })
             .unwrap(),
-            connection.source_authority(),
         )
         .unwrap();
         let scope = GrantScope::try_new(
@@ -174,6 +173,7 @@ impl NativeCalendarGrantReader for Grants {
             self.grant_id,
             self.authority,
             source,
+            connection.source_authority(),
             scope,
             self.policy,
             consumer,
@@ -453,7 +453,7 @@ async fn native_view_records_complete_empty_coverage_and_exact_dependency() {
     assert_eq!(dependency.person_id(), person_id);
     assert_eq!(dependency.consumer().identifier(), "floe.builtin.schedule");
     assert_eq!(
-        dependency.source().source_authority(),
+        dependency.source_authority(),
         view_source_authority(&connections)
     );
     assert_eq!(device.checks.load(Ordering::SeqCst), 2);

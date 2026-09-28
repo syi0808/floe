@@ -35,12 +35,11 @@ use uuid::Uuid;
 use crate::CallerContext;
 
 /// One live non-revoked grant covering a reviewed member resource,
-/// with the source authority its record binds.
+/// with its independent grant authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LiveGrant {
     pub id: GrantId,
     pub authority: GrantAuthority,
-    pub source_authority: SourceAuthority,
 }
 
 /// Current owner truth for one reviewed bundle member, re-read at decision
@@ -172,9 +171,7 @@ pub(crate) fn compare_reviewed_live(
                 [grant],
             ) if grant.id.as_uuid() == *grant_id
                 && grant.authority.incarnation() == *authority_incarnation
-                && grant.authority.access_epoch().get() == *authority_epoch
-                && reviewed_source(member)
-                    .is_none_or(|expected| grant.source_authority == expected) =>
+                && grant.authority.access_epoch().get() == *authority_epoch =>
             {
                 MemberGrantMatch::Unchanged
             }
@@ -1912,7 +1909,6 @@ mod tests {
                 .map(|(id, authority)| LiveGrant {
                     id,
                     authority,
-                    source_authority: source,
                 })
                 .collect(),
             policy_authority: policy,

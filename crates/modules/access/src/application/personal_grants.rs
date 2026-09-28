@@ -125,30 +125,35 @@ fn granted_consumers(grant: Option<&DataAccessGrant>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn overview(
+async fn overview(
+    store: &impl PersonalGrantStore,
     person_id: PersonId,
     connector: &str,
     device_id: &str,
     connection_id: String,
-    grant: Option<&DataAccessGrant>,
+    grant: Option<DataAccessGrant>,
     presence: Option<Uuid>,
     native_subject_fingerprint: Option<String>,
-) -> PersonalAccessOverview {
-    PersonalAccessOverview {
+) -> Result<PersonalAccessOverview, AgentFailure> {
+    let source_authority = match grant.as_ref() {
+        Some(grant) => Some(store.current_source_authority(grant.id()).await?),
+        None => None,
+    };
+    Ok(PersonalAccessOverview {
         person_id,
         connector: connector.to_owned(),
         device_id: device_id.to_owned(),
         connection_id,
-        source_authority: grant.map(|value| value.source().source_authority()),
-        grant_id: grant.map(DataAccessGrant::id),
-        grant_authority: grant.map(DataAccessGrant::authority),
-        state: state_of(grant),
-        review_required: grant.is_none_or(DataAccessGrant::review_required),
+        source_authority,
+        grant_id: grant.as_ref().map(DataAccessGrant::id),
+        grant_authority: grant.as_ref().map(DataAccessGrant::authority),
+        state: state_of(grant.as_ref()),
+        review_required: grant.as_ref().is_none_or(DataAccessGrant::review_required),
         presence_available: presence.is_some(),
-        consumers: granted_consumers(grant),
+        consumers: granted_consumers(grant.as_ref()),
         native_subject_fingerprint,
         process_incarnation: presence,
-    }
+    })
 }
 
 fn expected_grant(
@@ -225,11 +230,10 @@ fn scope_for(resource: &str, consumer_names: Vec<String>) -> Result<GrantScope, 
 pub fn source_and_scope(
     person_id: PersonId,
     device_id: &str,
-    authority: SourceAuthority,
     consumer_names: Vec<String>,
 ) -> Result<(GrantSourceBinding, GrantScope), AgentFailure> {
     Ok((
-        attention_source(person_id, device_id, authority)?,
+        attention_source(person_id, device_id)?,
         scope_for(ATTENTION_RESOURCE, consumer_names)?,
     ))
 }
@@ -373,11 +377,12 @@ async fn apply_attention(
         .cloned();
     let report = |grant: Option<&DataAccessGrant>, fingerprint: Option<String>| {
         overview(
+            store,
             person_id,
             ATTENTION_CONNECTOR,
             &request.device_id,
             ATTENTION_CONNECTION.into(),
-            grant,
+            grant.cloned(),
             presence,
             fingerprint,
         )
@@ -393,7 +398,7 @@ async fn apply_attention(
                 cancellation,
             )
             .await?;
-            Ok(report(existing.as_ref(), Some(subject)))
+            report(existing.as_ref(), Some(subject)).await
         }
         PersonalAccessChange::Review {
             expected_native_subject_fingerprint,
@@ -413,21 +418,9 @@ async fn apply_attention(
             if subject != expected_native_subject_fingerprint {
                 return Err(AgentFailure::AccessReviewRequired);
             }
-            // A source authority is only carried forward when the Person is
-            // reviewing the same subject the grant was last bound to.
-            let source_authority = match existing.as_ref() {
-                Some(grant)
-                    if store.reviewed_subject(grant.id()).await?
-                        == expected_native_subject_fingerprint =>
-                {
-                    grant.source().source_authority()
-                }
-                Some(_) | None => SourceAuthority::new(),
-            };
             let (source, scope) = source_and_scope(
                 person_id,
                 &request.device_id,
-                source_authority,
                 reviewed_consumers(&request.consumers)?,
             )?;
             let expected = expected_grant(expected_grant_id, expected_grant_authority)?;
@@ -439,10 +432,10 @@ async fn apply_attention(
                     expected,
                 )
                 .await?;
-            Ok(report(
+            report(
                 Some(&grant),
                 Some(expected_native_subject_fingerprint),
-            ))
+            ).await
         }
         PersonalAccessChange::Review {
             feasibility_query: Some(_),
@@ -452,7 +445,7 @@ async fn apply_attention(
             let grant = existing.ok_or(AgentFailure::AccessReviewRequired)?;
             if !enabled {
                 let grant = store.pause_grant(grant.id(), grant.authority()).await?;
-                return Ok(report(Some(&grant), None));
+                return report(Some(&grant), None).await;
             }
             let fingerprint = store.reviewed_subject(grant.id()).await?;
             let subject = inspected_subject(
@@ -470,7 +463,6 @@ async fn apply_attention(
             let (source, scope) = source_and_scope(
                 person_id,
                 &request.device_id,
-                grant.source().source_authority(),
                 granted_consumers(Some(&grant)),
             )?;
             let grant = store
@@ -481,7 +473,7 @@ async fn apply_attention(
                     Some((grant.id(), grant.authority())),
                 )
                 .await?;
-            Ok(report(Some(&grant), Some(fingerprint)))
+            report(Some(&grant), Some(fingerprint)).await
         }
     }
 }
@@ -493,7 +485,7 @@ async fn apply_feasibility(
     request: PersonalAccessConfiguration,
     cancellation: Cancellation,
 ) -> Result<PersonalAccessOverview, AgentFailure> {
-    let source = feasibility_source(person_id, &request.device_id, SourceAuthority::new())?;
+    let source = feasibility_source(person_id, &request.device_id)?;
     let grants = store.grants(128).await?;
     let existing = grants
         .iter()
@@ -501,17 +493,18 @@ async fn apply_feasibility(
         .cloned();
     let report = |grant: Option<&DataAccessGrant>, fingerprint: Option<String>| {
         overview(
+            store,
             person_id,
             FEASIBILITY_CONNECTOR,
             &request.device_id,
             FEASIBILITY_CONNECTION.into(),
-            grant,
+            grant.cloned(),
             None,
             fingerprint,
         )
     };
     match request.change {
-        PersonalAccessChange::Inspect => Ok(report(existing.as_ref(), None)),
+        PersonalAccessChange::Inspect => report(existing.as_ref(), None).await,
         PersonalAccessChange::Review {
             expected_native_subject_fingerprint,
             feasibility_query: Some(query),
@@ -530,30 +523,26 @@ async fn apply_feasibility(
             )
             .await?;
             let expected = expected_grant(expected_grant_id, expected_grant_authority)?;
-            let authority = existing
-                .as_ref()
-                .map(|grant| grant.source().source_authority())
-                .unwrap_or_else(SourceAuthority::new);
             let grant = store
                 .review_grant_with_feasibility_query(
-                    feasibility_source(person_id, &request.device_id, authority)?,
+                    feasibility_source(person_id, &request.device_id)?,
                     feasibility_scope(consumers)?,
                     &expected_native_subject_fingerprint,
                     expected,
                     query,
                 )
                 .await?;
-            Ok(report(
+            report(
                 Some(&grant),
                 Some(expected_native_subject_fingerprint),
-            ))
+            ).await
         }
         PersonalAccessChange::Review { .. } => Err(AgentFailure::InvalidInput),
         PersonalAccessChange::SetEnabled { enabled } => {
             let grant = existing.ok_or(AgentFailure::AccessReviewRequired)?;
             if !enabled {
                 let grant = store.pause_grant(grant.id(), grant.authority()).await?;
-                return Ok(report(Some(&grant), None));
+                return report(Some(&grant), None).await;
             }
             // Re-enabling re-runs the exact query the Person reviewed.
             let query = store.feasibility_query(grant.id()).await?;
@@ -569,18 +558,14 @@ async fn apply_feasibility(
             .await?;
             let grant = store
                 .review_grant_with_feasibility_query(
-                    feasibility_source(
-                        person_id,
-                        &request.device_id,
-                        grant.source().source_authority(),
-                    )?,
+                    feasibility_source(person_id, &request.device_id)?,
                     feasibility_scope(granted_consumers(Some(&grant)))?,
                     &fingerprint,
                     Some((grant.id(), grant.authority())),
                     query,
                 )
                 .await?;
-            Ok(report(Some(&grant), Some(fingerprint)))
+            report(Some(&grant), Some(fingerprint)).await
         }
     }
 }
@@ -592,7 +577,7 @@ async fn apply_wellbeing(
     request: PersonalAccessConfiguration,
     cancellation: Cancellation,
 ) -> Result<PersonalAccessOverview, AgentFailure> {
-    let source = wellbeing_source(person_id, &request.device_id, SourceAuthority::new())?;
+    let source = wellbeing_source(person_id, &request.device_id)?;
     let grants = store.grants(128).await?;
     let mut live = grants
         .iter()
@@ -605,17 +590,18 @@ async fn apply_wellbeing(
     };
     let report = |grant: Option<&DataAccessGrant>, fingerprint: Option<String>| {
         overview(
+            store,
             person_id,
             WELLBEING_CONNECTOR,
             &request.device_id,
             WELLBEING_CONNECTION.into(),
-            grant,
+            grant.cloned(),
             None,
             fingerprint,
         )
     };
     match request.change {
-        PersonalAccessChange::Inspect => Ok(report(existing.as_ref(), None)),
+        PersonalAccessChange::Inspect => report(existing.as_ref(), None).await,
         PersonalAccessChange::Review {
             expected_native_subject_fingerprint,
             feasibility_query: None,
@@ -633,29 +619,25 @@ async fn apply_wellbeing(
                 cancellation,
             )
             .await?;
-            let authority = existing
-                .as_ref()
-                .map(|grant| grant.source().source_authority())
-                .unwrap_or_else(SourceAuthority::new);
             let grant = store
                 .review_grant(
-                    wellbeing_source(person_id, &request.device_id, authority)?,
+                    wellbeing_source(person_id, &request.device_id)?,
                     wellbeing_scope(&consumers)?,
                     &expected_native_subject_fingerprint,
                     expected,
                 )
                 .await?;
-            Ok(report(
+            report(
                 Some(&grant),
                 Some(expected_native_subject_fingerprint),
-            ))
+            ).await
         }
         PersonalAccessChange::Review { .. } => Err(AgentFailure::InvalidInput),
         PersonalAccessChange::SetEnabled { enabled } => {
             let grant = existing.ok_or(AgentFailure::AccessReviewRequired)?;
             if !enabled {
                 let grant = store.pause_grant(grant.id(), grant.authority()).await?;
-                return Ok(report(Some(&grant), None));
+                return report(Some(&grant), None).await;
             }
             let fingerprint = store.reviewed_subject(grant.id()).await?;
             inspected_subject(
@@ -669,17 +651,13 @@ async fn apply_wellbeing(
             .await?;
             let grant = store
                 .review_grant(
-                    wellbeing_source(
-                        person_id,
-                        &request.device_id,
-                        grant.source().source_authority(),
-                    )?,
+                    wellbeing_source(person_id, &request.device_id)?,
                     grant.scope().clone(),
                     &fingerprint,
                     Some((grant.id(), grant.authority())),
                 )
                 .await?;
-            Ok(report(Some(&grant), Some(fingerprint)))
+            report(Some(&grant), Some(fingerprint)).await
         }
     }
 }
@@ -713,7 +691,6 @@ pub async fn apply_contacts(
         person_id,
         &request.device_id,
         &request.connector,
-        SourceAuthority::new(),
     )?;
     let grants = store.grants(128).await?;
     let existing = grants
@@ -730,11 +707,12 @@ pub async fn apply_contacts(
         .cloned();
     let report = |grant: Option<&DataAccessGrant>, fingerprint: Option<String>| {
         overview(
+            store,
             person_id,
             &request.connector,
             &request.device_id,
             contacts_connection(&request.connector),
-            grant,
+            grant.cloned(),
             None,
             fingerprint,
         )
@@ -752,7 +730,7 @@ pub async fn apply_contacts(
                 cancellation,
             )
             .await?;
-            Ok(report(existing.as_ref(), Some(subject)))
+            report(existing.as_ref(), Some(subject)).await
         }
         ContactsAccessChange::Review {
             selected_handles,
@@ -774,29 +752,25 @@ pub async fn apply_contacts(
             .await?;
             let expected = expected_grant(expected_grant_id, expected_grant_authority)?;
             let consumers = reviewed_contacts_consumers(&request.consumers)?;
-            let authority = existing
-                .as_ref()
-                .map(|grant| grant.source().source_authority())
-                .unwrap_or_else(SourceAuthority::new);
             let grant = store
                 .review_grant_with_selection(
-                    contacts_source(person_id, &request.device_id, &request.connector, authority)?,
+                    contacts_source(person_id, &request.device_id, &request.connector)?,
                     scope_for(PEOPLE_RESOURCE, consumers)?,
                     &expected_native_subject_fingerprint,
                     expected,
                     &selected_handles,
                 )
                 .await?;
-            Ok(report(
+            report(
                 Some(&grant),
                 Some(expected_native_subject_fingerprint),
-            ))
+            ).await
         }
         ContactsAccessChange::SetEnabled { enabled } => {
             let grant = existing.ok_or(AgentFailure::AccessReviewRequired)?;
             if !enabled {
                 let grant = store.pause_grant(grant.id(), grant.authority()).await?;
-                return Ok(report(Some(&grant), None));
+                return report(Some(&grant), None).await;
             }
             // Re-enabling re-inspects exactly the handles the Person selected.
             let selected_handles = store.selected_handles(grant.id()).await?;
@@ -821,7 +795,6 @@ pub async fn apply_contacts(
                         person_id,
                         &request.device_id,
                         &request.connector,
-                        grant.source().source_authority(),
                     )?,
                     scope_for(PEOPLE_RESOURCE, granted_consumers(Some(&grant)))?,
                     &fingerprint,
@@ -829,7 +802,7 @@ pub async fn apply_contacts(
                     &selected_handles,
                 )
                 .await?;
-            Ok(report(Some(&grant), Some(fingerprint)))
+            report(Some(&grant), Some(fingerprint)).await
         }
     }
 }

@@ -126,7 +126,6 @@ pub fn remote_view_source(
             .map_err(|_| AgentFailure::InvalidInput)?,
         ExecutionOwnerId::try_new(reference.execution_owner.clone())
             .map_err(|_| AgentFailure::InvalidInput)?,
-        reference.source_authority,
     )
     .map_err(|_| AgentFailure::InvalidInput)
 }
@@ -198,7 +197,8 @@ pub fn admit_remote_view_source(
     reference: &RemoteViewSourceReference,
     source: &GrantSourceBinding,
 ) -> Result<(), AgentFailure> {
-    if reference.source_authority != source.source_authority()
+    if !reference.source_authority.is_valid()
+        || remote_view_source(reference)? != *source
         || reference.connection_revision == 0
         || reference.provider_identity.is_empty()
     {
@@ -278,7 +278,9 @@ pub fn remote_dependency_source_admits(
     connection_revision: u64,
     recipient: &str,
 ) -> Result<(), AgentFailure> {
-    if reference.source_authority != dependency.source().source_authority()
+    if reference.source_authority != dependency.source_authority()
+        || dependency.source_resources().len() != 1
+        || dependency.source_resources()[0].as_str() != reference.resource
         || reference.execution_owner != dependency.source().execution_owner().as_str()
         || reference.connection_revision != connection_revision
     {

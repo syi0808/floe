@@ -49,7 +49,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             connection_id,
             provider,
             device_id,
-            source_authority,
         )?;
         // Exactly one grant for this exact source, or no read.
         let grants = self
@@ -168,7 +167,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                             created.id(),
                             created.authority(),
                             super::access_grants::AccessGrantMutation::Activate {
-                                source: source.clone(),
                                 scope: scope.clone(),
                             },
                         )
@@ -210,7 +208,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                             expected_id,
                             expected_authority,
                             super::access_grants::AccessGrantMutation::Activate {
-                                source: source.clone(),
                                 scope: scope.clone(),
                             },
                         )
@@ -254,7 +251,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if !is_native_provider(provider) {
             return Err(AgentFailure::CapabilityUnavailable);
         }
-        if !grant_id.is_valid() || !expected.is_valid() {
+        if !grant_id.is_valid() || !expected.is_valid() || !source_authority.is_valid() {
             return Err(AgentFailure::InvalidInput);
         }
         let source = calendar_source(
@@ -262,7 +259,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             connection_id,
             provider,
             device_id,
-            source_authority,
         )?;
         let mut connection = self.connection()?;
         let transaction = connection
@@ -309,7 +305,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if !is_native_provider(provider) {
             return Err(AgentFailure::CapabilityUnavailable);
         }
-        if !grant_id.is_valid() || !expected.is_valid() {
+        if !grant_id.is_valid() || !expected.is_valid() || !source_authority.is_valid() {
             return Err(AgentFailure::InvalidInput);
         }
         let source = calendar_source(
@@ -317,7 +313,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             connection_id,
             provider,
             device_id,
-            source_authority,
         )?;
         let mut connection = self.connection()?;
         let transaction = connection
@@ -359,13 +354,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.ensure_access_grant_schema_transaction(transaction)
             .await?;
         let mut rows = transaction
-            .query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? AND connection_id = ? AND connector = ? AND execution_owner = ? AND source_incarnation = ? AND source_epoch = ? ORDER BY access_epoch DESC, grant_id LIMIT ?", (self.person_id.to_string(), self.vault_id.to_string(), source.connection_id().as_str().to_owned(), source.connector().as_str().to_owned(), source.execution_owner().as_str().to_owned(), source.source_authority().incarnation().to_string(), source.source_authority().epoch().get() as i64, i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?))
+            .query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? AND connection_id = ? AND connector = ? AND execution_owner = ? ORDER BY access_epoch DESC, grant_id LIMIT ?", (self.person_id.to_string(), self.vault_id.to_string(), source.connection_id().as_str().to_owned(), source.connector().as_str().to_owned(), source.execution_owner().as_str().to_owned(), i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?))
             .await
             .map_err(storage)?;
         let mut grants = Vec::new();
         while let Some(row) = rows.next().await.map_err(storage)? {
             let grant = super::access_grants::decode_grant(&row)?;
-            if !grant.source().same_identity(source) {
+            if grant.source() != source {
                 return Err(AgentFailure::VaultUnavailable);
             }
             grants.push(grant);
@@ -404,7 +399,6 @@ fn calendar_source(
     connection_id: &str,
     provider: CalendarProvider,
     device_id: &str,
-    source_authority: SourceAuthority,
 ) -> Result<GrantSourceBinding, AgentFailure> {
     let connection_id = floe_access::ConnectionId::try_new(connection_id.to_owned())
         .map_err(|_| AgentFailure::InvalidInput)?;
@@ -415,7 +409,6 @@ fn calendar_source(
         connection_id,
         connector(provider)?,
         execution_owner,
-        source_authority,
     )
     .map_err(|_| AgentFailure::InvalidInput)
 }
@@ -429,13 +422,10 @@ fn calendar_binding(
     source_authority: SourceAuthority,
     consumers: &[GrantConsumer],
 ) -> Result<(GrantSourceBinding, GrantScope), AgentFailure> {
-    let source = calendar_source(
-        person_id,
-        connection_id,
-        provider,
-        device_id,
-        source_authority,
-    )?;
+    if !source_authority.is_valid() {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let source = calendar_source(person_id, connection_id, provider, device_id)?;
     let resources = calendar_ids
         .iter()
         .cloned()
@@ -753,7 +743,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_subject_rotation_uses_new_source_authority() {
+    async fn native_source_rotation_preserves_standing_grant_and_policy() {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let person_id = floe_kernel::PersonId::new();
@@ -795,7 +785,7 @@ mod tests {
                 rotated_authority,
                 &calendar_consumers(),
                 &"b".repeat(64),
-                None,
+                Some((grant.id(), grant.authority())),
             )
             .await
             .unwrap();
@@ -809,8 +799,9 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_ne!(new.consumer_policy, old.consumer_policy);
-        assert_ne!(new.grant_id, grant.id());
+        assert_eq!(new.consumer_policy, old.consumer_policy);
+        assert_eq!(new.grant_id, grant.id());
+        assert_eq!(new.authority, old.authority);
         assert_eq!(
             authorize(
                 &vault,
@@ -1546,6 +1537,8 @@ mod tests {
             admission.authority,
             admission.source.clone(),
             admission.scope.resources().to_vec(),
+            authority,
+            admission.scope.resources().to_vec(),
             admission.scope.categories().to_vec(),
             GrantOperation::Read,
             GrantPurpose::Assistant,
@@ -1598,7 +1591,7 @@ mod tests {
                 rotated_authority,
                 &calendar_consumers(),
                 &"b".repeat(64),
-                None,
+                Some((reactivated.id(), reactivated.authority())),
             )
             .await
             .unwrap();
@@ -1613,7 +1606,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(current.grant_id, rotated.id());
-        assert_ne!(current.consumer_policy, old_dependency.consumer_policy());
+        assert_eq!(current.consumer_policy, old_dependency.consumer_policy());
         assert_eq!(
             floe_access::validate_grant_dependency(&rotated, &old_dependency),
             Err(AgentFailure::PolicyDenied)

@@ -553,10 +553,10 @@ fn validate_context_calendar_source(
         || dependency.source().person_id() != connection.person_id()
         || dependency.source().connector() != connection.connector_id()
         || dependency.source().execution_owner() != connection.execution_owner_id()
-        || dependency.source().source_authority() != connection.source_authority()
+        || dependency.source_authority() != connection.source_authority()
         || !connection.is_serving()
         || !dependency
-            .resources()
+            .source_resources()
             .iter()
             .any(|resource| resource.as_str() == calendar_id)
         || !connection
