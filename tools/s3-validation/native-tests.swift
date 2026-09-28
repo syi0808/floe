@@ -90,7 +90,7 @@ check(stamp["calendar_ids"] as? [String] == ["first", "second"], "scope was chan
 check(stamp["generation"] as? String == "stable", "generation was lost")
 for change: [String: Any] in [
   ["schema_version": 2], ["person_id": UUID().uuidString], ["calendar_ids": [String]()],
-  ["calendar_ids": ["first", "first"]], ["calendar_ids": ["1", "2", "3", "4", "5"]],
+  ["calendar_ids": ["first", "first"]],
   ["deadline": formatter.string(from: Date().addingTimeInterval(-1))]
 ] {
   var invalid = accessRequest
@@ -101,6 +101,14 @@ for change: [String: Any] in [
     fatalError("invalid access request was allowed")
   } catch { check(!touched, "invalid input reached permission boundary") }
 }
+let manyCalendarIDs = (1...11).map { "calendar-\($0)" }
+var manyCalendarRequest = accessRequest
+manyCalendarRequest["calendar_ids"] = manyCalendarIDs
+let manyCalendarStamp = try calendarViewAccess(manyCalendarRequest, permission: {},
+  contains: { manyCalendarIDs.contains($0) }, generation: { "stable" },
+  subjectFingerprint: { String(repeating: "a", count: 64) })
+check(manyCalendarStamp["calendar_ids"] as? [String] == manyCalendarIDs.sorted(),
+  "eleven current calendars must be admitted")
 var generations = 0
 do {
   _ = try calendarViewAccess(accessRequest, permission: {}, contains: { _ in true }, generation: {
