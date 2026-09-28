@@ -58,6 +58,44 @@ fn now() -> DateTime<Utc> {
     *CLOCK.get_or_init(Utc::now)
 }
 
+async fn establish_native_source(
+    core: &FloeCore,
+    person: PersonId,
+    connection_id: &str,
+    calendars: &[(&str, &str)],
+) -> floe_connections::SourceConnection {
+    let source = core
+        .source_service()
+        .establish(
+            person,
+            floe_context_contract::ConnectorId::try_new("calendar.event_kit").unwrap(),
+            floe_context_contract::ConnectionId::try_new(connection_id).unwrap(),
+            floe_context_contract::ExecutionOwnerId::try_new("test-device").unwrap(),
+            floe_connections::ResourceMode::Selected,
+            calendars
+                .iter()
+                .map(|(id, name)| {
+                    floe_connections::ConnectionResource::new(
+                        floe_context_contract::ResourceHandle::try_new(*id).unwrap(),
+                        (*name).into(),
+                    )
+                    .unwrap()
+                })
+                .collect(),
+        )
+        .await
+        .unwrap();
+    core.source_service()
+        .update_native_subject(
+            person,
+            source.connection_id(),
+            source.revision(),
+            "a".repeat(64),
+        )
+        .await
+        .unwrap()
+}
+
 #[derive(Clone, Default)]
 struct Keys(Arc<KeyState>);
 
@@ -205,7 +243,9 @@ impl Fixture {
         )
         .await
         .unwrap();
-        let connection = core.calendar_connection(person).await.unwrap().unwrap();
+        let connection =
+            establish_native_source(&core, person, "eventkit-connection", &[("home", "Home")])
+                .await;
         let fingerprint = "a".repeat(64);
         let grant = vault
             .review_native_calendar_grant(
@@ -213,7 +253,7 @@ impl Fixture {
                 CalendarProvider::EventKit,
                 "test-device",
                 &["home".into()],
-                connection.source_authority,
+                connection.source_authority(),
                 &[GrantConsumer::builtin(package.id.clone()).unwrap()],
                 &fingerprint,
                 None,
@@ -257,7 +297,7 @@ impl Fixture {
                 CalendarProvider::EventKit,
                 "test-device",
                 &["home".into()],
-                connection.source_authority,
+                connection.source_authority(),
                 GrantOperation::Read,
                 GrantPurpose::Assistant,
                 consumer.clone(),
@@ -1350,7 +1390,13 @@ impl GovernedFocus {
         )
         .await
         .unwrap();
-        let connection = core.calendar_connection(person).await.unwrap().unwrap();
+        let connection = establish_native_source(
+            &core,
+            person,
+            "eventkit-connection",
+            &[("home", "Home"), ("away", "Away")],
+        )
+        .await;
         let fingerprint = "a".repeat(64);
         vault
             .review_native_calendar_grant(
@@ -1358,7 +1404,7 @@ impl GovernedFocus {
                 CalendarProvider::EventKit,
                 "test-device",
                 &["home".into()],
-                connection.source_authority,
+                connection.source_authority(),
                 &[GrantConsumer::builtin(
                     floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
                 )
@@ -1377,7 +1423,7 @@ impl GovernedFocus {
                 CalendarProvider::EventKit,
                 "test-device",
                 &["home".into()],
-                connection.source_authority,
+                connection.source_authority(),
                 GrantOperation::Read,
                 GrantPurpose::Assistant,
                 consumer.clone(),
@@ -1679,6 +1725,73 @@ async fn governed_focus_proposal_rejects_a_paused_grant() {
     assert_eq!(
         fixture.prepare(&reference, "home").await,
         Err(AgentFailure::PolicyDenied)
+    );
+}
+
+#[tokio::test]
+async fn governed_focus_proposal_rejects_connections_subject_drift() {
+    let mut fixture = GovernedFocus::new().await;
+    let (_, reference) = fixture.commit_evidence().await;
+    let connection_id =
+        floe_context_contract::ConnectionId::try_new("eventkit-connection").unwrap();
+    let source = fixture
+        .core
+        .source_service()
+        .load(fixture.person, &connection_id)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture
+        .core
+        .source_service()
+        .update_native_subject(
+            fixture.person,
+            &connection_id,
+            source.revision(),
+            "b".repeat(64),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.prepare(&reference, "home").await,
+        Err(AgentFailure::StaleContext)
+    );
+}
+
+#[tokio::test]
+async fn governed_focus_proposal_rejects_connections_resource_drift() {
+    let mut fixture = GovernedFocus::new().await;
+    let (_, reference) = fixture.commit_evidence().await;
+    let connection_id =
+        floe_context_contract::ConnectionId::try_new("eventkit-connection").unwrap();
+    let source = fixture
+        .core
+        .source_service()
+        .load(fixture.person, &connection_id)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture
+        .core
+        .source_service()
+        .configure(
+            fixture.person,
+            &connection_id,
+            source.revision(),
+            floe_connections::ResourceMode::Selected,
+            vec![
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new("away").unwrap(),
+                    "Away".into(),
+                )
+                .unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.prepare(&reference, "home").await,
+        Err(AgentFailure::StaleContext)
     );
 }
 

@@ -256,8 +256,8 @@ impl FloeCore {
         ActionService::new(&self.store)
     }
 
-    pub fn expert_actions(&self) -> ExpertActionService<'_, TursoStore, Self> {
-        ExpertActionService::new(&self.store, self)
+    pub fn expert_actions(&self) -> ExpertActionService<'_, TursoStore, TursoStore, Self> {
+        ExpertActionService::new(&self.store, &self.store, self)
     }
 
     pub async fn inspect_expert_calendar_action(

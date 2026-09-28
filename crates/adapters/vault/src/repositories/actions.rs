@@ -2,9 +2,11 @@
 
 use floe_actions::{
     ActionAuthority, ActionError, ActionErrorCode, ActionRepository, CalendarAction,
+    CalendarSourceReader,
 };
 use floe_agent_contract::AgentFailure;
-use floe_day::{CalendarConnection, CalendarMirror, Event, PersonId};
+use floe_connections::{ConnectionId, SourceConnection, SourceRepository};
+use floe_day::{CalendarMirror, Event, PersonId};
 use serde_json::to_string;
 use uuid::Uuid;
 
@@ -199,20 +201,22 @@ impl ActionRepository for TursoStore {
             .map_err(action_error)
     }
 
-    async fn calendar_connection(
-        &self,
-        person_id: PersonId,
-    ) -> Result<Option<CalendarConnection>, ActionError> {
-        Ok(TursoStore::calendar_mirror(self, person_id)
-            .await
-            .map_err(action_error)?
-            .map(|mirror| mirror.connection))
-    }
-
     async fn list_events(&self, person_id: PersonId) -> Result<Vec<Event>, ActionError> {
         TursoStore::list_events(self, person_id)
             .await
             .map_err(action_error)
+    }
+}
+
+impl CalendarSourceReader for TursoStore {
+    async fn calendar_source(
+        &self,
+        person_id: PersonId,
+        connection_id: &ConnectionId,
+    ) -> Result<Option<SourceConnection>, ActionError> {
+        SourceRepository::load(self, person_id, connection_id)
+            .await
+            .map_err(|error| ActionError::storage(error.to_string()))
     }
 }
 

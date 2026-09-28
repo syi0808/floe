@@ -11,9 +11,8 @@ use uuid::Uuid;
 use crate::{
     ActionAuthorityMode, ActionBlockReason, ActionError, ActionErrorCode, ActionFailure,
     ActionRepository, ActionService, AgentActionEnvelope, AgentActionOrigin, CalendarAction,
-    CalendarActionPolicy, CalendarActionProvider, CalendarActionState, ExpertActionStore,
-    ExpertProposalReference,
-    ExpertCalendarProposal,
+    CalendarActionPolicy, CalendarActionProvider, CalendarActionState, CalendarSourceReader,
+    ExpertActionStore, ExpertCalendarProposal, ExpertProposalReference,
 };
 
 pub struct ExpertCalendarDestination {
@@ -47,16 +46,30 @@ pub trait ObservationFence: Send + Sync {
 
 /// Expert-originated proposals: inspection, publication, approval, dispatch and
 /// the uncertain-result recovery path, all bound to recorded expert evidence.
-pub struct ExpertActionService<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence> {
+pub struct ExpertActionService<
+    'a,
+    Repository: ActionRepository + ?Sized,
+    Sources: CalendarSourceReader + ?Sized,
+    Fence: ObservationFence,
+> {
     pub(crate) repository: &'a Repository,
+    pub(crate) sources: &'a Sources,
     pub(crate) fence: &'a Fence,
 }
 
-impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
-    ExpertActionService<'a, Repository, Fence>
+impl<
+    'a,
+    Repository: ActionRepository + ?Sized,
+    Sources: CalendarSourceReader + ?Sized,
+    Fence: ObservationFence,
+> ExpertActionService<'a, Repository, Sources, Fence>
 {
-    pub fn new(repository: &'a Repository, fence: &'a Fence) -> Self {
-        Self { repository, fence }
+    pub fn new(repository: &'a Repository, sources: &'a Sources, fence: &'a Fence) -> Self {
+        Self {
+            repository,
+            sources,
+            fence,
+        }
     }
 
     fn actions(&self) -> ActionService<'_, Repository> {
@@ -447,26 +460,36 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
             )
             .await
             .map_err(agent_error)?;
+        let context_dependency = store
+            .expert_proposal_dependency(&request.reference, &evidence)
+            .await?;
+        self.fence.observation(&context_dependency)?;
         let connection = self
+            .sources
+            .calendar_source(
+                evidence.person_id,
+                &context_dependency.source().connection_id(),
+            )
+            .await
+            .map_err(agent_error)?
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
+        let mirror = self
             .repository
-            .calendar_connection(evidence.person_id)
+            .calendar_mirror(evidence.person_id)
             .await
             .map_err(agent_error)?
             .ok_or(AgentFailure::CapabilityUnavailable)?;
         if action.provider != destination.provider
-            || connection.disconnected
-            || connection.error.is_some()
-            || connection
+            || mirror.connection.connection_id != connection.connection_id().as_str()
+            || mirror.connection.error.is_some()
+            || mirror
+                .connection
                 .source_statuses
                 .get(&destination.calendar_id)
                 .is_some_and(|status| status.error.is_some())
         {
             return Err(AgentFailure::StaleContext);
         }
-        let context_dependency = store
-            .expert_proposal_dependency(&request.reference, &evidence)
-            .await?;
-        self.fence.observation(&context_dependency)?;
         validate_context_calendar_source(
             &context_dependency,
             &connection,
@@ -521,21 +544,23 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
 
 fn validate_context_calendar_source(
     dependency: &ContextDependency,
-    connection: &floe_day::CalendarConnection,
+    connection: &floe_connections::SourceConnection,
     calendar_id: &str,
 ) -> Result<(), AgentFailure> {
-    if dependency.source().connection_id().as_str() != connection.connection_id
-        || dependency.source().execution_owner().as_str() != connection.device_id
-        || dependency.source().source_authority() != connection.source_authority
-        || connection.disconnected
+    if dependency.source().connection_id() != *connection.connection_id()
+        || dependency.source().person_id() != connection.person_id()
+        || dependency.source().connector() != connection.connector_id()
+        || dependency.source().execution_owner() != connection.execution_owner_id()
+        || dependency.source().source_authority() != connection.source_authority()
+        || !connection.is_serving()
         || !dependency
             .resources()
             .iter()
             .any(|resource| resource.as_str() == calendar_id)
         || !connection
-            .calendars
+            .resources()
             .iter()
-            .any(|calendar| calendar.calendar_id == calendar_id)
+            .any(|calendar| calendar.handle().as_str() == calendar_id)
     {
         return Err(AgentFailure::StaleContext);
     }

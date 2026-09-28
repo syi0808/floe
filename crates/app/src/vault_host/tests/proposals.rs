@@ -1,7 +1,13 @@
 use chrono::TimeZone;
-use floe_actions::{ExpertCalendarDestination, ExpertCalendarProposal, ExpertCalendarProposalDraft, ExpertCalendarRequest};
+use floe_actions::{
+    ExpertCalendarDestination, ExpertCalendarProposal, ExpertCalendarProposalDraft,
+    ExpertCalendarRequest,
+};
 use floe_agent_contract::DataClass;
-use floe_context_contract::{CalendarProvider, ContextDependency, GrantConsumer, GrantOperation, GrantPurpose, ProcessingRestriction};
+use floe_context_contract::{
+    CalendarProvider, ContextDependency, GrantConsumer, GrantOperation, GrantPurpose,
+    ProcessingRestriction,
+};
 use floe_conversation::AgentMessage;
 use floe_day::{CalendarRange, CalendarSelection};
 use floe_experts::{AgentRegistry, RegistryConfiguration, RegistryConfigurationTarget};
@@ -31,7 +37,8 @@ async fn seed(
     for manifest in &mut seeded.manifests {
         manifest.data_class = DataClass::Personal;
     }
-    seeded.install_receipts[0].manifest_digest = floe_experts::manifest_set_digest(&seeded.manifests).unwrap();
+    seeded.install_receipts[0].manifest_digest =
+        floe_experts::manifest_set_digest(&seeded.manifests).unwrap();
     vault.initialize_expert_registry(&seeded).await.unwrap();
     let expert_assignment_id = seeded
         .assignments
@@ -60,6 +67,34 @@ async fn seed(
     )
     .await
     .unwrap();
+    let source = core
+        .source_service()
+        .establish(
+            person,
+            floe_context_contract::ConnectorId::try_new("calendar.event_kit").unwrap(),
+            floe_context_contract::ConnectionId::try_new("eventkit-connection").unwrap(),
+            floe_context_contract::ExecutionOwnerId::try_new("test-device").unwrap(),
+            floe_connections::ResourceMode::Selected,
+            vec![
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new("home").unwrap(),
+                    "Home".into(),
+                )
+                .unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+    let source = core
+        .source_service()
+        .update_native_subject(
+            person,
+            source.connection_id(),
+            source.revision(),
+            "a".repeat(64),
+        )
+        .await
+        .unwrap();
     let revision = core
         .calendar_connection(person)
         .await
@@ -85,7 +120,6 @@ async fn seed(
     let invocation_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
     let state_revision = registry.complete(&resolved, invocation_id).unwrap();
-    let connection = core.calendar_connection(person).await.unwrap().unwrap();
     let fingerprint = "a".repeat(64);
     vault
         .review_native_calendar_grant(
@@ -93,7 +127,7 @@ async fn seed(
             CalendarProvider::EventKit,
             "test-device",
             &["home".into()],
-            connection.source_authority,
+            source.source_authority(),
             &[GrantConsumer::builtin(resolved.manifest.package.id.clone()).unwrap()],
             &fingerprint,
             None,
@@ -107,7 +141,7 @@ async fn seed(
             CalendarProvider::EventKit,
             "test-device",
             &["home".into()],
-            connection.source_authority,
+            source.source_authority(),
             GrantOperation::Read,
             GrantPurpose::Assistant,
             consumer.clone(),
@@ -161,13 +195,7 @@ async fn seed(
         },
         state_revision,
     };
-    let terminal = record_proposal_task(
-        &vault,
-        registry.snapshot(),
-        &evidence,
-        dependency,
-    )
-    .await;
+    let terminal = record_proposal_task(&vault, registry.snapshot(), &evidence, dependency).await;
     let mut session = vault.create_session().await.unwrap();
     session.data_classes.push(DataClass::Personal);
     let turn_id = Uuid::new_v4();

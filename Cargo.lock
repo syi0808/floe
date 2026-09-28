@@ -641,6 +641,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "floe-agent-contract",
+ "floe-connections",
  "floe-context-contract",
  "floe-day",
  "floe-execution",

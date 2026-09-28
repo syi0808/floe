@@ -20,9 +20,7 @@ use std::{
 use floe_actions::{
     ActionAuthority, ActionError, ActionRepository, CalendarAction, CalendarActionState,
 };
-use floe_day::{
-    CalendarConnection, CalendarMirror, DayService, Event, PersonId, TimelineRepository,
-};
+use floe_day::{CalendarMirror, DayService, Event, PersonId, TimelineRepository};
 use uuid::Uuid;
 
 pub use timeline::TestTimelineRepository;
@@ -160,16 +158,6 @@ impl ActionRepository for TestActionStore {
             .calendar_mirror(person_id)
             .await
             .map_err(|error| ActionError::storage(error.message))
-    }
-
-    async fn calendar_connection(
-        &self,
-        person_id: PersonId,
-    ) -> Result<Option<CalendarConnection>, ActionError> {
-        Ok(self
-            .calendar_mirror(person_id)
-            .await?
-            .map(|mirror| mirror.connection))
     }
 
     async fn list_events(&self, person_id: PersonId) -> Result<Vec<Event>, ActionError> {

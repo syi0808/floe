@@ -21,5 +21,6 @@ pub use domain::{
     ExpertCalendarProposalDraft,
 };
 pub use ports::{
-    ActionError, ActionErrorCode, ActionRepository, CalendarActionProvider, ExpertActionStore,
+    ActionError, ActionErrorCode, ActionRepository, CalendarActionProvider, CalendarSourceReader,
+    ExpertActionStore,
 };

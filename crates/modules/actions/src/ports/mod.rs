@@ -1,9 +1,10 @@
 use std::{collections::BTreeMap, future::Future};
 
-use chrono::{DateTime, Utc};
 use crate::ExpertCalendarProposal;
+use chrono::{DateTime, Utc};
+use floe_connections::{ConnectionId, SourceConnection};
 use floe_context_contract::ContextDependency;
-use floe_day::{CalendarConnection, CalendarMirror, Event, PersonId};
+use floe_day::{CalendarMirror, Event, PersonId};
 use floe_kernel::AgentFailure;
 use thiserror::Error;
 use uuid::Uuid;
@@ -104,11 +105,16 @@ pub trait ActionRepository: Send + Sync {
         &self,
         person_id: PersonId,
     ) -> Result<Option<CalendarMirror>, ActionError>;
-    async fn calendar_connection(
+    async fn list_events(&self, person_id: PersonId) -> Result<Vec<Event>, ActionError>;
+}
+
+#[allow(async_fn_in_trait)]
+pub trait CalendarSourceReader: Send + Sync {
+    async fn calendar_source(
         &self,
         person_id: PersonId,
-    ) -> Result<Option<CalendarConnection>, ActionError>;
-    async fn list_events(&self, person_id: PersonId) -> Result<Vec<Event>, ActionError>;
+        connection_id: &ConnectionId,
+    ) -> Result<Option<SourceConnection>, ActionError>;
 }
 
 /// Durable pre-dispatch intent and settlement for expert-originated actions.
