@@ -126,13 +126,58 @@ fn restore_rejects_corrupt_revision_authority_and_resources() {
 
     let mut value = serde_json::to_value(&connection).unwrap();
     let duplicate = value["resources"][0].clone();
-    value["resources"]
-        .as_array_mut()
-        .unwrap()
-        .push(duplicate);
+    value["resources"].as_array_mut().unwrap().push(duplicate);
     let corrupt: SourceConnection = serde_json::from_value(value).unwrap();
     assert_eq!(
         corrupt.validate(),
         Err(SourceConnectionError::InvalidResource)
     );
+}
+
+#[test]
+fn persistence_successor_rejects_identity_and_authority_forgery() {
+    let original = source("calendar.fixture", vec![resource("a", "A")]);
+    let mut updated = original.clone();
+    updated
+        .configure(1, ResourceMode::Selected, vec![resource("a", "Renamed")])
+        .unwrap();
+    original.validate_successor(&updated).unwrap();
+
+    let mut value = serde_json::to_value(&updated).unwrap();
+    value["person_id"] = serde_json::to_value(floe_kernel::PersonId::new()).unwrap();
+    let forged: SourceConnection = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        original.validate_successor(&forged),
+        Err(SourceConnectionError::InvalidTransition)
+    );
+
+    let mut value = serde_json::to_value(&updated).unwrap();
+    value["source_authority"] =
+        serde_json::to_value(floe_context_contract::SourceAuthority::new()).unwrap();
+    let forged: SourceConnection = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        original.validate_successor(&forged),
+        Err(SourceConnectionError::InvalidTransition)
+    );
+}
+
+#[test]
+fn duplicate_resource_and_invalid_native_subject_fail_closed() {
+    assert_eq!(
+        SourceConnection::establish(
+            PersonId::new(),
+            ConnectorId::try_new("calendar.fixture").unwrap(),
+            ConnectionId::new(),
+            ExecutionOwnerId::try_new("device-1").unwrap(),
+            ResourceMode::Selected,
+            vec![resource("a", "A"), resource("a", "Duplicate")],
+        ),
+        Err(SourceConnectionError::InvalidResource)
+    );
+    let mut native = source("calendar.event_kit", vec![resource("a", "A")]);
+    assert_eq!(
+        native.update_native_subject(1, "untrusted".into()),
+        Err(SourceConnectionError::InvalidSubject)
+    );
+    assert_eq!(native.revision(), 1);
 }

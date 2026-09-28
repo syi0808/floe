@@ -114,6 +114,9 @@ impl SourceRepository for TursoStore {
             {
                 return Err(SourceRepositoryError::Conflict);
             }
+            stored
+                .validate_successor(source)
+                .map_err(|_| SourceRepositoryError::Corrupt)?;
             let changed = connection.execute(
                 "UPDATE source_connections SET revision = ?, payload = ? WHERE connection_id = ? AND person_id = ? AND connector_id = ? AND revision = ?",
                 (source.revision() as i64, payload, source.connection_id().as_str(), source.person_id().to_string(), source.connector_id().as_str(), expected_revision as i64),

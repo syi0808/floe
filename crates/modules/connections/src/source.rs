@@ -91,6 +91,8 @@ pub enum SourceConnectionError {
     Disconnected,
     #[error("source revision exhausted")]
     RevisionExhausted,
+    #[error("invalid source transition")]
+    InvalidTransition,
 }
 
 impl SourceConnection {
@@ -148,6 +150,72 @@ impl SourceConnection {
             && self.native_subject_fingerprint.is_none()
         {
             return Err(SourceConnectionError::InvalidSubject);
+        }
+        Ok(())
+    }
+
+    pub fn validate_successor(&self, next: &Self) -> Result<(), SourceConnectionError> {
+        self.validate()?;
+        next.validate()?;
+        if self.person_id != next.person_id
+            || self.connector_id != next.connector_id
+            || self.connection_id != next.connection_id
+            || self.execution_owner_id != next.execution_owner_id
+            || self.state == SourceState::Disconnected
+            || next.revision
+                != self
+                    .revision
+                    .checked_add(1)
+                    .ok_or(SourceConnectionError::RevisionExhausted)?
+        {
+            return Err(SourceConnectionError::InvalidTransition);
+        }
+        let expected_state = if next.state == SourceState::Disconnected {
+            SourceState::Disconnected
+        } else if next.requires_native_subject() && next.native_subject_fingerprint.is_none() {
+            SourceState::Pending
+        } else {
+            SourceState::Ready
+        };
+        if next.state != expected_state {
+            return Err(SourceConnectionError::InvalidTransition);
+        }
+        if next.state == SourceState::Disconnected {
+            if self.resource_mode != next.resource_mode
+                || self.resources != next.resources
+                || self.native_subject_fingerprint != next.native_subject_fingerprint
+            {
+                return Err(SourceConnectionError::InvalidTransition);
+            }
+        } else if self.native_subject_fingerprint != next.native_subject_fingerprint {
+            if self.resource_mode != next.resource_mode || self.resources != next.resources {
+                return Err(SourceConnectionError::InvalidTransition);
+            }
+        } else if self.state != next.state {
+            return Err(SourceConnectionError::InvalidTransition);
+        }
+        let scope_changed = self.resource_mode != next.resource_mode
+            || self
+                .resources
+                .iter()
+                .map(ConnectionResource::handle)
+                .ne(next.resources.iter().map(ConnectionResource::handle))
+            || self.native_subject_fingerprint != next.native_subject_fingerprint
+            || self.state != next.state;
+        let expected_authority = if scope_changed {
+            self.source_authority
+                .advance()
+                .ok_or(SourceConnectionError::RevisionExhausted)?
+        } else {
+            self.source_authority
+        };
+        if next.source_authority != expected_authority
+            || (self.resource_mode == next.resource_mode
+                && self.resources == next.resources
+                && self.native_subject_fingerprint == next.native_subject_fingerprint
+                && self.state == next.state)
+        {
+            return Err(SourceConnectionError::InvalidTransition);
         }
         Ok(())
     }
