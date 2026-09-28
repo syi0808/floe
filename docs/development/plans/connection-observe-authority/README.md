@@ -131,7 +131,7 @@ No new workspace crate is expected. Existing Connections, Access, Context, Exper
 | 01 | [Connection-owned source/resource authority](01-connection-resource-authority.md) | Complete |
 | 02 | [Stable grant source and dependency semantics](02-grant-and-dependency-cutover.md) | Complete |
 | 03 | [Native Calendar vertical cutover](03-native-calendar-vertical.md) | Complete |
-| 04 | [Remote Calendar -> generic remote View](04-remote-observe-unification.md) | Not started |
+| 04 | [Remote Calendar -> generic remote View](04-remote-observe-unification.md) | Complete |
 | 05 | [ConsumerPolicyAuthority elimination](05-consumer-policy-elimination.md) | Not started |
 | 06 | [Standing personal Observe convergence](06-personal-observe-convergence.md) | Not started |
 | 07 | [Product wire, FFI and UI convergence](07-product-wire-and-ui.md) | Not started |
