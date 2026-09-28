@@ -207,6 +207,13 @@ impl CalendarSource for Access {
         if self.denied.load(Ordering::SeqCst) {
             return Err(AgentFailure::CapabilityDenied);
         }
+        if request
+            .calendar_ids
+            .iter()
+            .any(|identifier| !matches!(identifier.as_str(), "home-secret-id" | "work-secret-id"))
+        {
+            return Err(AgentFailure::CapabilityDenied);
+        }
         if self.pending {
             *self.child.lock().unwrap() = Some(request.cancellation.clone());
             self.started.notify_one();
@@ -404,6 +411,39 @@ async fn projection_is_scoped_clipped_bounded_and_contains_no_provider_native_me
     assert_eq!(access.calls.load(Ordering::SeqCst), 2);
     let again = views.timeline(request(&grant)).await.unwrap();
     assert_eq!(again, projected);
+}
+
+#[tokio::test]
+async fn mirror_connection_metadata_cannot_override_access_source_authority() {
+    let fixture = Fixture::new().await;
+    let previous = fixture
+        .timeline
+        .calendar_mirror(fixture.person)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut mirror = previous.clone();
+    mirror.connection.disconnected = true;
+    mirror.connection.revision += 1;
+    mirror.connection.calendars.clear();
+    fixture
+        .timeline
+        .put_calendar_mirror(fixture.person, &mirror, Some(&previous))
+        .await
+        .unwrap();
+    let grant = fixture.grant();
+    let access = Access::default();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    assert_eq!(
+        views.timeline(request(&grant)).await.unwrap().items.len(),
+        1
+    );
+    access.denied.store(true, Ordering::SeqCst);
+    assert_eq!(
+        views.timeline(request(&grant)).await,
+        Err(AgentFailure::CapabilityDenied)
+    );
 }
 
 #[tokio::test]
@@ -756,10 +796,10 @@ async fn failed_other_calendar_does_not_poison_a_healthy_explicit_subset() {
 }
 
 #[tokio::test]
-async fn stale_cache_uncovered_ranges_revisions_and_revocation_never_return_empty_success() {
+async fn stale_cache_uncovered_ranges_and_access_revocation_never_return_empty_success() {
     let fixture = Fixture::new().await;
     let access = Access::default();
-    for mode in 0..4 {
+    for mode in 0..3 {
         let mut grant = fixture.grant();
         let clock = || {
             if mode == 0 {
@@ -772,33 +812,30 @@ async fn stale_cache_uncovered_ranges_revisions_and_revocation_never_return_empt
             grant.expires_at = clock() + TimeDelta::minutes(1);
         }
         if mode == 1 {
-            grant.connection_revision += 1;
-        }
-        if mode == 2 {
             grant.day.start_date += TimeDelta::days(1);
             grant.day.end_date_exclusive += TimeDelta::days(1);
             grant.starts_at += TimeDelta::days(1);
             grant.ends_at += TimeDelta::days(1);
         }
-        if mode == 3 {
-            fixture
-                .day()
-                .disconnect_calendar(fixture.person, 2)
-                .await
-                .unwrap();
+        if mode == 2 {
+            access.denied.store(true, Ordering::SeqCst);
         }
         let views =
             CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), clock)
                 .unwrap();
         assert_eq!(
             views.timeline(request(&grant)).await,
-            Err(AgentFailure::StaleContext)
+            Err(if mode == 2 {
+                AgentFailure::CapabilityDenied
+            } else {
+                AgentFailure::StaleContext
+            })
         );
     }
 }
 
 #[tokio::test]
-async fn access_generation_change_and_later_calendar_change_invalidate_a_read_lease() {
+async fn access_generation_change_and_later_source_denial_invalidate_a_read_lease() {
     let fixture = Fixture::new().await;
     let grant = fixture.grant();
     let changed = Access {
@@ -822,11 +859,7 @@ async fn access_generation_change_and_later_calendar_change_invalidate_a_read_le
         )
         .await
         .unwrap();
-    fixture
-        .day()
-        .import_calendar(fixture.person, 2, day(), vec![], now())
-        .await
-        .unwrap();
+    access.denied.store(true, Ordering::SeqCst);
     assert_eq!(
         views
             .revalidate(
@@ -834,7 +867,7 @@ async fn access_generation_change_and_later_calendar_change_invalidate_a_read_le
                 Cancellation::default()
             )
             .await,
-        Err(AgentFailure::StaleContext)
+        Err(AgentFailure::CapabilityDenied)
     );
 }
 

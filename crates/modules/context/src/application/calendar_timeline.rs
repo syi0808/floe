@@ -504,26 +504,10 @@ impl<
         now: DateTime<Utc>,
     ) -> Result<DateTime<Utc>, AgentFailure> {
         self.grant.validate(now)?;
-        let connection = &mirror.connection;
-        if connection.disconnected
-            || connection.provider != self.grant.provider
-            || connection.revision != self.grant.connection_revision
-        {
-            return Err(AgentFailure::StaleContext);
-        }
-        let selected = connection.calendars.clone();
+        let statuses = &mirror.connection.source_statuses;
         let mut expiry = self.grant.expires_at;
         for identifier in &self.grant.calendar_ids {
-            if !selected
-                .iter()
-                .any(|calendar| &calendar.calendar_id == identifier)
-            {
-                return Err(AgentFailure::CapabilityDenied);
-            }
-            let status = connection
-                .source_statuses
-                .get(identifier)
-                .ok_or(AgentFailure::StaleContext)?;
+            let status = statuses.get(identifier).ok_or(AgentFailure::StaleContext)?;
             if let Some(failure) = status.error {
                 return Err(match failure {
                     floe_day::CalendarFailure::PermissionDenied => AgentFailure::CapabilityDenied,
