@@ -1,5 +1,6 @@
 import 'package:floe_client/features/experts/domain/agent_calendar_sources.dart';
-import 'package:floe_client/features/day/domain/day_models.dart';
+import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

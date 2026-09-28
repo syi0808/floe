@@ -61,6 +61,67 @@ pub enum NativeCalendarSourceMutationDto {
     },
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RemoteCalendarSourceMutationDto {
+    Bind {
+        connector_id: String,
+        connection_id: String,
+        expected_revision: Option<u64>,
+        resources: Vec<ConnectionResourceDto>,
+    },
+    Disconnect {
+        connection_id: String,
+        expected_revision: u64,
+    },
+}
+
+impl RemoteCalendarSourceMutationDto {
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        match self {
+            Self::Bind {
+                connector_id,
+                connection_id,
+                expected_revision,
+                resources,
+            } => {
+                if !["calendar.google", "calendar.microsoft"].contains(&connector_id.as_str())
+                    || !valid_source_text(connection_id, 256)
+                    || expected_revision
+                        .is_some_and(|revision| revision == 0 || revision > i64::MAX as u64)
+                    || resources.is_empty()
+                    || resources.len() > 4096
+                    || resources.iter().any(|resource| {
+                        !valid_source_text(&resource.handle, 256)
+                            || resource.handle == "*"
+                            || !valid_source_text(&resource.label, 256)
+                    })
+                    || resources
+                        .iter()
+                        .map(|resource| &resource.handle)
+                        .collect::<std::collections::HashSet<_>>()
+                        .len()
+                        != resources.len()
+                {
+                    return Err("command.remote_calendar_source");
+                }
+            }
+            Self::Disconnect {
+                connection_id,
+                expected_revision,
+            } => {
+                if !valid_source_text(connection_id, 256)
+                    || *expected_revision == 0
+                    || *expected_revision > i64::MAX as u64
+                {
+                    return Err("command.remote_calendar_source");
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 impl NativeCalendarSourceMutationDto {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         let (connection_id, revision, resources) = match self {
@@ -141,6 +202,38 @@ mod source_tests {
         invalid["expected_revision"] = serde_json::json!(0);
         let mutation: NativeCalendarSourceMutationDto = serde_json::from_value(invalid).unwrap();
         assert_eq!(mutation.validate(), Err("command.source_identity"));
+    }
+
+    #[test]
+    fn remote_binding_has_local_cas_and_no_producer_authority() {
+        let valid = serde_json::json!({
+            "type": "bind",
+            "connector_id": "calendar.google",
+            "connection_id": "provider-connection",
+            "expected_revision": 4,
+            "resources": [{"handle": "home", "label": "Home"}]
+        });
+        let mutation: RemoteCalendarSourceMutationDto =
+            serde_json::from_value(valid.clone()).unwrap();
+        mutation.validate().unwrap();
+        for extra in ["source_authority", "next_revision", "connection_revision"] {
+            let mut rejected = valid.clone();
+            rejected[extra] = serde_json::json!(7);
+            assert!(serde_json::from_value::<RemoteCalendarSourceMutationDto>(rejected).is_err());
+        }
+        let mut wrong_connector = valid.clone();
+        wrong_connector["connector_id"] = serde_json::json!("calendar.event_kit");
+        let mutation: RemoteCalendarSourceMutationDto =
+            serde_json::from_value(wrong_connector).unwrap();
+        assert_eq!(mutation.validate(), Err("command.remote_calendar_source"));
+
+        let mut duplicate = valid;
+        duplicate["resources"] = serde_json::json!([
+            {"handle": "home", "label": "Home"},
+            {"handle": "home", "label": "Work"}
+        ]);
+        let mutation: RemoteCalendarSourceMutationDto = serde_json::from_value(duplicate).unwrap();
+        assert_eq!(mutation.validate(), Err("command.remote_calendar_source"));
     }
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

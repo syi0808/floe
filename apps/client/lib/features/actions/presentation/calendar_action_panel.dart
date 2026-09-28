@@ -11,10 +11,10 @@ import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_feedback.dart';
 import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/floe_squircle.dart';
+import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 import 'package:floe_client/features/experts/presentation/agent_capability_label.dart';
 import 'package:floe_client/features/actions/application/calendar_action_controller.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
-import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/features/actions/application/calendar_action_gateway.dart';
 
 String _status(AppLocalizations strings, CalendarActionStatus status) =>

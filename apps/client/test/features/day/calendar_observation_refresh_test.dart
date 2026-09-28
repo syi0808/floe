@@ -1,8 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 import 'package:floe_client/features/day/application/calendar_observation_refresh.dart';
-import 'package:floe_client/features/day/domain/day_models.dart';
 
 void main() {
   test(
@@ -34,7 +34,7 @@ void main() {
 
   test('coalesces simultaneous resume and expert refresh triggers', () async {
     final scheduler = _ManualScheduler();
-    final completion = Completer<DaySnapshot>();
+    final completion = Completer<CalendarConnection?>();
     var refreshes = 0;
     final coordinator = CalendarObservationRefreshCoordinator(
       scheduler: scheduler,
@@ -87,24 +87,17 @@ void main() {
   });
 }
 
-DaySnapshot _snapshot({bool connected = true, String? error}) => DaySnapshot(
-  personId: 'person-1',
-  date: DateTime.utc(2026, 9, 11),
-  generatedAt: DateTime.utc(2026, 9, 11),
-  timezoneOffsetSeconds: 0,
-  items: const [],
-  overdueTaskCount: 0,
-  calendar: connected
-      ? CalendarConnection(
-          connectionId: '00000000-0000-4000-8000-000000000010',
-          deviceId: 'test-device',
-          provider: 'event_kit',
-          revision: 1,
-          error: error,
-          calendars: const [ConnectedCalendar(id: 'home', name: 'Home')],
-        )
-      : null,
-);
+CalendarConnection? _snapshot({bool connected = true, String? error}) =>
+    connected
+    ? CalendarConnection(
+        connectionId: '00000000-0000-4000-8000-000000000010',
+        deviceId: 'test-device',
+        provider: 'event_kit',
+        revision: 1,
+        error: error,
+        calendars: const [ConnectedCalendar(id: 'home', name: 'Home')],
+      )
+    : null;
 
 final class _ManualScheduler implements CalendarObservationRefreshScheduler {
   final List<Duration> delays = [];

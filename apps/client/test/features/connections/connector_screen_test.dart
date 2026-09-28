@@ -6,6 +6,9 @@ import 'package:floe_client/features/day/application/calendar_gateway.dart';
 import 'package:floe_client/features/day/application/fake_day_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/features/connections/domain/native_calendar_access.dart';
+import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
+import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
 import 'package:floe_client/features/connections/presentation/connector_screen.dart';
 import 'package:floe_client/features/experts/domain/agent_calendar_sources.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
@@ -488,6 +491,7 @@ void main() {
         home: Scaffold(
           body: ConnectorScreen(
             gateway: gateway,
+            calendarSourceGateway: gateway,
             query: DayQuery(
               personId: '00000000-0000-4000-8000-000000000001',
               date: date,
@@ -504,7 +508,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(gateway.connectionId, '8a1d7fb0-435d-5d1e-aab4-53ed2894da61');
-    expect(gateway.connectionRevision, 7);
+    expect(gateway.expectedRevision, isNull);
     expect(gateway.deviceId, 'local-test-device');
     expect(gateway.provider, 'google_calendar');
     expect(gateway.boundCalendars.single.id, 'primary@example.test');
@@ -526,6 +530,7 @@ void main() {
           body: SingleChildScrollView(
             child: ConnectorScreen(
               gateway: gateway,
+              calendarSourceGateway: gateway,
               query: DayQuery(
                 personId: '00000000-0000-4000-8000-000000000001',
                 date: date,
@@ -567,7 +572,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(gateway.connectionId, _microsoftCalendarConnector.connectionId);
-    expect(gateway.connectionRevision, 11);
+    expect(gateway.expectedRevision, isNull);
     expect(gateway.provider, 'microsoft_calendar');
     expect(gateway.boundCalendars.single.id, 'calendar@microsoft.test');
     expect(changed, 1);
@@ -588,6 +593,7 @@ void main() {
             body: SingleChildScrollView(
               child: ConnectorScreen(
                 gateway: gateway,
+                calendarSourceGateway: gateway,
                 query: DayQuery(
                   personId: '00000000-0000-4000-8000-000000000001',
                   date: date,
@@ -702,29 +708,94 @@ void main() {
   );
 }
 
-final class _RecordingCalendarGateway extends _DeviceCalendarGateway {
+final class _RecordingCalendarGateway extends _DeviceCalendarGateway
+    implements CalendarSourceGateway {
   String? connectionId;
-  int? connectionRevision;
+  int? expectedRevision;
   String? deviceId;
   String? provider;
   List<CalendarChoice> boundCalendars = const [];
 
   @override
-  Future<DaySnapshot> bindCalendarConnection({
+  Future<CalendarSourceConnection> bindRemote(
+    String personId, {
+    required String connectorId,
     required String connectionId,
-    required int connectionRevision,
-    required String deviceId,
-    required String provider,
-    required List<CalendarChoice> calendars,
-    required DayQuery query,
-  }) {
+    required List<CalendarSourceResource> resources,
+    CalendarSourceConnection? current,
+  }) async {
     this.connectionId = connectionId;
-    this.connectionRevision = connectionRevision;
-    this.deviceId = deviceId;
-    this.provider = provider;
-    boundCalendars = calendars;
-    return FakeDayGateway().loadDay(query);
+    expectedRevision = current?.revision;
+    deviceId = 'local-test-device';
+    provider = connectorId == 'calendar.google'
+        ? 'google_calendar'
+        : 'microsoft_calendar';
+    boundCalendars = [
+      for (final resource in resources)
+        CalendarChoice(resource.handle, resource.label, provider: provider!),
+    ];
+    return _source(connectorId, connectionId, resources);
   }
+
+  @override
+  Future<List<CalendarSourceConnection>> inspectRemote(String personId) async =>
+      const [];
+
+  @override
+  Future<CalendarSourceConnection?> inspectNative(String personId) async =>
+      null;
+
+  @override
+  Future<CalendarSourceConnection> establishNative(
+    String personId, {
+    required String resourceMode,
+    required List<CalendarSourceResource> resources,
+  }) async => _source('calendar.event_kit', 'native', resources);
+
+  @override
+  Future<CalendarSourceConnection> configureNative(
+    String personId, {
+    required CalendarSourceConnection current,
+    required String resourceMode,
+    required List<CalendarSourceResource> resources,
+  }) async => current;
+
+  @override
+  Future<CalendarSourceConnection> reconcileNativeInventory(
+    String personId, {
+    required CalendarSourceConnection current,
+    required List<CalendarSourceResource> resources,
+  }) async => current;
+
+  @override
+  Future<CalendarSourceConnection> disconnectNative(
+    String personId, {
+    required CalendarSourceConnection current,
+  }) async => current;
+
+  @override
+  Future<CalendarSourceConnection> disconnectRemote(
+    String personId, {
+    required CalendarSourceConnection current,
+  }) async => current;
+
+  CalendarSourceConnection _source(
+    String connectorId,
+    String connectionId,
+    List<CalendarSourceResource> resources,
+  ) => CalendarSourceConnection(
+    connectorId: connectorId,
+    connectionId: connectionId,
+    executionOwnerId: 'local-test-device',
+    state: 'ready',
+    revision: 1,
+    sourceAuthority: const CalendarSourceAuthority(
+      incarnation: '00000000-0000-4000-8000-000000000009',
+      epoch: 1,
+    ),
+    resourceMode: 'selected',
+    resources: resources,
+  );
 }
 
 final class _StubCalendarAccessGateway implements NativeCalendarAccessGateway {
@@ -838,35 +909,10 @@ class _DeviceCalendarGateway
   Future<CalendarSystemAccess> inspectCalendarAccess() async =>
       CalendarSystemAccess.allowed;
   @override
-  Future<DaySnapshot> bindCalendarConnection({
-    required String connectionId,
-    required int connectionRevision,
-    required String deviceId,
-    required String provider,
-    required List<CalendarChoice> calendars,
-    required DayQuery query,
-  }) => FakeDayGateway().loadDay(query);
-
-  @override
   Future<List<CalendarChoice>> calendars() async => const [];
 
   @override
-  Future<DaySnapshot> disconnectCalendar(DayQuery query) =>
-      FakeDayGateway().loadDay(query);
-
-  @override
   Future<void> openCalendarSettings() async {}
-
-  @override
-  Future<DaySnapshot> selectCalendar(CalendarChoice calendar, DayQuery query) =>
-      FakeDayGateway().loadDay(query);
-
-  @override
-  Future<DaySnapshot> selectCalendars(
-    List<CalendarChoice> calendars,
-    DayQuery query, {
-    bool includeAll = false,
-  }) => FakeDayGateway().loadDay(query);
 
   @override
   Future<DaySnapshot> syncCalendar(DayQuery query) =>

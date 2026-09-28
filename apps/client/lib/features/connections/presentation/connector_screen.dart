@@ -1,4 +1,7 @@
 import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
+import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
+import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
+import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
 
 import 'dart:async';
 
@@ -37,6 +40,9 @@ class ConnectorScreen extends StatefulWidget {
     required this.gateway,
     required this.query,
     required this.connection,
+    this.calendarSourceGateway,
+    this.calendarSource,
+    this.remoteCalendarSources = const [],
     required this.onChanged,
     this.serverClient,
     this.deviceId,
@@ -55,6 +61,9 @@ class ConnectorScreen extends StatefulWidget {
   final CalendarGateway? gateway;
   final DayQuery query;
   final CalendarConnection? connection;
+  final CalendarSourceGateway? calendarSourceGateway;
+  final CalendarSourceConnection? calendarSource;
+  final List<CalendarSourceConnection> remoteCalendarSources;
   final Future<void> Function() onChanged;
 
   /// The Operation owner for connector authorization. Supplied by the app.
@@ -245,7 +254,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     ServerConnection server,
     ServerConnectorCatalog nextCatalog,
   ) async {
-    final gateway = widget.gateway;
+    final gateway = widget.calendarSourceGateway;
     if (gateway == null) return;
     final connected = nextCatalog.connectors
         .where(
@@ -258,7 +267,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         )
         .toList(growable: false);
     ServerConnector? selected;
-    final current = widget.connection;
+    final current = widget.remoteCalendarSources.singleOrNull;
     final currentProvider = current?.provider;
     for (final connector in connected) {
       if (_calendarProvider(connector.id) == currentProvider &&
@@ -267,7 +276,9 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         break;
       }
     }
-    if (selected == null && current == null && connected.length == 1) {
+    if (selected == null &&
+        widget.connection == null &&
+        connected.length == 1) {
       selected = connected.single;
     }
     if (selected == null) {
@@ -275,7 +286,10 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         'google_calendar',
         'microsoft_calendar',
       }.contains(currentProvider)) {
-        await gateway.disconnectCalendar(widget.query);
+        await gateway.disconnectRemote(
+          widget.query.personId,
+          current: current!,
+        );
         await widget.onChanged();
       }
       return;
@@ -286,38 +300,50 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
   }
 
   Future<bool> _bindServerCalendar(
-    CalendarGateway gateway,
+    CalendarSourceGateway gateway,
     ServerConnection server,
     ServerConnector selected,
   ) async {
     final calendarId = selected.scope['calendar_id'];
     final connectionId = selected.connectionId;
-    final revision = selected.connectionRevision;
     if (calendarId is! String ||
         calendarId.isEmpty ||
         connectionId == null ||
-        revision == null) {
+        !const {
+          'calendar.google',
+          'calendar.microsoft',
+        }.contains(selected.id)) {
       throw const ServerConnectionException('invalid_response');
     }
     final provider = _calendarProvider(selected.id);
-    final current = widget.connection;
+    final current = widget.remoteCalendarSources.singleOrNull;
     if (current?.connectionId == connectionId &&
-        current?.revision == revision &&
-        current?.deviceId == server.deviceId &&
+        current?.connectorId != selected.id) {
+      throw const ServerConnectionException('invalid_response');
+    }
+    if (current?.connectionId == connectionId &&
+        current?.executionOwnerId == server.deviceId &&
         current?.provider == provider &&
         current?.selectedCalendarIds.length == 1 &&
-        current?.selectedCalendarIds.single == calendarId) {
+        current?.selectedCalendarIds.single == calendarId &&
+        current?.resources.single.label == selected.name) {
       return false;
     }
-    await gateway.bindCalendarConnection(
+    if (current != null && current.connectionId != connectionId) {
+      await gateway.disconnectRemote(widget.query.personId, current: current);
+    }
+    await gateway.bindRemote(
+      widget.query.personId,
+      connectorId: selected.id,
       connectionId: connectionId,
-      connectionRevision: revision,
-      deviceId: server.deviceId,
-      provider: provider,
-      calendars: [
-        CalendarChoice(calendarId, selected.name, provider: provider),
+      current:
+          current?.connectionId == connectionId &&
+              current?.connectorId == selected.id
+          ? current
+          : null,
+      resources: [
+        CalendarSourceResource(handle: calendarId, label: selected.name),
       ],
-      query: widget.query,
     );
     return true;
   }
@@ -351,7 +377,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
   }
 
   Future<void> _activateServerCalendar(ServerConnector connector) async {
-    final gateway = widget.gateway;
+    final gateway = widget.calendarSourceGateway;
     final server = serverConnection;
     if (gateway == null ||
         server == null ||
@@ -664,6 +690,8 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
       if (widget.gateway != null)
         CalendarPanel(
           gateway: widget.gateway!,
+          sourceGateway: widget.calendarSourceGateway,
+          source: widget.calendarSource,
           query: widget.query,
           connection: deviceCalendarConnection,
           onChanged: _calendarChangedExplicitly,

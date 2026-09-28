@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:floe_client/features/day/domain/day_models.dart';
+import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 
 abstract interface class CalendarObservationRefreshTask {
   void cancel();
@@ -26,7 +26,7 @@ final class TimerCalendarObservationRefreshScheduler
 
 final class CalendarObservationRefreshCoordinator {
   factory CalendarObservationRefreshCoordinator({
-    required Future<DaySnapshot> Function() refresh,
+    required Future<CalendarConnection?> Function() refresh,
     CalendarObservationRefreshScheduler scheduler =
         const TimerCalendarObservationRefreshScheduler(),
     Duration refreshInterval = const Duration(minutes: 3),
@@ -44,7 +44,7 @@ final class CalendarObservationRefreshCoordinator {
 
   static const supportedProviders = {'event_kit', 'android'};
 
-  final Future<DaySnapshot> Function() _refresh;
+  final Future<CalendarConnection?> Function() _refresh;
   final CalendarObservationRefreshScheduler _scheduler;
   final Duration refreshInterval;
 
@@ -55,8 +55,7 @@ final class CalendarObservationRefreshCoordinator {
 
   bool get active => _active && !_disposed;
 
-  void reconcile(DaySnapshot? snapshot) {
-    final connection = snapshot?.calendar;
+  void reconcile(CalendarConnection? connection) {
     _active =
         connection != null &&
         supportedProviders.contains(connection.provider) &&
@@ -82,10 +81,9 @@ final class CalendarObservationRefreshCoordinator {
 
   Future<void> _runRefresh() async {
     try {
-      final snapshot = await _refresh();
+      final connection = await _refresh();
       if (_disposed) return;
-      reconcile(snapshot);
-      final connection = snapshot.calendar;
+      reconcile(connection);
       if (connection == null || !_active) {
         throw StateError('Device calendar observation is unavailable.');
       }

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
-import 'package:floe_client/features/day/domain/day_models.dart';
+import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 
 final class AgentCalendarSources {
   AgentCalendarSources({

@@ -4,22 +4,7 @@ import 'package:floe_client/features/day/domain/day_models.dart';
 
 abstract interface class CalendarGateway {
   Future<List<CalendarChoice>> calendars();
-  Future<DaySnapshot> selectCalendar(CalendarChoice calendar, DayQuery query);
-  Future<DaySnapshot> selectCalendars(
-    List<CalendarChoice> calendars,
-    DayQuery query, {
-    bool includeAll = false,
-  });
-  Future<DaySnapshot> bindCalendarConnection({
-    required String connectionId,
-    required int connectionRevision,
-    required String deviceId,
-    required String provider,
-    required List<CalendarChoice> calendars,
-    required DayQuery query,
-  });
   Future<DaySnapshot> syncCalendar(DayQuery query);
-  Future<DaySnapshot> disconnectCalendar(DayQuery query);
   Future<void> openCalendarSettings();
 }
 

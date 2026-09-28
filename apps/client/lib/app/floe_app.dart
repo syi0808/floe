@@ -1,5 +1,6 @@
 import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
 import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
+import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
 
 import 'dart:async';
 
@@ -26,6 +27,7 @@ class FloeApp extends StatefulWidget {
     super.key,
     required this.gateway,
     this.calendarActions,
+    this.calendarSourceGateway,
     this.query,
     this.agentGateway,
     this.ownerGateways = const LocalOwnerGateways(),
@@ -44,6 +46,7 @@ class FloeApp extends StatefulWidget {
 
   /// Proposal, approval and execution of calendar actions.
   final CalendarActionExecutionGateway? calendarActions;
+  final CalendarSourceGateway? calendarSourceGateway;
 
   final DayQuery? query;
   final AgentConversationGateway? agentGateway;
@@ -82,6 +85,7 @@ class _FloeAppState extends State<FloeApp> {
     final home = FloeToastHost(
       child: PersonalDayScreen(
         gateway: widget.gateway,
+        calendarSourceGateway: widget.calendarSourceGateway,
         query: effectiveQuery,
         agentGateway: widget.agentGateway,
         ownerGateways: widget.ownerGateways,

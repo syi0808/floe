@@ -1,5 +1,5 @@
 import 'package:floe_client/app/runtime/native_transport.dart';
-import 'package:floe_client/features/day/domain/day_models.dart';
+import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 
 final class CalendarObservationPublisher {
   factory CalendarObservationPublisher({

@@ -74,8 +74,8 @@ pub use floe_access::{
 pub use floe_actions::{ActionAuthorityMode, CalendarAction, CalendarActionState};
 pub use floe_agent_contract::UserInteractionKind;
 pub use floe_connections::{
-    CalendarConnectionRef, ConnectionId, ConnectionResource, PairingIssuer, PairingStatus,
-    ResourceMode, SourceConnection, SourceState,
+    CalendarConnectionRef, ConnectionId, ConnectionResource, ConnectorId, PairingIssuer,
+    PairingStatus, ResourceMode, SourceConnection, SourceState,
 };
 pub use floe_context_contract::{
     DataClass, GrantConsumer, ProcessingSourceScope, RecipientLineage,
@@ -101,7 +101,7 @@ pub use connection_observe::{
 #[cfg(unix)]
 pub use connection_services::{
     ConnectionsQueries, ConnectionsResult, NativeCalendarSourceCommands,
-    NativeCalendarSourceMutation,
+    NativeCalendarSourceMutation, RemoteCalendarSourceCommands, RemoteCalendarSourceMutation,
 };
 #[cfg(unix)]
 pub use context_services::{

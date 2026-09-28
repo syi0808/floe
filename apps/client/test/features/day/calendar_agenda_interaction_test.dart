@@ -68,14 +68,10 @@ void main() {
         date: date,
         generatedAt: DateTime(2026, 9, 8, 10),
         timezoneOffsetSeconds: date.timeZoneOffset.inSeconds,
-        calendar: CalendarConnection(
-          connectionId: '00000000-0000-4000-8000-000000000010',
-          deviceId: 'test-device',
+        calendar: CalendarMirrorState(
+          sourceConnectionId: '00000000-0000-4000-8000-000000000010',
           provider: 'fixture',
-          revision: 1,
-          calendars: const [
-            ConnectedCalendar(id: 'calendar', name: 'Personal'),
-          ],
+          sourceStatuses: const {},
           lastSuccessAt: DateTime(2026, 9, 8, 9),
         ),
         items: const [],

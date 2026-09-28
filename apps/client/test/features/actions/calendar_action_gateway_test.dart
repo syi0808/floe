@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
 import 'package:floe_client/features/actions/infrastructure/native_calendar_action_gateway.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
 
 import '../day/calendar_gateway_test.dart' show FixtureCalendarAdapter, query;
 
@@ -92,7 +93,7 @@ void main() {
     },
   );
 
-  test('action review requires an unlocked vault while proposals persist without writes', () async {
+  test('pending native source cannot authorize an action proposal', () async {
     final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
     expect(
       library.existsSync(),
@@ -108,51 +109,37 @@ void main() {
       clock: () => DateTime.utc(2000),
       deviceId: 'test-device',
     );
-    var gateway = await open();
+    final gateway = await open();
     try {
-      await gateway.day.selectCalendars(adapter.inventory, query);
-      expect(
-        await gateway.actions.loadCalendarActions(query.personId),
-        isEmpty,
+      await gateway.runtime.calendarSource.establishNative(
+        query.personId,
+        resourceMode: 'selected',
+        resources: const [
+          CalendarSourceResource(handle: 'home', label: 'Home'),
+        ],
       );
       final now = DateTime.now().toUtc();
-      Future<CalendarAction> propose() => gateway.actions.proposeCalendarAction(
-        personId: query.personId,
-        calendarId: 'fixture',
-        title: 'Focus',
-        startsAt: now.add(const Duration(hours: 1)),
-        endsAt: now.add(const Duration(hours: 2)),
-        timezone: 'Asia/Seoul',
-      );
-      final pending = await propose();
-      expect(pending.status, CalendarActionStatus.pending);
-      expect(pending.createdAt.year, now.year);
-      expect(pending.calendarName, 'Test calendar');
-      expect(
-        pending.expiresAt.difference(pending.createdAt),
-        const Duration(minutes: 15),
-      );
       await expectLater(
-        gateway.actions.decideCalendarAction(
+        gateway.actions.proposeCalendarAction(
           personId: query.personId,
-          actionId: pending.id,
-          decision: CalendarActionDecision.approve,
+          calendarId: 'home',
+          title: 'Focus',
+          startsAt: now.add(const Duration(hours: 1)),
+          endsAt: now.add(const Duration(hours: 2)),
+          timezone: 'Asia/Seoul',
         ),
         throwsA(
           isA<AgentVaultException>().having(
             (error) => error.failure,
             'failure',
-            'vault_unavailable',
+            'conflict',
           ),
         ),
       );
-      await gateway.close();
-      gateway = await open();
-      final restored = (await gateway.actions.loadCalendarActions(
-        query.personId,
-      )).single;
-      expect(restored.status, CalendarActionStatus.pending);
-      expect(restored.executionId, pending.executionId);
+      expect(
+        await gateway.actions.loadCalendarActions(query.personId),
+        isEmpty,
+      );
       expect((await gateway.day.loadDay(query)).items, isEmpty);
       expect(adapter.records, isEmpty);
     } finally {

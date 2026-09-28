@@ -227,6 +227,7 @@ Future<void> _start() async {
     runApp(
       FloeApp(
         gateway: gateway,
+        calendarSourceGateway: runtime.calendarSource,
         calendarActions: calendarActions,
         agentGateway: runtime.conversation,
         ownerGateways: runtime.owners,

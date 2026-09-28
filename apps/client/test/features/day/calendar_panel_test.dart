@@ -1,4 +1,7 @@
 import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
+import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
+import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/features/day/application/calendar_gateway.dart';
 import 'package:floe_client/features/day/application/fake_day_gateway.dart';
@@ -9,7 +12,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class PanelCalendarGateway
-    implements CalendarGateway, CalendarSystemAccessGateway {
+    implements
+        CalendarGateway,
+        CalendarSystemAccessGateway,
+        CalendarSourceGateway {
   List<CalendarChoice> selected = [];
   int syncCount = 0;
   int settingsCount = 0;
@@ -19,38 +25,86 @@ class PanelCalendarGateway
   Future<CalendarSystemAccess> inspectCalendarAccess() async => systemAccess;
 
   @override
-  Future<DaySnapshot> bindCalendarConnection({
-    required String connectionId,
-    required int connectionRevision,
-    required String deviceId,
-    required String provider,
-    required List<CalendarChoice> calendars,
-    required DayQuery query,
-  }) => FakeDayGateway().loadDay(query);
-
-  @override
-  Future<DaySnapshot> disconnectCalendar(DayQuery query) =>
-      FakeDayGateway().loadDay(query);
-
-  @override
   Future<List<CalendarChoice>> calendars() async => const [
     CalendarChoice('home', 'Home'),
     CalendarChoice('work', 'Work'),
   ];
 
   @override
-  Future<DaySnapshot> selectCalendar(CalendarChoice calendar, DayQuery query) =>
-      selectCalendars([calendar], query);
+  Future<CalendarSourceConnection?> inspectNative(String personId) async =>
+      null;
 
   @override
-  Future<DaySnapshot> selectCalendars(
-    List<CalendarChoice> calendars,
-    DayQuery query, {
-    bool includeAll = false,
-  }) {
-    selected = calendars;
-    return FakeDayGateway().loadDay(query);
+  Future<List<CalendarSourceConnection>> inspectRemote(String personId) async =>
+      const [];
+
+  @override
+  Future<CalendarSourceConnection> establishNative(
+    String personId, {
+    required String resourceMode,
+    required List<CalendarSourceResource> resources,
+  }) async {
+    selected = [
+      for (final resource in resources)
+        CalendarChoice(resource.handle, resource.label),
+    ];
+    return _source(resources);
   }
+
+  @override
+  Future<CalendarSourceConnection> configureNative(
+    String personId, {
+    required CalendarSourceConnection current,
+    required String resourceMode,
+    required List<CalendarSourceResource> resources,
+  }) => establishNative(
+    personId,
+    resourceMode: resourceMode,
+    resources: resources,
+  );
+
+  @override
+  Future<CalendarSourceConnection> reconcileNativeInventory(
+    String personId, {
+    required CalendarSourceConnection current,
+    required List<CalendarSourceResource> resources,
+  }) async => current;
+
+  @override
+  Future<CalendarSourceConnection> disconnectNative(
+    String personId, {
+    required CalendarSourceConnection current,
+  }) async => current;
+
+  @override
+  Future<CalendarSourceConnection> bindRemote(
+    String personId, {
+    required String connectorId,
+    required String connectionId,
+    required List<CalendarSourceResource> resources,
+    CalendarSourceConnection? current,
+  }) async => throw UnimplementedError();
+
+  @override
+  Future<CalendarSourceConnection> disconnectRemote(
+    String personId, {
+    required CalendarSourceConnection current,
+  }) async => throw UnimplementedError();
+
+  CalendarSourceConnection _source(List<CalendarSourceResource> resources) =>
+      CalendarSourceConnection(
+        connectorId: 'calendar.event_kit',
+        connectionId: '00000000-0000-4000-8000-000000000010',
+        executionOwnerId: 'test-device',
+        state: 'ready',
+        revision: 1,
+        sourceAuthority: const CalendarSourceAuthority(
+          incarnation: '00000000-0000-4000-8000-000000000009',
+          epoch: 1,
+        ),
+        resourceMode: 'selected',
+        resources: resources,
+      );
 
   @override
   Future<DaySnapshot> syncCalendar(DayQuery query) {
@@ -141,6 +195,7 @@ void main() {
             body: SingleChildScrollView(
               child: CalendarPanel(
                 gateway: gateway,
+                sourceGateway: gateway,
                 query: DayQuery(
                   personId: 'test',
                   date: date,

@@ -4,6 +4,7 @@ import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
+import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/features/actions/application/calendar_action_gateway.dart';
 

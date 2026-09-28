@@ -1,53 +1,3 @@
-final class CalendarSourceAuthority {
-  const CalendarSourceAuthority({
-    required this.incarnation,
-    required this.epoch,
-  });
-
-  factory CalendarSourceAuthority.fromJson(Object? value) {
-    if (value is! Map || value.keys.any((key) => key is! String)) {
-      throw const FormatException('Invalid Calendar source authority');
-    }
-    final json = value.cast<String, Object?>();
-    final incarnation = json['incarnation'];
-    final epoch = json['epoch'];
-    if (json.length != 2 ||
-        !json.keys.toSet().containsAll(const {'incarnation', 'epoch'}) ||
-        incarnation is! String ||
-        !_uuidPattern.hasMatch(incarnation) ||
-        incarnation.toLowerCase() == _nilUuid ||
-        epoch is! int ||
-        epoch <= 0) {
-      throw const FormatException('Invalid Calendar source authority');
-    }
-    return CalendarSourceAuthority(incarnation: incarnation, epoch: epoch);
-  }
-
-  final String incarnation;
-  final int epoch;
-
-  bool get isValid =>
-      _uuidPattern.hasMatch(incarnation) &&
-      incarnation.toLowerCase() != _nilUuid &&
-      epoch > 0;
-
-  Map<String, Object> toJson() => {'incarnation': incarnation, 'epoch': epoch};
-
-  @override
-  bool operator ==(Object other) =>
-      other is CalendarSourceAuthority &&
-      other.incarnation == incarnation &&
-      other.epoch == epoch;
-
-  @override
-  int get hashCode => Object.hash(incarnation, epoch);
-}
-
-final _uuidPattern = RegExp(
-  r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
-);
-const _nilUuid = '00000000-0000-0000-0000-000000000000';
-
 enum DayItemKind { event, task, note }
 
 enum TaskPriority { low, normal, high }
@@ -195,62 +145,34 @@ final class DaySnapshot {
   final String? nowEventId;
   final String? nextEventId;
   final int overdueTaskCount;
-  final CalendarConnection? calendar;
+  final CalendarMirrorState? calendar;
   final int? calendarMirrorRevision;
 }
 
-final class ConnectedCalendar {
-  const ConnectedCalendar({
-    required this.id,
-    required this.name,
-    this.error,
-    this.lastSuccessAt,
-  });
+final class CalendarSyncStatus {
+  const CalendarSyncStatus({this.error, this.lastSuccessAt});
 
-  final String id;
-  final String name;
   final String? error;
   final DateTime? lastSuccessAt;
-
-  String? get account {
-    final separator = name.indexOf(' · ');
-    return separator > 0 ? name.substring(0, separator) : null;
-  }
-
-  String get title {
-    final separator = name.indexOf(' · ');
-    return separator > 0 ? name.substring(separator + 3) : name;
-  }
 }
 
-final class CalendarConnection {
-  const CalendarConnection({
-    required this.connectionId,
-    required this.deviceId,
+final class CalendarMirrorState {
+  const CalendarMirrorState({
+    required this.sourceConnectionId,
     required this.provider,
-    required this.revision,
-    this.sourceAuthority,
-    required this.calendars,
+    required this.sourceStatuses,
     this.lastSuccessAt,
     this.error,
     this.rangeStart,
     this.rangeEnd,
-    this.includeAll = false,
   });
-  final String connectionId;
-  final String deviceId;
+  final String sourceConnectionId;
   final String provider;
-  final int revision;
-  final CalendarSourceAuthority? sourceAuthority;
+  final Map<String, CalendarSyncStatus> sourceStatuses;
   final DateTime? lastSuccessAt;
   final String? error;
   final String? rangeStart;
   final String? rangeEnd;
-  final List<ConnectedCalendar> calendars;
-  final bool includeAll;
-  List<ConnectedCalendar> get connectedCalendars => calendars;
-  List<String> get selectedCalendarIds =>
-      calendars.map((calendar) => calendar.id).toList();
 }
 
 final class CaptureReceipt {

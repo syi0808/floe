@@ -8,6 +8,8 @@ import 'package:floe_client/app/runtime/native_transport.dart'
     show NativeTransportException, nativeProtocolVersion;
 import 'package:floe_client/app/runtime/owner_operation.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
+import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 import 'package:floe_client/features/day/application/calendar_gateway.dart';
 import 'package:floe_client/features/day/application/calendar_observation_publisher.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
@@ -26,7 +28,6 @@ final class NativeDayGateway
     this._calendarAdapter, {
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now,
-       _deviceId = _runtime.deviceId,
        _calendarObservationPublisher = CalendarObservationPublisher(
          transport: _runtime.localContextTransport,
          deviceId: _runtime.deviceId,
@@ -36,7 +37,6 @@ final class NativeDayGateway
   final DateTime Function() _clock;
   final CalendarAdapter _calendarAdapter;
   final CalendarObservationPublisher _calendarObservationPublisher;
-  final String _deviceId;
   Future<void> _calendarOperationTail = Future.value();
 
   /// Drains any calendar operation still in flight. Transport shutdown belongs
@@ -124,82 +124,20 @@ final class NativeDayGateway
   Future<void> openCalendarSettings() => _calendarAdapter.openSettings();
 
   @override
-  Future<DaySnapshot> selectCalendar(CalendarChoice calendar, DayQuery query) =>
-      selectCalendars([calendar], query);
-
-  @override
-  Future<DaySnapshot> selectCalendars(
-    List<CalendarChoice> calendars,
-    DayQuery query, {
-    bool includeAll = false,
-  }) async {
-    if (calendars.isEmpty ||
-        calendars.any(
-          (calendar) => calendar.provider != calendars.first.provider,
-        )) {
-      throw ArgumentError('Select calendars from one provider');
-    }
-    final current = await loadDay(query);
-    final connectionId = _deviceId.startsWith('local-')
-        ? _deviceId.substring('local-'.length)
-        : _deviceId;
-    final data = await _mutate(query, {
-      'type': 'set_calendar_scope',
-      'connection_id': connectionId,
-      'connection_revision': (current.calendar?.revision ?? 0) + 1,
-      'scope': includeAll ? 'all' : 'selected',
-      'provider': calendars.first.provider,
-      'calendars': [
-        for (final calendar in calendars)
-          {'calendar_id': calendar.id, 'calendar_name': calendar.name},
-      ],
-    });
-    return _decodeSnapshot(_asMap(data['snapshot']));
-  }
-
-  @override
-  Future<DaySnapshot> bindCalendarConnection({
-    required String connectionId,
-    required int connectionRevision,
-    required String deviceId,
-    required String provider,
-    required List<CalendarChoice> calendars,
-    required DayQuery query,
-  }) async {
-    if (connectionId.isEmpty ||
-        connectionRevision <= 0 ||
-        deviceId != _deviceId ||
-        calendars.isEmpty ||
-        calendars.any((calendar) => calendar.provider != provider)) {
-      throw ArgumentError('Invalid Calendar connection binding');
-    }
-    final data = await _mutate(query, {
-      'type': 'set_calendar_scope',
-      'connection_id': connectionId,
-      'connection_revision': connectionRevision,
-      'scope': 'selected',
-      'provider': provider,
-      'calendars': [
-        for (final calendar in calendars)
-          {'calendar_id': calendar.id, 'calendar_name': calendar.name},
-      ],
-    });
-    return _decodeSnapshot(_asMap(data['snapshot']));
-  }
-
-  @override
   Future<DaySnapshot> syncCalendar(DayQuery query) =>
       _runCalendarOperation(() => _syncCalendar(query));
 
   Future<DaySnapshot> _syncCalendar(DayQuery query) async {
     final current = await loadDay(query);
-    var connection = current.calendar;
-    if (connection == null) return current;
-    var mirrorRevision = current.calendarMirrorRevision;
-    if (mirrorRevision == null) {
-      throw StateError('Calendar mirror revision is missing');
+    final loadedSource = await _runtime.calendarSource.inspectNative(
+      query.personId,
+    );
+    if (loadedSource == null || loadedSource.state == 'disconnected') {
+      return current;
     }
-    final provider = connection.provider;
+    CalendarSourceConnection source = loadedSource;
+    var mirrorRevision = current.calendarMirrorRevision;
+    final provider = source.provider;
     try {
       final inventory = await _calendarAdapter
           .calendars(requestAccess: false)
@@ -208,24 +146,20 @@ final class NativeDayGateway
           .where((calendar) => calendar.provider == provider)
           .map((calendar) => calendar.id)
           .toSet();
-      if (connection.includeAll) {
-        final discovered = await _mutate(query, {
-          'type': 'discover_calendars',
-          'expected_revision': mirrorRevision,
-          'calendars': [
+      if (source.includeAll) {
+        source = await _runtime.calendarSource.reconcileNativeInventory(
+          query.personId,
+          current: source,
+          resources: [
             for (final calendar in inventory.where(
               (calendar) => calendar.provider == provider,
             ))
-              {'calendar_id': calendar.id, 'calendar_name': calendar.name},
+              CalendarSourceResource(handle: calendar.id, label: calendar.name),
           ],
-        });
-        final snapshot = _decodeSnapshot(_asMap(discovered['snapshot']));
-        connection = snapshot.calendar!;
-        mirrorRevision = snapshot.calendarMirrorRevision!;
+        );
       }
-      final active = connection;
       final batches = await Future.wait(
-        active.selectedCalendarIds.map((calendarId) async {
+        source.selectedCalendarIds.map((calendarId) async {
           try {
             if (!available.contains(calendarId)) {
               throw PlatformException(code: 'calendar_unavailable');
@@ -252,7 +186,8 @@ final class NativeDayGateway
       );
       final data = await _mutate(query, {
         'type': 'import_calendar_sources',
-        'expected_revision': mirrorRevision,
+        'connection_id': source.connectionId,
+        'expected_mirror_revision': mirrorRevision,
         'occurred_at': _timestamp(_clock()),
         'range': {
           'start_date': _date(query.date),
@@ -265,30 +200,29 @@ final class NativeDayGateway
         'batches': batches,
       });
       final snapshot = _decodeSnapshot(_asMap(data['snapshot']));
-      final syncedConnection = snapshot.calendar;
-      if (syncedConnection != null) {
-        connection = syncedConnection;
-        final permissionRevoked =
-            batches.isNotEmpty &&
-            batches.every((batch) => batch['failure'] == 'permission_denied');
-        await _updateCalendarObservation(
-          query: query,
-          connection: syncedConnection,
-          batches: batches,
-          permissionRevoked: permissionRevoked,
-        );
-      }
+      final permissionRevoked =
+          batches.isNotEmpty &&
+          batches.every((batch) => batch['failure'] == 'permission_denied');
+      await _updateCalendarObservation(
+        query: query,
+        connection: CalendarConnection.compose(source, snapshot.calendar),
+        batches: batches,
+        permissionRevoked: permissionRevoked,
+      );
       return snapshot;
     } on Object catch (error) {
+      if (error is AppRuntimeException ||
+          error is NativeTransportException ||
+          error is FormatException) {
+        rethrow;
+      }
       if (_calendarObservationPublisher.supports(provider)) {
         await _revokeCalendarObservation(query.personId);
       }
-      if (error is AppRuntimeException && error.code != 'validation') {
-        rethrow;
-      }
       final data = await _mutate(query, {
         'type': 'calendar_failed',
-        'expected_revision': mirrorRevision,
+        'connection_id': source.connectionId,
+        'expected_mirror_revision': mirrorRevision,
         'failure': _calendarFailure(error),
       });
       return _decodeSnapshot(_asMap(data['snapshot']));
@@ -325,23 +259,6 @@ final class NativeDayGateway
     } on Object {
       return;
     }
-  }
-
-  @override
-  Future<DaySnapshot> disconnectCalendar(DayQuery query) =>
-      _runCalendarOperation(() => _disconnectCalendar(query));
-
-  Future<DaySnapshot> _disconnectCalendar(DayQuery query) async {
-    final current = await loadDay(query);
-    if (current.calendar == null) return current;
-    if (_calendarObservationPublisher.supports(current.calendar!.provider)) {
-      await _calendarObservationPublisher.revoke(personId: query.personId);
-    }
-    final data = await _mutate(query, {
-      'type': 'disconnect_calendar',
-      'expected_revision': current.calendar!.revision,
-    });
-    return _decodeSnapshot(_asMap(data['snapshot']));
   }
 
   Future<T> _runCalendarOperation<T>(Future<T> Function() operation) {
@@ -528,30 +445,19 @@ EventItem _decodeEvent(Map<String, dynamic> json, DateTime createdAt) {
   );
 }
 
-CalendarConnection _decodeCalendar(Map<String, dynamic> json) =>
-    CalendarConnection(
-      connectionId: json['connection_id']! as String,
-      deviceId: json['device_id']! as String,
-      calendars: (json['calendars']! as List)
-          .map(
-            (calendar) => ConnectedCalendar(
-              id: calendar['calendar_id'] as String,
-              name: calendar['calendar_name'] as String,
-              error:
-                  (json['source_statuses']
-                          as Map?)?[calendar['calendar_id']]?['error']
-                      as String?,
-              lastSuccessAt: _optionalTimestamp(
-                (json['source_statuses']
-                    as Map?)?[calendar['calendar_id']]?['last_success_at'],
-              ),
-            ),
-          )
-          .toList(),
+CalendarMirrorState _decodeCalendar(Map<String, dynamic> json) =>
+    CalendarMirrorState(
+      sourceConnectionId: json['source_connection_id']! as String,
       provider: json['provider']! as String,
-      includeAll: json['scope'] == 'all',
-      revision: json['revision']! as int,
-      sourceAuthority: _optionalSourceAuthority(json['source_authority']),
+      sourceStatuses: {
+        for (final entry in _asMap(json['source_statuses']).entries)
+          entry.key: CalendarSyncStatus(
+            error: _asMap(entry.value)['error'] as String?,
+            lastSuccessAt: _optionalTimestamp(
+              _asMap(entry.value)['last_success_at'],
+            ),
+          ),
+      },
       lastSuccessAt: _optionalTimestamp(json['last_success_at']),
       error: json['error'] as String?,
       rangeStart: (json['last_range'] as Map?)?['start_date'] as String?,
@@ -567,15 +473,6 @@ TaskPriority _priority(String value) => switch (value) {
 
 DateTime? _optionalTimestamp(Object? value) =>
     value == null ? null : DateTime.parse(value as String);
-
-CalendarSourceAuthority? _optionalSourceAuthority(Object? value) {
-  if (value == null) return null;
-  try {
-    return CalendarSourceAuthority.fromJson(value);
-  } on FormatException {
-    return null;
-  }
-}
 
 Map<String, dynamic> _asMap(Object? value) =>
     Map<String, dynamic>.from(value! as Map);

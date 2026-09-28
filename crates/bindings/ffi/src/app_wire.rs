@@ -38,6 +38,7 @@ where
         + floe_app::KnowledgeCommands
         + floe_app::DayCommands
         + floe_app::NativeCalendarSourceCommands
+        + floe_app::RemoteCalendarSourceCommands
         + floe_app::ActionCommands
         + floe_app::LocalContextCommands,
 {
@@ -105,6 +106,17 @@ where
                 .mutate_native_calendar_source(host_request.caller(), mutation)
                 .map_err(day_error)?;
             Ok(AppCommandResultDto::NativeCalendarSource {
+                command_id: request.command_id,
+                source: native_source_dto(&source),
+            })
+        }
+        AppCommandDto::RemoteCalendarSourceMutate { mutation } => {
+            let mutation = remote_source_mutation(mutation)?;
+            let source = host_request
+                .services()
+                .mutate_remote_calendar_source(host_request.caller(), mutation)
+                .map_err(day_error)?;
+            Ok(AppCommandResultDto::RemoteCalendarSource {
                 command_id: request.command_id,
                 source: native_source_dto(&source),
             })
@@ -440,6 +452,7 @@ fn query_with_host<
         + floe_app::KnowledgeQueries
         + floe_app::ConnectionsQueries
         + floe_app::NativeCalendarSourceCommands
+        + floe_app::RemoteCalendarSourceCommands
         + floe_app::DayQueries
         + floe_app::ActionQueries
         + floe_app::LocalContextQueries,
@@ -555,6 +568,14 @@ fn query_with_host<
                 .map_err(day_error)?;
             Ok(AppQueryResultDto::NativeCalendarSource {
                 source: source.as_ref().map(native_source_dto),
+            })
+        }
+        AppQueryDto::RemoteCalendarSources {} => {
+            let sources = services
+                .inspect_remote_calendar_sources(caller)
+                .map_err(day_error)?;
+            Ok(AppQueryResultDto::RemoteCalendarSources {
+                sources: sources.iter().map(native_source_dto).collect(),
             })
         }
         AppQueryDto::ConnectionsReadResult {
@@ -1116,6 +1137,49 @@ fn native_source_mutation(
             connection_id: id,
             expected_revision,
         } => floe_app::NativeCalendarSourceMutation::Disconnect {
+            connection_id: connection_id(id)?,
+            expected_revision,
+        },
+    })
+}
+
+fn remote_source_mutation(
+    mutation: floe_protocol::RemoteCalendarSourceMutationDto,
+) -> AppWireResult<floe_app::RemoteCalendarSourceMutation> {
+    use floe_protocol::RemoteCalendarSourceMutationDto as Dto;
+    let connection_id = |value: String| {
+        floe_app::ConnectionId::try_new(value)
+            .map_err(|_| request_validation("command.connection_id"))
+    };
+    Ok(match mutation {
+        Dto::Bind {
+            connector_id,
+            connection_id: id,
+            expected_revision,
+            resources,
+        } => {
+            let connector_id = floe_app::ConnectorId::try_new(connector_id)
+                .map_err(|_| request_validation("command.connector_id"))?;
+            let resources = resources
+                .into_iter()
+                .map(|resource| {
+                    let handle = floe_app::ResourceHandle::try_new(resource.handle)
+                        .map_err(|_| request_validation("command.resources"))?;
+                    floe_app::ConnectionResource::new(handle, resource.label)
+                        .map_err(|_| request_validation("command.resources"))
+                })
+                .collect::<AppWireResult<Vec<_>>>()?;
+            floe_app::RemoteCalendarSourceMutation::Bind {
+                connector_id,
+                connection_id: connection_id(id)?,
+                expected_revision,
+                resources,
+            }
+        }
+        Dto::Disconnect {
+            connection_id: id,
+            expected_revision,
+        } => floe_app::RemoteCalendarSourceMutation::Disconnect {
             connection_id: connection_id(id)?,
             expected_revision,
         },
@@ -1913,6 +1977,26 @@ mod tests {
             &self,
             _caller: &floe_app::CallerContext,
             _mutation: floe_app::NativeCalendarSourceMutation,
+        ) -> Result<floe_app::SourceConnection, floe_app::CoreError> {
+            Err(floe_app::CoreError::new(
+                floe_app::ErrorCode::NotFound,
+                "source unavailable",
+            ))
+        }
+    }
+
+    impl floe_app::RemoteCalendarSourceCommands for Services {
+        fn inspect_remote_calendar_sources(
+            &self,
+            _caller: &floe_app::CallerContext,
+        ) -> Result<Vec<floe_app::SourceConnection>, floe_app::CoreError> {
+            Ok(Vec::new())
+        }
+
+        fn mutate_remote_calendar_source(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _mutation: floe_app::RemoteCalendarSourceMutation,
         ) -> Result<floe_app::SourceConnection, floe_app::CoreError> {
             Err(floe_app::CoreError::new(
                 floe_app::ErrorCode::NotFound,

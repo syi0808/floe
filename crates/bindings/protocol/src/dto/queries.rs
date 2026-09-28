@@ -55,6 +55,8 @@ pub enum AppQueryDto {
     ConnectionsOverview {},
     #[serde(rename = "connections.native_calendar.source")]
     NativeCalendarSource {},
+    #[serde(rename = "connections.remote_calendar.sources")]
+    RemoteCalendarSources {},
     #[serde(rename = "connections.read_result")]
     ConnectionsReadResult { operation_id: Uuid, release: bool },
     #[serde(rename = "access.calendar.preview")]
@@ -124,6 +126,7 @@ impl AppQueryDto {
             | Self::KnowledgeMemoryReview {}
             | Self::ConnectionsOverview {} => return Ok(()),
             Self::NativeCalendarSource {} => return Ok(()),
+            Self::RemoteCalendarSources {} => return Ok(()),
             Self::KnowledgeReadResult { operation_id, .. }
             | Self::ConnectionsReadResult { operation_id, .. } => {
                 ("query.operation_id", operation_id)
@@ -209,6 +212,9 @@ pub enum AppQueryResultDto {
     },
     NativeCalendarSource {
         source: Option<super::SourceConnectionDto>,
+    },
+    RemoteCalendarSources {
+        sources: Vec<super::SourceConnectionDto>,
     },
     LocalAccessOperation {
         #[serde(flatten)]

@@ -11,6 +11,195 @@ use floe_kernel::PersonId;
 use uuid::Uuid;
 
 const EVENT_KIT_CONNECTOR: &str = "calendar.event_kit";
+const REMOTE_CALENDAR_CONNECTORS: [&str; 2] = ["calendar.google", "calendar.microsoft"];
+
+pub enum RemoteCalendarSourceMutation {
+    Bind {
+        connector_id: ConnectorId,
+        connection_id: ConnectionId,
+        expected_revision: Option<u64>,
+        resources: Vec<ConnectionResource>,
+    },
+    Disconnect {
+        connection_id: ConnectionId,
+        expected_revision: u64,
+    },
+}
+
+pub trait RemoteCalendarSourceCommands {
+    fn inspect_remote_calendar_sources(
+        &self,
+        caller: &CallerContext,
+    ) -> Result<Vec<SourceConnection>, CoreError>;
+
+    fn mutate_remote_calendar_source(
+        &self,
+        caller: &CallerContext,
+        mutation: RemoteCalendarSourceMutation,
+    ) -> Result<SourceConnection, CoreError>;
+}
+
+impl RemoteCalendarSourceCommands for AppComposition {
+    fn inspect_remote_calendar_sources(
+        &self,
+        caller: &CallerContext,
+    ) -> Result<Vec<SourceConnection>, CoreError> {
+        let person_id = PersonId(caller.person_id());
+        self.runtime.block_on(async {
+            let service = self.core.source_service();
+            let mut sources = Vec::new();
+            for connector in REMOTE_CALENDAR_CONNECTORS {
+                sources.extend(
+                    service
+                        .list_current(
+                            person_id,
+                            &ConnectorId::try_new(connector).expect("constant connector ID"),
+                        )
+                        .await
+                        .map_err(source_error)?
+                        .into_iter()
+                        .filter(|source| {
+                            source.execution_owner_id().as_str() == caller.device_id()
+                        }),
+                );
+            }
+            if sources.len() > 1 {
+                return Err(CoreError::new(
+                    ErrorCode::Conflict,
+                    "multiple current remote Calendar sources",
+                ));
+            }
+            Ok(sources)
+        })
+    }
+
+    fn mutate_remote_calendar_source(
+        &self,
+        caller: &CallerContext,
+        mutation: RemoteCalendarSourceMutation,
+    ) -> Result<SourceConnection, CoreError> {
+        let person_id = PersonId(caller.person_id());
+        self.runtime.block_on(async {
+            let service = self.core.source_service();
+            match mutation {
+                RemoteCalendarSourceMutation::Bind {
+                    connector_id,
+                    connection_id,
+                    expected_revision,
+                    resources,
+                } => {
+                    if !REMOTE_CALENDAR_CONNECTORS.contains(&connector_id.as_str()) {
+                        return Err(CoreError::new(
+                            ErrorCode::Validation,
+                            "invalid remote Calendar connector",
+                        ));
+                    }
+                    if let Some(expected_revision) = expected_revision {
+                        let existing = verify_remote_source(
+                            &service,
+                            person_id,
+                            caller.device_id(),
+                            &connection_id,
+                        )
+                        .await?;
+                        if existing.connector_id() != &connector_id {
+                            return Err(CoreError::new(
+                                ErrorCode::Conflict,
+                                "remote Calendar connector changed",
+                            ));
+                        }
+                        service
+                            .configure(
+                                person_id,
+                                &connection_id,
+                                expected_revision,
+                                ResourceMode::Selected,
+                                resources,
+                            )
+                            .await
+                            .map_err(source_error)
+                    } else {
+                        for connector in REMOTE_CALENDAR_CONNECTORS {
+                            let current = service
+                                .list_current(
+                                    person_id,
+                                    &ConnectorId::try_new(connector)
+                                        .expect("constant connector ID"),
+                                )
+                                .await
+                                .map_err(source_error)?;
+                            if current.iter().any(|source| {
+                                source.execution_owner_id().as_str() == caller.device_id()
+                            }) {
+                                return Err(CoreError::new(
+                                    ErrorCode::Conflict,
+                                    "disconnect the current remote Calendar source first",
+                                ));
+                            }
+                        }
+                        if service
+                            .load(person_id, &connection_id)
+                            .await
+                            .map_err(source_error)?
+                            .is_some()
+                        {
+                            return Err(CoreError::new(
+                                ErrorCode::Conflict,
+                                "remote Calendar source already exists",
+                            ));
+                        }
+                        service
+                            .establish(
+                                person_id,
+                                connector_id,
+                                connection_id,
+                                ExecutionOwnerId::try_new(caller.device_id()).map_err(|_| {
+                                    CoreError::new(ErrorCode::Validation, "invalid device identity")
+                                })?,
+                                ResourceMode::Selected,
+                                resources,
+                            )
+                            .await
+                            .map_err(source_error)
+                    }
+                }
+                RemoteCalendarSourceMutation::Disconnect {
+                    connection_id,
+                    expected_revision,
+                } => {
+                    verify_remote_source(&service, person_id, caller.device_id(), &connection_id)
+                        .await?;
+                    service
+                        .disconnect(person_id, &connection_id, expected_revision)
+                        .await
+                        .map_err(source_error)
+                }
+            }
+        })
+    }
+}
+
+async fn verify_remote_source<Repository: floe_connections::SourceRepository + ?Sized>(
+    service: &floe_connections::SourceConnectionService<'_, Repository>,
+    person_id: PersonId,
+    device_id: &str,
+    connection_id: &ConnectionId,
+) -> Result<SourceConnection, CoreError> {
+    let source = service
+        .load(person_id, connection_id)
+        .await
+        .map_err(source_error)?
+        .ok_or_else(|| CoreError::new(ErrorCode::NotFound, "remote Calendar source not found"))?;
+    if !REMOTE_CALENDAR_CONNECTORS.contains(&source.connector_id().as_str())
+        || source.execution_owner_id().as_str() != device_id
+    {
+        return Err(CoreError::new(
+            ErrorCode::NotFound,
+            "remote Calendar source not found",
+        ));
+    }
+    Ok(source)
+}
 
 pub enum NativeCalendarSourceMutation {
     Establish {

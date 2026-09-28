@@ -1,5 +1,8 @@
 import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
 import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
+import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
+import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
+import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
 import 'package:intl/intl.dart';
 
 import 'dart:async';
@@ -69,6 +72,7 @@ class PersonalDayScreen extends StatefulWidget {
     super.key,
     required this.gateway,
     required this.query,
+    this.calendarSourceGateway,
     this.agentGateway,
     this.ownerGateways = const LocalOwnerGateways(),
     this.pairingGateway,
@@ -79,6 +83,7 @@ class PersonalDayScreen extends StatefulWidget {
     this.macOSContext,
   });
   final DayGateway gateway;
+  final CalendarSourceGateway? calendarSourceGateway;
   final DayQuery query;
   final AgentConversationGateway? agentGateway;
   final LocalOwnerGateways ownerGateways;
@@ -96,6 +101,26 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     with WidgetsBindingObserver {
   late final PersonalDayController controller;
   CalendarObservationRefreshCoordinator? calendarObservationRefresh;
+  CalendarSourceConnection? nativeCalendarSource;
+  List<CalendarSourceConnection> remoteCalendarSources = const [];
+  CalendarSourceConnection? get calendarSource {
+    final mirrorId = controller.snapshot?.calendar?.sourceConnectionId;
+    for (final source in remoteCalendarSources) {
+      if (source.connectionId == mirrorId) return source;
+    }
+    if (nativeCalendarSource?.connectionId == mirrorId) {
+      return nativeCalendarSource;
+    }
+    if (remoteCalendarSources.length == 1) return remoteCalendarSources.single;
+    return nativeCalendarSource;
+  }
+
+  CalendarConnection? get calendarConnection => calendarSource == null
+      ? null
+      : CalendarConnection.compose(
+          calendarSource!,
+          controller.snapshot?.calendar,
+        );
   CalendarActionController? actionController;
   AgentController? agentController;
   bool assistantOpen = false;
@@ -119,7 +144,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         refresh: () async {
           final snapshot = await gateway.syncCalendar(controller.query);
           await controller.load();
-          return snapshot;
+          await _inspectCalendarSource();
+          return calendarSource == null
+              ? null
+              : CalendarConnection.compose(calendarSource!, snapshot.calendar);
         },
       );
       WidgetsBinding.instance.addObserver(this);
@@ -157,23 +185,41 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
 
   Future<void> _loadCalendar() async {
     await controller.load();
+    await _inspectCalendarSource();
     if (!mounted) return;
-    calendarObservationRefresh?.reconcile(controller.snapshot);
+    calendarObservationRefresh?.reconcile(calendarConnection);
     if (calendarObservationRefresh?.active ?? false) {
       try {
         await calendarObservationRefresh!.ensureFresh();
       } on Object {
-        calendarObservationRefresh?.reconcile(controller.snapshot);
+        calendarObservationRefresh?.reconcile(calendarConnection);
       }
     }
   }
 
   Future<void> _reloadCalendarConnection() async {
     await controller.load();
+    await _inspectCalendarSource();
     if (!mounted) return;
-    calendarObservationRefresh?.reconcile(controller.snapshot);
+    calendarObservationRefresh?.reconcile(calendarConnection);
     if (calendarObservationRefresh?.active ?? false) {
       await calendarObservationRefresh!.ensureFresh();
+    }
+  }
+
+  Future<void> _inspectCalendarSource() async {
+    final gateway = widget.calendarSourceGateway;
+    final native = gateway == null
+        ? null
+        : await gateway.inspectNative(widget.query.personId);
+    final remote = gateway == null
+        ? <CalendarSourceConnection>[]
+        : await gateway.inspectRemote(widget.query.personId);
+    if (mounted) {
+      setState(() {
+        nativeCalendarSource = native;
+        remoteCalendarSources = remote;
+      });
     }
   }
 
@@ -203,9 +249,14 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           now: DateTime.now(),
         ),
       );
-      final connection = snapshot.calendar;
-      if (connection == null ||
-          connection.error != null ||
+      await _inspectCalendarSource();
+      final source = calendarSource;
+      if (source == null ||
+          snapshot.calendar?.sourceConnectionId != source.connectionId) {
+        throw StateError('Calendar collection source changed');
+      }
+      final connection = CalendarConnection.compose(source, snapshot.calendar);
+      if (connection.error != null ||
           connection.calendars.any(
             (calendar) =>
                 calendar.id == action.calendarId && calendar.error != null,
@@ -284,7 +335,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
             ? widget.gateway as CalendarGateway
             : null,
         query: controller.query,
-        connection: controller.snapshot?.calendar,
+        connection: calendarConnection,
+        calendarSourceGateway: widget.calendarSourceGateway,
+        calendarSource: nativeCalendarSource,
+        remoteCalendarSources: remoteCalendarSources,
         onChanged: _reloadCalendarConnection,
         serverClient: widget.serverClient,
         deviceId: widget.serverClient?.deviceId,
@@ -317,7 +371,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           ? const Text('Activity is available in the native Floe app.')
           : ActivityPanel(
               controller: actions,
-              connection: () => controller.snapshot?.calendar,
+              connection: () => calendarConnection,
             );
     }
     if (controller.loadState == DayLoadState.failure) {
@@ -362,7 +416,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                     narrow: narrow,
                     onCreateEvent:
                         actionController?.canDirect == true &&
-                            controller.snapshot?.calendar != null
+                            calendarConnection != null
                         ? () => _openCalendarEditor()
                         : null,
                   ),
@@ -433,7 +487,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       loading: controller.loadState == DayLoadState.loading,
       onConnections: () => _selectDestination(_DestinationView.connections),
       onCreateEvent:
-          actionController?.canDirect == true && snapshot.calendar != null
+          actionController?.canDirect == true && calendarConnection != null
           ? (startsAt) => _openCalendarEditor(startsAt)
           : null,
       draftStartsAt: draftEventStart,
@@ -449,7 +503,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           ReviewRequestPanel(
             controller: actions,
             connection: () => controller.loadState == DayLoadState.ready
-                ? controller.snapshot?.calendar
+                ? calendarConnection
                 : null,
           ),
           SizedBox(height: FloeSpace.lg),
@@ -593,7 +647,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         controller: actions,
         actionId: actionId,
         connection: () => controller.loadState == DayLoadState.ready
-            ? controller.snapshot?.calendar
+            ? calendarConnection
             : null,
       ),
     );
@@ -625,7 +679,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
 
   Future<void> _openCalendarEditor([DateTime? startsAt]) async {
     final actions = actionController;
-    final connection = controller.snapshot?.calendar;
+    final connection = calendarConnection;
     if (actions == null || !actions.canDirect || connection == null) return;
     final date = controller.query.date;
     final now = DateTime.now();
@@ -639,7 +693,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       context,
       (_) => CalendarEventComposer(
         controller: actions,
-        connection: () => controller.snapshot?.calendar,
+        connection: () => calendarConnection,
         initialStart: initialStart,
       ),
     );
@@ -655,7 +709,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       context,
       (_) => CalendarEventComposer(
         controller: actions,
-        connection: () => controller.snapshot?.calendar,
+        connection: () => calendarConnection,
         event: event,
       ),
     );

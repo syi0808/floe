@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 import 'package:floe_client/features/day/application/calendar_observation_publisher.dart';
-import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
 
 void main() {

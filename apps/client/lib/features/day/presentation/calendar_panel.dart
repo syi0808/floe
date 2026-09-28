@@ -1,6 +1,9 @@
 import 'dart:async';
 
 import 'package:floe_client/features/day/presentation/calendar_layout.dart';
+import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
+import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
+import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
 
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/foundation.dart';
@@ -97,12 +100,16 @@ class CalendarPanel extends StatefulWidget {
   const CalendarPanel({
     super.key,
     required this.gateway,
+    this.sourceGateway,
+    this.source,
     required this.query,
     required this.connection,
     required this.onChanged,
     this.platform,
   });
   final CalendarGateway gateway;
+  final CalendarSourceGateway? sourceGateway;
+  final CalendarSourceConnection? source;
   final DayQuery query;
   final CalendarConnection? connection;
   final Future<void> Function() onChanged;
@@ -206,7 +213,10 @@ class _CalendarPanelState extends State<CalendarPanel> {
       ),
     );
     if (confirmed != true || !mounted) return;
-    await widget.gateway.disconnectCalendar(widget.query);
+    final source = widget.source;
+    final gateway = widget.sourceGateway;
+    if (source == null || gateway == null) return;
+    await gateway.disconnectNative(widget.query.personId, current: source);
     await widget.onChanged();
   });
 
@@ -324,11 +334,27 @@ class _CalendarPanelState extends State<CalendarPanel> {
     );
     if (choices == null || !mounted) return;
     final query = widget.query;
-    await widget.gateway.selectCalendars(
-      choices,
-      query,
-      includeAll: includeAll,
-    );
+    final gateway = widget.sourceGateway;
+    if (gateway == null) return;
+    final resources = [
+      for (final choice in choices)
+        CalendarSourceResource(handle: choice.id, label: choice.name),
+    ];
+    final source = widget.source;
+    if (source == null) {
+      await gateway.establishNative(
+        query.personId,
+        resourceMode: includeAll ? 'all_available' : 'selected',
+        resources: resources,
+      );
+    } else {
+      await gateway.configureNative(
+        query.personId,
+        current: source,
+        resourceMode: includeAll ? 'all_available' : 'selected',
+        resources: resources,
+      );
+    }
     try {
       await widget.gateway.syncCalendar(query);
     } finally {
