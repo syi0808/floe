@@ -290,11 +290,16 @@ mod tests {
     use floe_experts_builtin::BuiltinExpertKind;
 
     #[test]
-    fn calendar_template_has_no_unselected_expert_consumers() {
+    fn calendar_template_grants_trusted_shipped_consumers() {
         let consumers = crate::first_party_observe::calendar_policy()
             .unwrap()
             .consumers;
-        assert!(consumers.is_empty());
+        assert_eq!(consumers.len(), 4);
+        assert!(
+            !consumers
+                .iter()
+                .any(|consumer| consumer.identifier() == "assistant")
+        );
     }
 
     #[test]

@@ -951,7 +951,7 @@ mod tests {
             GrantOperation::Read,
             GrantConsumer::builtin("assistant").unwrap(),
             GrantPurpose::Assistant,
-            vec![ResourceHandle::try_new("home").unwrap()],
+            vec![floe_access::native_calendar_resource("fixture-connection").unwrap()],
             None,
             SourceAccessRequirementKind::EnableObserve,
             Some(connection.source_authority()),
@@ -965,7 +965,10 @@ mod tests {
             .unwrap();
         assert_eq!(snapshot.members.len(), 1);
         assert_eq!(snapshot.members[0].member_id, "calendar.timeline");
-        assert_eq!(snapshot.members[0].resource, "home");
+        assert_eq!(
+            snapshot.members[0].resource,
+            "calendar.timeline:fixture-connection"
+        );
         assert_eq!(snapshot.members[0].expected_grant, None);
         assert_eq!(
             snapshot.connection_revision,
@@ -994,7 +997,7 @@ mod tests {
             Some("d".repeat(64).as_str())
         );
 
-        // A calendar outside the live selection cannot bind inline review.
+        // A leaf resource cannot bind the logical inline review.
         let foreign = SourceAccessRequirement::try_new(
             blocking.source_id(),
             blocking.connector_id().cloned(),

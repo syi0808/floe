@@ -140,7 +140,7 @@ async fn seed(
         admission.source.clone(),
         admission.scope.resources().to_vec(),
         source.source_authority(),
-        admission.scope.resources().to_vec(),
+        vec![floe_context_contract::ResourceHandle::try_new("home").unwrap()],
         admission.scope.categories().to_vec(),
         GrantOperation::Read,
         GrantPurpose::Assistant,

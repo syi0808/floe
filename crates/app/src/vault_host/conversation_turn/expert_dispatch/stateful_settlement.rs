@@ -358,7 +358,8 @@ mod tests {
                         connection_id: grant.source().connection_id(),
                         execution_owner_id: grant.source().execution_owner().clone(),
                         capability_id: "calendar.timeline".into(),
-                        resource: floe_context_contract::ResourceHandle::try_new("home").unwrap(),
+                        resource: floe_access::native_calendar_resource("eventkit-connection")
+                            .unwrap(),
                         contract_version: 1,
                     }],
                 },
@@ -389,7 +390,7 @@ mod tests {
             admission.source.clone(),
             admission.scope.resources().to_vec(),
             floe_context_contract::SourceAuthority::new(),
-            admission.scope.resources().to_vec(),
+            vec![floe_context_contract::ResourceHandle::try_new("home").unwrap()],
             admission.scope.categories().to_vec(),
             GrantOperation::Read,
             GrantPurpose::Assistant,
