@@ -486,7 +486,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                                     && selected.execution_owner_id == *envelope.dependency.source().execution_owner()
                                     && envelope
                                         .dependency
-                                        .source_resources()
+                                        .resources()
                                         .contains(&selected.resource)
                             })
                     })

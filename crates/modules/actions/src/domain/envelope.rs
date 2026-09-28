@@ -45,7 +45,7 @@ impl AgentActionEnvelope {
         if origin.invocation_id != self.action.execution_id
             || !self
                 .dependency
-                .resources()
+                .source_resources()
                 .iter()
                 .any(|resource| resource.as_str() == self.action.calendar_id)
         {

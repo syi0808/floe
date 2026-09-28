@@ -290,7 +290,8 @@ impl Fixture {
                         connection_id: grant.source().connection_id(),
                         execution_owner_id: grant.source().execution_owner().clone(),
                         capability_id: "calendar.timeline".into(),
-                        resource: floe_context_contract::ResourceHandle::try_new("home").unwrap(),
+                        resource: floe_access::native_calendar_resource("eventkit-connection")
+                            .unwrap(),
                         contract_version: 1,
                     }],
                 },
@@ -327,7 +328,7 @@ impl Fixture {
             admission.source.clone(),
             admission.scope.resources().to_vec(),
             connection.source_authority(),
-            admission.scope.resources().to_vec(),
+            vec![floe_context_contract::ResourceHandle::try_new("home").unwrap()],
             admission.scope.categories().to_vec(),
             GrantOperation::Read,
             GrantPurpose::Assistant,
@@ -592,6 +593,15 @@ impl CalendarActionProvider for Provider {
 #[tokio::test]
 async fn committed_expert_proposal_uses_s3_review_and_one_shot_execution_after_restart() {
     let mut fixture = Fixture::new().await;
+    assert!(
+        floe_actions::ExpertActionStore::expert_proposal_dependency(
+            &fixture.vault,
+            &fixture.reference,
+            &fixture.evidence,
+        )
+        .await
+        .is_ok()
+    );
     let provider = Provider::default();
     let action = fixture.prepare().await.unwrap();
     assert_eq!(action.id, fixture.reference.invocation_id);
@@ -1454,7 +1464,10 @@ impl GovernedFocus {
             self.admission.source.clone(),
             self.admission.scope.resources().to_vec(),
             self.source_authority,
-            self.admission.scope.resources().to_vec(),
+            vec![
+                floe_context_contract::ResourceHandle::try_new("away").unwrap(),
+                floe_context_contract::ResourceHandle::try_new("home").unwrap(),
+            ],
             self.admission.scope.categories().to_vec(),
             GrantOperation::Read,
             GrantPurpose::Assistant,
@@ -1752,12 +1765,12 @@ async fn governed_focus_proposal_rejects_connections_resource_drift() {
 }
 
 #[tokio::test]
-async fn governed_focus_proposal_rejects_source_and_resource_drift() {
+async fn governed_focus_proposal_rejects_source_replacement() {
     let mut fixture = GovernedFocus::new().await;
     let (_, reference) = fixture.commit_evidence().await;
     assert_eq!(fixture.inspect(&reference).await.unwrap(), None);
     assert_eq!(
-        fixture.prepare(&reference, "away").await,
+        fixture.prepare(&reference, "unobserved").await,
         Err(AgentFailure::StaleContext)
     );
     let action = fixture.prepare(&reference, "home").await.unwrap();
