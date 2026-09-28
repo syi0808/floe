@@ -15,11 +15,12 @@ pub struct CalendarReviewClassification {
     pub observed: Option<floe_context_contract::ObservedGrant>,
 }
 
-pub fn current_calendar_connector(
-    connection: &floe_day::CalendarConnection,
-) -> Option<&'static str> {
-    floe_access::native_calendar_connector(connection.provider)
-        .or_else(|| floe_access::hosted_calendar_connector(connection.provider))
+pub fn current_calendar_connector(connection: &floe_connections::SourceConnection) -> Option<&str> {
+    match connection.connector_id().as_str() {
+        "calendar.fixture" | "calendar.event_kit" | "calendar.google" | "calendar.microsoft"
+        | "calendar.android" => Some(connection.connector_id().as_str()),
+        _ => None,
+    }
 }
 
 pub fn observe_calendar_binding(

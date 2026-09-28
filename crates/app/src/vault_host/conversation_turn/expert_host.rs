@@ -806,29 +806,22 @@ pub(super) trait CalendarContextReaderApi: Send + Sync {
 
 fn calendar_access_requirement<Value>(
     source_access_id: &str,
-    connection: Option<&floe_day::CalendarConnection>,
+    connection: Option<&floe_connections::SourceConnection>,
     selected: &[floe_context_contract::SourceSelectionReference],
     consumer: &str,
     reason: floe_context_contract::SourceAccessRequirementKind,
     observed_grant: Option<floe_context_contract::ObservedGrant>,
 ) -> Result<floe_context_contract::SourceReadOutcome<Value>, AgentFailure> {
-    let connector = connection.and_then(floe_context::current_calendar_connector);
-    let connector_id = connector
-        .map(|value| floe_context_contract::ConnectorId::try_new(value.to_owned()))
-        .transpose()
-        .map_err(|_| AgentFailure::StaleContext)?;
-    let connection_id = connection
-        .map(|connection| {
-            floe_context_contract::ConnectionId::try_new(connection.connection_id.clone())
-        })
-        .transpose()
-        .map_err(|_| AgentFailure::StaleContext)?;
+    let connector_id = connection
+        .filter(|connection| floe_context::current_calendar_connector(connection).is_some())
+        .map(|connection| connection.connector_id().clone());
+    let connection_id = connection.map(|connection| connection.connection_id().clone());
     let resources = selected
         .iter()
         .map(|source| source.resource.clone())
         .collect::<Vec<_>>();
     let source_authority = connection
-        .map(|connection| connection.source_authority)
+        .map(|connection| connection.source_authority())
         .filter(|authority| authority.is_valid());
     let inline_resolution = connector_id.is_some()
         && connection_id.is_some()
@@ -861,7 +854,7 @@ fn calendar_access_requirement<Value>(
 fn calendar_read_outcome<Value>(
     result: Result<Value, AgentFailure>,
     source_access_id: &str,
-    connection: &floe_day::CalendarConnection,
+    connection: &floe_connections::SourceConnection,
     selected: &[floe_context_contract::SourceSelectionReference],
     consumer: &str,
     review: &floe_context::CalendarReviewClassification,
@@ -931,44 +924,44 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
             if person_id != self.vault.person_id() {
                 return Err(AgentFailure::CapabilityDenied);
             }
+            let selected_source = selected.first().ok_or(AgentFailure::StaleContext)?;
             let connection = self
                 .core
-                .calendar_connection(person_id)
+                .source_service()
+                .load(person_id, &selected_source.connection_id)
                 .await
                 .map_err(|_| AgentFailure::StorageUnavailable)?;
             let connection = connection.ok_or(AgentFailure::CapabilityUnavailable)?;
             let connector_id =
                 calendar_connector_id(&connection).ok_or(AgentFailure::CapabilityUnavailable)?;
-            if selected.is_empty()
-                || connection.disconnected
-                || connection.device_id != self.device_id
+            if !connection.is_serving()
                 || selected.iter().any(|source| {
                     source.capability_id != "calendar.timeline"
                         || source.contract_version != 1
                         || source.connector_id.as_str() != connector_id
-                        || source.connection_id.as_str() != connection.connection_id
+                        || source.connection_id != *connection.connection_id()
                         || !connection
-                            .calendars
+                            .resources()
                             .iter()
-                            .any(|calendar| calendar.calendar_id == source.resource.as_str())
+                            .any(|calendar| calendar.handle() == &source.resource)
                 })
             {
                 return Err(AgentFailure::StaleContext);
             }
-            let expected_owner =
-                if connection.provider == floe_context_contract::CalendarProvider::EventKit {
-                    self.device_id.to_owned()
-                } else {
-                    self.vault.remote_pinned_producer().await?.execution_owner
-                };
-            if selected
-                .iter()
-                .any(|source| source.execution_owner_id.as_str() != expected_owner)
+            let expected_owner = if connector_id == "calendar.event_kit" {
+                self.device_id.to_owned()
+            } else {
+                self.vault.remote_pinned_producer().await?.execution_owner
+            };
+            if connection.execution_owner_id().as_str() != expected_owner
+                || selected
+                    .iter()
+                    .any(|source| source.execution_owner_id.as_str() != expected_owner)
             {
                 return Err(AgentFailure::StaleContext);
             }
             let result = async {
-                if connection.provider == floe_context_contract::CalendarProvider::EventKit {
+                if connector_id == "calendar.event_kit" {
                 #[cfg(target_os = "macos")]
                 {
                     let connections = crate::vault_host::calendar_access::CoreCalendarConnections {
@@ -985,10 +978,10 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                     let source = floe_provider_adapters::sources::native_calendar::NativeCalendarReadAccess::new(
                         person_id,
                         self.device_id.to_owned(),
-                        connection.provider,
+                        floe_context_contract::CalendarProvider::EventKit,
                         calendar_ids.clone(),
-                        connection.connection_id.clone(),
-                        connection.revision,
+                        connection.connection_id().as_str().to_owned(),
+                        connection.revision(),
                     );
                     let window = floe_context::RemoteCallWindow {
                         deadline,
@@ -1024,8 +1017,20 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
             {
                 return Err(AgentFailure::CapabilityDenied);
             }
-            let connector_id = floe_access::hosted_calendar_connector(connection.provider)
-                .ok_or(AgentFailure::CapabilityUnavailable)?;
+            if !matches!(connector_id, "calendar.google" | "calendar.microsoft") {
+                return Err(AgentFailure::CapabilityUnavailable);
+            }
+            let catalog = source_client
+                .observe_calendar_connections(deadline, cancellation)
+                .await?;
+            let producer_revision = catalog
+                .iter()
+                .find(|entry| {
+                    entry.connector_id == connector_id
+                        && entry.connection_id == connection.connection_id().as_str()
+                })
+                .ok_or(AgentFailure::StaleContext)?
+                .connection_revision;
             let person_text = person_id.to_string();
             let pairing = floe_context::RemotePairingIdentity {
                 person_id: &person_text,
@@ -1049,8 +1054,8 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                         person_id,
                         pairing,
                         connector_id,
-                        connection_id: &connection.connection_id,
-                        connection_revision: connection.revision,
+                        connection_id: connection.connection_id().as_str(),
+                        connection_revision: producer_revision,
                         resource: source.resource.as_str(),
                         consumer_name: consumer,
                         query,
@@ -1073,18 +1078,17 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                 let grants = floe_vault::VaultGrantRecords::new(self.vault)
                     .grants()
                     .await?;
-                let connector_id = calendar_connector_id(&connection).unwrap_or_default();
                 let review = classify_calendar_review(
                     &grants,
                     person_id,
                     connector_id,
-                    &connection.connection_id,
+                    connection.connection_id().as_str(),
                 )?;
                 let reconnect = observe_calendar_binding(
                     &grants,
                     person_id,
                     connector_id,
-                    &connection.connection_id,
+                    connection.connection_id().as_str(),
                 )?;
                 return calendar_read_outcome(
                     result,
@@ -1324,27 +1328,28 @@ impl<Keys: VaultKeyProvider> ConversationContextReaderApi for ConversationContex
 mod tests {
     use super::*;
     use floe_agent_contract::{ExpertModel, ExpertReasoner};
-    use std::collections::{BTreeMap, VecDeque};
+    use std::collections::VecDeque;
 
-    fn calendar_connection() -> floe_day::CalendarConnection {
-        floe_day::CalendarConnection {
-            connection_id: "connection".into(),
-            device_id: "device".into(),
-            disconnected: false,
-            scope: floe_context_contract::CalendarScope::Selected,
-            provider: floe_context_contract::CalendarProvider::EventKit,
-            calendars: vec![floe_day::CalendarSelection {
-                calendar_id: "primary".into(),
-                calendar_name: "Primary".into(),
-            }],
-            revision: 1,
-            source_authority: floe_context_contract::SourceAuthority::new(),
-            last_success_at: None,
-            last_range: None,
-            error: None,
-            error_at: None,
-            source_statuses: BTreeMap::new(),
-        }
+    fn calendar_connection() -> floe_connections::SourceConnection {
+        let mut source = floe_connections::SourceConnection::establish(
+            PersonId::new(),
+            floe_context_contract::ConnectorId::try_new("calendar.event_kit").unwrap(),
+            floe_context_contract::ConnectionId::try_new("connection").unwrap(),
+            floe_context_contract::ExecutionOwnerId::try_new("device").unwrap(),
+            floe_connections::ResourceMode::Selected,
+            vec![
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new("primary").unwrap(),
+                    "Primary".into(),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        source
+            .update_native_subject(source.revision(), "a".repeat(64))
+            .unwrap();
+        source
     }
 
     fn review_classification(
@@ -1410,7 +1415,7 @@ mod tests {
         assert_eq!(requirement.resources()[0].as_str(), "primary");
         assert_eq!(
             requirement.source_authority(),
-            Some(connection.source_authority)
+            Some(connection.source_authority())
         );
         assert_eq!(requirement.observed_grant(), Some(observed));
         assert!(requirement.inline_resolution());
@@ -1442,10 +1447,24 @@ mod tests {
     #[test]
     fn calendar_review_does_not_expand_when_another_resource_is_added() {
         let mut connection = calendar_connection();
-        connection.calendars.push(floe_day::CalendarSelection {
-            calendar_id: "new-calendar".into(),
-            calendar_name: "New calendar".into(),
-        });
+        connection
+            .configure(
+                connection.revision(),
+                floe_connections::ResourceMode::Selected,
+                vec![
+                    floe_connections::ConnectionResource::new(
+                        floe_context_contract::ResourceHandle::try_new("primary").unwrap(),
+                        "Primary".into(),
+                    )
+                    .unwrap(),
+                    floe_connections::ConnectionResource::new(
+                        floe_context_contract::ResourceHandle::try_new("new-calendar").unwrap(),
+                        "New calendar".into(),
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap();
         let review = review_classification(
             floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource,
             None,
@@ -1475,7 +1494,8 @@ mod tests {
         assert_eq!(
             calendar_read_outcome::<Vec<String>>(
                 Ok(vec![]),
-                floe_context_contract::source_access_id_for_capability("calendar.timeline").unwrap(),
+                floe_context_contract::source_access_id_for_capability("calendar.timeline")
+                    .unwrap(),
                 &connection,
                 &selected_calendar(),
                 "floe.builtin.schedule",
@@ -1488,7 +1508,8 @@ mod tests {
         assert_eq!(
             calendar_read_outcome::<Vec<String>>(
                 Err(AgentFailure::CapabilityUnavailable),
-                floe_context_contract::source_access_id_for_capability("calendar.timeline").unwrap(),
+                floe_context_contract::source_access_id_for_capability("calendar.timeline")
+                    .unwrap(),
                 &connection,
                 &selected_calendar(),
                 "floe.builtin.schedule",
@@ -1510,7 +1531,8 @@ mod tests {
             assert_eq!(
                 calendar_read_outcome::<Vec<String>>(
                     Err(failure),
-                    floe_context_contract::source_access_id_for_capability("calendar.timeline").unwrap(),
+                    floe_context_contract::source_access_id_for_capability("calendar.timeline")
+                        .unwrap(),
                     &connection,
                     &selected_calendar(),
                     "floe.builtin.schedule",
@@ -1538,8 +1560,7 @@ mod tests {
         assert!(requirement.resources().is_empty());
         assert!(!requirement.inline_resolution());
 
-        let mut connection = calendar_connection();
-        connection.calendars[0].calendar_id = "x".repeat(257);
+        let connection = calendar_connection();
         let outcome = calendar_access_requirement::<Vec<String>>(
             floe_context_contract::source_access_id_for_capability("calendar.timeline").unwrap(),
             Some(&connection),
