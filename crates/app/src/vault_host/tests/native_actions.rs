@@ -56,6 +56,54 @@ struct NativeActions {
     caller: crate::CallerContext,
 }
 impl NativeActions {
+    async fn select_calendar(&self, connection_id: &str, calendar_id: &str, label: &str) {
+        let person = PersonId(self.caller.person_id());
+        let source = self
+            .core
+            .source_service()
+            .establish(
+                person,
+                floe_context_contract::ConnectorId::try_new("calendar.event_kit").unwrap(),
+                floe_context_contract::ConnectionId::try_new(connection_id).unwrap(),
+                floe_context_contract::ExecutionOwnerId::try_new(self.caller.device_id()).unwrap(),
+                floe_connections::ResourceMode::Selected,
+                vec![
+                    floe_connections::ConnectionResource::new(
+                        floe_context_contract::ResourceHandle::try_new(calendar_id).unwrap(),
+                        label.into(),
+                    )
+                    .unwrap(),
+                ],
+            )
+            .await
+            .unwrap();
+        self.core
+            .source_service()
+            .update_native_subject(
+                person,
+                source.connection_id(),
+                source.revision(),
+                "a".repeat(64),
+            )
+            .await
+            .unwrap();
+        self.core
+            .set_calendar_scope(
+                person,
+                connection_id.into(),
+                1,
+                self.caller.device_id().into(),
+                CalendarProvider::EventKit,
+                vec![crate::CalendarSelection {
+                    calendar_id: calendar_id.into(),
+                    calendar_name: label.into(),
+                }],
+                crate::CalendarScope::Selected,
+            )
+            .await
+            .unwrap();
+    }
+
     fn open(path: &std::path::Path, keys: Keys, create: bool) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -181,20 +229,11 @@ fn native_executor_uses_rust_ledger_and_lookup_only_after_response_loss() {
     let path = directory.path().join("actions.db");
     let keys = Keys::default();
     let host = NativeActions::open(&path, keys.clone(), true);
-    host.runtime
-        .block_on(host.core.set_calendar_scope(
-            PersonId(host.caller.person_id()),
-            "00000000-0000-4000-8000-000000000010".into(),
-            1,
-            host.caller.device_id().into(),
-            CalendarProvider::EventKit,
-            vec![crate::CalendarSelection {
-                calendar_id: "target".into(),
-                calendar_name: "Fixture · Target".into(),
-            }],
-            crate::CalendarScope::Selected,
-        ))
-        .unwrap();
+    host.runtime.block_on(host.select_calendar(
+        "00000000-0000-4000-8000-000000000010",
+        "target",
+        "Fixture · Target",
+    ));
     assert_eq!(
         host.action(CalendarActionOperation::Capabilities).unwrap()["writes_enabled"],
         true
@@ -293,20 +332,11 @@ fn authorized_eventkit_response_loss_recovers_exact_disposable_event() {
     );
     let keys = Keys::default();
     let host = NativeActions::open(&path, keys.clone(), true);
-    host.runtime
-        .block_on(host.core.set_calendar_scope(
-            PersonId(host.caller.person_id()),
-            Uuid::new_v4().to_string(),
-            1,
-            host.caller.device_id().into(),
-            CalendarProvider::EventKit,
-            vec![crate::CalendarSelection {
-                calendar_id: calendar_id.into(),
-                calendar_name: "iCloud · Floe Validation".into(),
-            }],
-            crate::CalendarScope::Selected,
-        ))
-        .unwrap();
+    host.runtime.block_on(host.select_calendar(
+        &Uuid::new_v4().to_string(),
+        calendar_id,
+        "iCloud · Floe Validation",
+    ));
     let now = chrono::Utc::now().with_nanosecond(0).unwrap();
     let result = host
         .action(CalendarActionOperation::Propose(Box::new(

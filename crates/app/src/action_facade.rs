@@ -224,15 +224,29 @@ impl FloeCore {
     /// The device calendar this Person writes through, scoped to the calendars
     /// their connection actually selected.
     async fn native_calendar(&self, person_id: PersonId) -> Result<NativeCalendar, CoreError> {
-        let connection = self.calendar_connection(person_id).await?;
+        let connector = floe_context_contract::ConnectorId::try_new("calendar.event_kit")
+            .expect("built-in connector id");
+        let mut sources = self
+            .source_service()
+            .list_current(person_id, &connector)
+            .await
+            .map_err(|error| CoreError::new(crate::ErrorCode::Storage, error.to_string()))?;
+        if sources.len() > 1 {
+            return Err(CoreError::new(
+                crate::ErrorCode::Conflict,
+                "multiple current native calendar sources",
+            ));
+        }
         Ok(NativeCalendar::new(
-            connection
-                .map(|connection| {
-                    connection
-                        .calendars
-                        .into_iter()
-                        .map(|calendar| calendar.calendar_id)
-                        .collect()
+            sources
+                .pop()
+                .filter(|source| source.is_serving())
+                .map(|source| {
+                    source
+                        .resources()
+                        .iter()
+                        .map(|resource| resource.handle().as_str().to_owned())
+                        .collect::<Vec<_>>()
                 })
                 .unwrap_or_default(),
         ))
