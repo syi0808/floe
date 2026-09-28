@@ -21,6 +21,7 @@ pub use application::remote_pairing::{
     PairingIdentity, PairingOwnerKeys, admit_pairing_report, confirm_pairing, finalize_pairing,
     read_pairing_status,
 };
+pub use application::source_connections::{SourceConnectionService, SourceServiceError};
 pub use ports::{RemoteControl, SourceRepository, SourceRepositoryError};
 
 pub use application::connected_context::{
