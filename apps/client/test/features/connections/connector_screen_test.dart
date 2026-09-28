@@ -560,6 +560,50 @@ void main() {
     expect(changed, 1);
   });
 
+  testWidgets('catalog refresh cannot disconnect a remote source', (
+    tester,
+  ) async {
+    final gateway = _RecordingCalendarGateway();
+    final source = gateway._source(
+      'calendar.google',
+      '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
+      const [
+        CalendarSourceResource(
+          handle: 'primary@example.test',
+          label: 'Primary',
+        ),
+      ],
+    );
+    final date = DateTime.utc(2026, 9, 4);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: ConnectorScreen(
+            gateway: gateway,
+            calendarSourceGateway: gateway,
+            query: DayQuery(
+              personId: '00000000-0000-4000-8000-000000000001',
+              date: date,
+              now: date,
+              timezoneOffsetSeconds: 0,
+            ),
+            connection: CalendarConnectionView.compose(source, null),
+            remoteCalendarSources: [source],
+            onChanged: () async {},
+            serverClient: _CalendarCatalogClient(connectors: const []),
+            platform: TargetPlatform.macOS,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(gateway.disconnectCount, 0);
+    expect(gateway.connectionId, isNull);
+  });
+
   testWidgets(
     'keeps device calendar active until server is explicitly chosen',
     (tester) async {
@@ -697,6 +741,7 @@ final class _RecordingCalendarGateway extends _DeviceCalendarGateway
   String? deviceId;
   String? provider;
   List<CalendarChoice> boundCalendars = const [];
+  int disconnectCount = 0;
 
   @override
   Future<CalendarSourceConnection> bindRemote(
@@ -759,7 +804,10 @@ final class _RecordingCalendarGateway extends _DeviceCalendarGateway
   Future<CalendarSourceConnection> disconnectRemote(
     String personId, {
     required CalendarSourceConnection current,
-  }) async => current;
+  }) async {
+    disconnectCount++;
+    return current;
+  }
 
   CalendarSourceConnection _source(
     String connectorId,

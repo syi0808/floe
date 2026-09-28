@@ -1,4 +1,4 @@
-import 'package:floe_client/features/connections/application/native_calendar_source_gateway.dart';
+import 'package:floe_client/features/connections/application/app_wire_calendar_source_gateway.dart';
 import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -37,7 +37,7 @@ void main() {
       expect(request['query'], {'kind': 'connections.native_calendar.source'});
       return {'kind': 'native_calendar_source', 'source': _source()};
     });
-    final gateway = NativeCalendarSourceGateway(transport, deviceId: _device);
+    final gateway = AppWireCalendarSourceGateway(transport, deviceId: _device);
     final source = await gateway.inspectNative(_person);
     expect(source?.connectionId, 'calendar-source');
     expect(source?.selectedCalendarIds, ['home']);
@@ -63,7 +63,10 @@ void main() {
           'source': _source(revision: 8),
         };
       });
-      final gateway = NativeCalendarSourceGateway(transport, deviceId: _device);
+      final gateway = AppWireCalendarSourceGateway(
+        transport,
+        deviceId: _device,
+      );
       final current = CalendarSourceConnection.fromJson(
         Map<String, dynamic>.from(_source(revision: 7)),
       );
@@ -80,7 +83,7 @@ void main() {
   );
 
   test('foreign execution owner cannot be configured', () async {
-    final gateway = NativeCalendarSourceGateway(
+    final gateway = AppWireCalendarSourceGateway(
       CallbackAppWireTransport((_) async => throw StateError('unexpected I/O')),
       deviceId: _device,
     );
@@ -113,7 +116,10 @@ void main() {
           'source': _remoteSource(revision: 5),
         };
       });
-      final gateway = NativeCalendarSourceGateway(transport, deviceId: _device);
+      final gateway = AppWireCalendarSourceGateway(
+        transport,
+        deviceId: _device,
+      );
       final current = CalendarSourceConnection.fromJson(
         Map<String, dynamic>.from(_remoteSource(revision: 4)),
       );
@@ -139,7 +145,29 @@ void main() {
         ],
       },
     );
-    final gateway = NativeCalendarSourceGateway(transport, deviceId: _device);
+    final gateway = AppWireCalendarSourceGateway(transport, deviceId: _device);
     await expectLater(gateway.inspectRemote(_person), throwsFormatException);
+  });
+
+  test('source decoder rejects malformed resource and native subject', () {
+    for (final malformed in [
+      {
+        ..._source(),
+        'resources': [42],
+      },
+      {
+        ..._source(),
+        'resources': [
+          {'handle': 'work', 'label': 'Work'},
+          {'handle': 'home', 'label': 'Home'},
+        ],
+      },
+      {..._source(), 'native_subject_fingerprint': null},
+    ]) {
+      expect(
+        () => CalendarSourceConnection.fromJson(malformed),
+        throwsFormatException,
+      );
+    }
   });
 }

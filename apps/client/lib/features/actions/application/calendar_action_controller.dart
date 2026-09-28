@@ -53,6 +53,7 @@ final class CalendarActionController extends ChangeNotifier {
       !now.isBefore(action.createdAt) &&
       now.isBefore(action.expiresAt) &&
       connection != null &&
+      connection.isServing &&
       connection.error == null &&
       connection.lastSuccessAt != null &&
       connection.provider == action.provider &&

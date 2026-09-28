@@ -422,7 +422,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                     narrow: narrow,
                     onCreateEvent:
                         actionController?.canDirect == true &&
-                            calendarConnection != null
+                            calendarConnection?.isServing == true
                         ? () => _openCalendarEditor()
                         : null,
                   ),
@@ -493,7 +493,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       loading: controller.loadState == DayLoadState.loading,
       onConnections: () => _selectDestination(_DestinationView.connections),
       onCreateEvent:
-          actionController?.canDirect == true && calendarConnection != null
+          actionController?.canDirect == true &&
+              calendarConnection?.isServing == true
           ? (startsAt) => _openCalendarEditor(startsAt)
           : null,
       draftStartsAt: draftEventStart,
@@ -686,7 +687,11 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   Future<void> _openCalendarEditor([DateTime? startsAt]) async {
     final actions = actionController;
     final connection = calendarConnection;
-    if (actions == null || !actions.canDirect || connection == null) return;
+    if (actions == null ||
+        !actions.canDirect ||
+        connection?.isServing != true) {
+      return;
+    }
     final date = controller.query.date;
     final now = DateTime.now();
     final initialStart =

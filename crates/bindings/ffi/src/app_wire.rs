@@ -107,7 +107,7 @@ where
                 .map_err(day_error)?;
             Ok(AppCommandResultDto::NativeCalendarSource {
                 command_id: request.command_id,
-                source: native_source_dto(&source),
+                source: source_connection_dto(&source),
             })
         }
         AppCommandDto::RemoteCalendarSourceMutate { mutation } => {
@@ -118,7 +118,7 @@ where
                 .map_err(day_error)?;
             Ok(AppCommandResultDto::RemoteCalendarSource {
                 command_id: request.command_id,
-                source: native_source_dto(&source),
+                source: source_connection_dto(&source),
             })
         }
         AppCommandDto::KnowledgeMemoryDecide {
@@ -567,7 +567,7 @@ fn query_with_host<
                 .inspect_native_calendar_source(caller)
                 .map_err(day_error)?;
             Ok(AppQueryResultDto::NativeCalendarSource {
-                source: source.as_ref().map(native_source_dto),
+                source: source.as_ref().map(source_connection_dto),
             })
         }
         AppQueryDto::RemoteCalendarSources {} => {
@@ -575,7 +575,7 @@ fn query_with_host<
                 .inspect_remote_calendar_sources(caller)
                 .map_err(day_error)?;
             Ok(AppQueryResultDto::RemoteCalendarSources {
-                sources: sources.iter().map(native_source_dto).collect(),
+                sources: sources.iter().map(source_connection_dto).collect(),
             })
         }
         AppQueryDto::ConnectionsReadResult {
@@ -1186,7 +1186,7 @@ fn remote_source_mutation(
     })
 }
 
-fn native_source_dto(source: &floe_app::SourceConnection) -> floe_protocol::SourceConnectionDto {
+fn source_connection_dto(source: &floe_app::SourceConnection) -> floe_protocol::SourceConnectionDto {
     floe_protocol::SourceConnectionDto {
         connector_id: source.connector_id().as_str().into(),
         connection_id: source.connection_id().as_str().into(),

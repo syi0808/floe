@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:floe_client/features/day/application/native_day_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 
@@ -71,6 +72,21 @@ void main() {
         );
         expect(renamed.revision, restored.revision + 1);
         expect(renamed.sourceAuthority, restored.sourceAuthority);
+        await expectLater(
+          host.runtime.calendarSource.bindRemote(
+            localPersonId,
+            connectorId: 'calendar.google',
+            connectionId: restored.connectionId,
+            current: restored,
+            resources: const [
+              CalendarSourceResource(
+                handle: 'primary@example.test',
+                label: 'Stale rename',
+              ),
+            ],
+          ),
+          throwsA(isA<NativeTransportException>()),
+        );
         final disconnected = await host.runtime.calendarSource.disconnectRemote(
           localPersonId,
           current: renamed,
@@ -80,6 +96,20 @@ void main() {
         expect(
           await host.runtime.calendarSource.inspectRemote(localPersonId),
           isEmpty,
+        );
+        await expectLater(
+          host.runtime.calendarSource.bindRemote(
+            localPersonId,
+            connectorId: 'calendar.google',
+            connectionId: disconnected.connectionId,
+            resources: const [
+              CalendarSourceResource(
+                handle: 'primary@example.test',
+                label: 'New source',
+              ),
+            ],
+          ),
+          throwsA(isA<NativeTransportException>()),
         );
       } finally {
         await host.close();

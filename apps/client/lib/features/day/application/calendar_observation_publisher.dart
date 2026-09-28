@@ -1,5 +1,5 @@
 import 'package:floe_client/app/runtime/native_transport.dart';
-import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
+import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
 
 final class CalendarObservationPublisher {
   factory CalendarObservationPublisher({
@@ -20,27 +20,27 @@ final class CalendarObservationPublisher {
 
   Future<void> publish({
     required String personId,
-    required CalendarConnectionView connection,
+    required CalendarSourceConnection source,
     required DateTime observedAt,
     required DateTime rangeStart,
     required DateTime rangeEnd,
     required List<Map<String, dynamic>> batches,
   }) async {
-    if (!supports(connection.provider)) return;
-    if (connection.revision <= 0) {
+    if (!supports(source.provider)) return;
+    if (source.revision <= 0) {
       throw StateError('Calendar connection revision must be positive.');
     }
-    if (connection.selectedCalendarIds.length > maxCalendarCount) {
+    if (source.selectedCalendarIds.length > maxCalendarCount) {
       await revoke(personId: personId);
       return;
     }
     await _transport.publishCalendarObservation(
       personId: personId,
       deviceId: _deviceId,
-      connectionId: connection.connectionId,
-      connectionRevision: connection.revision,
-      provider: connection.provider,
-      calendarIds: connection.selectedCalendarIds,
+      connectionId: source.connectionId,
+      connectionRevision: source.revision,
+      provider: source.provider,
+      calendarIds: source.selectedCalendarIds,
       observedAt: observedAt,
       expiresAt: observedAt.add(freshness),
       rangeStart: rangeStart,

@@ -4,8 +4,8 @@ import 'package:floe_client/features/connections/application/calendar_source_gat
 import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 
-final class NativeCalendarSourceGateway implements CalendarSourceGateway {
-  const NativeCalendarSourceGateway(this._transport, {required this.deviceId});
+final class AppWireCalendarSourceGateway implements CalendarSourceGateway {
+  const AppWireCalendarSourceGateway(this._transport, {required this.deviceId});
 
   final AppWireTransport _transport;
   final String deviceId;

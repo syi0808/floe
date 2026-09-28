@@ -250,6 +250,27 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     }
   }
 
+  Future<void> _catalogChangedExplicitly() async {
+    await _loadCatalog();
+    if (!mounted || catalogError != null) return;
+    final source = widget.remoteCalendarSources.singleOrNull;
+    final gateway = widget.calendarSourceGateway;
+    if (source == null ||
+        gateway == null ||
+        selectedServerConnectorId != source.connectorId) {
+      return;
+    }
+    final selected = catalog?.connectors
+        .where((connector) => connector.id == source.connectorId)
+        .singleOrNull;
+    if (selected?.status == ServerConnectorStatus.connected &&
+        selected?.connectionId == source.connectionId) {
+      return;
+    }
+    await gateway.disconnectRemote(widget.query.personId, current: source);
+    await widget.onChanged();
+  }
+
   Future<void> _synchronizeServerCalendar(
     ServerConnection server,
     ServerConnectorCatalog nextCatalog,
@@ -282,16 +303,6 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
       selected = connected.single;
     }
     if (selected == null) {
-      if (const {
-        'google_calendar',
-        'microsoft_calendar',
-      }.contains(currentProvider)) {
-        await gateway.disconnectRemote(
-          widget.query.personId,
-          current: current!,
-        );
-        await widget.onChanged();
-      }
       return;
     }
     if (await _bindServerCalendar(gateway, server, selected)) {
@@ -419,7 +430,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         remoteAccessGateway: widget.remoteAccessGateway,
         authorization: widget.connectorAuthorization!,
         onBack: () => setState(() => selectedServerConnectorId = null),
-        onChanged: _loadCatalog,
+        onChanged: _catalogChangedExplicitly,
       );
     }
     return _catalog(context);

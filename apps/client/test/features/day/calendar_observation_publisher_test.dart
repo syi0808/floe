@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
+import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
 import 'package:floe_client/features/day/application/calendar_observation_publisher.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
 
@@ -14,17 +14,18 @@ void main() {
       );
       final calendars = List.generate(
         11,
-        (index) =>
-            ConnectedCalendar(id: 'calendar-$index', name: 'Calendar $index'),
+        (index) => CalendarSourceResource(
+          handle: 'calendar-$index',
+          label: 'Calendar $index',
+        ),
       );
       await publisher.publish(
         personId: 'person-1',
-        connection: CalendarConnectionView(
-          connectionId: '00000000-0000-4000-8000-000000000010',
-          deviceId: 'device-1',
+        source: _source(
+          id: '00000000-0000-4000-8000-000000000010',
           provider: 'event_kit',
           revision: 8,
-          calendars: calendars,
+          resources: calendars,
         ),
         observedAt: DateTime.utc(2026, 9, 11),
         rangeStart: DateTime.utc(2026, 9, 10),
@@ -32,7 +33,7 @@ void main() {
         batches: [
           for (final calendar in calendars)
             {
-              'calendar_id': calendar.id,
+              'calendar_id': calendar.handle,
               'records': <Object>[],
               'failure': null,
             },
@@ -58,12 +59,13 @@ void main() {
 
     await publisher.publish(
       personId: 'person-1',
-      connection: const CalendarConnectionView(
-        connectionId: '00000000-0000-4000-8000-000000000010',
-        deviceId: 'test-device',
+      source: _source(
+        id: '00000000-0000-4000-8000-000000000010',
         provider: 'event_kit',
         revision: 8,
-        calendars: [ConnectedCalendar(id: 'home', name: 'Home')],
+        resources: const [
+          CalendarSourceResource(handle: 'home', label: 'Home'),
+        ],
       ),
       observedAt: observedAt,
       rangeStart: rangeStart,
@@ -105,14 +107,13 @@ void main() {
 
     await publisher.publish(
       personId: 'person-1',
-      connection: const CalendarConnectionView(
-        connectionId: '00000000-0000-4000-8000-000000000011',
-        deviceId: 'android-device',
+      source: _source(
+        id: '00000000-0000-4000-8000-000000000011',
         provider: 'android',
         revision: 3,
-        calendars: [
-          ConnectedCalendar(id: 'work', name: 'Work'),
-          ConnectedCalendar(id: 'home', name: 'Home'),
+        resources: const [
+          CalendarSourceResource(handle: 'work', label: 'Work'),
+          CalendarSourceResource(handle: 'home', label: 'Home'),
         ],
       ),
       observedAt: DateTime.utc(2026, 9, 11),
@@ -132,24 +133,28 @@ void main() {
     );
     final calendars = List.generate(
       CalendarObservationPublisher.maxCalendarCount + 1,
-      (index) => ConnectedCalendar(id: 'calendar-$index', name: 'Calendar'),
+      (index) =>
+          CalendarSourceResource(handle: 'calendar-$index', label: 'Calendar'),
     );
 
     await publisher.publish(
       personId: 'person-1',
-      connection: CalendarConnectionView(
-        connectionId: '00000000-0000-4000-8000-000000000013',
-        deviceId: 'device-1',
+      source: _source(
+        id: '00000000-0000-4000-8000-000000000013',
         provider: 'event_kit',
         revision: 1,
-        calendars: calendars,
+        resources: calendars,
       ),
       observedAt: DateTime.utc(2026, 9, 11),
       rangeStart: DateTime.utc(2026, 9, 10),
       rangeEnd: DateTime.utc(2026, 9, 12),
       batches: [
         for (final calendar in calendars)
-          {'calendar_id': calendar.id, 'records': <Object>[], 'failure': null},
+          {
+            'calendar_id': calendar.handle,
+            'records': <Object>[],
+            'failure': null,
+          },
       ],
     );
 
@@ -170,12 +175,13 @@ void main() {
 
     await publisher.publish(
       personId: 'person-1',
-      connection: const CalendarConnectionView(
-        connectionId: '00000000-0000-4000-8000-000000000012',
-        deviceId: 'server-device',
+      source: _source(
+        id: '00000000-0000-4000-8000-000000000012',
         provider: 'google_calendar',
         revision: 2,
-        calendars: [ConnectedCalendar(id: 'primary', name: 'Primary')],
+        resources: const [
+          CalendarSourceResource(handle: 'primary', label: 'Primary'),
+        ],
       ),
       observedAt: DateTime.utc(2026, 9, 11),
       rangeStart: DateTime.utc(2026, 9, 10),
@@ -192,6 +198,31 @@ void main() {
     ));
   });
 }
+
+CalendarSourceConnection _source({
+  required String id,
+  required String provider,
+  required int revision,
+  required List<CalendarSourceResource> resources,
+}) => CalendarSourceConnection(
+  connectorId: switch (provider) {
+    'event_kit' => 'calendar.event_kit',
+    'android' => 'calendar.android',
+    'google_calendar' => 'calendar.google',
+    _ => throw ArgumentError.value(provider),
+  },
+  connectionId: id,
+  executionOwnerId: 'device-1',
+  state: 'ready',
+  revision: revision,
+  sourceAuthority: const CalendarSourceAuthority(
+    incarnation: '00000000-0000-4000-8000-000000000009',
+    epoch: 1,
+  ),
+  resourceMode: 'selected',
+  resources: resources,
+  nativeSubjectFingerprint: provider == 'google_calendar' ? null : 'a' * 64,
+);
 
 final class _RecordingTransport implements LocalContextTransport {
   final List<_CalendarPublication> calendarPublications = [];

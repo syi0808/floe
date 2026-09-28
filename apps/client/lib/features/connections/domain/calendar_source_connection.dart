@@ -104,19 +104,33 @@ final class CalendarSourceConnection {
         resourceMode is! String ||
         !const {'selected', 'all_available'}.contains(resourceMode) ||
         rawResources is! List ||
-        fingerprint != null && fingerprint is! String) {
+        rawResources.length > 4096 ||
+        fingerprint != null &&
+            (fingerprint is! String ||
+                !_fingerprintPattern.hasMatch(fingerprint))) {
       throw const FormatException('Invalid Calendar source connection');
     }
     final resources = rawResources
-        .map(
-          (resource) => CalendarSourceResource.fromJson(
-            Map<String, dynamic>.from(resource as Map),
-          ),
-        )
+        .map((resource) {
+          if (resource is! Map || resource.keys.any((key) => key is! String)) {
+            throw const FormatException('Invalid Calendar source resource');
+          }
+          return CalendarSourceResource.fromJson(
+            Map<String, dynamic>.from(resource),
+          );
+        })
         .toList(growable: false);
-    if (resources.map((resource) => resource.handle).toSet().length !=
-        resources.length) {
-      throw const FormatException('Duplicate Calendar source resource');
+    for (var index = 1; index < resources.length; index++) {
+      if (resources[index - 1].handle.compareTo(resources[index].handle) >= 0) {
+        throw const FormatException('Unordered Calendar source resources');
+      }
+    }
+    final native =
+        connectorId == 'calendar.event_kit' ||
+        connectorId == 'calendar.android';
+    if (native && state == 'ready' && fingerprint == null ||
+        !native && fingerprint != null) {
+      throw const FormatException('Invalid Calendar source subject');
     }
     return CalendarSourceConnection(
       connectorId: connectorId,
@@ -157,3 +171,5 @@ const _providers = {
   'calendar.fixture': 'fixture',
   'calendar.android': 'android',
 };
+
+final _fingerprintPattern = RegExp(r'^[0-9a-fA-F]{64}$');

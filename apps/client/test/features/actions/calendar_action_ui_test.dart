@@ -61,22 +61,26 @@ CalendarAction action({
   });
 }
 
-CalendarConnectionView connection({int revision = 3, String? error}) =>
-    CalendarConnectionView(
-      connectionId: '00000000-0000-4000-8000-000000000010',
-      deviceId: 'test-device',
-      provider: 'fixture',
-      revision: revision,
-      calendars: [
-        ConnectedCalendar(
-          id: 'calendar',
-          name: 'Personal calendar',
-          lastSuccessAt: DateTime.now(),
-        ),
-      ],
+CalendarConnectionView connection({
+  int revision = 3,
+  String? error,
+  bool isServing = true,
+}) => CalendarConnectionView(
+  connectionId: '00000000-0000-4000-8000-000000000010',
+  deviceId: 'test-device',
+  provider: 'fixture',
+  revision: revision,
+  isServing: isServing,
+  calendars: [
+    ConnectedCalendar(
+      id: 'calendar',
+      name: 'Personal calendar',
       lastSuccessAt: DateTime.now(),
-      error: error,
-    );
+    ),
+  ],
+  lastSuccessAt: DateTime.now(),
+  error: error,
+);
 
 class Gateway implements CalendarActionGateway {
   List<CalendarAction> saved = [action()];
@@ -165,6 +169,14 @@ void main() {
         isTrue,
       );
       expect(controller.canApprove(proposal, null, DateTime.now()), isFalse);
+      expect(
+        controller.canApprove(
+          proposal,
+          connection(isServing: false),
+          DateTime.now(),
+        ),
+        isFalse,
+      );
       expect(
         controller.canApprove(
           action(agentOrigin: origin()),

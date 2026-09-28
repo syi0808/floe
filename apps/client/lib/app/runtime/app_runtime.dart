@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:floe_client/features/connections/application/native_calendar_access_gateway.dart';
-import 'package:floe_client/features/connections/application/native_calendar_source_gateway.dart';
+import 'package:floe_client/features/connections/application/app_wire_calendar_source_gateway.dart';
 import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
 import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
 
@@ -70,7 +70,7 @@ final class AppRuntime {
   );
   late final memory = NativeMemoryGateway(_transport);
   late final connections = NativeConnectionsGateway(_transport);
-  late final calendarSource = NativeCalendarSourceGateway(
+  late final calendarSource = AppWireCalendarSourceGateway(
     _transport,
     deviceId: deviceId,
   );

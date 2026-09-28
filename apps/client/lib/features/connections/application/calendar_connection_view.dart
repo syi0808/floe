@@ -31,6 +31,7 @@ final class CalendarConnectionView {
     required this.deviceId,
     required this.provider,
     required this.revision,
+    this.isServing = true,
     this.sourceAuthority,
     required this.calendars,
     this.lastSuccessAt,
@@ -54,6 +55,7 @@ final class CalendarConnectionView {
       deviceId: source.executionOwnerId,
       provider: source.provider,
       revision: source.revision,
+      isServing: source.isServing,
       sourceAuthority: source.sourceAuthority,
       calendars: source.resources
           .map((resource) {
@@ -78,6 +80,7 @@ final class CalendarConnectionView {
   final String deviceId;
   final String provider;
   final int revision;
+  final bool isServing;
   final CalendarSourceAuthority? sourceAuthority;
   final DateTime? lastSuccessAt;
   final String? error;

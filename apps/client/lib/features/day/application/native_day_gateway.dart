@@ -9,7 +9,6 @@ import 'package:floe_client/app/runtime/native_transport.dart'
 import 'package:floe_client/app/runtime/owner_operation.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
-import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 import 'package:floe_client/features/day/application/calendar_gateway.dart';
 import 'package:floe_client/features/day/application/calendar_observation_publisher.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
@@ -205,7 +204,7 @@ final class NativeDayGateway
           batches.every((batch) => batch['failure'] == 'permission_denied');
       await _updateCalendarObservation(
         query: query,
-        connection: CalendarConnectionView.compose(source, snapshot.calendar),
+        source: source,
         batches: batches,
         permissionRevoked: permissionRevoked,
       );
@@ -231,7 +230,7 @@ final class NativeDayGateway
 
   Future<void> _updateCalendarObservation({
     required DayQuery query,
-    required CalendarConnectionView connection,
+    required CalendarSourceConnection source,
     required List<Map<String, dynamic>> batches,
     required bool permissionRevoked,
   }) async {
@@ -241,7 +240,7 @@ final class NativeDayGateway
       } else {
         await _calendarObservationPublisher.publish(
           personId: query.personId,
-          connection: connection,
+          source: source,
           observedAt: _clock().toUtc(),
           rangeStart: query.startsAt,
           rangeEnd: query.endsAt,

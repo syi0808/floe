@@ -56,7 +56,7 @@ struct NativeActions {
     caller: crate::CallerContext,
 }
 impl NativeActions {
-    async fn select_calendar(&self, connection_id: &str, calendar_id: &str, label: &str) {
+    async fn establish_calendar_source(&self, connection_id: &str, calendar_id: &str, label: &str) {
         let person = PersonId(self.caller.person_id());
         let source = self
             .core
@@ -214,7 +214,7 @@ fn native_executor_uses_rust_ledger_and_lookup_only_after_response_loss() {
     let path = directory.path().join("actions.db");
     let keys = Keys::default();
     let host = NativeActions::open(&path, keys.clone(), true);
-    host.runtime.block_on(host.select_calendar(
+    host.runtime.block_on(host.establish_calendar_source(
         "00000000-0000-4000-8000-000000000010",
         "target",
         "Fixture · Target",
@@ -317,7 +317,7 @@ fn authorized_eventkit_response_loss_recovers_exact_disposable_event() {
     );
     let keys = Keys::default();
     let host = NativeActions::open(&path, keys.clone(), true);
-    host.runtime.block_on(host.select_calendar(
+    host.runtime.block_on(host.establish_calendar_source(
         &Uuid::new_v4().to_string(),
         calendar_id,
         "iCloud · Floe Validation",
