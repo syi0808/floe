@@ -214,6 +214,7 @@ async fn native_action_source_validation_rejects_wrong_subject() {
         id: uuid::Uuid::new_v4(),
         person_id: person,
         provider: CalendarProvider::EventKit,
+        connection_id: ConnectionId::try_new("00000000-0000-4000-8000-000000000010").unwrap(),
         calendar_id: "target".into(),
         calendar_name: "Target".into(),
         title: "Focus time".into(),

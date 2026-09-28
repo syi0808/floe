@@ -222,6 +222,7 @@ class ProposalDayGateway implements DayGateway, CalendarActionGateway {
         'calendar_name': 'Synthetic calendar',
         'title': 'Focus time',
         'connection_revision': 1,
+        'connection_id': 'fixture-connection',
         'created_at': '2050-01-15T09:00:00Z',
         'expires_at': '2050-01-15T09:02:00Z',
         'approved_at': null,

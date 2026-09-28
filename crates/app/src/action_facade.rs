@@ -154,7 +154,14 @@ impl FloeCore {
                 title,
                 schedule,
             } => actions
-                .propose_calendar_action(person_id, calendar_id, title, schedule, now)
+                .propose_calendar_action(
+                    person_id,
+                    CalendarProvider::EventKit,
+                    calendar_id,
+                    title,
+                    schedule,
+                    now,
+                )
                 .await
                 .map(single)
                 .map_err(action_error),
@@ -169,6 +176,7 @@ impl FloeCore {
                 actions
                     .direct_calendar_action(
                         person_id,
+                        CalendarProvider::EventKit,
                         calendar_id,
                         title,
                         schedule,
@@ -252,8 +260,8 @@ impl FloeCore {
         ))
     }
 
-    pub fn actions(&self) -> ActionService<'_, TursoStore> {
-        ActionService::new(&self.store)
+    pub fn actions(&self) -> ActionService<'_, TursoStore, TursoStore> {
+        ActionService::new(&self.store, &self.store)
     }
 
     pub fn expert_actions(&self) -> ExpertActionService<'_, TursoStore, TursoStore, Self> {

@@ -1,22 +1,33 @@
 use chrono::{DateTime, Duration, Utc};
+use floe_context_contract::{CalendarProvider, ConnectorId};
 use floe_day::{EventId, EventSchedule, PersonId, Revision, SourceRef, TimedSchedule};
 use uuid::Uuid;
 
 use crate::{
     ActionAuthority, ActionAuthorityMode, ActionBlockReason, ActionError, ActionFailure,
     ActionRepository, CalendarAction, CalendarActionPolicy, CalendarActionProvider,
-    CalendarActionState, CalendarMutation,
+    CalendarActionState, CalendarMutation, CalendarSourceReader,
 };
 
 /// Owner of proposal admission, approval decisions, external dispatch and the
 /// uncertain-result recovery path for calendar writes.
-pub struct ActionService<'a, Repository: ActionRepository + ?Sized> {
+pub struct ActionService<
+    'a,
+    Repository: ActionRepository + ?Sized,
+    Sources: CalendarSourceReader + ?Sized,
+> {
     pub(crate) repository: &'a Repository,
+    pub(crate) sources: &'a Sources,
 }
 
-impl<'a, Repository: ActionRepository + ?Sized> ActionService<'a, Repository> {
-    pub fn new(repository: &'a Repository) -> Self {
-        Self { repository }
+impl<'a, Repository: ActionRepository + ?Sized, Sources: CalendarSourceReader + ?Sized>
+    ActionService<'a, Repository, Sources>
+{
+    pub fn new(repository: &'a Repository, sources: &'a Sources) -> Self {
+        Self {
+            repository,
+            sources,
+        }
     }
 
     pub async fn action_authority(
@@ -61,13 +72,14 @@ impl<'a, Repository: ActionRepository + ?Sized> ActionService<'a, Repository> {
     pub async fn propose_calendar_action(
         &self,
         person_id: PersonId,
+        provider: CalendarProvider,
         calendar_id: String,
         title: String,
         schedule: TimedSchedule,
         now: DateTime<Utc>,
     ) -> Result<CalendarAction, ActionError> {
         let action = self
-            .draft_calendar_action(person_id, calendar_id, title, schedule, now)
+            .draft_calendar_action(person_id, provider, calendar_id, title, schedule, now)
             .await?;
         self.repository.save_calendar_action(&action, None).await?;
         Ok(action)
@@ -76,6 +88,7 @@ impl<'a, Repository: ActionRepository + ?Sized> ActionService<'a, Repository> {
     pub async fn draft_calendar_action(
         &self,
         person_id: PersonId,
+        provider: CalendarProvider,
         calendar_id: String,
         title: String,
         schedule: TimedSchedule,
@@ -88,16 +101,18 @@ impl<'a, Repository: ActionRepository + ?Sized> ActionService<'a, Repository> {
                 "provide a title and future interval",
             ));
         }
-        let mirror = self
-            .repository
-            .calendar_mirror(person_id)
+        let source = self
+            .sources
+            .current_calendar_source(person_id, &connector_id(provider))
             .await?
             .ok_or_else(|| ActionError::not_found("connect a calendar first"))?;
-        let calendar = mirror
-            .connection
-            .calendars
-            .into_iter()
-            .find(|calendar| calendar.calendar_id == calendar_id)
+        if source.state() == floe_connections::SourceState::Disconnected {
+            return Err(ActionError::conflict("calendar source is disconnected"));
+        }
+        let calendar = source
+            .resources()
+            .iter()
+            .find(|calendar| calendar.handle().as_str() == calendar_id)
             .ok_or_else(|| ActionError::validation("calendar is not connected"))?;
         let action = CalendarAction {
             agent_origin: None,
@@ -105,13 +120,14 @@ impl<'a, Repository: ActionRepository + ?Sized> ActionService<'a, Repository> {
             mutation: None,
             id: Uuid::new_v4(),
             person_id,
-            provider: mirror.connection.provider,
+            provider,
+            connection_id: source.connection_id().clone(),
             calendar_id,
-            calendar_name: calendar.calendar_name,
+            calendar_name: calendar.label().to_owned(),
             title: title.trim().to_owned(),
             expires_at: (now + Duration::minutes(15)).min(schedule.starts_at),
             schedule,
-            connection_revision: mirror.connection.revision,
+            connection_revision: source.revision(),
             created_at: now,
             approved_at: None,
             execution_id: Uuid::new_v4(),
@@ -124,6 +140,7 @@ impl<'a, Repository: ActionRepository + ?Sized> ActionService<'a, Repository> {
     pub async fn direct_calendar_action(
         &self,
         person_id: PersonId,
+        provider: CalendarProvider,
         calendar_id: String,
         title: String,
         schedule: TimedSchedule,
@@ -136,12 +153,30 @@ impl<'a, Repository: ActionRepository + ?Sized> ActionService<'a, Repository> {
         if title.trim().is_empty() || schedule.ends_at - schedule.starts_at > Duration::hours(24) {
             return Err(ActionError::validation("invalid event interval or title"));
         }
-        let mirror = self
-            .repository
-            .calendar_mirror(person_id)
+        let source = self
+            .sources
+            .current_calendar_source(person_id, &connector_id(provider))
             .await?
             .ok_or_else(|| ActionError::not_found("connect a calendar first"))?;
+        if source.state() == floe_connections::SourceState::Disconnected {
+            return Err(ActionError::conflict("calendar source is disconnected"));
+        }
+        let calendar = source
+            .resources()
+            .iter()
+            .find(|calendar| calendar.handle().as_str() == calendar_id)
+            .ok_or_else(|| ActionError::validation("calendar is not connected"))?;
         let mutation = if let Some((event_id, revision)) = event_id {
+            let mirror = self
+                .repository
+                .calendar_mirror(person_id)
+                .await?
+                .ok_or_else(|| ActionError::not_found("event not found"))?;
+            if mirror.connection.connection_id != source.connection_id().as_str() {
+                return Err(ActionError::conflict(
+                    "calendar source changed; reload before editing",
+                ));
+            }
             let original = mirror
                 .events
                 .iter()
@@ -154,7 +189,7 @@ impl<'a, Repository: ActionRepository + ?Sized> ActionService<'a, Repository> {
                 ));
             }
             if !matches!(&original.source, SourceRef::Calendar(source)
-                if source.calendar_id == calendar_id && source.can_modify)
+                if source.provider == provider && source.calendar_id == calendar_id && source.can_modify)
                 || !matches!(original.schedule, EventSchedule::Timed(_))
             {
                 return Err(ActionError::validation("unsupported event"));
@@ -166,24 +201,19 @@ impl<'a, Repository: ActionRepository + ?Sized> ActionService<'a, Repository> {
             }
             None
         };
-        let calendar = mirror
-            .connection
-            .calendars
-            .into_iter()
-            .find(|calendar| calendar.calendar_id == calendar_id)
-            .ok_or_else(|| ActionError::validation("calendar is not connected"))?;
         let action = CalendarAction {
             agent_origin: None,
             direct: true,
             mutation,
             id: Uuid::new_v4(),
             person_id,
-            provider: mirror.connection.provider,
+            provider,
+            connection_id: source.connection_id().clone(),
             calendar_id,
-            calendar_name: calendar.calendar_name,
+            calendar_name: calendar.label().to_owned(),
             title: title.trim().to_owned(),
             schedule,
-            connection_revision: mirror.connection.revision,
+            connection_revision: source.revision(),
             created_at: now,
             expires_at: now + Duration::minutes(15),
             approved_at: Some(now),
@@ -365,29 +395,39 @@ impl<'a, Repository: ActionRepository + ?Sized> ActionService<'a, Repository> {
                 return Ok(Some(ActionBlockReason::PolicyDenied));
             }
         }
+        let source = self
+            .sources
+            .calendar_source(action.person_id, &action.connection_id)
+            .await?;
+        if source.is_none_or(|source| {
+            source.person_id() != action.person_id
+                || source.connector_id().as_str() != connector_for_provider(action.provider)
+                || source.state() == floe_connections::SourceState::Disconnected
+                || source.revision() != action.connection_revision
+                || !source
+                    .resources()
+                    .iter()
+                    .any(|resource| resource.handle().as_str() == action.calendar_id)
+        }) {
+            return Ok(Some(ActionBlockReason::CalendarChanged));
+        }
         let mirror = self.repository.calendar_mirror(action.person_id).await?;
         if let Some(mutation) = &action.mutation
-            && mirror
-                .as_ref()
-                .is_none_or(|mirror| !mirror.events.contains(&mutation.original))
+            && mirror.as_ref().is_none_or(|mirror| {
+                mirror.connection.connection_id != action.connection_id.as_str()
+                    || !mirror.events.contains(&mutation.original)
+            })
         {
             return Ok(Some(ActionBlockReason::CalendarChanged));
         }
-        if mirror.is_none_or(|mirror| {
-            mirror.connection.revision != action.connection_revision
-                || mirror.connection.disconnected
-                || mirror
+        if mirror.as_ref().is_some_and(|mirror| {
+            mirror.connection.connection_id == action.connection_id.as_str()
+                && (mirror
                     .connection
                     .source_statuses
                     .get(&action.calendar_id)
                     .is_some_and(|status| status.error.is_some())
-                || mirror.connection.provider != action.provider
-                || mirror.connection.error.is_some()
-                || !mirror
-                    .connection
-                    .calendars
-                    .iter()
-                    .any(|calendar| calendar.calendar_id == action.calendar_id)
+                    || mirror.connection.error.is_some())
         }) {
             return Ok(Some(ActionBlockReason::CalendarChanged));
         }
@@ -406,6 +446,20 @@ impl<'a, Repository: ActionRepository + ?Sized> ActionService<'a, Repository> {
             .await?;
         Ok(updated)
     }
+}
+
+fn connector_for_provider(provider: CalendarProvider) -> &'static str {
+    match provider {
+        CalendarProvider::Fixture => "calendar.fixture",
+        CalendarProvider::EventKit => "calendar.event_kit",
+        CalendarProvider::Google => "calendar.google",
+        CalendarProvider::Microsoft => "calendar.microsoft",
+        CalendarProvider::Android => "calendar.android",
+    }
+}
+
+fn connector_id(provider: CalendarProvider) -> ConnectorId {
+    ConnectorId::try_new(connector_for_provider(provider)).expect("constant connector ID")
 }
 
 pub(crate) fn conflict() -> ActionError {

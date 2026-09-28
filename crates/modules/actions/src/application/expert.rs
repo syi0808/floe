@@ -72,8 +72,8 @@ impl<
         }
     }
 
-    fn actions(&self) -> ActionService<'_, Repository> {
-        ActionService::new(self.repository)
+    fn actions(&self) -> ActionService<'_, Repository, Sources> {
+        ActionService::new(self.repository, self.sources)
     }
 
     pub async fn inspect_expert_calendar_action(
@@ -449,17 +449,6 @@ impl<
         if source_expiry <= now {
             return Err(AgentFailure::StaleContext);
         }
-        let mut action = self
-            .actions()
-            .draft_calendar_action(
-                evidence.person_id,
-                destination.calendar_id.clone(),
-                "Focus time".into(),
-                schedule.clone(),
-                now,
-            )
-            .await
-            .map_err(agent_error)?;
         let context_dependency = store
             .expert_proposal_dependency(&request.reference, &evidence)
             .await?;
@@ -479,8 +468,7 @@ impl<
             .await
             .map_err(agent_error)?
             .ok_or(AgentFailure::CapabilityUnavailable)?;
-        if action.provider != destination.provider
-            || mirror.connection.connection_id != connection.connection_id().as_str()
+        if destination.connection_revision != connection.revision()
             || mirror.connection.error.is_some()
             || mirror
                 .connection
@@ -495,7 +483,21 @@ impl<
             &connection,
             &destination.calendar_id,
         )?;
-        action.connection_revision = destination.connection_revision;
+        let mut action = self
+            .actions()
+            .draft_calendar_action(
+                evidence.person_id,
+                destination.provider,
+                destination.calendar_id.clone(),
+                "Focus time".into(),
+                schedule.clone(),
+                now,
+            )
+            .await
+            .map_err(agent_error)?;
+        if action.connection_id != *connection.connection_id() {
+            return Err(AgentFailure::StaleContext);
+        }
         let authority = store.agent_action_policy().await?;
         action.id = evidence.task_id;
         action.execution_id = evidence.task_id;

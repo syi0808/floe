@@ -19,6 +19,11 @@ use std::{
 
 use floe_actions::{
     ActionAuthority, ActionError, ActionRepository, CalendarAction, CalendarActionState,
+    CalendarSourceReader,
+};
+use floe_connections::{ConnectionResource, ResourceMode, SourceConnection};
+use floe_context_contract::{
+    CalendarProvider, ConnectionId, ConnectorId, ExecutionOwnerId, ResourceHandle,
 };
 use floe_day::{CalendarMirror, DayService, Event, PersonId, TimelineRepository};
 use uuid::Uuid;
@@ -39,6 +44,7 @@ struct Actions {
 pub struct TestActionStore {
     pub timeline: TestTimelineRepository,
     actions: Mutex<Actions>,
+    sources: Mutex<HashMap<(PersonId, ConnectionId), SourceConnection>>,
 }
 
 impl TestActionStore {
@@ -48,6 +54,51 @@ impl TestActionStore {
 
     pub fn day(&self) -> DayService<'_, TestTimelineRepository> {
         DayService::new(&self.timeline)
+    }
+
+    pub fn establish_fixture_source(&self, person_id: PersonId) {
+        let source = SourceConnection::establish(
+            person_id,
+            ConnectorId::try_new("calendar.fixture").unwrap(),
+            ConnectionId::try_new("calendar.fixture").unwrap(),
+            ExecutionOwnerId::try_new("fixture-device").unwrap(),
+            ResourceMode::Selected,
+            vec![
+                ConnectionResource::new(
+                    ResourceHandle::try_new("calendar-1").unwrap(),
+                    "Test".into(),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        self.sources
+            .lock()
+            .unwrap()
+            .insert((person_id, source.connection_id().clone()), source);
+    }
+
+    pub fn replace_fixture_resource(&self, person_id: PersonId) {
+        let mut sources = self.sources.lock().unwrap();
+        let source = sources
+            .get_mut(&(
+                person_id,
+                ConnectionId::try_new("calendar.fixture").unwrap(),
+            ))
+            .unwrap();
+        source
+            .configure(
+                source.revision(),
+                ResourceMode::Selected,
+                vec![
+                    ConnectionResource::new(
+                        ResourceHandle::try_new("other").unwrap(),
+                        "Other".into(),
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap();
     }
 
     fn actions(&self) -> Result<MutexGuard<'_, Actions>, ActionError> {
@@ -65,6 +116,39 @@ impl TestActionStore {
             .filter(|(recorded, _)| *recorded == id)
             .map(|(_, state)| state.clone())
             .collect()
+    }
+}
+
+impl CalendarSourceReader for TestActionStore {
+    async fn current_calendar_source(
+        &self,
+        person_id: PersonId,
+        connector_id: &ConnectorId,
+    ) -> Result<Option<SourceConnection>, ActionError> {
+        Ok(self
+            .sources
+            .lock()
+            .unwrap()
+            .values()
+            .find(|source| {
+                source.person_id() == person_id
+                    && source.connector_id() == connector_id
+                    && source.state() != floe_connections::SourceState::Disconnected
+            })
+            .cloned())
+    }
+
+    async fn calendar_source(
+        &self,
+        person_id: PersonId,
+        connection_id: &ConnectionId,
+    ) -> Result<Option<SourceConnection>, ActionError> {
+        Ok(self
+            .sources
+            .lock()
+            .unwrap()
+            .get(&(person_id, connection_id.clone()))
+            .cloned())
     }
 }
 

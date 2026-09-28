@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, future::Future};
 use crate::ExpertCalendarProposal;
 use chrono::{DateTime, Utc};
 use floe_connections::{ConnectionId, SourceConnection};
-use floe_context_contract::ContextDependency;
+use floe_context_contract::{ConnectorId, ContextDependency};
 use floe_day::{CalendarMirror, Event, PersonId};
 use floe_kernel::AgentFailure;
 use thiserror::Error;
@@ -110,6 +110,12 @@ pub trait ActionRepository: Send + Sync {
 
 #[allow(async_fn_in_trait)]
 pub trait CalendarSourceReader: Send + Sync {
+    async fn current_calendar_source(
+        &self,
+        person_id: PersonId,
+        connector_id: &ConnectorId,
+    ) -> Result<Option<SourceConnection>, ActionError>;
+
     async fn calendar_source(
         &self,
         person_id: PersonId,

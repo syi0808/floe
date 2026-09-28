@@ -5,7 +5,7 @@ use floe_actions::{
     CalendarSourceReader,
 };
 use floe_agent_contract::AgentFailure;
-use floe_connections::{ConnectionId, SourceConnection, SourceRepository};
+use floe_connections::{ConnectionId, ConnectorId, SourceConnection, SourceRepository};
 use floe_day::{CalendarMirror, Event, PersonId};
 use serde_json::to_string;
 use uuid::Uuid;
@@ -209,6 +209,20 @@ impl ActionRepository for TursoStore {
 }
 
 impl CalendarSourceReader for TursoStore {
+    async fn current_calendar_source(
+        &self,
+        person_id: PersonId,
+        connector_id: &ConnectorId,
+    ) -> Result<Option<SourceConnection>, ActionError> {
+        let mut sources = SourceRepository::list_current(self, person_id, connector_id)
+            .await
+            .map_err(|error| ActionError::storage(error.to_string()))?;
+        if sources.len() > 1 {
+            return Err(ActionError::conflict("multiple current Calendar sources"));
+        }
+        Ok(sources.pop())
+    }
+
     async fn calendar_source(
         &self,
         person_id: PersonId,

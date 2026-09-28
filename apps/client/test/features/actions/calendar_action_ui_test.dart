@@ -40,6 +40,7 @@ CalendarAction action({
     'calendar_name': 'Personal calendar',
     'title': 'Quiet focus',
     'connection_revision': 3,
+    'connection_id': 'fixture-connection',
     'created_at': now.subtract(const Duration(minutes: 1)).toIso8601String(),
     'expires_at': (expiresAt ?? now.add(const Duration(minutes: 14)))
         .toIso8601String(),

@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use floe_context_contract::CalendarProvider;
+use floe_context_contract::{CalendarProvider, ConnectionId};
 use floe_day::{Event, PersonId, SourceRef, TimedSchedule};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -17,6 +17,7 @@ pub struct CalendarAction {
     pub id: Uuid,
     pub person_id: PersonId,
     pub provider: CalendarProvider,
+    pub connection_id: ConnectionId,
     pub calendar_id: String,
     pub calendar_name: String,
     pub title: String,

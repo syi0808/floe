@@ -167,6 +167,19 @@ enum ProposalArtifactCase {
 }
 
 impl Fixture {
+    async fn source_revision(&self) -> u64 {
+        self.core
+            .source_service()
+            .load(
+                self.person,
+                &floe_context_contract::ConnectionId::try_new("eventkit-connection").unwrap(),
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .revision()
+    }
+
     async fn new() -> Self {
         Self::with_class(DataClass::Personal, true).await
     }
@@ -442,13 +455,7 @@ impl Fixture {
 
     async fn prepare(&self) -> Result<CalendarAction, AgentFailure> {
         let mut request = self.request();
-        request.destination.connection_revision = self
-            .core
-            .calendar_connection(self.person)
-            .await
-            .unwrap()
-            .unwrap()
-            .revision;
+        request.destination.connection_revision = self.source_revision().await;
         self.core
             .prepare_expert_calendar_action(&self.vault, request, now)
             .await
@@ -836,13 +843,7 @@ async fn reference_destination_freshness_and_budgets_reject_before_creating_an_a
     let fixture = Fixture::new().await;
     for invalid in [0, 1, 2, 3, 5, 6, 7] {
         let mut request = fixture.request();
-        request.destination.connection_revision = fixture
-            .core
-            .calendar_connection(fixture.person)
-            .await
-            .unwrap()
-            .unwrap()
-            .revision;
+        request.destination.connection_revision = fixture.source_revision().await;
         let expected = match invalid {
             0 => {
                 request.reference.person_id = PersonId::new();
@@ -882,13 +883,7 @@ async fn reference_destination_freshness_and_budgets_reject_before_creating_an_a
         );
     }
     let mut request = fixture.request();
-    request.destination.connection_revision = fixture
-        .core
-        .calendar_connection(fixture.person)
-        .await
-        .unwrap()
-        .unwrap()
-        .revision;
+    request.destination.connection_revision = fixture.source_revision().await;
     assert_eq!(
         fixture
             .core
@@ -907,23 +902,26 @@ async fn reference_destination_freshness_and_budgets_reject_before_creating_an_a
             .len(),
         0
     );
-    let current_revision = fixture
-        .core
-        .calendar_connection(fixture.person)
-        .await
-        .unwrap()
-        .unwrap()
-        .revision;
+    let current_revision = fixture.source_revision().await;
     let mut revision_only_request = fixture.request();
     revision_only_request.destination.connection_revision = current_revision + 1;
+    assert_eq!(
+        fixture
+            .core
+            .prepare_expert_calendar_action(&fixture.vault, revision_only_request, now)
+            .await,
+        Err(AgentFailure::StaleContext)
+    );
+    let mut current_request = fixture.request();
+    current_request.destination.connection_revision = current_revision;
     let allowed = fixture
         .core
-        .prepare_expert_calendar_action(&fixture.vault, revision_only_request, now)
+        .prepare_expert_calendar_action(&fixture.vault, current_request, now)
         .await
         .unwrap();
     assert_eq!(allowed.provider, CalendarProvider::EventKit);
     assert_eq!(allowed.calendar_id, "home");
-    assert_eq!(allowed.connection_revision, current_revision + 1);
+    assert_eq!(allowed.connection_revision, current_revision);
 }
 
 #[tokio::test]
@@ -1129,13 +1127,7 @@ async fn committed_receipt_content_and_history_classification_cannot_be_rewritte
 async fn cancellation_after_publication_reports_uncertainty_without_replacing_the_intent() {
     let fixture = Fixture::new().await;
     let mut request = fixture.request();
-    request.destination.connection_revision = fixture
-        .core
-        .calendar_connection(fixture.person)
-        .await
-        .unwrap()
-        .unwrap()
-        .revision;
+    request.destination.connection_revision = fixture.source_revision().await;
     *fixture.keys.0.cancel_on_read.lock().unwrap() = Some(request.cancellation.clone());
     fixture.keys.0.fail_on_read.store(5, Ordering::Release);
     assert_eq!(
@@ -1175,13 +1167,7 @@ async fn personal_projection_uses_the_same_bridge_but_sensitive_classes_cannot_e
         let fixture = Fixture::with_class(class, true).await;
         let mut request = fixture.request();
         request.destination.provider = CalendarProvider::EventKit;
-        request.destination.connection_revision = fixture
-            .core
-            .calendar_connection(fixture.person)
-            .await
-            .unwrap()
-            .unwrap()
-            .revision;
+        request.destination.connection_revision = fixture.source_revision().await;
         let result = fixture
             .core
             .prepare_expert_calendar_action(&fixture.vault, request, now)
@@ -1210,13 +1196,7 @@ async fn cancellation_deadline_and_clock_changes_before_publish_leave_no_intent(
     let fixture = Fixture::new().await;
     for mode in 0..4 {
         let mut request = fixture.request();
-        request.destination.connection_revision = fixture
-            .core
-            .calendar_connection(fixture.person)
-            .await
-            .unwrap()
-            .unwrap()
-            .revision;
+        request.destination.connection_revision = fixture.source_revision().await;
         if mode == 1 {
             request.deadline = Instant::now() + Duration::from_millis(20);
         }
@@ -1345,6 +1325,7 @@ struct GovernedFocus {
     admission: CalendarGrantAdmission,
     consumer: GrantConsumer,
     fingerprint: String,
+    source_revision: u64,
     _root: tempfile::TempDir,
 }
 
@@ -1478,6 +1459,7 @@ impl GovernedFocus {
             admission,
             consumer,
             fingerprint,
+            source_revision: connection.revision(),
             _root: root,
         }
     }
@@ -1579,7 +1561,7 @@ impl GovernedFocus {
             destination: ExpertCalendarDestination {
                 provider: CalendarProvider::EventKit,
                 calendar_id: calendar_id.into(),
-                connection_revision: 1,
+                connection_revision: self.source_revision,
                 timezone: "Asia/Seoul".into(),
             },
             cancellation: Cancellation::default(),
@@ -1806,22 +1788,33 @@ async fn governed_focus_proposal_rejects_source_and_resource_drift() {
     );
     let action = fixture.prepare(&reference, "home").await.unwrap();
     assert_eq!(action.state, CalendarActionState::Pending);
+    let previous = fixture
+        .core
+        .source_service()
+        .load(
+            fixture.person,
+            &floe_context_contract::ConnectionId::try_new("eventkit-connection").unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
     fixture
         .core
-        .set_calendar_scope(
+        .source_service()
+        .disconnect(
             fixture.person,
-            "eventkit-connection-2".into(),
-            2,
-            "test-device".into(),
-            CalendarProvider::EventKit,
-            vec![CalendarSelection {
-                calendar_id: "home".into(),
-                calendar_name: "Home".into(),
-            }],
-            floe_context_contract::CalendarScope::Selected,
+            previous.connection_id(),
+            previous.revision(),
         )
         .await
         .unwrap();
+    establish_native_source(
+        &fixture.core,
+        fixture.person,
+        "eventkit-connection-2",
+        &[("home", "Home")],
+    )
+    .await;
     let (_, drifted) = fixture.commit_evidence().await;
     assert_eq!(
         fixture.prepare(&drifted, "home").await,

@@ -71,6 +71,7 @@ final class CalendarAction {
       id = json['id'] as String,
       personId = json['person_id'] as String,
       provider = json['provider'] as String,
+      connectionId = json['connection_id'] as String,
       calendarId = json['calendar_id'] as String,
       calendarName = json['calendar_name'] as String,
       title = json['title'] as String,
@@ -104,6 +105,7 @@ final class CalendarAction {
       : 'Updated';
   final String personId;
   final String provider;
+  final String connectionId;
   final String calendarId;
   final String calendarName;
   final String title;

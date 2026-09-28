@@ -382,7 +382,15 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         let vault = EncryptedAgentVault::open(&root, person, keys.clone())
             .await
             .unwrap();
-        let connection = core.calendar_connection(person).await.unwrap().unwrap();
+        let source = core
+            .source_service()
+            .load(
+                person,
+                &floe_context_contract::ConnectionId::try_new("eventkit-connection").unwrap(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
         core.prepare_expert_calendar_action(
             &vault,
             ExpertCalendarRequest {
@@ -390,7 +398,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
                 destination: ExpertCalendarDestination {
                     provider: CalendarProvider::EventKit,
                     calendar_id: "home".into(),
-                    connection_revision: connection.revision,
+                    connection_revision: source.revision(),
                     timezone: "Asia/Seoul".into(),
                 },
                 cancellation: Cancellation::default(),

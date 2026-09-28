@@ -95,11 +95,11 @@ impl CalendarActionProvider for Provider {
 async fn fixture(
     store: &TestActionStore,
 ) -> (
-    ActionService<'_, TestActionStore>,
+    ActionService<'_, TestActionStore, TestActionStore>,
     CalendarAction,
     CalendarActionPolicy,
 ) {
-    let core = ActionService::new(store);
+    let core = ActionService::new(store, store);
     let person = PersonId::new();
     store
         .day()
@@ -111,9 +111,11 @@ async fn fixture(
         )
         .await
         .unwrap();
+    store.establish_fixture_source(person);
     let action = core
         .propose_calendar_action(
             person,
+            CalendarProvider::Fixture,
             "calendar-1".into(),
             "Focus".into(),
             TimedSchedule::new(
@@ -135,7 +137,10 @@ async fn fixture(
     (core, action, policy)
 }
 
-async fn approve(core: &ActionService<'_, TestActionStore>, action: &CalendarAction) {
+async fn approve(
+    core: &ActionService<'_, TestActionStore, TestActionStore>,
+    action: &CalendarAction,
+) {
     core.decide_calendar_action(action.person_id, action.id, true, now())
         .await
         .unwrap();
@@ -154,6 +159,7 @@ async fn direct_create_is_durable_explicit_authority_and_executes_only_once() {
     let direct = core
         .direct_calendar_action(
             proposal.person_id,
+            CalendarProvider::Fixture,
             proposal.calendar_id.clone(),
             "Past event".into(),
             schedule,
@@ -167,7 +173,7 @@ async fn direct_create_is_durable_explicit_authority_and_executes_only_once() {
     assert_eq!(direct.state, CalendarActionState::Approved);
     assert_eq!(direct.expires_at, now() + Duration::minutes(15));
     drop(core);
-    let core = ActionService::new(&store);
+    let core = ActionService::new(&store, &store);
     assert_eq!(
         core.calendar_action(direct.person_id, direct.id)
             .await
@@ -243,6 +249,7 @@ async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targe
     let changed = core
         .direct_calendar_action(
             proposal.person_id,
+            CalendarProvider::Fixture,
             proposal.calendar_id.clone(),
             "Edited".into(),
             proposal.schedule.clone(),
@@ -267,6 +274,7 @@ async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targe
     let deletion = core
         .direct_calendar_action(
             proposal.person_id,
+            CalendarProvider::Fixture,
             proposal.calendar_id.clone(),
             proposal.title.clone(),
             proposal.schedule.clone(),
@@ -304,6 +312,7 @@ async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targe
     assert!(
         core.direct_calendar_action(
             proposal.person_id,
+            CalendarProvider::Fixture,
             proposal.calendar_id.clone(),
             proposal.title.clone(),
             proposal.schedule.clone(),
@@ -317,6 +326,7 @@ async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targe
     assert!(
         core.direct_calendar_action(
             proposal.person_id,
+            CalendarProvider::Fixture,
             proposal.calendar_id,
             proposal.title,
             proposal.schedule,
@@ -424,7 +434,7 @@ async fn success_is_durable_and_receipt_can_be_reimported() {
         .await
         .unwrap();
     drop(core);
-    let reopened = ActionService::new(&store);
+    let reopened = ActionService::new(&store, &store);
     assert_eq!(
         reopened
             .calendar_action(action.person_id, action.id)
@@ -474,16 +484,7 @@ async fn policy_and_connection_changes_block_execution() {
         if reason == ActionBlockReason::PolicyDenied {
             policy.allow_create = false;
         } else {
-            store
-                .day()
-                .select_calendar(
-                    action.person_id,
-                    CalendarProvider::Fixture,
-                    "other".into(),
-                    "Other".into(),
-                )
-                .await
-                .unwrap();
+            store.replace_fixture_resource(action.person_id);
         }
         let result = core
             .execute_calendar_action(action.person_id, action.id, &policy, &provider, now)
@@ -595,7 +596,7 @@ async fn ambiguous_create_recovers_after_restart_without_retry() {
             CalendarActionState::Unknown { reason: failure }
         );
         drop(core);
-        let reopened = ActionService::new(&store);
+        let reopened = ActionService::new(&store, &store);
         assert!(
             reopened
                 .execute_calendar_action(action.person_id, action.id, &policy, &provider, now)
@@ -656,6 +657,7 @@ async fn malformed_proposals_are_not_persisted() {
     assert!(
         core.propose_calendar_action(
             action.person_id,
+            CalendarProvider::Fixture,
             "missing".into(),
             action.title.clone(),
             action.schedule.clone(),
@@ -667,6 +669,7 @@ async fn malformed_proposals_are_not_persisted() {
     assert!(
         core.propose_calendar_action(
             action.person_id,
+            CalendarProvider::Fixture,
             action.calendar_id.clone(),
             " ".into(),
             action.schedule.clone(),
@@ -680,6 +683,7 @@ async fn malformed_proposals_are_not_persisted() {
     assert!(
         core.propose_calendar_action(
             action.person_id,
+            CalendarProvider::Fixture,
             action.calendar_id,
             action.title,
             invalid,
@@ -718,7 +722,7 @@ async fn cancellation_after_external_write_leaves_recoverable_executing_state() 
         .await;
     }
     drop(core);
-    let reopened = ActionService::new(&store);
+    let reopened = ActionService::new(&store, &store);
     assert_eq!(
         reopened
             .calendar_action(action.person_id, action.id)
