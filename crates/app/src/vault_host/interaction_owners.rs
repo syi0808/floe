@@ -637,6 +637,10 @@ where
         .await?
         .into_iter()
         .filter(|grant| grant.state() == floe_access::GrantState::Active)
+        .filter(|grant| {
+            connector != "calendar.event_kit"
+                || source_revision == Some(grant.source().source_authority())
+        })
         .collect::<Vec<_>>();
         let policy_authority = match grants.as_slice() {
             [grant] => Some(

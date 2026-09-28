@@ -69,7 +69,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::AccessReviewRequired);
         }
         let policy = self.calendar_grant_policy(grant.id()).await?;
-        let native_subject_fingerprint = native_subject_fingerprint
+        native_subject_fingerprint
             .ok_or(AgentFailure::AccessReviewRequired)
             .and_then(validate_native_subject_fingerprint)?;
         let requested_scope =

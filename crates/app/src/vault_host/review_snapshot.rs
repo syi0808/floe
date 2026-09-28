@@ -233,13 +233,10 @@ where
             },
         )
         .await?;
-        let expected = observed_expectation(requirement);
         let connector = requirement
             .connector_id()
             .map(|id| id.as_str())
             .ok_or(AgentFailure::InvalidInput)?;
-        self.verify_observed_live(person_id, connector, connection_id, expected)
-            .await?;
         let policy_fingerprint = crate::first_party_observe::policy_fingerprint(
             &crate::first_party_observe::native_calendar_policy_for_target(
                 self.vault,
@@ -251,13 +248,31 @@ where
             )
             .await?,
         )?;
+        let current = self
+            .core
+            .source_service()
+            .update_native_subject(
+                person_id,
+                live.connection_id(),
+                live.revision(),
+                observation.native_subject_fingerprint.clone(),
+            )
+            .await
+            .map_err(|_| AgentFailure::StaleContext)?;
+        let expected = if current.source_authority() == live.source_authority() {
+            observed_expectation(requirement)
+        } else {
+            None
+        };
+        self.verify_observed_live(person_id, connector, connection_id, expected)
+            .await?;
         let mut members = Vec::with_capacity(reviewed.len());
         for resource in reviewed {
             members.push(SnapshotMember {
                 member_id: "calendar.timeline".to_owned(),
                 policy_fingerprint: policy_fingerprint.clone(),
                 resource,
-                source_revision: requirement.source_authority(),
+                source_revision: Some(current.source_authority()),
                 expected_grant: expected,
                 policy_authority: self.calendar_policy(expected).await?,
             });
@@ -269,7 +284,7 @@ where
         });
         Ok(InlineReviewSnapshot {
             members,
-            connection_revision: Some(live.revision()),
+            connection_revision: Some(current.revision()),
             producer_fingerprint: None,
             native_subject: Some(observation.native_subject_fingerprint),
         })
@@ -961,7 +976,28 @@ mod tests {
         assert_eq!(snapshot.members[0].member_id, "calendar.timeline");
         assert_eq!(snapshot.members[0].resource, "home");
         assert_eq!(snapshot.members[0].expected_grant, None);
-        assert_eq!(snapshot.connection_revision, Some(connection.revision()));
+        assert_eq!(
+            snapshot.connection_revision,
+            Some(connection.revision() + 1)
+        );
+        let current = fixture
+            .core
+            .source_service()
+            .load(
+                fixture.person_id,
+                &ConnectionId::try_new("fixture-connection").unwrap(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            current.native_subject_fingerprint(),
+            Some("d".repeat(64).as_str())
+        );
+        assert_eq!(
+            snapshot.members[0].source_revision,
+            Some(current.source_authority())
+        );
         assert_eq!(
             snapshot.native_subject.as_deref(),
             Some("d".repeat(64).as_str())
