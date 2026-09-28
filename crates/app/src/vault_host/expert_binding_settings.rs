@@ -136,10 +136,27 @@ async fn discover_live_candidates<Keys: floe_vault::VaultKeyProvider>(
     cancellation: &floe_execution::Cancellation,
 ) -> Result<Vec<floe_context::SourceCandidate>, AgentFailure> {
     let calendar_connection = if context.capability == "calendar.timeline" {
-        open.core
-            .calendar_connection(person_id)
-            .await
-            .map_err(|_| AgentFailure::StorageUnavailable)?
+        let mut sources = Vec::new();
+        for connector in [
+            "calendar.event_kit",
+            "calendar.google",
+            "calendar.microsoft",
+            "calendar.fixture",
+        ] {
+            let connector = floe_context_contract::ConnectorId::try_new(connector)
+                .map_err(|_| AgentFailure::InvalidInput)?;
+            sources.extend(
+                open.core
+                    .source_service()
+                    .list_current(person_id, &connector)
+                    .await
+                    .map_err(|_| AgentFailure::StorageUnavailable)?,
+            );
+        }
+        if sources.len() > 1 {
+            return Err(AgentFailure::Conflict);
+        }
+        sources.pop()
     } else {
         None
     };
@@ -171,10 +188,10 @@ async fn discover_live_candidates<Keys: floe_vault::VaultKeyProvider>(
         (Vec::new(), None)
     };
     let remote_execution_owner = if context.capability == "calendar.timeline"
-        && calendar_connection.as_ref().is_some_and(|connection| {
-            floe_context::current_calendar_connector(connection)
-                .is_some_and(|connector| connector != "calendar.event_kit")
-        }) {
+        && calendar_connection
+            .as_ref()
+            .is_some_and(|connection| connection.connector_id().as_str() != "calendar.event_kit")
+    {
         floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
             &open.connections,
             &person_id.to_string(),

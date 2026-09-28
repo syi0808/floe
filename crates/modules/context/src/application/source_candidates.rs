@@ -4,15 +4,13 @@ use floe_access::{
     attention_execution_owner, contacts_connection, contacts_execution_owner,
 };
 use floe_agent_contract::{AgentFailure, PersonId};
-use floe_connections::ConnectorSnapshot;
+use floe_connections::{ConnectorSnapshot, SourceConnection};
 use floe_context_contract::{
     ConnectionId, ConnectorId, ExecutionOwnerId, ResourceHandle, SourceSelectionReference,
 };
-use floe_day::CalendarConnection;
 use sha2::{Digest, Sha256};
 
 use crate::application::remote_views::remote_view_resource;
-use crate::current_calendar_connector;
 
 pub const LOCAL_CONTEXT_CONNECTOR: &str = "floe.local.context";
 
@@ -69,7 +67,7 @@ pub struct SourceCandidateRequest<'a> {
     pub contract_version: u32,
     pub remote_connections: &'a [ConnectorSnapshot],
     pub remote_execution_owner: Option<&'a str>,
-    pub calendar_connection: Option<&'a CalendarConnection>,
+    pub calendar_connection: Option<&'a SourceConnection>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -149,27 +147,32 @@ pub fn discover_source_candidates(
         }
         "calendar.timeline" => {
             if let Some(connection) = request.calendar_connection {
-                if !connection.disconnected && connection.device_id == request.device_id {
-                    if let Some(connector) = current_calendar_connector(connection) {
-                        let owner = if connection.provider
-                            == floe_context_contract::CalendarProvider::EventKit
-                        {
-                            Some(request.device_id)
-                        } else {
-                            request.remote_execution_owner
-                        };
-                        if let Some(owner) = owner {
-                            for calendar in &connection.calendars {
-                                add(
-                                    connector,
-                                    &connection.connection_id,
-                                    owner,
-                                    &calendar.calendar_id,
-                                    calendar.calendar_name.clone(),
-                                    "Selected calendar".into(),
-                                )?;
-                            }
-                        }
+                let connector = connection.connector_id().as_str();
+                let expected_owner = if connector == "calendar.event_kit" {
+                    Some(request.device_id)
+                } else {
+                    request.remote_execution_owner
+                };
+                if connection.is_serving()
+                    && connection.person_id() == request.person_id
+                    && expected_owner == Some(connection.execution_owner_id().as_str())
+                    && matches!(
+                        connector,
+                        "calendar.event_kit"
+                            | "calendar.google"
+                            | "calendar.microsoft"
+                            | "calendar.fixture"
+                    )
+                {
+                    for calendar in connection.resources() {
+                        add(
+                            connector,
+                            connection.connection_id().as_str(),
+                            connection.execution_owner_id().as_str(),
+                            calendar.handle().as_str(),
+                            calendar.label().into(),
+                            "Selected calendar".into(),
+                        )?;
                     }
                 }
             }
@@ -240,16 +243,14 @@ fn remote_connector_supports(capability: &str, connector: &str) -> bool {
 mod tests {
     use super::*;
     use floe_connections::{
-        ConnectionState, ConnectorConnectionSnapshot, ConnectorDescriptor, ExecutionLocation,
+        ConnectionResource, ConnectionState, ConnectorConnectionSnapshot, ConnectorDescriptor,
+        ExecutionLocation, ResourceMode,
     };
-    use floe_context_contract::{CalendarProvider, CalendarScope, SourceAuthority};
-    use floe_day::CalendarSelection;
-    use std::collections::BTreeMap;
 
     fn request<'a>(
         person_id: PersonId,
         capability: &'a str,
-        calendar: Option<&'a CalendarConnection>,
+        calendar: Option<&'a SourceConnection>,
     ) -> SourceCandidateRequest<'a> {
         SourceCandidateRequest {
             person_id,
@@ -313,32 +314,60 @@ mod tests {
     #[test]
     fn calendar_addition_produces_a_new_candidate_without_changing_the_old_reference() {
         let person_id = PersonId::new();
-        let mut connection = CalendarConnection {
-            connection_id: "calendar-account".into(),
-            device_id: "mac-local".into(),
-            disconnected: false,
-            scope: CalendarScope::Selected,
-            provider: CalendarProvider::EventKit,
-            calendars: vec![CalendarSelection {
-                calendar_id: "calendar-a".into(),
-                calendar_name: "Personal".into(),
-            }],
-            revision: 1,
-            source_authority: SourceAuthority::new(),
-            last_success_at: None,
-            last_range: None,
-            error: None,
-            error_at: None,
-            source_statuses: BTreeMap::new(),
-        };
+        let mut connection = SourceConnection::establish(
+            person_id,
+            ConnectorId::try_new("calendar.event_kit").unwrap(),
+            ConnectionId::try_new("calendar-account").unwrap(),
+            ExecutionOwnerId::try_new("mac-local").unwrap(),
+            ResourceMode::Selected,
+            vec![
+                ConnectionResource::new(
+                    ResourceHandle::try_new("calendar-a").unwrap(),
+                    "Personal".into(),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        connection.update_native_subject(1, "a".repeat(64)).unwrap();
         let initial =
             discover_source_candidates(request(person_id, "calendar.timeline", Some(&connection)))
                 .unwrap();
         assert_eq!(initial.len(), 1);
-        connection.calendars.push(CalendarSelection {
-            calendar_id: "calendar-b".into(),
-            calendar_name: "Work".into(),
-        });
+        assert!(
+            discover_source_candidates(request(
+                PersonId::new(),
+                "calendar.timeline",
+                Some(&connection)
+            ))
+            .unwrap()
+            .is_empty()
+        );
+        let mut foreign_device = request(person_id, "calendar.timeline", Some(&connection));
+        foreign_device.device_id = "other-device";
+        assert!(
+            discover_source_candidates(foreign_device)
+                .unwrap()
+                .is_empty()
+        );
+        connection
+            .configure(
+                2,
+                ResourceMode::Selected,
+                vec![
+                    ConnectionResource::new(
+                        ResourceHandle::try_new("calendar-a").unwrap(),
+                        "Personal".into(),
+                    )
+                    .unwrap(),
+                    ConnectionResource::new(
+                        ResourceHandle::try_new("calendar-b").unwrap(),
+                        "Work".into(),
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap();
         let refreshed =
             discover_source_candidates(request(person_id, "calendar.timeline", Some(&connection)))
                 .unwrap();

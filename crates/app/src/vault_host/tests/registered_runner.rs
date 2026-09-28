@@ -1748,20 +1748,23 @@ async fn hosted_calendar_settings_use_product_connection_and_pinned_producer() {
         .unwrap();
     let core = Arc::new(FloeCore::open(":memory:").await.unwrap());
     let calendar_connection_id = Uuid::new_v4().to_string();
-    core.set_calendar_scope(
-        person,
-        calendar_connection_id.clone(),
-        1,
-        "mac-local".into(),
-        floe_context_contract::CalendarProvider::Google,
-        vec![floe_day::CalendarSelection {
-            calendar_id: "primary".into(),
-            calendar_name: "Primary".into(),
-        }],
-        floe_context_contract::CalendarScope::Selected,
-    )
-    .await
-    .unwrap();
+    core.source_service()
+        .establish(
+            person,
+            floe_context_contract::ConnectorId::try_new("calendar.google").unwrap(),
+            floe_context_contract::ConnectionId::try_new(calendar_connection_id.clone()).unwrap(),
+            floe_context_contract::ExecutionOwnerId::try_new(execution_owner.clone()).unwrap(),
+            floe_connections::ResourceMode::Selected,
+            vec![
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new("primary").unwrap(),
+                    "Primary".into(),
+                )
+                .unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
     let registration = super::conversation_turn::expert_dispatch::shipped_registrations()
         .into_iter()
         .find(|entry| entry.manifest.package.id == "floe.builtin.commitments")
@@ -1824,7 +1827,12 @@ async fn hosted_calendar_settings_use_product_connection_and_pinned_producer() {
             remote_execution_owner: Some(&execution_owner),
             calendar_connection: open
                 .core
-                .calendar_connection(person)
+                .source_service()
+                .load(
+                    person,
+                    &floe_context_contract::ConnectionId::try_new(calendar_connection_id.clone())
+                        .unwrap(),
+                )
                 .await
                 .unwrap()
                 .as_ref(),
