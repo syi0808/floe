@@ -57,7 +57,7 @@ async fn fixture(
 }
 
 #[tokio::test]
-async fn authority_survives_sync_but_not_permission_or_scope_changes() {
+async fn authority_survives_sync_failures_but_not_scope_changes() {
     let timeline = TestTimelineRepository::new();
     let (core, person) = fixture(&timeline).await;
     let initial = core.calendar_connection(person).await.unwrap().unwrap();
@@ -90,7 +90,7 @@ async fn authority_survives_sync_but_not_permission_or_scope_changes() {
     .await
     .unwrap();
     let revoked = core.calendar_connection(person).await.unwrap().unwrap();
-    assert_ne!(revoked.source_authority, initial.source_authority);
+    assert_eq!(revoked.source_authority, initial.source_authority);
     core.record_calendar_failure(
         person,
         revoked.revision,

@@ -341,18 +341,6 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
         let previous = mirror.clone();
         mirror.connection.error = Some(failure);
         mirror.connection.error_at = Some(now);
-        if failure == CalendarFailure::PermissionDenied
-            && previous.connection.calendars.iter().any(|calendar| {
-                !previous
-                    .connection
-                    .source_statuses
-                    .get(&calendar.calendar_id)
-                    .is_some_and(|status| status.error == Some(CalendarFailure::PermissionDenied))
-            })
-        {
-            mirror.connection.source_authority =
-                next_authority(mirror.connection.source_authority)?;
-        }
         for calendar in &mirror.connection.calendars {
             let status = mirror
                 .connection
@@ -478,17 +466,6 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
             return Err(validation(
                 "exactly one complete result per selected source is required",
             ));
-        }
-        if batches.iter().any(|batch| {
-            batch.failure == Some(CalendarFailure::PermissionDenied)
-                && !previous
-                    .connection
-                    .source_statuses
-                    .get(&batch.calendar_id)
-                    .is_some_and(|status| status.error == Some(CalendarFailure::PermissionDenied))
-        }) {
-            mirror.connection.source_authority =
-                next_authority(mirror.connection.source_authority)?;
         }
         for batch in batches {
             let calendar = calendars

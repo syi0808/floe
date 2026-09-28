@@ -119,7 +119,7 @@ async fn disconnect_removes_imports_and_reconnect_never_reuses_a_revision() {
 }
 
 #[tokio::test]
-async fn permission_epoch_tracks_new_denials_even_when_another_source_was_already_denied() {
+async fn sync_denials_do_not_advance_source_authority() {
     let timeline = TestTimelineRepository::new();
     let (core, person) = setup(&timeline).await;
     let initial = core.calendar_connection(person).await.unwrap().unwrap();
@@ -140,7 +140,7 @@ async fn permission_epoch_tracks_new_denials_even_when_another_source_was_alread
     .await
     .unwrap();
     let partial = core.calendar_connection(person).await.unwrap().unwrap();
-    assert_ne!(initial.source_authority, partial.source_authority);
+    assert_eq!(initial.source_authority, partial.source_authority);
     core.record_calendar_failure(
         person,
         partial.revision,
@@ -150,7 +150,7 @@ async fn permission_epoch_tracks_new_denials_even_when_another_source_was_alread
     .await
     .unwrap();
     let all_denied = core.calendar_connection(person).await.unwrap().unwrap();
-    assert_ne!(partial.source_authority, all_denied.source_authority);
+    assert_eq!(partial.source_authority, all_denied.source_authority);
     core.import_calendar_sources(
         person,
         all_denied.revision,
