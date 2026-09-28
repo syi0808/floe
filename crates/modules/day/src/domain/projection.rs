@@ -23,6 +23,7 @@ pub struct DaySnapshot {
     pub items: Vec<TimelineItem>,
     #[serde(default)]
     pub calendar: Option<CalendarConnection>,
+    pub calendar_mirror_revision: Option<u64>,
 }
 
 pub fn project_day(
@@ -153,6 +154,7 @@ pub fn project_day_with_end_offset(
     });
     DaySnapshot {
         calendar: None,
+        calendar_mirror_revision: None,
         person_id,
         date,
         generated_at: now,

@@ -595,6 +595,7 @@ pub fn day_snapshot_to_dto(value: DaySnapshot) -> Result<DaySnapshotDto, Protoco
         })?,
         items: value.items.into_iter().map(timeline_item_to_dto).collect(),
         calendar: value.calendar.map(calendar_connection_to_dto),
+        calendar_mirror_revision: value.calendar_mirror_revision,
     })
 }
 
@@ -612,6 +613,7 @@ pub fn day_snapshot_from_dto(
         person_id: parse_person_id(&value.person_id, "person_id")?,
         date: parse_date(&value.date, "date")?,
         calendar: value.calendar.map(calendar_connection_from_dto),
+        calendar_mirror_revision: value.calendar_mirror_revision,
         generated_at: parse_timestamp(&value.generated_at, "generated_at")?,
         timezone_offset_seconds: value.timezone_offset_seconds,
         now_event_id: value
@@ -679,6 +681,7 @@ mod tests {
         let note = Note::new(person_id, "Remember", SourceRef::Manual, now).unwrap();
         let snapshot = DaySnapshot {
             calendar: None,
+            calendar_mirror_revision: None,
             person_id,
             date: now.date_naive(),
             generated_at: now,
@@ -716,6 +719,7 @@ mod tests {
     fn conversion_rejects_invalid_versions_and_domain_values() {
         let snapshot = DaySnapshotDto {
             calendar: None,
+            calendar_mirror_revision: None,
             schema_version: 99,
             person_id: "00000000-0000-0000-0000-000000000001".into(),
             date: "2026-09-02".into(),

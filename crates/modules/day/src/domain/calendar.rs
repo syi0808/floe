@@ -113,6 +113,7 @@ pub struct CalendarBatch {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarMirror {
+    pub mirror_revision: u64,
     pub connection: CalendarConnection,
     pub events: Vec<Event>,
 }

@@ -3,6 +3,7 @@ use floe_context_contract::{CalendarProvider, CalendarScope};
 use floe_day::{
     CalendarBatch, CalendarFailure, CalendarRange, CalendarRecord, CalendarSelection,
     DayErrorCode as ErrorCode, DayService, EventSchedule, PersonId, TimedSchedule, TimelineItem,
+    TimelineRepository,
 };
 
 mod support;
@@ -105,7 +106,8 @@ async fn disconnect_removes_imports_and_reconnect_never_reuses_a_revision() {
         .day_snapshot(person, now().date_naive(), 0, now())
         .await
         .unwrap();
-    assert_eq!(snapshot.calendar.unwrap().revision, 4);
+    assert_eq!(snapshot.calendar.unwrap().revision, 3);
+    assert_eq!(snapshot.calendar_mirror_revision, Some(4));
     assert_eq!(
         core.import_calendar_sources(person, 2, range(), vec![batch("home", "Late")], now())
             .await
@@ -125,7 +127,12 @@ async fn sync_denials_do_not_advance_source_authority() {
     let initial = core.calendar_connection(person).await.unwrap().unwrap();
     core.import_calendar_sources(
         person,
-        initial.revision,
+        timeline
+            .calendar_mirror(person)
+            .await
+            .unwrap()
+            .unwrap()
+            .mirror_revision,
         range(),
         vec![
             CalendarBatch {
@@ -143,7 +150,12 @@ async fn sync_denials_do_not_advance_source_authority() {
     assert_eq!(initial.source_authority, partial.source_authority);
     core.record_calendar_failure(
         person,
-        partial.revision,
+        timeline
+            .calendar_mirror(person)
+            .await
+            .unwrap()
+            .unwrap()
+            .mirror_revision,
         CalendarFailure::PermissionDenied,
         now(),
     )
@@ -153,7 +165,12 @@ async fn sync_denials_do_not_advance_source_authority() {
     assert_eq!(partial.source_authority, all_denied.source_authority);
     core.import_calendar_sources(
         person,
-        all_denied.revision,
+        timeline
+            .calendar_mirror(person)
+            .await
+            .unwrap()
+            .unwrap()
+            .mirror_revision,
         range(),
         vec![batch("home", "Home"), batch("work", "Work")],
         now(),

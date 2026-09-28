@@ -375,6 +375,7 @@ mod tests {
             error_at: None,
         };
         let mirror = CalendarMirror {
+            mirror_revision: 1,
             connection: floe_day::CalendarConnection {
                 connection_id: "calendar-source".into(),
                 device_id: "device".into(),

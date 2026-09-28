@@ -157,6 +157,7 @@ fn memory_overview_transport_is_read_only() {
 fn snapshot_has_a_versioned_stable_wire_shape() {
     let snapshot = DaySnapshotDto {
         calendar: None,
+        calendar_mirror_revision: None,
         schema_version: PROTOCOL_VERSION,
         person_id: "00000000-0000-0000-0000-000000000001".into(),
         date: "2026-09-02".into(),
@@ -191,6 +192,7 @@ fn snapshot_has_a_versioned_stable_wire_shape() {
             "next_event_id": null,
             "overdue_task_count": 2,
             "calendar": null,
+            "calendar_mirror_revision": null,
             "items": [{
                 "kind": "note",
                 "id": "00000000-0000-0000-0000-000000000003",

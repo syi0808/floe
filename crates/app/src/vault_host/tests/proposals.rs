@@ -219,7 +219,7 @@ async fn seed(
 }
 
 #[tokio::test]
-async fn old_calendar_receipt_cannot_be_published_against_a_new_connection_revision() {
+async fn source_resource_change_blocks_old_calendar_receipt_without_mirror_revision_change() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("vaults");
     fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
@@ -232,10 +232,22 @@ async fn old_calendar_receipt_cannot_be_published_against_a_new_connection_revis
     let vault = EncryptedAgentVault::open(&root, person, keys)
         .await
         .unwrap();
-    let connection = core.calendar_connection(person).await.unwrap().unwrap();
+    let source = core
+        .source_service()
+        .load(
+            person,
+            &floe_context_contract::ConnectionId::try_new("eventkit-connection").unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
     core.import_calendar(
         person,
-        connection.revision,
+        floe_day::TimelineRepository::calendar_mirror(&core.store, person)
+            .await
+            .unwrap()
+            .unwrap()
+            .mirror_revision,
         CalendarRange {
             start_date: fixture_now().date_naive(),
             end_date_exclusive: (fixture_now() + chrono::Duration::days(1)).date_naive(),
@@ -247,13 +259,43 @@ async fn old_calendar_receipt_cannot_be_published_against_a_new_connection_revis
     )
     .await
     .unwrap();
-    let revision = core
-        .calendar_connection(person)
+    let after_sync = core
+        .source_service()
+        .load(person, source.connection_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after_sync, source);
+    let mirror_revision = floe_day::TimelineRepository::calendar_mirror(&core.store, person)
         .await
         .unwrap()
         .unwrap()
-        .revision;
-    assert_eq!(revision, connection.revision + 1);
+        .mirror_revision;
+    assert_eq!(mirror_revision, 3);
+    let updated = core
+        .source_service()
+        .configure(
+            person,
+            source.connection_id(),
+            source.revision(),
+            floe_connections::ResourceMode::Selected,
+            vec![
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new("home").unwrap(),
+                    "Home".into(),
+                )
+                .unwrap(),
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new("work").unwrap(),
+                    "Work".into(),
+                )
+                .unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.revision(), source.revision() + 1);
+    assert_ne!(updated.source_authority(), source.source_authority());
     assert_eq!(
         core.prepare_expert_calendar_action(
             &vault,
@@ -266,7 +308,7 @@ async fn old_calendar_receipt_cannot_be_published_against_a_new_connection_revis
                 destination: ExpertCalendarDestination {
                     provider: CalendarProvider::EventKit,
                     calendar_id: "home".into(),
-                    connection_revision: revision,
+                    connection_revision: updated.revision(),
                     timezone: "Asia/Seoul".into(),
                 },
                 cancellation: Cancellation::default(),
@@ -275,7 +317,7 @@ async fn old_calendar_receipt_cannot_be_published_against_a_new_connection_revis
             fixture_now,
         )
         .await,
-        Err(AgentFailure::PolicyDenied),
+        Err(AgentFailure::StaleContext),
     );
     assert_eq!(vault.load(person, session.id).await.unwrap(), session);
     assert!(

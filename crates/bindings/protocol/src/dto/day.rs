@@ -23,6 +23,7 @@ pub struct DaySnapshotDto {
     pub overdue_task_count: u32,
     pub items: Vec<TimelineItemDto>,
     pub calendar: Option<CalendarConnectionDto>,
+    pub calendar_mirror_revision: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

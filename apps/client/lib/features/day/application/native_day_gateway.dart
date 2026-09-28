@@ -195,6 +195,10 @@ final class NativeDayGateway
     final current = await loadDay(query);
     var connection = current.calendar;
     if (connection == null) return current;
+    var mirrorRevision = current.calendarMirrorRevision;
+    if (mirrorRevision == null) {
+      throw StateError('Calendar mirror revision is missing');
+    }
     final provider = connection.provider;
     try {
       final inventory = await _calendarAdapter
@@ -207,7 +211,7 @@ final class NativeDayGateway
       if (connection.includeAll) {
         final discovered = await _mutate(query, {
           'type': 'discover_calendars',
-          'expected_revision': connection.revision,
+          'expected_revision': mirrorRevision,
           'calendars': [
             for (final calendar in inventory.where(
               (calendar) => calendar.provider == provider,
@@ -215,7 +219,9 @@ final class NativeDayGateway
               {'calendar_id': calendar.id, 'calendar_name': calendar.name},
           ],
         });
-        connection = _decodeSnapshot(_asMap(discovered['snapshot'])).calendar!;
+        final snapshot = _decodeSnapshot(_asMap(discovered['snapshot']));
+        connection = snapshot.calendar!;
+        mirrorRevision = snapshot.calendarMirrorRevision!;
       }
       final active = connection;
       final batches = await Future.wait(
@@ -246,7 +252,7 @@ final class NativeDayGateway
       );
       final data = await _mutate(query, {
         'type': 'import_calendar_sources',
-        'expected_revision': active.revision,
+        'expected_revision': mirrorRevision,
         'occurred_at': _timestamp(_clock()),
         'range': {
           'start_date': _date(query.date),
@@ -282,7 +288,7 @@ final class NativeDayGateway
       }
       final data = await _mutate(query, {
         'type': 'calendar_failed',
-        'expected_revision': connection!.revision,
+        'expected_revision': mirrorRevision,
         'failure': _calendarFailure(error),
       });
       return _decodeSnapshot(_asMap(data['snapshot']));
@@ -466,6 +472,7 @@ DaySnapshot _decodeSnapshot(Map<String, dynamic> json) {
     calendar: json['calendar'] == null
         ? null
         : _decodeCalendar(_asMap(json['calendar'])),
+    calendarMirrorRevision: json['calendar_mirror_revision'] as int?,
   );
 }
 

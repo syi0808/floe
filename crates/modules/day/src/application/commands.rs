@@ -308,6 +308,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
             self.repository.list_tasks(person_id).await?,
             self.repository.list_notes(person_id).await?,
         );
+        snapshot.calendar_mirror_revision = mirror.as_ref().map(|mirror| mirror.mirror_revision);
         snapshot.calendar = mirror
             .filter(|mirror| !mirror.connection.disconnected)
             .map(|mirror| mirror.connection);

@@ -277,23 +277,18 @@ async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targe
         .await
         .unwrap();
     assert!(deletion.mutation.as_ref().unwrap().delete);
-    let connection = store
-        .day()
-        .calendar_connection(proposal.person_id)
+    let mirror_revision = store
+        .timeline
+        .calendar_mirror(proposal.person_id)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .mirror_revision;
     let mut read_only = records;
     read_only[0].can_modify = false;
     store
         .day()
-        .import_calendar(
-            proposal.person_id,
-            connection.revision,
-            range,
-            read_only,
-            now(),
-        )
+        .import_calendar(proposal.person_id, mirror_revision, range, read_only, now())
         .await
         .unwrap();
     let blocked = core

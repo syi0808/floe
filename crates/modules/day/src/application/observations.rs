@@ -150,6 +150,9 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
             .put_calendar_mirror(
                 person_id,
                 &CalendarMirror {
+                    mirror_revision: previous
+                        .as_ref()
+                        .map_or(Ok(1), |mirror| next_mirror_revision(mirror.mirror_revision))?,
                     connection: CalendarConnection {
                         connection_id,
                         device_id,
@@ -198,6 +201,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
         mirror.connection.disconnected = true;
         mirror.connection.source_authority = next_authority(mirror.connection.source_authority)?;
         mirror.connection.revision += 1;
+        mirror.mirror_revision = next_mirror_revision(mirror.mirror_revision)?;
         mirror.connection.calendars.clear();
         mirror.connection.source_statuses.clear();
         mirror.connection.last_success_at = None;
@@ -273,6 +277,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
                 next_authority(mirror.connection.source_authority)?;
         }
         mirror.connection.revision += 1;
+        mirror.mirror_revision = next_mirror_revision(mirror.mirror_revision)?;
         self.repository
             .put_calendar_mirror(person_id, &mirror, Some(&previous))
             .await
@@ -305,7 +310,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
             status.error = Some(failure);
             status.error_at = Some(now);
         }
-        mirror.connection.revision += 1;
+        mirror.mirror_revision = next_mirror_revision(mirror.mirror_revision)?;
         self.repository
             .put_calendar_mirror(person_id, &mirror, Some(&previous))
             .await
@@ -342,7 +347,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
                 },
             );
         }
-        mirror.connection.revision += 1;
+        mirror.mirror_revision = next_mirror_revision(mirror.mirror_revision)?;
         self.repository
             .put_calendar_mirror(person_id, &mirror, Some(&previous))
             .await
@@ -444,7 +449,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
             mirror.connection.last_success_at = Some(now);
             mirror.connection.last_range = Some(range);
         }
-        mirror.connection.revision += 1;
+        mirror.mirror_revision = next_mirror_revision(mirror.mirror_revision)?;
         self.repository
             .put_calendar_mirror(person_id, &mirror, Some(&previous))
             .await
@@ -465,7 +470,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
                     "select a calendar first",
                 )
             })?;
-        if mirror.connection.disconnected || mirror.connection.revision != expected_revision {
+        if mirror.connection.disconnected || mirror.mirror_revision != expected_revision {
             return Err(DayError::conflict(
                 "calendar selection or sync has changed; reload and retry",
             ));
@@ -481,6 +486,13 @@ fn next_authority(current: SourceAuthority) -> Result<SourceAuthority, DayError>
     current
         .advance()
         .ok_or_else(|| validation("source authority exhausted"))
+}
+
+fn next_mirror_revision(current: u64) -> Result<u64, DayError> {
+    current
+        .checked_add(1)
+        .filter(|revision| *revision <= i64::MAX as u64)
+        .ok_or_else(|| validation("calendar mirror revision exhausted"))
 }
 
 fn provider_identifier(provider: CalendarProvider) -> &'static str {

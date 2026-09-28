@@ -184,6 +184,7 @@ final class DaySnapshot {
     this.nextEventId,
     this.overdueTaskCount = 0,
     this.calendar,
+    this.calendarMirrorRevision,
   });
 
   final String personId;
@@ -195,6 +196,7 @@ final class DaySnapshot {
   final String? nextEventId;
   final int overdueTaskCount;
   final CalendarConnection? calendar;
+  final int? calendarMirrorRevision;
 }
 
 final class ConnectedCalendar {

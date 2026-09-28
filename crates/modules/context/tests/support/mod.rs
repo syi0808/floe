@@ -238,7 +238,7 @@ impl TimelineRepository for TestTimelineRepository {
         // The store admits the write only against the mirror the caller read.
         match (stored, previous) {
             (Some(stored), Some(previous))
-                if stored.connection.revision != previous.connection.revision =>
+                if stored.mirror_revision != previous.mirror_revision =>
             {
                 return Err(DayError::conflict("stale calendar mirror"));
             }

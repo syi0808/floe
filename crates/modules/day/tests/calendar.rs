@@ -61,47 +61,66 @@ async fn authority_survives_sync_failures_but_not_scope_changes() {
     let timeline = TestTimelineRepository::new();
     let (core, person) = fixture(&timeline).await;
     let initial = core.calendar_connection(person).await.unwrap().unwrap();
+    let mut mirror_revision = timeline
+        .calendar_mirror(person)
+        .await
+        .unwrap()
+        .unwrap()
+        .mirror_revision;
     assert!(initial.source_authority.is_valid());
     let mut obsolete = serde_json::to_value(&initial).unwrap();
     obsolete.as_object_mut().unwrap().remove("source_authority");
     assert!(serde_json::from_value::<CalendarConnection>(obsolete).is_err());
-    core.import_calendar(person, initial.revision, range(0), vec![], now())
+    core.import_calendar(person, mirror_revision, range(0), vec![], now())
         .await
         .unwrap();
+    mirror_revision += 1;
     let synced = core.calendar_connection(person).await.unwrap().unwrap();
-    assert!(synced.revision > initial.revision);
+    assert_eq!(synced.revision, initial.revision);
+    assert_eq!(
+        timeline
+            .calendar_mirror(person)
+            .await
+            .unwrap()
+            .unwrap()
+            .mirror_revision,
+        mirror_revision
+    );
     assert_eq!(synced.source_authority, initial.source_authority);
     core.record_calendar_failure(
         person,
-        synced.revision,
+        mirror_revision,
         CalendarFailure::ProviderUnavailable,
         now(),
     )
     .await
     .unwrap();
+    mirror_revision += 1;
     let unavailable = core.calendar_connection(person).await.unwrap().unwrap();
     assert_eq!(unavailable.source_authority, initial.source_authority);
     core.record_calendar_failure(
         person,
-        unavailable.revision,
+        mirror_revision,
         CalendarFailure::PermissionDenied,
         now(),
     )
     .await
     .unwrap();
+    mirror_revision += 1;
     let revoked = core.calendar_connection(person).await.unwrap().unwrap();
     assert_eq!(revoked.source_authority, initial.source_authority);
     core.record_calendar_failure(
         person,
-        revoked.revision,
+        mirror_revision,
         CalendarFailure::PermissionDenied,
         now(),
     )
     .await
     .unwrap();
+    mirror_revision += 1;
     let still_revoked = core.calendar_connection(person).await.unwrap().unwrap();
     assert_eq!(still_revoked.source_authority, revoked.source_authority);
-    core.import_calendar(person, still_revoked.revision, range(0), vec![], now())
+    core.import_calendar(person, mirror_revision, range(0), vec![], now())
         .await
         .unwrap();
     let restored = core.calendar_connection(person).await.unwrap().unwrap();
