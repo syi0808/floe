@@ -1003,17 +1003,10 @@ async fn registered_runner_nonbuiltin_extension_chain_reads_only_its_exact_selec
     let selected = &snapshot.assignments[0].binding.entries[0].selected[0];
     assert_eq!(selected.capability_id, "floe.tasks");
     assert!(
-        crate::first_party_observe::selected_shipped_consumers(
-            Some(&snapshot),
-            person,
-            "floe.tasks",
-            selected.connector_id.as_str(),
-            selected.connection_id.as_str(),
-            selected.execution_owner_id.as_str(),
-            selected.resource.as_str(),
-        )
-        .unwrap()
-        .is_empty()
+        !crate::first_party_observe::trusted_shipped_consumers("floe.tasks")
+            .unwrap()
+            .iter()
+            .any(|consumer| consumer.identifier() == "example.test.expert")
     );
     open.publish_expert_directory(&open.registrations)
         .await
@@ -1084,20 +1077,11 @@ async fn registered_runner_builtin_prefix_does_not_grant_first_party_observe() {
         )
         .await
         .unwrap();
-    let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
-    let source = &candidate.reference;
     assert!(
-        crate::first_party_observe::selected_shipped_consumers(
-            Some(&snapshot),
-            person,
-            "floe.tasks",
-            source.connector_id.as_str(),
-            source.connection_id.as_str(),
-            source.execution_owner_id.as_str(),
-            source.resource.as_str(),
-        )
-        .unwrap()
-        .is_empty()
+        !crate::first_party_observe::trusted_shipped_consumers("floe.tasks")
+            .unwrap()
+            .iter()
+            .any(|consumer| consumer.identifier() == "floe.builtin.impostor")
     );
 }
 

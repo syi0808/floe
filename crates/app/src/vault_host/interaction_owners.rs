@@ -335,21 +335,8 @@ where
             },
         )
         .await?;
-        let reviewed_resources: Vec<String> = target
-            .members
-            .iter()
-            .map(|member| member.resource.clone())
-            .collect();
         let policy_fingerprint = crate::first_party_observe::policy_fingerprint(
-            &crate::first_party_observe::native_calendar_policy_for_target(
-                self.vault,
-                person_id,
-                connector,
-                &target.connection_id,
-                device_id,
-                &reviewed_resources,
-            )
-            .await?,
+            &crate::first_party_observe::calendar_policy()?,
         )?;
         let mut members = Vec::with_capacity(target.members.len());
         for member in &target.members {
@@ -646,7 +633,11 @@ where
         .collect::<Vec<_>>();
         let source_revision = if matches!(policy, PolicyStore::Personal) {
             match grants.as_slice() {
-                [grant] => Some(self.vault.personal_grant_source_authority(grant.id()).await?),
+                [grant] => Some(
+                    self.vault
+                        .personal_grant_source_authority(grant.id())
+                        .await?,
+                ),
                 _ => None,
             }
         } else {
@@ -664,15 +655,7 @@ where
             member_id: member_id.to_owned(),
             policy_fingerprint: if connector == "calendar.event_kit" {
                 crate::first_party_observe::policy_fingerprint(
-                    &crate::first_party_observe::native_calendar_policy_for_target(
-                        self.vault,
-                        person_id,
-                        connector,
-                        connection_id,
-                        device_id.ok_or(AgentFailure::InvalidInput)?,
-                        &[resource.to_owned()],
-                    )
-                    .await?,
+                    &crate::first_party_observe::calendar_policy()?,
                 )?
             } else if let Some(device_id) = device_id {
                 crate::first_party_observe::native_member_policy_fingerprint_for_target(
@@ -1394,11 +1377,7 @@ impl PolicyStore {
             Self::Personal => vault.personal_grant_consumer_policy(grant.id()).await,
             Self::RemoteView => {
                 let (recorded, policy) = vault
-                    .remote_view_grant_policy(
-                        member_id,
-                        connector,
-                        connection_id,
-                    )
+                    .remote_view_grant_policy(member_id, connector, connection_id)
                     .await?;
                 if recorded != grant.id() {
                     return Err(AgentFailure::AccessReviewRequired);

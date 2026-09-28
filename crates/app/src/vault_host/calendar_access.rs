@@ -328,9 +328,7 @@ mod tests {
             scope.clone(),
         )
         .unwrap();
-        grant
-            .activate_review(grant.authority(), scope)
-            .unwrap();
+        grant.activate_review(grant.authority(), scope).unwrap();
 
         for consumer in &consumers {
             floe_access::admit_remote_calendar_read(&grant, consumer, "primary").unwrap();
@@ -377,9 +375,7 @@ mod tests {
             scope.clone(),
         )
         .unwrap();
-        grant
-            .activate_review(grant.authority(), scope)
-            .unwrap();
+        grant.activate_review(grant.authority(), scope).unwrap();
 
         assert_eq!(
             floe_access::admit_remote_calendar_read(
@@ -549,16 +545,7 @@ where
             if fresh.native_subject_fingerprint != expected_native_subject_fingerprint {
                 return Err(AgentFailure::AccessReviewRequired);
             }
-            let consumers = crate::first_party_observe::native_calendar_policy_for_target(
-                vault,
-                person_id,
-                "calendar.event_kit",
-                connection.connection_id().as_str(),
-                &device_id,
-                &calendar_ids,
-            )
-            .await?
-            .consumers;
+            let consumers = crate::first_party_observe::calendar_policy()?.consumers;
             if consumers.is_empty() {
                 return Err(AgentFailure::InvalidInput);
             }

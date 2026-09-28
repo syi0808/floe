@@ -238,15 +238,7 @@ where
             .map(|id| id.as_str())
             .ok_or(AgentFailure::InvalidInput)?;
         let policy_fingerprint = crate::first_party_observe::policy_fingerprint(
-            &crate::first_party_observe::native_calendar_policy_for_target(
-                self.vault,
-                person_id,
-                connector,
-                connection_id,
-                device_id,
-                &reviewed,
-            )
-            .await?,
+            &crate::first_party_observe::calendar_policy()?,
         )?;
         let current = self
             .core

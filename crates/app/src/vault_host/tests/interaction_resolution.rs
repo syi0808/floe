@@ -616,10 +616,7 @@ fn live_satisfied() -> LiveInlineState {
             policy_fingerprint: "a".repeat(64),
             resource: "personal".into(),
             source_revision: None,
-            live_grants: vec![LiveGrant {
-                id,
-                authority,
-            }],
+            live_grants: vec![LiveGrant { id, authority }],
             policy_authority: None,
         }],
         connection_revision: Some(9),
@@ -1011,10 +1008,7 @@ async fn fresh_approve_on_unchanged_live_grant_rereviews_and_resolves() {
             policy_fingerprint: "a".repeat(64),
             resource: "personal".into(),
             source_revision: Some(source),
-            live_grants: vec![LiveGrant {
-                id,
-                authority,
-            }],
+            live_grants: vec![LiveGrant { id, authority }],
             policy_authority: None,
         }],
         connection_revision: Some(9),
@@ -1783,22 +1777,8 @@ impl HostFixture {
             .await
             .unwrap()
             .unwrap();
-        let resources = live
-            .resources()
-            .iter()
-            .map(|calendar| calendar.handle().as_str().to_owned())
-            .collect::<Vec<_>>();
         let policy_fingerprint = crate::first_party_observe::policy_fingerprint(
-            &crate::first_party_observe::native_calendar_policy_for_target(
-                &self.base.vault,
-                self.base.person,
-                "calendar.event_kit",
-                live.connection_id().as_str(),
-                DEVICE,
-                &resources,
-            )
-            .await
-            .unwrap(),
+            &crate::first_party_observe::calendar_policy().unwrap(),
         )
         .unwrap();
         floe_conversation::InlineObserveTarget {
