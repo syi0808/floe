@@ -104,5 +104,6 @@ pub use application::calendar_read::{
     CalendarReadAccessAdmission, CalendarReadAccessRequest, CalendarReadAdmission,
     admission_matches, admission_matches_dependency, admits_calendar_read,
     admits_calendar_read_request, admits_native_calendar_read, admits_processing,
+    native_calendar_resource,
 };
 pub use floe_context_contract::{CalendarProvider, CalendarReadAccessStamp, CalendarScope};

@@ -114,10 +114,7 @@ async fn seed(
             "eventkit-connection",
             CalendarProvider::EventKit,
             "test-device",
-            &["home".into()],
-            source.source_authority(),
             &[GrantConsumer::builtin(resolved.manifest.package.id.clone()).unwrap()],
-            &fingerprint,
             None,
         )
         .await
@@ -128,13 +125,10 @@ async fn seed(
             "eventkit-connection",
             CalendarProvider::EventKit,
             "test-device",
-            &["home".into()],
-            source.source_authority(),
             GrantOperation::Read,
             GrantPurpose::Assistant,
             consumer.clone(),
             ProcessingRestriction::LocalOnly,
-            Some(&fingerprint),
         )
         .await
         .unwrap();

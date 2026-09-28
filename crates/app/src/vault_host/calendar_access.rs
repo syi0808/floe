@@ -73,9 +73,9 @@ impl<Keys: VaultKeyProvider> NativeCalendarGrantReader for VaultNativeCalendarGr
         &self,
         connection: &floe_connections::SourceConnection,
         person_id: PersonId,
-        calendar_ids: &[String],
+        _calendar_ids: &[String],
         consumer: &str,
-        native_subject_fingerprint: &str,
+        _native_subject_fingerprint: &str,
     ) -> Result<floe_access::CalendarReadAccessAdmission, AgentFailure> {
         if person_id != self.vault.person_id() {
             return Err(AgentFailure::CapabilityDenied);
@@ -88,13 +88,10 @@ impl<Keys: VaultKeyProvider> NativeCalendarGrantReader for VaultNativeCalendarGr
                 connection.connection_id().as_str(),
                 floe_context_contract::CalendarProvider::EventKit,
                 connection.execution_owner_id().as_str(),
-                calendar_ids,
-                connection.source_authority(),
                 floe_access::GrantOperation::Read,
                 floe_access::GrantPurpose::Assistant,
                 consumer.clone(),
                 floe_access::ProcessingRestriction::LocalOnly,
-                Some(native_subject_fingerprint),
             )
             .await?;
         Ok(floe_access::CalendarReadAccessAdmission::device_local(
@@ -511,12 +508,15 @@ where
             {
                 return Err(AgentFailure::StaleContext);
             }
-            let selected = connection
+            let mut selected = connection
                 .resources()
                 .iter()
                 .map(|calendar| calendar.handle().as_str().to_owned())
                 .collect::<Vec<_>>();
-            if !calendar_ids.iter().all(|id| selected.contains(id)) {
+            selected.sort();
+            let mut reviewed = calendar_ids.clone();
+            reviewed.sort();
+            if reviewed != selected {
                 return Err(AgentFailure::StaleContext);
             }
             let fresh = preview_native_calendar_subject(
@@ -526,7 +526,7 @@ where
                     person_id,
                     provider: floe_context_contract::CalendarProvider::EventKit,
                     device_id: device_id.clone(),
-                    calendar_ids: calendar_ids.clone(),
+                    calendar_ids: selected,
                     connection_scope: match connection.resource_mode() {
                         floe_connections::ResourceMode::Selected => {
                             floe_context_contract::CalendarScope::Selected
@@ -568,10 +568,7 @@ where
                     current.connection_id().as_str(),
                     floe_context_contract::CalendarProvider::EventKit,
                     &device_id,
-                    &calendar_ids,
-                    current.source_authority(),
                     &consumers,
-                    &expected_native_subject_fingerprint,
                     expected_grant,
                 )
                 .await?;
@@ -664,16 +661,8 @@ async fn overview<Keys: VaultKeyProvider>(
     grant: Option<&floe_access::DataAccessGrant>,
     vault: &EncryptedAgentVault<Keys>,
 ) -> Result<CalendarAccessOverview, AgentFailure> {
-    let (state, review_required, grant_id, grant_authority, consumer_policy, granted) = match grant
-    {
-        None => (
-            CalendarAccessState::NeedsReview,
-            true,
-            None,
-            None,
-            None,
-            Vec::new(),
-        ),
+    let (state, review_required, grant_id, grant_authority, consumer_policy) = match grant {
+        None => (CalendarAccessState::NeedsReview, true, None, None, None),
         Some(grant) => {
             let policy = vault.calendar_grant_policy_authority(grant.id()).await?;
             let state = match grant.state() {
@@ -687,25 +676,25 @@ async fn overview<Keys: VaultKeyProvider>(
                 Some(grant.id()),
                 Some(grant.authority()),
                 Some(policy),
-                grant
-                    .scope()
-                    .resources()
-                    .iter()
-                    .map(|resource| resource.as_str().to_owned())
-                    .collect(),
             )
         }
+    };
+    let selected_resources = connection
+        .resources()
+        .iter()
+        .map(|calendar| calendar.handle().as_str().to_owned())
+        .collect::<Vec<_>>();
+    let granted_resources = if state == CalendarAccessState::Active && !review_required {
+        selected_resources.clone()
+    } else {
+        Vec::new()
     };
     Ok(CalendarAccessOverview {
         person_id,
         provider: floe_context_contract::CalendarProvider::EventKit,
         connection_id: connection.connection_id().as_str().to_owned(),
-        selected_resources: connection
-            .resources()
-            .iter()
-            .map(|calendar| calendar.handle().as_str().to_owned())
-            .collect(),
-        granted_resources: granted,
+        selected_resources,
+        granted_resources,
         source_authority: connection.source_authority(),
         grant_id,
         grant_authority,

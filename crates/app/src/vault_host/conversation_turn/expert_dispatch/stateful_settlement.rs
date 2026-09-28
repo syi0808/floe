@@ -179,7 +179,6 @@ mod tests {
     };
     use floe_context_contract::{
         CalendarProvider, GrantConsumer, GrantOperation, GrantPurpose, ProcessingRestriction,
-        SourceAuthority,
     };
     use floe_execution::Cancellation;
     use floe_experts::{
@@ -319,19 +318,15 @@ mod tests {
             )
             .await
             .unwrap();
-        let source_authority = SourceAuthority::new();
         let grant = vault
             .review_native_calendar_grant(
                 "eventkit-connection",
                 CalendarProvider::EventKit,
                 "test-device",
-                &["home".into()],
-                source_authority,
                 &[
                     floe_access::GrantConsumer::builtin(BuiltinExpertKind::Schedule.package_id())
                         .unwrap(),
                 ],
-                &"a".repeat(64),
                 None,
             )
             .await
@@ -376,13 +371,10 @@ mod tests {
                 "eventkit-connection",
                 CalendarProvider::EventKit,
                 "test-device",
-                &["home".into()],
-                source_authority,
                 GrantOperation::Read,
                 GrantPurpose::Assistant,
                 consumer.clone(),
                 ProcessingRestriction::LocalOnly,
-                Some("a".repeat(64).as_str()),
             )
             .await
             .unwrap();

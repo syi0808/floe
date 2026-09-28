@@ -8,9 +8,10 @@
 use std::future::Future;
 
 use floe_context_contract::{
-    CalendarProvider, CalendarReadAccessStamp, ConsumerPolicyAuthority, ContextDependency,
-    GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-    GrantScope, GrantSourceBinding, ProcessingRestriction, SourceAuthority,
+    CALENDAR_CONTEXT_VIEW_ID, CalendarProvider, CalendarReadAccessStamp, ConsumerPolicyAuthority,
+    ContextDependency, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation,
+    GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle,
+    SourceAuthority, connection_view_resource,
 };
 use floe_execution::Cancellation;
 use floe_kernel::AgentFailure;
@@ -199,24 +200,19 @@ pub fn admits_native_calendar_read(
     connection_id: &str,
     provider: CalendarProvider,
     device_id: &str,
-    calendar_ids: &[String],
     source_authority: SourceAuthority,
     consumer: &GrantConsumer,
 ) -> Result<(), AgentFailure> {
     let connector = super::native_calendar::native_calendar_connector(provider)
         .ok_or(AgentFailure::CapabilityUnavailable)?;
+    let logical_resource = native_calendar_resource(connection_id)?;
     if admission.person_id != person_id
         || admission.source.person_id() != person_id
         || admission.source.connection_id().as_str() != connection_id
         || admission.source.connector().as_str() != connector
         || admission.source.execution_owner().as_str() != device_id
         || admission.source_authority != source_authority
-        || admission.scope.resources().len() != calendar_ids.len()
-        || admission.scope.resources().iter().any(|resource| {
-            !calendar_ids
-                .iter()
-                .any(|calendar_id| calendar_id == resource.as_str())
-        })
+        || admission.scope.resources() != [logical_resource]
         || admission.scope.categories().len() != 2
         || !admission
             .scope
@@ -238,6 +234,15 @@ pub fn admits_native_calendar_read(
         return Err(AgentFailure::CapabilityDenied);
     }
     Ok(())
+}
+
+pub fn native_calendar_resource(connection_id: &str) -> Result<ResourceHandle, AgentFailure> {
+    connection_view_resource(
+        CALENDAR_CONTEXT_VIEW_ID,
+        &floe_context_contract::ConnectionId::try_new(connection_id)
+            .map_err(|_| AgentFailure::InvalidInput)?,
+    )
+    .map_err(|_| AgentFailure::InvalidInput)
 }
 
 /// That where this run's model runs is where the grant said its contents may be
@@ -286,10 +291,6 @@ pub fn admission_matches_dependency(
         && admission.source_authority == dependency.source_authority()
         && admission.scope.resources() == dependency.resources()
         && !dependency.source_resources().is_empty()
-        && dependency
-            .source_resources()
-            .iter()
-            .all(|resource| admission.scope.resources().contains(resource))
         && admission.scope.categories() == dependency.categories()
         && admission.consumer_policy == dependency.consumer_policy()
         && admission.operation == dependency.operation()

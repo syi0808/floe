@@ -200,7 +200,6 @@ pub async fn admit_current_native_calendar_read(
         connection.connection_id().as_str(),
         provider,
         device_id,
-        &calendar_ids,
         connection.source_authority(),
         &consumer_identity,
     )?;

@@ -271,10 +271,7 @@ impl Fixture {
                 "eventkit-connection",
                 CalendarProvider::EventKit,
                 "test-device",
-                &["home".into()],
-                connection.source_authority(),
                 &[GrantConsumer::builtin(package.id.clone()).unwrap()],
-                &fingerprint,
                 None,
             )
             .await
@@ -315,13 +312,10 @@ impl Fixture {
                 "eventkit-connection",
                 CalendarProvider::EventKit,
                 "test-device",
-                &["home".into()],
-                connection.source_authority(),
                 GrantOperation::Read,
                 GrantPurpose::Assistant,
                 consumer.clone(),
                 ProcessingRestriction::LocalOnly,
-                Some(&fingerprint),
             )
             .await
             .unwrap();
@@ -1373,13 +1367,10 @@ impl GovernedFocus {
                 "eventkit-connection",
                 CalendarProvider::EventKit,
                 "test-device",
-                &["home".into()],
-                connection.source_authority(),
                 &[GrantConsumer::builtin(
                     floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
                 )
                 .unwrap()],
-                &fingerprint,
                 None,
             )
             .await
@@ -1392,13 +1383,10 @@ impl GovernedFocus {
                 "eventkit-connection",
                 CalendarProvider::EventKit,
                 "test-device",
-                &["home".into()],
-                connection.source_authority(),
                 GrantOperation::Read,
                 GrantPurpose::Assistant,
                 consumer.clone(),
                 ProcessingRestriction::LocalOnly,
-                Some(fingerprint.as_str()),
             )
             .await
             .unwrap();
@@ -1629,8 +1617,6 @@ async fn governed_focus_proposal_rejects_a_stale_consumer_policy() {
             "eventkit-connection",
             CalendarProvider::EventKit,
             "test-device",
-            &["home".into()],
-            fixture.source_authority,
             &[
                 GrantConsumer::builtin(
                     floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
@@ -1641,7 +1627,6 @@ async fn governed_focus_proposal_rejects_a_stale_consumer_policy() {
                 )
                 .unwrap(),
             ],
-            &"a".repeat(64),
             Some((fixture.admission.grant_id, authority)),
         )
         .await
@@ -1653,13 +1638,10 @@ async fn governed_focus_proposal_rejects_a_stale_consumer_policy() {
             "eventkit-connection",
             CalendarProvider::EventKit,
             "test-device",
-            &["home".into()],
-            fixture.source_authority,
             GrantOperation::Read,
             GrantPurpose::Assistant,
             fixture.consumer.clone(),
             ProcessingRestriction::LocalOnly,
-            Some("a".repeat(64).as_str()),
         )
         .await
         .unwrap();

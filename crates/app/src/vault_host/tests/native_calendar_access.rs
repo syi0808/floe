@@ -88,56 +88,6 @@ impl Fixture {
                 )
                 .await
                 .unwrap();
-            let registry = vault.expert_registry().await.unwrap().unwrap();
-            for assignment in &registry.assignments {
-                let installation = registry
-                    .installations
-                    .iter()
-                    .find(|entry| entry.id == assignment.installation_id)
-                    .unwrap();
-                let manifest = registry
-                    .manifests
-                    .iter()
-                    .find(|entry| entry.package == installation.package)
-                    .unwrap();
-                let Some(requirement) = manifest
-                    .source_requirements
-                    .iter()
-                    .find(|requirement| requirement.capability == "calendar.timeline")
-                else {
-                    continue;
-                };
-                vault
-                    .replace_expert_binding(
-                        Uuid::new_v4(),
-                        floe_experts::ExpertBindingCommand {
-                            assignment_id: assignment.id,
-                            package: installation.package.clone(),
-                            definition_revision: manifest.definition.definition_revision,
-                            requirement_key: requirement.key.clone(),
-                            expected_binding_revision: 1,
-                            selected: vec![floe_context_contract::SourceSelectionReference {
-                                connector_id: floe_context_contract::ConnectorId::try_new(
-                                    "calendar.event_kit",
-                                )
-                                .unwrap(),
-                                connection_id: floe_context_contract::ConnectionId::try_new(
-                                    "fixture-connection",
-                                )
-                                .unwrap(),
-                                execution_owner_id:
-                                    floe_context_contract::ExecutionOwnerId::try_new(&device_id)
-                                        .unwrap(),
-                                capability_id: "calendar.timeline".into(),
-                                resource: floe_context_contract::ResourceHandle::try_new("home")
-                                    .unwrap(),
-                                contract_version: 1,
-                            }],
-                        },
-                    )
-                    .await
-                    .unwrap();
-            }
         });
         let subject = FixtureSubject {
             fingerprints: HashMap::from([
@@ -273,6 +223,56 @@ fn fresh_review_creates_an_active_grant() {
 }
 
 #[test]
+fn eleven_current_calendars_enable_one_logical_grant_without_leaf_bindings() {
+    let fixture = Fixture::new();
+    let mut calendar_ids = (0..11)
+        .map(|index| format!("calendar-{index}"))
+        .collect::<Vec<_>>();
+    calendar_ids.sort();
+    fixture
+        .runtime
+        .block_on(
+            fixture.core.source_service().configure(
+                fixture.person,
+                &floe_context_contract::ConnectionId::try_new("fixture-connection").unwrap(),
+                fixture.connection().revision(),
+                floe_connections::ResourceMode::Selected,
+                calendar_ids
+                    .iter()
+                    .map(|calendar_id| {
+                        floe_connections::ConnectionResource::new(
+                            floe_context_contract::ResourceHandle::try_new(calendar_id).unwrap(),
+                            calendar_id.clone(),
+                        )
+                        .unwrap()
+                    })
+                    .collect(),
+            ),
+        )
+        .unwrap();
+    let inspected = fixture.apply(CalendarAccessChange::Inspect).unwrap();
+    assert_eq!(inspected.state, CalendarAccessState::NeedsReview);
+    let active = fixture
+        .review(&inspected, &calendar_ids, &"a".repeat(64))
+        .unwrap();
+    assert_eq!(active.state, CalendarAccessState::Active);
+    assert_eq!(active.granted_resources, calendar_ids);
+    let grants = fixture
+        .runtime
+        .block_on(fixture.vault.list_data_access_grants(16))
+        .unwrap();
+    assert_eq!(grants.len(), 1);
+    assert_eq!(grants[0].scope().resources().len(), 1);
+    assert_eq!(
+        grants[0].scope().resources()[0].as_str(),
+        "calendar.timeline:fixture-connection"
+    );
+    let expected =
+        crate::first_party_observe::trusted_shipped_consumers("calendar.timeline").unwrap();
+    assert_eq!(grants[0].scope().consumers(), expected);
+}
+
+#[test]
 fn stale_grant_expectations_conflict() {
     let fixture = Fixture::new();
     let inspected = fixture.apply(CalendarAccessChange::Inspect).unwrap();
@@ -341,7 +341,7 @@ fn pause_and_remove_leave_the_connection_intact() {
 }
 
 #[test]
-fn selection_change_requires_a_fresh_subject_and_authority() {
+fn resource_change_stales_review_but_preserves_standing_grant() {
     let fixture = Fixture::new();
     let inspected = fixture.apply(CalendarAccessChange::Inspect).unwrap();
     let active = fixture
@@ -384,81 +384,18 @@ fn selection_change_requires_a_fresh_subject_and_authority() {
         CalendarAccessState::Active,
         "rotated source authority leaves the standing grant active"
     );
+    assert_eq!(current.grant_id, active.grant_id);
+    assert_eq!(current.grant_authority, active.grant_authority);
+    assert_eq!(current.consumer_policy, active.consumer_policy);
     assert_eq!(
-        fixture.review(
-            &current,
-            &["home".to_owned(), "work".to_owned()],
-            &"b".repeat(64)
-        ),
-        Err(AgentFailure::InvalidInput),
-        "a newly added Calendar is not automatically included in existing Expert bindings"
-    );
-    fixture.runtime.block_on(async {
-        let registry = fixture.vault.expert_registry().await.unwrap().unwrap();
-        for assignment in &registry.assignments {
-            let installation = registry
-                .installations
-                .iter()
-                .find(|entry| entry.id == assignment.installation_id)
-                .unwrap();
-            let manifest = registry
-                .manifests
-                .iter()
-                .find(|entry| entry.package == installation.package)
-                .unwrap();
-            let Some(requirement) = manifest
-                .source_requirements
-                .iter()
-                .find(|entry| entry.capability == "calendar.timeline")
-            else {
-                continue;
-            };
-            let selected = ["home", "work"]
-                .into_iter()
-                .map(|resource| floe_context_contract::SourceSelectionReference {
-                    connector_id: floe_context_contract::ConnectorId::try_new("calendar.event_kit")
-                        .unwrap(),
-                    connection_id: floe_context_contract::ConnectionId::try_new(
-                        "fixture-connection",
-                    )
-                    .unwrap(),
-                    execution_owner_id: floe_context_contract::ExecutionOwnerId::try_new(
-                        &fixture.device_id,
-                    )
-                    .unwrap(),
-                    capability_id: "calendar.timeline".into(),
-                    resource: floe_context_contract::ResourceHandle::try_new(resource).unwrap(),
-                    contract_version: 1,
-                })
-                .collect();
-            fixture
-                .vault
-                .replace_expert_binding(
-                    Uuid::new_v4(),
-                    floe_experts::ExpertBindingCommand {
-                        assignment_id: assignment.id,
-                        package: installation.package.clone(),
-                        definition_revision: manifest.definition.definition_revision,
-                        requirement_key: requirement.key.clone(),
-                        expected_binding_revision: assignment.binding.revision,
-                        selected,
-                    },
-                )
-                .await
-                .unwrap();
-        }
-    });
-    let reviewed = fixture
-        .review(
-            &current,
-            &["home".to_owned(), "work".to_owned()],
-            &"b".repeat(64),
-        )
-        .unwrap();
-    assert_eq!(reviewed.state, CalendarAccessState::Active);
-    assert_eq!(
-        reviewed.granted_resources,
+        current.granted_resources,
         vec!["home".to_owned(), "work".to_owned()]
+    );
+    assert!(!current.review_required);
+    assert_eq!(
+        fixture.review(&current, &["home".to_owned()], &"b".repeat(64)),
+        Err(AgentFailure::StaleContext),
+        "an explicit review must name the entire current source",
     );
 }
 

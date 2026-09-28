@@ -106,7 +106,16 @@ impl ConnectionObserveOverview {
                     },
                     review_required: value.review_required
                         || value.state == crate::CalendarAccessState::NeedsReview,
-                    resources: value.granted_resources.clone(),
+                    resources: vec![
+                        floe_context_contract::connection_view_resource(
+                            "calendar.timeline",
+                            &floe_context_contract::ConnectionId::try_new(&value.connection_id)
+                                .expect("native Calendar connection ID is valid"),
+                        )
+                        .expect("native Calendar View resource is valid")
+                        .as_str()
+                        .to_owned(),
+                    ],
                 }]
             }
             _ => Vec::new(),
