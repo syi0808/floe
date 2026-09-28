@@ -111,7 +111,7 @@ class CalendarPanel extends StatefulWidget {
   final CalendarSourceGateway? sourceGateway;
   final CalendarSourceConnection? source;
   final DayQuery query;
-  final CalendarConnection? connection;
+  final CalendarConnectionView? connection;
   final Future<void> Function() onChanged;
   final TargetPlatform? platform;
 

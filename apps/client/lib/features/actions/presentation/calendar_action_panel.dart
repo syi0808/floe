@@ -45,7 +45,7 @@ class ReviewRequestPanel extends StatelessWidget {
     required this.connection,
   });
   final CalendarActionController controller;
-  final CalendarConnection? Function() connection;
+  final CalendarConnectionView? Function() connection;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -120,7 +120,7 @@ class ActivityPanel extends StatelessWidget {
   });
 
   final CalendarActionController controller;
-  final CalendarConnection? Function() connection;
+  final CalendarConnectionView? Function() connection;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -211,7 +211,7 @@ class ActionReviewDialog extends StatefulWidget {
   });
   final CalendarActionController controller;
   final String actionId;
-  final CalendarConnection? Function() connection;
+  final CalendarConnectionView? Function() connection;
 
   @override
   State<ActionReviewDialog> createState() => _ActionReviewDialogState();

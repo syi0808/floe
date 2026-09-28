@@ -19,7 +19,7 @@ void main() {
       );
       await publisher.publish(
         personId: 'person-1',
-        connection: CalendarConnection(
+        connection: CalendarConnectionView(
           connectionId: '00000000-0000-4000-8000-000000000010',
           deviceId: 'device-1',
           provider: 'event_kit',
@@ -58,7 +58,7 @@ void main() {
 
     await publisher.publish(
       personId: 'person-1',
-      connection: const CalendarConnection(
+      connection: const CalendarConnectionView(
         connectionId: '00000000-0000-4000-8000-000000000010',
         deviceId: 'test-device',
         provider: 'event_kit',
@@ -105,7 +105,7 @@ void main() {
 
     await publisher.publish(
       personId: 'person-1',
-      connection: const CalendarConnection(
+      connection: const CalendarConnectionView(
         connectionId: '00000000-0000-4000-8000-000000000011',
         deviceId: 'android-device',
         provider: 'android',
@@ -137,7 +137,7 @@ void main() {
 
     await publisher.publish(
       personId: 'person-1',
-      connection: CalendarConnection(
+      connection: CalendarConnectionView(
         connectionId: '00000000-0000-4000-8000-000000000013',
         deviceId: 'device-1',
         provider: 'event_kit',
@@ -170,7 +170,7 @@ void main() {
 
     await publisher.publish(
       personId: 'person-1',
-      connection: const CalendarConnection(
+      connection: const CalendarConnectionView(
         connectionId: '00000000-0000-4000-8000-000000000012',
         deviceId: 'server-device',
         provider: 'google_calendar',

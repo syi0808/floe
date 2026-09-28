@@ -20,7 +20,7 @@ final class CalendarObservationPublisher {
 
   Future<void> publish({
     required String personId,
-    required CalendarConnection connection,
+    required CalendarConnectionView connection,
     required DateTime observedAt,
     required DateTime rangeStart,
     required DateTime rangeEnd,

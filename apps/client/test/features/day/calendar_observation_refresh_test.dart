@@ -34,7 +34,7 @@ void main() {
 
   test('coalesces simultaneous resume and expert refresh triggers', () async {
     final scheduler = _ManualScheduler();
-    final completion = Completer<CalendarConnection?>();
+    final completion = Completer<CalendarConnectionView?>();
     var refreshes = 0;
     final coordinator = CalendarObservationRefreshCoordinator(
       scheduler: scheduler,
@@ -87,9 +87,9 @@ void main() {
   });
 }
 
-CalendarConnection? _snapshot({bool connected = true, String? error}) =>
+CalendarConnectionView? _snapshot({bool connected = true, String? error}) =>
     connected
-    ? CalendarConnection(
+    ? CalendarConnectionView(
         connectionId: '00000000-0000-4000-8000-000000000010',
         deviceId: 'test-device',
         provider: 'event_kit',

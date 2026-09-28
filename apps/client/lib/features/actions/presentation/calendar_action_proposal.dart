@@ -21,7 +21,7 @@ class CalendarEventComposer extends StatefulWidget {
     this.event,
   });
   final CalendarActionController controller;
-  final CalendarConnection? Function() connection;
+  final CalendarConnectionView? Function() connection;
   final DateTime? initialStart;
   final EventItem? event;
 

@@ -10,7 +10,6 @@ import 'package:floe_client/features/connections/domain/calendar_source_connecti
 import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
 import 'package:floe_client/features/connections/presentation/connector_screen.dart';
-import 'package:floe_client/features/experts/domain/agent_calendar_sources.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
 import 'package:floe_client/features/connections/application/local_server_client.dart';
@@ -147,24 +146,7 @@ void main() {
       gateway: TestRegistryGateway(),
       personId: registryPerson,
     );
-    final source = ValueNotifier<AgentCalendarSources?>(
-      AgentCalendarSources(
-        personId: registryPerson,
-        connection: const CalendarConnection(
-          connectionId: '00000000-0000-4000-8000-000000000010',
-          deviceId: 'test-device',
-          provider: 'event_kit',
-          revision: 1,
-          sourceAuthority: CalendarSourceAuthority(
-            incarnation: '00000000-0000-4000-8000-000000000009',
-            epoch: 1,
-          ),
-          calendars: [ConnectedCalendar(id: 'home', name: 'Home')],
-        ),
-      ),
-    );
     addTearDown(controller.dispose);
-    addTearDown(source.dispose);
     await controller.load();
     await tester.pumpWidget(
       MaterialApp(
@@ -181,7 +163,7 @@ void main() {
                 now: DateTime.utc(2026, 9, 4),
                 timezoneOffsetSeconds: 0,
               ),
-              connection: const CalendarConnection(
+              connection: const CalendarConnectionView(
                 connectionId: '00000000-0000-4000-8000-000000000010',
                 deviceId: 'test-device',
                 provider: 'event_kit',
@@ -238,7 +220,7 @@ void main() {
                 now: DateTime.utc(2026, 9, 4),
                 timezoneOffsetSeconds: 0,
               ),
-              connection: CalendarConnection(
+              connection: CalendarConnectionView(
                 connectionId: 'connection',
                 deviceId: 'test-device',
                 provider: 'event_kit',
@@ -395,7 +377,7 @@ void main() {
                     now: date,
                     timezoneOffsetSeconds: 0,
                   ),
-                  connection: CalendarConnection(
+                  connection: CalendarConnectionView(
                     connectionId: '00000000-0000-4000-8000-000000000010',
                     deviceId: 'test-device',
                     provider: testCase.provider,
@@ -453,7 +435,7 @@ void main() {
                 now: date,
                 timezoneOffsetSeconds: 0,
               ),
-              connection: const CalendarConnection(
+              connection: const CalendarConnectionView(
                 connectionId: '00000000-0000-4000-8000-000000000010',
                 deviceId: 'test-device',
                 provider: 'event_kit',
@@ -600,7 +582,7 @@ void main() {
                   now: date,
                   timezoneOffsetSeconds: 0,
                 ),
-                connection: const CalendarConnection(
+                connection: const CalendarConnectionView(
                   connectionId: '00000000-0000-4000-8000-000000000020',
                   deviceId: 'local-test-device',
                   provider: 'event_kit',
@@ -667,7 +649,7 @@ void main() {
                   now: date,
                   timezoneOffsetSeconds: 0,
                 ),
-                connection: const CalendarConnection(
+                connection: const CalendarConnectionView(
                   connectionId: '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
                   deviceId: 'local-test-device',
                   provider: 'google_calendar',

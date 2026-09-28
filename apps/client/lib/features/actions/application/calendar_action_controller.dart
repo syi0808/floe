@@ -40,7 +40,7 @@ final class CalendarActionController extends ChangeNotifier {
 
   bool canApprove(
     CalendarAction action,
-    CalendarConnection? connection,
+    CalendarConnectionView? connection,
     DateTime now, {
     bool approved = false,
   }) =>
@@ -113,7 +113,7 @@ final class CalendarActionController extends ChangeNotifier {
   Future<void> decide(
     String id,
     CalendarActionDecision decision,
-    CalendarConnection? connection,
+    CalendarConnectionView? connection,
     DateTime now,
   ) async {
     final action = find(id);
@@ -376,7 +376,7 @@ final class CalendarActionController extends ChangeNotifier {
   Future<void> run(
     String id, {
     bool recover = false,
-    CalendarConnection? connection,
+    CalendarConnectionView? connection,
   }) async {
     final action = find(id);
     if (_disposed ||

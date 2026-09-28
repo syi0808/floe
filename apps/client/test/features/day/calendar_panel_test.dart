@@ -141,7 +141,7 @@ void main() {
                   now: date,
                   timezoneOffsetSeconds: 0,
                 ),
-                connection: const CalendarConnection(
+                connection: const CalendarConnectionView(
                   connectionId: '00000000-0000-4000-8000-000000000010',
                   deviceId: 'test-device',
                   provider: 'event_kit',
@@ -202,7 +202,7 @@ void main() {
                   now: date,
                   timezoneOffsetSeconds: 0,
                 ),
-                connection: const CalendarConnection(
+                connection: const CalendarConnectionView(
                   connectionId: '00000000-0000-4000-8000-000000000010',
                   deviceId: 'test-device',
                   provider: 'event_kit',
@@ -277,7 +277,7 @@ void main() {
                 now: date,
                 timezoneOffsetSeconds: 0,
               ),
-              connection: const CalendarConnection(
+              connection: const CalendarConnectionView(
                 connectionId: '00000000-0000-4000-8000-000000000010',
                 deviceId: 'test-device',
                 provider: 'event_kit',

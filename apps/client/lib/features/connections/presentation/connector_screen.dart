@@ -60,7 +60,7 @@ class ConnectorScreen extends StatefulWidget {
 
   final CalendarGateway? gateway;
   final DayQuery query;
-  final CalendarConnection? connection;
+  final CalendarConnectionView? connection;
   final CalendarSourceGateway? calendarSourceGateway;
   final CalendarSourceConnection? calendarSource;
   final List<CalendarSourceConnection> remoteCalendarSources;
@@ -110,7 +110,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
   String get deviceCalendarProvider =>
       effectivePlatform == TargetPlatform.android ? 'android' : 'event_kit';
 
-  CalendarConnection? get deviceCalendarConnection {
+  CalendarConnectionView? get deviceCalendarConnection {
     final connection = widget.connection;
     return connection?.provider == deviceCalendarProvider ? connection : null;
   }
@@ -722,7 +722,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
 
   Widget _deviceCalendarObserve(
     BuildContext context,
-    CalendarConnection connection,
+    CalendarConnectionView connection,
   ) {
     observeFuture ??= widget.nativeCalendarAccessGateway!.inspectCalendarAccess(
       widget.query.personId,
@@ -798,7 +798,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
   }
 
   Widget _useWithFloeControl(
-    CalendarConnection connection,
+    CalendarConnectionView connection,
     NativeCalendarAccessOverview overview,
   ) {
     Future<void> run(Future<void> Function() action) async {
@@ -835,7 +835,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
   }
 
   Future<void> _reviewObserve(
-    CalendarConnection connection,
+    CalendarConnectionView connection,
     NativeCalendarAccessOverview overview,
   ) async {
     final gateway = widget.nativeCalendarAccessGateway!;
@@ -882,7 +882,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
   }
 
   Future<void> _reconcileExplicitCalendarChange(
-    CalendarConnection connection,
+    CalendarConnectionView connection,
   ) async {
     final gateway = widget.nativeCalendarAccessGateway;
     if (gateway == null) return;

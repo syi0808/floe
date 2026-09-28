@@ -205,7 +205,7 @@ final class NativeDayGateway
           batches.every((batch) => batch['failure'] == 'permission_denied');
       await _updateCalendarObservation(
         query: query,
-        connection: CalendarConnection.compose(source, snapshot.calendar),
+        connection: CalendarConnectionView.compose(source, snapshot.calendar),
         batches: batches,
         permissionRevoked: permissionRevoked,
       );
@@ -231,7 +231,7 @@ final class NativeDayGateway
 
   Future<void> _updateCalendarObservation({
     required DayQuery query,
-    required CalendarConnection connection,
+    required CalendarConnectionView connection,
     required List<Map<String, dynamic>> batches,
     required bool permissionRevoked,
   }) async {

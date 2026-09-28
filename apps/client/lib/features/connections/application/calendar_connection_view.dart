@@ -25,8 +25,8 @@ final class ConnectedCalendar {
   }
 }
 
-final class CalendarConnection {
-  const CalendarConnection({
+final class CalendarConnectionView {
+  const CalendarConnectionView({
     required this.connectionId,
     required this.deviceId,
     required this.provider,
@@ -40,7 +40,7 @@ final class CalendarConnection {
     this.includeAll = false,
   });
 
-  factory CalendarConnection.compose(
+  factory CalendarConnectionView.compose(
     CalendarSourceConnection source,
     CalendarMirrorState? mirror,
   ) {
@@ -49,7 +49,7 @@ final class CalendarConnection {
             mirror?.provider == source.provider
         ? mirror
         : null;
-    return CalendarConnection(
+    return CalendarConnectionView(
       connectionId: source.connectionId,
       deviceId: source.executionOwnerId,
       provider: source.provider,

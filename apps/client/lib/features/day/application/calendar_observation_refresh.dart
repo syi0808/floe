@@ -26,7 +26,7 @@ final class TimerCalendarObservationRefreshScheduler
 
 final class CalendarObservationRefreshCoordinator {
   factory CalendarObservationRefreshCoordinator({
-    required Future<CalendarConnection?> Function() refresh,
+    required Future<CalendarConnectionView?> Function() refresh,
     CalendarObservationRefreshScheduler scheduler =
         const TimerCalendarObservationRefreshScheduler(),
     Duration refreshInterval = const Duration(minutes: 3),
@@ -44,7 +44,7 @@ final class CalendarObservationRefreshCoordinator {
 
   static const supportedProviders = {'event_kit', 'android'};
 
-  final Future<CalendarConnection?> Function() _refresh;
+  final Future<CalendarConnectionView?> Function() _refresh;
   final CalendarObservationRefreshScheduler _scheduler;
   final Duration refreshInterval;
 
@@ -55,7 +55,7 @@ final class CalendarObservationRefreshCoordinator {
 
   bool get active => _active && !_disposed;
 
-  void reconcile(CalendarConnection? connection) {
+  void reconcile(CalendarConnectionView? connection) {
     _active =
         connection != null &&
         supportedProviders.contains(connection.provider) &&
@@ -115,7 +115,7 @@ final class CalendarObservationRefreshCoordinator {
   }
 }
 
-bool _permissionRevoked(CalendarConnection connection) =>
+bool _permissionRevoked(CalendarConnectionView connection) =>
     connection.error == 'permission_denied' ||
     connection.calendars.isNotEmpty &&
         connection.calendars.every(

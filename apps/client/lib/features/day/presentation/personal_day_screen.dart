@@ -115,9 +115,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     return nativeCalendarSource;
   }
 
-  CalendarConnection? get calendarConnection => calendarSource == null
+  CalendarConnectionView? get calendarConnection => calendarSource == null
       ? null
-      : CalendarConnection.compose(
+      : CalendarConnectionView.compose(
           calendarSource!,
           controller.snapshot?.calendar,
         );
@@ -147,7 +147,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           await _inspectCalendarSource();
           return calendarSource == null
               ? null
-              : CalendarConnection.compose(calendarSource!, snapshot.calendar);
+              : CalendarConnectionView.compose(
+                  calendarSource!,
+                  snapshot.calendar,
+                );
         },
       );
       WidgetsBinding.instance.addObserver(this);
@@ -255,7 +258,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           snapshot.calendar?.sourceConnectionId != source.connectionId) {
         throw StateError('Calendar collection source changed');
       }
-      final connection = CalendarConnection.compose(source, snapshot.calendar);
+      final connection = CalendarConnectionView.compose(
+        source,
+        snapshot.calendar,
+      );
       if (connection.error != null ||
           connection.calendars.any(
             (calendar) =>
