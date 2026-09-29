@@ -248,6 +248,40 @@ mod tests {
     }
 
     #[test]
+    fn every_member_digest_matches_the_activation_policy() {
+        for connector in [
+            "gmail",
+            "microsoft.mail",
+            "slack.conversations",
+            "microsoft.teams",
+            "github.issues",
+            "google_drive.files",
+            "home_assistant.states",
+            "calendar.google",
+            "calendar.microsoft",
+        ] {
+            for policy in remote_policies(connector).unwrap() {
+                assert_eq!(
+                    member_policy_digest(connector, policy.view_id).unwrap(),
+                    policy_digest(&policy).unwrap()
+                );
+            }
+        }
+        let calendar = calendar_policy().unwrap();
+        assert_eq!(
+            member_policy_digest("calendar.event_kit", calendar.view_id).unwrap(),
+            policy_digest(&calendar).unwrap()
+        );
+        for connector in ["contacts.apple", "attention.macos", "health.apple"] {
+            let policy = personal_policy(connector).unwrap();
+            assert_eq!(
+                member_policy_digest(connector, policy.view_id).unwrap(),
+                policy_digest(&policy).unwrap()
+            );
+        }
+    }
+
+    #[test]
     fn policy_never_default_grants_extensions_or_wildcards() {
         for connector in [
             "gmail",
