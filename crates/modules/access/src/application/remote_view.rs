@@ -177,7 +177,7 @@ mod remote_view_scope_tests {
 }
 
 /// What a review does to the grant the Person already holds for this view.
-pub enum RemoteViewGrantReview {
+pub(crate) enum RemoteViewGrantReview {
     /// The Person already granted exactly this. There is nothing to review.
     AlreadyGranted,
     /// Activate the grant under the reviewed scope, at the authority it is
@@ -192,7 +192,7 @@ pub enum RemoteViewGrantReview {
 ///
 /// An active grant whose scope differs is the Person having approved something
 /// else; widening it silently is not this path's to do.
-pub fn review_remote_view_grant(
+pub(crate) fn review_remote_view_grant(
     existing: Option<&DataAccessGrant>,
     scope: &GrantScope,
 ) -> Result<RemoteViewGrantReview, AgentFailure> {

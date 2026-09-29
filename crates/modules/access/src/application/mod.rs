@@ -52,8 +52,8 @@ pub use remote_grants::{
     preview_remote_view_grant, review_and_activate_remote_view_grant,
 };
 pub use remote_view::{
-    RemoteProducerIdentity, RemoteViewApproval, RemoteViewGrantReview, RemoteViewSourceReference,
+    RemoteProducerIdentity, RemoteViewApproval, RemoteViewSourceReference,
     admit_remote_view_binding, admit_remote_view_source, matches_review, producer_is_pinned,
     remote_dependency_live, remote_dependency_resource, remote_dependency_source_admits,
-    remote_view_scope, remote_view_source, review_remote_view_grant, source_matches_producer,
+    remote_view_scope, remote_view_source, source_matches_producer,
 };
