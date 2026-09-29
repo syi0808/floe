@@ -560,6 +560,17 @@ mod tests {
         let vault = EncryptedAgentVault::create(root.path(), person_id, keys.clone())
             .await
             .unwrap();
+        let connection = vault.connection().unwrap();
+        let mut old_tables = connection
+            .query(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('personal_grant_schema', 'personal_grant_policies', 'personal_feasibility_queries')",
+                (),
+            )
+            .await
+            .unwrap();
+        assert!(old_tables.next().await.unwrap().is_none());
+        drop(old_tables);
+        drop(connection);
         vault
             .connection()
             .unwrap()
