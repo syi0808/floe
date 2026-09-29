@@ -64,7 +64,7 @@ pub fn source_candidate_id(reference: &SourceSelectionReference) -> Result<Strin
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
-pub fn validate_personal_source_selection(
+pub(crate) fn validate_personal_source_selection(
     selected: &SourceSelectionReference,
     connection: &SourceConnection,
     person_id: PersonId,

@@ -101,9 +101,10 @@ pub use application::remote_views::{
     remote_view_dependency, validate_remote_view, validate_remote_view_query,
 };
 pub use application::service::{ContextService, PreparedContext};
+pub(crate) use application::source_candidates::validate_personal_source_selection;
 pub use application::source_candidates::{
     LOCAL_CONTEXT_CONNECTOR, SourceCandidate, SourceCandidateRequest, discover_source_candidates,
-    source_candidate_id, validate_local_source_selection, validate_personal_source_selection,
+    source_candidate_id, validate_local_source_selection,
 };
 pub use application::source_view::SourceView;
 pub use application::tools::{
