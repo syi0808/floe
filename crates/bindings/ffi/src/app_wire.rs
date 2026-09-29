@@ -39,6 +39,7 @@ where
         + floe_app::DayCommands
         + floe_app::NativeCalendarSourceCommands
         + floe_app::NativePersonalSourceCommands
+        + floe_app::ConnectionObserveCommands
         + floe_app::RemoteCalendarSourceCommands
         + floe_app::ActionCommands
         + floe_app::LocalContextCommands,
@@ -126,6 +127,22 @@ where
             Ok(AppCommandResultDto::NativePersonalSource {
                 command_id: request.command_id,
                 source: source_connection_dto(&source),
+            })
+        }
+        AppCommandDto::ConnectionObserveSetEnabled { mutation } => {
+            let operation = floe_app::ConnectionObserveOperation::SetEnabled {
+                connector_id: mutation.connector_id,
+                connection_id: mutation.connection_id,
+                enabled: mutation.enabled,
+                disconnecting: mutation.disconnecting,
+                expected: mutation.expected.map(connection_observe_expectation),
+            };
+            let result = host_request
+                .services()
+                .connection_observe(host_request.caller(), request.command_id, operation)
+                .map_err(service_error)?;
+            Ok(AppCommandResultDto::ConnectionObserve {
+                result: connection_observe_result(result, request.command_id)?,
             })
         }
         AppCommandDto::RemoteCalendarSourceMutate { mutation } => {
@@ -471,6 +488,7 @@ fn query_with_host<
         + floe_app::ConnectionsQueries
         + floe_app::NativeCalendarSourceCommands
         + floe_app::NativePersonalSourceCommands
+        + floe_app::ConnectionObserveCommands
         + floe_app::RemoteCalendarSourceCommands
         + floe_app::DayQueries
         + floe_app::ActionQueries
@@ -595,6 +613,32 @@ fn query_with_host<
                 .map_err(day_error)?;
             Ok(AppQueryResultDto::NativePersonalSource {
                 source: source.as_ref().map(source_connection_dto),
+            })
+        }
+        AppQueryDto::ConnectionObserveInspect { connector_id, connection_id } => {
+            let operation = floe_app::ConnectionObserveOperation::Inspect { connector_id, connection_id };
+            let result = services
+                .connection_observe(caller, request.request_id, operation)
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::ConnectionObserve {
+                result: connection_observe_result(result, request.request_id)?,
+            })
+        }
+        AppQueryDto::ConnectionObserveReview { connector_id, connection_id } => {
+            let operation = floe_app::ConnectionObserveOperation::Review { connector_id, connection_id };
+            let result = services
+                .connection_observe(caller, request.request_id, operation)
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::ConnectionObserve {
+                result: connection_observe_result(result, request.request_id)?,
+            })
+        }
+        AppQueryDto::ConnectionObserveReadResult { operation_id, release } => {
+            let result = services
+                .read_connection_observe_result(caller, operation_id, release)
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::ConnectionObserve {
+                result: connection_observe_result(result, operation_id)?,
             })
         }
         AppQueryDto::RemoteCalendarSources {} => {
@@ -1012,6 +1056,87 @@ fn expert_result(
                 &result.stage,
                 &operation_id.to_string(),
             )
+        }),
+    })
+}
+
+fn connection_observe_expectation(
+    expected: floe_protocol::ConnectionObserveExpectationDto,
+) -> floe_app::ConnectionObserveExpectation {
+    floe_app::ConnectionObserveExpectation {
+        connector_id: expected.connector_id,
+        connection_id: expected.connection_id,
+        source_authority: expected.source_authority,
+        connection_revision: expected.connection_revision,
+        native_subject: expected.native_subject,
+        producer_fingerprint: expected.producer_fingerprint,
+        members: expected.members.into_iter().map(|member| floe_app::ConnectionObserveReviewedMember {
+            view_id: member.view_id,
+            policy_digest: member.policy_digest,
+            resource: member.resource,
+            expected_grant_id: member.expected_grant_id,
+            expected_grant_authority: member.expected_grant_authority,
+        }).collect(),
+    }
+}
+
+fn connection_observe_expectation_dto(
+    expected: floe_app::ConnectionObserveExpectation,
+) -> floe_protocol::ConnectionObserveExpectationDto {
+    floe_protocol::ConnectionObserveExpectationDto {
+        connector_id: expected.connector_id,
+        connection_id: expected.connection_id,
+        source_authority: expected.source_authority,
+        connection_revision: expected.connection_revision,
+        native_subject: expected.native_subject,
+        producer_fingerprint: expected.producer_fingerprint,
+        members: expected.members.into_iter().map(|member| floe_protocol::ConnectionObserveReviewedMemberDto {
+            view_id: member.view_id,
+            policy_digest: member.policy_digest,
+            resource: member.resource,
+            expected_grant_id: member.expected_grant_id,
+            expected_grant_authority: member.expected_grant_authority,
+        }).collect(),
+    }
+}
+
+fn connection_observe_result(
+    result: floe_app::ConnectionObserveResult,
+    operation_id: uuid::Uuid,
+) -> AppWireResult<floe_protocol::ConnectionObserveResultDto> {
+    if result.operation_id != operation_id {
+        return Err(service_error(floe_app::ServiceError::Internal));
+    }
+    Ok(floe_protocol::ConnectionObserveResultDto {
+        operation_id,
+        done: result.done,
+        state: result.state.map(crate::conversion::owners::vault_state_dto),
+        overview: result.overview.map(|overview| floe_protocol::ConnectionObserveOverviewDto {
+            connector_id: overview.connector_id,
+            connection_id: overview.connection_id,
+            status: match overview.status {
+                floe_app::ConnectionObserveStatus::Active => floe_protocol::ConnectionObserveStatusDto::Active,
+                floe_app::ConnectionObserveStatus::Paused => floe_protocol::ConnectionObserveStatusDto::Paused,
+                floe_app::ConnectionObserveStatus::NeedsReview => floe_protocol::ConnectionObserveStatusDto::NeedsReview,
+                floe_app::ConnectionObserveStatus::NeedsSystemAccess => floe_protocol::ConnectionObserveStatusDto::NeedsSystemAccess,
+                floe_app::ConnectionObserveStatus::ReconnectRequired => floe_protocol::ConnectionObserveStatusDto::ReconnectRequired,
+                floe_app::ConnectionObserveStatus::Unavailable => floe_protocol::ConnectionObserveStatusDto::Unavailable,
+            },
+            enabled: overview.enabled,
+            source_resources: overview.source_resources,
+            members: overview.members.into_iter().map(|member| floe_protocol::ConnectionObserveMemberDto {
+                view_id: member.view_id,
+                state: match member.state {
+                    floe_app::GrantState::Active => floe_protocol::ConnectionObserveGrantStateDto::Active,
+                    floe_app::GrantState::Paused => floe_protocol::ConnectionObserveGrantStateDto::Paused,
+                    floe_app::GrantState::Revoked => floe_protocol::ConnectionObserveGrantStateDto::Revoked,
+                },
+                review_required: member.review_required,
+            }).collect(),
+        }),
+        reviewed: result.reviewed.map(connection_observe_expectation_dto),
+        failure: result.failure.as_ref().map(|failure| {
+            crate::conversion::owners::failure_envelope(failure, &result.stage, &operation_id.to_string())
         }),
     })
 }
@@ -2032,6 +2157,26 @@ mod tests {
                 floe_app::ErrorCode::NotFound,
                 "source unavailable",
             ))
+        }
+    }
+
+    impl floe_app::ConnectionObserveCommands for Services {
+        fn connection_observe(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _operation: floe_app::ConnectionObserveOperation,
+        ) -> Result<floe_app::ConnectionObserveResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+
+        fn read_connection_observe_result(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _release: bool,
+        ) -> Result<floe_app::ConnectionObserveResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
         }
     }
 

@@ -52,6 +52,10 @@ pub enum AppCommandDto {
     NativePersonalSourceSetup {
         setup: super::NativePersonalSourceSetupDto,
     },
+    #[serde(rename = "connection_observe.set_enabled")]
+    ConnectionObserveSetEnabled {
+        mutation: super::ConnectionObserveMutationDto,
+    },
     #[serde(rename = "connections.remote_calendar.mutate")]
     RemoteCalendarSourceMutate {
         mutation: super::RemoteCalendarSourceMutationDto,
@@ -144,6 +148,7 @@ impl AppCommandDto {
             Self::DayMutate { mutation, .. } => mutation.validate(),
             Self::NativeCalendarSourceMutate { mutation } => mutation.validate(),
             Self::NativePersonalSourceSetup { setup } => setup.validate(),
+            Self::ConnectionObserveSetEnabled { mutation } => mutation.validate(),
             Self::RemoteCalendarSourceMutate { mutation } => mutation.validate(),
             Self::KnowledgeMemoryDecide { candidate_id, .. } => {
                 if candidate_id.is_nil() {
@@ -401,6 +406,9 @@ pub enum AppCommandResultDto {
     NativePersonalSource {
         command_id: Uuid,
         source: super::SourceConnectionDto,
+    },
+    ConnectionObserve {
+        result: super::ConnectionObserveResultDto,
     },
     RemoteCalendarSource {
         command_id: Uuid,

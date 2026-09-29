@@ -226,7 +226,7 @@ fn access_result(result: floe_app::RemoteAccessResult) -> AppWireResult<RemoteAc
 }
 
 fn observe_expectation(
-    expected: &ConnectionObserveExpectationDto,
+    expected: &RemoteObserveExpectationDto,
 ) -> floe_app::RemoteConnectionObserveExpectation {
     floe_app::RemoteConnectionObserveExpectation {
         members: expected
@@ -250,12 +250,12 @@ fn observe_expectation(
 
 fn observe_expectation_dto(
     expected: &floe_app::RemoteConnectionObserveExpectation,
-) -> ConnectionObserveExpectationDto {
-    ConnectionObserveExpectationDto {
+) -> RemoteObserveExpectationDto {
+    RemoteObserveExpectationDto {
         members: expected
             .members
             .iter()
-            .map(|member| ConnectionObserveMemberDto {
+            .map(|member| RemoteObserveMemberDto {
                 view_id: member.view_id.clone(),
                 policy_digest: member.policy_digest.clone(),
                 resource: member.resource.clone(),

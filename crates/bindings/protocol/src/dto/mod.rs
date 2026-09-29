@@ -1,13 +1,19 @@
 mod access;
 mod actions;
 pub use access::{
-    ConnectionObserveExpectationDto, ConnectionObserveMemberDto, RemoteAccessOperationDto,
-    RemoteAccessRequestDto, RemoteAccessResultDto, RemoteAuthorityEnrollmentStatusDto,
+    RemoteAccessOperationDto, RemoteAccessRequestDto, RemoteAccessResultDto,
+    RemoteAuthorityEnrollmentStatusDto, RemoteObserveExpectationDto, RemoteObserveMemberDto,
     RemoteOwnerPublicKeyDto, RemoteProducerIdentityDto,
 };
 pub use actions::ActionOperationResultDto;
-pub use connections::RemotePairingChallengeDto;
+mod connection_observe;
 mod connections;
+pub use connection_observe::{
+    ConnectionObserveExpectationDto, ConnectionObserveGrantStateDto, ConnectionObserveMemberDto,
+    ConnectionObserveMutationDto, ConnectionObserveOverviewDto, ConnectionObserveResultDto,
+    ConnectionObserveReviewedMemberDto, ConnectionObserveStatusDto,
+};
+pub use connections::RemotePairingChallengeDto;
 pub use connections::{
     ConnectionResourceDto, ConnectionsResultDto, NativeCalendarSourceMutationDto,
     NativePersonalSourceSetupDto, PairingOutcomeDto, PairingReportDto, PairingTargetDto,

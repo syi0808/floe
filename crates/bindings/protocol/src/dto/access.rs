@@ -31,7 +31,7 @@ pub enum RemoteAccessOperationDto {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         disconnecting: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        expected: Option<ConnectionObserveExpectationDto>,
+        expected: Option<RemoteObserveExpectationDto>,
     },
     ConnectionObserveReview {
         connector_id: String,
@@ -46,7 +46,7 @@ pub enum RemoteAccessOperationDto {
 /// One reviewed grant of a remote Observe bundle, echoed back on enable.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ConnectionObserveMemberDto {
+pub struct RemoteObserveMemberDto {
     pub view_id: String,
     pub policy_digest: String,
     pub resource: String,
@@ -65,8 +65,8 @@ pub struct ConnectionObserveMemberDto {
 /// The whole reviewed bundle a remote Observe enable binds.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ConnectionObserveExpectationDto {
-    pub members: Vec<ConnectionObserveMemberDto>,
+pub struct RemoteObserveExpectationDto {
+    pub members: Vec<RemoteObserveMemberDto>,
 }
 
 impl RemoteAccessRequestDto {
@@ -117,7 +117,7 @@ fn validate_observe_identity(
 }
 
 fn validate_observe_expectation(
-    expected: &ConnectionObserveExpectationDto,
+    expected: &RemoteObserveExpectationDto,
 ) -> Result<(), &'static str> {
     if expected.members.is_empty() || expected.members.len() > 8 {
         return Err("operation.expected.members");
@@ -169,7 +169,7 @@ pub struct RemoteAccessResultDto {
     pub owner: Option<RemoteOwnerPublicKeyDto>,
     pub enrollment: Option<RemoteAuthorityEnrollmentStatusDto>,
     pub connection_observe_status: Option<String>,
-    pub reviewed_bundle: Option<ConnectionObserveExpectationDto>,
+    pub reviewed_bundle: Option<RemoteObserveExpectationDto>,
     pub failure: Option<AgentVaultFailureDto>,
 }
 

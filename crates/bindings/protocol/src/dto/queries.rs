@@ -57,6 +57,18 @@ pub enum AppQueryDto {
     NativeCalendarSource {},
     #[serde(rename = "connections.native_personal.source")]
     NativePersonalSource { connector_id: String },
+    #[serde(rename = "connection_observe.inspect")]
+    ConnectionObserveInspect {
+        connector_id: String,
+        connection_id: String,
+    },
+    #[serde(rename = "connection_observe.review")]
+    ConnectionObserveReview {
+        connector_id: String,
+        connection_id: String,
+    },
+    #[serde(rename = "connection_observe.read_result")]
+    ConnectionObserveReadResult { operation_id: Uuid, release: bool },
     #[serde(rename = "connections.remote_calendar.sources")]
     RemoteCalendarSources {},
     #[serde(rename = "connections.read_result")]
@@ -136,6 +148,13 @@ impl AppQueryDto {
                 } else {
                     Err("query.connector_id")
                 };
+            }
+            Self::ConnectionObserveInspect { connector_id, connection_id }
+            | Self::ConnectionObserveReview { connector_id, connection_id } => {
+                return super::connection_observe::validate_identity(connector_id, connection_id);
+            }
+            Self::ConnectionObserveReadResult { operation_id, .. } => {
+                return if operation_id.is_nil() { Err("query.operation_id") } else { Ok(()) };
             }
             Self::RemoteCalendarSources {} => return Ok(()),
             Self::KnowledgeReadResult { operation_id, .. }
@@ -230,6 +249,9 @@ pub enum AppQueryResultDto {
     },
     NativePersonalSource {
         source: Option<super::SourceConnectionDto>,
+    },
+    ConnectionObserve {
+        result: super::ConnectionObserveResultDto,
     },
     RemoteCalendarSources {
         sources: Vec<super::SourceConnectionDto>,
