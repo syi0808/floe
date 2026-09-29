@@ -1,26 +1,29 @@
-use floe_protocol::{AppCommandRequestDto, AppQueryRequestDto, CalendarAccessOverviewDto};
+use floe_protocol::{AppCommandRequestDto, AppQueryRequestDto, FeasibilityAccessOverviewDto};
 use serde_json::json;
 use uuid::Uuid;
 
 #[test]
-fn calendar_overview_rejects_obsolete_policy_field() {
+fn feasibility_overview_rejects_obsolete_policy_field() {
     let overview = json!({
         "schema_version": 1,
         "person_id": Uuid::new_v4().to_string(),
-        "provider": "event_kit",
-        "connection_id": "connection",
-        "selected_resources": ["home"],
-        "granted_resources": ["home"],
-        "source_authority": {"incarnation": Uuid::new_v4(), "epoch": 1},
+        "connector": "feasibility.apple",
+        "device_id": "device",
+        "connection_id": "feasibility",
+        "source_authority": null,
         "grant_id": Uuid::new_v4(),
         "grant_authority": {"incarnation": Uuid::new_v4(), "access_epoch": 1},
         "state": "active",
         "review_required": false,
+        "presence_available": true,
+        "consumers": ["assistant"],
+        "native_subject_fingerprint": "subject",
+        "process_incarnation": null,
     });
-    assert!(serde_json::from_value::<CalendarAccessOverviewDto>(overview.clone()).is_ok());
+    assert!(serde_json::from_value::<FeasibilityAccessOverviewDto>(overview.clone()).is_ok());
     let mut obsolete = overview;
     obsolete["consumer_policy"] = json!({"incarnation": Uuid::new_v4(), "epoch": 1});
-    assert!(serde_json::from_value::<CalendarAccessOverviewDto>(obsolete).is_err());
+    assert!(serde_json::from_value::<FeasibilityAccessOverviewDto>(obsolete).is_err());
 }
 
 #[test]
@@ -140,9 +143,7 @@ fn local_owner_commands_reject_identity_topology_and_malformed_ids() {
         json!({"kind":"conversation.session.resume"}),
         json!({"kind":"conversation.session.recover", "session_id":Uuid::new_v4(), "expected_revision":1}),
         json!({"kind":"experts.registry.configure", "change":{"instance_id":Uuid::new_v4(), "expected_revision":1, "target":{"kind":"installation", "id":Uuid::new_v4(), "enabled":true}}}),
-        json!({"kind":"access.personal.configure", "connector":"attention.macos", "change":{"kind":"set_enabled", "enabled":false}}),
-        json!({"kind":"access.contacts.configure", "connector":"contacts.apple", "change":{"kind":"set_enabled", "enabled":false}}),
-        json!({"kind":"access.calendar.configure", "change":{"kind":"pause", "grant_id":Uuid::new_v4(), "expected_grant_authority":{"incarnation":Uuid::new_v4(), "access_epoch":1}}}),
+        json!({"kind":"access.feasibility.configure", "change":{"kind":"set_enabled", "enabled":false}}),
         json!({"kind":"knowledge.memory.decide", "candidate_id":Uuid::new_v4(), "decision":"approve"}),
     ];
     for command in commands {
@@ -288,83 +289,33 @@ fn day_actions_and_native_completions_accept_intent_not_authority() {
         );
     }
 }
-
 #[test]
-fn calendar_access_kinds_roundtrip_and_reject_stale_shapes() {
-    use floe_protocol::{AppCommandDto, AppQueryDto, CalendarAccessChangeDto};
-
-    let inspect = json!({"schema_version":2, "request_id":Uuid::new_v4(), "query":{"kind":"access.calendar.inspect"}});
+fn feasibility_access_wire_is_contextual_and_old_standing_wire_is_unknown() {
+    let inspect = json!({"schema_version":2, "request_id":Uuid::new_v4(), "query":{"kind":"access.feasibility.inspect"}});
     let parsed = serde_json::from_value::<AppQueryRequestDto>(inspect.clone()).unwrap();
     parsed.validate().unwrap();
-    assert!(matches!(
-        parsed.query,
-        AppQueryDto::AccessCalendarInspect {}
-    ));
-    let roundtrip: AppQueryRequestDto =
-        serde_json::from_value(serde_json::to_value(&parsed).unwrap()).unwrap();
-    assert_eq!(roundtrip, parsed);
+    assert_eq!(serde_json::to_value(parsed).unwrap(), inspect);
 
-    let authority = floe_context_contract::SourceAuthority::new();
-    let calendar_ids = (0..129)
-        .map(|index| format!("calendar-{index}"))
-        .collect::<Vec<_>>();
-    let preview = json!({"schema_version":2, "request_id":Uuid::new_v4(), "query":{"kind":"access.calendar.preview", "request":{"provider":"event_kit", "connection_id":"connection", "calendar_ids":calendar_ids, "connection_scope":"all", "connection_revision":1, "source_authority":authority}}});
-    serde_json::from_value::<AppQueryRequestDto>(preview)
-        .unwrap()
-        .validate()
-        .unwrap();
-    let review = AppCommandDto::AccessCalendarConfigure {
-        change: CalendarAccessChangeDto::Review {
-            connection_id: "connection".into(),
-            calendar_ids: calendar_ids.clone(),
-            expected_source_authority: authority,
-            expected_native_subject_fingerprint: "a".repeat(64),
-            expected_grant_id: None,
-            expected_grant_authority: None,
-        },
-    };
-    let request = json!({"schema_version":2, "request_id":Uuid::new_v4(), "command_id":Uuid::new_v4(), "command":review});
-    let parsed = serde_json::from_value::<AppCommandRequestDto>(request).unwrap();
+    let query = json!({
+        "event_handle": "event",
+        "evidence_handles": [],
+        "destination_latitude": 0.0,
+        "destination_longitude": 0.0,
+        "event_start_unix_ms": 1000,
+        "event_end_unix_ms": 2000,
+        "travel_mode": "driving"
+    });
+    let review = json!({"schema_version":2, "request_id":Uuid::new_v4(), "command_id":Uuid::new_v4(), "command":{"kind":"access.feasibility.configure", "change":{"kind":"review", "expected_native_subject_fingerprint":"subject", "feasibility_query":query}}});
+    let parsed = serde_json::from_value::<AppCommandRequestDto>(review.clone()).unwrap();
     parsed.validate().unwrap();
-    let roundtrip: AppCommandRequestDto =
-        serde_json::from_value(serde_json::to_value(&parsed).unwrap()).unwrap();
-    assert_eq!(roundtrip, parsed);
+    assert_eq!(serde_json::to_value(parsed).unwrap(), review);
 
-    // Registry/setup/consumer/scope fields are not part of the Access-owned
-    // shape, so a forged payload is rejected before it reaches the owner.
-    for forged in [
-        json!({"kind":"review", "connection_id":"connection", "calendar_ids":["home"], "expected_source_authority":authority, "expected_native_subject_fingerprint":"a".repeat(64), "setup_id":Uuid::new_v4()}),
-        json!({"kind":"review", "connection_id":"connection", "calendar_ids":["home"], "expected_source_authority":authority, "expected_native_subject_fingerprint":"a".repeat(64), "registry_revision":3}),
-        json!({"kind":"review", "connection_id":"connection", "calendar_ids":["home"], "expected_source_authority":authority, "expected_native_subject_fingerprint":"a".repeat(64), "consumers":["floe.builtin.schedule"]}),
-        json!({"kind":"review", "connection_id":"connection", "calendar_ids":["home"], "expected_source_authority":authority, "expected_native_subject_fingerprint":"a".repeat(64), "scope":{}}),
-        json!({"kind":"review", "connection_id":"connection", "calendar_ids":["home"], "expected_source_authority":authority, "expected_native_subject_fingerprint":"a".repeat(64), "purpose":"assistant"}),
-        json!({"kind":"review", "connection_id":"connection", "calendar_ids":["home"], "expected_source_authority":authority, "expected_native_subject_fingerprint":"a".repeat(64), "processing":"local_only"}),
-        json!({"kind":"review", "connection_id":"connection", "calendar_ids":["home"], "expected_source_authority":authority, "expected_native_subject_fingerprint":"a".repeat(64), "expected_grant_id":Uuid::new_v4()}),
-        json!({"kind":"pause", "grant_id":Uuid::new_v4(), "expected_grant_authority":{"incarnation":Uuid::nil(), "access_epoch":1}}),
-        json!({"kind":"inspect"}),
-    ] {
-        let value = json!({"schema_version":2, "request_id":Uuid::new_v4(), "command_id":Uuid::new_v4(), "command":{"kind":"access.calendar.configure", "change":forged}});
-        let parsed = serde_json::from_value::<AppCommandRequestDto>(value);
-        let rejected = match parsed {
-            Err(_) => true,
-            Ok(request) => request.validate().is_err(),
-        };
-        assert!(rejected, "forged change accepted: {forged}");
+    for kind in ["access.personal.configure", "access.contacts.configure", "access.calendar.configure"] {
+        let request = json!({"schema_version":2, "request_id":Uuid::new_v4(), "command_id":Uuid::new_v4(), "command":{"kind":kind, "change":{"kind":"inspect"}}});
+        assert!(serde_json::from_value::<AppCommandRequestDto>(request).is_err());
     }
-
-    // The deleted Calendar-Expert vertical stays unknown on the wire.
-    for command in [
-        json!({"kind":"experts.calendar.install", "change":{}}),
-        json!({"kind":"experts.calendar.configure", "change":{}}),
-    ] {
-        let value = json!({"schema_version":2, "request_id":Uuid::new_v4(), "command_id":Uuid::new_v4(), "command":command});
-        assert!(serde_json::from_value::<AppCommandRequestDto>(value).is_err());
-    }
-    for query in [
-        json!({"kind":"experts.calendar.inspect"}),
-        json!({"kind":"experts.calendar.setup"}),
-    ] {
-        let value = json!({"schema_version":2, "request_id":Uuid::new_v4(), "query":query});
-        assert!(serde_json::from_value::<AppQueryRequestDto>(value).is_err());
+    for kind in ["access.personal.inspect", "access.contacts.inspect", "access.calendar.inspect", "access.calendar.preview"] {
+        let request = json!({"schema_version":2, "request_id":Uuid::new_v4(), "query":{"kind":kind}});
+        assert!(serde_json::from_value::<AppQueryRequestDto>(request).is_err());
     }
 }

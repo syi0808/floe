@@ -46,10 +46,7 @@ pub use context::{
 mod knowledge;
 pub use knowledge::KnowledgeOperationResultDto;
 mod local_access;
-pub use local_access::{
-    CalendarAccessChangeDto, CalendarAccessOverviewDto, CalendarSubjectIntentDto,
-    LocalAccessResultDto,
-};
+pub use local_access::LocalAccessResultDto;
 mod queries;
 mod vault;
 pub use vault::VaultLifecycleResultDto;
@@ -63,10 +60,10 @@ pub use agent::{
     AgentMemoryReviewDecisionKindDto, AgentMemoryReviewOverviewDto, AgentMemorySummaryDto,
     AgentProposalActionDto, AgentProposalInspectionDto, AgentProposalStatusDto, AgentRetryPolicy,
     AgentSessionDto, AgentVaultFailureDto, AgentVaultRecoveryActionDto, AgentVaultStateDto,
-    CalendarActionDecisionDto, CalendarActionOperationDto, CalendarSubjectPreviewDto,
-    ConnectorSnapshotDto, ContactsAccessChangeDto, EpistemicStatusDto, FeasibilityGrantQueryDto,
-    KnowledgeCandidateDto, KnowledgeDecisionResultDto, PersonalAccessChangeDto,
-    PersonalAccessOverviewDto, PersonalMemoryKindDto, RegistryConfigurationDto,
+    CalendarActionDecisionDto, CalendarActionOperationDto,
+    ConnectorSnapshotDto, EpistemicStatusDto, FeasibilityAccessChangeDto,
+    FeasibilityAccessOverviewDto, FeasibilityGrantQueryDto, KnowledgeCandidateDto,
+    KnowledgeDecisionResultDto, PersonalMemoryKindDto, RegistryConfigurationDto,
     RegistryConfigurationTargetDto, RegistryOverviewDto,
 };
 pub use calendar::{

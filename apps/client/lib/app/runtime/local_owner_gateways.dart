@@ -372,21 +372,18 @@ final class NativeFeasibilityAccessGateway implements FeasibilityAccessGateway {
     scope: personId,
     intent: ownerIntent({
       'kind': change['kind'] == 'inspect'
-          ? 'access.personal.inspect'
-          : 'access.personal.configure',
-      'connector': 'feasibility.apple',
+          ? 'access.feasibility.inspect'
+          : 'access.feasibility.configure',
       if (change['kind'] != 'inspect') 'change': change,
     }),
     stage: 'personal_access',
     resultKind: 'local_access_operation',
     start: (operationId) => change['kind'] == 'inspect'
         ? ownerQuery(_transport, operationId, {
-            'kind': 'access.personal.inspect',
-            'connector': 'feasibility.apple',
+            'kind': 'access.feasibility.inspect',
           })
         : ownerCommand(_transport, operationId, {
-            'kind': 'access.personal.configure',
-            'connector': 'feasibility.apple',
+            'kind': 'access.feasibility.configure',
             'change': change,
           }),
     read: (operationId, release) => ownerResult(
@@ -396,11 +393,11 @@ final class NativeFeasibilityAccessGateway implements FeasibilityAccessGateway {
       release,
     ),
     decode: (result) {
-      if (result['state'] != 'ready' || result['personal_access'] is! Map) {
+      if (result['state'] != 'ready' || result['feasibility_access'] is! Map) {
         throw const FormatException('Missing Feasibility access overview');
       }
       final overview = FeasibilityAccessOverview.fromJson(
-        result['personal_access'],
+        result['feasibility_access'],
       );
       if (overview.personId != personId || overview.deviceId != deviceId) {
         throw const FormatException('Feasibility access scope mismatch');

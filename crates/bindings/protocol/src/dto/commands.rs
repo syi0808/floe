@@ -65,19 +65,9 @@ pub enum AppCommandDto {
         candidate_id: Uuid,
         decision: super::AgentMemoryReviewDecisionKindDto,
     },
-    #[serde(rename = "access.personal.configure")]
-    AccessPersonalConfigure {
-        connector: String,
-        change: super::PersonalAccessChangeDto,
-    },
-    #[serde(rename = "access.contacts.configure")]
-    AccessContactsConfigure {
-        connector: String,
-        change: super::ContactsAccessChangeDto,
-    },
-    #[serde(rename = "access.calendar.configure")]
-    AccessCalendarConfigure {
-        change: super::CalendarAccessChangeDto,
+    #[serde(rename = "access.feasibility.configure")]
+    AccessFeasibilityConfigure {
+        change: super::FeasibilityAccessChangeDto,
     },
     #[serde(rename = "experts.registry.configure")]
     ExpertsRegistryConfigure {
@@ -157,15 +147,7 @@ impl AppCommandDto {
                     Ok(())
                 }
             }
-            Self::AccessPersonalConfigure { connector, .. }
-            | Self::AccessContactsConfigure { connector, .. } => {
-                if super::local_access::identifier(connector) {
-                    Ok(())
-                } else {
-                    Err("command.connector")
-                }
-            }
-            Self::AccessCalendarConfigure { change } => change.validate(),
+            Self::AccessFeasibilityConfigure { change } => change.validate(),
             Self::ExpertsRegistryConfigure { change } => {
                 let target_id = match &change.target {
                     super::RegistryConfigurationTargetDto::Installation { id, .. }

@@ -1,7 +1,7 @@
 use floe_app::{
     AgentFailure, CalendarActionOperation, CalendarActionProposal, CalendarActionState,
-    CalendarProposalInspection, CalendarSubjectPreview, ContactsAccessChange,
-    FeasibilityGrantQuery, MemoryReviewResult, PairingIssuer, PersonalAccessChange,
+    CalendarProposalInspection, FeasibilityGrantQuery,
+    MemoryReviewResult, PairingIssuer, PersonalAccessChange,
     RemoteEnrollmentStatus, RemoteOwnerPublicKey, RemoteProducerIdentity, VaultState,
 };
 use floe_protocol::wire::{WireResult, invalid};
@@ -378,104 +378,23 @@ fn feasibility_query(query: &FeasibilityGrantQueryDto) -> FeasibilityGrantQuery 
     }
 }
 
-pub(crate) fn personal_access_change(change: &PersonalAccessChangeDto) -> PersonalAccessChange {
+pub(crate) fn feasibility_access_change(change: &FeasibilityAccessChangeDto) -> PersonalAccessChange {
     match change {
-        PersonalAccessChangeDto::Inspect {} => PersonalAccessChange::Inspect,
-        PersonalAccessChangeDto::Review {
+        FeasibilityAccessChangeDto::Inspect {} => PersonalAccessChange::Inspect,
+        FeasibilityAccessChangeDto::Review {
             expected_native_subject_fingerprint,
             feasibility_query: query,
             expected_grant_id,
             expected_grant_authority,
         } => PersonalAccessChange::Review {
             expected_native_subject_fingerprint: expected_native_subject_fingerprint.clone(),
-            feasibility_query: query.as_ref().map(feasibility_query),
+            feasibility_query: Some(feasibility_query(query)),
             expected_grant_id: *expected_grant_id,
             expected_grant_authority: *expected_grant_authority,
         },
-        PersonalAccessChangeDto::SetEnabled { enabled } => {
+        FeasibilityAccessChangeDto::SetEnabled { enabled } => {
             PersonalAccessChange::SetEnabled { enabled: *enabled }
         }
-    }
-}
-
-pub(crate) fn contacts_access_change(change: &ContactsAccessChangeDto) -> ContactsAccessChange {
-    match change {
-        ContactsAccessChangeDto::Inspect { selected_handles } => ContactsAccessChange::Inspect {
-            selected_handles: selected_handles.clone(),
-        },
-        ContactsAccessChangeDto::Review {
-            selected_handles,
-            expected_native_subject_fingerprint,
-            expected_grant_id,
-            expected_grant_authority,
-        } => ContactsAccessChange::Review {
-            selected_handles: selected_handles.clone(),
-            expected_native_subject_fingerprint: expected_native_subject_fingerprint.clone(),
-            expected_grant_id: *expected_grant_id,
-            expected_grant_authority: *expected_grant_authority,
-        },
-        ContactsAccessChangeDto::SetEnabled { enabled } => {
-            ContactsAccessChange::SetEnabled { enabled: *enabled }
-        }
-    }
-}
-
-pub(crate) fn calendar_access_change(
-    change: &CalendarAccessChangeDto,
-) -> floe_app::CalendarAccessChange {
-    match change {
-        CalendarAccessChangeDto::Review {
-            connection_id,
-            calendar_ids,
-            expected_source_authority,
-            expected_native_subject_fingerprint,
-            expected_grant_id,
-            expected_grant_authority,
-        } => floe_app::CalendarAccessChange::Review {
-            connection_id: connection_id.clone(),
-            calendar_ids: calendar_ids.clone(),
-            expected_source_authority: *expected_source_authority,
-            expected_native_subject_fingerprint: expected_native_subject_fingerprint.clone(),
-            expected_grant_id: *expected_grant_id,
-            expected_grant_authority: *expected_grant_authority,
-        },
-        CalendarAccessChangeDto::Pause {
-            grant_id,
-            expected_grant_authority,
-        } => floe_app::CalendarAccessChange::Pause {
-            grant_id: *grant_id,
-            expected_grant_authority: *expected_grant_authority,
-        },
-        CalendarAccessChangeDto::Remove {
-            grant_id,
-            expected_grant_authority,
-        } => floe_app::CalendarAccessChange::Remove {
-            grant_id: *grant_id,
-            expected_grant_authority: *expected_grant_authority,
-        },
-    }
-}
-
-pub(crate) fn calendar_access_dto(
-    overview: floe_app::CalendarAccessOverview,
-) -> CalendarAccessOverviewDto {
-    CalendarAccessOverviewDto {
-        schema_version: PROTOCOL_VERSION,
-        person_id: overview.person_id.to_string(),
-        provider: super::day::calendar_provider_to_dto(overview.provider),
-        connection_id: overview.connection_id,
-        selected_resources: overview.selected_resources,
-        granted_resources: overview.granted_resources,
-        source_authority: overview.source_authority,
-        grant_id: overview.grant_id,
-        grant_authority: overview.grant_authority,
-        state: match overview.state {
-            floe_app::CalendarAccessState::NeedsReview => "needs_review".into(),
-            floe_app::CalendarAccessState::Paused => "paused".into(),
-            floe_app::CalendarAccessState::Active => "active".into(),
-            floe_app::CalendarAccessState::Revoked => "revoked".into(),
-        },
-        review_required: overview.review_required,
     }
 }
 
@@ -543,19 +462,6 @@ pub(crate) fn vault_state_dto(state: VaultState) -> AgentVaultStateDto {
     }
 }
 
-pub(crate) fn subject_preview_dto(preview: CalendarSubjectPreview) -> CalendarSubjectPreviewDto {
-    CalendarSubjectPreviewDto {
-        provider: super::day::calendar_provider_to_dto(preview.provider),
-        device_id: preview.device_id,
-        calendar_ids: preview.calendar_ids,
-        connection_scope: super::day::calendar_scope_to_dto(preview.connection_scope),
-        connection_id: preview.connection_id,
-        connection_revision: preview.connection_revision,
-        source_authority: preview.source_authority,
-        native_subject_fingerprint: preview.native_subject_fingerprint,
-    }
-}
-
 pub(crate) fn proposal_dto(proposal: CalendarProposalInspection) -> AgentProposalInspectionDto {
     AgentProposalInspectionDto {
         schema_version: PROTOCOL_VERSION,
@@ -615,10 +521,10 @@ pub(crate) fn memory_dto(
     })
 }
 
-pub(crate) fn personal_access_dto(
+pub(crate) fn feasibility_access_dto(
     overview: floe_app::PersonalAccessOverview,
-) -> PersonalAccessOverviewDto {
-    PersonalAccessOverviewDto {
+) -> FeasibilityAccessOverviewDto {
+    FeasibilityAccessOverviewDto {
         schema_version: 1,
         person_id: overview.person_id.to_string(),
         connector: overview.connector,

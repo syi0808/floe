@@ -179,35 +179,10 @@ where
                 result: knowledge_result(result, request.command_id)?,
             })
         }
-        AppCommandDto::AccessPersonalConfigure { connector, change } => {
+        AppCommandDto::AccessFeasibilityConfigure { change } => {
             let command = floe_app::LocalAccessCommand::Personal {
-                connector,
-                change: crate::conversion::owners::personal_access_change(&change),
-            };
-            let result = host_request
-                .services()
-                .local_access_command(host_request.caller(), request.command_id, command)
-                .map_err(service_error)?;
-            Ok(AppCommandResultDto::LocalAccessOperation {
-                result: local_access_result(result, request.command_id)?,
-            })
-        }
-        AppCommandDto::AccessContactsConfigure { connector, change } => {
-            let command = floe_app::LocalAccessCommand::Contacts {
-                connector,
-                change: crate::conversion::owners::contacts_access_change(&change),
-            };
-            let result = host_request
-                .services()
-                .local_access_command(host_request.caller(), request.command_id, command)
-                .map_err(service_error)?;
-            Ok(AppCommandResultDto::LocalAccessOperation {
-                result: local_access_result(result, request.command_id)?,
-            })
-        }
-        AppCommandDto::AccessCalendarConfigure { change } => {
-            let command = floe_app::LocalAccessCommand::Calendar {
-                change: crate::conversion::owners::calendar_access_change(&change),
+                connector: "feasibility.apple".to_owned(),
+                change: crate::conversion::owners::feasibility_access_change(&change),
             };
             let result = host_request
                 .services()
@@ -660,60 +635,13 @@ fn query_with_host<
                 result: connections_result(result, operation_id)?,
             })
         }
-        AppQueryDto::AccessCalendarPreview { request: subject } => {
-            let inspection =
-                floe_app::LocalAccessInspection::CalendarSubject(floe_app::CalendarSubjectIntent {
-                    provider: crate::conversion::calendar_provider_from_dto(subject.provider),
-                    connection_id: subject.connection_id,
-                    calendar_ids: subject.calendar_ids,
-                    connection_scope: crate::conversion::calendar_scope_from_dto(
-                        subject.connection_scope,
-                    ),
-                    connection_revision: subject.connection_revision,
-                    source_authority: subject.source_authority,
-                });
-            let result = services
-                .inspect_local_access(caller, request.request_id, inspection)
-                .map_err(service_error)?;
-            Ok(AppQueryResultDto::LocalAccessOperation {
-                result: local_access_result(result, request.request_id)?,
-            })
-        }
-        AppQueryDto::AccessCalendarInspect {} => {
+        AppQueryDto::AccessFeasibilityInspect {} => {
             let result = services
                 .inspect_local_access(
                     caller,
                     request.request_id,
-                    floe_app::LocalAccessInspection::CalendarAccess,
-                )
-                .map_err(service_error)?;
-            Ok(AppQueryResultDto::LocalAccessOperation {
-                result: local_access_result(result, request.request_id)?,
-            })
-        }
-        AppQueryDto::AccessPersonalInspect { connector } => {
-            let result = services
-                .inspect_local_access(
-                    caller,
-                    request.request_id,
-                    floe_app::LocalAccessInspection::Personal { connector },
-                )
-                .map_err(service_error)?;
-            Ok(AppQueryResultDto::LocalAccessOperation {
-                result: local_access_result(result, request.request_id)?,
-            })
-        }
-        AppQueryDto::AccessContactsInspect {
-            connector,
-            selected_handles,
-        } => {
-            let result = services
-                .inspect_local_access(
-                    caller,
-                    request.request_id,
-                    floe_app::LocalAccessInspection::Contacts {
-                        connector,
-                        selected_handles,
+                    floe_app::LocalAccessInspection::Personal {
+                        connector: "feasibility.apple".to_owned(),
                     },
                 )
                 .map_err(service_error)?;
@@ -1152,15 +1080,9 @@ fn local_access_result(
         operation_id,
         done: result.done,
         state: result.state.map(crate::conversion::owners::vault_state_dto),
-        calendar_subject_preview: result
-            .calendar_subject_preview
-            .map(crate::conversion::owners::subject_preview_dto),
-        calendar_access: result
-            .calendar_access
-            .map(crate::conversion::owners::calendar_access_dto),
-        personal_access: result
+        feasibility_access: result
             .personal_access
-            .map(crate::conversion::owners::personal_access_dto),
+            .map(crate::conversion::owners::feasibility_access_dto),
         failure: result.failure.as_ref().map(|failure| {
             crate::conversion::owners::failure_envelope(
                 failure,

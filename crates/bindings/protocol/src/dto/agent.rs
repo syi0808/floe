@@ -4,8 +4,6 @@ use uuid::Uuid;
 
 use floe_context_contract::{GrantAuthority, GrantId, SourceAuthority};
 
-use super::calendar::{CalendarProviderDto, CalendarScopeDto};
-
 pub use floe_agent_contract::{
     AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction, AgentRetryPolicy,
 };
@@ -78,27 +76,13 @@ pub enum RegistryConfigurationTargetDto {
     Assignment { id: Uuid, enabled: bool },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct CalendarSubjectPreviewDto {
-    pub provider: CalendarProviderDto,
-    pub device_id: String,
-    pub calendar_ids: Vec<String>,
-    pub connection_scope: CalendarScopeDto,
-    pub connection_id: String,
-    pub connection_revision: u64,
-    pub source_authority: SourceAuthority,
-    pub native_subject_fingerprint: String,
-}
-
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum PersonalAccessChangeDto {
+pub enum FeasibilityAccessChangeDto {
     Inspect {},
     Review {
         expected_native_subject_fingerprint: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        feasibility_query: Option<FeasibilityGrantQueryDto>,
+        feasibility_query: FeasibilityGrantQueryDto,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expected_grant_id: Option<GrantId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -107,6 +91,37 @@ pub enum PersonalAccessChangeDto {
     SetEnabled {
         enabled: bool,
     },
+}
+
+impl FeasibilityAccessChangeDto {
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        match self {
+            Self::Inspect {} | Self::SetEnabled { .. } => Ok(()),
+            Self::Review {
+                expected_native_subject_fingerprint,
+                feasibility_query,
+                expected_grant_id,
+                expected_grant_authority,
+            } => {
+                if expected_native_subject_fingerprint.is_empty()
+                    || expected_native_subject_fingerprint.len() > 256
+                    || expected_native_subject_fingerprint.trim()
+                        != expected_native_subject_fingerprint
+                    || feasibility_query.event_handle.is_empty()
+                    || feasibility_query.event_handle.len() > 256
+                    || feasibility_query.event_start_unix_ms
+                        >= feasibility_query.event_end_unix_ms
+                {
+                    return Err("command.change");
+                }
+                match (expected_grant_id, expected_grant_authority) {
+                    (None, None) => Ok(()),
+                    (Some(id), Some(authority)) if id.is_valid() && authority.is_valid() => Ok(()),
+                    _ => Err("command.change.expected_grant"),
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -122,27 +137,8 @@ pub struct FeasibilityGrantQueryDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ContactsAccessChangeDto {
-    Inspect {
-        selected_handles: Vec<String>,
-    },
-    Review {
-        selected_handles: Vec<String>,
-        expected_native_subject_fingerprint: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        expected_grant_id: Option<GrantId>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        expected_grant_authority: Option<GrantAuthority>,
-    },
-    SetEnabled {
-        enabled: bool,
-    },
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct PersonalAccessOverviewDto {
+pub struct FeasibilityAccessOverviewDto {
     pub schema_version: u32,
     pub person_id: String,
     pub connector: String,

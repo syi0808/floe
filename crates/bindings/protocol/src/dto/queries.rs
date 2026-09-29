@@ -73,19 +73,8 @@ pub enum AppQueryDto {
     RemoteCalendarSources {},
     #[serde(rename = "connections.read_result")]
     ConnectionsReadResult { operation_id: Uuid, release: bool },
-    #[serde(rename = "access.calendar.preview")]
-    AccessCalendarPreview {
-        request: super::CalendarSubjectIntentDto,
-    },
-    #[serde(rename = "access.calendar.inspect")]
-    AccessCalendarInspect {},
-    #[serde(rename = "access.personal.inspect")]
-    AccessPersonalInspect { connector: String },
-    #[serde(rename = "access.contacts.inspect")]
-    AccessContactsInspect {
-        connector: String,
-        selected_handles: Vec<String>,
-    },
+    #[serde(rename = "access.feasibility.inspect")]
+    AccessFeasibilityInspect {},
     #[serde(rename = "access.local.read_result")]
     AccessLocalReadResult { operation_id: Uuid, release: bool },
     #[serde(rename = "experts.registry.inspect")]
@@ -161,27 +150,7 @@ impl AppQueryDto {
             | Self::ConnectionsReadResult { operation_id, .. } => {
                 ("query.operation_id", operation_id)
             }
-            Self::AccessCalendarPreview { request } => return request.validate(),
-            Self::AccessCalendarInspect {} => return Ok(()),
-            Self::AccessPersonalInspect { connector } => {
-                return if super::local_access::identifier(connector) {
-                    Ok(())
-                } else {
-                    Err("query.connector")
-                };
-            }
-            Self::AccessContactsInspect {
-                connector,
-                selected_handles,
-            } => {
-                return if super::local_access::identifier(connector)
-                    && super::local_access::identifiers(selected_handles, 64)
-                {
-                    Ok(())
-                } else {
-                    Err("query.selection")
-                };
-            }
+            Self::AccessFeasibilityInspect {} => return Ok(()),
             Self::AccessLocalReadResult { operation_id, .. } => {
                 ("query.operation_id", operation_id)
             }
