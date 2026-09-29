@@ -303,19 +303,29 @@ fn feasibility_access_wire_is_contextual_and_old_standing_wire_is_unknown() {
         "destination_longitude": 0.0,
         "event_start_unix_ms": 1000,
         "event_end_unix_ms": 2000,
-        "travel_mode": "driving"
+        "travel_mode": "automobile"
     });
     let review = json!({"schema_version":2, "request_id":Uuid::new_v4(), "command_id":Uuid::new_v4(), "command":{"kind":"access.feasibility.configure", "change":{"kind":"review", "expected_native_subject_fingerprint":"subject", "feasibility_query":query}}});
     let parsed = serde_json::from_value::<AppCommandRequestDto>(review.clone()).unwrap();
     parsed.validate().unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), review);
 
-    for kind in ["access.personal.configure", "access.contacts.configure", "access.calendar.configure"] {
+    for kind in [
+        "access.personal.configure",
+        "access.contacts.configure",
+        "access.calendar.configure",
+    ] {
         let request = json!({"schema_version":2, "request_id":Uuid::new_v4(), "command_id":Uuid::new_v4(), "command":{"kind":kind, "change":{"kind":"inspect"}}});
         assert!(serde_json::from_value::<AppCommandRequestDto>(request).is_err());
     }
-    for kind in ["access.personal.inspect", "access.contacts.inspect", "access.calendar.inspect", "access.calendar.preview"] {
-        let request = json!({"schema_version":2, "request_id":Uuid::new_v4(), "query":{"kind":kind}});
+    for kind in [
+        "access.personal.inspect",
+        "access.contacts.inspect",
+        "access.calendar.inspect",
+        "access.calendar.preview",
+    ] {
+        let request =
+            json!({"schema_version":2, "request_id":Uuid::new_v4(), "query":{"kind":kind}});
         assert!(serde_json::from_value::<AppQueryRequestDto>(request).is_err());
     }
 }

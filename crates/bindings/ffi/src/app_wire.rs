@@ -180,8 +180,7 @@ where
             })
         }
         AppCommandDto::AccessFeasibilityConfigure { change } => {
-            let command = floe_app::LocalAccessCommand::Personal {
-                connector: "feasibility.apple".to_owned(),
+            let command = floe_app::LocalAccessCommand::Feasibility {
                 change: crate::conversion::owners::feasibility_access_change(&change),
             };
             let result = host_request
@@ -640,9 +639,7 @@ fn query_with_host<
                 .inspect_local_access(
                     caller,
                     request.request_id,
-                    floe_app::LocalAccessInspection::Personal {
-                        connector: "feasibility.apple".to_owned(),
-                    },
+                    floe_app::LocalAccessInspection::Feasibility,
                 )
                 .map_err(service_error)?;
             Ok(AppQueryResultDto::LocalAccessOperation {
@@ -1081,7 +1078,7 @@ fn local_access_result(
         done: result.done,
         state: result.state.map(crate::conversion::owners::vault_state_dto),
         feasibility_access: result
-            .personal_access
+            .feasibility_access
             .map(crate::conversion::owners::feasibility_access_dto),
         failure: result.failure.as_ref().map(|failure| {
             crate::conversion::owners::failure_envelope(

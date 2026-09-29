@@ -217,6 +217,107 @@ mod tests {
     }
 
     #[test]
+    fn native_and_hosted_observe_share_one_exact_wire() {
+        for (connector, native_subject, producer_fingerprint) in [
+            ("calendar.event_kit", Some("a".repeat(64)), None),
+            ("calendar.google", None, Some("b".repeat(64))),
+        ] {
+            let connection_id = Uuid::new_v4().to_string();
+            let connection = ConnectionId::try_new(&connection_id).unwrap();
+            let expected = ConnectionObserveExpectationDto {
+                connector_id: connector.into(),
+                connection_id: connection_id.clone(),
+                source_authority: SourceAuthority::new(),
+                connection_revision: Some(1),
+                native_subject,
+                producer_fingerprint,
+                members: vec![ConnectionObserveReviewedMemberDto {
+                    view_id: "calendar.timeline".into(),
+                    policy_digest: "c".repeat(64),
+                    resource: floe_context_contract::connection_view_resource(
+                        "calendar.timeline",
+                        &connection,
+                    )
+                    .unwrap()
+                    .as_str()
+                    .into(),
+                    expected_grant_id: None,
+                    expected_grant_authority: None,
+                }],
+            };
+            expected.validate().unwrap();
+            let mutation = ConnectionObserveMutationDto {
+                connector_id: connector.into(),
+                connection_id,
+                enabled: true,
+                disconnecting: false,
+                expected: Some(expected),
+            };
+            mutation.validate().unwrap();
+            let wire = serde_json::to_value(&mutation).unwrap();
+            let decoded: ConnectionObserveMutationDto =
+                serde_json::from_value(wire.clone()).unwrap();
+            decoded.validate().unwrap();
+            assert_eq!(decoded, mutation);
+            for field in [
+                "calendar_ids",
+                "selected_handles",
+                "resource",
+                "consumers",
+                "purpose",
+                "processing",
+                "source_authority",
+                "consumer_policy",
+                "policy_authority",
+            ] {
+                let mut forged = wire.clone();
+                forged[field] = serde_json::json!("forged");
+                assert!(
+                    serde_json::from_value::<ConnectionObserveMutationDto>(forged).is_err(),
+                    "{field}"
+                );
+            }
+            for field in [
+                "provider_identity",
+                "recipient",
+                "selected_resources",
+                "granted_resources",
+            ] {
+                let mut forged = wire.clone();
+                forged["expected"][field] = serde_json::json!("forged");
+                assert!(
+                    serde_json::from_value::<ConnectionObserveMutationDto>(forged).is_err(),
+                    "{field}"
+                );
+            }
+            let mut absent_pair = wire;
+            absent_pair["expected"]["members"][0]["expected_grant_id"] =
+                serde_json::json!(GrantId::new());
+            let invalid: ConnectionObserveMutationDto =
+                serde_json::from_value(absent_pair).unwrap();
+            assert!(invalid.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn overview_rejects_old_selected_granted_projection() {
+        let value = serde_json::json!({
+            "connector_id": "contacts.apple",
+            "connection_id": Uuid::new_v4().to_string(),
+            "status": "active",
+            "enabled": true,
+            "source_resources": ["contact-a"],
+            "members": [{"view_id": "people.identity", "state": "active", "review_required": false}]
+        });
+        assert!(serde_json::from_value::<ConnectionObserveOverviewDto>(value.clone()).is_ok());
+        for field in ["selected_resources", "granted_resources"] {
+            let mut forged = value.clone();
+            forged[field] = serde_json::json!(["contact-a"]);
+            assert!(serde_json::from_value::<ConnectionObserveOverviewDto>(forged).is_err());
+        }
+    }
+
+    #[test]
     fn app_result_keeps_owner_correlation_at_top_level() {
         let operation_id = Uuid::new_v4();
         let result = super::super::AppQueryResultDto::ConnectionObserve {

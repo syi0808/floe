@@ -1,8 +1,8 @@
 use floe_app::{
     AgentFailure, CalendarActionOperation, CalendarActionProposal, CalendarActionState,
-    CalendarProposalInspection, FeasibilityGrantQuery,
-    MemoryReviewResult, PairingIssuer, PersonalAccessChange,
-    RemoteEnrollmentStatus, RemoteOwnerPublicKey, RemoteProducerIdentity, VaultState,
+    CalendarProposalInspection, FeasibilityAccessChange, FeasibilityGrantQuery, MemoryReviewResult,
+    PairingIssuer, RemoteEnrollmentStatus, RemoteOwnerPublicKey, RemoteProducerIdentity,
+    VaultState,
 };
 use floe_protocol::wire::{WireResult, invalid};
 use floe_protocol::*;
@@ -83,11 +83,8 @@ fn classify_failure(failure: &AgentFailure, stage: &str) -> FailureClassificatio
         .unwrap_or_else(|| "unknown".into());
     let source_stage = matches!(
         stage,
-        "calendar_subject_preview"
-            | "calendar_access"
-            | "calendar_action"
-            | "personal_access"
-            | "contacts_access"
+        "calendar_action"
+            | "feasibility_access"
             | "remote_authority_inspect_producer"
             | "remote_authority_review_and_enroll"
             | "remote_authority_enrollment_status"
@@ -347,12 +344,7 @@ fn recovery_action(failure: &AgentFailure, stage: &str) -> AgentVaultRecoveryAct
         AgentFailure::AccessReviewRequired
             if matches!(
                 stage,
-                "calendar_subject_preview"
-                    | "calendar_access"
-                    | "calendar_action"
-                    | "personal_access"
-                    | "contacts_access"
-                    | "conversation_turn"
+                "calendar_action" | "feasibility_access" | "conversation_turn"
             ) =>
         {
             AgentVaultRecoveryActionDto::ReviewSource
@@ -378,22 +370,24 @@ fn feasibility_query(query: &FeasibilityGrantQueryDto) -> FeasibilityGrantQuery 
     }
 }
 
-pub(crate) fn feasibility_access_change(change: &FeasibilityAccessChangeDto) -> PersonalAccessChange {
+pub(crate) fn feasibility_access_change(
+    change: &FeasibilityAccessChangeDto,
+) -> FeasibilityAccessChange {
     match change {
-        FeasibilityAccessChangeDto::Inspect {} => PersonalAccessChange::Inspect,
+        FeasibilityAccessChangeDto::Inspect {} => FeasibilityAccessChange::Inspect,
         FeasibilityAccessChangeDto::Review {
             expected_native_subject_fingerprint,
             feasibility_query: query,
             expected_grant_id,
             expected_grant_authority,
-        } => PersonalAccessChange::Review {
+        } => FeasibilityAccessChange::Review {
             expected_native_subject_fingerprint: expected_native_subject_fingerprint.clone(),
-            feasibility_query: Some(feasibility_query(query)),
+            feasibility_query: feasibility_query(query),
             expected_grant_id: *expected_grant_id,
             expected_grant_authority: *expected_grant_authority,
         },
         FeasibilityAccessChangeDto::SetEnabled { enabled } => {
-            PersonalAccessChange::SetEnabled { enabled: *enabled }
+            FeasibilityAccessChange::SetEnabled { enabled: *enabled }
         }
     }
 }
@@ -522,7 +516,7 @@ pub(crate) fn memory_dto(
 }
 
 pub(crate) fn feasibility_access_dto(
-    overview: floe_app::PersonalAccessOverview,
+    overview: floe_app::FeasibilityAccessOverview,
 ) -> FeasibilityAccessOverviewDto {
     FeasibilityAccessOverviewDto {
         schema_version: 1,
@@ -534,10 +528,10 @@ pub(crate) fn feasibility_access_dto(
         grant_id: overview.grant_id,
         grant_authority: overview.grant_authority,
         state: match overview.state {
-            floe_app::PersonalAccessState::NeedsReview => "needs_review".into(),
-            floe_app::PersonalAccessState::Paused => "paused".into(),
-            floe_app::PersonalAccessState::Active => "active".into(),
-            floe_app::PersonalAccessState::Revoked => "revoked".into(),
+            floe_app::FeasibilityAccessState::NeedsReview => "needs_review".into(),
+            floe_app::FeasibilityAccessState::Paused => "paused".into(),
+            floe_app::FeasibilityAccessState::Active => "active".into(),
+            floe_app::FeasibilityAccessState::Revoked => "revoked".into(),
         },
         review_required: overview.review_required,
         presence_available: overview.presence_available,

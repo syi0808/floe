@@ -96,7 +96,8 @@ pub enum FeasibilityAccessChangeDto {
 impl FeasibilityAccessChangeDto {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         match self {
-            Self::Inspect {} | Self::SetEnabled { .. } => Ok(()),
+            Self::Inspect {} => Err("command.change"),
+            Self::SetEnabled { .. } => Ok(()),
             Self::Review {
                 expected_native_subject_fingerprint,
                 feasibility_query,
@@ -109,8 +110,7 @@ impl FeasibilityAccessChangeDto {
                         != expected_native_subject_fingerprint
                     || feasibility_query.event_handle.is_empty()
                     || feasibility_query.event_handle.len() > 256
-                    || feasibility_query.event_start_unix_ms
-                        >= feasibility_query.event_end_unix_ms
+                    || feasibility_query.event_start_unix_ms >= feasibility_query.event_end_unix_ms
                 {
                     return Err("command.change");
                 }
