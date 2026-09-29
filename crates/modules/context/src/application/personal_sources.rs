@@ -69,7 +69,6 @@ struct PersonalRead<'a> {
     domain: PersonalDomain,
     consumer: GrantConsumer,
     reject_ambiguous: bool,
-    selected_handles: Vec<String>,
     /// What the dependency this read produces is charged to.
     lease_invocation_id: Uuid,
     deadline: Instant,
@@ -125,7 +124,7 @@ async fn acquire_personal_source(
                 device_id: read.device_id,
                 host_epoch: driver.personal_host_epoch(read.person_id)?,
                 domain: read.domain,
-                selected_handles: read.selected_handles.clone(),
+                selected_handles: Vec::new(),
                 feasibility: Some(&review.query),
                 expected_subject: subject.clone(),
                 deadline: read.deadline,
@@ -162,15 +161,8 @@ fn personal_dependency(
     expires_at_unix_ms: i64,
 ) -> Result<ContextDependency, AgentFailure> {
     let (observed, expires) = freshness(observed_at_unix_ms, expires_at_unix_ms)?;
-    let source_resources = if read.domain == PersonalDomain::People {
-        read.selected_handles
-            .iter()
-            .map(|handle| ResourceHandle::try_new(handle.clone()))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| AgentFailure::InvalidInput)?
-    } else {
-        vec![ResourceHandle::try_new(read.resource).map_err(|_| AgentFailure::InvalidInput)?]
-    };
+    let source_resources =
+        vec![ResourceHandle::try_new(read.resource).map_err(|_| AgentFailure::InvalidInput)?];
     ContextDependency::try_new(
         read.person_id,
         completed.grant.id(),
@@ -220,7 +212,6 @@ pub async fn read_feasibility(
         domain: PersonalDomain::Feasibility,
         consumer,
         reject_ambiguous: true,
-        selected_handles: vec![],
         lease_invocation_id,
         deadline,
     };

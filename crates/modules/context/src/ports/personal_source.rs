@@ -14,7 +14,7 @@ use serde_json::Value;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-/// The grant records a personal read runs against.
+/// Vault-owned grant and contextual Feasibility review facts.
 pub trait PersonalGrantRecords: Sync {
     fn grants<'a>(&'a self) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>>;
 

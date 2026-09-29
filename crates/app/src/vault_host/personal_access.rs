@@ -558,6 +558,94 @@ mod tests {
         }
     }
 
+    fn standing_review(
+        connector: &str,
+        fingerprint: &str,
+        expected: Option<&DataAccessGrant>,
+    ) -> PersonalAccessConfiguration {
+        PersonalAccessConfiguration {
+            connector: connector.into(),
+            device_id: "device-1".into(),
+            consumers: Vec::new(),
+            change: PersonalAccessChange::Review {
+                expected_native_subject_fingerprint: fingerprint.into(),
+                feasibility_query: None,
+                expected_grant_id: expected.map(DataAccessGrant::id),
+                expected_grant_authority: expected.map(DataAccessGrant::authority),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn singleton_personal_subject_review_advances_only_source_authority() {
+        for connector in ["attention.macos", "health.apple"] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            let core = FloeCore::open(root.path().join("core.db")).await.unwrap();
+            let person = PersonId::new();
+            let vault = EncryptedAgentVault::create(root.path(), person, Keys::default())
+                .await
+                .unwrap();
+            let subject = Subject {
+                fingerprint: Mutex::new("a".repeat(64)),
+                selected: Mutex::new(Vec::new()),
+            };
+            let first = apply_personal(
+                &core,
+                &vault,
+                &subject,
+                person,
+                standing_review(connector, &"a".repeat(64), None),
+                Cancellation::default(),
+            )
+            .await
+            .unwrap();
+            let spec = PersonalSourceSpec::for_connector(connector).unwrap();
+            let connection_id = ConnectionId::try_new(spec.connection).unwrap();
+            let initial = core
+                .source_service()
+                .load(person, &connection_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(initial.revision(), 1);
+            assert_eq!(
+                initial.resource_mode(),
+                floe_connections::ResourceMode::AllAvailable
+            );
+            let grant = current_grant(&vault, spec, Some(&initial))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(first.grant_id, Some(grant.id()));
+            *subject.fingerprint.lock().unwrap() = "b".repeat(64);
+            let next = apply_personal(
+                &core,
+                &vault,
+                &subject,
+                person,
+                standing_review(connector, &"b".repeat(64), Some(&grant)),
+                Cancellation::default(),
+            )
+            .await
+            .unwrap();
+            let changed = core
+                .source_service()
+                .load(person, &connection_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(changed.revision(), 2);
+            assert_eq!(
+                changed.source_authority(),
+                initial.source_authority().advance().unwrap()
+            );
+            assert_eq!(changed.resources(), initial.resources());
+            assert_eq!(next.grant_id, Some(grant.id()));
+            assert_eq!(next.grant_authority, Some(grant.authority()));
+        }
+    }
+
     #[tokio::test]
     async fn contacts_source_review_preserves_grant_and_does_not_roll_back_on_grant_conflict() {
         let root = tempfile::tempdir().unwrap();

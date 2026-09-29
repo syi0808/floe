@@ -64,7 +64,7 @@ fn decode_review(row: &turso::Row, offset: usize) -> Result<FeasibilityReviewRec
 const REVIEW_COLUMNS: &str = "reviewed_subject_fingerprint, source_incarnation, source_epoch, event_handle, evidence_handles, destination_latitude, destination_longitude, event_start_unix_ms, event_end_unix_ms, travel_mode";
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    pub async fn feasibility_review(
+    pub(crate) async fn feasibility_review(
         &self,
         grant_id: GrantId,
     ) -> Result<FeasibilityReviewRecord, AgentFailure> {
@@ -125,7 +125,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(Some((grant_id, review)))
     }
 
-    pub async fn review_feasibility_grant(
+    pub(crate) async fn review_feasibility_grant(
         &self,
         source: GrantSourceBinding,
         scope: GrantScope,
@@ -231,7 +231,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    pub async fn pause_feasibility_grant(
+    pub(crate) async fn pause_feasibility_grant(
         &self,
         grant_id: GrantId,
         expected: GrantAuthority,

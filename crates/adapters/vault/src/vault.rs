@@ -45,7 +45,6 @@ pub use conversations::{
     VaultConversationJournalEntry, VaultConversationResumeRef, VaultConversationRunRecord,
     VaultConversationRunState, VaultConversationTerminal,
 };
-pub use floe_access::FeasibilityGrantQuery;
 pub use floe_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use keyring::KeyringVaultKeys;
 pub use remote_authority::{

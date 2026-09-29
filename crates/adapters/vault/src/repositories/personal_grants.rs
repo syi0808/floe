@@ -1,8 +1,7 @@
 //! The Person's own grants, as their vault holds them.
 //!
-//! Context asks what the Person has granted and what subject they reviewed; the
-//! vault is where those records live. Nothing here decides whether a read is
-//! allowed — it only reports what was recorded.
+//! Context asks what the Person granted and which contextual Feasibility
+//! review they left. Standing native source facts live in Connections.
 
 use floe_agent_contract::{AgentFailure, BoxFuture};
 use floe_context::PersonalGrantRecords;

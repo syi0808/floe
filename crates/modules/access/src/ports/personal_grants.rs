@@ -1,4 +1,4 @@
-//! What reviewing a personal grant needs from outside Access.
+//! What reviewing contextual Feasibility needs from outside Access.
 //!
 //! Two things: the device, to say which subject it is answering for right now,
 //! and the Person's own store, to report what they already granted and to commit

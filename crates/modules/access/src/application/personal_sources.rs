@@ -1,9 +1,6 @@
-//! What the Person's own device sources are, as a grant names them.
+//! Personal View identifiers and the contextual Feasibility grant source.
 //!
-//! A grant binds a connector, a connection and the device that answers for it.
-//! Those three names are the same whether a grant is being reviewed or a read is
-//! being admitted under one, so they are stated once, here, by the owner that
-//! decides what a grant may say.
+//! Standing personal source resources and subjects belong to Connections.
 
 use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId, GrantSourceBinding};
 use floe_kernel::{AgentFailure, PersonId};
