@@ -390,11 +390,13 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                     selection: self.selection.clone(),
                 }));
             let attention_reader = PersonalAttentionReader {
+                core: &self.core,
                 vault: &self.vault,
                 local_context: &self.local_context,
                 device_id: &context.device_id,
             };
             let people_reader = PersonalPeopleReader {
+                core: &self.core,
                 vault: &self.vault,
                 local_context: &self.local_context,
                 device_id: &context.device_id,
@@ -882,11 +884,7 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
             }
             if matches!(
                 declared.capability.as_str(),
-                "attention.coarse"
-                    | "people.identity"
-                    | "wellbeing.derived"
-                    | "floe.tasks"
-                    | "memory.confirmed"
+                "floe.tasks" | "memory.confirmed"
             ) {
                 let selected = admitted
                     .selected
@@ -1245,15 +1243,43 @@ mod capture_tests {
                             contract_version: 1,
                         }]
                     } else {
+                        let sources = if requirement.capability == "attention.coarse" {
+                            vec![
+                                floe_connections::SourceConnection::establish_reviewed_native(
+                                    floe_kernel::PersonId::new(),
+                                    ConnectorId::try_new("attention.macos").unwrap(),
+                                    ConnectionId::try_new("attention.macos.local").unwrap(),
+                                    floe_context_contract::ExecutionOwnerId::try_new(format!(
+                                        "macos:{device_id}"
+                                    ))
+                                    .unwrap(),
+                                    floe_connections::ResourceMode::AllAvailable,
+                                    vec![
+                                        floe_connections::ConnectionResource::new(
+                                            ResourceHandle::try_new("attention.coarse").unwrap(),
+                                            "Attention".into(),
+                                        )
+                                        .unwrap(),
+                                    ],
+                                    "a".repeat(64),
+                                )
+                                .unwrap(),
+                            ]
+                        } else {
+                            Vec::new()
+                        };
                         floe_context::discover_source_candidates(
                             floe_context::SourceCandidateRequest {
-                                person_id: floe_kernel::PersonId::new(),
+                                person_id: sources
+                                    .first()
+                                    .map(floe_connections::SourceConnection::person_id)
+                                    .unwrap_or_else(floe_kernel::PersonId::new),
                                 device_id,
                                 capability: &requirement.capability,
                                 contract_version: 1,
                                 remote_connections: &[],
                                 remote_execution_owner: None,
-                                calendar_connection: None,
+                                source_connections: &sources,
                             },
                         )
                         .unwrap()

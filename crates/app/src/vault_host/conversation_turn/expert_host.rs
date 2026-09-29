@@ -965,7 +965,9 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                 return Err(AgentFailure::StaleContext);
             }
             if !native {
-                let source_client = self.source_client.ok_or(AgentFailure::CapabilityUnavailable)?;
+                let source_client = self
+                    .source_client
+                    .ok_or(AgentFailure::CapabilityUnavailable)?;
                 if source_client.source().person_id() != person_id.to_string()
                     || source_client.source().device_id() != self.device_id
                 {
@@ -981,11 +983,13 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                     deadline,
                     cancellation: cancellation.clone(),
                 };
-                let authorized_client = floe_provider_adapters::sources::AuthorizedSourceClient::new(
-                    source_client,
-                    self.vault,
-                );
-                let query_bytes = serde_json::to_vec(query).map_err(|_| AgentFailure::InvalidInput)?;
+                let authorized_client =
+                    floe_provider_adapters::sources::AuthorizedSourceClient::new(
+                        source_client,
+                        self.vault,
+                    );
+                let query_bytes =
+                    serde_json::to_vec(query).map_err(|_| AgentFailure::InvalidInput)?;
                 let outcome = floe_context::read_selected_remote_view(
                     self.vault,
                     &authorized_client,
@@ -1012,12 +1016,12 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                             bindings.into_iter().next().unwrap().dependency,
                         )]))
                     }
-                    floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
-                        Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers))
-                    }
-                    floe_context_contract::SourceReadOutcome::Unavailable(reason) => {
-                        Ok(floe_context_contract::SourceReadOutcome::Unavailable(reason))
-                    }
+                    floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => Ok(
+                        floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers),
+                    ),
+                    floe_context_contract::SourceReadOutcome::Unavailable(reason) => Ok(
+                        floe_context_contract::SourceReadOutcome::Unavailable(reason),
+                    ),
                 };
             }
             let result = async {
@@ -1121,6 +1125,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
 }
 
 pub(super) struct PersonalAttentionReader<'a, Keys: VaultKeyProvider> {
+    pub(super) core: &'a FloeCore,
     pub(super) vault: &'a EncryptedAgentVault<Keys>,
     pub(super) local_context: &'a LocalContextHost,
     pub(super) device_id: &'a str,
@@ -1159,10 +1164,22 @@ impl<Keys: VaultKeyProvider> PersonalAttentionReaderApi for PersonalAttentionRea
                 });
             }
             let _ = turn_id;
-            floe_context::validate_local_source_selection(selected, self.device_id)?;
             if selected.capability_id != "attention.coarse" {
                 return Err(AgentFailure::CapabilityDenied);
             }
+            let source = floe_context::PersonalConnectionReader::load(
+                &personal_grants::CorePersonalConnections { core: self.core },
+                person_id,
+                &selected.connection_id,
+            )
+            .await?
+            .ok_or(AgentFailure::StaleContext)?;
+            floe_context::validate_personal_source_selection(
+                selected,
+                &source,
+                person_id,
+                self.device_id,
+            )?;
             floe_context::admit_attention_outcome(
                 &floe_vault::VaultGrantRecords::new(self.vault),
                 &personal_grants::native_driver(self.local_context),
@@ -1179,6 +1196,7 @@ impl<Keys: VaultKeyProvider> PersonalAttentionReaderApi for PersonalAttentionRea
 }
 
 pub(super) struct PersonalPeopleReader<'a, Keys: VaultKeyProvider> {
+    pub(super) core: &'a FloeCore,
     pub(super) vault: &'a EncryptedAgentVault<Keys>,
     pub(super) local_context: &'a LocalContextHost,
     pub(super) device_id: &'a str,
@@ -1260,6 +1278,7 @@ impl<Keys: VaultKeyProvider> PersonalPeopleReaderApi for PersonalPeopleReader<'_
     > {
         Box::pin(async move {
             floe_context::read_selected_people_outcome(
+                &personal_grants::CorePersonalConnections { core: self.core },
                 &floe_vault::VaultGrantRecords::new(self.vault),
                 &personal_grants::native_driver(self.local_context),
                 person_id,

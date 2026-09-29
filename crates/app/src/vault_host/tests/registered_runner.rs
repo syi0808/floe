@@ -71,6 +71,34 @@ static OUTPUT_RELEASE: OnceLock<tokio::sync::Notify> = OnceLock::new();
 static MODEL_DISPATCH_ENTERED: OnceLock<tokio::sync::Notify> = OnceLock::new();
 static MODEL_DISPATCH_RELEASE: OnceLock<tokio::sync::Notify> = OnceLock::new();
 
+fn attention_source(person: PersonId) -> floe_connections::SourceConnection {
+    floe_connections::SourceConnection::establish_reviewed_native(
+        person,
+        floe_context_contract::ConnectorId::try_new("attention.macos").unwrap(),
+        floe_context_contract::ConnectionId::try_new("attention.macos.local").unwrap(),
+        floe_context_contract::ExecutionOwnerId::try_new("macos:mac-local").unwrap(),
+        floe_connections::ResourceMode::AllAvailable,
+        vec![
+            floe_connections::ConnectionResource::new(
+                floe_context_contract::ResourceHandle::try_new("attention.coarse").unwrap(),
+                "Attention".into(),
+            )
+            .unwrap(),
+        ],
+        "a".repeat(64),
+    )
+    .unwrap()
+}
+
+async fn establish_attention_source<Keys: floe_vault::VaultKeyProvider>(
+    open: &OpenVault<Keys>,
+    person: PersonId,
+) {
+    floe_connections::SourceRepository::create(&open.core.store, &attention_source(person))
+        .await
+        .unwrap();
+}
+
 fn runner_a<'turn, 'model, 'msg, 'call>(
     _host: &'call DelegatedMessageExperts<'turn, 'model, 'msg>,
     _request: &'call BuiltinExpertRequest,
@@ -433,7 +461,7 @@ async fn read_a_then_rebind_b_fences_expert_model_dispatch() {
             contract_version: 1,
             remote_connections: &[],
             remote_execution_owner: None,
-            calendar_connection: None,
+            source_connections: &[],
         })
         .unwrap()
         .remove(0)
@@ -521,7 +549,7 @@ async fn rebound_selection_discards_runner_result_before_final_release() {
         contract_version: 1,
         remote_connections: &[],
         remote_execution_owner: None,
-        calendar_connection: None,
+        source_connections: &[attention_source(person)],
     })
     .unwrap()
     .remove(0)
@@ -595,7 +623,7 @@ async fn completed_task_replays_historical_result_after_rebinding_and_disable() 
         contract_version: 1,
         remote_connections: &[],
         remote_execution_owner: None,
-        calendar_connection: None,
+        source_connections: &[attention_source(person)],
     })
     .unwrap()
     .remove(0)
@@ -695,7 +723,7 @@ async fn admitted_source_a_rebound_before_read_never_uses_b() {
         contract_version: 1,
         remote_connections: &[],
         remote_execution_owner: None,
-        calendar_connection: None,
+        source_connections: &[attention_source(person)],
     })
     .unwrap()
     .remove(0)
@@ -1059,7 +1087,7 @@ async fn registered_runner_builtin_prefix_does_not_grant_first_party_observe() {
             contract_version: 1,
             remote_connections: &[],
             remote_execution_owner: None,
-            calendar_connection: None,
+            source_connections: &[],
         })
         .unwrap()
         .remove(0);
@@ -1127,7 +1155,7 @@ async fn registered_runner_extension_cannot_read_another_experts_selection() {
         contract_version: 1,
         remote_connections: &[],
         remote_execution_owner: None,
-        calendar_connection: None,
+        source_connections: &[],
     })
     .unwrap()
     .remove(0)
@@ -1442,7 +1470,7 @@ async fn registered_runner_required_unconfigured_source_returns_typed_outcome() 
         contract_version: 1,
         remote_connections: &[],
         remote_execution_owner: None,
-        calendar_connection: None,
+        source_connections: &[attention_source(person)],
     })
     .unwrap()
     .remove(0)
@@ -1491,7 +1519,7 @@ async fn registered_runner_undeclared_requirement_is_denied_before_source_io() {
         contract_version: 1,
         remote_connections: &[],
         remote_execution_owner: None,
-        calendar_connection: None,
+        source_connections: &[attention_source(person)],
     })
     .unwrap()
     .remove(0)
@@ -1538,6 +1566,26 @@ async fn expert_settings_resolve_only_current_candidate_ids_and_rejoin_exact_sav
     let registration = required_source_registration(required_source_runner);
     let manifest = registration.manifest.clone();
     let (_root, open) = installed_open_without_provider(person, vec![registration], manifest).await;
+    let assignment_id = open
+        .vault
+        .expert_registry()
+        .await
+        .unwrap()
+        .unwrap()
+        .assignments[0]
+        .id;
+    let absent = crate::vault_host::expert_binding_settings::inspect(
+        &open,
+        person,
+        "mac-local",
+        assignment_id,
+        "required_attention",
+        &cancellation,
+    )
+    .await
+    .unwrap();
+    assert!(absent.candidates.is_empty());
+    establish_attention_source(&open, person).await;
     let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
     let assignment_id = snapshot.assignments[0].id;
     let first = crate::vault_host::expert_binding_settings::inspect(
@@ -1801,6 +1849,16 @@ async fn hosted_calendar_settings_use_product_connection_and_pinned_producer() {
     .unwrap();
     assert_eq!(catalog.candidates.len(), 1);
     assert_eq!(catalog.candidates[0].availability, "available");
+    let source_connection = open
+        .core
+        .source_service()
+        .load(
+            person,
+            &floe_context_contract::ConnectionId::try_new(calendar_connection_id.clone()).unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
     let reference =
         floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
             person_id: person,
@@ -1809,17 +1867,7 @@ async fn hosted_calendar_settings_use_product_connection_and_pinned_producer() {
             contract_version: 1,
             remote_connections: &[],
             remote_execution_owner: Some(&execution_owner),
-            calendar_connection: open
-                .core
-                .source_service()
-                .load(
-                    person,
-                    &floe_context_contract::ConnectionId::try_new(calendar_connection_id.clone())
-                        .unwrap(),
-                )
-                .await
-                .unwrap()
-                .as_ref(),
+            source_connections: std::slice::from_ref(&source_connection),
         })
         .unwrap()
         .remove(0);
@@ -1971,6 +2019,7 @@ async fn initial_shipped_setup_selects_single_native_source_only_once() {
         .unwrap();
     let manifest = registration.manifest.clone();
     let (_root, open) = installed_open_without_provider(person, vec![registration], manifest).await;
+    establish_attention_source(&open, person).await;
     let before = open.vault.expert_registry().await.unwrap().unwrap();
     let assignment_id = before.assignments[0].id;
     assert_eq!(before.assignments[0].binding.revision, 1);

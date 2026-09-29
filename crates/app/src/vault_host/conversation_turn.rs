@@ -596,15 +596,71 @@ mod tests {
                             | "floe.tasks"
                             | "memory.confirmed"
                     ) {
+                        let sources = match requirement.capability.as_str() {
+                            "attention.coarse" | "people.identity" | "wellbeing.derived" => {
+                                let (connector, connection, owner, mode, handle) =
+                                    match requirement.capability.as_str() {
+                                        "attention.coarse" => (
+                                            "attention.macos",
+                                            "attention.macos.local",
+                                            "macos:test-device",
+                                            floe_connections::ResourceMode::AllAvailable,
+                                            "attention.coarse",
+                                        ),
+                                        "people.identity" => (
+                                            "contacts.apple",
+                                            "contacts.apple.local",
+                                            "apple:test-device",
+                                            floe_connections::ResourceMode::Selected,
+                                            "person.identity:test",
+                                        ),
+                                        _ => (
+                                            "health.apple",
+                                            "health.apple.local",
+                                            "apple:test-device",
+                                            floe_connections::ResourceMode::AllAvailable,
+                                            "wellbeing.derived",
+                                        ),
+                                    };
+                                vec![
+                                    floe_connections::SourceConnection::establish_reviewed_native(
+                                        PersonId::new(),
+                                        floe_context_contract::ConnectorId::try_new(connector)
+                                            .unwrap(),
+                                        floe_context_contract::ConnectionId::try_new(connection)
+                                            .unwrap(),
+                                        floe_context_contract::ExecutionOwnerId::try_new(owner)
+                                            .unwrap(),
+                                        mode,
+                                        vec![
+                                            floe_connections::ConnectionResource::new(
+                                                floe_context_contract::ResourceHandle::try_new(
+                                                    handle,
+                                                )
+                                                .unwrap(),
+                                                handle.into(),
+                                            )
+                                            .unwrap(),
+                                        ],
+                                        "a".repeat(64),
+                                    )
+                                    .unwrap(),
+                                ]
+                            }
+                            _ => Vec::new(),
+                        };
                         floe_context::discover_source_candidates(
                             floe_context::SourceCandidateRequest {
-                                person_id: PersonId::new(),
+                                person_id: sources
+                                    .first()
+                                    .map(floe_connections::SourceConnection::person_id)
+                                    .unwrap_or_else(PersonId::new),
                                 device_id: "test-device",
                                 capability: &requirement.capability,
                                 contract_version: requirement.contract_version,
                                 remote_connections: &[],
                                 remote_execution_owner: None,
-                                calendar_connection: None,
+                                source_connections: &sources,
                             },
                         )
                         .unwrap()
@@ -1635,11 +1691,32 @@ mod tests {
             device_id: "test-device",
         };
         let store = vault.governed_general_store_with_liveness(session.id, &liveness);
+        let core = FloeCore::open(":memory:").await.unwrap();
         let reader = PersonalAttentionReader {
+            core: &core,
             vault: &vault,
             local_context: &local_context,
             device_id: "test-device",
         };
+        let source = floe_connections::SourceConnection::establish_reviewed_native(
+            person_id,
+            floe_context_contract::ConnectorId::try_new("attention.macos").unwrap(),
+            floe_context_contract::ConnectionId::try_new("attention.macos.local").unwrap(),
+            floe_context_contract::ExecutionOwnerId::try_new("macos:test-device").unwrap(),
+            floe_connections::ResourceMode::AllAvailable,
+            vec![
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new("attention.coarse").unwrap(),
+                    "Attention".into(),
+                )
+                .unwrap(),
+            ],
+            subject.clone(),
+        )
+        .unwrap();
+        floe_connections::SourceRepository::create(&core.store, &source)
+            .await
+            .unwrap();
         let selected =
             floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
                 person_id,
@@ -1648,7 +1725,7 @@ mod tests {
                 contract_version: 1,
                 remote_connections: &[],
                 remote_execution_owner: None,
-                calendar_connection: None,
+                source_connections: std::slice::from_ref(&source),
             })
             .unwrap()
             .remove(0)

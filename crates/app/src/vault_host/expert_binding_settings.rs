@@ -135,31 +135,30 @@ async fn discover_live_candidates<Keys: floe_vault::VaultKeyProvider>(
     context: &BindingContext,
     cancellation: &floe_execution::Cancellation,
 ) -> Result<Vec<floe_context::SourceCandidate>, AgentFailure> {
-    let calendar_connection = if context.capability == "calendar.timeline" {
-        let mut sources = Vec::new();
-        for connector in [
+    let source_connectors: &[&str] = match context.capability.as_str() {
+        "calendar.timeline" => &[
             "calendar.event_kit",
             "calendar.google",
             "calendar.microsoft",
             "calendar.fixture",
-        ] {
-            let connector = floe_context_contract::ConnectorId::try_new(connector)
-                .map_err(|_| AgentFailure::InvalidInput)?;
-            sources.extend(
-                open.core
-                    .source_service()
-                    .list_current(person_id, &connector)
-                    .await
-                    .map_err(|_| AgentFailure::StorageUnavailable)?,
-            );
-        }
-        if sources.len() > 1 {
-            return Err(AgentFailure::Conflict);
-        }
-        sources.pop()
-    } else {
-        None
+        ],
+        "people.identity" => &["contacts.apple", "contacts.android"],
+        "attention.coarse" => &["attention.macos"],
+        "wellbeing.derived" => &["health.apple"],
+        _ => &[],
     };
+    let mut source_connections = Vec::new();
+    for connector in source_connectors {
+        let connector = floe_context_contract::ConnectorId::try_new(*connector)
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        source_connections.extend(
+            open.core
+                .source_service()
+                .list_current(person_id, &connector)
+                .await
+                .map_err(|_| AgentFailure::StorageUnavailable)?,
+        );
+    }
     let remote = if matches!(
         context.capability.as_str(),
         "mail.communication" | "work.context" | "life.logistics"
@@ -188,9 +187,9 @@ async fn discover_live_candidates<Keys: floe_vault::VaultKeyProvider>(
         (Vec::new(), None)
     };
     let remote_execution_owner = if context.capability == "calendar.timeline"
-        && calendar_connection
-            .as_ref()
-            .is_some_and(|connection| connection.connector_id().as_str() != "calendar.event_kit")
+        && source_connections
+            .iter()
+            .any(|connection| connection.connector_id().as_str() != "calendar.event_kit")
     {
         floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
             &open.connections,
@@ -209,7 +208,7 @@ async fn discover_live_candidates<Keys: floe_vault::VaultKeyProvider>(
         contract_version: context.contract_version,
         remote_connections: &remote.0,
         remote_execution_owner: remote_execution_owner.as_deref(),
-        calendar_connection: calendar_connection.as_ref(),
+        source_connections: &source_connections,
     })
 }
 

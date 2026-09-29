@@ -11,12 +11,37 @@ use std::{future::Future, pin::Pin};
 use floe_access::DependencyLiveness;
 use floe_access::{DependencyAuthorization, DependencyResolver};
 use floe_agent_contract::AgentFailure;
+use floe_context_contract::ConnectionId;
 use floe_context_contract::ContextDependency;
 use floe_kernel::PersonId;
 use floe_provider_adapters::sources::NativePersonalDriver;
 use floe_vault::{EncryptedAgentVault, VaultGrantRecords, VaultKeyProvider};
 
+use crate::FloeCore;
 use crate::local_context::LocalContextHost;
+
+pub(crate) struct CorePersonalConnections<'a> {
+    pub(crate) core: &'a FloeCore,
+}
+
+impl floe_context::PersonalConnectionReader for CorePersonalConnections<'_> {
+    fn load<'a>(
+        &'a self,
+        person_id: PersonId,
+        connection_id: &'a ConnectionId,
+    ) -> floe_agent_contract::BoxFuture<
+        'a,
+        Result<Option<floe_connections::SourceConnection>, AgentFailure>,
+    > {
+        Box::pin(async move {
+            self.core
+                .source_service()
+                .load(person_id, connection_id)
+                .await
+                .map_err(|_| AgentFailure::StorageUnavailable)
+        })
+    }
+}
 
 pub(crate) struct PersonalDependencyResolver<'a, Keys: VaultKeyProvider> {
     pub(crate) vault: &'a EncryptedAgentVault<Keys>,

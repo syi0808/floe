@@ -1,13 +1,9 @@
-use floe_access::{
-    ATTENTION_CONNECTION, ATTENTION_CONNECTOR, ATTENTION_RESOURCE, PEOPLE_RESOURCE,
-    WELLBEING_CONNECTION, WELLBEING_CONNECTOR, WELLBEING_RESOURCE, apple_execution_owner,
-    attention_execution_owner, contacts_connection, contacts_execution_owner,
-};
 use floe_agent_contract::{AgentFailure, PersonId};
-use floe_connections::{ConnectorSnapshot, SourceConnection};
+use floe_connections::{ConnectorSnapshot, ResourceMode, SourceConnection};
 use floe_context_contract::{
-    CALENDAR_CONTEXT_VIEW_ID, ConnectionId, ConnectorId, ExecutionOwnerId, ResourceHandle,
-    SourceSelectionReference, connection_view_resource,
+    ATTENTION_VIEW_ID, CALENDAR_CONTEXT_VIEW_ID, ConnectionId, ConnectorId, ExecutionOwnerId,
+    PEOPLE_VIEW_ID, ResourceHandle, SourceSelectionReference, WELLBEING_VIEW_ID,
+    connection_view_resource,
 };
 use sha2::{Digest, Sha256};
 
@@ -21,24 +17,6 @@ pub fn validate_local_source_selection(
         .validate()
         .map_err(|_| AgentFailure::InvalidInput)?;
     let (connector, connection, owner, resource) = match selected.capability_id.as_str() {
-        "attention.coarse" => (
-            ATTENTION_CONNECTOR.to_owned(),
-            ATTENTION_CONNECTION.to_owned(),
-            attention_execution_owner(device_id),
-            ATTENTION_RESOURCE.to_owned(),
-        ),
-        "people.identity" => (
-            "contacts.apple".to_owned(),
-            contacts_connection("contacts.apple"),
-            contacts_execution_owner("contacts.apple", device_id),
-            PEOPLE_RESOURCE.to_owned(),
-        ),
-        "wellbeing.derived" => (
-            WELLBEING_CONNECTOR.to_owned(),
-            WELLBEING_CONNECTION.to_owned(),
-            apple_execution_owner(device_id),
-            WELLBEING_RESOURCE.to_owned(),
-        ),
         "floe.tasks" | "memory.confirmed" => (
             LOCAL_CONTEXT_CONNECTOR.to_owned(),
             LOCAL_CONTEXT_CONNECTOR.to_owned(),
@@ -66,7 +44,7 @@ pub struct SourceCandidateRequest<'a> {
     pub contract_version: u32,
     pub remote_connections: &'a [ConnectorSnapshot],
     pub remote_execution_owner: Option<&'a str>,
-    pub calendar_connection: Option<&'a SourceConnection>,
+    pub source_connections: &'a [SourceConnection],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -84,6 +62,38 @@ pub fn source_candidate_id(reference: &SourceSelectionReference) -> Result<Strin
     let bytes = serde_json::to_vec(&("floe.source-selection-candidate.sha256.v1", reference))
         .map_err(|_| AgentFailure::InvalidInput)?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+pub fn validate_personal_source_selection(
+    selected: &SourceSelectionReference,
+    connection: &SourceConnection,
+    person_id: PersonId,
+    device_id: &str,
+) -> Result<(), AgentFailure> {
+    selected
+        .validate()
+        .map_err(|_| AgentFailure::InvalidInput)?;
+    let request = SourceCandidateRequest {
+        person_id,
+        device_id,
+        capability: &selected.capability_id,
+        contract_version: selected.contract_version,
+        remote_connections: &[],
+        remote_execution_owner: None,
+        source_connections: std::slice::from_ref(connection),
+    };
+    if selected.contract_version != 1
+        || !serves_personal(connection, &request)
+        || selected.connector_id != *connection.connector_id()
+        || selected.connection_id != *connection.connection_id()
+        || selected.execution_owner_id != *connection.execution_owner_id()
+        || selected.resource
+            != connection_view_resource(&selected.capability_id, connection.connection_id())
+                .map_err(|_| AgentFailure::InvalidInput)?
+    {
+        return Err(AgentFailure::StaleContext);
+    }
+    Ok(())
 }
 
 pub fn discover_source_candidates(
@@ -151,7 +161,7 @@ pub fn discover_source_candidates(
             }
         }
         "calendar.timeline" => {
-            if let Some(connection) = request.calendar_connection {
+            for connection in request.source_connections {
                 let connector = connection.connector_id().as_str();
                 let expected_owner = if connector == "calendar.event_kit" {
                     Some(request.device_id)
@@ -189,30 +199,30 @@ pub fn discover_source_candidates(
                 }
             }
         }
-        "attention.coarse" => add(
-            ATTENTION_CONNECTOR,
-            ATTENTION_CONNECTION,
-            &attention_execution_owner(request.device_id),
-            ATTENTION_RESOURCE,
-            "Attention".into(),
-            "This device".into(),
-        )?,
-        "people.identity" => add(
-            "contacts.apple",
-            &contacts_connection("contacts.apple"),
-            &contacts_execution_owner("contacts.apple", request.device_id),
-            PEOPLE_RESOURCE,
-            "Contacts".into(),
-            "This device".into(),
-        )?,
-        "wellbeing.derived" => add(
-            WELLBEING_CONNECTOR,
-            WELLBEING_CONNECTION,
-            &apple_execution_owner(request.device_id),
-            WELLBEING_RESOURCE,
-            "Wellbeing".into(),
-            "This device".into(),
-        )?,
+        ATTENTION_VIEW_ID | PEOPLE_VIEW_ID | WELLBEING_VIEW_ID => {
+            for connection in request.source_connections {
+                if !serves_personal(connection, &request) {
+                    continue;
+                }
+                let resource =
+                    connection_view_resource(request.capability, connection.connection_id())
+                        .map_err(|_| AgentFailure::InvalidInput)?;
+                let title = match request.capability {
+                    ATTENTION_VIEW_ID => "Attention",
+                    PEOPLE_VIEW_ID => "Contacts",
+                    WELLBEING_VIEW_ID => "Wellbeing",
+                    _ => unreachable!(),
+                };
+                add(
+                    connection.connector_id().as_str(),
+                    connection.connection_id().as_str(),
+                    connection.execution_owner_id().as_str(),
+                    resource.as_str(),
+                    title.into(),
+                    "This device".into(),
+                )?;
+            }
+        }
         "floe.tasks" | "memory.confirmed" => add(
             LOCAL_CONTEXT_CONNECTOR,
             LOCAL_CONTEXT_CONNECTOR,
@@ -237,6 +247,53 @@ pub fn discover_source_candidates(
         return Err(AgentFailure::Conflict);
     }
     Ok(candidates)
+}
+
+fn serves_personal(connection: &SourceConnection, request: &SourceCandidateRequest<'_>) -> bool {
+    if !connection.is_serving()
+        || connection.person_id() != request.person_id
+        || connection.native_subject_fingerprint().is_none()
+    {
+        return false;
+    }
+    let (connectors, mode, owner, singleton): (&[&str], _, _, _) = match request.capability {
+        ATTENTION_VIEW_ID => (
+            &["attention.macos"],
+            ResourceMode::AllAvailable,
+            format!("macos:{}", request.device_id),
+            Some(ATTENTION_VIEW_ID),
+        ),
+        PEOPLE_VIEW_ID => (
+            &["contacts.apple", "contacts.android"],
+            ResourceMode::Selected,
+            format!("apple:{}", request.device_id),
+            None,
+        ),
+        WELLBEING_VIEW_ID => (
+            &["health.apple"],
+            ResourceMode::AllAvailable,
+            format!("apple:{}", request.device_id),
+            Some(WELLBEING_VIEW_ID),
+        ),
+        _ => return false,
+    };
+    let actual_owner = if request.capability == PEOPLE_VIEW_ID
+        && connection.connector_id().as_str() == "contacts.android"
+    {
+        format!("android:{}", request.device_id)
+    } else {
+        owner
+    };
+    connectors.contains(&connection.connector_id().as_str())
+        && connection.resource_mode() == mode
+        && connection.execution_owner_id().as_str() == actual_owner
+        && match singleton {
+            Some(handle) => {
+                connection.resources().len() == 1
+                    && connection.resources()[0].handle().as_str() == handle
+            }
+            None => !connection.resources().is_empty() && connection.resources().len() <= 64,
+        }
 }
 
 fn remote_connector_supports(capability: &str, connector: &str) -> bool {
@@ -271,20 +328,14 @@ mod tests {
             contract_version: 1,
             remote_connections: &[],
             remote_execution_owner: None,
-            calendar_connection: calendar,
+            source_connections: calendar.map(std::slice::from_ref).unwrap_or(&[]),
         }
     }
 
     #[test]
-    fn native_and_intrinsic_selection_is_exactly_device_pinned() {
+    fn intrinsic_selection_is_exactly_device_pinned() {
         let person_id = PersonId::new();
-        for capability in [
-            "attention.coarse",
-            "people.identity",
-            "wellbeing.derived",
-            "floe.tasks",
-            "memory.confirmed",
-        ] {
+        for capability in ["floe.tasks", "memory.confirmed"] {
             let selected = discover_source_candidates(request(person_id, capability, None))
                 .unwrap()
                 .remove(0)
@@ -430,23 +481,168 @@ mod tests {
                 ConnectionId::try_new("calendar-account").unwrap(),
                 ExecutionOwnerId::try_new("server-owner").unwrap(),
                 ResourceMode::Selected,
-                vec![ConnectionResource::new(ResourceHandle::try_new("calendar-a").unwrap(), "Personal".into()).unwrap()],
+                vec![
+                    ConnectionResource::new(
+                        ResourceHandle::try_new("calendar-a").unwrap(),
+                        "Personal".into(),
+                    )
+                    .unwrap(),
+                ],
             )
             .unwrap();
             let candidates = |connection: &SourceConnection| {
-                let mut candidate_request = request(person_id, "calendar.timeline", Some(connection));
+                let mut candidate_request =
+                    request(person_id, "calendar.timeline", Some(connection));
                 candidate_request.remote_execution_owner = Some("server-owner");
                 discover_source_candidates(candidate_request).unwrap()
             };
             let initial = candidates(&connection);
             assert_eq!(initial.len(), 1);
-            assert_eq!(initial[0].reference.resource.as_str(), "calendar.timeline:calendar-account");
+            assert_eq!(
+                initial[0].reference.resource.as_str(),
+                "calendar.timeline:calendar-account"
+            );
             let revision = connection.revision();
-            connection.configure(revision, ResourceMode::Selected, vec![
-                ConnectionResource::new(ResourceHandle::try_new("calendar-a").unwrap(), "Personal".into()).unwrap(),
-                ConnectionResource::new(ResourceHandle::try_new("calendar-b").unwrap(), "Work".into()).unwrap(),
-            ]).unwrap();
+            connection
+                .configure(
+                    revision,
+                    ResourceMode::Selected,
+                    vec![
+                        ConnectionResource::new(
+                            ResourceHandle::try_new("calendar-a").unwrap(),
+                            "Personal".into(),
+                        )
+                        .unwrap(),
+                        ConnectionResource::new(
+                            ResourceHandle::try_new("calendar-b").unwrap(),
+                            "Work".into(),
+                        )
+                        .unwrap(),
+                    ],
+                )
+                .unwrap();
             assert_eq!(candidates(&connection), initial);
+        }
+    }
+
+    #[test]
+    fn personal_candidates_require_serving_connections_and_survive_source_edits() {
+        let person_id = PersonId::new();
+        let discover = |capability: &str, connections: &[SourceConnection]| {
+            discover_source_candidates(SourceCandidateRequest {
+                person_id,
+                device_id: "mac-local",
+                capability,
+                contract_version: 1,
+                remote_connections: &[],
+                remote_execution_owner: None,
+                source_connections: connections,
+            })
+            .unwrap()
+        };
+        assert!(discover(PEOPLE_VIEW_ID, &[]).is_empty());
+        let mut contacts = SourceConnection::establish_reviewed_native(
+            person_id,
+            ConnectorId::try_new("contacts.apple").unwrap(),
+            ConnectionId::try_new("contacts.apple.local").unwrap(),
+            ExecutionOwnerId::try_new("apple:mac-local").unwrap(),
+            ResourceMode::Selected,
+            vec![
+                ConnectionResource::new(ResourceHandle::try_new("a").unwrap(), "A".into()).unwrap(),
+            ],
+            "a".repeat(64),
+        )
+        .unwrap();
+        let initial = discover(PEOPLE_VIEW_ID, std::slice::from_ref(&contacts));
+        assert_eq!(initial.len(), 1);
+        assert_eq!(
+            initial[0].reference.resource.as_str(),
+            "people.identity:contacts.apple.local"
+        );
+        contacts
+            .configure_reviewed_native(
+                1,
+                ResourceMode::Selected,
+                vec![
+                    ConnectionResource::new(ResourceHandle::try_new("a").unwrap(), "A".into())
+                        .unwrap(),
+                    ConnectionResource::new(ResourceHandle::try_new("b").unwrap(), "B".into())
+                        .unwrap(),
+                ],
+                "b".repeat(64),
+            )
+            .unwrap();
+        assert_eq!(
+            discover(PEOPLE_VIEW_ID, std::slice::from_ref(&contacts)),
+            initial
+        );
+        contacts.disconnect(2).unwrap();
+        assert!(discover(PEOPLE_VIEW_ID, std::slice::from_ref(&contacts)).is_empty());
+    }
+
+    #[test]
+    fn personal_candidate_modes_and_singletons_are_checked_per_connection() {
+        let person_id = PersonId::new();
+        let sources = [
+            (
+                "attention.macos",
+                ATTENTION_VIEW_ID,
+                "macos:mac-local",
+                ResourceMode::AllAvailable,
+            ),
+            (
+                "health.apple",
+                WELLBEING_VIEW_ID,
+                "apple:mac-local",
+                ResourceMode::AllAvailable,
+            ),
+        ];
+        for (connector, view, owner, mode) in sources {
+            let connection = SourceConnection::establish_reviewed_native(
+                person_id,
+                ConnectorId::try_new(connector).unwrap(),
+                ConnectionId::try_new(format!("{connector}.local")).unwrap(),
+                ExecutionOwnerId::try_new(owner).unwrap(),
+                mode,
+                vec![
+                    ConnectionResource::new(ResourceHandle::try_new(view).unwrap(), view.into())
+                        .unwrap(),
+                ],
+                "a".repeat(64),
+            )
+            .unwrap();
+            let discover = |connection: &SourceConnection| {
+                discover_source_candidates(SourceCandidateRequest {
+                    person_id,
+                    device_id: "mac-local",
+                    capability: view,
+                    contract_version: 1,
+                    remote_connections: &[],
+                    remote_execution_owner: None,
+                    source_connections: std::slice::from_ref(connection),
+                })
+                .unwrap()
+            };
+            let initial = discover(&connection);
+            assert_eq!(initial.len(), 1);
+            assert_eq!(
+                initial[0].reference.resource.as_str(),
+                format!("{view}:{connector}.local")
+            );
+            let mut changed = connection.clone();
+            changed
+                .configure_reviewed_native(1, mode, changed.resources().to_vec(), "b".repeat(64))
+                .unwrap();
+            assert_eq!(discover(&changed), initial);
+            changed
+                .configure_reviewed_native(
+                    2,
+                    ResourceMode::Selected,
+                    changed.resources().to_vec(),
+                    "b".repeat(64),
+                )
+                .unwrap();
+            assert!(discover(&changed).is_empty());
         }
     }
 
@@ -489,7 +685,7 @@ mod tests {
             contract_version: 1,
             remote_connections: &sources,
             remote_execution_owner: None,
-            calendar_connection: None,
+            source_connections: &[],
         };
         assert!(discover_source_candidates(request).unwrap().is_empty());
         request.remote_execution_owner = Some("server:paired");

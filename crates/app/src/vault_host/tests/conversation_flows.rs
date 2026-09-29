@@ -3636,7 +3636,7 @@ impl ResumeHarness {
                 contract_version: 1,
                 remote_connections: &[],
                 remote_execution_owner: None,
-                calendar_connection: None,
+                source_connections: &[],
             })
             .unwrap()
             .remove(0);

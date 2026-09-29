@@ -106,7 +106,7 @@ pub use application::remote_views::{
 pub use application::service::{ContextService, PreparedContext};
 pub use application::source_candidates::{
     LOCAL_CONTEXT_CONNECTOR, SourceCandidate, SourceCandidateRequest, discover_source_candidates,
-    source_candidate_id, validate_local_source_selection,
+    source_candidate_id, validate_local_source_selection, validate_personal_source_selection,
 };
 pub use application::source_view::SourceView;
 pub use application::tools::{
@@ -118,8 +118,8 @@ pub use application::tools::{
 /// The authorization input Context's own coverage entry points take.
 pub use floe_access::{
     DependencyAuthorization, DependencyLiveness, DependencyResolver, RemoteCallWindow,
-    RemoteGrantStore, RemoteGrantTransport, RemotePairingIdentity,
-    RemoteSourceQuery, SignedSourcePreview,
+    RemoteGrantStore, RemoteGrantTransport, RemotePairingIdentity, RemoteSourceQuery,
+    SignedSourcePreview,
 };
 pub use floe_agent_contract::{HistoryMessageSize, bounded_history_start};
 pub use floe_context_contract::ContextDependency;
@@ -134,7 +134,8 @@ pub use ports::calendar_source::{
 pub use ports::evidence_reader::EvidenceReader;
 pub use ports::personal_source::{
     AcquiredSource, AttentionAcquisition, AttentionAcquisitionMode, PersonalAcquisition,
-    PersonalDomain, PersonalGrantRecords, PersonalSourceDriver, TrustedObservation,
+    PersonalConnectionReader, PersonalDomain, PersonalGrantRecords, PersonalSourceDriver,
+    TrustedObservation,
 };
 pub use ports::source_reader::{
     SelectedSourceReader, SourceKey, SourceRead, SourceReadRequest, SourceReader,

@@ -361,7 +361,7 @@ fn resource_change_stales_review_but_preserves_standing_grant() {
             contract_version: 1,
             remote_connections: &[],
             remote_execution_owner: None,
-            calendar_connection: Some(&before_connection),
+            source_connections: std::slice::from_ref(&before_connection),
         })
         .unwrap()
         .remove(0);
@@ -439,7 +439,7 @@ fn resource_change_stales_review_but_preserves_standing_grant() {
             contract_version: 1,
             remote_connections: &[],
             remote_execution_owner: None,
-            calendar_connection: Some(&after_connection),
+            source_connections: std::slice::from_ref(&after_connection),
         })
         .unwrap()
         .remove(0);

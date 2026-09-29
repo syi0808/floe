@@ -7,6 +7,8 @@
 
 use floe_access::{DataAccessGrant, FeasibilityGrantQuery, GrantId, SourceAuthority};
 use floe_agent_contract::{AgentFailure, BoxFuture, PersonId};
+use floe_connections::SourceConnection;
+use floe_context_contract::ConnectionId;
 use floe_execution::Cancellation;
 use serde_json::Value;
 use tokio::time::Instant;
@@ -38,6 +40,14 @@ pub trait PersonalGrantRecords: Sync {
         &'a self,
         grant: GrantId,
     ) -> BoxFuture<'a, Result<Vec<String>, AgentFailure>>;
+}
+
+pub trait PersonalConnectionReader: Sync {
+    fn load<'a>(
+        &'a self,
+        person_id: PersonId,
+        connection_id: &'a ConnectionId,
+    ) -> BoxFuture<'a, Result<Option<SourceConnection>, AgentFailure>>;
 }
 
 /// Which of the Person's own domains a read asks for.
