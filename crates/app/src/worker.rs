@@ -80,31 +80,6 @@ pub struct CalendarActionProposal {
 /// Both are Knowledge's own values; the worker only carries them.
 pub use floe_knowledge::{MemoryReviewDecision, MemoryReviewResult};
 
-/// What the device reports about the calendar a grant would name.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CalendarSubjectRequest {
-    pub provider: floe_context_contract::CalendarProvider,
-    pub device_id: String,
-    pub connection_id: String,
-    pub calendar_ids: Vec<String>,
-    pub connection_scope: floe_context_contract::CalendarScope,
-    pub connection_revision: u64,
-    pub source_authority: floe_context_contract::SourceAuthority,
-}
-
-/// The subject a device would answer for, as the Person is shown it.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CalendarSubjectPreview {
-    pub provider: floe_context_contract::CalendarProvider,
-    pub device_id: String,
-    pub calendar_ids: Vec<String>,
-    pub connection_scope: floe_context_contract::CalendarScope,
-    pub connection_id: String,
-    pub connection_revision: u64,
-    pub source_authority: floe_context_contract::SourceAuthority,
-    pub native_subject_fingerprint: String,
-}
-
 /// One producer pairing challenge, as the producer issued it.
 ///
 /// The challenge is Access's: what a producer claims and what the owner key is
@@ -140,17 +115,8 @@ pub enum WorkerAction {
         change: crate::ExpertBindingSelectionIntent,
         device_id: String,
     },
-    CalendarSubjectPreview {
-        request: Box<CalendarSubjectRequest>,
-    },
-    CalendarAccess {
-        change: Box<crate::CalendarAccessConfiguration>,
-    },
-    PersonalAccess {
-        change: Box<floe_access::PersonalAccessConfiguration>,
-    },
-    ContactsAccess {
-        change: Box<floe_access::ContactsAccessConfiguration>,
+    FeasibilityAccess {
+        change: Box<floe_access::FeasibilityAccessConfiguration>,
     },
     ConnectionObserve {
         operation: crate::ConnectionObserveOperation,
@@ -210,11 +176,8 @@ impl WorkerAction {
             Self::Registry { .. } => "registry",
             Self::ExpertCandidates { .. } => "expert_candidates",
             Self::ExpertReplaceBinding { .. } => "expert_binding",
-            Self::PersonalAccess { .. } => "personal_access",
-            Self::ContactsAccess { .. } => "contacts_access",
+            Self::FeasibilityAccess { .. } => "feasibility_access",
             Self::CalendarAction { .. } => "calendar_action",
-            Self::CalendarSubjectPreview { .. } => "calendar_subject_preview",
-            Self::CalendarAccess { .. } => "calendar_access",
             Self::ConnectionObserve { operation, .. } => operation.name(),
             Self::InspectProposal { .. } => "inspect_proposal",
             Self::ConversationSession { .. } => "conversation_session",
@@ -241,11 +204,8 @@ impl WorkerAction {
                 | Self::Registry { .. }
                 | Self::ExpertCandidates { .. }
                 | Self::ExpertReplaceBinding { .. }
-                | Self::PersonalAccess { .. }
-                | Self::ContactsAccess { .. }
-                | Self::CalendarAccess { .. }
+                | Self::FeasibilityAccess { .. }
                 | Self::ConnectionObserve { .. }
-                | Self::CalendarSubjectPreview { .. }
                 | Self::ConversationTurn { .. }
                 | Self::ConversationResume { .. }
                 | Self::ConversationSession {
@@ -276,7 +236,6 @@ pub struct WorkerResult {
     pub session: Option<floe_conversation::AgentSession>,
     pub registry: Option<floe_experts::RegistryOverview>,
     pub expert_candidates: Option<crate::ExpertCandidateCatalog>,
-    pub calendar_subject_preview: Option<CalendarSubjectPreview>,
     pub proposal: Option<CalendarProposalInspection>,
     pub memory_review: Option<MemoryReviewResult>,
     pub memory: Option<floe_knowledge::MemoryOverviewSnapshot>,
@@ -287,8 +246,7 @@ pub struct WorkerResult {
     pub remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
     pub connection_observe: Option<crate::ConnectionObserveOverview>,
     pub reviewed_connection_observe: Option<crate::ConnectionObserveExpectation>,
-    pub personal_access: Option<floe_access::PersonalAccessOverview>,
-    pub calendar_access: Option<crate::CalendarAccessOverview>,
+    pub feasibility_access: Option<floe_access::FeasibilityAccessOverview>,
     pub calendar_actions: Option<crate::CalendarActionsResult>,
     pub failure: Option<AgentFailure>,
 }

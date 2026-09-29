@@ -7,7 +7,7 @@ pub use application::model_dispatch::{
     revalidate_model_dispatch,
 };
 pub use application::personal_grants::{
-    apply_feasibility_access, validate_request as validate_personal_access_request,
+    apply_feasibility_access, validate_request as validate_feasibility_access_request,
 };
 pub use application::recipient_consent::{
     ContextualRecipientAuthority, RECIPIENT_CONSENT_NAMESPACE, RECIPIENT_CONSENT_TTL,
@@ -15,9 +15,8 @@ pub use application::recipient_consent::{
     revoke_recipient_consent,
 };
 pub use application::{
-    ATTENTION_ASSISTANT_CONSUMER, ContactsAccessChange, ContactsAccessConfiguration,
-    PersonalAccessChange, PersonalAccessConfiguration, PersonalAccessOverview, PersonalAccessState,
-    attention_consumer,
+    ATTENTION_ASSISTANT_CONSUMER, FeasibilityAccessChange, FeasibilityAccessConfiguration,
+    FeasibilityAccessOverview, FeasibilityAccessState, attention_consumer,
 };
 pub use application::{
     ATTENTION_CONNECTOR, ATTENTION_RESOURCE, FEASIBILITY_CONNECTION, FEASIBILITY_CONNECTOR,

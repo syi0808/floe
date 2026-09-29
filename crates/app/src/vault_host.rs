@@ -19,9 +19,8 @@ use crate::WorkerOperation;
 #[cfg(target_os = "android")]
 use crate::android_vault_keys::AndroidVaultKeys as PlatformVaultKeys;
 use crate::{
-    CalendarActionOperation, CalendarProposalInspection, CalendarSubjectPreview,
-    ConversationResumeRequest, ConversationSessionOperation, ConversationTurnRequest, VaultState,
-    WorkerAction, WorkerResult,
+    CalendarActionOperation, CalendarProposalInspection, ConversationResumeRequest,
+    ConversationSessionOperation, ConversationTurnRequest, VaultState, WorkerAction, WorkerResult,
 };
 use floe_actions::{ExpertCalendarInspection, ExpertProposalReference};
 use floe_agent_contract::AgentFailure;
@@ -623,7 +622,6 @@ struct Progress {
     session: Option<AgentSession>,
     registry: Option<floe_experts::RegistryOverview>,
     expert_candidates: Option<crate::ExpertCandidateCatalog>,
-    calendar_subject_preview: Option<CalendarSubjectPreview>,
     proposal: Option<CalendarProposalInspection>,
     memory_review: Option<floe_knowledge::MemoryReviewResult>,
     memory: Option<floe_knowledge::MemoryOverviewSnapshot>,
@@ -634,8 +632,7 @@ struct Progress {
     remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
     connection_observe: Option<crate::ConnectionObserveOverview>,
     reviewed_connection_observe: Option<crate::ConnectionObserveExpectation>,
-    personal_access: Option<floe_access::PersonalAccessOverview>,
-    calendar_access: Option<crate::CalendarAccessOverview>,
+    feasibility_access: Option<floe_access::FeasibilityAccessOverview>,
     calendar_actions: Option<crate::CalendarActionsResult>,
     failure: Option<AgentFailure>,
 }
@@ -1286,7 +1283,6 @@ impl Worker {
             session: progress.session.clone(),
             registry: progress.registry.clone(),
             expert_candidates: progress.expert_candidates.clone(),
-            calendar_subject_preview: progress.calendar_subject_preview.clone(),
             proposal: progress.proposal.clone(),
             memory_review: progress.memory_review.clone(),
             memory: progress.memory.clone(),
@@ -1297,8 +1293,7 @@ impl Worker {
             remote_pairing: progress.remote_pairing.clone(),
             connection_observe: progress.connection_observe.clone(),
             reviewed_connection_observe: progress.reviewed_connection_observe.clone(),
-            personal_access: progress.personal_access.clone(),
-            calendar_access: progress.calendar_access.clone(),
+            feasibility_access: progress.feasibility_access.clone(),
             calendar_actions: progress.calendar_actions.clone(),
             failure: progress.failure,
         };
@@ -1795,7 +1790,6 @@ struct VaultExecutionResult {
     session: Option<AgentSession>,
     registry: Option<floe_experts::RegistryOverview>,
     expert_candidates: Option<crate::ExpertCandidateCatalog>,
-    calendar_subject_preview: Option<CalendarSubjectPreview>,
     proposal: Option<CalendarProposalInspection>,
     memory_review: Option<floe_knowledge::MemoryReviewResult>,
     memory: Option<floe_knowledge::MemoryOverviewSnapshot>,
@@ -1805,8 +1799,7 @@ struct VaultExecutionResult {
     remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
     connection_observe: Option<crate::ConnectionObserveOverview>,
     reviewed_connection_observe: Option<crate::ConnectionObserveExpectation>,
-    personal_access: Option<floe_access::PersonalAccessOverview>,
-    calendar_access: Option<crate::CalendarAccessOverview>,
+    feasibility_access: Option<floe_access::FeasibilityAccessOverview>,
     calendar_actions: Option<crate::CalendarActionsResult>,
     run_receipt: Option<floe_conversation::RunReceipt>,
 }
@@ -1860,7 +1853,6 @@ fn finish_job(
                 progress.session = result.session;
                 progress.registry = result.registry;
                 progress.expert_candidates = result.expert_candidates;
-                progress.calendar_subject_preview = result.calendar_subject_preview;
                 progress.proposal = result.proposal;
                 progress.memory_review = result.memory_review;
                 progress.memory = result.memory;
@@ -1870,8 +1862,7 @@ fn finish_job(
                 progress.remote_owner = result.remote_owner;
                 progress.connection_observe = result.connection_observe;
                 progress.reviewed_connection_observe = result.reviewed_connection_observe;
-                progress.personal_access = result.personal_access;
-                progress.calendar_access = result.calendar_access;
+                progress.feasibility_access = result.feasibility_access;
                 progress.calendar_actions = result.calendar_actions;
                 progress.done = true;
                 if let Some(receipt) = run_receipt {
@@ -2423,43 +2414,6 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 ..VaultExecutionResult::ready()
             })
         }
-        WorkerAction::CalendarSubjectPreview { request } => {
-            let admission = calendar_access::DeviceCalendarAdmission::new(
-                core,
-                local_context,
-                job.person,
-                job.cancellation.clone(),
-            );
-            let subject = Box::pin(floe_context::preview_native_calendar_subject(
-                &admission.connections,
-                &admission.device,
-                &floe_context::NativeCalendarSourceRequest {
-                    person_id: job.person,
-                    provider: request.provider,
-                    device_id: request.device_id.clone(),
-                    calendar_ids: request.calendar_ids.clone(),
-                    connection_scope: request.connection_scope,
-                    source_authority: Some(request.source_authority),
-                    reviewed_native_subject_fingerprint: None,
-                    connection_id: Some(request.connection_id.clone()),
-                },
-                &admission.window,
-            ))
-            .await?;
-            Ok(VaultExecutionResult {
-                calendar_subject_preview: Some(CalendarSubjectPreview {
-                    provider: subject.provider,
-                    device_id: subject.device_id,
-                    calendar_ids: subject.calendar_ids,
-                    connection_scope: subject.connection_scope,
-                    connection_id: subject.connection_id,
-                    connection_revision: subject.connection_revision,
-                    source_authority: subject.source_authority,
-                    native_subject_fingerprint: subject.native_subject_fingerprint,
-                }),
-                ..VaultExecutionResult::ready()
-            })
-        }
         WorkerAction::ConnectionObserve {
             operation,
             device_id,
@@ -2624,72 +2578,17 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 ..VaultExecutionResult::ready()
             })
         }
-        WorkerAction::CalendarAccess { change } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let command = (**change).clone();
-            let subject = calendar_access::DeviceCalendarSubject { local_context };
-            let overview = calendar_access::apply_calendar_access(
-                core,
-                vault.vault.as_ref(),
-                &subject,
-                job.person,
-                command.device_id.clone(),
-                command.change,
-                job.cancellation.clone(),
-            )
-            .await?;
-            Ok(VaultExecutionResult {
-                calendar_access: Some(overview),
-                ..VaultExecutionResult::ready()
-            })
-        }
-        WorkerAction::PersonalAccess { change } => {
+        WorkerAction::FeasibilityAccess { change } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let mut command = (**change).clone();
             command.consumers = crate::first_party_observe::native_consumers_for_target(
                 vault.vault.as_ref(),
                 job.person,
-                &command.connector,
+                floe_access::FEASIBILITY_CONNECTOR,
                 &command.device_id,
             )
             .await?;
-            let overview = if command.connector == floe_access::FEASIBILITY_CONNECTOR {
-                floe_access::apply_feasibility_access(
-                    vault.vault.as_ref(),
-                    &personal_grants::native_driver(local_context),
-                    job.person,
-                    command,
-                    job.cancellation.clone(),
-                )
-                .await?
-            } else {
-                personal_access::apply_personal(
-                    core,
-                    vault.vault.as_ref(),
-                    &personal_grants::native_driver(local_context),
-                    job.person,
-                    command,
-                    job.cancellation.clone(),
-                )
-                .await?
-            };
-            Ok(VaultExecutionResult {
-                personal_access: Some(overview),
-                ..VaultExecutionResult::ready()
-            })
-        }
-        WorkerAction::ContactsAccess { change } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let mut command = (**change).clone();
-            command.consumers = crate::first_party_observe::native_consumers_for_target(
-                vault.vault.as_ref(),
-                job.person,
-                &command.connector,
-                &command.device_id,
-            )
-            .await?;
-            let overview = personal_access::apply_contacts(
-                core,
+            let overview = floe_access::apply_feasibility_access(
                 vault.vault.as_ref(),
                 &personal_grants::native_driver(local_context),
                 job.person,
@@ -2698,7 +2597,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             )
             .await?;
             Ok(VaultExecutionResult {
-                personal_access: Some(overview),
+                feasibility_access: Some(overview),
                 ..VaultExecutionResult::ready()
             })
         }
@@ -3079,7 +2978,6 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                         ..VaultExecutionResult::ready()
                     })
                 }
-
             }
         }
     }

@@ -1614,6 +1614,105 @@ mod tests {
         .unwrap()
     }
 
+    async fn enable_attention_observe(
+        core: &FloeCore,
+        vault: &EncryptedAgentVault<AttentionTestKeys>,
+        local_context: &LocalContextHost,
+        person_id: PersonId,
+        subject: &str,
+    ) {
+        let spec = crate::personal_source_spec::PersonalSourceSpec::for_connector(
+            floe_access::ATTENTION_CONNECTOR,
+        )
+        .unwrap();
+        core.source_service()
+            .establish_reviewed_native(
+                person_id,
+                floe_context_contract::ConnectorId::try_new(spec.connector).unwrap(),
+                floe_context_contract::ConnectionId::try_new(spec.connection).unwrap(),
+                floe_context_contract::ExecutionOwnerId::try_new(
+                    spec.execution_owner("test-device").unwrap(),
+                )
+                .unwrap(),
+                spec.mode,
+                spec.resources(Vec::new()).unwrap(),
+                subject.to_owned(),
+            )
+            .await
+            .unwrap();
+        let review = crate::ConnectionObserveOperation::Review {
+            connector_id: spec.connector.into(),
+            connection_id: spec.connection.into(),
+        };
+        let (_, expected) = super::super::personal_access::apply_connection_observe(
+            core,
+            vault,
+            &personal_grants::native_driver(local_context),
+            person_id,
+            "test-device",
+            &review,
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+        let enable = crate::ConnectionObserveOperation::SetEnabled {
+            connector_id: spec.connector.into(),
+            connection_id: spec.connection.into(),
+            enabled: true,
+            disconnecting: false,
+            expected,
+        };
+        let (overview, _) = super::super::personal_access::apply_connection_observe(
+            core,
+            vault,
+            &personal_grants::native_driver(local_context),
+            person_id,
+            "test-device",
+            &enable,
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            overview.unwrap().status,
+            crate::ConnectionObserveStatus::Active
+        );
+    }
+
+    async fn pause_attention_observe(
+        core: &FloeCore,
+        vault: &EncryptedAgentVault<AttentionTestKeys>,
+        local_context: &LocalContextHost,
+        person_id: PersonId,
+    ) {
+        let spec = crate::personal_source_spec::PersonalSourceSpec::for_connector(
+            floe_access::ATTENTION_CONNECTOR,
+        )
+        .unwrap();
+        let pause = crate::ConnectionObserveOperation::SetEnabled {
+            connector_id: spec.connector.into(),
+            connection_id: spec.connection.into(),
+            enabled: false,
+            disconnecting: false,
+            expected: None,
+        };
+        let (overview, _) = super::super::personal_access::apply_connection_observe(
+            core,
+            vault,
+            &personal_grants::native_driver(local_context),
+            person_id,
+            "test-device",
+            &pause,
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            overview.unwrap().status,
+            crate::ConnectionObserveStatus::Paused
+        );
+    }
+
     #[tokio::test]
     async fn encrypted_attention_admission_model_and_final_cas_are_fenced() {
         let root = tempfile::tempdir().unwrap();
@@ -1650,47 +1749,15 @@ mod tests {
         ));
 
         let core = FloeCore::open(":memory:").await.unwrap();
-        let inspected = super::super::personal_access::apply_personal(
-            &core,
-            &vault,
-            &personal_grants::native_driver(&local_context),
-            person_id,
-            floe_access::PersonalAccessConfiguration {
-                connector: floe_access::ATTENTION_CONNECTOR.into(),
-                device_id: "test-device".into(),
-                consumers: vec![floe_access::ATTENTION_ASSISTANT_CONSUMER.into()],
-                change: floe_access::PersonalAccessChange::Inspect,
-            },
-            Cancellation::default(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(inspected.native_subject_fingerprint, Some(subject.clone()));
-        let reviewed = super::super::personal_access::apply_personal(
-            &core,
-            &vault,
-            &personal_grants::native_driver(&local_context),
-            person_id,
-            floe_access::PersonalAccessConfiguration {
-                connector: floe_access::ATTENTION_CONNECTOR.into(),
-                device_id: "test-device".into(),
-                consumers: vec![floe_access::ATTENTION_ASSISTANT_CONSUMER.into()],
-                change: floe_access::PersonalAccessChange::Review {
-                    expected_native_subject_fingerprint: subject.clone(),
-                    feasibility_query: None,
-                    expected_grant_id: None,
-                    expected_grant_authority: None,
-                },
-            },
-            Cancellation::default(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(reviewed.state, floe_access::PersonalAccessState::Active);
+        enable_attention_observe(&core, &vault, &local_context, person_id, &subject).await;
+        let grants = vault.list_data_access_grants(16).await.unwrap();
+        assert_eq!(grants.len(), 1);
         assert!(
-            reviewed
-                .consumers
-                .contains(&floe_access::ATTENTION_ASSISTANT_CONSUMER.to_owned())
+            grants[0]
+                .scope()
+                .consumers()
+                .iter()
+                .any(|consumer| consumer.identifier() == floe_access::ATTENTION_ASSISTANT_CONSUMER)
         );
 
         let store = vault.governed_general_store(session.id);
@@ -3424,43 +3491,7 @@ mod tests {
                 Arc::new(AtomicUsize::new(0)),
                 Arc::new(AtomicUsize::new(0)),
             ));
-            let inspected = super::super::personal_access::apply_personal(
-                &core,
-                &vault,
-                &personal_grants::native_driver(&local_context),
-                person_id,
-                floe_access::PersonalAccessConfiguration {
-                    connector: floe_access::ATTENTION_CONNECTOR.into(),
-                    device_id: "test-device".into(),
-                    consumers: vec![floe_access::ATTENTION_ASSISTANT_CONSUMER.into()],
-                    change: floe_access::PersonalAccessChange::Inspect,
-                },
-                Cancellation::default(),
-            )
-            .await
-            .unwrap();
-            assert_eq!(inspected.native_subject_fingerprint, Some(subject.clone()));
-            let reviewed = super::super::personal_access::apply_personal(
-                &core,
-                &vault,
-                &personal_grants::native_driver(&local_context),
-                person_id,
-                floe_access::PersonalAccessConfiguration {
-                    connector: floe_access::ATTENTION_CONNECTOR.into(),
-                    device_id: "test-device".into(),
-                    consumers: vec![floe_access::ATTENTION_ASSISTANT_CONSUMER.into()],
-                    change: floe_access::PersonalAccessChange::Review {
-                        expected_native_subject_fingerprint: subject,
-                        feasibility_query: None,
-                        expected_grant_id: None,
-                        expected_grant_authority: None,
-                    },
-                },
-                Cancellation::default(),
-            )
-            .await
-            .unwrap();
-            assert_eq!(reviewed.state, floe_access::PersonalAccessState::Active);
+            enable_attention_observe(&core, &vault, &local_context, person_id, &subject).await;
             Self {
                 _root: root,
                 core,
@@ -3472,22 +3503,8 @@ mod tests {
         }
 
         async fn disable(&self) {
-            let overview = super::super::personal_access::apply_personal(
-                &self.core,
-                &self.vault,
-                &personal_grants::native_driver(&self.local_context),
-                self.person_id,
-                floe_access::PersonalAccessConfiguration {
-                    connector: floe_access::ATTENTION_CONNECTOR.into(),
-                    device_id: "test-device".into(),
-                    consumers: vec![floe_access::ATTENTION_ASSISTANT_CONSUMER.into()],
-                    change: floe_access::PersonalAccessChange::SetEnabled { enabled: false },
-                },
-                Cancellation::default(),
-            )
-            .await
-            .unwrap();
-            assert_eq!(overview.state, floe_access::PersonalAccessState::Paused);
+            pause_attention_observe(&self.core, &self.vault, &self.local_context, self.person_id)
+                .await;
         }
 
         /// The canonical attention read through vault grants and the device
@@ -3748,23 +3765,13 @@ mod tests {
                 // before the post-response revalidation (3rd).
                 if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
                     result.as_ref().unwrap();
-                    super::super::personal_access::apply_personal(
+                    pause_attention_observe(
                         self.core,
                         self.vault,
-                        &personal_grants::native_driver(self.local_context),
+                        self.local_context,
                         self.person_id,
-                        floe_access::PersonalAccessConfiguration {
-                            connector: floe_access::ATTENTION_CONNECTOR.into(),
-                            device_id: "test-device".into(),
-                            consumers: vec![floe_access::ATTENTION_ASSISTANT_CONSUMER.into()],
-                            change: floe_access::PersonalAccessChange::SetEnabled {
-                                enabled: false,
-                            },
-                        },
-                        Cancellation::default(),
                     )
-                    .await
-                    .unwrap();
+                    .await;
                 }
                 result
             })

@@ -229,33 +229,6 @@ impl ConnectionObserveOverview {
             members,
         }
     }
-
-    pub(crate) fn from_calendar(value: crate::CalendarAccessOverview) -> Self {
-        let members = match (value.grant_id, value.grant_authority) {
-            (Some(_), Some(_)) => {
-                vec![ConnectionObserveMember {
-                    view_id: "calendar.timeline".into(),
-                    state: match value.state {
-                        crate::CalendarAccessState::Active => GrantState::Active,
-                        crate::CalendarAccessState::Paused => GrantState::Paused,
-                        crate::CalendarAccessState::Revoked => GrantState::Revoked,
-                        crate::CalendarAccessState::NeedsReview => GrantState::Paused,
-                    },
-                    review_required: value.review_required
-                        || value.state == crate::CalendarAccessState::NeedsReview,
-                }]
-            }
-            _ => Vec::new(),
-        };
-        Self::from_members(
-            floe_access::native_calendar_connector(value.provider)
-                .expect("calendar access overview is native"),
-            value.connection_id,
-            value.selected_resources,
-            &["calendar.timeline"],
-            members,
-        )
-    }
 }
 
 #[cfg(unix)]

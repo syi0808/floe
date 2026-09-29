@@ -22,14 +22,14 @@ use crate::ports::personal_grants::{
 
 pub const ATTENTION_ASSISTANT_CONSUMER: &str = "assistant";
 
-/// What the Person is asking to change about one source.
+/// What the Person asks to change about one contextual Feasibility query.
 #[derive(Clone, Debug, PartialEq)]
-pub enum PersonalAccessChange {
+pub enum FeasibilityAccessChange {
     /// Show what is granted now, and what subject the device answers for.
     Inspect,
     Review {
         expected_native_subject_fingerprint: String,
-        feasibility_query: Option<FeasibilityGrantQuery>,
+        feasibility_query: FeasibilityGrantQuery,
         expected_grant_id: Option<GrantId>,
         expected_grant_authority: Option<GrantAuthority>,
     },
@@ -39,41 +39,15 @@ pub enum PersonalAccessChange {
 }
 
 #[derive(Clone)]
-pub struct PersonalAccessConfiguration {
-    pub connector: String,
+pub struct FeasibilityAccessConfiguration {
     pub device_id: String,
     pub consumers: Vec<String>,
-    pub change: PersonalAccessChange,
+    pub change: FeasibilityAccessChange,
 }
 
-/// What the Person is asking to change about their contacts.
+/// The current contextual Feasibility grant and native subject.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ContactsAccessChange {
-    Inspect {
-        selected_handles: Vec<String>,
-    },
-    Review {
-        selected_handles: Vec<String>,
-        expected_native_subject_fingerprint: String,
-        expected_grant_id: Option<GrantId>,
-        expected_grant_authority: Option<GrantAuthority>,
-    },
-    SetEnabled {
-        enabled: bool,
-    },
-}
-
-#[derive(Clone)]
-pub struct ContactsAccessConfiguration {
-    pub connector: String,
-    pub device_id: String,
-    pub consumers: Vec<String>,
-    pub change: ContactsAccessChange,
-}
-
-/// What one source's access looks like after the change.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PersonalAccessOverview {
+pub struct FeasibilityAccessOverview {
     pub person_id: PersonId,
     pub connector: String,
     pub device_id: String,
@@ -81,7 +55,7 @@ pub struct PersonalAccessOverview {
     pub source_authority: Option<SourceAuthority>,
     pub grant_id: Option<GrantId>,
     pub grant_authority: Option<GrantAuthority>,
-    pub state: PersonalAccessState,
+    pub state: FeasibilityAccessState,
     pub review_required: bool,
     pub presence_available: bool,
     pub consumers: Vec<String>,
@@ -90,19 +64,19 @@ pub struct PersonalAccessOverview {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PersonalAccessState {
+pub enum FeasibilityAccessState {
     NeedsReview,
     Paused,
     Active,
     Revoked,
 }
 
-fn state_of(grant: Option<&DataAccessGrant>) -> PersonalAccessState {
+fn state_of(grant: Option<&DataAccessGrant>) -> FeasibilityAccessState {
     match grant.map(DataAccessGrant::state) {
-        None => PersonalAccessState::NeedsReview,
-        Some(GrantState::Paused) => PersonalAccessState::Paused,
-        Some(GrantState::Active) => PersonalAccessState::Active,
-        Some(GrantState::Revoked) => PersonalAccessState::Revoked,
+        None => FeasibilityAccessState::NeedsReview,
+        Some(GrantState::Paused) => FeasibilityAccessState::Paused,
+        Some(GrantState::Active) => FeasibilityAccessState::Active,
+        Some(GrantState::Revoked) => FeasibilityAccessState::Revoked,
     }
 }
 
@@ -128,12 +102,12 @@ async fn overview(
     grant: Option<DataAccessGrant>,
     presence: Option<Uuid>,
     native_subject_fingerprint: Option<String>,
-) -> Result<PersonalAccessOverview, AgentFailure> {
+) -> Result<FeasibilityAccessOverview, AgentFailure> {
     let source_authority = match grant.as_ref() {
         Some(grant) => Some(store.feasibility_review(grant.id()).await?.source_authority),
         None => None,
     };
-    Ok(PersonalAccessOverview {
+    Ok(FeasibilityAccessOverview {
         person_id,
         connector: connector.to_owned(),
         device_id: device_id.to_owned(),
@@ -165,8 +139,8 @@ fn valid_device(device_id: &str) -> bool {
     !device_id.is_empty() && device_id.len() <= 128 && !device_id.chars().any(char::is_whitespace)
 }
 
-pub fn validate_request(request: &PersonalAccessConfiguration) -> Result<(), AgentFailure> {
-    if request.connector != FEASIBILITY_CONNECTOR || !valid_device(&request.device_id) {
+pub fn validate_request(request: &FeasibilityAccessConfiguration) -> Result<(), AgentFailure> {
+    if !valid_device(&request.device_id) {
         return Err(AgentFailure::InvalidInput);
     }
     Ok(())
@@ -253,9 +227,9 @@ pub async fn apply_feasibility_access(
     store: &impl PersonalGrantStore,
     inspector: &impl PersonalSubjectInspector,
     person_id: PersonId,
-    request: PersonalAccessConfiguration,
+    request: FeasibilityAccessConfiguration,
     cancellation: Cancellation,
-) -> Result<PersonalAccessOverview, AgentFailure> {
+) -> Result<FeasibilityAccessOverview, AgentFailure> {
     validate_request(&request)?;
     apply_feasibility(store, inspector, person_id, request, cancellation).await
 }
@@ -264,9 +238,9 @@ async fn apply_feasibility(
     store: &impl PersonalGrantStore,
     inspector: &impl PersonalSubjectInspector,
     person_id: PersonId,
-    request: PersonalAccessConfiguration,
+    request: FeasibilityAccessConfiguration,
     cancellation: Cancellation,
-) -> Result<PersonalAccessOverview, AgentFailure> {
+) -> Result<FeasibilityAccessOverview, AgentFailure> {
     let source = feasibility_source(person_id, &request.device_id)?;
     let grants = store.grants(128).await?;
     let existing = grants
@@ -286,10 +260,10 @@ async fn apply_feasibility(
         )
     };
     match request.change {
-        PersonalAccessChange::Inspect => report(existing.as_ref(), None).await,
-        PersonalAccessChange::Review {
+        FeasibilityAccessChange::Inspect => report(existing.as_ref(), None).await,
+        FeasibilityAccessChange::Review {
             expected_native_subject_fingerprint,
-            feasibility_query: Some(query),
+            feasibility_query: query,
             expected_grant_id,
             expected_grant_authority,
         } => {
@@ -316,8 +290,7 @@ async fn apply_feasibility(
                 .await?;
             report(Some(&grant), Some(expected_native_subject_fingerprint)).await
         }
-        PersonalAccessChange::Review { .. } => Err(AgentFailure::InvalidInput),
-        PersonalAccessChange::SetEnabled { enabled } => {
+        FeasibilityAccessChange::SetEnabled { enabled } => {
             let grant = existing.ok_or(AgentFailure::AccessReviewRequired)?;
             if !enabled {
                 let grant = store.pause_grant(grant.id(), grant.authority()).await?;

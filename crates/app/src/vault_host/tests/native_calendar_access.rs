@@ -5,9 +5,7 @@ use std::sync::{Arc, Mutex};
 use floe_context::{NativeCalendarSubjectSource, NativeSubjectObservation, NativeSubjectRequest};
 use floe_execution::Cancellation;
 
-use super::super::calendar_access::apply_calendar_access;
 use super::*;
-use crate::{CalendarAccessChange, CalendarAccessOverview, CalendarAccessState};
 
 struct FixtureSubject {
     fingerprints: HashMap<Vec<String>, String>,
@@ -120,18 +118,6 @@ impl Fixture {
             .unwrap()
     }
 
-    fn apply(&self, change: CalendarAccessChange) -> Result<CalendarAccessOverview, AgentFailure> {
-        self.runtime.block_on(apply_calendar_access(
-            &self.core,
-            &self.vault,
-            &self.subject,
-            self.person,
-            self.device_id.clone(),
-            change,
-            Cancellation::default(),
-        ))
-    }
-
     fn observe(
         &self,
         operation: &crate::ConnectionObserveOperation,
@@ -154,96 +140,154 @@ impl Fixture {
             ))
     }
 
-    fn review(
-        &self,
-        overview: &CalendarAccessOverview,
-        calendars: &[String],
-        fingerprint: &str,
-    ) -> Result<CalendarAccessOverview, AgentFailure> {
-        self.apply(CalendarAccessChange::Review {
-            connection_id: overview.connection_id.clone(),
-            calendar_ids: calendars.to_vec(),
-            expected_source_authority: overview.source_authority,
-            expected_native_subject_fingerprint: fingerprint.to_owned(),
-            expected_grant_id: overview.grant_id,
-            expected_grant_authority: overview.grant_authority,
+    fn reviewed_source(&self) -> floe_connections::SourceConnection {
+        let current = self.connection();
+        self.runtime
+            .block_on(self.core.source_service().configure_reviewed_native(
+                self.person,
+                current.connection_id(),
+                current.revision(),
+                current.resource_mode(),
+                current.resources().to_vec(),
+                "a".repeat(64),
+            ))
+            .unwrap()
+    }
+
+    fn review_observe(&self) -> crate::ConnectionObserveExpectation {
+        self.observe(&crate::ConnectionObserveOperation::Review {
+            connector_id: "calendar.event_kit".into(),
+            connection_id: "fixture-connection".into(),
         })
+        .unwrap()
+        .1
+        .unwrap()
+    }
+
+    fn enable_observe(
+        &self,
+        expected: crate::ConnectionObserveExpectation,
+    ) -> Result<crate::ConnectionObserveOverview, AgentFailure> {
+        self.observe(&crate::ConnectionObserveOperation::SetEnabled {
+            connector_id: "calendar.event_kit".into(),
+            connection_id: "fixture-connection".into(),
+            enabled: true,
+            disconnecting: false,
+            expected: Some(expected),
+        })
+        .map(|(overview, _)| overview.unwrap())
     }
 }
 
 #[test]
-fn connection_projection_inspection_never_creates_a_grant() {
+fn common_observe_pauses_without_changing_calendar_source() {
     let fixture = Fixture::new();
-    for _ in 0..2 {
-        let raw = fixture.apply(CalendarAccessChange::Inspect).unwrap();
-        let projected = crate::ConnectionObserveOverview::from_calendar(raw);
-        assert_eq!(
-            projected.status,
-            crate::ConnectionObserveStatus::NeedsReview
-        );
-        assert!(projected.members.is_empty());
-    }
-    assert!(
+    let source = fixture.reviewed_source();
+    let (overview, _) = fixture
+        .observe(&crate::ConnectionObserveOperation::Inspect {
+            connector_id: "calendar.event_kit".into(),
+            connection_id: "fixture-connection".into(),
+        })
+        .unwrap();
+    assert_eq!(
+        overview.unwrap().status,
+        crate::ConnectionObserveStatus::NeedsReview
+    );
+    let active = fixture.enable_observe(fixture.review_observe()).unwrap();
+    assert_eq!(active.status, crate::ConnectionObserveStatus::Active);
+    let grant = fixture
+        .runtime
+        .block_on(fixture.vault.list_data_access_grants(16))
+        .unwrap()
+        .remove(0);
+    let (paused, _) = fixture
+        .observe(&crate::ConnectionObserveOperation::SetEnabled {
+            connector_id: "calendar.event_kit".into(),
+            connection_id: "fixture-connection".into(),
+            enabled: false,
+            disconnecting: false,
+            expected: None,
+        })
+        .unwrap();
+    assert_eq!(
+        paused.unwrap().status,
+        crate::ConnectionObserveStatus::Paused
+    );
+    assert_eq!(fixture.connection(), source);
+    let paused_grant = fixture
+        .runtime
+        .block_on(fixture.vault.list_data_access_grants(16))
+        .unwrap()
+        .remove(0);
+    assert_eq!(paused_grant.id(), grant.id());
+}
+
+#[test]
+fn common_observe_rejects_stale_grant_source_subject_and_identity() {
+    let fixture = Fixture::new();
+    let source = fixture.reviewed_source();
+    let reviewed = fixture.review_observe();
+    let active = fixture.enable_observe(reviewed.clone()).unwrap();
+    assert_eq!(active.status, crate::ConnectionObserveStatus::Active);
+    assert_eq!(
+        fixture.enable_observe(reviewed),
+        Err(AgentFailure::AccessReviewRequired)
+    );
+    let current_review = fixture.review_observe();
+    let changed = fixture
+        .runtime
+        .block_on(fixture.core.source_service().configure_reviewed_native(
+            fixture.person,
+            source.connection_id(),
+            source.revision(),
+            source.resource_mode(),
+            vec![
+            floe_connections::ConnectionResource::new(
+                floe_context_contract::ResourceHandle::try_new("work").unwrap(),
+                "Work".into(),
+            )
+            .unwrap(),
+        ],
+            "a".repeat(64),
+        ))
+        .unwrap();
+    assert_eq!(
+        fixture.enable_observe(current_review),
+        Err(AgentFailure::AccessReviewRequired)
+    );
+    let grant = fixture
+        .runtime
+        .block_on(fixture.vault.list_data_access_grants(16))
+        .unwrap()
+        .remove(0);
+    assert_eq!(grant.state(), floe_access::GrantState::Active);
+    assert_eq!(
+        changed.source_authority(),
+        source.source_authority().advance().unwrap()
+    );
+    assert_eq!(
+        fixture.observe(&crate::ConnectionObserveOperation::Review {
+            connector_id: "calendar.event_kit".into(),
+            connection_id: "wrong".into(),
+        }),
+        Err(AgentFailure::AccessReviewRequired)
+    );
+    let foreign =
         fixture
             .runtime
-            .block_on(fixture.vault.list_data_access_grants(16))
-            .unwrap()
-            .is_empty()
-    );
-}
-
-#[test]
-fn calendar_review_and_pause_use_current_grant_authority() {
-    let fixture = Fixture::new();
-    let inspected = fixture.apply(CalendarAccessChange::Inspect).unwrap();
-    let active = fixture
-        .review(&inspected, &["home".to_owned()], &"a".repeat(64))
-        .unwrap();
-    assert_eq!(active.state, CalendarAccessState::Active);
-    assert_eq!(
-        fixture.apply(CalendarAccessChange::Pause {
-            grant_id: active.grant_id.unwrap(),
-            expected_grant_authority: floe_access::GrantAuthority::new(),
-        }),
-        Err(AgentFailure::Conflict)
-    );
-    let paused = fixture
-        .apply(CalendarAccessChange::Pause {
-            grant_id: active.grant_id.unwrap(),
-            expected_grant_authority: active.grant_authority.unwrap(),
-        })
-        .unwrap();
-    assert_eq!(paused.state, CalendarAccessState::Paused);
-}
-
-#[test]
-fn inspect_connected_calendar_without_grant_needs_review() {
-    let fixture = Fixture::new();
-    let overview = fixture.apply(CalendarAccessChange::Inspect).unwrap();
-    assert_eq!(overview.person_id, fixture.person);
-    assert_eq!(overview.connection_id, "fixture-connection");
-    assert_eq!(overview.selected_resources, vec!["home".to_owned()]);
-    assert!(overview.granted_resources.is_empty());
-    assert_eq!(overview.grant_id, None);
-    assert_eq!(overview.state, CalendarAccessState::NeedsReview);
-    assert!(overview.review_required);
-}
-
-#[test]
-fn fresh_review_creates_an_active_grant() {
-    let fixture = Fixture::new();
-    let inspected = fixture.apply(CalendarAccessChange::Inspect).unwrap();
-    let overview = fixture
-        .review(&inspected, &["home".to_owned()], &"a".repeat(64))
-        .unwrap();
-    assert_eq!(overview.state, CalendarAccessState::Active);
-    assert!(!overview.review_required);
-    assert_eq!(overview.granted_resources, vec!["home".to_owned()]);
-    assert!(overview.grant_id.is_some());
-    assert!(overview.grant_authority.is_some());
-    let reread = fixture.apply(CalendarAccessChange::Inspect).unwrap();
-    assert_eq!(reread.state, CalendarAccessState::Active);
-    assert_eq!(reread.grant_id, overview.grant_id);
+            .block_on(super::super::calendar_access::apply_connection_observe(
+                &fixture.core,
+                &fixture.vault,
+                &fixture.subject,
+                PersonId::new(),
+                &fixture.device_id,
+                &crate::ConnectionObserveOperation::Inspect {
+                    connector_id: "calendar.event_kit".into(),
+                    connection_id: "fixture-connection".into(),
+                },
+                Cancellation::default(),
+            ));
+    assert_eq!(foreign, Err(AgentFailure::CapabilityDenied));
 }
 
 #[test]
@@ -373,444 +417,4 @@ fn common_observe_reviews_eleven_calendars_without_leaf_permission_input() {
         fixture.subject.seen.lock().unwrap().last().unwrap(),
         &twelve
     );
-}
-
-#[test]
-fn eleven_current_calendars_enable_one_logical_grant_without_leaf_bindings() {
-    let fixture = Fixture::new();
-    let mut calendar_ids = (0..11)
-        .map(|index| format!("calendar-{index}"))
-        .collect::<Vec<_>>();
-    calendar_ids.sort();
-    fixture
-        .runtime
-        .block_on(
-            fixture.core.source_service().configure(
-                fixture.person,
-                &floe_context_contract::ConnectionId::try_new("fixture-connection").unwrap(),
-                fixture.connection().revision(),
-                floe_connections::ResourceMode::Selected,
-                calendar_ids
-                    .iter()
-                    .map(|calendar_id| {
-                        floe_connections::ConnectionResource::new(
-                            floe_context_contract::ResourceHandle::try_new(calendar_id).unwrap(),
-                            calendar_id.clone(),
-                        )
-                        .unwrap()
-                    })
-                    .collect(),
-            ),
-        )
-        .unwrap();
-    let inspected = fixture.apply(CalendarAccessChange::Inspect).unwrap();
-    assert_eq!(inspected.state, CalendarAccessState::NeedsReview);
-    let active = fixture
-        .review(&inspected, &calendar_ids, &"a".repeat(64))
-        .unwrap();
-    assert_eq!(active.state, CalendarAccessState::Active);
-    assert_eq!(active.granted_resources, calendar_ids);
-    let grants = fixture
-        .runtime
-        .block_on(fixture.vault.list_data_access_grants(16))
-        .unwrap();
-    assert_eq!(grants.len(), 1);
-    assert_eq!(grants[0].scope().resources().len(), 1);
-    assert_eq!(
-        grants[0].scope().resources()[0].as_str(),
-        "calendar.timeline:fixture-connection"
-    );
-    let expected =
-        crate::first_party_observe::trusted_shipped_consumers("calendar.timeline").unwrap();
-    assert_eq!(grants[0].scope().consumers(), expected);
-}
-
-#[test]
-fn stale_grant_expectations_conflict() {
-    let fixture = Fixture::new();
-    let inspected = fixture.apply(CalendarAccessChange::Inspect).unwrap();
-    let active = fixture
-        .review(&inspected, &["home".to_owned()], &"a".repeat(64))
-        .unwrap();
-    let paused = fixture
-        .apply(CalendarAccessChange::Pause {
-            grant_id: active.grant_id.unwrap(),
-            expected_grant_authority: active.grant_authority.unwrap(),
-        })
-        .unwrap();
-    assert_eq!(paused.state, CalendarAccessState::Paused);
-    assert_eq!(
-        fixture.review(&active, &["home".to_owned()], &"a".repeat(64)),
-        Err(AgentFailure::Conflict)
-    );
-    assert_eq!(
-        fixture.apply(CalendarAccessChange::Pause {
-            grant_id: active.grant_id.unwrap(),
-            expected_grant_authority: active.grant_authority.unwrap(),
-        }),
-        Err(AgentFailure::Conflict)
-    );
-    assert_eq!(
-        fixture.apply(CalendarAccessChange::Remove {
-            grant_id: active.grant_id.unwrap(),
-            expected_grant_authority: active.grant_authority.unwrap(),
-        }),
-        Err(AgentFailure::Conflict)
-    );
-    let reactivated = fixture
-        .review(&paused, &["home".to_owned()], &"a".repeat(64))
-        .unwrap();
-    assert_eq!(reactivated.state, CalendarAccessState::Active);
-    assert_eq!(reactivated.grant_id, active.grant_id);
-}
-
-#[test]
-fn pause_and_remove_leave_the_connection_intact() {
-    let fixture = Fixture::new();
-    let inspected = fixture.apply(CalendarAccessChange::Inspect).unwrap();
-    let before = fixture.connection();
-    let active = fixture
-        .review(&inspected, &["home".to_owned()], &"a".repeat(64))
-        .unwrap();
-    let paused = fixture
-        .apply(CalendarAccessChange::Pause {
-            grant_id: active.grant_id.unwrap(),
-            expected_grant_authority: active.grant_authority.unwrap(),
-        })
-        .unwrap();
-    let removed = fixture
-        .apply(CalendarAccessChange::Remove {
-            grant_id: paused.grant_id.unwrap(),
-            expected_grant_authority: paused.grant_authority.unwrap(),
-        })
-        .unwrap();
-    assert_eq!(removed.state, CalendarAccessState::Revoked);
-    let after = fixture.connection();
-    assert_eq!(after.connection_id(), before.connection_id());
-    assert_ne!(after.revision(), before.revision());
-    assert_ne!(after.source_authority(), before.source_authority());
-    assert_ne!(after.state(), floe_connections::SourceState::Disconnected);
-    assert_eq!(after.resources(), before.resources());
-}
-
-#[test]
-fn resource_change_stales_review_but_preserves_standing_grant() {
-    let fixture = Fixture::new();
-    let unobserved = fixture.connection();
-    fixture
-        .runtime
-        .block_on(fixture.core.source_service().update_native_subject(
-            fixture.person,
-            unobserved.connection_id(),
-            unobserved.revision(),
-            "a".repeat(64),
-        ))
-        .unwrap();
-    let before_connection = fixture.connection();
-    let candidate =
-        floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
-            person_id: fixture.person,
-            device_id: &fixture.device_id,
-            capability: "calendar.timeline",
-            contract_version: 1,
-            remote_connections: &[],
-            remote_execution_owner: None,
-            source_connections: std::slice::from_ref(&before_connection),
-        })
-        .unwrap()
-        .remove(0);
-    let registry = fixture
-        .runtime
-        .block_on(fixture.vault.expert_registry())
-        .unwrap()
-        .unwrap();
-    let installation = registry
-        .installations
-        .iter()
-        .find(|installation| installation.package.id == "floe.builtin.schedule")
-        .unwrap();
-    let assignment = registry
-        .assignments
-        .iter()
-        .find(|assignment| assignment.installation_id == installation.id)
-        .unwrap();
-    let binding = fixture
-        .runtime
-        .block_on(fixture.vault.replace_expert_binding(
-            Uuid::new_v4(),
-            floe_experts::ExpertBindingCommand {
-                assignment_id: assignment.id,
-                package: installation.package.clone(),
-                definition_revision: 1,
-                requirement_key: "floe.source.calendar".into(),
-                expected_binding_revision: assignment.binding.revision,
-                selected: vec![candidate.reference.clone()],
-            },
-        ))
-        .unwrap();
-    let inspected = fixture.apply(CalendarAccessChange::Inspect).unwrap();
-    let active = fixture
-        .review(&inspected, &["home".to_owned()], &"a".repeat(64))
-        .unwrap();
-    fixture
-        .runtime
-        .block_on(fixture.core.source_service().configure(
-            fixture.person,
-            &floe_context_contract::ConnectionId::try_new("fixture-connection").unwrap(),
-            fixture.connection().revision(),
-            floe_connections::ResourceMode::Selected,
-            vec![
-            floe_connections::ConnectionResource::new(
-                floe_context_contract::ResourceHandle::try_new("home").unwrap(),
-                "Home".into(),
-            )
-            .unwrap(),
-            floe_connections::ConnectionResource::new(
-                floe_context_contract::ResourceHandle::try_new("work").unwrap(),
-                "Work".into(),
-            )
-            .unwrap(),
-        ],
-        ))
-        .unwrap();
-    // The old authority and the old subject no longer describe the review.
-    assert_eq!(
-        fixture.review(
-            &active,
-            &["home".to_owned(), "work".to_owned()],
-            &"a".repeat(64)
-        ),
-        Err(AgentFailure::StaleContext)
-    );
-    let current = fixture.apply(CalendarAccessChange::Inspect).unwrap();
-    assert_ne!(current.source_authority, active.source_authority);
-    let after_connection = fixture.connection();
-    let refreshed_candidate =
-        floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
-            person_id: fixture.person,
-            device_id: &fixture.device_id,
-            capability: "calendar.timeline",
-            contract_version: 1,
-            remote_connections: &[],
-            remote_execution_owner: None,
-            source_connections: std::slice::from_ref(&after_connection),
-        })
-        .unwrap()
-        .remove(0);
-    assert_eq!(refreshed_candidate, candidate);
-    let refreshed_registry = fixture
-        .runtime
-        .block_on(fixture.vault.expert_registry())
-        .unwrap()
-        .unwrap();
-    let refreshed_assignment = refreshed_registry
-        .assignments
-        .iter()
-        .find(|entry| entry.id == assignment.id)
-        .unwrap();
-    assert_eq!(refreshed_assignment.binding.revision, binding.revision);
-    assert_eq!(
-        refreshed_assignment.binding.entries[0].selected,
-        vec![candidate.reference]
-    );
-    assert_eq!(
-        current.state,
-        CalendarAccessState::Active,
-        "rotated source authority leaves the standing grant active"
-    );
-    assert_eq!(current.grant_id, active.grant_id);
-    assert_eq!(current.grant_authority, active.grant_authority);
-    assert_eq!(
-        current.granted_resources,
-        vec!["home".to_owned(), "work".to_owned()]
-    );
-    assert!(!current.review_required);
-    assert_eq!(
-        fixture.review(&current, &["home".to_owned()], &"b".repeat(64)),
-        Err(AgentFailure::StaleContext),
-        "an explicit review must name the entire current source",
-    );
-}
-
-#[test]
-fn review_rejects_a_stale_subject_before_mutation() {
-    let fixture = Fixture::new();
-    let inspected = fixture.apply(CalendarAccessChange::Inspect).unwrap();
-    assert_eq!(
-        fixture.review(&inspected, &["home".to_owned()], &"c".repeat(64)),
-        Err(AgentFailure::AccessReviewRequired)
-    );
-    let still = fixture.apply(CalendarAccessChange::Inspect).unwrap();
-    assert_eq!(still.state, CalendarAccessState::NeedsReview);
-}
-
-#[test]
-fn review_rejects_malformed_and_mixed_expectations_without_device_io() {
-    let fixture = Fixture::new();
-    let inspected = fixture.apply(CalendarAccessChange::Inspect).unwrap();
-    assert_eq!(
-        fixture.apply(CalendarAccessChange::Review {
-            connection_id: inspected.connection_id.clone(),
-            calendar_ids: vec!["home".to_owned()],
-            expected_source_authority: inspected.source_authority,
-            expected_native_subject_fingerprint: "not-a-fingerprint".to_owned(),
-            expected_grant_id: None,
-            expected_grant_authority: None,
-        }),
-        Err(AgentFailure::InvalidInput)
-    );
-    assert_eq!(
-        fixture.apply(CalendarAccessChange::Review {
-            connection_id: inspected.connection_id.clone(),
-            calendar_ids: vec!["home".to_owned()],
-            expected_source_authority: inspected.source_authority,
-            expected_native_subject_fingerprint: "a".repeat(64),
-            expected_grant_id: Some(floe_access::GrantId::new()),
-            expected_grant_authority: None,
-        }),
-        Err(AgentFailure::InvalidInput)
-    );
-    assert_eq!(
-        fixture.apply(CalendarAccessChange::Review {
-            connection_id: "another-connection".to_owned(),
-            calendar_ids: vec!["home".to_owned()],
-            expected_source_authority: inspected.source_authority,
-            expected_native_subject_fingerprint: "a".repeat(64),
-            expected_grant_id: None,
-            expected_grant_authority: None,
-        }),
-        Err(AgentFailure::StaleContext)
-    );
-}
-
-#[test]
-fn registry_revision_is_unchanged_across_calendar_access() {
-    let fixture = Fixture::new();
-    let expected_revision = fixture
-        .runtime
-        .block_on(fixture.vault.registry_overview())
-        .unwrap()
-        .unwrap()
-        .revision;
-    let inspected = fixture.apply(CalendarAccessChange::Inspect).unwrap();
-    let active = fixture
-        .review(&inspected, &["home".to_owned()], &"a".repeat(64))
-        .unwrap();
-    let paused = fixture
-        .apply(CalendarAccessChange::Pause {
-            grant_id: active.grant_id.unwrap(),
-            expected_grant_authority: active.grant_authority.unwrap(),
-        })
-        .unwrap();
-    fixture
-        .review(&paused, &["home".to_owned()], &"a".repeat(64))
-        .unwrap();
-    let overview = fixture
-        .runtime
-        .block_on(fixture.vault.registry_overview())
-        .unwrap()
-        .unwrap();
-    assert_eq!(overview.revision, expected_revision);
-}
-
-#[test]
-fn worker_inspect_serves_needs_review_without_device_io() {
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path().join("vaults");
-    let person = PersonId::new();
-    let keys = Keys::default();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let core = Arc::new(runtime.block_on(FloeCore::open(":memory:")).unwrap());
-    runtime
-        .block_on(core.source_service().establish(
-            person,
-            floe_context_contract::ConnectorId::try_new("calendar.event_kit").unwrap(),
-            floe_context_contract::ConnectionId::try_new("fixture-connection").unwrap(),
-            floe_context_contract::ExecutionOwnerId::try_new("fixture-device").unwrap(),
-            floe_connections::ResourceMode::Selected,
-            vec![floe_connections::ConnectionResource::new(
-            floe_context_contract::ResourceHandle::try_new("home").unwrap(),
-            "Home".into(),
-        )
-        .unwrap()],
-        ))
-        .unwrap();
-    let worker = Worker::with_core_and_connection_store(
-        root,
-        keys,
-        core,
-        Arc::new(LocalContextHost::default()),
-        Arc::new(crate::events::AppEventBuffer::default()),
-        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(None),
-    )
-    .unwrap();
-    assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
-    let caller = remote_caller(person, "fixture-device");
-    let operation_id = Uuid::new_v4();
-    worker
-        .local_request(
-            &caller,
-            operation_id,
-            Some(
-                crate::local_operations::LocalOperationIntent::LocalAccessInspection(
-                    crate::LocalAccessInspection::CalendarAccess,
-                ),
-            ),
-            crate::local_operations::LocalOperationOwner::Access,
-            false,
-        )
-        .unwrap();
-    let mut inspected = None;
-    for _ in 0..100 {
-        let polled = worker
-            .local_request(
-                &caller,
-                operation_id,
-                None,
-                crate::local_operations::LocalOperationOwner::Access,
-                false,
-            )
-            .unwrap();
-        if polled.done {
-            inspected = Some(polled);
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    let inspected = inspected.expect("calendar inspect completes");
-    assert_eq!(inspected.failure, None);
-    assert_eq!(inspected.stage, "calendar_access");
-    let overview = inspected.calendar_access.unwrap();
-    assert_eq!(overview.state, CalendarAccessState::NeedsReview);
-    assert_eq!(overview.connection_id, "fixture-connection");
-    worker
-        .local_request(
-            &caller,
-            operation_id,
-            None,
-            crate::local_operations::LocalOperationOwner::Access,
-            true,
-        )
-        .unwrap();
-    let malformed = perform(
-        &worker,
-        person,
-        WorkerAction::CalendarAccess {
-            change: Box::new(crate::CalendarAccessConfiguration {
-                device_id: "fixture-device".into(),
-                change: CalendarAccessChange::Review {
-                    connection_id: "fixture-connection".into(),
-                    calendar_ids: vec!["home".into()],
-                    expected_source_authority: overview.source_authority,
-                    expected_native_subject_fingerprint: "not-a-fingerprint".into(),
-                    expected_grant_id: None,
-                    expected_grant_authority: None,
-                },
-            }),
-        },
-    );
-    assert_eq!(malformed.failure, Some(AgentFailure::InvalidInput));
 }

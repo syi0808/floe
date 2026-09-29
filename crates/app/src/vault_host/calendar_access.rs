@@ -8,10 +8,7 @@
 
 use std::{future::Future, pin::Pin, time::Duration};
 
-use floe_access::{
-    ExecutionOwnerId, GrantSourceBinding, RemoteCallWindow, valid_subject_fingerprint,
-    validate_grant_expectation,
-};
+use floe_access::{ExecutionOwnerId, GrantSourceBinding, RemoteCallWindow};
 use floe_agent_contract::AgentFailure;
 use floe_context::{
     CalendarConnectionReader, NativeCalendarGrantReader, NativeCalendarSourceRequest,
@@ -23,9 +20,6 @@ use floe_kernel::PersonId;
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 
 use crate::FloeCore;
-use crate::local_access_services::{
-    CalendarAccessChange, CalendarAccessOverview, CalendarAccessState,
-};
 use crate::local_context::LocalContextHost;
 use crate::{
     ConnectionObserveExpectation, ConnectionObserveMember, ConnectionObserveOperation,
@@ -265,28 +259,6 @@ impl NativeCalendarSubjectSource for DeviceCalendarSubject<'_> {
     }
 }
 
-/// The device admission an Expert calendar change asks for, run through Context.
-pub(super) struct DeviceCalendarAdmission<'a> {
-    pub connections: CoreCalendarConnections<'a>,
-    pub device: DeviceCalendarSubject<'a>,
-    pub window: RemoteCallWindow,
-}
-
-impl<'host> DeviceCalendarAdmission<'host> {
-    pub(super) fn new(
-        core: &'host FloeCore,
-        local_context: &'host LocalContextHost,
-        person_id: PersonId,
-        cancellation: Cancellation,
-    ) -> Self {
-        Self {
-            connections: CoreCalendarConnections { core, person_id },
-            device: DeviceCalendarSubject { local_context },
-            window: subject_window(cancellation),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -301,178 +273,6 @@ mod tests {
                 .iter()
                 .any(|consumer| consumer.identifier() == "assistant")
         );
-    }
-}
-
-/// Run one native Calendar Observe change: inspect, review, pause or remove.
-///
-/// The backend is authoritative for the current connection, the admitted
-/// consumers, and the grant expectation comparison. A review observes the
-/// fresh native subject outside any Vault transaction and compares it with
-/// the reviewed subject before the E1 mutation runs; pause and remove only
-/// touch the grant, never the connection, credentials or Day data.
-pub(super) async fn apply_calendar_access<Keys, Subject>(
-    core: &FloeCore,
-    vault: &EncryptedAgentVault<Keys>,
-    subject: &Subject,
-    person_id: PersonId,
-    device_id: String,
-    change: CalendarAccessChange,
-    cancellation: Cancellation,
-) -> Result<CalendarAccessOverview, AgentFailure>
-where
-    Keys: VaultKeyProvider,
-    Subject: NativeCalendarSubjectSource,
-{
-    match change {
-        CalendarAccessChange::Inspect => {
-            let connection = usable_native_connection(core, person_id).await?;
-            let source = native_grant_source(person_id, &device_id, &connection)?;
-            match vault
-                .data_access_grants_for_source(&source, 2)
-                .await?
-                .as_slice()
-            {
-                [] => overview(person_id, &connection, None, vault).await,
-                [grant] => overview(person_id, &connection, Some(grant), vault).await,
-                _ => Err(AgentFailure::VaultUnavailable),
-            }
-        }
-        CalendarAccessChange::Review {
-            connection_id,
-            calendar_ids,
-            expected_source_authority,
-            expected_native_subject_fingerprint,
-            expected_grant_id,
-            expected_grant_authority,
-        } => {
-            if connection_id.trim().is_empty()
-                || calendar_ids.is_empty()
-                || calendar_ids.iter().any(|id| {
-                    id.is_empty()
-                        || id.len() > 256
-                        || id.trim() != id
-                        || id.chars().any(char::is_control)
-                })
-                || !expected_source_authority.is_valid()
-                || !valid_subject_fingerprint(&expected_native_subject_fingerprint)
-            {
-                return Err(AgentFailure::InvalidInput);
-            }
-            let expected_grant =
-                validate_grant_expectation(expected_grant_id, expected_grant_authority)?;
-            let connection = usable_native_connection(core, person_id).await?;
-            if connection.connection_id().as_str() != connection_id
-                || connection.source_authority() != expected_source_authority
-            {
-                return Err(AgentFailure::StaleContext);
-            }
-            let mut selected = connection
-                .resources()
-                .iter()
-                .map(|calendar| calendar.handle().as_str().to_owned())
-                .collect::<Vec<_>>();
-            selected.sort();
-            let mut reviewed = calendar_ids.clone();
-            reviewed.sort();
-            if reviewed != selected {
-                return Err(AgentFailure::StaleContext);
-            }
-            let fresh = preview_native_calendar_subject(
-                &CoreCalendarConnections { core, person_id },
-                subject,
-                &NativeCalendarSourceRequest {
-                    person_id,
-                    provider: floe_context_contract::CalendarProvider::EventKit,
-                    device_id: device_id.clone(),
-                    calendar_ids: selected,
-                    connection_scope: match connection.resource_mode() {
-                        floe_connections::ResourceMode::Selected => {
-                            floe_context_contract::CalendarScope::Selected
-                        }
-                        floe_connections::ResourceMode::AllAvailable => {
-                            floe_context_contract::CalendarScope::All
-                        }
-                    },
-                    source_authority: Some(connection.source_authority()),
-                    reviewed_native_subject_fingerprint: None,
-                    connection_id: Some(connection.connection_id().as_str().to_owned()),
-                },
-                &subject_window(cancellation),
-            )
-            .await?;
-            if fresh.native_subject_fingerprint != expected_native_subject_fingerprint {
-                return Err(AgentFailure::AccessReviewRequired);
-            }
-            let consumers = crate::first_party_observe::calendar_policy()?.consumers;
-            if consumers.is_empty() {
-                return Err(AgentFailure::InvalidInput);
-            }
-            let current = usable_native_connection(core, person_id).await?;
-            if current != connection {
-                return Err(AgentFailure::StaleContext);
-            }
-            let current = core
-                .source_service()
-                .update_native_subject(
-                    person_id,
-                    current.connection_id(),
-                    current.revision(),
-                    fresh.native_subject_fingerprint,
-                )
-                .await
-                .map_err(|_| AgentFailure::StaleContext)?;
-            let grant = vault
-                .review_native_calendar_grant(
-                    current.connection_id().as_str(),
-                    floe_context_contract::CalendarProvider::EventKit,
-                    &device_id,
-                    &consumers,
-                    expected_grant,
-                )
-                .await?;
-            overview(person_id, &current, Some(&grant), vault).await
-        }
-        CalendarAccessChange::Pause {
-            grant_id,
-            expected_grant_authority,
-        } => {
-            if !grant_id.is_valid() || !expected_grant_authority.is_valid() {
-                return Err(AgentFailure::InvalidInput);
-            }
-            let current = usable_native_connection(core, person_id).await?;
-            let grant = vault
-                .pause_native_calendar_grant(
-                    grant_id,
-                    expected_grant_authority,
-                    current.connection_id().as_str(),
-                    floe_context_contract::CalendarProvider::EventKit,
-                    &device_id,
-                    current.source_authority(),
-                )
-                .await?;
-            overview(person_id, &current, Some(&grant), vault).await
-        }
-        CalendarAccessChange::Remove {
-            grant_id,
-            expected_grant_authority,
-        } => {
-            if !grant_id.is_valid() || !expected_grant_authority.is_valid() {
-                return Err(AgentFailure::InvalidInput);
-            }
-            let current = usable_native_connection(core, person_id).await?;
-            let grant = vault
-                .revoke_native_calendar_grant(
-                    grant_id,
-                    expected_grant_authority,
-                    current.connection_id().as_str(),
-                    floe_context_contract::CalendarProvider::EventKit,
-                    &device_id,
-                    current.source_authority(),
-                )
-                .await?;
-            overview(person_id, &current, Some(&grant), vault).await
-        }
     }
 }
 
@@ -820,50 +620,4 @@ fn native_grant_source(
         ExecutionOwnerId::try_new(device_id).map_err(|_| AgentFailure::InvalidInput)?,
     )
     .map_err(|_| AgentFailure::InvalidInput)
-}
-
-async fn overview<Keys: VaultKeyProvider>(
-    person_id: PersonId,
-    connection: &floe_connections::SourceConnection,
-    grant: Option<&floe_access::DataAccessGrant>,
-    _vault: &EncryptedAgentVault<Keys>,
-) -> Result<CalendarAccessOverview, AgentFailure> {
-    let (state, review_required, grant_id, grant_authority) = match grant {
-        None => (CalendarAccessState::NeedsReview, true, None, None),
-        Some(grant) => {
-            let state = match grant.state() {
-                floe_access::GrantState::Active => CalendarAccessState::Active,
-                floe_access::GrantState::Paused => CalendarAccessState::Paused,
-                floe_access::GrantState::Revoked => CalendarAccessState::Revoked,
-            };
-            (
-                state,
-                grant.review_required(),
-                Some(grant.id()),
-                Some(grant.authority()),
-            )
-        }
-    };
-    let selected_resources = connection
-        .resources()
-        .iter()
-        .map(|calendar| calendar.handle().as_str().to_owned())
-        .collect::<Vec<_>>();
-    let granted_resources = if state == CalendarAccessState::Active && !review_required {
-        selected_resources.clone()
-    } else {
-        Vec::new()
-    };
-    Ok(CalendarAccessOverview {
-        person_id,
-        provider: floe_context_contract::CalendarProvider::EventKit,
-        connection_id: connection.connection_id().as_str().to_owned(),
-        selected_resources,
-        granted_resources,
-        source_authority: connection.source_authority(),
-        grant_id,
-        grant_authority,
-        state,
-        review_required,
-    })
 }

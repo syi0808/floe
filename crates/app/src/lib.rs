@@ -67,9 +67,9 @@ pub use floe_diagnostics::{PanicRecord, TraceContext, instrument, panic_record};
 /// The binding reads and writes these against its wire; it never reaches into
 /// the owner that decided them.
 pub use floe_access::{
-    ContactsAccessChange, ContactsAccessConfiguration, DataAccessGrant, FeasibilityGrantQuery,
-    GrantAuthority, GrantId, GrantState, PersonalAccessChange, PersonalAccessConfiguration,
-    PersonalAccessOverview, PersonalAccessState, ProcessingRestriction, RemoteEnrollmentStatus,
+    DataAccessGrant, FeasibilityGrantQuery,
+    GrantAuthority, GrantId, GrantState, FeasibilityAccessChange, FeasibilityAccessConfiguration,
+    FeasibilityAccessOverview, FeasibilityAccessState, ProcessingRestriction, RemoteEnrollmentStatus,
     RemoteOwnerPublicKey, RemoteProducerIdentity,
 };
 pub use floe_actions::{ActionAuthorityMode, CalendarAction, CalendarActionState};
@@ -141,9 +141,8 @@ pub use knowledge_services::{
 };
 #[cfg(unix)]
 pub use local_access_services::{
-    CalendarAccessChange, CalendarAccessConfiguration, CalendarAccessOverview, CalendarAccessState,
-    CalendarSubjectIntent, LocalAccessCommand, LocalAccessCommands, LocalAccessInspection,
-    LocalAccessQueries, LocalAccessResult,
+    LocalAccessCommand, LocalAccessCommands, LocalAccessInspection, LocalAccessQueries,
+    LocalAccessResult,
 };
 pub use local_context::{
     CalendarObservationPublication, LocalContextCommand, LocalContextHost, LocalContextOutcome,
@@ -176,7 +175,7 @@ pub use vault_services::{
 pub(crate) use worker::WorkerOperation;
 pub use worker::{
     CalendarActionOperation, CalendarActionProposal, CalendarProposalInspection,
-    CalendarSubjectPreview, CalendarSubjectRequest, ConversationSessionOperation,
+    ConversationSessionOperation,
     MemoryReviewDecision, MemoryReviewResult, RemotePairingChallenge, VaultState,
 };
 pub(crate) use worker::{WorkerAction, WorkerResult};

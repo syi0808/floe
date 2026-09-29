@@ -319,7 +319,7 @@ pub(crate) trait ObserveStateReader: Send + Sync {
 ///
 /// Implementations call the same owner operation the owning connection
 /// screen uses, with the exact reviewed expectation: native
-/// `CalendarAccessChange::Review`, personal `PersonalAccessChange::Review`,
+/// native and personal `ConnectionObserve` enable,
 /// or remote `ConnectionObserve` enable. The operation re-verifies live
 /// before committing; this trait never widens or fabricates expectations.
 ///

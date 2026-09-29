@@ -135,21 +135,28 @@ fn local_expert_and_access_intents_inject_only_the_admitted_device() {
     let caller = remote_caller(PersonId::new(), "verified-device");
     let expected_grant_id = crate::GrantId::new();
     let expected_grant_authority = crate::GrantAuthority::new();
-    let intent = LocalOperationIntent::LocalAccessCommand(crate::LocalAccessCommand::Personal {
-        connector: "attention.macos".into(),
-        change: crate::PersonalAccessChange::Review {
+    let intent = LocalOperationIntent::LocalAccessCommand(crate::LocalAccessCommand::Feasibility {
+        change: crate::FeasibilityAccessChange::Review {
             expected_native_subject_fingerprint: "b".repeat(64),
-            feasibility_query: None,
+            feasibility_query: crate::FeasibilityGrantQuery {
+                event_handle: "event".into(),
+                evidence_handles: vec!["evidence".into()],
+                destination_latitude: 0.0,
+                destination_longitude: 0.0,
+                event_start_unix_ms: 1,
+                event_end_unix_ms: 2,
+                travel_mode: "automobile".into(),
+            },
             expected_grant_id: Some(expected_grant_id),
             expected_grant_authority: Some(expected_grant_authority),
         },
     });
-    let WorkerAction::PersonalAccess { change } = intent.action(&caller) else {
+    let WorkerAction::FeasibilityAccess { change } = intent.action(&caller) else {
         panic!("wrong owner action")
     };
     assert_eq!(change.device_id, caller.device_id());
     assert!(change.consumers.is_empty());
-    let crate::PersonalAccessChange::Review {
+    let crate::FeasibilityAccessChange::Review {
         expected_grant_id: actual_id,
         expected_grant_authority: actual_authority,
         expected_native_subject_fingerprint,
