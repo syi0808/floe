@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{APP_WIRE_VERSION, AppCommandReceiptDto, AppWireErrorDto};
+use super::{AppCommandReceiptDto, AppWireErrorDto, APP_WIRE_VERSION};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -55,6 +55,8 @@ pub enum AppQueryDto {
     ConnectionsOverview {},
     #[serde(rename = "connections.native_calendar.source")]
     NativeCalendarSource {},
+    #[serde(rename = "connections.native_personal.source")]
+    NativePersonalSource { connector_id: String },
     #[serde(rename = "connections.remote_calendar.sources")]
     RemoteCalendarSources {},
     #[serde(rename = "connections.read_result")]
@@ -126,6 +128,15 @@ impl AppQueryDto {
             | Self::KnowledgeMemoryReview {}
             | Self::ConnectionsOverview {} => return Ok(()),
             Self::NativeCalendarSource {} => return Ok(()),
+            Self::NativePersonalSource { connector_id } => {
+                return if ["contacts.apple", "attention.macos", "health.apple"]
+                    .contains(&connector_id.as_str())
+                {
+                    Ok(())
+                } else {
+                    Err("query.connector_id")
+                };
+            }
             Self::RemoteCalendarSources {} => return Ok(()),
             Self::KnowledgeReadResult { operation_id, .. }
             | Self::ConnectionsReadResult { operation_id, .. } => {
@@ -185,7 +196,11 @@ impl AppQueryDto {
             }
             Self::ConversationInteractionList { session_id } => ("query.session_id", session_id),
         };
-        if id.is_nil() { Err(field) } else { Ok(()) }
+        if id.is_nil() {
+            Err(field)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -211,6 +226,9 @@ pub enum AppQueryResultDto {
         result: super::ConnectionsResultDto,
     },
     NativeCalendarSource {
+        source: Option<super::SourceConnectionDto>,
+    },
+    NativePersonalSource {
         source: Option<super::SourceConnectionDto>,
     },
     RemoteCalendarSources {

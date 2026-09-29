@@ -103,7 +103,8 @@ pub use connection_observe::{
 #[cfg(unix)]
 pub use connection_services::{
     ConnectionsQueries, ConnectionsResult, NativeCalendarSourceCommands,
-    NativeCalendarSourceMutation, RemoteCalendarSourceCommands, RemoteCalendarSourceMutation,
+    NativeCalendarSourceMutation, NativePersonalSourceCommands, NativePersonalSourceSetup,
+    RemoteCalendarSourceCommands, RemoteCalendarSourceMutation,
 };
 #[cfg(unix)]
 pub use context_services::{

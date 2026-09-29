@@ -1,7 +1,9 @@
 use crate::local_operations::{LocalOperationIntent, LocalOperationOwner};
+use crate::personal_source_spec::PersonalSourceSpec;
 use crate::{
     AgentFailure, AppComposition, CallerContext, CoreError, ErrorCode, ServiceError, VaultState,
 };
+use floe_access::{valid_subject_fingerprint, PersonalSubjectInspector, PersonalSubjectProbe};
 use floe_connections::{
     ConnectionId, ConnectionResource, ConnectorId, ResourceMode, SourceConnection,
     SourceConnectionError, SourceRepositoryError, SourceServiceError,
@@ -395,6 +397,187 @@ pub(crate) fn source_error(error: SourceServiceError) -> CoreError {
     CoreError::new(code, error.to_string())
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativePersonalSourceSetup {
+    pub connector_id: String,
+    pub expected_revision: Option<u64>,
+    pub selected_handles: Vec<String>,
+}
+
+pub trait NativePersonalSourceCommands {
+    fn inspect_native_personal_source(
+        &self,
+        caller: &CallerContext,
+        connector_id: &str,
+    ) -> Result<Option<SourceConnection>, CoreError>;
+
+    fn setup_native_personal_source(
+        &self,
+        caller: &CallerContext,
+        setup: NativePersonalSourceSetup,
+    ) -> Result<SourceConnection, CoreError>;
+}
+
+impl NativePersonalSourceCommands for AppComposition {
+    fn inspect_native_personal_source(
+        &self,
+        caller: &CallerContext,
+        connector_id: &str,
+    ) -> Result<Option<SourceConnection>, CoreError> {
+        let spec = PersonalSourceSpec::for_connector(connector_id)
+            .map_err(|_| CoreError::new(ErrorCode::Validation, "invalid personal connector"))?;
+        let connection_id = ConnectionId::try_new(spec.connection)
+            .map_err(|_| CoreError::new(ErrorCode::Validation, "invalid connection identity"))?;
+        let owner = spec
+            .execution_owner(caller.device_id())
+            .map_err(|_| CoreError::new(ErrorCode::Validation, "invalid device identity"))?;
+        let source = self
+            .runtime
+            .block_on(
+                self.core
+                    .source_service()
+                    .load(PersonId(caller.person_id()), &connection_id),
+            )
+            .map_err(source_error)?;
+        if source.as_ref().is_some_and(|source| {
+            source.connector_id().as_str() != spec.connector
+                || source.execution_owner_id().as_str() != owner
+        }) {
+            return Err(CoreError::new(
+                ErrorCode::NotFound,
+                "personal source not found",
+            ));
+        }
+        Ok(source)
+    }
+
+    fn setup_native_personal_source(
+        &self,
+        caller: &CallerContext,
+        setup: NativePersonalSourceSetup,
+    ) -> Result<SourceConnection, CoreError> {
+        let inspector = floe_provider_adapters::sources::NativePersonalDriver {
+            attention: self.local_context.attention(),
+            personal: self.local_context.personal(),
+            observations: self.local_context.observations(),
+        };
+        self.runtime.block_on(setup_personal_source(
+            self.core.as_ref(),
+            &inspector,
+            PersonId(caller.person_id()),
+            caller.device_id(),
+            setup,
+        ))
+    }
+}
+
+async fn setup_personal_source(
+    core: &crate::FloeCore,
+    inspector: &impl PersonalSubjectInspector,
+    person_id: PersonId,
+    device_id: &str,
+    setup: NativePersonalSourceSetup,
+) -> Result<SourceConnection, CoreError> {
+    let spec = PersonalSourceSpec::for_connector(&setup.connector_id)
+        .map_err(|_| CoreError::new(ErrorCode::Validation, "invalid personal connector"))?;
+    let resources = spec
+        .resources(setup.selected_handles)
+        .map_err(|_| CoreError::new(ErrorCode::Validation, "invalid source resources"))?;
+    let owner = spec
+        .execution_owner(device_id)
+        .map_err(|_| CoreError::new(ErrorCode::Validation, "invalid device identity"))?;
+    let connection_id = ConnectionId::try_new(spec.connection)
+        .map_err(|_| CoreError::new(ErrorCode::Validation, "invalid connection identity"))?;
+    if setup
+        .expected_revision
+        .is_some_and(|revision| revision == 0)
+    {
+        return Err(CoreError::new(
+            ErrorCode::Validation,
+            "invalid source revision",
+        ));
+    }
+    let service = core.source_service();
+    let existing = service
+        .load(person_id, &connection_id)
+        .await
+        .map_err(source_error)?;
+    match (setup.expected_revision, existing.as_ref()) {
+        (Some(expected_revision), Some(current))
+            if current.connector_id().as_str() == spec.connector
+                && current.execution_owner_id().as_str() == owner
+                && current.revision() == expected_revision => {}
+        (None, None) => {}
+        _ => {
+            return Err(CoreError::new(
+                ErrorCode::Conflict,
+                "personal source changed",
+            ))
+        }
+    }
+    let probe = match spec.connector {
+        "contacts.apple" | "contacts.android" => PersonalSubjectProbe::People {
+            selected_handles: resources
+                .iter()
+                .map(|resource| resource.handle().as_str().to_owned())
+                .collect(),
+        },
+        "attention.macos" => PersonalSubjectProbe::Attention,
+        "health.apple" => PersonalSubjectProbe::Wellbeing,
+        _ => {
+            return Err(CoreError::new(
+                ErrorCode::Validation,
+                "invalid personal connector",
+            ))
+        }
+    };
+    let evidence = inspector
+        .inspect(
+            person_id,
+            device_id,
+            probe,
+            None,
+            Some(tokio::time::Instant::now() + std::time::Duration::from_secs(30)),
+            floe_execution::Cancellation::default(),
+        )
+        .await
+        .map_err(|_| CoreError::new(ErrorCode::Validation, "native source unavailable"))?;
+    if evidence.before != evidence.after || !valid_subject_fingerprint(&evidence.before) {
+        return Err(CoreError::new(
+            ErrorCode::Conflict,
+            "native subject changed",
+        ));
+    }
+    match setup.expected_revision {
+        Some(expected_revision) => service
+            .configure_reviewed_native(
+                person_id,
+                &connection_id,
+                expected_revision,
+                spec.mode,
+                resources,
+                evidence.before,
+            )
+            .await
+            .map_err(source_error),
+        None => service
+            .establish_reviewed_native(
+                person_id,
+                ConnectorId::try_new(spec.connector)
+                    .map_err(|_| CoreError::new(ErrorCode::Validation, "invalid connector"))?,
+                connection_id,
+                ExecutionOwnerId::try_new(owner).map_err(|_| {
+                    CoreError::new(ErrorCode::Validation, "invalid device identity")
+                })?,
+                spec.mode,
+                resources,
+                evidence.before,
+            )
+            .await
+            .map_err(source_error),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ConnectionsResult {
     pub operation_id: Uuid,
@@ -474,7 +657,179 @@ impl AppComposition {
 #[cfg(test)]
 mod source_tests {
     use super::*;
+    use floe_access::{GrantId, GrantScope, GrantSourceBinding, PersonalSubjectEvidence};
+    use floe_agent_contract::BoxFuture;
     use floe_context_contract::ResourceHandle;
+    use floe_vault::{AccessGrantActivation, EncryptedAgentVault, VaultKey, VaultKeyProvider};
+    use std::collections::HashMap;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct Subject {
+        probes: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl PersonalSubjectInspector for Subject {
+        fn inspect<'a>(
+            &'a self,
+            _person_id: PersonId,
+            _device_id: &'a str,
+            probe: PersonalSubjectProbe<'a>,
+            _expected_native_subject_fingerprint: Option<String>,
+            _deadline: Option<tokio::time::Instant>,
+            _cancellation: floe_execution::Cancellation,
+        ) -> BoxFuture<'a, Result<PersonalSubjectEvidence, AgentFailure>> {
+            Box::pin(async move {
+                if let PersonalSubjectProbe::People { selected_handles } = probe {
+                    self.probes.lock().unwrap().push(selected_handles);
+                }
+                Ok(PersonalSubjectEvidence {
+                    before: "a".repeat(64),
+                    after: "a".repeat(64),
+                })
+            })
+        }
+
+        fn attention_presence(&self, _person_id: PersonId, _device_id: &str) -> Option<Uuid> {
+            None
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct Keys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
+
+    impl VaultKeyProvider for Keys {
+        fn load(&self, person: PersonId, vault: Uuid) -> Result<VaultKey, AgentFailure> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(&(person, vault))
+                .copied()
+                .map(VaultKey::from_bytes)
+                .ok_or(AgentFailure::VaultUnavailable)
+        }
+
+        fn insert(
+            &self,
+            person: PersonId,
+            vault: Uuid,
+            key: &VaultKey,
+        ) -> Result<(), AgentFailure> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert((person, vault), *key.as_bytes());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn contacts_source_edit_changes_only_source_authority() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let core = crate::FloeCore::open(directory.path().join("personal-source.db"))
+            .await
+            .unwrap();
+        let person = PersonId::new();
+        let vault = EncryptedAgentVault::create(directory.path(), person, Keys::default())
+            .await
+            .unwrap();
+        let subject = Subject::default();
+        let setup = |expected_revision, selected_handles: &[&str]| NativePersonalSourceSetup {
+            connector_id: "contacts.apple".into(),
+            expected_revision,
+            selected_handles: selected_handles
+                .iter()
+                .map(|handle| (*handle).into())
+                .collect(),
+        };
+        let initial =
+            setup_personal_source(&core, &subject, person, "device-1", setup(None, &["A"]))
+                .await
+                .unwrap();
+        let policy = crate::first_party_observe::personal_policy("contacts.apple").unwrap();
+        let binding = GrantSourceBinding::try_new(
+            person,
+            initial.connection_id().clone(),
+            initial.connector_id().clone(),
+            initial.execution_owner_id().clone(),
+        )
+        .unwrap();
+        let logical = floe_context_contract::connection_view_resource(
+            policy.view_id,
+            initial.connection_id(),
+        )
+        .unwrap();
+        let scope = GrantScope::try_new(
+            vec![logical.clone()],
+            policy.categories,
+            vec![policy.operation],
+            vec![policy.purpose],
+            policy.consumers,
+            policy.processing,
+        )
+        .unwrap();
+        let [grant] = vault
+            .activate_access_grants(vec![AccessGrantActivation {
+                grant_id: GrantId::new(),
+                expected: None,
+                source: binding.clone(),
+                scope,
+            }])
+            .await
+            .unwrap()
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            setup_personal_source(
+                &core,
+                &subject,
+                person,
+                "device-1",
+                setup(Some(initial.revision()), &["A", "A"])
+            )
+            .await
+            .unwrap_err()
+            .code,
+            ErrorCode::Validation
+        );
+        assert_eq!(subject.probes.lock().unwrap().len(), 1);
+        let changed = setup_personal_source(
+            &core,
+            &subject,
+            person,
+            "device-1",
+            setup(Some(initial.revision()), &["A", "B"]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(changed.revision(), initial.revision() + 1);
+        assert_eq!(
+            changed.source_authority(),
+            initial.source_authority().advance().unwrap()
+        );
+        assert_eq!(
+            changed
+                .resources()
+                .iter()
+                .map(|resource| resource.handle().as_str())
+                .collect::<Vec<_>>(),
+            ["A", "B"]
+        );
+        let current_grant = vault
+            .data_access_grant_for_source_resource(&binding, &logical)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(current_grant.id(), grant.id());
+        assert_eq!(current_grant.authority(), grant.authority());
+        assert_eq!(current_grant.state(), floe_access::GrantState::Active);
+        assert_eq!(
+            *subject.probes.lock().unwrap(),
+            [vec!["A".to_owned()], vec!["A".to_owned(), "B".to_owned()]]
+        );
+    }
 
     #[tokio::test]
     async fn native_source_mutation_rejects_foreign_device() {
@@ -491,13 +846,11 @@ mod source_tests {
                 ConnectionId::new(),
                 ExecutionOwnerId::try_new("mac-local").unwrap(),
                 ResourceMode::Selected,
-                vec![
-                    ConnectionResource::new(
-                        ResourceHandle::try_new("home").unwrap(),
-                        "Home".into(),
-                    )
-                    .unwrap(),
-                ],
+                vec![ConnectionResource::new(
+                    ResourceHandle::try_new("home").unwrap(),
+                    "Home".into(),
+                )
+                .unwrap()],
             )
             .await
             .unwrap();
@@ -539,11 +892,8 @@ mod source_tests {
         let service = core.source_service();
         let person_id = PersonId::new();
         let resource = |handle: &str| {
-            ConnectionResource::new(
-                ResourceHandle::try_new(handle).unwrap(),
-                handle.into(),
-            )
-            .unwrap()
+            ConnectionResource::new(ResourceHandle::try_new(handle).unwrap(), handle.into())
+                .unwrap()
         };
         let initial = service
             .establish(
@@ -576,7 +926,11 @@ mod source_tests {
             initial.source_authority().epoch().get() + 1
         );
         assert_eq!(
-            expanded.resources().iter().map(|item| item.handle().as_str()).collect::<Vec<_>>(),
+            expanded
+                .resources()
+                .iter()
+                .map(|item| item.handle().as_str())
+                .collect::<Vec<_>>(),
             ["A", "B"]
         );
         let reordered = service

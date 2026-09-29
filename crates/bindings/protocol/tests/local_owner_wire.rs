@@ -24,6 +24,38 @@ fn calendar_overview_rejects_obsolete_policy_field() {
 }
 
 #[test]
+fn personal_source_setup_uses_connections_product_wire() {
+    let command = json!({
+        "schema_version": 2,
+        "request_id": Uuid::new_v4(),
+        "command_id": Uuid::new_v4(),
+        "command": {
+            "kind": "connections.native_personal.setup",
+            "setup": {
+                "connector_id": "contacts.apple",
+                "expected_revision": 2,
+                "selected_handles": ["A", "B"]
+            }
+        }
+    });
+    let parsed: AppCommandRequestDto = serde_json::from_value(command.clone()).unwrap();
+    assert_eq!(parsed.validate(), Ok(()));
+    assert_eq!(serde_json::to_value(parsed).unwrap(), command);
+    let mut forbidden = command;
+    forbidden["command"]["setup"]["expected_grant_id"] = json!(Uuid::new_v4());
+    assert!(serde_json::from_value::<AppCommandRequestDto>(forbidden).is_err());
+
+    let query = json!({
+        "schema_version": 2,
+        "request_id": Uuid::new_v4(),
+        "query": {"kind": "connections.native_personal.source", "connector_id": "contacts.apple"}
+    });
+    let parsed: AppQueryRequestDto = serde_json::from_value(query.clone()).unwrap();
+    assert_eq!(parsed.validate(), Ok(()));
+    assert_eq!(serde_json::to_value(parsed).unwrap(), query);
+}
+
+#[test]
 fn vault_commands_are_strict_owner_intent() {
     for kind in ["vault.create", "vault.unlock", "vault.lock"] {
         let request = json!({"schema_version": 2, "request_id": Uuid::new_v4(), "command_id": Uuid::new_v4(), "command": {"kind": kind}});

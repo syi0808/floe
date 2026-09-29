@@ -38,6 +38,7 @@ where
         + floe_app::KnowledgeCommands
         + floe_app::DayCommands
         + floe_app::NativeCalendarSourceCommands
+        + floe_app::NativePersonalSourceCommands
         + floe_app::RemoteCalendarSourceCommands
         + floe_app::ActionCommands
         + floe_app::LocalContextCommands,
@@ -106,6 +107,23 @@ where
                 .mutate_native_calendar_source(host_request.caller(), mutation)
                 .map_err(day_error)?;
             Ok(AppCommandResultDto::NativeCalendarSource {
+                command_id: request.command_id,
+                source: source_connection_dto(&source),
+            })
+        }
+        AppCommandDto::NativePersonalSourceSetup { setup } => {
+            let source = host_request
+                .services()
+                .setup_native_personal_source(
+                    host_request.caller(),
+                    floe_app::NativePersonalSourceSetup {
+                        connector_id: setup.connector_id,
+                        expected_revision: setup.expected_revision,
+                        selected_handles: setup.selected_handles,
+                    },
+                )
+                .map_err(day_error)?;
+            Ok(AppCommandResultDto::NativePersonalSource {
                 command_id: request.command_id,
                 source: source_connection_dto(&source),
             })
@@ -452,6 +470,7 @@ fn query_with_host<
         + floe_app::KnowledgeQueries
         + floe_app::ConnectionsQueries
         + floe_app::NativeCalendarSourceCommands
+        + floe_app::NativePersonalSourceCommands
         + floe_app::RemoteCalendarSourceCommands
         + floe_app::DayQueries
         + floe_app::ActionQueries
@@ -567,6 +586,14 @@ fn query_with_host<
                 .inspect_native_calendar_source(caller)
                 .map_err(day_error)?;
             Ok(AppQueryResultDto::NativeCalendarSource {
+                source: source.as_ref().map(source_connection_dto),
+            })
+        }
+        AppQueryDto::NativePersonalSource { connector_id } => {
+            let source = services
+                .inspect_native_personal_source(caller, &connector_id)
+                .map_err(day_error)?;
+            Ok(AppQueryResultDto::NativePersonalSource {
                 source: source.as_ref().map(source_connection_dto),
             })
         }
@@ -1987,6 +2014,27 @@ mod tests {
         }
     }
 
+    impl floe_app::NativePersonalSourceCommands for Services {
+        fn inspect_native_personal_source(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _connector_id: &str,
+        ) -> Result<Option<floe_app::SourceConnection>, floe_app::CoreError> {
+            Ok(None)
+        }
+
+        fn setup_native_personal_source(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _setup: floe_app::NativePersonalSourceSetup,
+        ) -> Result<floe_app::SourceConnection, floe_app::CoreError> {
+            Err(floe_app::CoreError::new(
+                floe_app::ErrorCode::NotFound,
+                "source unavailable",
+            ))
+        }
+    }
+
     impl floe_app::RemoteCalendarSourceCommands for Services {
         fn inspect_remote_calendar_sources(
             &self,
@@ -2117,20 +2165,18 @@ mod tests {
             failure: None,
         });
         assert!(command_with_host(&host, command()).is_err());
-        assert!(
-            query_with_host(
-                &host,
-                AppQueryRequestDto {
-                    schema_version: 2,
-                    request_id: Uuid::new_v4(),
-                    query: AppQueryDto::VaultReadResult {
-                        operation_id,
-                        release: true
-                    },
-                }
-            )
-            .is_err()
-        );
+        assert!(query_with_host(
+            &host,
+            AppQueryRequestDto {
+                schema_version: 2,
+                request_id: Uuid::new_v4(),
+                query: AppQueryDto::VaultReadResult {
+                    operation_id,
+                    release: true
+                },
+            }
+        )
+        .is_err());
     }
 
     impl floe_app::ConversationQueries for Services {
@@ -2595,11 +2641,9 @@ mod tests {
             error.metadata.get("recovery_action").map(String::as_str),
             Some("retry_read")
         );
-        assert!(
-            !agent_failure(AgentFailure::Cancelled)
-                .metadata
-                .contains_key("recovery_action")
-        );
+        assert!(!agent_failure(AgentFailure::Cancelled)
+            .metadata
+            .contains_key("recovery_action"));
     }
 
     #[test]

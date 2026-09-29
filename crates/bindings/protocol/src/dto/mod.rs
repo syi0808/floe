@@ -10,9 +10,9 @@ pub use connections::RemotePairingChallengeDto;
 mod connections;
 pub use connections::{
     ConnectionResourceDto, ConnectionsResultDto, NativeCalendarSourceMutationDto,
-    PairingOutcomeDto, PairingReportDto, PairingTargetDto, RemoteCalendarSourceMutationDto,
-    RemotePairingOperationDto, RemotePairingRequestDto, RemotePairingResultDto,
-    SourceConnectionDto, SourceLifecycleDto, SourceResourceModeDto,
+    NativePersonalSourceSetupDto, PairingOutcomeDto, PairingReportDto, PairingTargetDto,
+    RemoteCalendarSourceMutationDto, RemotePairingOperationDto, RemotePairingRequestDto,
+    RemotePairingResultDto, SourceConnectionDto, SourceLifecycleDto, SourceResourceModeDto,
 };
 mod agent;
 mod calendar;

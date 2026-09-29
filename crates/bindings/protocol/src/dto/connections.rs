@@ -38,6 +38,50 @@ pub struct SourceConnectionDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativePersonalSourceSetupDto {
+    pub connector_id: String,
+    pub expected_revision: Option<u64>,
+    pub selected_handles: Vec<String>,
+}
+
+impl NativePersonalSourceSetupDto {
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        let selected = self.connector_id == "contacts.apple";
+        if !selected && !["attention.macos", "health.apple"].contains(&self.connector_id.as_str()) {
+            return Err("command.connector_id");
+        }
+        if self
+            .expected_revision
+            .is_some_and(|revision| revision == 0 || revision > i64::MAX as u64)
+        {
+            return Err("command.expected_revision");
+        }
+        if selected {
+            if self.selected_handles.is_empty() || self.selected_handles.len() > 64 {
+                return Err("command.selected_handles");
+            }
+        } else if !self.selected_handles.is_empty() {
+            return Err("command.selected_handles");
+        }
+        if self
+            .selected_handles
+            .iter()
+            .any(|handle| !valid_source_text(handle, 256) || handle == "*")
+            || self
+                .selected_handles
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != self.selected_handles.len()
+        {
+            return Err("command.selected_handles");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NativeCalendarSourceMutationDto {
     Establish {
@@ -182,6 +226,44 @@ mod source_tests {
     use super::*;
 
     #[test]
+    fn native_personal_setup_is_source_configuration_only() {
+        let valid = serde_json::json!({
+            "connector_id": "contacts.apple",
+            "expected_revision": 2,
+            "selected_handles": ["A", "B"]
+        });
+        let setup: NativePersonalSourceSetupDto = serde_json::from_value(valid.clone()).unwrap();
+        assert_eq!(setup.validate(), Ok(()));
+        assert_eq!(serde_json::to_value(setup).unwrap(), valid);
+        for field in [
+            "expected_grant_id",
+            "expected_grant_authority",
+            "source_authority",
+            "consumers",
+            "purpose",
+            "processing",
+        ] {
+            let mut forbidden = valid.clone();
+            forbidden[field] = serde_json::json!("forged");
+            assert!(serde_json::from_value::<NativePersonalSourceSetupDto>(forbidden).is_err());
+        }
+        for invalid in [
+            serde_json::json!({"connector_id": "contacts.apple", "expected_revision": null, "selected_handles": []}),
+            serde_json::json!({"connector_id": "contacts.apple", "expected_revision": 0, "selected_handles": ["A"]}),
+            serde_json::json!({"connector_id": "contacts.apple", "expected_revision": null, "selected_handles": ["A", "A"]}),
+            serde_json::json!({"connector_id": "attention.macos", "expected_revision": null, "selected_handles": ["A"]}),
+            serde_json::json!({"connector_id": "contacts.android", "expected_revision": null, "selected_handles": ["A"]}),
+        ] {
+            assert!(
+                serde_json::from_value::<NativePersonalSourceSetupDto>(invalid)
+                    .unwrap()
+                    .validate()
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn source_mutation_accepts_expected_revision_but_not_authority_or_next_revision() {
         let valid = serde_json::json!({
             "type": "configure",
@@ -248,7 +330,7 @@ pub struct ConnectionsResultDto {
 use uuid::Uuid;
 
 use super::{
-    APP_WIRE_VERSION, AgentVaultFailureDto, RemoteOwnerPublicKeyDto, RemoteProducerIdentityDto,
+    AgentVaultFailureDto, RemoteOwnerPublicKeyDto, RemoteProducerIdentityDto, APP_WIRE_VERSION,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

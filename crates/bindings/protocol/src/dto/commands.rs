@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{APP_WIRE_VERSION, AppWireErrorDto};
+use super::{AppWireErrorDto, APP_WIRE_VERSION};
 
 const MAX_TURN_TEXT_BYTES: usize = 8 * 1024;
 const MAX_TURN_PAYLOAD_BYTES: usize = 64 * 1024;
@@ -47,6 +47,10 @@ pub enum AppCommandDto {
     #[serde(rename = "connections.native_calendar.mutate")]
     NativeCalendarSourceMutate {
         mutation: super::NativeCalendarSourceMutationDto,
+    },
+    #[serde(rename = "connections.native_personal.setup")]
+    NativePersonalSourceSetup {
+        setup: super::NativePersonalSourceSetupDto,
     },
     #[serde(rename = "connections.remote_calendar.mutate")]
     RemoteCalendarSourceMutate {
@@ -139,6 +143,7 @@ impl AppCommandDto {
             Self::ActionsCalendar { operation } => super::actions::validate_command(operation),
             Self::DayMutate { mutation, .. } => mutation.validate(),
             Self::NativeCalendarSourceMutate { mutation } => mutation.validate(),
+            Self::NativePersonalSourceSetup { setup } => setup.validate(),
             Self::RemoteCalendarSourceMutate { mutation } => mutation.validate(),
             Self::KnowledgeMemoryDecide { candidate_id, .. } => {
                 if candidate_id.is_nil() {
@@ -390,6 +395,10 @@ pub enum AppCommandResultDto {
         mutation: super::MutationResultDto,
     },
     NativeCalendarSource {
+        command_id: Uuid,
+        source: super::SourceConnectionDto,
+    },
+    NativePersonalSource {
         command_id: Uuid,
         source: super::SourceConnectionDto,
     },
