@@ -448,52 +448,44 @@ fn context_identity_is_admitted_and_publications_are_ephemeral() {
 }
 
 #[test]
-fn native_calendar_publication_rejects_pending_and_stale_connections() {
+fn native_calendar_setup_requires_a_live_device_probe() {
     let directory = tempfile::tempdir().unwrap();
     let core = Core::open(directory.path().join("calendar.db").to_str().unwrap());
-    let established = core.command_v2(intent(json!({
+    let establish = json!({
         "kind": "connections.native_calendar.mutate",
         "mutation": {
             "type": "establish",
             "resource_mode": "selected",
             "resources": [{"handle": "home", "label": "Home"}]
         }
-    })));
-    assert_eq!(established["status"], "ok", "{established}");
-    let connection_id = established["result"]["source"]["connection_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let revision = established["result"]["source"]["revision"]
-        .as_u64()
-        .unwrap();
+    });
+    let response = core.command_v2(intent(establish));
+    assert_eq!(response["error"]["code"], "validation", "{response}");
+    let source = core.query_v2(query(json!({"kind":"connections.native_calendar.source"})));
+    assert_eq!(source["status"], "ok", "{source}");
+    assert!(source["result"]["source"].is_null());
+
     let now = chrono::Utc::now().timestamp_millis();
-    let publication = json!({"kind":"publish_calendar_observation", "connection_id":connection_id, "connection_revision":revision, "provider":"event_kit", "calendar_ids":["home"], "observed_at_unix_ms":now-1, "expires_at_unix_ms":now+60_000, "range_start_unix_ms":now-60_000, "range_end_unix_ms":now+60_000, "batches":[{"calendar_id":"home", "records":[], "failure":null}]});
-    assert_eq!(established["result"]["source"]["state"], "pending");
+    let publication = json!({
+        "kind":"publish_calendar_observation",
+        "connection_id":Uuid::new_v4().to_string(),
+        "connection_revision":1,
+        "provider":"event_kit",
+        "calendar_ids":["home"],
+        "observed_at_unix_ms":now-1,
+        "expires_at_unix_ms":now+60_000,
+        "range_start_unix_ms":now-60_000,
+        "range_end_unix_ms":now+60_000,
+        "batches":[{"calendar_id":"home", "records":[], "failure":null}]
+    });
     assert_eq!(
         core.context(publication.clone(), false)["error"]["metadata"]["agent_failure"],
-        "stale_context"
+        "capability_unavailable"
     );
-    for (field, value, expected) in [
-        (
-            "connection_id",
-            json!(Uuid::new_v4()),
-            "capability_unavailable",
-        ),
-        ("connection_revision", json!(revision + 1), "stale_context"),
-    ] {
-        let mut stale = publication.clone();
-        stale[field] = value;
-        assert_eq!(
-            core.context(stale, false)["error"]["metadata"]["agent_failure"],
-            expected
-        );
-    }
     let mut foreign = publication;
     foreign["person_id"] = json!(Uuid::new_v4());
     assert_eq!(core.context(foreign, false)["error"]["code"], "validation");
 }
-
 #[test]
 fn owner_results_are_correlated_and_status_never_provisions_keys() {
     let directory = tempfile::tempdir().unwrap();
