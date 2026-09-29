@@ -2,7 +2,7 @@
 
 Prerequisite: 05 complete.
 
-Status: Not started.
+Status: In progress.
 
 Planning base: `main` at `5d5cdd75c3fddf452300009be5acfb46d261cf51` on 2026-09-29.
 
