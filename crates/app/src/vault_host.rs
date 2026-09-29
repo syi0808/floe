@@ -2473,16 +2473,159 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             device_id,
         } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let (overview, reviewed) = personal_access::apply_connection_observe(
-                core,
-                vault.vault.as_ref(),
-                &personal_grants::native_driver(local_context),
-                job.person,
-                device_id,
-                operation,
-                job.cancellation.clone(),
-            )
-            .await?;
+            let (connector_id, connection_id) = operation.identity();
+            let (overview, reviewed) = if connector_id == "calendar.event_kit" {
+                calendar_access::apply_connection_observe(
+                    core,
+                    vault.vault.as_ref(),
+                    &calendar_access::DeviceCalendarSubject { local_context },
+                    job.person,
+                    device_id,
+                    operation,
+                    job.cancellation.clone(),
+                )
+                .await?
+            } else if !crate::first_party_observe::remote_policies(connector_id)?.is_empty() {
+                remote_observe::validate_observe_identity(connector_id, connection_id)?;
+                let local_source = core
+                    .source_service()
+                    .load(
+                        job.person,
+                        &floe_context_contract::ConnectionId::try_new(connection_id)
+                            .map_err(|_| AgentFailure::InvalidInput)?,
+                    )
+                    .await
+                    .map_err(|_| AgentFailure::StorageUnavailable)?;
+                if local_source
+                    .as_ref()
+                    .is_some_and(|source| source.connector_id().as_str() != connector_id)
+                {
+                    return Err(AgentFailure::AccessReviewRequired);
+                }
+                let source_resources = local_source
+                    .as_ref()
+                    .map(|source| {
+                        source
+                            .resources()
+                            .iter()
+                            .map(|resource| resource.handle().as_str().to_owned())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let person_text = job.person.to_string();
+                match operation {
+                    crate::ConnectionObserveOperation::Inspect { .. } => {
+                        let mut overview = remote_observe::product_overview(
+                            vault.vault.as_ref(),
+                            job.person,
+                            connector_id,
+                            connection_id,
+                            source_resources,
+                        )
+                        .await?;
+                        if floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
+                            connections,
+                            &person_text,
+                            device_id,
+                        )?
+                        .is_none()
+                        {
+                            overview.status = crate::ConnectionObserveStatus::ReconnectRequired;
+                            overview.enabled = false;
+                        }
+                        (Some(overview), None)
+                    }
+                    crate::ConnectionObserveOperation::SetEnabled {
+                        enabled: false,
+                        disconnecting,
+                        ..
+                    } => {
+                        remote_observe::disable_bundle(
+                            vault.vault.as_ref(),
+                            job.person,
+                            connector_id,
+                            connection_id,
+                            *disconnecting,
+                        )
+                        .await?;
+                        let overview = remote_observe::product_overview(
+                            vault.vault.as_ref(),
+                            job.person,
+                            connector_id,
+                            connection_id,
+                            source_resources,
+                        )
+                        .await?;
+                        (Some(overview), None)
+                    }
+                    crate::ConnectionObserveOperation::Review { .. }
+                    | crate::ConnectionObserveOperation::SetEnabled { enabled: true, .. } => {
+                        let source_client = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
+                            connections,
+                            &person_text,
+                            device_id,
+                        )?
+                        .ok_or(AgentFailure::PolicyDenied)?;
+                        let transport =
+                            floe_provider_adapters::sources::AuthorizedSourceClient::new(
+                                &source_client,
+                                vault.vault.as_ref(),
+                            );
+                        let window = floe_access::RemoteCallWindow {
+                            deadline: tokio::time::Instant::now() + Duration::from_secs(30),
+                            cancellation: job.cancellation.clone(),
+                        };
+                        let ctx = remote_observe::RemoteObserveContext {
+                            vault: vault.vault.as_ref(),
+                            person_id: job.person,
+                            pairing: floe_access::RemotePairingIdentity {
+                                person_id: &person_text,
+                                client_id: source_client.source().client_id(),
+                                device_id,
+                            },
+                            connector_id,
+                            connection_id,
+                            window: &window,
+                        };
+                        match operation {
+                            crate::ConnectionObserveOperation::Review { .. } => (
+                                None,
+                                Some(
+                                    remote_observe::product_review_bundle(&ctx, &transport).await?,
+                                ),
+                            ),
+                            crate::ConnectionObserveOperation::SetEnabled {
+                                expected: Some(expected),
+                                ..
+                            } => {
+                                remote_observe::product_enable_bundle(&ctx, &transport, expected)
+                                    .await?;
+                                let overview = remote_observe::product_overview(
+                                    vault.vault.as_ref(),
+                                    job.person,
+                                    connector_id,
+                                    connection_id,
+                                    source_resources,
+                                )
+                                .await?;
+                                (Some(overview), None)
+                            }
+                            _ => return Err(AgentFailure::InvalidInput),
+                        }
+                    }
+                }
+            } else {
+                personal_access::apply_connection_observe(
+                    core,
+                    vault.vault.as_ref(),
+                    &personal_grants::native_driver(local_context),
+                    job.person,
+                    device_id,
+                    operation,
+                    job.cancellation.clone(),
+                )
+                .await?
+            };
             Ok(VaultExecutionResult {
                 connection_observe: overview,
                 reviewed_connection_observe: reviewed,

@@ -18,6 +18,138 @@ use floe_agent_contract::AgentFailure;
 use floe_kernel::PersonId;
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 
+fn product_expectation(
+    connector_id: &str,
+    connection_id: &str,
+    bundle: &crate::RemoteConnectionObserveExpectation,
+) -> Result<crate::ConnectionObserveExpectation, AgentFailure> {
+    validate_observe_expectation(bundle)?;
+    let first = &bundle.members[0];
+    if bundle.members.iter().any(|member| {
+        member.connection_revision != first.connection_revision
+            || member.producer_fingerprint != first.producer_fingerprint
+    }) {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    let expected = crate::ConnectionObserveExpectation {
+        connector_id: connector_id.to_owned(),
+        connection_id: connection_id.to_owned(),
+        source_authority: first.source_authority,
+        connection_revision: first.connection_revision,
+        native_subject: None,
+        producer_fingerprint: Some(first.producer_fingerprint.clone()),
+        members: bundle
+            .members
+            .iter()
+            .map(|member| crate::ConnectionObserveReviewedMember {
+                view_id: member.view_id.clone(),
+                policy_digest: member.policy_digest.clone(),
+                resource: member.resource.clone(),
+                expected_grant_id: member.expected_grant_id,
+                expected_grant_authority: member.expected_grant_authority,
+            })
+            .collect(),
+    };
+    expected.validate()?;
+    Ok(expected)
+}
+
+pub(crate) async fn product_review_bundle<Keys, Transport>(
+    ctx: &RemoteObserveContext<'_, Keys>,
+    transport: &Transport,
+) -> Result<crate::ConnectionObserveExpectation, AgentFailure>
+where
+    Keys: VaultKeyProvider,
+    Transport: floe_access::RemoteGrantTransport,
+{
+    let reviewed = review_bundle(ctx, transport).await?;
+    product_expectation(ctx.connector_id, ctx.connection_id, &reviewed)
+}
+
+pub(crate) async fn product_enable_bundle<Keys, Transport>(
+    ctx: &RemoteObserveContext<'_, Keys>,
+    transport: &Transport,
+    expected: &crate::ConnectionObserveExpectation,
+) -> Result<(), AgentFailure>
+where
+    Keys: VaultKeyProvider,
+    Transport: floe_access::RemoteGrantTransport,
+{
+    expected.validate()?;
+    if expected.connector_id != ctx.connector_id || expected.connection_id != ctx.connection_id {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let fresh = review_bundle(ctx, transport).await?;
+    if product_expectation(ctx.connector_id, ctx.connection_id, &fresh)? != *expected {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    enable_bundle(ctx, transport, &fresh).await
+}
+
+pub(crate) async fn product_overview<Keys: VaultKeyProvider>(
+    vault: &EncryptedAgentVault<Keys>,
+    person_id: PersonId,
+    connector_id: &str,
+    connection_id: &str,
+    source_resources: Vec<String>,
+) -> Result<crate::ConnectionObserveOverview, AgentFailure> {
+    let policies = crate::first_party_observe::remote_policies_for_target(
+        vault,
+        person_id,
+        connector_id,
+        connection_id,
+    )
+    .await?;
+    if policies.is_empty() {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let mut members = Vec::new();
+    for policy in &policies {
+        let resource = floe_context_contract::connection_view_resource(
+            policy.view_id,
+            &floe_context_contract::ConnectionId::try_new(connection_id)
+                .map_err(|_| AgentFailure::InvalidInput)?,
+        )
+        .map_err(|_| AgentFailure::InvalidInput)?;
+        let grants = live_member_grants(
+            vault,
+            person_id,
+            connector_id,
+            connection_id,
+            resource.as_str(),
+        )
+        .await?;
+        match grants.as_slice() {
+            [] => {}
+            [grant] => members.push(crate::ConnectionObserveMember {
+                view_id: policy.view_id.to_owned(),
+                state: grant.state(),
+                review_required: grant.review_required(),
+            }),
+            _ => return Err(AgentFailure::Conflict),
+        }
+    }
+    let expected_views = policies
+        .iter()
+        .map(|policy| policy.view_id)
+        .collect::<Vec<_>>();
+    let mut overview = crate::ConnectionObserveOverview::from_members(
+        connector_id,
+        connection_id,
+        source_resources,
+        &expected_views,
+        members,
+    );
+    let status = observe_status(vault, person_id, connector_id, connection_id).await?;
+    overview.status = match status.as_str() {
+        "active" => crate::ConnectionObserveStatus::Active,
+        "paused" => crate::ConnectionObserveStatus::Paused,
+        _ => crate::ConnectionObserveStatus::NeedsReview,
+    };
+    overview.enabled = overview.status == crate::ConnectionObserveStatus::Active;
+    Ok(overview)
+}
+
 /// Everything a remote Observe review or enable judges.
 pub(crate) struct RemoteObserveContext<'a, Keys: VaultKeyProvider> {
     pub vault: &'a EncryptedAgentVault<Keys>,
@@ -93,9 +225,11 @@ pub(crate) fn validate_observe_expectation(
         }
         previous = Some(member.view_id.as_str());
     }
-    if expected.members.iter().any(|member| {
-        member.source_authority != expected.members[0].source_authority
-    }) {
+    if expected
+        .members
+        .iter()
+        .any(|member| member.source_authority != expected.members[0].source_authority)
+    {
         return Err(AgentFailure::AccessReviewRequired);
     }
     Ok(())
@@ -224,8 +358,7 @@ where
             .iter()
             .find(|member| member.view_id == policy.view_id)
             .ok_or(AgentFailure::InvalidInput)?;
-        if let Some(activation) = prepare_view_member(ctx, transport, policy, member).await?
-        {
+        if let Some(activation) = prepare_view_member(ctx, transport, policy, member).await? {
             activations.push(activation);
         }
     }
@@ -327,11 +460,11 @@ pub(crate) async fn observe_status<Keys: VaultKeyProvider>(
                 && grant.source().connection_id().as_str() == connection_id
                 && grant.state() != floe_access::GrantState::Revoked
                 && grant.scope().resources().iter().any(|value| {
-                        expected_views.iter().any(|view| {
-                            floe_context_contract::connection_view_resource(view, &connection)
-                                .is_ok_and(|expected| &expected == value)
-                        })
+                    expected_views.iter().any(|view| {
+                        floe_context_contract::connection_view_resource(view, &connection)
+                            .is_ok_and(|expected| &expected == value)
                     })
+                })
         })
         .collect::<Vec<_>>();
     let status = if relevant.len() != policies.len() {
@@ -494,9 +627,7 @@ mod tests {
     use std::sync::Mutex;
 
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-    use floe_access::{
-        BoxFuture, RemoteGrantTransport, RemoteSourceQuery, SignedSourcePreview,
-    };
+    use floe_access::{BoxFuture, RemoteGrantTransport, RemoteSourceQuery, SignedSourcePreview};
     use floe_context_contract::{
         ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory,
         GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction,
@@ -631,7 +762,6 @@ mod tests {
             let preview = self.view_preview(query.view_id, query.resource);
             Box::pin(async move { Ok(preview) })
         }
-
     }
 
     struct Fixture {
@@ -796,6 +926,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn product_review_uses_common_connection_expectation_without_routing_fields() {
+        let fixture = Fixture::open().await;
+        let cancellation = floe_execution::Cancellation::default();
+        let window = window(&cancellation);
+        let person = fixture.person_id.to_string();
+        let ctx = fixture.ctx(&window, fixture.pairing(&person));
+        let reviewed = product_review_bundle(&ctx, &fixture.transport)
+            .await
+            .unwrap();
+        assert_eq!(reviewed.connector_id, "gmail");
+        assert_eq!(reviewed.connection_id, fixture.connection_id);
+        assert_eq!(reviewed.members.len(), 2);
+        assert_eq!(reviewed.members[0].view_id, "life.logistics");
+        assert_eq!(reviewed.members[1].view_id, "mail.communication");
+        assert!(reviewed.members.iter().all(|member| {
+            member.resource.ends_with(&fixture.connection_id) && member.expected_grant_id.is_none()
+        }));
+        *fixture.transport.provider_identity.lock().unwrap() = "google:current-subject".into();
+        product_enable_bundle(&ctx, &fixture.transport, &reviewed)
+            .await
+            .unwrap();
+        let overview = product_overview(
+            &fixture.vault,
+            fixture.person_id,
+            "gmail",
+            &fixture.connection_id,
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(overview.status, crate::ConnectionObserveStatus::Active);
+        assert_eq!(overview.members.len(), 2);
+        let grants = fixture.live_grants().await;
+        assert_eq!(grants.len(), 2);
+        let next = product_review_bundle(&ctx, &fixture.transport)
+            .await
+            .unwrap();
+        *fixture.transport.authority.lock().unwrap() = SourceAuthority::new();
+        assert_eq!(
+            product_enable_bundle(&ctx, &fixture.transport, &next).await,
+            Err(AgentFailure::AccessReviewRequired)
+        );
+        assert_eq!(fixture.live_grants().await.len(), 2);
+    }
+
+    #[tokio::test]
     async fn calendar_resource_edit_keeps_logical_grant_without_automatic_review() {
         let fixture = Fixture::open_calendar().await;
         let cancellation = floe_execution::Cancellation::default();
@@ -820,7 +996,10 @@ mod tests {
             vec!["calendar-a".into(), "calendar-b".into()];
         *fixture.transport.revision.lock().unwrap() += 1;
         *fixture.transport.authority.lock().unwrap() = SourceAuthority::new();
-        assert_eq!(fixture.live_grants().await[0].authority(), before[0].authority());
+        assert_eq!(
+            fixture.live_grants().await[0].authority(),
+            before[0].authority()
+        );
         assert_eq!(
             observe_status(
                 &fixture.vault,
@@ -834,8 +1013,14 @@ mod tests {
         );
         let next = review_bundle(&ctx, &fixture.transport).await.unwrap();
         assert_eq!(next.members[0].expected_grant_id, Some(before[0].id()));
-        assert_eq!(next.members[0].policy_digest, reviewed.members[0].policy_digest);
-        assert_ne!(next.members[0].source_authority, reviewed.members[0].source_authority);
+        assert_eq!(
+            next.members[0].policy_digest,
+            reviewed.members[0].policy_digest
+        );
+        assert_ne!(
+            next.members[0].source_authority,
+            reviewed.members[0].source_authority
+        );
         assert_eq!(fixture.live_grants().await.len(), 1);
     }
 

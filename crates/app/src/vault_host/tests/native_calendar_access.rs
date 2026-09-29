@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use floe_context::{NativeCalendarSubjectSource, NativeSubjectObservation, NativeSubjectRequest};
 use floe_execution::Cancellation;
@@ -12,6 +12,7 @@ use crate::{CalendarAccessChange, CalendarAccessOverview, CalendarAccessState};
 struct FixtureSubject {
     fingerprints: HashMap<Vec<String>, String>,
     default: String,
+    seen: Mutex<Vec<Vec<String>>>,
 }
 
 impl NativeCalendarSubjectSource for FixtureSubject {
@@ -21,6 +22,7 @@ impl NativeCalendarSubjectSource for FixtureSubject {
     ) -> Result<NativeSubjectObservation, AgentFailure> {
         let mut ids = request.calendar_ids.clone();
         ids.sort();
+        self.seen.lock().unwrap().push(ids.clone());
         let before = self
             .fingerprints
             .get(&ids)
@@ -95,6 +97,7 @@ impl Fixture {
                 (vec!["home".to_owned(), "work".to_owned()], "b".repeat(64)),
             ]),
             default: "a".repeat(64),
+            seen: Mutex::new(Vec::new()),
         };
         Self {
             runtime,
@@ -127,6 +130,28 @@ impl Fixture {
             change,
             Cancellation::default(),
         ))
+    }
+
+    fn observe(
+        &self,
+        operation: &crate::ConnectionObserveOperation,
+    ) -> Result<
+        (
+            Option<crate::ConnectionObserveOverview>,
+            Option<crate::ConnectionObserveExpectation>,
+        ),
+        AgentFailure,
+    > {
+        self.runtime
+            .block_on(super::super::calendar_access::apply_connection_observe(
+                &self.core,
+                &self.vault,
+                &self.subject,
+                self.person,
+                &self.device_id,
+                operation,
+                Cancellation::default(),
+            ))
     }
 
     fn review(
@@ -219,6 +244,135 @@ fn fresh_review_creates_an_active_grant() {
     let reread = fixture.apply(CalendarAccessChange::Inspect).unwrap();
     assert_eq!(reread.state, CalendarAccessState::Active);
     assert_eq!(reread.grant_id, overview.grant_id);
+}
+
+#[test]
+fn common_observe_reviews_eleven_calendars_without_leaf_permission_input() {
+    let fixture = Fixture::new();
+    let calendar_ids = (0..11)
+        .map(|index| format!("calendar-{index:02}"))
+        .collect::<Vec<_>>();
+    let initial = fixture.connection();
+    let configured = fixture
+        .runtime
+        .block_on(
+            fixture.core.source_service().configure_reviewed_native(
+                fixture.person,
+                initial.connection_id(),
+                initial.revision(),
+                floe_connections::ResourceMode::Selected,
+                calendar_ids
+                    .iter()
+                    .map(|calendar_id| {
+                        floe_connections::ConnectionResource::new(
+                            floe_context_contract::ResourceHandle::try_new(calendar_id).unwrap(),
+                            calendar_id.clone(),
+                        )
+                        .unwrap()
+                    })
+                    .collect(),
+                "a".repeat(64),
+            ),
+        )
+        .unwrap();
+    let inspect = crate::ConnectionObserveOperation::Inspect {
+        connector_id: "calendar.event_kit".into(),
+        connection_id: configured.connection_id().as_str().into(),
+    };
+    let review = crate::ConnectionObserveOperation::Review {
+        connector_id: "calendar.event_kit".into(),
+        connection_id: configured.connection_id().as_str().into(),
+    };
+    let (overview, _) = fixture.observe(&inspect).unwrap();
+    let overview = overview.unwrap();
+    assert_eq!(overview.status, crate::ConnectionObserveStatus::NeedsReview);
+    assert_eq!(overview.source_resources, calendar_ids);
+    let (_, expected) = fixture.observe(&review).unwrap();
+    let expected = expected.unwrap();
+    assert_eq!(expected.members.len(), 1);
+    assert_eq!(expected.members[0].view_id, "calendar.timeline");
+    assert_eq!(
+        expected.members[0].resource,
+        "calendar.timeline:fixture-connection"
+    );
+    assert_eq!(
+        fixture.subject.seen.lock().unwrap().last().unwrap(),
+        &calendar_ids
+    );
+    let enable = |expected| crate::ConnectionObserveOperation::SetEnabled {
+        connector_id: "calendar.event_kit".into(),
+        connection_id: "fixture-connection".into(),
+        enabled: true,
+        disconnecting: false,
+        expected: Some(expected),
+    };
+    let (active, _) = fixture.observe(&enable(expected.clone())).unwrap();
+    assert_eq!(
+        active.unwrap().status,
+        crate::ConnectionObserveStatus::Active
+    );
+    let grants = fixture
+        .runtime
+        .block_on(fixture.vault.list_data_access_grants(16))
+        .unwrap();
+    assert_eq!(grants.len(), 1);
+    let before_grant = grants[0].clone();
+    assert_eq!(before_grant.scope().resources().len(), 1);
+    let before_source = fixture.connection();
+    let twelve = (0..12)
+        .map(|index| format!("calendar-{index:02}"))
+        .collect::<Vec<_>>();
+    let changed = fixture
+        .runtime
+        .block_on(
+            fixture.core.source_service().configure_reviewed_native(
+                fixture.person,
+                before_source.connection_id(),
+                before_source.revision(),
+                floe_connections::ResourceMode::Selected,
+                twelve
+                    .iter()
+                    .map(|calendar_id| {
+                        floe_connections::ConnectionResource::new(
+                            floe_context_contract::ResourceHandle::try_new(calendar_id).unwrap(),
+                            calendar_id.clone(),
+                        )
+                        .unwrap()
+                    })
+                    .collect(),
+                "a".repeat(64),
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        changed.source_authority(),
+        before_source.source_authority().advance().unwrap()
+    );
+    let (active_after_edit, _) = fixture.observe(&inspect).unwrap();
+    assert_eq!(
+        active_after_edit.unwrap().status,
+        crate::ConnectionObserveStatus::Active
+    );
+    assert_eq!(
+        fixture.observe(&enable(expected)),
+        Err(AgentFailure::AccessReviewRequired)
+    );
+    let grants_after = fixture
+        .runtime
+        .block_on(fixture.vault.list_data_access_grants(16))
+        .unwrap();
+    assert_eq!(grants_after[0].id(), before_grant.id());
+    assert_eq!(grants_after[0].authority(), before_grant.authority());
+    let (_, current_review) = fixture.observe(&review).unwrap();
+    let (enabled, _) = fixture.observe(&enable(current_review.unwrap())).unwrap();
+    assert_eq!(
+        enabled.unwrap().status,
+        crate::ConnectionObserveStatus::Active
+    );
+    assert_eq!(
+        fixture.subject.seen.lock().unwrap().last().unwrap(),
+        &twelve
+    );
 }
 
 #[test]
