@@ -114,13 +114,6 @@ fn all_remote_access_operations_reload_and_reject_foreign_or_missing_saved_ident
         RemoteAccessCommand::EnrollmentStatus {
             enrollment_id: Uuid::new_v4().to_string(),
         },
-        RemoteAccessCommand::ConnectionObserve {
-            connector_id: "gmail".into(),
-            connection_id: Uuid::new_v4().to_string(),
-            enabled: None,
-            disconnecting: false,
-            expected: None,
-        },
     ];
     for saved in [
         Some(saved_remote_connection(
@@ -145,65 +138,14 @@ fn all_remote_access_operations_reload_and_reject_foreign_or_missing_saved_ident
                     command,
                 },
             );
-            if result.stage == "remote_connection_observe_inspect" {
-                assert_eq!(result.failure, None);
-                assert_eq!(
-                    result.connection_observe_status.as_deref(),
-                    Some("needs_review")
-                );
-            } else {
-                assert_eq!(
-                    result.failure,
-                    Some(AgentFailure::PolicyDenied),
-                    "{}",
-                    result.stage
-                );
-            }
+            assert_eq!(
+                result.failure,
+                Some(AgentFailure::PolicyDenied),
+                "{}",
+                result.stage
+            );
         }
     }
-}
-
-#[test]
-fn observe_enable_requires_reviewed_expectation_before_any_io() {
-    let directory = tempfile::tempdir().unwrap();
-    let person = PersonId::new();
-    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
-    assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
-    let caller = remote_caller(person, "verified-device");
-    // No saved connection exists, so reaching owner I/O would fail with
-    // PolicyDenied. The missing review rejects first, as InvalidInput.
-    let result = perform(
-        &worker,
-        person,
-        WorkerAction::RemoteAccess {
-            caller: caller.clone(),
-            command: RemoteAccessCommand::ConnectionObserve {
-                connector_id: "gmail".into(),
-                connection_id: Uuid::new_v4().to_string(),
-                enabled: Some(true),
-                disconnecting: false,
-                expected: None,
-            },
-        },
-    );
-    assert_eq!(result.stage, "remote_connection_observe_enable");
-    assert_eq!(result.failure, Some(AgentFailure::InvalidInput));
-
-    // The review command reaches the owner boundary instead: without a
-    // saved connection there is nothing to probe.
-    let result = perform(
-        &worker,
-        person,
-        WorkerAction::RemoteAccess {
-            caller,
-            command: RemoteAccessCommand::ConnectionObserveReview {
-                connector_id: "gmail".into(),
-                connection_id: Uuid::new_v4().to_string(),
-            },
-        },
-    );
-    assert_eq!(result.stage, "remote_connection_observe_review");
-    assert_eq!(result.failure, Some(AgentFailure::PolicyDenied));
 }
 
 #[test]

@@ -136,7 +136,7 @@ pub trait RemotePairingCommands {
 /// owner re-probes live and compares every field; a fresh read never
 /// substitutes for these values.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RemoteObserveMemberExpectation {
+pub(crate) struct RemoteObserveMemberExpectation {
     pub view_id: String,
     pub policy_digest: String,
     pub resource: String,
@@ -154,7 +154,7 @@ pub struct RemoteObserveMemberExpectation {
 /// this set, or a changed per-member expectation, refuses the enable
 /// instead of widening it.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RemoteConnectionObserveExpectation {
+pub(crate) struct RemoteConnectionObserveExpectation {
     pub members: Vec<RemoteObserveMemberExpectation>,
 }
 
@@ -167,21 +167,6 @@ pub enum RemoteAccessCommand {
     EnrollmentStatus {
         enrollment_id: String,
     },
-    ConnectionObserve {
-        connector_id: String,
-        connection_id: String,
-        enabled: Option<bool>,
-        disconnecting: bool,
-        /// The reviewed bundle the enable binds. Required when `enabled` is
-        /// `Some(true)`; any other shape rejects before touching owners.
-        expected: Option<RemoteConnectionObserveExpectation>,
-    },
-    /// Read the reviewable Observe bundle without mutating: the snapshot an
-    /// enable must echo back. Nothing is stored.
-    ConnectionObserveReview {
-        connector_id: String,
-        connection_id: String,
-    },
 }
 
 impl RemoteAccessCommand {
@@ -190,12 +175,6 @@ impl RemoteAccessCommand {
             Self::InspectProducer => "remote_authority_inspect_producer",
             Self::ReviewAndEnroll { .. } => "remote_authority_review_and_enroll",
             Self::EnrollmentStatus { .. } => "remote_authority_enrollment_status",
-            Self::ConnectionObserve { enabled, .. } => match enabled {
-                None => "remote_connection_observe_inspect",
-                Some(true) => "remote_connection_observe_enable",
-                Some(false) => "remote_connection_observe_disable",
-            },
-            Self::ConnectionObserveReview { .. } => "remote_connection_observe_review",
         }
     }
 }
@@ -209,10 +188,6 @@ pub struct RemoteAccessResult {
     pub producer: Option<crate::RemoteProducerIdentity>,
     pub owner: Option<crate::RemoteOwnerPublicKey>,
     pub enrollment: Option<crate::RemoteEnrollmentStatus>,
-    pub connection_observe_status: Option<String>,
-    /// The reviewable bundle a `ConnectionObserveReview` read. `None` for
-    /// every other command; an enable echoes this snapshot back.
-    pub reviewed_bundle: Option<RemoteConnectionObserveExpectation>,
     pub failure: Option<crate::AgentFailure>,
 }
 

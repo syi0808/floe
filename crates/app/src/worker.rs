@@ -285,8 +285,6 @@ pub struct WorkerResult {
     pub remote_enrollment: Option<floe_access::RemoteEnrollmentStatus>,
     pub remote_pairing: Option<floe_connections::PairingStatus>,
     pub remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
-    pub connection_observe_status: Option<String>,
-    pub reviewed_observe_bundle: Option<crate::RemoteConnectionObserveExpectation>,
     pub connection_observe: Option<crate::ConnectionObserveOverview>,
     pub reviewed_connection_observe: Option<crate::ConnectionObserveExpectation>,
     pub personal_access: Option<floe_access::PersonalAccessOverview>,

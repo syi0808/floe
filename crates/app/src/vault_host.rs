@@ -632,8 +632,6 @@ struct Progress {
     remote_enrollment: Option<floe_access::RemoteEnrollmentStatus>,
     remote_pairing: Option<floe_connections::PairingStatus>,
     remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
-    connection_observe_status: Option<String>,
-    reviewed_observe_bundle: Option<crate::RemoteConnectionObserveExpectation>,
     connection_observe: Option<crate::ConnectionObserveOverview>,
     reviewed_connection_observe: Option<crate::ConnectionObserveExpectation>,
     personal_access: Option<floe_access::PersonalAccessOverview>,
@@ -1297,8 +1295,6 @@ impl Worker {
             remote_producer: progress.remote_producer.clone(),
             remote_enrollment: progress.remote_enrollment.clone(),
             remote_pairing: progress.remote_pairing.clone(),
-            connection_observe_status: progress.connection_observe_status.clone(),
-            reviewed_observe_bundle: progress.reviewed_observe_bundle.clone(),
             connection_observe: progress.connection_observe.clone(),
             reviewed_connection_observe: progress.reviewed_connection_observe.clone(),
             personal_access: progress.personal_access.clone(),
@@ -1807,8 +1803,6 @@ struct VaultExecutionResult {
     remote_enrollment: Option<floe_access::RemoteEnrollmentStatus>,
     remote_pairing: Option<floe_connections::PairingStatus>,
     remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
-    connection_observe_status: Option<String>,
-    reviewed_observe_bundle: Option<crate::RemoteConnectionObserveExpectation>,
     connection_observe: Option<crate::ConnectionObserveOverview>,
     reviewed_connection_observe: Option<crate::ConnectionObserveExpectation>,
     personal_access: Option<floe_access::PersonalAccessOverview>,
@@ -1874,8 +1868,6 @@ fn finish_job(
                 progress.remote_enrollment = result.remote_enrollment;
                 progress.remote_pairing = result.remote_pairing;
                 progress.remote_owner = result.remote_owner;
-                progress.connection_observe_status = result.connection_observe_status;
-                progress.reviewed_observe_bundle = result.reviewed_observe_bundle;
                 progress.connection_observe = result.connection_observe;
                 progress.reviewed_connection_observe = result.reviewed_connection_observe;
                 progress.personal_access = result.personal_access;
@@ -3088,147 +3080,6 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     })
                 }
 
-                crate::RemoteAccessCommand::ConnectionObserve {
-                    connector_id,
-                    connection_id,
-                    enabled,
-                    disconnecting,
-                    expected,
-                } => {
-                    let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-                    let vault = vault.vault.as_ref();
-                    remote_observe::validate_observe_identity(connector_id, connection_id)?;
-                    match enabled {
-                        None => {
-                            let status = remote_observe::observe_status(
-                                vault,
-                                job.person,
-                                connector_id,
-                                connection_id,
-                            )
-                            .await?;
-                            Ok(VaultExecutionResult {
-                                connection_observe_status: Some(status),
-                                ..VaultExecutionResult::ready()
-                            })
-                        }
-                        Some(true) => {
-                            if *disconnecting {
-                                return Err(AgentFailure::InvalidInput);
-                            }
-                            let expected = expected.as_ref().ok_or(AgentFailure::InvalidInput)?;
-                            let policies =
-                                crate::first_party_observe::remote_policies(connector_id)?;
-                            if policies.is_empty() {
-                                return Err(AgentFailure::InvalidInput);
-                            }
-                            let source_client = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
-                                connections, &person_text, caller.device_id(),
-                            )?
-                            .ok_or(AgentFailure::PolicyDenied)?;
-                            let transport =
-                                floe_provider_adapters::sources::AuthorizedSourceClient::new(
-                                    &source_client,
-                                    vault,
-                                );
-                            let window = floe_access::RemoteCallWindow {
-                                deadline: tokio::time::Instant::now() + Duration::from_secs(30),
-                                cancellation: job.cancellation.clone(),
-                            };
-                            let pairing = floe_access::RemotePairingIdentity {
-                                person_id: &person_text,
-                                client_id: source_client.source().client_id(),
-                                device_id: caller.device_id(),
-                            };
-                            let ctx = remote_observe::RemoteObserveContext {
-                                vault,
-                                person_id: job.person,
-                                pairing,
-                                connector_id,
-                                connection_id,
-                                window: &window,
-                            };
-                            remote_observe::enable_bundle(&ctx, &transport, expected).await?;
-                            let status = remote_observe::observe_status(
-                                vault,
-                                job.person,
-                                connector_id,
-                                connection_id,
-                            )
-                            .await?;
-                            Ok(VaultExecutionResult {
-                                connection_observe_status: Some(status),
-                                ..VaultExecutionResult::ready()
-                            })
-                        }
-                        Some(false) => {
-                            if expected.is_some() {
-                                return Err(AgentFailure::InvalidInput);
-                            }
-                            remote_observe::disable_bundle(
-                                vault,
-                                job.person,
-                                connector_id,
-                                connection_id,
-                                *disconnecting,
-                            )
-                            .await?;
-                            let status = remote_observe::observe_status(
-                                vault,
-                                job.person,
-                                connector_id,
-                                connection_id,
-                            )
-                            .await?;
-                            Ok(VaultExecutionResult {
-                                connection_observe_status: Some(status),
-                                ..VaultExecutionResult::ready()
-                            })
-                        }
-                    }
-                }
-                crate::RemoteAccessCommand::ConnectionObserveReview {
-                    connector_id,
-                    connection_id,
-                } => {
-                    let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-                    let vault = vault.vault.as_ref();
-                    remote_observe::validate_observe_identity(connector_id, connection_id)?;
-                    let policies = crate::first_party_observe::remote_policies(connector_id)?;
-                    if policies.is_empty() {
-                        return Err(AgentFailure::InvalidInput);
-                    }
-                    let source_client = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
-                        connections, &person_text, caller.device_id(),
-                    )?
-                    .ok_or(AgentFailure::PolicyDenied)?;
-                    let transport = floe_provider_adapters::sources::AuthorizedSourceClient::new(
-                        &source_client,
-                        vault,
-                    );
-                    let window = floe_access::RemoteCallWindow {
-                        deadline: tokio::time::Instant::now() + Duration::from_secs(30),
-                        cancellation: job.cancellation.clone(),
-                    };
-                    let pairing = floe_access::RemotePairingIdentity {
-                        person_id: &person_text,
-                        client_id: source_client.source().client_id(),
-                        device_id: caller.device_id(),
-                    };
-                    let ctx = remote_observe::RemoteObserveContext {
-                        vault,
-                        person_id: job.person,
-                        pairing,
-                        connector_id,
-                        connection_id,
-                        window: &window,
-                    };
-                    let bundle = remote_observe::review_bundle(&ctx, &transport).await?;
-                    Ok(VaultExecutionResult {
-                        reviewed_observe_bundle: Some(bundle),
-                        ..VaultExecutionResult::ready()
-                    })
-                }
             }
         }
     }

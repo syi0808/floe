@@ -31,119 +31,13 @@ fn envelope(operation: Value) -> Value {
     json!({"schema_version": APP_WIRE_VERSION, "request_id": Uuid::new_v4(), "operation": operation})
 }
 
-fn authority() -> Value {
-    json!({"incarnation": Uuid::new_v4(), "epoch": 3})
-}
-
-fn observe_member(view_id: &str, resource: &str) -> Value {
-    json!({
-        "view_id": view_id,
-        "resource": resource,
-        "producer_fingerprint": "fp",
-        "policy_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "source_authority": authority(),
-        "connection_revision": 11,
-        "provider_identity": "google:subject-a",
-        "recipient": "floe.server:test",
-        "expected_grant_id": null,
-        "expected_grant_authority": null,
-    })
-}
-
 #[test]
-fn observe_review_and_echoed_enable_roundtrip() {
+fn remote_access_rejects_obsolete_observe_product_operations() {
     let connection = Uuid::new_v4();
-    let review = json!({"kind": "connection_observe_review", "connector_id": "gmail", "connection_id": connection});
-    let decoded: RemoteAccessRequestDto = serde_json::from_value(envelope(review)).unwrap();
-    assert_eq!(decoded.validate(), Ok(()));
-    let forbidden = json!({"kind": "connection_observe_review", "connector_id": "gmail", "connection_id": connection, "resource": "primary"});
-    assert!(serde_json::from_value::<RemoteAccessRequestDto>(envelope(forbidden)).is_err());
-
-    let resource = format!("mail.communication:{connection}");
-    let bundle = json!({"members": [observe_member("mail.communication", &resource)]});
-    let enable = json!({
-        "kind": "connection_observe",
-        "connector_id": "gmail",
-        "connection_id": connection,
-        "enabled": true,
-        "expected": bundle,
-    });
-    let decoded: RemoteAccessRequestDto = serde_json::from_value(envelope(enable)).unwrap();
-    assert_eq!(decoded.validate(), Ok(()));
-    let forbidden = json!({"kind": "connection_observe", "connector_id": "gmail", "connection_id": connection, "resource": null, "enabled": true, "expected": bundle});
-    assert!(serde_json::from_value::<RemoteAccessRequestDto>(envelope(forbidden)).is_err());
-    for invalid in [
-        json!({"kind": "connection_observe", "connector_id": "gmail", "connection_id": connection, "enabled": true}),
-        json!({"kind": "connection_observe", "connector_id": "gmail", "connection_id": connection, "enabled": false, "expected": bundle}),
-        json!({"kind": "connection_observe", "connector_id": "gmail", "connection_id": connection, "enabled": true, "disconnecting": true, "expected": bundle}),
-        json!({"kind": "connection_observe", "connector_id": "gmail", "connection_id": connection, "disconnecting": true}),
-    ] {
-        assert!(serde_json::from_value::<RemoteAccessRequestDto>(envelope(invalid))
-            .unwrap()
-            .validate()
-            .is_err());
+    for kind in ["connection_observe", "connection_observe_review"] {
+        let operation = json!({"kind": kind, "connector_id": "calendar.google", "connection_id": connection});
+        assert!(serde_json::from_value::<RemoteAccessRequestDto>(envelope(operation)).is_err());
     }
-
-    // An incoherent grant pair never validates.
-    let mut broken = observe_member("mail.communication", &resource);
-    broken["expected_grant_id"] = json!(Uuid::new_v4().to_string());
-    let enable = json!({
-        "kind": "connection_observe",
-        "connector_id": "gmail",
-        "connection_id": connection,
-        "enabled": true,
-        "expected": json!({"members": [broken]}),
-    });
-    assert!(
-        serde_json::from_value::<RemoteAccessRequestDto>(envelope(enable))
-            .unwrap()
-            .validate()
-            .is_err()
-    );
-
-    // The result carries the reviewed bundle back to the reviewer.
-    let result = json!({
-        "operation_id": Uuid::new_v4(),
-        "done": true,
-        "producer": null,
-        "owner": null,
-        "enrollment": null,
-        "connection_observe_status": null,
-        "reviewed_bundle": bundle,
-        "failure": null,
-    });
-    let decoded: RemoteAccessResultDto = serde_json::from_value(result).unwrap();
-    let bundle = decoded.reviewed_bundle.unwrap();
-    assert_eq!(bundle.members.len(), 1);
-    assert_eq!(bundle.members[0].view_id, "mail.communication");
-    assert_eq!(bundle.members[0].policy_digest, "a".repeat(64));
-    assert_eq!(bundle.members[0].connection_revision, Some(11));
-    assert_eq!(bundle.members[0].expected_grant_id, None);
-    let mut obsolete = observe_member("mail.communication", &resource);
-    obsolete["expected_policy"] = authority();
-    let enable = json!({
-        "kind": "connection_observe",
-        "connector_id": "gmail",
-        "connection_id": connection,
-        "enabled": true,
-        "expected": {"members": [obsolete]},
-    });
-    assert!(serde_json::from_value::<RemoteAccessRequestDto>(envelope(enable)).is_err());
-    let mut invalid = observe_member("mail.communication", &resource);
-    invalid["policy_digest"] = json!("A".repeat(64));
-    let enable = json!({
-        "kind": "connection_observe",
-        "connector_id": "gmail",
-        "connection_id": connection,
-        "enabled": true,
-        "expected": {"members": [invalid]},
-    });
-    assert!(
-        serde_json::from_value::<RemoteAccessRequestDto>(envelope(enable))
-            .unwrap()
-            .validate()
-            .is_err()
-    );
 }
 
 #[test]
@@ -201,12 +95,10 @@ fn pairing_contract_roundtrips_only_setup_intent_and_signed_evidence() {
 
 #[test]
 fn remote_access_rejects_all_transport_and_identity_fields() {
-    let connection = Uuid::new_v4();
     let commands = vec![
         json!({"kind": "inspect_producer"}),
         json!({"kind": "review_and_enroll", "producer": producer()}),
         json!({"kind": "enrollment_status", "enrollment_id": Uuid::new_v4()}),
-        json!({"kind": "connection_observe", "connector_id": "calendar.google", "connection_id": connection, "enabled": null}),
         json!({"kind": "read_result", "operation_id": Uuid::new_v4(), "release": true}),
     ];
     for command in commands {
@@ -281,7 +173,6 @@ fn remote_requests_reject_invalid_versions_ids_and_bounds() {
     for operation in [
         json!({"kind": "enrollment_status", "enrollment_id": "invalid"}),
         json!({"kind": "read_result", "operation_id": Uuid::nil(), "release": false}),
-        json!({"kind": "connection_observe", "connector_id": "calendar.google", "connection_id": "invalid", "enabled": true}),
     ] {
         assert!(
             serde_json::from_value::<RemoteAccessRequestDto>(envelope(operation))

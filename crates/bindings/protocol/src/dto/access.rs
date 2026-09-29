@@ -1,8 +1,7 @@
 use super::AgentVaultFailureDto;
 use super::connections::{
-    validate_envelope, validate_identifier, validate_producer, validate_text, validate_uuid,
+    validate_envelope, validate_identifier, validate_producer, validate_uuid,
 };
-use floe_context_contract::{GrantAuthority, GrantId, SourceAuthority};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -24,49 +23,10 @@ pub enum RemoteAccessOperationDto {
     EnrollmentStatus {
         enrollment_id: String,
     },
-    ConnectionObserve {
-        connector_id: String,
-        connection_id: String,
-        enabled: Option<bool>,
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        disconnecting: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        expected: Option<RemoteObserveExpectationDto>,
-    },
-    ConnectionObserveReview {
-        connector_id: String,
-        connection_id: String,
-    },
     ReadResult {
         operation_id: Uuid,
         release: bool,
     },
-}
-
-/// One reviewed grant of a remote Observe bundle, echoed back on enable.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteObserveMemberDto {
-    pub view_id: String,
-    pub policy_digest: String,
-    pub resource: String,
-    pub producer_fingerprint: String,
-    pub source_authority: SourceAuthority,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub connection_revision: Option<u64>,
-    pub provider_identity: String,
-    pub recipient: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_grant_id: Option<GrantId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_grant_authority: Option<GrantAuthority>,
-}
-
-/// The whole reviewed bundle a remote Observe enable binds.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteObserveExpectationDto {
-    pub members: Vec<RemoteObserveMemberDto>,
 }
 
 impl RemoteAccessRequestDto {
@@ -78,86 +38,11 @@ impl RemoteAccessRequestDto {
             RemoteAccessOperationDto::EnrollmentStatus { enrollment_id } => {
                 validate_uuid(enrollment_id)
             }
-            RemoteAccessOperationDto::ConnectionObserve {
-                connector_id,
-                connection_id,
-                enabled,
-                disconnecting,
-                expected,
-            } => {
-                validate_observe_identity(connector_id, connection_id)?;
-                if matches!(enabled, Some(true)) != expected.is_some()
-                    || (*disconnecting && *enabled != Some(false))
-                {
-                    return Err("operation.expected");
-                }
-                if let Some(expected) = expected {
-                    validate_observe_expectation(expected)?;
-                }
-                Ok(())
-            }
-            RemoteAccessOperationDto::ConnectionObserveReview {
-                connector_id,
-                connection_id,
-            } => validate_observe_identity(connector_id, connection_id),
             RemoteAccessOperationDto::ReadResult { operation_id, .. } => {
                 validate_identifier(*operation_id)
             }
         }
     }
-}
-
-fn validate_observe_identity(
-    connector_id: &str,
-    connection_id: &str,
-) -> Result<(), &'static str> {
-    validate_text(connector_id, 128)?;
-    validate_uuid(connection_id)?;
-    Ok(())
-}
-
-fn validate_observe_expectation(
-    expected: &RemoteObserveExpectationDto,
-) -> Result<(), &'static str> {
-    if expected.members.is_empty() || expected.members.len() > 8 {
-        return Err("operation.expected.members");
-    }
-    let mut previous: Option<&str> = None;
-    for member in &expected.members {
-        if member.policy_digest.len() != 64
-            || !member
-                .policy_digest
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err("operation.expected.member.policy_digest");
-        }
-        for value in [
-            member.view_id.as_str(),
-            member.resource.as_str(),
-            member.producer_fingerprint.as_str(),
-            member.provider_identity.as_str(),
-            member.recipient.as_str(),
-        ] {
-            validate_text(value, 256)?;
-        }
-        if !member.source_authority.is_valid() || member.connection_revision == Some(0) {
-            return Err("operation.expected.member");
-        }
-        match (
-            &member.expected_grant_id,
-            &member.expected_grant_authority,
-        ) {
-            (None, None) => {}
-            (Some(id), Some(authority)) if id.is_valid() && authority.is_valid() => {}
-            _ => return Err("operation.expected.member.grant"),
-        }
-        if previous.is_some_and(|previous| previous >= member.view_id.as_str()) {
-            return Err("operation.expected.members");
-        }
-        previous = Some(member.view_id.as_str());
-    }
-    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -168,8 +53,6 @@ pub struct RemoteAccessResultDto {
     pub producer: Option<RemoteProducerIdentityDto>,
     pub owner: Option<RemoteOwnerPublicKeyDto>,
     pub enrollment: Option<RemoteAuthorityEnrollmentStatusDto>,
-    pub connection_observe_status: Option<String>,
-    pub reviewed_bundle: Option<RemoteObserveExpectationDto>,
     pub failure: Option<AgentVaultFailureDto>,
 }
 

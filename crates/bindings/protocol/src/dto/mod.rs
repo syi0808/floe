@@ -2,7 +2,7 @@ mod access;
 mod actions;
 pub use access::{
     RemoteAccessOperationDto, RemoteAccessRequestDto, RemoteAccessResultDto,
-    RemoteAuthorityEnrollmentStatusDto, RemoteObserveExpectationDto, RemoteObserveMemberDto,
+    RemoteAuthorityEnrollmentStatusDto,
     RemoteOwnerPublicKeyDto, RemoteProducerIdentityDto,
 };
 pub use actions::ActionOperationResultDto;

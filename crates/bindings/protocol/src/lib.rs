@@ -28,7 +28,7 @@ pub use dto::{
     CaptureSourceDto, ClassificationDto, ConnectionObserveExpectationDto,
     ConnectionObserveGrantStateDto, ConnectionObserveMemberDto, ConnectionObserveMutationDto,
     ConnectionObserveOverviewDto, ConnectionObserveResultDto, ConnectionObserveReviewedMemberDto,
-    ConnectionObserveStatusDto, RemoteObserveExpectationDto, RemoteObserveMemberDto,
+    ConnectionObserveStatusDto,
     ConnectionResourceDto, ConnectionsResultDto, ConnectorSnapshotDto,
     ContactsAccessChangeDto, ContextCommandDto, ContextQueryDto, ConversationSessionResultDto,
     DayMutationDto, DayQueryDto, DaySnapshotDto, DomainRefDto, EpistemicStatusDto, ErrorCodeDto,

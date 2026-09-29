@@ -150,9 +150,9 @@ pub use local_context::{
 };
 pub use remote_services::{
     PairingTarget, RemoteAccessCommand, RemoteAccessCommands, RemoteAccessResult,
-    RemoteConnectionObserveExpectation, RemoteObserveMemberExpectation, RemotePairingCommand,
-    RemotePairingCommands, RemotePairingResult,
+    RemotePairingCommand, RemotePairingCommands, RemotePairingResult,
 };
+pub(crate) use remote_services::{RemoteConnectionObserveExpectation, RemoteObserveMemberExpectation};
 pub use services::CalendarActionsResult;
 pub use services::{
     CancelRun, CancelRunOutcome, CancelRunReceipt, CommandReceipt, ContinuationRef,
