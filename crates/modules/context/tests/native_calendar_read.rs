@@ -10,9 +10,9 @@ use chrono::TimeZone;
 
 use floe_access::{
     CalendarReadAccessAdmission, CalendarReadAccessRequest, ConnectionId, ConnectorId,
-    ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory,
-    GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction,
-    RemoteCallWindow, ResourceHandle,
+    ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation,
+    GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, RemoteCallWindow,
+    ResourceHandle,
 };
 use floe_connections::{ConnectionResource, ResourceMode, SourceConnection};
 use floe_context::{
@@ -478,6 +478,20 @@ async fn native_view_records_complete_empty_coverage_and_exact_dependency() {
 #[tokio::test]
 async fn current_resource_growth_reads_all_calendars_and_stales_old_dependency() {
     let (connections, device, grants, person_id) = fixture();
+    let eleven = (0..11)
+        .map(|index| format!("calendar-{index:02}"))
+        .collect::<Vec<_>>();
+    {
+        let mut stored = connections.value.lock().unwrap();
+        let source = stored.as_mut().unwrap();
+        source
+            .configure(
+                source.revision(),
+                ResourceMode::Selected,
+                eleven.iter().map(|id| resource(id, id)).collect(),
+            )
+            .unwrap();
+    }
     let now = chrono::Utc::now().timestamp_millis();
     let query = CalendarViewQuery::try_new(now - 60_000, now + 60_000, None, 8).unwrap();
     let leases = SourceLeaseRegistry::new();
@@ -497,6 +511,8 @@ async fn current_resource_growth_reads_all_calendars_and_stales_old_dependency()
     )
     .await
     .unwrap();
+    assert_eq!(old_dependency.source_resources().len(), 11);
+    assert_eq!(old_dependency.resources().len(), 1);
     let old_source_authority = old_dependency.source_authority();
     {
         let mut stored = connections.value.lock().unwrap();
@@ -505,10 +521,12 @@ async fn current_resource_growth_reads_all_calendars_and_stales_old_dependency()
             .configure(
                 source.revision(),
                 ResourceMode::Selected,
-                vec![
-                    resource("primary", "Primary"),
-                    resource("secondary", "Secondary"),
-                ],
+                (0..12)
+                    .map(|index| {
+                        let id = format!("calendar-{index:02}");
+                        resource(&id, &id)
+                    })
+                    .collect(),
             )
             .unwrap();
     }
@@ -542,7 +560,9 @@ async fn current_resource_growth_reads_all_calendars_and_stales_old_dependency()
     .await
     .unwrap();
     assert!(view.items.is_empty());
-    let expected_ids = vec!["primary", "secondary"];
+    let expected_ids = (0..12)
+        .map(|index| format!("calendar-{index:02}"))
+        .collect::<Vec<_>>();
     assert_eq!(
         device.checked_calendar_ids.lock().unwrap().last().unwrap(),
         &expected_ids

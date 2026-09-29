@@ -291,7 +291,7 @@ fn common_observe_rejects_stale_grant_source_subject_and_identity() {
 }
 
 #[test]
-fn common_observe_reviews_eleven_calendars_without_leaf_permission_input() {
+fn calendar_connection_observe_conformance_eleven_to_twelve() {
     let fixture = Fixture::new();
     let calendar_ids = (0..11)
         .map(|index| format!("calendar-{index:02}"))
@@ -319,6 +319,89 @@ fn common_observe_reviews_eleven_calendars_without_leaf_permission_input() {
             ),
         )
         .unwrap();
+    let candidates =
+        floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+            person_id: fixture.person,
+            device_id: &fixture.device_id,
+            capability: "calendar.timeline",
+            contract_version: 1,
+            remote_connections: &[],
+            remote_execution_owner: None,
+            source_connections: std::slice::from_ref(&configured),
+        })
+        .unwrap();
+    assert_eq!(candidates.len(), 1);
+    let candidate = &candidates[0];
+    assert_eq!(
+        candidate.reference.resource.as_str(),
+        "calendar.timeline:fixture-connection"
+    );
+    let registry = fixture
+        .runtime
+        .block_on(fixture.vault.expert_registry())
+        .unwrap()
+        .unwrap();
+    let schedule = registry
+        .installations
+        .iter()
+        .find(|installation| installation.package.id == "floe.builtin.schedule")
+        .unwrap();
+    let assignment = registry
+        .assignments
+        .iter()
+        .find(|assignment| assignment.installation_id == schedule.id)
+        .unwrap();
+    let binding = fixture
+        .runtime
+        .block_on(fixture.vault.replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: assignment.id,
+                package: schedule.package.clone(),
+                definition_revision: 1,
+                requirement_key: "floe.source.calendar".into(),
+                expected_binding_revision: assignment.binding.revision,
+                selected: vec![candidate.reference.clone()],
+            },
+        ))
+        .unwrap();
+    let mut extension = floe_experts_builtin::manifests()
+        .into_iter()
+        .find(|manifest| manifest.package.id == "floe.builtin.schedule")
+        .unwrap();
+    extension.package.id = "example.calendar.extension".into();
+    extension.definition.card.id = extension.package.id.clone();
+    extension.publisher = "example".into();
+    extension.validate().unwrap();
+    let current_registry = fixture
+        .runtime
+        .block_on(fixture.vault.expert_registry())
+        .unwrap()
+        .unwrap();
+    fixture
+        .runtime
+        .block_on(fixture.vault.install_expert_bundle(
+            floe_experts::ExpertInstallOperation {
+                instance_id: fixture.vault.registry_instance_id(),
+                expected_revision: current_registry.revision,
+                operation_id: Uuid::new_v4(),
+            },
+            &[extension],
+            Cancellation::default(),
+        ))
+        .unwrap();
+    let policy = crate::first_party_observe::calendar_policy().unwrap();
+    assert_eq!(
+        crate::first_party_observe::member_policy_digest("calendar.event_kit", "calendar.timeline")
+            .unwrap(),
+        crate::first_party_observe::policy_digest(&policy).unwrap()
+    );
+    assert!(
+        !policy
+            .consumers
+            .iter()
+            .any(|consumer| consumer.identifier() == "example.calendar.extension")
+    );
     let inspect = crate::ConnectionObserveOperation::Inspect {
         connector_id: "calendar.event_kit".into(),
         connection_id: configured.connection_id().as_str().into(),
@@ -362,6 +445,11 @@ fn common_observe_reviews_eleven_calendars_without_leaf_permission_input() {
     assert_eq!(grants.len(), 1);
     let before_grant = grants[0].clone();
     assert_eq!(before_grant.scope().resources().len(), 1);
+    assert_eq!(
+        before_grant.scope().resources()[0].as_str(),
+        candidate.reference.resource.as_str()
+    );
+    assert_eq!(before_grant.scope().consumers(), policy.consumers);
     let before_source = fixture.connection();
     let twelve = (0..12)
         .map(|index| format!("calendar-{index:02}"))
@@ -407,6 +495,30 @@ fn common_observe_reviews_eleven_calendars_without_leaf_permission_input() {
         .unwrap();
     assert_eq!(grants_after[0].id(), before_grant.id());
     assert_eq!(grants_after[0].authority(), before_grant.authority());
+    let candidates_after =
+        floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+            person_id: fixture.person,
+            device_id: &fixture.device_id,
+            capability: "calendar.timeline",
+            contract_version: 1,
+            remote_connections: &[],
+            remote_execution_owner: None,
+            source_connections: std::slice::from_ref(&changed),
+        })
+        .unwrap();
+    assert_eq!(candidates_after.len(), 1);
+    assert_eq!(candidates_after[0].candidate_id, candidate.candidate_id);
+    let registry_after = fixture
+        .runtime
+        .block_on(fixture.vault.expert_registry())
+        .unwrap()
+        .unwrap();
+    let assignment_after = registry_after
+        .assignments
+        .iter()
+        .find(|current| current.id == assignment.id)
+        .unwrap();
+    assert_eq!(assignment_after.binding.revision, binding.revision);
     let (_, current_review) = fixture.observe(&review).unwrap();
     let (enabled, _) = fixture.observe(&enable(current_review.unwrap())).unwrap();
     assert_eq!(
