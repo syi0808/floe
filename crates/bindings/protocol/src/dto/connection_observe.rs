@@ -215,4 +215,23 @@ mod tests {
         });
         assert!(serde_json::from_value::<ConnectionObserveExpectationDto>(expectation).is_err());
     }
+
+    #[test]
+    fn app_result_keeps_owner_correlation_at_top_level() {
+        let operation_id = Uuid::new_v4();
+        let result = super::super::AppQueryResultDto::ConnectionObserve {
+            result: ConnectionObserveResultDto {
+                operation_id,
+                done: true,
+                state: None,
+                overview: None,
+                reviewed: None,
+                failure: None,
+            },
+        };
+        let value = serde_json::to_value(result).unwrap();
+        assert_eq!(value["kind"], "connection_observe");
+        assert_eq!(value["operation_id"], operation_id.to_string());
+        assert!(value.get("result").is_none());
+    }
 }

@@ -408,6 +408,7 @@ pub enum AppCommandResultDto {
         source: super::SourceConnectionDto,
     },
     ConnectionObserve {
+        #[serde(flatten)]
         result: super::ConnectionObserveResultDto,
     },
     RemoteCalendarSource {
