@@ -32,7 +32,8 @@ LEGACY = re.compile(
     r"consumer_policy|policy_authority|policy_incarnation|policy_epoch)\b"
 )
 FORBIDDEN_POLICY = re.compile(
-    r"\b(?:AgentRegistry|assignments?|binding|selected_resources|"
+    r"\b(?:AgentRegistry|registry|assignments?|binding|installations?|"
+    r"selected_resources|source_resources|connection_id|person_id|vault|"
     r"installed_extensions?|extension_package_ids?)\b"
 )
 FORBIDDEN_FIELDS = re.compile(
