@@ -322,13 +322,11 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
         ? await gateway.connectionObserveReview(
             connectorId: widget.connector.id,
             connectionId: connectionId,
-            resource: null,
           )
         : null;
     await gateway.connectionObserve(
       connectorId: widget.connector.id,
       connectionId: connectionId,
-      resource: null,
       enabled: enabled,
       disconnecting: disconnecting,
       expected: expected,
@@ -566,7 +564,6 @@ final class _ConnectionObserveControlState
       final next = await widget.gateway.connectionObserve(
         connectorId: widget.connector.id,
         connectionId: connectionId,
-        resource: null,
       );
       if (mounted && connectionId == widget.connector.connectionId) {
         setState(() {
@@ -595,7 +592,6 @@ final class _ConnectionObserveControlState
           ? await widget.gateway.connectionObserveReview(
               connectorId: widget.connector.id,
               connectionId: connectionId,
-              resource: null,
             )
           : null;
       if (enabled && expected != null && mounted) {
@@ -611,7 +607,6 @@ final class _ConnectionObserveControlState
       final next = await widget.gateway.connectionObserve(
         connectorId: widget.connector.id,
         connectionId: connectionId,
-        resource: null,
         enabled: enabled,
         expected: expected,
       );

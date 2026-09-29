@@ -2966,7 +2966,6 @@ impl InlineOwnerMutation for RemoteTestOwners<'_> {
                 pairing,
                 connector_id: connector,
                 connection_id: target.connection_id.as_str(),
-                resource: None,
                 window: &window,
             };
             enable_remote_reviewed(&ctx, self.transport, target).await
@@ -3095,7 +3094,6 @@ async fn gmail_connection_review_rejects_changed_policy_before_enable() {
         },
         connector_id: "gmail",
         connection_id: &host.connection_id,
-        resource: None,
         window: &window,
     };
     let mut review = super::super::remote_observe::review_bundle(&ctx, &host.transport)
@@ -3134,7 +3132,6 @@ async fn manager_mail_read_requires_assistant_in_reviewed_product_policy() {
         },
         connector_id: "microsoft.mail",
         connection_id: &host.connection_id,
-        resource: None,
         window: &window,
     };
     let review = super::super::remote_observe::review_bundle(&ctx, &host.transport)

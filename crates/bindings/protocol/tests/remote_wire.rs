@@ -56,6 +56,8 @@ fn observe_review_and_echoed_enable_roundtrip() {
     let review = json!({"kind": "connection_observe_review", "connector_id": "gmail", "connection_id": connection});
     let decoded: RemoteAccessRequestDto = serde_json::from_value(envelope(review)).unwrap();
     assert_eq!(decoded.validate(), Ok(()));
+    let forbidden = json!({"kind": "connection_observe_review", "connector_id": "gmail", "connection_id": connection, "resource": "primary"});
+    assert!(serde_json::from_value::<RemoteAccessRequestDto>(envelope(forbidden)).is_err());
 
     let resource = format!("mail.communication:{connection}");
     let bundle = json!({"members": [observe_member("mail.communication", &resource)]});
@@ -68,6 +70,8 @@ fn observe_review_and_echoed_enable_roundtrip() {
     });
     let decoded: RemoteAccessRequestDto = serde_json::from_value(envelope(enable)).unwrap();
     assert_eq!(decoded.validate(), Ok(()));
+    let forbidden = json!({"kind": "connection_observe", "connector_id": "gmail", "connection_id": connection, "resource": null, "enabled": true, "expected": bundle});
+    assert!(serde_json::from_value::<RemoteAccessRequestDto>(envelope(forbidden)).is_err());
 
     // An incoherent grant pair never validates.
     let mut broken = observe_member("mail.communication", &resource);
@@ -191,7 +195,7 @@ fn remote_access_rejects_all_transport_and_identity_fields() {
         json!({"kind": "inspect_producer"}),
         json!({"kind": "review_and_enroll", "producer": producer()}),
         json!({"kind": "enrollment_status", "enrollment_id": Uuid::new_v4()}),
-        json!({"kind": "connection_observe", "connector_id": "calendar.google", "connection_id": connection, "resource": "primary", "enabled": true}),
+        json!({"kind": "connection_observe", "connector_id": "calendar.google", "connection_id": connection, "enabled": true}),
         json!({"kind": "read_result", "operation_id": Uuid::new_v4(), "release": true}),
     ];
     for command in commands {
@@ -265,9 +269,8 @@ fn remote_requests_reject_invalid_versions_ids_and_bounds() {
     );
     for operation in [
         json!({"kind": "enrollment_status", "enrollment_id": "invalid"}),
-        json!({"kind": "connection_observe", "connector_id": "calendar.google", "connection_id": Uuid::new_v4(), "resource": "x".repeat(2049), "enabled": true}),
         json!({"kind": "read_result", "operation_id": Uuid::nil(), "release": false}),
-        json!({"kind": "connection_observe", "connector_id": "calendar.google", "connection_id": "invalid", "resource": "primary", "enabled": true}),
+        json!({"kind": "connection_observe", "connector_id": "calendar.google", "connection_id": "invalid", "enabled": true}),
     ] {
         assert!(
             serde_json::from_value::<RemoteAccessRequestDto>(envelope(operation))

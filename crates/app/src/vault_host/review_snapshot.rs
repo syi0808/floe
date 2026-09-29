@@ -411,7 +411,6 @@ where
             },
             connector_id: connector,
             connection_id: connection,
-            resource: None,
             window: &window,
         };
         let transport =

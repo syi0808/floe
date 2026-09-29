@@ -279,7 +279,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(operations, hasLength(1));
-    expect(operations.single['resource'], isNull);
+    expect(operations.single.containsKey('resource'), isFalse);
     await tester.enterText(
       find.byKey(const Key('connector-scope-calendar_ids')),
       'opaque,id\nprimary\nopaque,id',

@@ -25,7 +25,6 @@ pub(crate) struct RemoteObserveContext<'a, Keys: VaultKeyProvider> {
     pub pairing: floe_access::RemotePairingIdentity<'a>,
     pub connector_id: &'a str,
     pub connection_id: &'a str,
-    pub resource: Option<&'a str>,
     pub window: &'a floe_access::RemoteCallWindow,
 }
 
@@ -33,13 +32,11 @@ pub(crate) struct RemoteObserveContext<'a, Keys: VaultKeyProvider> {
 pub(crate) fn validate_observe_identity(
     connector_id: &str,
     connection_id: &str,
-    resource: Option<&str>,
 ) -> Result<(), AgentFailure> {
     if connector_id.trim().is_empty()
         || connector_id.len() > 256
         || connection_id.trim().is_empty()
         || connection_id.len() > 256
-        || resource.is_some()
     {
         return Err(AgentFailure::InvalidInput);
     }
@@ -116,7 +113,7 @@ where
     Keys: VaultKeyProvider,
     Transport: floe_access::RemoteGrantTransport,
 {
-    validate_observe_identity(ctx.connector_id, ctx.connection_id, ctx.resource)?;
+    validate_observe_identity(ctx.connector_id, ctx.connection_id)?;
     if ctx.vault.person_id() != ctx.person_id {
         return Err(AgentFailure::CapabilityDenied);
     }
@@ -155,7 +152,7 @@ where
     Keys: VaultKeyProvider,
     Transport: floe_access::RemoteGrantTransport,
 {
-    validate_observe_identity(ctx.connector_id, ctx.connection_id, ctx.resource)?;
+    validate_observe_identity(ctx.connector_id, ctx.connection_id)?;
     validate_observe_expectation(expected)?;
     if ctx.vault.person_id() != ctx.person_id {
         return Err(AgentFailure::CapabilityDenied);
@@ -259,10 +256,9 @@ pub(crate) async fn disable_bundle<Keys: VaultKeyProvider>(
     person_id: PersonId,
     connector_id: &str,
     connection_id: &str,
-    resource: Option<&str>,
     disconnecting: bool,
 ) -> Result<(), AgentFailure> {
-    validate_observe_identity(connector_id, connection_id, resource)?;
+    validate_observe_identity(connector_id, connection_id)?;
     if vault.person_id() != person_id {
         return Err(AgentFailure::CapabilityDenied);
     }
@@ -304,9 +300,8 @@ pub(crate) async fn observe_status<Keys: VaultKeyProvider>(
     person_id: PersonId,
     connector_id: &str,
     connection_id: &str,
-    resource: Option<&str>,
 ) -> Result<String, AgentFailure> {
-    validate_observe_identity(connector_id, connection_id, resource)?;
+    validate_observe_identity(connector_id, connection_id)?;
     if vault.person_id() != person_id {
         return Err(AgentFailure::CapabilityDenied);
     }
@@ -373,7 +368,7 @@ where
     Keys: VaultKeyProvider,
     Transport: floe_access::RemoteGrantTransport,
 {
-    if ctx.resource.is_some() || !floe_context::is_remote_view(policy.view_id) {
+    if !floe_context::is_remote_view(policy.view_id) {
         return Err(AgentFailure::InvalidInput);
     }
     let resource = floe_context_contract::connection_view_resource(
@@ -709,7 +704,6 @@ mod tests {
             &'a self,
             window: &'a floe_access::RemoteCallWindow,
             pairing: floe_access::RemotePairingIdentity<'a>,
-            resource: Option<&'a str>,
         ) -> RemoteObserveContext<'a, Keys> {
             RemoteObserveContext {
                 vault: &self.vault,
@@ -717,7 +711,6 @@ mod tests {
                 pairing,
                 connector_id: &self.connector_id,
                 connection_id: &self.connection_id,
-                resource,
                 window,
             }
         }
@@ -755,7 +748,7 @@ mod tests {
         let cancellation = floe_execution::Cancellation::default();
         let window = window(&cancellation);
         let person = fixture.person_id.to_string();
-        let context = fixture.ctx(&window, fixture.pairing(&person), None);
+        let context = fixture.ctx(&window, fixture.pairing(&person));
         assert_eq!(
             review_bundle(&context, &fixture.transport).await,
             Err(AgentFailure::AccessReviewRequired)
@@ -769,7 +762,7 @@ mod tests {
         let cancellation = floe_execution::Cancellation::default();
         let window = window(&cancellation);
         let person = fixture.person_id.to_string();
-        let ctx = fixture.ctx(&window, fixture.pairing(&person), None);
+        let ctx = fixture.ctx(&window, fixture.pairing(&person));
 
         let reviewed = review_bundle(&ctx, &fixture.transport).await.unwrap();
         assert_eq!(reviewed.members.len(), 2);
@@ -796,7 +789,6 @@ mod tests {
             fixture.person_id,
             "gmail",
             &fixture.connection_id,
-            None,
         )
         .await
         .unwrap();
@@ -809,7 +801,7 @@ mod tests {
         let cancellation = floe_execution::Cancellation::default();
         let window = window(&cancellation);
         let person = fixture.person_id.to_string();
-        let ctx = fixture.ctx(&window, fixture.pairing(&person), None);
+        let ctx = fixture.ctx(&window, fixture.pairing(&person));
         let reviewed = review_bundle(&ctx, &fixture.transport).await.unwrap();
         assert_eq!(reviewed.members.len(), 1);
         let logical_resource = format!("calendar.timeline:{}", fixture.connection_id);
@@ -835,7 +827,6 @@ mod tests {
                 fixture.person_id,
                 "calendar.google",
                 &fixture.connection_id,
-                None,
             )
             .await
             .unwrap(),
@@ -846,11 +837,6 @@ mod tests {
         assert_eq!(next.members[0].policy_digest, reviewed.members[0].policy_digest);
         assert_ne!(next.members[0].source_authority, reviewed.members[0].source_authority);
         assert_eq!(fixture.live_grants().await.len(), 1);
-        let legacy = fixture.ctx(&window, fixture.pairing(&person), Some("calendar-a"));
-        assert!(matches!(
-            review_bundle(&legacy, &fixture.transport).await,
-            Err(AgentFailure::InvalidInput)
-        ));
     }
 
     #[tokio::test]
@@ -859,7 +845,7 @@ mod tests {
         let cancellation = floe_execution::Cancellation::default();
         let window = window(&cancellation);
         let person = fixture.person_id.to_string();
-        let ctx = fixture.ctx(&window, fixture.pairing(&person), None);
+        let ctx = fixture.ctx(&window, fixture.pairing(&person));
         let reviewed = review_bundle(&ctx, &fixture.transport).await.unwrap();
 
         // A moved source authority is not what was reviewed.
@@ -887,7 +873,7 @@ mod tests {
         let cancellation = floe_execution::Cancellation::default();
         let window = window(&cancellation);
         let person = fixture.person_id.to_string();
-        let ctx = fixture.ctx(&window, fixture.pairing(&person), None);
+        let ctx = fixture.ctx(&window, fixture.pairing(&person));
         let reviewed = review_bundle(&ctx, &fixture.transport).await.unwrap();
         *fixture.transport.view_probes.lock().unwrap() = 0;
 
@@ -921,7 +907,7 @@ mod tests {
         let cancellation = floe_execution::Cancellation::default();
         let window = window(&cancellation);
         let person = fixture.person_id.to_string();
-        let ctx = fixture.ctx(&window, fixture.pairing(&person), None);
+        let ctx = fixture.ctx(&window, fixture.pairing(&person));
         let reviewed = review_bundle(&ctx, &fixture.transport).await.unwrap();
 
         // A grant appears out of band for one reviewed-absent member.
@@ -970,7 +956,7 @@ mod tests {
         let cancellation = floe_execution::Cancellation::default();
         let window = window(&cancellation);
         let person = fixture.person_id.to_string();
-        let ctx = fixture.ctx(&window, fixture.pairing(&person), None);
+        let ctx = fixture.ctx(&window, fixture.pairing(&person));
         let reviewed = review_bundle(&ctx, &fixture.transport).await.unwrap();
         enable_bundle(&ctx, &fixture.transport, &reviewed)
             .await
@@ -1004,7 +990,7 @@ mod tests {
         let cancellation = floe_execution::Cancellation::default();
         let window = window(&cancellation);
         let person = fixture.person_id.to_string();
-        let ctx = fixture.ctx(&window, fixture.pairing(&person), None);
+        let ctx = fixture.ctx(&window, fixture.pairing(&person));
         let reviewed = review_bundle(&ctx, &fixture.transport).await.unwrap();
         enable_bundle(&ctx, &fixture.transport, &reviewed)
             .await
@@ -1015,7 +1001,6 @@ mod tests {
             fixture.person_id,
             "gmail",
             &fixture.connection_id,
-            None,
             false,
         )
         .await
@@ -1032,7 +1017,6 @@ mod tests {
             fixture.person_id,
             "gmail",
             &fixture.connection_id,
-            None,
         )
         .await
         .unwrap();
@@ -1043,7 +1027,6 @@ mod tests {
             fixture.person_id,
             "gmail",
             &fixture.connection_id,
-            None,
             false,
         )
         .await
@@ -1054,7 +1037,6 @@ mod tests {
             fixture.person_id,
             "gmail",
             &fixture.connection_id,
-            None,
             true,
         )
         .await
@@ -1070,7 +1052,6 @@ mod tests {
             fixture.person_id,
             "gmail",
             &fixture.connection_id,
-            None,
             true,
         )
         .await

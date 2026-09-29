@@ -117,7 +117,6 @@ fn all_remote_access_operations_reload_and_reject_foreign_or_missing_saved_ident
         RemoteAccessCommand::ConnectionObserve {
             connector_id: "gmail".into(),
             connection_id: Uuid::new_v4().to_string(),
-            resource: None,
             enabled: None,
             disconnecting: false,
             expected: None,
@@ -181,7 +180,6 @@ fn observe_enable_requires_reviewed_expectation_before_any_io() {
             command: RemoteAccessCommand::ConnectionObserve {
                 connector_id: "gmail".into(),
                 connection_id: Uuid::new_v4().to_string(),
-                resource: None,
                 enabled: Some(true),
                 disconnecting: false,
                 expected: None,
@@ -201,7 +199,6 @@ fn observe_enable_requires_reviewed_expectation_before_any_io() {
             command: RemoteAccessCommand::ConnectionObserveReview {
                 connector_id: "gmail".into(),
                 connection_id: Uuid::new_v4().to_string(),
-                resource: None,
             },
         },
     );

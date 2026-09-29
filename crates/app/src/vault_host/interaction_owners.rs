@@ -1259,7 +1259,6 @@ where
                 pairing,
                 connector_id: connector,
                 connection_id: target.connection_id.as_str(),
-                resource: None,
                 window: &window,
             };
             enable_remote_reviewed(&ctx, &transport, target).await?;

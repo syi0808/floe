@@ -12,7 +12,6 @@ abstract interface class RemoteAccessGateway {
   Future<String> connectionObserve({
     required String connectorId,
     required String connectionId,
-    String? resource,
     bool? enabled,
     bool disconnecting = false,
     ConnectionObserveBundle? expected,
@@ -20,7 +19,6 @@ abstract interface class RemoteAccessGateway {
   Future<ConnectionObserveBundle> connectionObserveReview({
     required String connectorId,
     required String connectionId,
-    String? resource,
   });
 }
 
@@ -72,7 +70,6 @@ final class NativeRemoteAccessGateway implements RemoteAccessGateway {
   Future<String> connectionObserve({
     required String connectorId,
     required String connectionId,
-    String? resource,
     bool? enabled,
     bool disconnecting = false,
     ConnectionObserveBundle? expected,
@@ -80,7 +77,6 @@ final class NativeRemoteAccessGateway implements RemoteAccessGateway {
     'kind': 'connection_observe',
     'connector_id': connectorId,
     'connection_id': connectionId,
-    'resource': resource,
     'enabled': enabled,
     'disconnecting': disconnecting,
     'expected': expected?.toJson(),
@@ -90,13 +86,11 @@ final class NativeRemoteAccessGateway implements RemoteAccessGateway {
   Future<ConnectionObserveBundle> connectionObserveReview({
     required String connectorId,
     required String connectionId,
-    String? resource,
   }) => _operations.perform(
     {
       'kind': 'connection_observe_review',
       'connector_id': connectorId,
       'connection_id': connectionId,
-      'resource': resource,
     },
     (result) {
       final bundle = result['reviewed_bundle'];

@@ -2919,18 +2919,13 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 crate::RemoteAccessCommand::ConnectionObserve {
                     connector_id,
                     connection_id,
-                    resource,
                     enabled,
                     disconnecting,
                     expected,
                 } => {
                     let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
                     let vault = vault.vault.as_ref();
-                    remote_observe::validate_observe_identity(
-                        connector_id,
-                        connection_id,
-                        resource.as_deref(),
-                    )?;
+                    remote_observe::validate_observe_identity(connector_id, connection_id)?;
                     match enabled {
                         None => {
                             let status = remote_observe::observe_status(
@@ -2938,7 +2933,6 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                                 job.person,
                                 connector_id,
                                 connection_id,
-                                resource.as_deref(),
                             )
                             .await?;
                             Ok(VaultExecutionResult {
@@ -2980,7 +2974,6 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                                 pairing,
                                 connector_id,
                                 connection_id,
-                                resource: resource.as_deref(),
                                 window: &window,
                             };
                             remote_observe::enable_bundle(&ctx, &transport, expected).await?;
@@ -2989,7 +2982,6 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                                 job.person,
                                 connector_id,
                                 connection_id,
-                                resource.as_deref(),
                             )
                             .await?;
                             Ok(VaultExecutionResult {
@@ -3006,7 +2998,6 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                                 job.person,
                                 connector_id,
                                 connection_id,
-                                resource.as_deref(),
                                 *disconnecting,
                             )
                             .await?;
@@ -3015,7 +3006,6 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                                 job.person,
                                 connector_id,
                                 connection_id,
-                                resource.as_deref(),
                             )
                             .await?;
                             Ok(VaultExecutionResult {
@@ -3028,15 +3018,10 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 crate::RemoteAccessCommand::ConnectionObserveReview {
                     connector_id,
                     connection_id,
-                    resource,
                 } => {
                     let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
                     let vault = vault.vault.as_ref();
-                    remote_observe::validate_observe_identity(
-                        connector_id,
-                        connection_id,
-                        resource.as_deref(),
-                    )?;
+                    remote_observe::validate_observe_identity(connector_id, connection_id)?;
                     let policies = crate::first_party_observe::remote_policies(connector_id)?;
                     if policies.is_empty() {
                         return Err(AgentFailure::InvalidInput);
@@ -3064,7 +3049,6 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                         pairing,
                         connector_id,
                         connection_id,
-                        resource: resource.as_deref(),
                         window: &window,
                     };
                     let bundle = remote_observe::review_bundle(&ctx, &transport).await?;

@@ -27,7 +27,6 @@ pub enum RemoteAccessOperationDto {
     ConnectionObserve {
         connector_id: String,
         connection_id: String,
-        resource: Option<String>,
         enabled: Option<bool>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         disconnecting: bool,
@@ -37,7 +36,6 @@ pub enum RemoteAccessOperationDto {
     ConnectionObserveReview {
         connector_id: String,
         connection_id: String,
-        resource: Option<String>,
     },
     ReadResult {
         operation_id: Uuid,
@@ -83,11 +81,10 @@ impl RemoteAccessRequestDto {
             RemoteAccessOperationDto::ConnectionObserve {
                 connector_id,
                 connection_id,
-                resource,
                 expected,
                 ..
             } => {
-                validate_observe_identity(connector_id, connection_id, resource)?;
+                validate_observe_identity(connector_id, connection_id)?;
                 if let Some(expected) = expected {
                     validate_observe_expectation(expected)?;
                 }
@@ -96,8 +93,7 @@ impl RemoteAccessRequestDto {
             RemoteAccessOperationDto::ConnectionObserveReview {
                 connector_id,
                 connection_id,
-                resource,
-            } => validate_observe_identity(connector_id, connection_id, resource),
+            } => validate_observe_identity(connector_id, connection_id),
             RemoteAccessOperationDto::ReadResult { operation_id, .. } => {
                 validate_identifier(*operation_id)
             }
@@ -108,13 +104,9 @@ impl RemoteAccessRequestDto {
 fn validate_observe_identity(
     connector_id: &str,
     connection_id: &str,
-    resource: &Option<String>,
 ) -> Result<(), &'static str> {
     validate_text(connector_id, 128)?;
     validate_uuid(connection_id)?;
-    if let Some(resource) = resource {
-        validate_text(resource, 2048)?;
-    }
     Ok(())
 }
 

@@ -170,7 +170,6 @@ pub enum RemoteAccessCommand {
     ConnectionObserve {
         connector_id: String,
         connection_id: String,
-        resource: Option<String>,
         enabled: Option<bool>,
         disconnecting: bool,
         /// The reviewed bundle the enable binds. Required when `enabled` is
@@ -182,7 +181,6 @@ pub enum RemoteAccessCommand {
     ConnectionObserveReview {
         connector_id: String,
         connection_id: String,
-        resource: Option<String>,
     },
 }
 

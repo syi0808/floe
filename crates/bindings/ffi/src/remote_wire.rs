@@ -184,14 +184,12 @@ fn access_with_host<Services: floe_app::HostServices + floe_app::RemoteAccessCom
         RemoteAccessOperationDto::ConnectionObserve {
             connector_id,
             connection_id,
-            resource,
             enabled,
             disconnecting,
             expected,
         } => floe_app::RemoteAccessCommand::ConnectionObserve {
             connector_id,
             connection_id,
-            resource,
             enabled,
             disconnecting,
             expected: expected.as_ref().map(observe_expectation),
@@ -199,11 +197,9 @@ fn access_with_host<Services: floe_app::HostServices + floe_app::RemoteAccessCom
         RemoteAccessOperationDto::ConnectionObserveReview {
             connector_id,
             connection_id,
-            resource,
         } => floe_app::RemoteAccessCommand::ConnectionObserveReview {
             connector_id,
             connection_id,
-            resource,
         },
         RemoteAccessOperationDto::ReadResult { .. } => unreachable!(),
     };
