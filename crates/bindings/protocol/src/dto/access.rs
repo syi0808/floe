@@ -81,10 +81,16 @@ impl RemoteAccessRequestDto {
             RemoteAccessOperationDto::ConnectionObserve {
                 connector_id,
                 connection_id,
+                enabled,
+                disconnecting,
                 expected,
-                ..
             } => {
                 validate_observe_identity(connector_id, connection_id)?;
+                if matches!(enabled, Some(true)) != expected.is_some()
+                    || (*disconnecting && *enabled != Some(false))
+                {
+                    return Err("operation.expected");
+                }
                 if let Some(expected) = expected {
                     validate_observe_expectation(expected)?;
                 }

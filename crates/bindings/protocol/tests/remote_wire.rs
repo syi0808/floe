@@ -72,6 +72,17 @@ fn observe_review_and_echoed_enable_roundtrip() {
     assert_eq!(decoded.validate(), Ok(()));
     let forbidden = json!({"kind": "connection_observe", "connector_id": "gmail", "connection_id": connection, "resource": null, "enabled": true, "expected": bundle});
     assert!(serde_json::from_value::<RemoteAccessRequestDto>(envelope(forbidden)).is_err());
+    for invalid in [
+        json!({"kind": "connection_observe", "connector_id": "gmail", "connection_id": connection, "enabled": true}),
+        json!({"kind": "connection_observe", "connector_id": "gmail", "connection_id": connection, "enabled": false, "expected": bundle}),
+        json!({"kind": "connection_observe", "connector_id": "gmail", "connection_id": connection, "enabled": true, "disconnecting": true, "expected": bundle}),
+        json!({"kind": "connection_observe", "connector_id": "gmail", "connection_id": connection, "disconnecting": true}),
+    ] {
+        assert!(serde_json::from_value::<RemoteAccessRequestDto>(envelope(invalid))
+            .unwrap()
+            .validate()
+            .is_err());
+    }
 
     // An incoherent grant pair never validates.
     let mut broken = observe_member("mail.communication", &resource);
@@ -195,7 +206,7 @@ fn remote_access_rejects_all_transport_and_identity_fields() {
         json!({"kind": "inspect_producer"}),
         json!({"kind": "review_and_enroll", "producer": producer()}),
         json!({"kind": "enrollment_status", "enrollment_id": Uuid::new_v4()}),
-        json!({"kind": "connection_observe", "connector_id": "calendar.google", "connection_id": connection, "enabled": true}),
+        json!({"kind": "connection_observe", "connector_id": "calendar.google", "connection_id": connection, "enabled": null}),
         json!({"kind": "read_result", "operation_id": Uuid::new_v4(), "release": true}),
     ];
     for command in commands {
