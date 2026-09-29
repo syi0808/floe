@@ -2490,7 +2490,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             )
             .await?;
             let overview = if command.connector == floe_access::FEASIBILITY_CONNECTOR {
-                floe_access::apply_personal_access(
+                floe_access::apply_feasibility_access(
                     vault.vault.as_ref(),
                     &personal_grants::native_driver(local_context),
                     job.person,
@@ -3222,6 +3222,7 @@ mod tests {
     mod conversation_flows;
     mod expert_actions;
     pub(in crate::vault_host) mod expert_evidence;
+    mod expert_registry_host;
     mod interaction_resolution;
     mod learner_worker;
     mod local_product;
@@ -3230,7 +3231,6 @@ mod tests {
     mod proposals;
     mod registered_runner;
     mod remote_product;
-    mod expert_registry_host;
     mod vault_registry;
 
     use super::conversation_turn::expert_dispatch::RegisteredExpertEndpoint;

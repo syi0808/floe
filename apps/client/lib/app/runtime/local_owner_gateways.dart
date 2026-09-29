@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:floe_client/app/runtime/floe_client.dart';
@@ -558,7 +559,13 @@ final class NativePersonalAccessGateway implements AgentPersonalAccessGateway {
         value.length > 64 ||
         value.length != handles.length ||
         value.any(
-          (handle) => handle.isEmpty || handle.contains(RegExp(r'\s')),
+          (handle) =>
+              handle.isEmpty ||
+              handle.trim() != handle ||
+              utf8.encode(handle).length > 256 ||
+              handle.contains('*') ||
+              RegExp(r'[\x00-\x1f\x7f]').hasMatch(handle) ||
+              handle.toLowerCase() == '00000000-0000-0000-0000-000000000000',
         )) {
       throw const FormatException('Invalid Contacts selection');
     }

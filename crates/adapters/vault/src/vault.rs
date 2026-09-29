@@ -27,14 +27,15 @@ mod context_dependencies;
 mod conversation_interactions;
 mod conversations;
 mod expert_actions;
+mod feasibility_reviews;
 mod keyring;
 mod learning;
-mod personal_grants;
 mod recipient_consents;
 mod registry;
 mod remote_authority;
 mod session_archive;
 mod tasks;
+pub use access_grants::AccessGrantActivation;
 pub use access_grants::AccessGrantCleanup;
 pub use calendar_grants::CalendarGrantAdmission;
 pub use conversations::{
@@ -44,14 +45,13 @@ pub use conversations::{
     VaultConversationJournalEntry, VaultConversationResumeRef, VaultConversationRunRecord,
     VaultConversationRunState, VaultConversationTerminal,
 };
+pub use floe_access::FeasibilityGrantQuery;
 pub use floe_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use keyring::KeyringVaultKeys;
-pub use personal_grants::FeasibilityGrantQuery;
 pub use remote_authority::{
-    RemoteViewAuthorizationExpectation, RemoteEnrollmentSignature, RemoteOwnerPublicKey, RemotePairingChallenge,
-    RemoteProducerIdentity, RemoteViewSourceReference,
+    RemoteEnrollmentSignature, RemoteOwnerPublicKey, RemotePairingChallenge,
+    RemoteProducerIdentity, RemoteViewAuthorizationExpectation, RemoteViewSourceReference,
 };
-pub use access_grants::AccessGrantActivation;
 pub use session_archive::*;
 pub use tasks::{VaultTaskActivation, VaultTaskAdmission, VaultTaskRecord};
 
@@ -227,7 +227,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_learning_store().await?;
         vault.initialize_access_grant_store().await?;
         vault.initialize_agent_action_store().await?;
-        vault.initialize_personal_grant_store(true).await?;
+        vault.initialize_feasibility_review_store(true).await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_conversation_store().await?;
         vault.initialize_task_store().await?;
@@ -307,7 +307,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(unavailable)?;
         connection
-            .query("SELECT task_id, session_id, turn_id FROM agent_task_delegations LIMIT 0", ())
+            .query(
+                "SELECT task_id, session_id, turn_id FROM agent_task_delegations LIMIT 0",
+                (),
+            )
             .await
             .map_err(unavailable)?;
         vault.reject_obsolete_policy_schemas().await?;
@@ -315,7 +318,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_learning_store().await?;
         vault.initialize_access_grant_store().await?;
         vault.initialize_agent_action_store().await?;
-        vault.initialize_personal_grant_store(false).await?;
+        vault.initialize_feasibility_review_store(false).await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_conversation_store().await?;
         vault.initialize_task_store().await?;

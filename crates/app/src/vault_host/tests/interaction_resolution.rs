@@ -2337,8 +2337,7 @@ async fn personal_attention_allow_resolves() {
         .establish_reviewed_native(
             host.base.person,
             floe_context_contract::ConnectorId::try_new(floe_access::ATTENTION_CONNECTOR).unwrap(),
-            floe_context_contract::ConnectionId::try_new(floe_access::ATTENTION_CONNECTION)
-                .unwrap(),
+            floe_context_contract::ConnectionId::try_new("attention.macos.local").unwrap(),
             floe_context_contract::ExecutionOwnerId::try_new(format!("macos:{DEVICE}")).unwrap(),
             floe_connections::ResourceMode::AllAvailable,
             vec![
@@ -2359,7 +2358,7 @@ async fn personal_attention_allow_resolves() {
     )
     .unwrap();
     let target = floe_conversation::InlineObserveTarget {
-        connection_id: floe_access::ATTENTION_CONNECTION.into(),
+        connection_id: "attention.macos.local".into(),
         device_id: Some(DEVICE.into()),
         source_id: "floe.source.attention".into(),
         connector_id: Some(floe_access::ATTENTION_CONNECTOR.into()),
@@ -2388,11 +2387,7 @@ async fn personal_attention_allow_resolves() {
     };
     let current = host
         .base
-        .seed_inline(
-            target,
-            "floe.source.attention",
-            floe_access::ATTENTION_CONNECTION,
-        )
+        .seed_inline(target, "floe.source.attention", "attention.macos.local")
         .await;
     let calendar = FixtureCalendarSubject {
         fingerprint: NATIVE_FINGERPRINT.into(),

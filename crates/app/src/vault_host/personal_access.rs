@@ -599,6 +599,22 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(first.grant_id, Some(grant.id()));
+        let first_candidate =
+            floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+                person_id: person,
+                device_id: "device-1",
+                capability: floe_context_contract::PEOPLE_VIEW_ID,
+                contract_version: 1,
+                remote_connections: &[],
+                remote_execution_owner: None,
+                source_connections: std::slice::from_ref(&initial),
+            })
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            grant.scope().resources(),
+            [first_candidate.reference.resource.clone()]
+        );
 
         *subject.fingerprint.lock().unwrap() = "b".repeat(64);
         let next = apply_contacts(
@@ -633,6 +649,20 @@ mod tests {
         assert_eq!(*subject.selected.lock().unwrap(), ["a", "b"]);
         assert_eq!(next.grant_id, Some(grant.id()));
         assert_eq!(next.grant_authority, Some(grant.authority()));
+        let next_candidate =
+            floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+                person_id: person,
+                device_id: "device-1",
+                capability: floe_context_contract::PEOPLE_VIEW_ID,
+                contract_version: 1,
+                remote_connections: &[],
+                remote_execution_owner: None,
+                source_connections: std::slice::from_ref(&source),
+            })
+            .unwrap()
+            .remove(0);
+        assert_eq!(next_candidate.candidate_id, first_candidate.candidate_id);
+        assert_eq!(next_candidate.reference, first_candidate.reference);
 
         *subject.fingerprint.lock().unwrap() = "c".repeat(64);
         let wrong = DataAccessGrant::new(

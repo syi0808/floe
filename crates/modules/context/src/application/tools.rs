@@ -750,6 +750,22 @@ mod tests {
         grant
     }
 
+    fn standing_source(person_id: PersonId, connector: &str) -> floe_access::GrantSourceBinding {
+        let platform = if connector == "attention.macos" {
+            "macos"
+        } else {
+            "apple"
+        };
+        floe_access::GrantSourceBinding::try_new(
+            person_id,
+            ConnectionId::try_new(format!("{connector}.local")).unwrap(),
+            floe_context_contract::ConnectorId::try_new(connector).unwrap(),
+            floe_context_contract::ExecutionOwnerId::try_new(format!("{platform}:{DEVICE}"))
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
     struct FixtureRecords {
         grants: Vec<DataAccessGrant>,
         subject: String,
@@ -759,10 +775,10 @@ mod tests {
 
     impl FixtureRecords {
         fn new(person_id: PersonId) -> Self {
-            let people = floe_access::contacts_source(person_id, DEVICE, "contacts.apple").unwrap();
+            let people = standing_source(person_id, "contacts.apple");
             let feasibility = floe_access::feasibility_source(person_id, DEVICE).unwrap();
-            let wellbeing = floe_access::wellbeing_source(person_id, DEVICE).unwrap();
-            let attention = floe_access::attention_source(person_id, DEVICE).unwrap();
+            let wellbeing = standing_source(person_id, "health.apple");
+            let attention = standing_source(person_id, "attention.macos");
             let people_resource = connection_view_resource(
                 floe_context_contract::PEOPLE_VIEW_ID,
                 &people.connection_id(),
@@ -806,41 +822,23 @@ mod tests {
             Box::pin(async move { Ok(grants) })
         }
 
-        fn current_source_authority<'a>(
+        fn feasibility_review<'a>(
             &'a self,
             _: GrantId,
-        ) -> BoxFuture<'a, Result<SourceAuthority, AgentFailure>> {
-            Box::pin(async {
-                Ok(SourceAuthority::from_parts(
-                    Uuid::from_u128(1),
-                    std::num::NonZeroU64::new(1).unwrap(),
-                )
-                .unwrap())
-            })
-        }
-
-        fn reviewed_subject<'a>(
-            &'a self,
-            _: GrantId,
-        ) -> BoxFuture<'a, Result<String, AgentFailure>> {
-            let subject = self.subject.clone();
-            Box::pin(async move { Ok(subject) })
-        }
-
-        fn feasibility_query<'a>(
-            &'a self,
-            _: GrantId,
-        ) -> BoxFuture<'a, Result<FeasibilityGrantQuery, AgentFailure>> {
+        ) -> BoxFuture<'a, Result<floe_access::FeasibilityReviewRecord, AgentFailure>> {
             let query = self.query.clone();
-            Box::pin(async move { Ok(query) })
-        }
-
-        fn selected_handles<'a>(
-            &'a self,
-            _: GrantId,
-        ) -> BoxFuture<'a, Result<Vec<String>, AgentFailure>> {
-            let handles = self.handles.clone();
-            Box::pin(async move { Ok(handles) })
+            let reviewed_subject = self.subject.clone();
+            Box::pin(async move {
+                Ok(floe_access::FeasibilityReviewRecord {
+                    query,
+                    reviewed_subject,
+                    source_authority: SourceAuthority::from_parts(
+                        Uuid::from_u128(1),
+                        std::num::NonZeroU64::new(1).unwrap(),
+                    )
+                    .unwrap(),
+                })
+            })
         }
     }
 
@@ -1556,7 +1554,7 @@ mod tests {
     #[tokio::test]
     async fn paused_personal_grant_binds_the_observed_grant() {
         let person_id = PersonId::new();
-        let source = floe_access::attention_source(person_id, DEVICE).unwrap();
+        let source = standing_source(person_id, "attention.macos");
         let scope_fixture = scope_fixture(floe_access::ATTENTION_RESOURCE);
         let paused =
             DataAccessGrant::new(GrantId::new(), Uuid::new_v4(), source, scope_fixture).unwrap();
@@ -1592,7 +1590,7 @@ mod tests {
     #[tokio::test]
     async fn duplicate_and_corrupt_personal_authority_fail_closed() {
         let person_id = PersonId::new();
-        let source = floe_access::attention_source(person_id, DEVICE).unwrap();
+        let source = standing_source(person_id, "attention.macos");
         let grants = vec![
             DataAccessGrant::new(
                 GrantId::new(),
@@ -1637,31 +1635,11 @@ mod tests {
                 Box::pin(async { Err(AgentFailure::StorageUnavailable) })
             }
 
-            fn current_source_authority<'a>(
+            fn feasibility_review<'a>(
                 &'a self,
                 _: GrantId,
-            ) -> BoxFuture<'a, Result<SourceAuthority, AgentFailure>> {
-                Box::pin(async { Err(AgentFailure::StorageUnavailable) })
-            }
-
-            fn reviewed_subject<'a>(
-                &'a self,
-                _: GrantId,
-            ) -> BoxFuture<'a, Result<String, AgentFailure>> {
-                Box::pin(async { Err(AgentFailure::StorageUnavailable) })
-            }
-
-            fn selected_handles<'a>(
-                &'a self,
-                _: GrantId,
-            ) -> BoxFuture<'a, Result<Vec<String>, AgentFailure>> {
-                Box::pin(async { Err(AgentFailure::StorageUnavailable) })
-            }
-
-            fn feasibility_query<'a>(
-                &'a self,
-                _: GrantId,
-            ) -> BoxFuture<'a, Result<FeasibilityGrantQuery, AgentFailure>> {
+            ) -> BoxFuture<'a, Result<floe_access::FeasibilityReviewRecord, AgentFailure>>
+            {
                 Box::pin(async { Err(AgentFailure::StorageUnavailable) })
             }
         }

@@ -741,7 +741,7 @@ mod tests {
             .establish_reviewed_native(
                 fixture.person_id,
                 ConnectorId::try_new(floe_access::ATTENTION_CONNECTOR).unwrap(),
-                ConnectionId::try_new(floe_access::ATTENTION_CONNECTION).unwrap(),
+                ConnectionId::try_new("attention.macos.local").unwrap(),
                 floe_context_contract::ExecutionOwnerId::try_new("macos:device").unwrap(),
                 floe_connections::ResourceMode::AllAvailable,
                 vec![

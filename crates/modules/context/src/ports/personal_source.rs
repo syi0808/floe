@@ -5,7 +5,7 @@
 //! device, are the host's; both reach this module as ports so the read itself
 //! names neither a vault nor a native bridge.
 
-use floe_access::{DataAccessGrant, FeasibilityGrantQuery, GrantId, SourceAuthority};
+use floe_access::{DataAccessGrant, FeasibilityGrantQuery, FeasibilityReviewRecord, GrantId};
 use floe_agent_contract::{AgentFailure, BoxFuture, PersonId};
 use floe_connections::SourceConnection;
 use floe_context_contract::ConnectionId;
@@ -18,28 +18,10 @@ use uuid::Uuid;
 pub trait PersonalGrantRecords: Sync {
     fn grants<'a>(&'a self) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>>;
 
-    /// The device subject the Person reviewed this grant against.
-    fn reviewed_subject<'a>(
+    fn feasibility_review<'a>(
         &'a self,
         grant: GrantId,
-    ) -> BoxFuture<'a, Result<String, AgentFailure>>;
-
-    fn current_source_authority<'a>(
-        &'a self,
-        grant: GrantId,
-    ) -> BoxFuture<'a, Result<SourceAuthority, AgentFailure>>;
-
-    /// The query a feasibility grant admits.
-    fn feasibility_query<'a>(
-        &'a self,
-        grant: GrantId,
-    ) -> BoxFuture<'a, Result<FeasibilityGrantQuery, AgentFailure>>;
-
-    /// The contact handles a people grant admits reading.
-    fn selected_handles<'a>(
-        &'a self,
-        grant: GrantId,
-    ) -> BoxFuture<'a, Result<Vec<String>, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<FeasibilityReviewRecord, AgentFailure>>;
 }
 
 pub trait PersonalConnectionReader: Sync {

@@ -30,19 +30,16 @@ pub use native_calendar::{
 pub use personal_grants::{
     ATTENTION_ASSISTANT_CONSUMER, ContactsAccessChange, ContactsAccessConfiguration,
     PersonalAccessChange, PersonalAccessConfiguration, PersonalAccessOverview, PersonalAccessState,
-    attention_consumer, matches_source, source_and_scope,
+    attention_consumer,
 };
 pub use personal_read::{
-    FeasibilityGrantQuery, PersonalReadRequirement, active_read_grant, active_resource_grant,
-    active_resource_grants, grant_unchanged, people_read_grant, subject_unchanged,
-    valid_subject_fingerprint,
+    FeasibilityGrantQuery, PersonalReadRequirement, active_read_grant, grant_unchanged,
+    subject_unchanged, valid_subject_fingerprint,
 };
 pub use personal_sources::{
-    ATTENTION_CONNECTION, ATTENTION_CONNECTOR, ATTENTION_RESOURCE, FEASIBILITY_CONNECTION,
-    FEASIBILITY_CONNECTOR, FEASIBILITY_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTION,
-    WELLBEING_CONNECTOR, WELLBEING_RESOURCE, apple_execution_owner, attention_execution_owner,
-    attention_source, contacts_connection, contacts_execution_owner, contacts_source,
-    feasibility_source, is_device_local_source, source_binding, wellbeing_source,
+    ATTENTION_CONNECTOR, ATTENTION_RESOURCE, FEASIBILITY_CONNECTION, FEASIBILITY_CONNECTOR,
+    FEASIBILITY_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTOR, WELLBEING_RESOURCE,
+    apple_execution_owner, feasibility_source, is_device_local_source,
 };
 pub use release::{ReleasePermit, ReleaseRecipient, admit_release, consume_release};
 pub use remote_authority::{
@@ -58,7 +55,6 @@ pub use remote_grants::{
 pub use remote_view::{
     RemoteProducerIdentity, RemoteViewApproval, RemoteViewGrantReview, RemoteViewSourceReference,
     admit_remote_view_binding, admit_remote_view_source, matches_review, producer_is_pinned,
-    remote_dependency_live, remote_dependency_resource,
-    remote_dependency_source_admits, remote_view_scope, remote_view_source,
-    review_remote_view_grant, source_matches_producer,
+    remote_dependency_live, remote_dependency_resource, remote_dependency_source_admits,
+    remote_view_scope, remote_view_source, review_remote_view_grant, source_matches_producer,
 };

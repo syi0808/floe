@@ -15,9 +15,6 @@ use floe_context_contract::{
 use floe_kernel::AgentFailure;
 use serde::{Deserialize, Serialize};
 
-use crate::application::personal_sources::{
-    PEOPLE_RESOURCE, contacts_connection, contacts_execution_owner,
-};
 use crate::{DataAccessGrant, GrantState};
 
 /// What one read needs the Person to have granted.
@@ -33,17 +30,6 @@ pub struct PersonalReadRequirement<'a> {
     pub reject_ambiguous: bool,
 }
 
-/// Whether a grant is bound to the same source identity: the same Person,
-/// connector, connection and execution owner. The source authority advances on
-/// its own, so it is not part of the identity.
-fn binds_source(grant: &DataAccessGrant, source: &GrantSourceBinding) -> bool {
-    let binding = grant.source();
-    binding.person_id() == source.person_id()
-        && binding.connector() == source.connector()
-        && binding.connection_id() == source.connection_id()
-        && binding.execution_owner() == source.execution_owner()
-}
-
 /// The single live grant that admits this read.
 pub fn active_read_grant(
     grants: &[DataAccessGrant],
@@ -52,7 +38,7 @@ pub fn active_read_grant(
     let source = requirement.source;
     let mut live = grants
         .iter()
-        .filter(|grant| grant.state() != GrantState::Revoked && binds_source(grant, source));
+        .filter(|grant| grant.state() != GrantState::Revoked && grant.source() == source);
     let grant = live.next().ok_or(AgentFailure::AccessReviewRequired)?;
     if requirement.reject_ambiguous && live.next().is_some() {
         return Err(AgentFailure::AccessReviewRequired);
@@ -110,81 +96,6 @@ pub fn subject_unchanged(reviewed: &str, before: &str, after: &str) -> Result<()
         return Err(AgentFailure::AccessReviewRequired);
     }
     Ok(())
-}
-
-/// The single active grant that admits reading one resource for this Person.
-///
-/// The caller says which sources are admissible and what resource handle each
-/// must carry; Access decides the rest — the grant has to be active, not
-/// awaiting review, and scoped to a read for the assistant by this consumer.
-/// Nothing matching is a review the Person owes; more than one is a conflict
-/// they have to resolve, not a choice a read may make on their behalf.
-pub fn active_resource_grant(
-    grants: &[DataAccessGrant],
-    person_id: floe_kernel::PersonId,
-    consumer: &GrantConsumer,
-    required_resource: impl Fn(&GrantSourceBinding) -> Option<String>,
-) -> Result<DataAccessGrant, AgentFailure> {
-    let mut admitted = grants.iter().filter(|grant| {
-        grant.source().person_id() == person_id
-            && grant.state() == GrantState::Active
-            && !grant.review_required()
-            && grant.scope().operations().contains(&GrantOperation::Read)
-            && grant.scope().purposes().contains(&GrantPurpose::Assistant)
-            && grant.scope().consumers().contains(consumer)
-            && grant.scope().resources().len() == 1
-            && required_resource(grant.source())
-                .is_some_and(|resource| grant.scope().resources()[0].as_str() == resource)
-    });
-    let grant = admitted.next().ok_or(AgentFailure::AccessReviewRequired)?;
-    if admitted.next().is_some() {
-        return Err(AgentFailure::Conflict);
-    }
-    Ok(grant.clone())
-}
-
-pub fn active_resource_grants(
-    grants: &[DataAccessGrant],
-    person_id: floe_kernel::PersonId,
-    consumer: &GrantConsumer,
-    required_resource: impl Fn(&GrantSourceBinding) -> Option<String>,
-) -> Result<Vec<DataAccessGrant>, AgentFailure> {
-    let mut admitted = grants
-        .iter()
-        .filter(|grant| {
-            grant.source().person_id() == person_id
-                && grant.state() == GrantState::Active
-                && !grant.review_required()
-                && grant.scope().operations().contains(&GrantOperation::Read)
-                && grant.scope().purposes().contains(&GrantPurpose::Assistant)
-                && grant.scope().consumers().contains(consumer)
-                && grant.scope().resources().len() == 1
-                && required_resource(grant.source())
-                    .is_some_and(|resource| grant.scope().resources()[0].as_str() == resource)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    admitted.sort_by(|left, right| {
-        left.source()
-            .connector()
-            .cmp(right.source().connector())
-            .then_with(|| {
-                left.source()
-                    .connection_id()
-                    .cmp(&right.source().connection_id())
-            })
-            .then_with(|| left.id().cmp(&right.id()))
-    });
-    if admitted.is_empty() {
-        return Err(AgentFailure::AccessReviewRequired);
-    }
-    if admitted
-        .windows(2)
-        .any(|pair| pair[0].source() == pair[1].source())
-    {
-        return Err(AgentFailure::Conflict);
-    }
-    Ok(admitted)
 }
 
 #[cfg(test)]
@@ -337,90 +248,6 @@ mod tests {
         assert!(!valid_subject_fingerprint(&"A".repeat(64)));
         assert!(!valid_subject_fingerprint(&"a".repeat(63)));
     }
-
-    #[test]
-    fn a_resource_read_takes_the_one_admitted_grant_and_refuses_a_tie() {
-        let person_id = PersonId::new();
-        let consumer = consumer();
-        let bound = source(person_id, "device:this");
-        let resource = |_: &GrantSourceBinding| Some("attention.coarse".to_owned());
-        assert!(
-            active_resource_grant(
-                &[active(bound.clone(), "attention.coarse")],
-                person_id,
-                &consumer,
-                resource
-            )
-            .is_ok()
-        );
-        assert_eq!(
-            active_resource_grant(&[], person_id, &consumer, resource),
-            Err(AgentFailure::AccessReviewRequired)
-        );
-        assert_eq!(
-            active_resource_grant(
-                &[
-                    active(bound.clone(), "attention.coarse"),
-                    active(source(person_id, "device:other"), "attention.coarse"),
-                ],
-                person_id,
-                &consumer,
-                resource
-            ),
-            Err(AgentFailure::Conflict)
-        );
-        // A source the caller does not admit contributes no grant at all.
-        assert_eq!(
-            active_resource_grant(
-                &[active(bound, "attention.coarse")],
-                person_id,
-                &consumer,
-                |_| None
-            ),
-            Err(AgentFailure::AccessReviewRequired)
-        );
-    }
-
-    #[test]
-    fn overlapping_remote_sources_are_all_admitted_but_duplicate_source_conflicts() {
-        let person_id = PersonId::new();
-        let consumer = consumer();
-        let make_source = |connector: &str, connection: &str| {
-            GrantSourceBinding::try_new(
-                person_id,
-                ConnectionId::try_new(connection).unwrap(),
-                ConnectorId::try_new(connector).unwrap(),
-                ExecutionOwnerId::try_new("server-owner").unwrap(),
-            )
-            .unwrap()
-        };
-        let gmail = make_source("gmail", "gmail-connection");
-        let microsoft = make_source("microsoft.mail", "microsoft-connection");
-        let grants = [
-            active(gmail.clone(), "mail.communication:gmail-connection"),
-            active(microsoft.clone(), "mail.communication:microsoft-connection"),
-        ];
-        let admitted = active_resource_grants(&grants, person_id, &consumer, |source| {
-            Some(format!(
-                "mail.communication:{}",
-                source.connection_id().as_str()
-            ))
-        })
-        .unwrap();
-        assert_eq!(admitted.len(), 2);
-
-        let duplicate = [
-            grants[0].clone(),
-            active(gmail, "mail.communication:gmail-connection"),
-        ];
-        assert_eq!(
-            active_resource_grants(&duplicate, person_id, &consumer, |source| Some(format!(
-                "mail.communication:{}",
-                source.connection_id().as_str()
-            ))),
-            Err(AgentFailure::Conflict)
-        );
-    }
 }
 
 /// The query one feasibility grant admits.
@@ -469,43 +296,4 @@ impl FeasibilityGrantQuery {
         }
         Ok(())
     }
-}
-
-/// The single grant that admits reading this Person's contacts from this device.
-///
-/// Which connector answers for their contacts is the device's; that exactly one
-/// live grant admits the read, for this consumer and the people resource, is
-/// Access's. More than one is a review the Person owes rather than a choice a
-/// read may make on their behalf.
-pub fn people_read_grant(
-    grants: &[DataAccessGrant],
-    person_id: floe_kernel::PersonId,
-    device_id: &str,
-    consumer: &str,
-) -> Result<DataAccessGrant, AgentFailure> {
-    let mut admitted = grants.iter().filter(|grant| {
-        let connector = grant.source().connector().as_str();
-        matches!(connector, "contacts.apple" | "contacts.android")
-            && grant.source().person_id() == person_id
-            && grant.source().connection_id().as_str() == contacts_connection(connector)
-            && grant.source().execution_owner().as_str()
-                == contacts_execution_owner(connector, device_id)
-            && grant.state() == GrantState::Active
-            && !grant.review_required()
-            && grant
-                .scope()
-                .resources()
-                .iter()
-                .any(|resource| resource.as_str() == PEOPLE_RESOURCE)
-            && grant
-                .scope()
-                .consumers()
-                .iter()
-                .any(|value| value.identifier() == consumer)
-    });
-    let grant = admitted.next().ok_or(AgentFailure::AccessReviewRequired)?;
-    if admitted.next().is_some() {
-        return Err(AgentFailure::AccessReviewRequired);
-    }
-    Ok(grant.clone())
 }

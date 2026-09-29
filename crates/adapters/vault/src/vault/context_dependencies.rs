@@ -323,10 +323,10 @@ mod tests {
     use crate::ContextEvidenceReader;
     use chrono::{Duration, Utc};
     use floe_access::{
-        ConnectionId, ConnectorId, ContextDependency, DependencyCoverage,
-        ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
-        GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, MAX_CONTEXT_DEPENDENCIES,
-        ProcessingRestriction, ResourceHandle,
+        ConnectionId, ConnectorId, ContextDependency, DependencyCoverage, ExecutionOwnerId,
+        GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+        GrantScope, GrantSourceBinding, MAX_CONTEXT_DEPENDENCIES, ProcessingRestriction,
+        ResourceHandle,
     };
     use floe_agent_contract::{ModelConversation, ModelConversationEntry};
     use floe_conversation::{AgentBudget, AgentMessage, SessionStore};
@@ -531,8 +531,12 @@ mod tests {
             ProcessingRestriction::LocalOnly,
         )
         .unwrap();
+        let created = vault
+            .create_data_access_grant(source, scope.clone())
+            .await
+            .unwrap();
         let grant = vault
-            .review_personal_grant(source, scope, &"a".repeat(64), None)
+            .activate_data_access_grant(created.id(), created.authority(), scope)
             .await
             .unwrap();
         let observed_at = Utc::now();

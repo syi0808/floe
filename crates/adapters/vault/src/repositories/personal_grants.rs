@@ -26,32 +26,11 @@ impl<Keys: VaultKeyProvider> PersonalGrantRecords for VaultGrantRecords<'_, Keys
         Box::pin(async move { self.vault.list_data_access_grants(128).await })
     }
 
-    fn reviewed_subject<'a>(
+    fn feasibility_review<'a>(
         &'a self,
         grant: floe_access::GrantId,
-    ) -> BoxFuture<'a, Result<String, AgentFailure>> {
-        Box::pin(async move { self.vault.personal_grant_subject_fingerprint(grant).await })
-    }
-
-    fn current_source_authority<'a>(
-        &'a self,
-        grant: floe_access::GrantId,
-    ) -> BoxFuture<'a, Result<floe_access::SourceAuthority, AgentFailure>> {
-        Box::pin(async move { self.vault.personal_grant_source_authority(grant).await })
-    }
-
-    fn feasibility_query<'a>(
-        &'a self,
-        grant: floe_access::GrantId,
-    ) -> BoxFuture<'a, Result<floe_access::FeasibilityGrantQuery, AgentFailure>> {
-        Box::pin(async move { self.vault.personal_feasibility_query(grant).await })
-    }
-
-    fn selected_handles<'a>(
-        &'a self,
-        grant: floe_access::GrantId,
-    ) -> BoxFuture<'a, Result<Vec<String>, AgentFailure>> {
-        Box::pin(async move { self.vault.personal_grant_selected_handles(grant).await })
+    ) -> BoxFuture<'a, Result<floe_access::FeasibilityReviewRecord, AgentFailure>> {
+        Box::pin(async move { self.vault.feasibility_review(grant).await })
     }
 }
 
@@ -67,65 +46,11 @@ impl<Keys: VaultKeyProvider> floe_access::PersonalGrantStore for EncryptedAgentV
         Box::pin(async move { self.list_data_access_grants(limit).await })
     }
 
-    fn reviewed_subject<'a>(
+    fn feasibility_review<'a>(
         &'a self,
         grant: floe_access::GrantId,
-    ) -> BoxFuture<'a, Result<String, AgentFailure>> {
-        Box::pin(async move { self.personal_grant_subject_fingerprint(grant).await })
-    }
-
-    fn current_source_authority<'a>(
-        &'a self,
-        grant: floe_access::GrantId,
-    ) -> BoxFuture<'a, Result<floe_access::SourceAuthority, AgentFailure>> {
-        Box::pin(async move { self.personal_grant_source_authority(grant).await })
-    }
-
-    fn selected_handles<'a>(
-        &'a self,
-        grant: floe_access::GrantId,
-    ) -> BoxFuture<'a, Result<Vec<String>, AgentFailure>> {
-        Box::pin(async move { self.personal_grant_selected_handles(grant).await })
-    }
-
-    fn feasibility_query<'a>(
-        &'a self,
-        grant: floe_access::GrantId,
-    ) -> BoxFuture<'a, Result<floe_access::FeasibilityGrantQuery, AgentFailure>> {
-        Box::pin(async move { self.personal_feasibility_query(grant).await })
-    }
-
-    fn review_grant<'a>(
-        &'a self,
-        source: floe_access::GrantSourceBinding,
-        scope: floe_access::GrantScope,
-        native_subject_fingerprint: &'a str,
-        expected: Option<(floe_access::GrantId, floe_access::GrantAuthority)>,
-    ) -> BoxFuture<'a, Result<floe_access::DataAccessGrant, AgentFailure>> {
-        Box::pin(async move {
-            self.review_personal_grant(source, scope, native_subject_fingerprint, expected)
-                .await
-        })
-    }
-
-    fn review_grant_with_selection<'a>(
-        &'a self,
-        source: floe_access::GrantSourceBinding,
-        scope: floe_access::GrantScope,
-        native_subject_fingerprint: &'a str,
-        expected: Option<(floe_access::GrantId, floe_access::GrantAuthority)>,
-        selected_handles: &'a [String],
-    ) -> BoxFuture<'a, Result<floe_access::DataAccessGrant, AgentFailure>> {
-        Box::pin(async move {
-            self.review_personal_grant_with_selection(
-                source,
-                scope,
-                native_subject_fingerprint,
-                expected,
-                selected_handles,
-            )
-            .await
-        })
+    ) -> BoxFuture<'a, Result<floe_access::FeasibilityReviewRecord, AgentFailure>> {
+        Box::pin(async move { self.feasibility_review(grant).await })
     }
 
     fn review_grant_with_feasibility_query<'a>(
@@ -137,7 +62,7 @@ impl<Keys: VaultKeyProvider> floe_access::PersonalGrantStore for EncryptedAgentV
         query: floe_access::FeasibilityGrantQuery,
     ) -> BoxFuture<'a, Result<floe_access::DataAccessGrant, AgentFailure>> {
         Box::pin(async move {
-            self.review_personal_grant_with_feasibility_query(
+            self.review_feasibility_grant(
                 source,
                 scope,
                 native_subject_fingerprint,
@@ -153,6 +78,6 @@ impl<Keys: VaultKeyProvider> floe_access::PersonalGrantStore for EncryptedAgentV
         grant: floe_access::GrantId,
         authority: floe_access::GrantAuthority,
     ) -> BoxFuture<'a, Result<floe_access::DataAccessGrant, AgentFailure>> {
-        Box::pin(async move { self.pause_personal_grant(grant, authority).await })
+        Box::pin(async move { self.pause_feasibility_grant(grant, authority).await })
     }
 }

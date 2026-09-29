@@ -593,7 +593,7 @@ final class _PersonalContactsAccessCardState
           Text('Contacts access', style: FloeType.title),
           const SizedBox(height: FloeSpace.xs),
           Text(
-            'Choose specific contacts. Floe never requests an all-contacts grant for this access.',
+            'Choose which contacts this connection can read. Floe does not request all contacts.',
             style: FloeType.body,
           ),
           const SizedBox(height: FloeSpace.sm),

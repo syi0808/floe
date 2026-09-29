@@ -1693,12 +1693,7 @@ mod tests {
                 .contains(&floe_access::ATTENTION_ASSISTANT_CONSUMER.to_owned())
         );
 
-        let liveness = personal_grants::PersonalDependencyLiveness {
-            local_context: &local_context,
-            person_id,
-            device_id: "test-device",
-        };
-        let store = vault.governed_general_store_with_liveness(session.id, &liveness);
+        let store = vault.governed_general_store(session.id);
         let reader = PersonalAttentionReader {
             core: &core,
             vault: &vault,

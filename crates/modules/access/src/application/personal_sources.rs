@@ -9,35 +9,17 @@ use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId, GrantSo
 use floe_kernel::{AgentFailure, PersonId};
 
 pub const ATTENTION_CONNECTOR: &str = "attention.macos";
-pub const ATTENTION_CONNECTION: &str = "attention.macos.local";
 pub const ATTENTION_RESOURCE: &str = "attention.coarse";
 pub const PEOPLE_RESOURCE: &str = "people.identity";
 pub const FEASIBILITY_CONNECTOR: &str = "feasibility.apple";
 pub const FEASIBILITY_CONNECTION: &str = "feasibility.apple.local";
 pub const FEASIBILITY_RESOURCE: &str = "schedule.feasibility";
 pub const WELLBEING_CONNECTOR: &str = "health.apple";
-pub const WELLBEING_CONNECTION: &str = "health.apple.local";
 pub const WELLBEING_RESOURCE: &str = "wellbeing.derived";
-
-/// The device that answers for attention on this Person's behalf.
-pub fn attention_execution_owner(device_id: &str) -> String {
-    format!("macos:{device_id}")
-}
 
 /// The device that answers for the Apple personal sources.
 pub fn apple_execution_owner(device_id: &str) -> String {
     format!("apple:{device_id}")
-}
-
-/// The connection a contacts source is bound to.
-pub fn contacts_connection(connector: &str) -> String {
-    format!("{connector}.local")
-}
-
-/// The device that answers for a contacts source.
-pub fn contacts_execution_owner(connector: &str, device_id: &str) -> String {
-    let platform = connector.strip_prefix("contacts.").unwrap_or("unknown");
-    format!("{platform}:{device_id}")
 }
 
 /// Whether a source is one this device serves for the Person themselves.
@@ -53,7 +35,7 @@ pub fn is_device_local_source(connector: &str) -> bool {
         )
 }
 
-pub fn source_binding(
+fn source_binding(
     person_id: PersonId,
     connection: &str,
     connector: &str,
@@ -78,48 +60,5 @@ pub fn feasibility_source(
         FEASIBILITY_CONNECTION,
         FEASIBILITY_CONNECTOR,
         apple_execution_owner(device_id),
-    )
-}
-
-/// The source binding a wellbeing grant is bound to.
-pub fn wellbeing_source(
-    person_id: PersonId,
-    device_id: &str,
-) -> Result<GrantSourceBinding, AgentFailure> {
-    source_binding(
-        person_id,
-        WELLBEING_CONNECTION,
-        WELLBEING_CONNECTOR,
-        apple_execution_owner(device_id),
-    )
-}
-
-/// The source binding an attention grant is bound to.
-pub fn attention_source(
-    person_id: PersonId,
-    device_id: &str,
-) -> Result<GrantSourceBinding, AgentFailure> {
-    source_binding(
-        person_id,
-        ATTENTION_CONNECTION,
-        ATTENTION_CONNECTOR,
-        attention_execution_owner(device_id),
-    )
-}
-
-/// The source binding a contacts grant is bound to.
-pub fn contacts_source(
-    person_id: PersonId,
-    device_id: &str,
-    connector: &str,
-) -> Result<GrantSourceBinding, AgentFailure> {
-    if !connector.starts_with("contacts.") {
-        return Err(AgentFailure::InvalidInput);
-    }
-    source_binding(
-        person_id,
-        &contacts_connection(connector),
-        connector,
-        contacts_execution_owner(connector, device_id),
     )
 }
