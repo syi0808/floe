@@ -1753,6 +1753,166 @@ async fn expert_settings_resolve_only_current_candidate_ids_and_rejoin_exact_sav
 }
 
 #[tokio::test]
+async fn contacts_source_edit_keeps_saved_expert_binding_and_logical_grant() {
+    let person = PersonId::new();
+    let mut registration = required_source_registration(required_source_runner);
+    registration.manifest.source_requirements[0].capability = "people.identity".into();
+    let manifest = registration.manifest.clone();
+    let (_root, open) = installed_open_without_provider(person, vec![registration], manifest).await;
+    let source = open
+        .core
+        .source_service()
+        .establish_reviewed_native(
+            person,
+            floe_context_contract::ConnectorId::try_new("contacts.apple").unwrap(),
+            floe_context_contract::ConnectionId::try_new("contacts.apple.local").unwrap(),
+            floe_context_contract::ExecutionOwnerId::try_new("apple:mac-local").unwrap(),
+            floe_connections::ResourceMode::Selected,
+            vec![
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new("person.identity:a").unwrap(),
+                    "A".into(),
+                )
+                .unwrap(),
+            ],
+            "a".repeat(64),
+        )
+        .await
+        .unwrap();
+    let policy = crate::first_party_observe::personal_policy("contacts.apple").unwrap();
+    let logical = floe_context_contract::connection_view_resource(
+        floe_context_contract::PEOPLE_VIEW_ID,
+        source.connection_id(),
+    )
+    .unwrap();
+    let scope = floe_access::GrantScope::try_new(
+        vec![logical.clone()],
+        policy.categories,
+        vec![policy.operation],
+        vec![policy.purpose],
+        policy.consumers,
+        policy.processing,
+    )
+    .unwrap();
+    let source_binding = floe_access::GrantSourceBinding::try_new(
+        person,
+        source.connection_id().clone(),
+        source.connector_id().clone(),
+        source.execution_owner_id().clone(),
+    )
+    .unwrap();
+    let grant = open
+        .vault
+        .activate_access_grants(vec![floe_vault::AccessGrantActivation {
+            grant_id: floe_access::GrantId::new(),
+            expected: None,
+            source: source_binding.clone(),
+            scope,
+        }])
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(grant.scope().resources(), [logical]);
+    let assignment_id = open
+        .vault
+        .expert_registry()
+        .await
+        .unwrap()
+        .unwrap()
+        .assignments[0]
+        .id;
+    let first = crate::vault_host::expert_binding_settings::inspect(
+        &open,
+        person,
+        "mac-local",
+        assignment_id,
+        "required_attention",
+        &Cancellation::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.candidates.len(), 1);
+    let saved = crate::vault_host::expert_binding_settings::replace(
+        &open,
+        person,
+        "mac-local",
+        Uuid::new_v4(),
+        &crate::ExpertBindingSelectionIntent {
+            assignment_id,
+            package_id: "example.test.expert".into(),
+            package_version: "1.0.0".into(),
+            definition_revision: 1,
+            requirement_key: "required_attention".into(),
+            expected_binding_revision: first.binding_revision,
+            candidate_ids: vec![first.candidates[0].candidate_id.clone()],
+        },
+        &Cancellation::default(),
+    )
+    .await
+    .unwrap();
+    let changed = open
+        .core
+        .source_service()
+        .configure_reviewed_native(
+            person,
+            source.connection_id(),
+            source.revision(),
+            floe_connections::ResourceMode::Selected,
+            vec![
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new("person.identity:a").unwrap(),
+                    "A".into(),
+                )
+                .unwrap(),
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new("person.identity:b").unwrap(),
+                    "B".into(),
+                )
+                .unwrap(),
+            ],
+            "b".repeat(64),
+        )
+        .await
+        .unwrap();
+    assert_eq!(changed.revision(), source.revision() + 1);
+    assert_eq!(
+        changed.source_authority(),
+        source.source_authority().advance().unwrap()
+    );
+    let after = crate::vault_host::expert_binding_settings::inspect(
+        &open,
+        person,
+        "mac-local",
+        assignment_id,
+        "required_attention",
+        &Cancellation::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(after.binding_revision, saved.binding_revision);
+    assert_eq!(
+        after.candidates[0].candidate_id,
+        first.candidates[0].candidate_id
+    );
+    assert!(after.candidates[0].selected);
+    let current = open
+        .vault
+        .data_access_grant_for_source_resource(
+            &source_binding,
+            &floe_context_contract::connection_view_resource(
+                floe_context_contract::PEOPLE_VIEW_ID,
+                changed.connection_id(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.id(), grant.id());
+    assert_eq!(current.authority(), grant.authority());
+}
+
+#[tokio::test]
 async fn hosted_calendar_settings_use_product_connection_and_pinned_producer() {
     use base64::Engine;
     use sha2::Digest;
