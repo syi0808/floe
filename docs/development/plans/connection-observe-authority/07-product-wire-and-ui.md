@@ -2,7 +2,7 @@
 
 Prerequisite: 06 complete.
 
-Status: In progress. Started from clean main at 720feffeb88003f48d347d7ff86999096bd50e6e; fetched origin/main matched on 2026-09-29.
+Status: Complete on 2026-09-29. Started from clean main at 720feffeb88003f48d347d7ff86999096bd50e6e; fetched origin/main matched on 2026-09-29.
 
 Planning base: main at 988cec65595a2f7a2b64358b6060e6791e22b137 on 2026-09-29.
 
@@ -1329,3 +1329,41 @@ Report only:
 28. live smoke or SKIPPED reason;
 29. clean worktree;
 30. confirmation Checkpoint 08 was not started.
+
+## Execution evidence — 2026-09-29
+
+1. **Date:** 2026-09-29 (Asia/Seoul).
+2. **Baseline:** clean local `main` and fetched `origin/main` both `720feffeb88003f48d347d7ff86999096bd50e6e` before implementation; final fetch confirmed `origin/main` unchanged.
+3. **Commits:** App contract `5a33564f`; App orchestration `a56c740b`, `7d1bdf7e`, `82a625e0`, `3ce7ae33`; Connections source setup `ce182b4b`, `c84a5177`; protocol/FFI `a1864d99`, `255ac6f6`, `24b38353`, `31ec8b12`, `79df22e4`, `03f74823`, `9aa817a3`; Flutter `6efca235` through `7efeb4a6`; architecture/product docs `deab0435`. This evidence and the parent status are in the closure commit carrying this section.
+4. **App contract:** `crates/app/src/connection_observe.rs` is the single public product `ConnectionObserveOperation` for all standing native, personal and hosted sources.
+5. **Overview:** connector ID, connection ID, status, enabled, display-only `source_resources`, and logical View members (`view_id`, state, review-required); no granted-resource projection.
+6. **Reviewed expectation:** connector/connection, source authority, optional connection revision/native subject/producer fingerprint, and canonical members with View ID, policy digest, logical resource and exact expected grant ID/authority or proven absence. It is backend-produced compare-only evidence.
+7. **Intent:** `connection_observe.inspect`, `.review`, `.set_enabled` share AppWire owner correlation. Enable requires the exact reviewed expectation; disable forbids it and may mark disconnecting.
+8. **Calendar source:** `connections.native_calendar.source/mutate` and Connections' reviewed native source establishment probe the live EventKit subject; Calendar IDs are source resources, not Observe permission inputs.
+9. **Contacts source:** `connections.native_personal.source/setup` owns selected handles and subject refresh. Resource edits use Connections CAS only, not Observe review/enable.
+10. **Attention/Wellbeing source:** native-personal setup refreshes the OS subject and serving `SourceConnection` independently of standing grant mutation.
+11. **Feasibility:** `access.feasibility.inspect/configure`, `FeasibilityAccess*` DTOs and Flutter gateway remain contextual, separate from `ConnectionObserve`.
+12. **Native Calendar Observe:** App reloads current Connections source, probes its full current Calendar set for review, and uses one logical `calendar.timeline:<connection>` grant through common `ConnectionObserve`.
+13. **Personal Observe:** Contacts, Attention and Wellbeing reload their Connections source and use the same common product operation for logical View grants, pause and re-enable.
+14. **Hosted Observe:** the common operation reloads the saved remote pairing/producer/provider identity; provider leaves and routing remain behind the remote adapter.
+15. **Interaction convergence:** native Calendar and personal inline enable resolve via the same reviewed connection operation; hosted inline enable compares the same internal expectation. Navigation/observer timeout does not revoke a recorded decision.
+16. **Calendar deletion:** old `CalendarAccessChange/Overview/State/Configuration`, Calendar Access DTOs, `access.calendar.*` product branches, native Calendar Access gateway/model and old worker/projection path are deleted.
+17. **Personal deletion:** standing `PersonalAccessChange/Overview`, `ContactsAccessChange`, `access.personal/contacts.*` product branches, and old personal standing gateway/model are deleted; only Feasibility-specific contextual names remain.
+18. **Remote deletion:** remote-specific Observe product operation, outer `resource` argument and Flutter remote Observe model are deleted; remote pairing/enrollment remains separate.
+19. **Projection:** `selected_resources`/`granted_resources` dual Observe projection is deleted. `source_resources` is display-only Connections state and is not a grant mutation token.
+20. **Eleven Calendars:** App `common_observe_reviews_eleven_calendars_without_leaf_permission_input` and Flutter connector-screen regressions cover one toggle, all current source IDs, one logical grant, and no leaf IDs in enable; Context resource-growth tests prove current additions are read and prior evidence is stale.
+21. **Contacts continuity:** Connections source tests, App `contacts_source_edit_keeps_saved_expert_binding_and_logical_grant`, and Flutter source-edit tests prove [A] to [A,B] advances source authority once while grant ID/authority and Expert binding remain unchanged, without Observe review/enable.
+22. **Lifecycle:** Off pauses without deleting source/resources; re-enable reviews current source/subject; disconnect revoke is separate from source disconnect. Stale grant/source/subject/identity fails before mutation.
+23. **Strict wire:** protocol DTO/local-owner/remote-wire tests reject old kinds, leaf Calendar IDs/Contacts handles, outer resource, old selected/granted projection, consumer/policy/routing authority, unknown fields and enable without exact review.
+24. **Flutter:** one `ConnectionObserveGateway` and model serve native Calendar, Contacts, Attention, Wellbeing and hosted panels; source editors use Connections gateways. Focused gateway/widget tests pass.
+25. **Data & privacy:** remains navigation/summary-only and contains no second editable standing permission control.
+26. **Residual classification:** all section 19 searches ran. Removed product type/gateway symbols, remote outer Observe resource, `_observeResource`, and standing Observe leaf/consumer policy fields have zero production matches. Three `access.calendar.*`, four `access.personal/contacts.*`, two `granted_resources`, two `selected_resources`, and seven `consumer_policy/ConsumerPolicyAuthority/policy_authority` matches are negative rejection-test literals only. The sole `resource: Option<&` match is `personal_source_spec.rs`'s internal singleton source spec. `calendar_ids` (271) are Connections source config, provider/native/Context acquisition, signed hosted provenance, server connector scope, fixtures and one negative Observe DTO test. `selected_handles` (73) are Contacts source setup/acquisition/provenance, fixtures and one negative Observe DTO test. `RemoteConnectionObserveExpectation` is crate-private compare-only signed View evidence, not a product DTO.
+27. **Docs:** `docs/architecture/modules.md`, `runtime.md`, `authority-recovery.md` and `docs/product/integrations-and-privacy.md` reflect current ownership and wire/UI semantics.
+28. **Targeted Rust:** App connection/native/personal/remote filters, Connections, Access Feasibility, `cargo check --workspace --lib`, and both architecture scripts pass. One default-parallel App global-runner test raced; its isolated rerun passed, and the serialized broad gate below passed.
+29. **Protocol/FFI:** `cargo test -p floe-protocol`, `cargo test -p floe-ffi`, and `cargo build -p floe-ffi` pass, including the native Calendar C ABI fail-closed fixture.
+30. **Flutter:** `flutter analyze`, Connections/settings focused tests, full `flutter test` (371 passed, 0 failed), and `flutter build macos` pass from the same source snapshot.
+31. **Apple/native:** Swift tests for FloeAppleContacts, FloeAppleHealth and iOS ScreenTimeGate pass; Apple native gateway tests and EventKit/Rust fixtures pass. No Android build or parity work was done.
+32. **Broad Rust:** `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast -- --test-threads=1` passed.
+33. **Live smoke:** SKIPPED; no explicitly approved disposable source/device/account was provided. No permission, credential or signing state was changed for verification.
+34. **Worktree:** clean after closure commit (verified in final audit).
+35. **Boundary:** Checkpoint 08 was not started; 08 and 09 remain Not started.
