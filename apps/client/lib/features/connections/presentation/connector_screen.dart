@@ -1,4 +1,5 @@
 import 'package:floe_client/features/connections/application/connection_observe_gateway.dart';
+import 'package:floe_client/features/connections/domain/connection_observe.dart';
 import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
 import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
@@ -28,7 +29,6 @@ import 'package:floe_client/features/connections/presentation/server_connector_p
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 
 import 'package:floe_client/features/connections/domain/agent_connections.dart';
-import 'package:floe_client/features/connections/domain/native_calendar_access.dart';
 import 'package:floe_client/features/settings/domain/agent_personal_access.dart';
 import 'package:floe_client/features/connections/presentation/personal_access_cards.dart';
 import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
@@ -49,7 +49,6 @@ class ConnectorScreen extends StatefulWidget {
     this.platform,
     this.agentController,
     this.personalAccessGateway,
-    this.nativeCalendarAccessGateway,
     this.connectionObserveGateway,
     this.connectorAuthorization,
     this.appleContext,
@@ -74,7 +73,6 @@ class ConnectorScreen extends StatefulWidget {
   final AgentController? agentController;
   final ConnectionObserveGateway? connectionObserveGateway;
   final AgentPersonalAccessGateway? personalAccessGateway;
-  final NativeCalendarAccessGateway? nativeCalendarAccessGateway;
   final AppleContextApi? appleContext;
   final MacOSContextApi? macOSContext;
   final DaySnapshot? daySnapshot;
@@ -97,7 +95,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
   String? activatingCalendarConnectorId;
   String? calendarSelectionError;
   String? selectedLocalConnectionId;
-  Future<NativeCalendarAccessOverview>? observeFuture;
+  Future<ConnectionObserveOverview>? observeFuture;
   String? observeError;
   bool observeBusy = false;
 
@@ -718,7 +716,8 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         ),
       if (widget.gateway != null &&
           deviceCalendarConnection != null &&
-          widget.nativeCalendarAccessGateway != null) ...[
+          widget.connectionObserveGateway != null &&
+          effectivePlatform != TargetPlatform.android) ...[
         SizedBox(height: FloeSpace.lg),
         _deviceCalendarObserve(context, deviceCalendarConnection!),
       ],
@@ -735,8 +734,9 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     BuildContext context,
     CalendarConnectionView connection,
   ) {
-    observeFuture ??= widget.nativeCalendarAccessGateway!.inspectCalendarAccess(
-      widget.query.personId,
+    observeFuture ??= widget.connectionObserveGateway!.inspect(
+      connectorId: 'calendar.event_kit',
+      connectionId: connection.connectionId,
     );
     return FloeSquircle(
       key: const Key('device-calendar-observe'),
@@ -755,7 +755,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
             style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
           ),
           SizedBox(height: FloeSpace.base),
-          FutureBuilder<NativeCalendarAccessOverview>(
+          FutureBuilder<ConnectionObserveOverview>(
             future: observeFuture,
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
@@ -774,7 +774,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
                   Text(_observeStateLabel(overview), style: FloeType.bodySmall),
                   SizedBox(height: FloeSpace.sm),
                   Text(
-                    overview.state == 'active' && !overview.reviewRequired
+                    overview.enabled
                         ? 'Floe uses the current calendars in this connection.'
                         : 'Floe is not using this calendar connection.',
                     style: FloeType.bodySmall.copyWith(
@@ -796,22 +796,19 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     );
   }
 
-  String _observeStateLabel(NativeCalendarAccessOverview overview) {
-    final state = switch (overview.state) {
+  String _observeStateLabel(ConnectionObserveOverview overview) {
+    final state = switch (overview.status) {
       'active' => 'Active',
       'paused' => 'Paused',
       'revoked' => 'Needs review',
       _ => 'Needs review',
     };
-    if (overview.reviewRequired && overview.state == 'active') {
-      return '$state · review needed';
-    }
     return state;
   }
 
   Widget _useWithFloeControl(
     CalendarConnectionView connection,
-    NativeCalendarAccessOverview overview,
+    ConnectionObserveOverview overview,
   ) {
     Future<void> run(Future<void> Function() action) async {
       if (observeBusy) return;
@@ -828,7 +825,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
       }
     }
 
-    final enabled = overview.state == 'active' && !overview.reviewRequired;
+    final enabled = overview.enabled;
     return FloeSwitchTile(
       key: const Key('device-calendar-use-with-floe'),
       title: 'Use with Floe',
@@ -840,37 +837,23 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
           ? null
           : (value) => run(
               () => value
-                  ? _reviewObserve(connection, overview)
-                  : _pauseObserve(overview),
+                  ? _reviewObserve(connection)
+                  : _pauseObserve(connection),
             ),
     );
   }
 
-  Future<void> _reviewObserve(
-    CalendarConnectionView connection,
-    NativeCalendarAccessOverview overview,
-  ) async {
-    final gateway = widget.nativeCalendarAccessGateway!;
-    final authority = connection.sourceAuthority;
-    if (authority == null) {
-      throw const FormatException('Calendar connection has no authority');
-    }
-    final subject = await gateway.previewCalendarSubject(
-      personId: widget.query.personId,
-      provider: connection.provider,
+  Future<void> _reviewObserve(CalendarConnectionView connection) async {
+    final gateway = widget.connectionObserveGateway!;
+    final expected = await gateway.review(
+      connectorId: 'calendar.event_kit',
       connectionId: connection.connectionId,
-      calendarIds: connection.selectedCalendarIds,
-      connectionScope: connection.includeAll ? 'all' : 'selected',
-      connectionRevision: connection.revision,
-      sourceAuthority: authority.toJson(),
     );
-    final refreshed = await gateway.reviewCalendarAccess(
-      widget.query.personId,
+    final refreshed = await gateway.setEnabled(
+      connectorId: 'calendar.event_kit',
       connectionId: connection.connectionId,
-      calendarIds: connection.selectedCalendarIds,
-      expectedSourceAuthority: overview.sourceAuthority,
-      expectedNativeSubjectFingerprint: subject.nativeSubjectFingerprint,
-      reviewedOverview: overview,
+      enabled: true,
+      expected: expected,
     );
     _replaceObserve(refreshed);
   }
@@ -879,13 +862,16 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     await widget.onChanged();
   }
 
-  Future<void> _pauseObserve(NativeCalendarAccessOverview overview) async {
-    final refreshed = await widget.nativeCalendarAccessGateway!
-        .pauseCalendarAccess(widget.query.personId, reviewedOverview: overview);
+  Future<void> _pauseObserve(CalendarConnectionView connection) async {
+    final refreshed = await widget.connectionObserveGateway!.setEnabled(
+      connectorId: 'calendar.event_kit',
+      connectionId: connection.connectionId,
+      enabled: false,
+    );
     _replaceObserve(refreshed);
   }
 
-  void _replaceObserve(NativeCalendarAccessOverview overview) {
+  void _replaceObserve(ConnectionObserveOverview overview) {
     setState(() => observeFuture = Future.value(overview));
   }
 }

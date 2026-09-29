@@ -5,7 +5,8 @@ import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/day/application/calendar_gateway.dart';
 import 'package:floe_client/features/day/application/fake_day_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
-import 'package:floe_client/features/connections/domain/native_calendar_access.dart';
+import 'package:floe_client/features/connections/application/connection_observe_gateway.dart';
+import 'package:floe_client/features/connections/domain/connection_observe.dart';
 import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
 import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
@@ -193,18 +194,9 @@ void main() {
   testWidgets('device detail manages one Use with Floe control', (
     tester,
   ) async {
-    final access = _StubCalendarAccessGateway();
+    final access = _StubCalendarObserveGateway();
     final calendarIds = List.generate(11, (index) => 'calendar-$index');
-    access.overview = NativeCalendarAccessOverview(
-      personId: 'person',
-      provider: 'event_kit',
-      connectionId: 'connection',
-      selectedResources: calendarIds,
-      grantedResources: const [],
-      sourceAuthority: access.overview.sourceAuthority,
-      state: 'needs_review',
-      reviewRequired: true,
-    );
+    access.sourceResources = calendarIds;
     await tester.pumpWidget(
       MaterialApp(
         theme: FloeTheme.light,
@@ -237,7 +229,7 @@ void main() {
               onChanged: () async {},
               platform: TargetPlatform.macOS,
               initialDeviceCalendarDetail: true,
-              nativeCalendarAccessGateway: access,
+              connectionObserveGateway: access,
             ),
           ),
         ),
@@ -261,10 +253,8 @@ void main() {
       find.byKey(const ValueKey('device-calendar-use-with-floe')),
     );
     await tester.pumpAndSettle();
-    expect(access.calls, ['inspect', 'preview', 'review']);
-    expect(access.previewedCalendarIds, calendarIds);
-    expect(access.reviewedCalendarIds, calendarIds);
-    expect(access.reviewedFingerprint, 'f' * 64);
+    expect(access.calls, ['inspect', 'review', 'enable']);
+    expect(access.reviewed?.toJson().toString().contains('calendar-0'), false);
     expect(find.text('Active'), findsOneWidget);
 
     await tester.ensureVisible(
@@ -274,28 +264,15 @@ void main() {
       find.byKey(const ValueKey('device-calendar-use-with-floe')),
     );
     await tester.pumpAndSettle();
-    expect(access.calls.last, 'pause');
-    expect(access.pausedGrantId, isNotNull);
+    expect(access.calls.last, 'disable');
     expect(find.text('Paused'), findsOneWidget);
   });
 
   testWidgets(
     'calendar resource refresh preserves active Observe without review',
     (tester) async {
-      final access = _StubCalendarAccessGateway();
-      final initial = access.overview;
-      access.overview = NativeCalendarAccessOverview(
-        personId: initial.personId,
-        provider: initial.provider,
-        connectionId: initial.connectionId,
-        selectedResources: const ['home'],
-        grantedResources: const ['home'],
-        sourceAuthority: initial.sourceAuthority,
-        state: 'active',
-        reviewRequired: false,
-        grantId: 'grant',
-        grantAuthority: const {'access_epoch': 1},
-      );
+      final access = _StubCalendarObserveGateway(status: 'active');
+      access.sourceResources = const ['home'];
       Widget screen(List<String> calendarIds, int revision) => MaterialApp(
         theme: FloeTheme.light,
         localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -327,7 +304,7 @@ void main() {
               onChanged: () async {},
               platform: TargetPlatform.macOS,
               initialDeviceCalendarDetail: true,
-              nativeCalendarAccessGateway: access,
+              connectionObserveGateway: access,
             ),
           ),
         ),
@@ -336,21 +313,7 @@ void main() {
       await tester.pumpWidget(screen(const ['home'], 1));
       await tester.pumpAndSettle();
       expect(access.calls, ['inspect']);
-      access.overview = NativeCalendarAccessOverview(
-        personId: initial.personId,
-        provider: initial.provider,
-        connectionId: initial.connectionId,
-        selectedResources: const ['home', 'work'],
-        grantedResources: const ['home', 'work'],
-        sourceAuthority: const {
-          'incarnation': '00000000-0000-4000-8000-000000000009',
-          'epoch': 2,
-        },
-        state: 'active',
-        reviewRequired: false,
-        grantId: 'grant',
-        grantAuthority: const {'access_epoch': 1},
-      );
+      access.sourceResources = const ['home', 'work'];
       await tester.pumpWidget(screen(const ['home', 'work'], 2));
       await tester.pumpAndSettle();
       expect(access.calls, ['inspect', 'inspect']);
@@ -917,107 +880,84 @@ final class _RecordingCalendarGateway extends _DeviceCalendarGateway
   );
 }
 
-final class _StubCalendarAccessGateway implements NativeCalendarAccessGateway {
-  NativeCalendarAccessOverview overview = const NativeCalendarAccessOverview(
-    personId: 'person',
-    provider: 'event_kit',
-    connectionId: 'connection',
-    selectedResources: ['home'],
-    grantedResources: [],
-    sourceAuthority: {
-      'incarnation': '00000000-0000-4000-8000-000000000009',
-      'epoch': 1,
-    },
-    state: 'needs_review',
-    reviewRequired: true,
-  );
+final class _StubCalendarObserveGateway implements ConnectionObserveGateway {
+  _StubCalendarObserveGateway({this.status = 'needs_review'});
+
+  String status;
+  List<String> sourceResources = const ['home'];
   final List<String> calls = [];
-  String? reviewedFingerprint;
-  List<String>? previewedCalendarIds;
-  List<String>? reviewedCalendarIds;
-  String? pausedGrantId;
+  ConnectionObserveReview? reviewed;
 
-  NativeCalendarAccessOverview _granted(String state) =>
-      NativeCalendarAccessOverview(
-        personId: overview.personId,
-        provider: overview.provider,
-        connectionId: overview.connectionId,
-        selectedResources: overview.selectedResources,
-        grantedResources: overview.selectedResources,
-        sourceAuthority: overview.sourceAuthority,
-        state: state,
-        reviewRequired: false,
-        grantId: 'grant',
-        grantAuthority: const {'access_epoch': 1},
-      );
-
-  @override
-  Future<NativeCalendarAccessOverview> inspectCalendarAccess(
-    String personId,
-  ) async {
-    calls.add('inspect');
-    return overview;
-  }
+  ConnectionObserveOverview _overview(
+    String connectorId,
+    String connectionId,
+  ) => ConnectionObserveOverview.fromJson({
+    'connector_id': connectorId,
+    'connection_id': connectionId,
+    'status': status,
+    'enabled': status == 'active',
+    'source_resources': sourceResources,
+    'members': [
+      {
+        'view_id': 'calendar.timeline',
+        'state': status == 'active' ? 'active' : 'paused',
+        'review_required': status == 'needs_review',
+      },
+    ],
+  });
 
   @override
-  Future<NativeCalendarSubjectPreview> previewCalendarSubject({
-    required String personId,
-    required String provider,
+  Future<ConnectionObserveOverview> inspect({
+    required String connectorId,
     required String connectionId,
-    required List<String> calendarIds,
-    required String connectionScope,
-    required int connectionRevision,
-    required Map<String, Object?> sourceAuthority,
   }) async {
-    calls.add('preview');
-    previewedCalendarIds = calendarIds;
-    return NativeCalendarSubjectPreview(
-      provider: provider,
-      deviceId: 'test-device',
-      calendarIds: calendarIds,
-      connectionScope: connectionScope,
-      connectionId: connectionId,
-      connectionRevision: connectionRevision,
-      sourceAuthority: sourceAuthority,
-      nativeSubjectFingerprint: 'f' * 64,
-    );
+    calls.add('inspect');
+    return _overview(connectorId, connectionId);
   }
 
   @override
-  Future<NativeCalendarAccessOverview> reviewCalendarAccess(
-    String personId, {
+  Future<ConnectionObserveReview> review({
+    required String connectorId,
     required String connectionId,
-    required List<String> calendarIds,
-    required Map<String, Object?> expectedSourceAuthority,
-    required String expectedNativeSubjectFingerprint,
-    required NativeCalendarAccessOverview reviewedOverview,
   }) async {
     calls.add('review');
-    reviewedCalendarIds = calendarIds;
-    reviewedFingerprint = expectedNativeSubjectFingerprint;
-    overview = _granted('active');
-    return overview;
+    reviewed = ConnectionObserveReview.fromJson({
+      'connector_id': connectorId,
+      'connection_id': connectionId,
+      'source_authority': {
+        'incarnation': '00000000-0000-4000-8000-000000000009',
+        'epoch': 1,
+      },
+      'connection_revision': 1,
+      'native_subject': 'f' * 64,
+      'producer_fingerprint': null,
+      'members': [
+        {
+          'view_id': 'calendar.timeline',
+          'resource': 'connection/$connectionId/view/calendar.timeline',
+          'policy_digest': 'a' * 64,
+          'expected_grant_id': null,
+          'expected_grant_authority': null,
+        },
+      ],
+    });
+    return reviewed!;
   }
 
   @override
-  Future<NativeCalendarAccessOverview> pauseCalendarAccess(
-    String personId, {
-    required NativeCalendarAccessOverview reviewedOverview,
+  Future<ConnectionObserveOverview> setEnabled({
+    required String connectorId,
+    required String connectionId,
+    required bool enabled,
+    bool disconnecting = false,
+    ConnectionObserveReview? expected,
   }) async {
-    calls.add('pause');
-    pausedGrantId = reviewedOverview.grantId;
-    overview = _granted('paused');
-    return overview;
-  }
-
-  @override
-  Future<NativeCalendarAccessOverview> removeCalendarAccess(
-    String personId, {
-    required NativeCalendarAccessOverview reviewedOverview,
-  }) async {
-    calls.add('remove');
-    overview = _granted('revoked');
-    return overview;
+    calls.add(enabled ? 'enable' : 'disable');
+    if (enabled && expected != reviewed) {
+      throw const FormatException('Review changed');
+    }
+    status = enabled ? 'active' : 'paused';
+    return _overview(connectorId, connectionId);
   }
 }
 
