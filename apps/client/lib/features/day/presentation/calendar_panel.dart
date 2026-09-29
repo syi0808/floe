@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:floe_client/features/day/presentation/calendar_layout.dart';
 import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
-import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/domain/source_connection.dart';
 
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/foundation.dart';
@@ -109,7 +109,7 @@ class CalendarPanel extends StatefulWidget {
   });
   final CalendarGateway gateway;
   final CalendarSourceGateway? sourceGateway;
-  final CalendarSourceConnection? source;
+  final SourceConnection? source;
   final DayQuery query;
   final CalendarConnectionView? connection;
   final Future<void> Function() onChanged;
@@ -338,7 +338,7 @@ class _CalendarPanelState extends State<CalendarPanel> {
     if (gateway == null) return;
     final resources = [
       for (final choice in choices)
-        CalendarSourceResource(handle: choice.id, label: choice.name),
+        SourceResource(handle: choice.id, label: choice.name),
     ];
     final source = widget.source;
     if (source == null) {

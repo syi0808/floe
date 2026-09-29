@@ -1,7 +1,7 @@
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
-import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/domain/source_connection.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/features/day/application/calendar_gateway.dart';
 import 'package:floe_client/features/day/application/fake_day_gateway.dart';
@@ -31,18 +31,18 @@ class PanelCalendarGateway
   ];
 
   @override
-  Future<CalendarSourceConnection?> inspectNative(String personId) async =>
+  Future<SourceConnection?> inspectNative(String personId) async =>
       null;
 
   @override
-  Future<List<CalendarSourceConnection>> inspectRemote(String personId) async =>
+  Future<List<SourceConnection>> inspectRemote(String personId) async =>
       const [];
 
   @override
-  Future<CalendarSourceConnection> establishNative(
+  Future<SourceConnection> establishNative(
     String personId, {
     required String resourceMode,
-    required List<CalendarSourceResource> resources,
+    required List<SourceResource> resources,
   }) async {
     selected = [
       for (final resource in resources)
@@ -52,11 +52,11 @@ class PanelCalendarGateway
   }
 
   @override
-  Future<CalendarSourceConnection> configureNative(
+  Future<SourceConnection> configureNative(
     String personId, {
-    required CalendarSourceConnection current,
+    required SourceConnection current,
     required String resourceMode,
-    required List<CalendarSourceResource> resources,
+    required List<SourceResource> resources,
   }) => establishNative(
     personId,
     resourceMode: resourceMode,
@@ -64,41 +64,41 @@ class PanelCalendarGateway
   );
 
   @override
-  Future<CalendarSourceConnection> reconcileNativeInventory(
+  Future<SourceConnection> reconcileNativeInventory(
     String personId, {
-    required CalendarSourceConnection current,
-    required List<CalendarSourceResource> resources,
+    required SourceConnection current,
+    required List<SourceResource> resources,
   }) async => current;
 
   @override
-  Future<CalendarSourceConnection> disconnectNative(
+  Future<SourceConnection> disconnectNative(
     String personId, {
-    required CalendarSourceConnection current,
+    required SourceConnection current,
   }) async => current;
 
   @override
-  Future<CalendarSourceConnection> bindRemote(
+  Future<SourceConnection> bindRemote(
     String personId, {
     required String connectorId,
     required String connectionId,
-    required List<CalendarSourceResource> resources,
-    CalendarSourceConnection? current,
+    required List<SourceResource> resources,
+    SourceConnection? current,
   }) async => throw UnimplementedError();
 
   @override
-  Future<CalendarSourceConnection> disconnectRemote(
+  Future<SourceConnection> disconnectRemote(
     String personId, {
-    required CalendarSourceConnection current,
+    required SourceConnection current,
   }) async => throw UnimplementedError();
 
-  CalendarSourceConnection _source(List<CalendarSourceResource> resources) =>
-      CalendarSourceConnection(
+  SourceConnection _source(List<SourceResource> resources) =>
+      SourceConnection(
         connectorId: 'calendar.event_kit',
         connectionId: '00000000-0000-4000-8000-000000000010',
         executionOwnerId: 'test-device',
         state: 'ready',
         revision: 1,
-        sourceAuthority: const CalendarSourceAuthority(
+        sourceAuthority: const SourceAuthority(
           incarnation: '00000000-0000-4000-8000-000000000009',
           epoch: 1,
         ),

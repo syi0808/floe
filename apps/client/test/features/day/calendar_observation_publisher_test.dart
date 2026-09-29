@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/domain/source_connection.dart';
 import 'package:floe_client/features/day/application/calendar_observation_publisher.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
 
@@ -14,7 +14,7 @@ void main() {
       );
       final calendars = List.generate(
         11,
-        (index) => CalendarSourceResource(
+        (index) => SourceResource(
           handle: 'calendar-$index',
           label: 'Calendar $index',
         ),
@@ -64,7 +64,7 @@ void main() {
         provider: 'event_kit',
         revision: 8,
         resources: const [
-          CalendarSourceResource(handle: 'home', label: 'Home'),
+          SourceResource(handle: 'home', label: 'Home'),
         ],
       ),
       observedAt: observedAt,
@@ -112,8 +112,8 @@ void main() {
         provider: 'android',
         revision: 3,
         resources: const [
-          CalendarSourceResource(handle: 'work', label: 'Work'),
-          CalendarSourceResource(handle: 'home', label: 'Home'),
+          SourceResource(handle: 'work', label: 'Work'),
+          SourceResource(handle: 'home', label: 'Home'),
         ],
       ),
       observedAt: DateTime.utc(2026, 9, 11),
@@ -134,7 +134,7 @@ void main() {
     final calendars = List.generate(
       CalendarObservationPublisher.maxCalendarCount + 1,
       (index) =>
-          CalendarSourceResource(handle: 'calendar-$index', label: 'Calendar'),
+          SourceResource(handle: 'calendar-$index', label: 'Calendar'),
     );
 
     await publisher.publish(
@@ -180,7 +180,7 @@ void main() {
         provider: 'google_calendar',
         revision: 2,
         resources: const [
-          CalendarSourceResource(handle: 'primary', label: 'Primary'),
+          SourceResource(handle: 'primary', label: 'Primary'),
         ],
       ),
       observedAt: DateTime.utc(2026, 9, 11),
@@ -199,12 +199,12 @@ void main() {
   });
 }
 
-CalendarSourceConnection _source({
+SourceConnection _source({
   required String id,
   required String provider,
   required int revision,
-  required List<CalendarSourceResource> resources,
-}) => CalendarSourceConnection(
+  required List<SourceResource> resources,
+}) => SourceConnection(
   connectorId: switch (provider) {
     'event_kit' => 'calendar.event_kit',
     'android' => 'calendar.android',
@@ -215,7 +215,7 @@ CalendarSourceConnection _source({
   executionOwnerId: 'device-1',
   state: 'ready',
   revision: revision,
-  sourceAuthority: const CalendarSourceAuthority(
+  sourceAuthority: const SourceAuthority(
     incarnation: '00000000-0000-4000-8000-000000000009',
     epoch: 1,
   ),

@@ -1,44 +1,44 @@
-import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/domain/source_connection.dart';
 
 abstract interface class CalendarSourceGateway {
-  Future<CalendarSourceConnection?> inspectNative(String personId);
+  Future<SourceConnection?> inspectNative(String personId);
 
-  Future<CalendarSourceConnection> establishNative(
+  Future<SourceConnection> establishNative(
     String personId, {
     required String resourceMode,
-    required List<CalendarSourceResource> resources,
+    required List<SourceResource> resources,
   });
 
-  Future<CalendarSourceConnection> configureNative(
+  Future<SourceConnection> configureNative(
     String personId, {
-    required CalendarSourceConnection current,
+    required SourceConnection current,
     required String resourceMode,
-    required List<CalendarSourceResource> resources,
+    required List<SourceResource> resources,
   });
 
-  Future<CalendarSourceConnection> reconcileNativeInventory(
+  Future<SourceConnection> reconcileNativeInventory(
     String personId, {
-    required CalendarSourceConnection current,
-    required List<CalendarSourceResource> resources,
+    required SourceConnection current,
+    required List<SourceResource> resources,
   });
 
-  Future<CalendarSourceConnection> disconnectNative(
+  Future<SourceConnection> disconnectNative(
     String personId, {
-    required CalendarSourceConnection current,
+    required SourceConnection current,
   });
 
-  Future<List<CalendarSourceConnection>> inspectRemote(String personId);
+  Future<List<SourceConnection>> inspectRemote(String personId);
 
-  Future<CalendarSourceConnection> bindRemote(
+  Future<SourceConnection> bindRemote(
     String personId, {
     required String connectorId,
     required String connectionId,
-    required List<CalendarSourceResource> resources,
-    CalendarSourceConnection? current,
+    required List<SourceResource> resources,
+    SourceConnection? current,
   });
 
-  Future<CalendarSourceConnection> disconnectRemote(
+  Future<SourceConnection> disconnectRemote(
     String personId, {
-    required CalendarSourceConnection current,
+    required SourceConnection current,
   });
 }

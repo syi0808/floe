@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/domain/source_connection.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:floe_client/features/day/application/native_day_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
@@ -32,7 +32,7 @@ void main() {
           connectorId: 'calendar.google',
           connectionId: '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
           resources: const [
-            CalendarSourceResource(
+            SourceResource(
               handle: 'primary@example.test',
               label: 'Google Calendar',
             ),
@@ -64,7 +64,7 @@ void main() {
           connectionId: restored.connectionId,
           current: restored,
           resources: const [
-            CalendarSourceResource(
+            SourceResource(
               handle: 'primary@example.test',
               label: 'Renamed Calendar',
             ),
@@ -79,7 +79,7 @@ void main() {
             connectionId: restored.connectionId,
             current: restored,
             resources: const [
-              CalendarSourceResource(
+              SourceResource(
                 handle: 'primary@example.test',
                 label: 'Stale rename',
               ),
@@ -103,7 +103,7 @@ void main() {
             connectorId: 'calendar.google',
             connectionId: disconnected.connectionId,
             resources: const [
-              CalendarSourceResource(
+              SourceResource(
                 handle: 'primary@example.test',
                 label: 'New source',
               ),

@@ -1,4 +1,4 @@
-import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/domain/source_connection.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 
 final class ConnectedCalendar {
@@ -42,7 +42,7 @@ final class CalendarConnectionView {
   });
 
   factory CalendarConnectionView.compose(
-    CalendarSourceConnection source,
+    SourceConnection source,
     CalendarMirrorState? mirror,
   ) {
     final observed =
@@ -81,7 +81,7 @@ final class CalendarConnectionView {
   final String provider;
   final int revision;
   final bool isServing;
-  final CalendarSourceAuthority? sourceAuthority;
+  final SourceAuthority? sourceAuthority;
   final DateTime? lastSuccessAt;
   final String? error;
   final String? rangeStart;

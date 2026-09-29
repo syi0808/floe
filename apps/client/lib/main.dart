@@ -233,6 +233,7 @@ Future<void> _start() async {
         ownerGateways: runtime.owners,
         pairingGateway: runtime.pairing,
         connectionObserveGateway: runtime.connectionObserve,
+        nativePersonalSourceGateway: runtime.nativePersonalSource,
         serverClient: serverClient,
         androidContext: androidContext,
         appleContext: appleContext,

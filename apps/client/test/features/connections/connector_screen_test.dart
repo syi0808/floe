@@ -7,7 +7,7 @@ import 'package:floe_client/features/day/application/fake_day_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/features/connections/application/connection_observe_gateway.dart';
 import 'package:floe_client/features/connections/domain/connection_observe.dart';
-import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/domain/source_connection.dart';
 import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
 import 'package:floe_client/features/connections/presentation/connector_screen.dart';
@@ -217,7 +217,7 @@ void main() {
                 deviceId: 'test-device',
                 provider: 'event_kit',
                 revision: 1,
-                sourceAuthority: const CalendarSourceAuthority(
+                sourceAuthority: const SourceAuthority(
                   incarnation: '00000000-0000-4000-8000-000000000009',
                   epoch: 1,
                 ),
@@ -292,7 +292,7 @@ void main() {
                 deviceId: 'test-device',
                 provider: 'event_kit',
                 revision: revision,
-                sourceAuthority: CalendarSourceAuthority(
+                sourceAuthority: SourceAuthority(
                   incarnation: '00000000-0000-4000-8000-000000000009',
                   epoch: revision,
                 ),
@@ -620,7 +620,7 @@ void main() {
       'calendar.google',
       '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
       const [
-        CalendarSourceResource(
+        SourceResource(
           handle: 'primary@example.test',
           label: 'Primary',
         ),
@@ -796,12 +796,12 @@ final class _RecordingCalendarGateway extends _DeviceCalendarGateway
   int disconnectCount = 0;
 
   @override
-  Future<CalendarSourceConnection> bindRemote(
+  Future<SourceConnection> bindRemote(
     String personId, {
     required String connectorId,
     required String connectionId,
-    required List<CalendarSourceResource> resources,
-    CalendarSourceConnection? current,
+    required List<SourceResource> resources,
+    SourceConnection? current,
   }) async {
     this.connectionId = connectionId;
     expectedRevision = current?.revision;
@@ -817,61 +817,61 @@ final class _RecordingCalendarGateway extends _DeviceCalendarGateway
   }
 
   @override
-  Future<List<CalendarSourceConnection>> inspectRemote(String personId) async =>
+  Future<List<SourceConnection>> inspectRemote(String personId) async =>
       const [];
 
   @override
-  Future<CalendarSourceConnection?> inspectNative(String personId) async =>
+  Future<SourceConnection?> inspectNative(String personId) async =>
       null;
 
   @override
-  Future<CalendarSourceConnection> establishNative(
+  Future<SourceConnection> establishNative(
     String personId, {
     required String resourceMode,
-    required List<CalendarSourceResource> resources,
+    required List<SourceResource> resources,
   }) async => _source('calendar.event_kit', 'native', resources);
 
   @override
-  Future<CalendarSourceConnection> configureNative(
+  Future<SourceConnection> configureNative(
     String personId, {
-    required CalendarSourceConnection current,
+    required SourceConnection current,
     required String resourceMode,
-    required List<CalendarSourceResource> resources,
+    required List<SourceResource> resources,
   }) async => current;
 
   @override
-  Future<CalendarSourceConnection> reconcileNativeInventory(
+  Future<SourceConnection> reconcileNativeInventory(
     String personId, {
-    required CalendarSourceConnection current,
-    required List<CalendarSourceResource> resources,
+    required SourceConnection current,
+    required List<SourceResource> resources,
   }) async => current;
 
   @override
-  Future<CalendarSourceConnection> disconnectNative(
+  Future<SourceConnection> disconnectNative(
     String personId, {
-    required CalendarSourceConnection current,
+    required SourceConnection current,
   }) async => current;
 
   @override
-  Future<CalendarSourceConnection> disconnectRemote(
+  Future<SourceConnection> disconnectRemote(
     String personId, {
-    required CalendarSourceConnection current,
+    required SourceConnection current,
   }) async {
     disconnectCount++;
     return current;
   }
 
-  CalendarSourceConnection _source(
+  SourceConnection _source(
     String connectorId,
     String connectionId,
-    List<CalendarSourceResource> resources,
-  ) => CalendarSourceConnection(
+    List<SourceResource> resources,
+  ) => SourceConnection(
     connectorId: connectorId,
     connectionId: connectionId,
     executionOwnerId: 'local-test-device',
     state: 'ready',
     revision: 1,
-    sourceAuthority: const CalendarSourceAuthority(
+    sourceAuthority: const SourceAuthority(
       incarnation: '00000000-0000-4000-8000-000000000009',
       epoch: 1,
     ),

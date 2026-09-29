@@ -1,8 +1,9 @@
 import 'package:floe_client/features/connections/application/connection_observe_gateway.dart';
+import 'package:floe_client/features/connections/application/native_personal_source_gateway.dart';
 import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
 import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
 import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
-import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/domain/source_connection.dart';
 import 'package:intl/intl.dart';
 
 import 'dart:async';
@@ -77,6 +78,7 @@ class PersonalDayScreen extends StatefulWidget {
     this.ownerGateways = const LocalOwnerGateways(),
     this.pairingGateway,
     this.connectionObserveGateway,
+    this.nativePersonalSourceGateway,
     this.serverClient,
     this.androidContext,
     this.appleContext,
@@ -89,6 +91,7 @@ class PersonalDayScreen extends StatefulWidget {
   final LocalOwnerGateways ownerGateways;
   final RemotePairingGateway? pairingGateway;
   final ConnectionObserveGateway? connectionObserveGateway;
+  final NativePersonalSourceGateway? nativePersonalSourceGateway;
   final LocalServerClient? serverClient;
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
@@ -101,9 +104,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     with WidgetsBindingObserver {
   late final PersonalDayController controller;
   CalendarObservationRefreshCoordinator? calendarObservationRefresh;
-  CalendarSourceConnection? nativeCalendarSource;
-  List<CalendarSourceConnection> remoteCalendarSources = const [];
-  CalendarSourceConnection? get calendarSource {
+  SourceConnection? nativeCalendarSource;
+  List<SourceConnection> remoteCalendarSources = const [];
+  SourceConnection? get calendarSource {
     final mirrorId = controller.snapshot?.calendar?.sourceConnectionId;
     for (final source in remoteCalendarSources) {
       if (source.connectionId == mirrorId) return source;
@@ -216,7 +219,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         ? null
         : await gateway.inspectNative(widget.query.personId);
     final remote = gateway == null
-        ? <CalendarSourceConnection>[]
+        ? <SourceConnection>[]
         : await gateway.inspectRemote(widget.query.personId);
     if (mounted) {
       setState(() {
@@ -337,6 +340,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     if (destination == _DestinationView.connections) {
       return ConnectorScreen(
         connectionObserveGateway: widget.connectionObserveGateway,
+        nativePersonalSourceGateway: widget.nativePersonalSourceGateway,
         gateway: widget.gateway is CalendarGateway
             ? widget.gateway as CalendarGateway
             : null,

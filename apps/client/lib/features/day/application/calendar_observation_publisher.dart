@@ -1,5 +1,5 @@
 import 'package:floe_client/app/runtime/native_transport.dart';
-import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/domain/source_connection.dart';
 
 final class CalendarObservationPublisher {
   factory CalendarObservationPublisher({
@@ -20,7 +20,7 @@ final class CalendarObservationPublisher {
 
   Future<void> publish({
     required String personId,
-    required CalendarSourceConnection source,
+    required SourceConnection source,
     required DateTime observedAt,
     required DateTime rangeStart,
     required DateTime rangeEnd,

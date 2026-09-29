@@ -1,12 +1,9 @@
-final class CalendarSourceAuthority {
-  const CalendarSourceAuthority({
-    required this.incarnation,
-    required this.epoch,
-  });
+final class SourceAuthority {
+  const SourceAuthority({required this.incarnation, required this.epoch});
 
-  factory CalendarSourceAuthority.fromJson(Object? value) {
+  factory SourceAuthority.fromJson(Object? value) {
     if (value is! Map || value.keys.any((key) => key is! String)) {
-      throw const FormatException('Invalid Calendar source authority');
+      throw const FormatException('Invalid source authority');
     }
     final json = value.cast<String, Object?>();
     final incarnation = json['incarnation'];
@@ -18,9 +15,9 @@ final class CalendarSourceAuthority {
         incarnation.toLowerCase() == _nilUuid ||
         epoch is! int ||
         epoch <= 0) {
-      throw const FormatException('Invalid Calendar source authority');
+      throw const FormatException('Invalid source authority');
     }
-    return CalendarSourceAuthority(incarnation: incarnation, epoch: epoch);
+    return SourceAuthority(incarnation: incarnation, epoch: epoch);
   }
 
   final String incarnation;
@@ -35,7 +32,7 @@ final class CalendarSourceAuthority {
 
   @override
   bool operator ==(Object other) =>
-      other is CalendarSourceAuthority &&
+      other is SourceAuthority &&
       other.incarnation == incarnation &&
       other.epoch == epoch;
 
@@ -48,19 +45,19 @@ final _uuidPattern = RegExp(
 );
 const _nilUuid = '00000000-0000-0000-0000-000000000000';
 
-final class CalendarSourceResource {
-  const CalendarSourceResource({required this.handle, required this.label});
+final class SourceResource {
+  const SourceResource({required this.handle, required this.label});
 
-  factory CalendarSourceResource.fromJson(Map<String, dynamic> json) {
+  factory SourceResource.fromJson(Map<String, dynamic> json) {
     final handle = json['handle'];
     final label = json['label'];
     if (handle is! String ||
         handle.isEmpty ||
         label is! String ||
         label.isEmpty) {
-      throw const FormatException('Invalid Calendar source resource');
+      throw const FormatException('Invalid source resource');
     }
-    return CalendarSourceResource(handle: handle, label: label);
+    return SourceResource(handle: handle, label: label);
   }
 
   final String handle;
@@ -69,8 +66,8 @@ final class CalendarSourceResource {
   Map<String, Object> toJson() => {'handle': handle, 'label': label};
 }
 
-final class CalendarSourceConnection {
-  const CalendarSourceConnection({
+final class SourceConnection {
+  const SourceConnection({
     required this.connectorId,
     required this.connectionId,
     required this.executionOwnerId,
@@ -82,7 +79,7 @@ final class CalendarSourceConnection {
     this.nativeSubjectFingerprint,
   });
 
-  factory CalendarSourceConnection.fromJson(Map<String, dynamic> json) {
+  factory SourceConnection.fromJson(Map<String, dynamic> json) {
     final connectorId = json['connector_id'];
     final connectionId = json['connection_id'];
     final executionOwnerId = json['execution_owner_id'];
@@ -108,39 +105,39 @@ final class CalendarSourceConnection {
         fingerprint != null &&
             (fingerprint is! String ||
                 !_fingerprintPattern.hasMatch(fingerprint))) {
-      throw const FormatException('Invalid Calendar source connection');
+      throw const FormatException('Invalid source connection');
     }
     final resources = rawResources
         .map((resource) {
           if (resource is! Map || resource.keys.any((key) => key is! String)) {
-            throw const FormatException('Invalid Calendar source resource');
+            throw const FormatException('Invalid source resource');
           }
-          return CalendarSourceResource.fromJson(
-            Map<String, dynamic>.from(resource),
-          );
+          return SourceResource.fromJson(Map<String, dynamic>.from(resource));
         })
         .toList(growable: false);
     for (var index = 1; index < resources.length; index++) {
       if (resources[index - 1].handle.compareTo(resources[index].handle) >= 0) {
-        throw const FormatException('Unordered Calendar source resources');
+        throw const FormatException('Unordered source resources');
       }
     }
-    final native =
-        connectorId == 'calendar.event_kit' ||
-        connectorId == 'calendar.android';
+    final native = const {
+      'calendar.event_kit',
+      'calendar.android',
+      'contacts.apple',
+      'attention.macos',
+      'health.apple',
+    }.contains(connectorId);
     if (native && state == 'ready' && fingerprint == null ||
         !native && fingerprint != null) {
-      throw const FormatException('Invalid Calendar source subject');
+      throw const FormatException('Invalid source subject');
     }
-    return CalendarSourceConnection(
+    return SourceConnection(
       connectorId: connectorId,
       connectionId: connectionId,
       executionOwnerId: executionOwnerId,
       state: state,
       revision: revision,
-      sourceAuthority: CalendarSourceAuthority.fromJson(
-        json['source_authority'],
-      ),
+      sourceAuthority: SourceAuthority.fromJson(json['source_authority']),
       resourceMode: resourceMode,
       resources: resources,
       nativeSubjectFingerprint: fingerprint as String?,
@@ -152,9 +149,9 @@ final class CalendarSourceConnection {
   final String executionOwnerId;
   final String state;
   final int revision;
-  final CalendarSourceAuthority sourceAuthority;
+  final SourceAuthority sourceAuthority;
   final String resourceMode;
-  final List<CalendarSourceResource> resources;
+  final List<SourceResource> resources;
   final String? nativeSubjectFingerprint;
 
   String get provider => _providers[connectorId]!;
@@ -170,6 +167,9 @@ const _providers = {
   'calendar.microsoft': 'microsoft_calendar',
   'calendar.fixture': 'fixture',
   'calendar.android': 'android',
+  'contacts.apple': 'contacts.apple',
+  'attention.macos': 'attention.macos',
+  'health.apple': 'health.apple',
 };
 
 final _fingerprintPattern = RegExp(r'^[0-9a-fA-F]{64}$');

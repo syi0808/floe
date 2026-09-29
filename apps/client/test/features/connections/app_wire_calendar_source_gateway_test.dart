@@ -1,5 +1,5 @@
 import 'package:floe_client/features/connections/application/app_wire_calendar_source_gateway.dart';
-import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/domain/source_connection.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/app_wire_transport.dart';
@@ -67,7 +67,7 @@ void main() {
         transport,
         deviceId: _device,
       );
-      final current = CalendarSourceConnection.fromJson(
+      final current = SourceConnection.fromJson(
         Map<String, dynamic>.from(_source(revision: 7)),
       );
       final updated = await gateway.configureNative(
@@ -75,7 +75,7 @@ void main() {
         current: current,
         resourceMode: 'selected',
         resources: const [
-          CalendarSourceResource(handle: 'work', label: 'Work'),
+          SourceResource(handle: 'work', label: 'Work'),
         ],
       );
       expect(updated.revision, 8);
@@ -87,7 +87,7 @@ void main() {
       CallbackAppWireTransport((_) async => throw StateError('unexpected I/O')),
       deviceId: _device,
     );
-    final current = CalendarSourceConnection.fromJson({
+    final current = SourceConnection.fromJson({
       ..._source(),
       'execution_owner_id': 'foreign-device',
     });
@@ -120,7 +120,7 @@ void main() {
         transport,
         deviceId: _device,
       );
-      final current = CalendarSourceConnection.fromJson(
+      final current = SourceConnection.fromJson(
         Map<String, dynamic>.from(_remoteSource(revision: 4)),
       );
       final updated = await gateway.bindRemote(
@@ -129,7 +129,7 @@ void main() {
         connectionId: 'server-connection',
         current: current,
         resources: const [
-          CalendarSourceResource(handle: 'home', label: 'Home'),
+          SourceResource(handle: 'home', label: 'Home'),
         ],
       );
       expect(updated.revision, 5);
@@ -165,7 +165,7 @@ void main() {
       {..._source(), 'native_subject_fingerprint': null},
     ]) {
       expect(
-        () => CalendarSourceConnection.fromJson(malformed),
+        () => SourceConnection.fromJson(malformed),
         throwsFormatException,
       );
     }

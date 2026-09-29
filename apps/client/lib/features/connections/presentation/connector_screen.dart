@@ -1,8 +1,9 @@
 import 'package:floe_client/features/connections/application/connection_observe_gateway.dart';
+import 'package:floe_client/features/connections/application/native_personal_source_gateway.dart';
 import 'package:floe_client/features/connections/domain/connection_observe.dart';
 import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
-import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/domain/source_connection.dart';
 
 import 'dart:async';
 
@@ -50,6 +51,7 @@ class ConnectorScreen extends StatefulWidget {
     this.agentController,
     this.personalAccessGateway,
     this.connectionObserveGateway,
+    this.nativePersonalSourceGateway,
     this.connectorAuthorization,
     this.appleContext,
     this.macOSContext,
@@ -61,8 +63,8 @@ class ConnectorScreen extends StatefulWidget {
   final DayQuery query;
   final CalendarConnectionView? connection;
   final CalendarSourceGateway? calendarSourceGateway;
-  final CalendarSourceConnection? calendarSource;
-  final List<CalendarSourceConnection> remoteCalendarSources;
+  final SourceConnection? calendarSource;
+  final List<SourceConnection> remoteCalendarSources;
   final Future<void> Function() onChanged;
 
   /// The Operation owner for connector authorization. Supplied by the app.
@@ -72,6 +74,7 @@ class ConnectorScreen extends StatefulWidget {
   final TargetPlatform? platform;
   final AgentController? agentController;
   final ConnectionObserveGateway? connectionObserveGateway;
+  final NativePersonalSourceGateway? nativePersonalSourceGateway;
   final AgentPersonalAccessGateway? personalAccessGateway;
   final AppleContextApi? appleContext;
   final MacOSContextApi? macOSContext;
@@ -351,7 +354,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
           : null,
       resources: [
         for (final calendarId in calendarIds.cast<String>())
-          CalendarSourceResource(handle: calendarId, label: selected.name),
+          SourceResource(handle: calendarId, label: selected.name),
       ],
     );
     return true;
@@ -451,6 +454,8 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     personId: widget.query.personId,
     deviceId: connection.descriptor.execution.deviceId ?? widget.deviceId ?? '',
     personalAccessGateway: widget.personalAccessGateway,
+    connectionObserveGateway: widget.connectionObserveGateway,
+    nativePersonalSourceGateway: widget.nativePersonalSourceGateway,
     appleContext: widget.appleContext,
     macOSContext: widget.macOSContext,
     daySnapshot: widget.daySnapshot,
@@ -945,6 +950,8 @@ final class _AppleConnectionDetail extends StatefulWidget {
     required this.personId,
     required this.deviceId,
     required this.personalAccessGateway,
+    required this.connectionObserveGateway,
+    required this.nativePersonalSourceGateway,
     required this.appleContext,
     required this.macOSContext,
     required this.daySnapshot,
@@ -956,6 +963,8 @@ final class _AppleConnectionDetail extends StatefulWidget {
   final String personId;
   final String deviceId;
   final AgentPersonalAccessGateway? personalAccessGateway;
+  final ConnectionObserveGateway? connectionObserveGateway;
+  final NativePersonalSourceGateway? nativePersonalSourceGateway;
   final AppleContextApi? appleContext;
   final MacOSContextApi? macOSContext;
   final DaySnapshot? daySnapshot;

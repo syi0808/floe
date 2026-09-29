@@ -2,7 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/domain/source_connection.dart';
 import 'package:floe_client/features/day/application/calendar_gateway.dart';
 import 'package:floe_client/features/day/application/calendar_observation_publisher.dart';
 import 'package:floe_client/features/day/application/native_day_gateway.dart';
@@ -54,14 +54,14 @@ final query = DayQuery(
   timezoneOffsetSeconds: 32400,
 );
 
-Future<CalendarSourceConnection> _select(
+Future<SourceConnection> _select(
   TestAppHost host,
   List<CalendarChoice> calendars, {
   bool all = false,
 }) async {
   final resources = [
     for (final calendar in calendars)
-      CalendarSourceResource(handle: calendar.id, label: calendar.name),
+      SourceResource(handle: calendar.id, label: calendar.name),
   ];
   final current = await host.runtime.calendarSource.inspectNative(
     query.personId,

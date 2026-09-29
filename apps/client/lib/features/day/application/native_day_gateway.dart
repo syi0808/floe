@@ -8,7 +8,7 @@ import 'package:floe_client/app/runtime/native_transport.dart'
     show NativeTransportException, nativeProtocolVersion;
 import 'package:floe_client/app/runtime/owner_operation.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
-import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/domain/source_connection.dart';
 import 'package:floe_client/features/day/application/calendar_gateway.dart';
 import 'package:floe_client/features/day/application/calendar_observation_publisher.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
@@ -134,7 +134,7 @@ final class NativeDayGateway
     if (loadedSource == null || loadedSource.state == 'disconnected') {
       return current;
     }
-    CalendarSourceConnection source = loadedSource;
+    SourceConnection source = loadedSource;
     var mirrorRevision = current.calendarMirrorRevision;
     final provider = source.provider;
     try {
@@ -153,7 +153,7 @@ final class NativeDayGateway
             for (final calendar in inventory.where(
               (calendar) => calendar.provider == provider,
             ))
-              CalendarSourceResource(handle: calendar.id, label: calendar.name),
+              SourceResource(handle: calendar.id, label: calendar.name),
           ],
         );
       }
@@ -230,7 +230,7 @@ final class NativeDayGateway
 
   Future<void> _updateCalendarObservation({
     required DayQuery query,
-    required CalendarSourceConnection source,
+    required SourceConnection source,
     required List<Map<String, dynamic>> batches,
     required bool permissionRevoked,
   }) async {

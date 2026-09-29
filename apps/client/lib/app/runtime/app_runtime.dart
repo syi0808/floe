@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:floe_client/features/connections/application/app_wire_calendar_source_gateway.dart';
 import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
 import 'package:floe_client/features/connections/application/connection_observe_gateway.dart';
+import 'package:floe_client/features/connections/application/native_personal_source_gateway.dart';
 import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
 
 import 'package:floe_client/app/local_identity.dart';
@@ -50,6 +51,8 @@ final class AppRuntime {
   );
   late final ConnectionObserveGateway connectionObserve =
       AppWireConnectionObserveGateway(_transport);
+  late final NativePersonalSourceGateway nativePersonalSource =
+      AppWireNativePersonalSourceGateway(_transport, deviceId: deviceId);
   late final RemotePairingGateway pairing = NativeRemotePairingGateway(
     remotePairingV2,
     expectedPersonId: defaultLocalPersonId,

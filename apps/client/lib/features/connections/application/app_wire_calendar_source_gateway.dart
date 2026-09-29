@@ -1,7 +1,7 @@
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/app/runtime/owner_operation.dart';
 import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
-import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/domain/source_connection.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 
 final class AppWireCalendarSourceGateway implements CalendarSourceGateway {
@@ -11,7 +11,7 @@ final class AppWireCalendarSourceGateway implements CalendarSourceGateway {
   final String deviceId;
 
   @override
-  Future<CalendarSourceConnection?> inspectNative(String personId) async {
+  Future<SourceConnection?> inspectNative(String personId) async {
     final result = await ownerQuery(_transport, newAgentRequestId(), {
       'kind': 'connections.native_calendar.source',
     });
@@ -24,10 +24,10 @@ final class AppWireCalendarSourceGateway implements CalendarSourceGateway {
   }
 
   @override
-  Future<CalendarSourceConnection> establishNative(
+  Future<SourceConnection> establishNative(
     String personId, {
     required String resourceMode,
-    required List<CalendarSourceResource> resources,
+    required List<SourceResource> resources,
   }) => _mutate({
     'type': 'establish',
     'resource_mode': resourceMode,
@@ -35,11 +35,11 @@ final class AppWireCalendarSourceGateway implements CalendarSourceGateway {
   });
 
   @override
-  Future<CalendarSourceConnection> configureNative(
+  Future<SourceConnection> configureNative(
     String personId, {
-    required CalendarSourceConnection current,
+    required SourceConnection current,
     required String resourceMode,
-    required List<CalendarSourceResource> resources,
+    required List<SourceResource> resources,
   }) {
     _requireOwnedNative(current);
     return _mutate({
@@ -52,10 +52,10 @@ final class AppWireCalendarSourceGateway implements CalendarSourceGateway {
   }
 
   @override
-  Future<CalendarSourceConnection> reconcileNativeInventory(
+  Future<SourceConnection> reconcileNativeInventory(
     String personId, {
-    required CalendarSourceConnection current,
-    required List<CalendarSourceResource> resources,
+    required SourceConnection current,
+    required List<SourceResource> resources,
   }) {
     _requireOwnedNative(current);
     return _mutate({
@@ -67,9 +67,9 @@ final class AppWireCalendarSourceGateway implements CalendarSourceGateway {
   }
 
   @override
-  Future<CalendarSourceConnection> disconnectNative(
+  Future<SourceConnection> disconnectNative(
     String personId, {
-    required CalendarSourceConnection current,
+    required SourceConnection current,
   }) {
     _requireOwnedNative(current);
     return _mutate({
@@ -80,7 +80,7 @@ final class AppWireCalendarSourceGateway implements CalendarSourceGateway {
   }
 
   @override
-  Future<List<CalendarSourceConnection>> inspectRemote(String personId) async {
+  Future<List<SourceConnection>> inspectRemote(String personId) async {
     final result = await ownerQuery(_transport, newAgentRequestId(), {
       'kind': 'connections.remote_calendar.sources',
     });
@@ -96,12 +96,12 @@ final class AppWireCalendarSourceGateway implements CalendarSourceGateway {
   }
 
   @override
-  Future<CalendarSourceConnection> bindRemote(
+  Future<SourceConnection> bindRemote(
     String personId, {
     required String connectorId,
     required String connectionId,
-    required List<CalendarSourceResource> resources,
-    CalendarSourceConnection? current,
+    required List<SourceResource> resources,
+    SourceConnection? current,
   }) async {
     if (current != null) {
       _requireOwnedRemote(current);
@@ -120,9 +120,9 @@ final class AppWireCalendarSourceGateway implements CalendarSourceGateway {
   }
 
   @override
-  Future<CalendarSourceConnection> disconnectRemote(
+  Future<SourceConnection> disconnectRemote(
     String personId, {
-    required CalendarSourceConnection current,
+    required SourceConnection current,
   }) {
     _requireOwnedRemote(current);
     return _mutateRemote({
@@ -132,7 +132,7 @@ final class AppWireCalendarSourceGateway implements CalendarSourceGateway {
     });
   }
 
-  Future<CalendarSourceConnection> _mutateRemote(
+  Future<SourceConnection> _mutateRemote(
     Map<String, Object?> mutation,
   ) async {
     final commandId = newAgentRequestId();
@@ -149,18 +149,18 @@ final class AppWireCalendarSourceGateway implements CalendarSourceGateway {
     return _decodeRemote(result['source']);
   }
 
-  CalendarSourceConnection _decodeRemote(Object? raw) {
+  SourceConnection _decodeRemote(Object? raw) {
     if (raw is! Map) {
       throw const FormatException('Missing remote Calendar source');
     }
-    final source = CalendarSourceConnection.fromJson(
+    final source = SourceConnection.fromJson(
       Map<String, dynamic>.from(raw),
     );
     _requireOwnedRemote(source);
     return source;
   }
 
-  void _requireOwnedRemote(CalendarSourceConnection source) {
+  void _requireOwnedRemote(SourceConnection source) {
     if (!const {
           'calendar.google',
           'calendar.microsoft',
@@ -170,7 +170,7 @@ final class AppWireCalendarSourceGateway implements CalendarSourceGateway {
     }
   }
 
-  Future<CalendarSourceConnection> _mutate(
+  Future<SourceConnection> _mutate(
     Map<String, Object?> mutation,
   ) async {
     final commandId = newAgentRequestId();
@@ -185,18 +185,18 @@ final class AppWireCalendarSourceGateway implements CalendarSourceGateway {
     return _decode(result['source']);
   }
 
-  CalendarSourceConnection _decode(Object? raw) {
+  SourceConnection _decode(Object? raw) {
     if (raw is! Map) {
       throw const FormatException('Missing Calendar source');
     }
-    final source = CalendarSourceConnection.fromJson(
+    final source = SourceConnection.fromJson(
       Map<String, dynamic>.from(raw),
     );
     _requireOwnedNative(source);
     return source;
   }
 
-  void _requireOwnedNative(CalendarSourceConnection source) {
+  void _requireOwnedNative(SourceConnection source) {
     if (source.connectorId != 'calendar.event_kit' ||
         source.executionOwnerId != deviceId) {
       throw const FormatException('Calendar source owner mismatch');

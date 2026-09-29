@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
 import 'package:floe_client/features/actions/infrastructure/native_calendar_action_gateway.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
-import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
+import 'package:floe_client/features/connections/domain/source_connection.dart';
 
 import '../day/calendar_gateway_test.dart' show FixtureCalendarAdapter, query;
 
@@ -115,7 +115,7 @@ void main() {
         query.personId,
         resourceMode: 'selected',
         resources: const [
-          CalendarSourceResource(handle: 'home', label: 'Home'),
+          SourceResource(handle: 'home', label: 'Home'),
         ],
       );
       final now = DateTime.now().toUtc();
