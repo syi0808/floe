@@ -1,4 +1,4 @@
-import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
+import 'package:floe_client/features/connections/application/connection_observe_gateway.dart';
 import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
 import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
 import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
@@ -76,7 +76,7 @@ class PersonalDayScreen extends StatefulWidget {
     this.agentGateway,
     this.ownerGateways = const LocalOwnerGateways(),
     this.pairingGateway,
-    this.remoteAccessGateway,
+    this.connectionObserveGateway,
     this.serverClient,
     this.androidContext,
     this.appleContext,
@@ -88,7 +88,7 @@ class PersonalDayScreen extends StatefulWidget {
   final AgentConversationGateway? agentGateway;
   final LocalOwnerGateways ownerGateways;
   final RemotePairingGateway? pairingGateway;
-  final RemoteAccessGateway? remoteAccessGateway;
+  final ConnectionObserveGateway? connectionObserveGateway;
   final LocalServerClient? serverClient;
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
@@ -336,7 +336,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   Widget _workspace(bool narrow) {
     if (destination == _DestinationView.connections) {
       return ConnectorScreen(
-        remoteAccessGateway: widget.remoteAccessGateway,
+        connectionObserveGateway: widget.connectionObserveGateway,
         gateway: widget.gateway is CalendarGateway
             ? widget.gateway as CalendarGateway
             : null,

@@ -1,4 +1,4 @@
-import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
+import 'package:floe_client/features/connections/application/connection_observe_gateway.dart';
 import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
 import 'package:floe_client/features/connections/domain/calendar_source_connection.dart';
@@ -50,7 +50,7 @@ class ConnectorScreen extends StatefulWidget {
     this.agentController,
     this.personalAccessGateway,
     this.nativeCalendarAccessGateway,
-    this.remoteAccessGateway,
+    this.connectionObserveGateway,
     this.connectorAuthorization,
     this.appleContext,
     this.macOSContext,
@@ -72,7 +72,7 @@ class ConnectorScreen extends StatefulWidget {
   final String? deviceId;
   final TargetPlatform? platform;
   final AgentController? agentController;
-  final RemoteAccessGateway? remoteAccessGateway;
+  final ConnectionObserveGateway? connectionObserveGateway;
   final AgentPersonalAccessGateway? personalAccessGateway;
   final NativeCalendarAccessGateway? nativeCalendarAccessGateway;
   final AppleContextApi? appleContext;
@@ -427,7 +427,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         connector: serverConnector,
         connection: serverConnection!,
         client: widget.serverClient!,
-        remoteAccessGateway: widget.remoteAccessGateway,
+        connectionObserveGateway: widget.connectionObserveGateway,
         authorization: widget.connectorAuthorization!,
         onBack: () => setState(() => selectedServerConnectorId = null),
         onChanged: _catalogChangedExplicitly,

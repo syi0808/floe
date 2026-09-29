@@ -232,7 +232,7 @@ Future<void> _start() async {
         agentGateway: runtime.conversation,
         ownerGateways: runtime.owners,
         pairingGateway: runtime.pairing,
-        remoteAccessGateway: runtime.remoteAccess,
+        connectionObserveGateway: runtime.connectionObserve,
         serverClient: serverClient,
         androidContext: androidContext,
         appleContext: appleContext,

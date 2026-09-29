@@ -1,4 +1,4 @@
-import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
+import 'package:floe_client/features/connections/application/connection_observe_gateway.dart';
 import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
 import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
 
@@ -32,7 +32,7 @@ class FloeApp extends StatefulWidget {
     this.agentGateway,
     this.ownerGateways = const LocalOwnerGateways(),
     this.pairingGateway,
-    this.remoteAccessGateway,
+    this.connectionObserveGateway,
     this.serverClient,
     this.androidContext,
     this.appleContext,
@@ -52,7 +52,7 @@ class FloeApp extends StatefulWidget {
   final AgentConversationGateway? agentGateway;
   final LocalOwnerGateways ownerGateways;
   final RemotePairingGateway? pairingGateway;
-  final RemoteAccessGateway? remoteAccessGateway;
+  final ConnectionObserveGateway? connectionObserveGateway;
   final LocalServerClient? serverClient;
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
@@ -90,7 +90,7 @@ class _FloeAppState extends State<FloeApp> {
         agentGateway: widget.agentGateway,
         ownerGateways: widget.ownerGateways,
         pairingGateway: widget.pairingGateway,
-        remoteAccessGateway: widget.remoteAccessGateway,
+        connectionObserveGateway: widget.connectionObserveGateway,
         serverClient: widget.serverClient,
         androidContext: widget.androidContext,
         appleContext: widget.appleContext,

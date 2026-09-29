@@ -2,7 +2,8 @@ import 'package:floe_client/features/connections/application/connector_authoriza
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/features/connections/presentation/server_connector_panel.dart';
-import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
+import 'package:floe_client/features/connections/application/connection_observe_gateway.dart';
+import 'package:floe_client/features/connections/domain/connection_observe.dart';
 import 'package:floe_client/features/connections/application/local_server_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -184,22 +185,7 @@ void main() {
     tester,
   ) async {
     final actions = <Map<String, Object?>>[];
-    final gateway = NativeRemoteAccessGateway((request) async {
-      final operation = Map<String, Object?>.from(request['operation']! as Map);
-      if (operation['kind'] == 'read_result') {
-        return _grantSuccess(request, {
-          'connection_observe_status': actions.last['enabled'] == false
-              ? 'paused'
-              : 'active',
-        });
-      }
-      actions.add(operation);
-      return _grantSuccess(request, {
-        'connection_observe_status': operation['enabled'] == false
-            ? 'paused'
-            : 'active',
-      });
-    });
+    final gateway = _ObserveGateway(actions, status: 'active');
     final first = _calendarConnector('00000000-0000-4000-8000-000000000011');
     await tester.pumpWidget(
       _host(
@@ -211,7 +197,7 @@ void main() {
             store: MemoryServerCredentials(),
             deviceId: _connection.deviceId,
           ),
-          remoteAccessGateway: gateway,
+          connectionObserveGateway: gateway,
           onBack: () {},
           onChanged: () async {},
         ),
@@ -223,7 +209,7 @@ void main() {
       findsOneWidget,
     );
     expect(actions.single['connection_id'], first.connectionId);
-    expect(actions.single['enabled'], isNull);
+    expect(actions.single['kind'], 'inspect');
 
     await tester.tap(find.byKey(const ValueKey('connection-use-with-floe')));
     await tester.pumpAndSettle();
@@ -241,7 +227,7 @@ void main() {
             store: MemoryServerCredentials(),
             deviceId: _connection.deviceId,
           ),
-          remoteAccessGateway: gateway,
+          connectionObserveGateway: gateway,
           onBack: () {},
           onChanged: () async {},
         ),
@@ -249,7 +235,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(actions.last['connection_id'], second.connectionId);
-    expect(actions.last['enabled'], isNull);
+    expect(actions.last['kind'], 'inspect');
   });
 
   testWidgets('Calendar scope edit never reviews active Observe', (
@@ -259,11 +245,7 @@ void main() {
       startResult: _attempt(ServerConnectorStatus.connected),
     );
     final operations = <Map<String, Object?>>[];
-    final gateway = NativeRemoteAccessGateway((request) async {
-      final operation = Map<String, Object?>.from(request['operation']! as Map);
-      if (operation['kind'] != 'read_result') operations.add(operation);
-      return _grantSuccess(request, {'connection_observe_status': 'active'});
-    });
+    final gateway = _ObserveGateway(operations, status: 'active');
     await tester.pumpWidget(
       _host(
         ServerConnectorPanel(
@@ -271,7 +253,7 @@ void main() {
           connector: _calendarConnector('00000000-0000-4000-8000-000000000011'),
           connection: _connection,
           client: client,
-          remoteAccessGateway: gateway,
+          connectionObserveGateway: gateway,
           onBack: () {},
           onChanged: () async {},
         ),
@@ -279,7 +261,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(operations, hasLength(1));
-    expect(operations.single.containsKey('resource'), isFalse);
+    expect(operations.single['kind'], 'inspect');
     await tester.enterText(
       find.byKey(const Key('connector-scope-calendar_ids')),
       'opaque,id\nprimary\nopaque,id',
@@ -295,40 +277,7 @@ void main() {
 
   testWidgets('enabling reviews the bundle and echoes it back', (tester) async {
     final actions = <Map<String, Object?>>[];
-    Map<String, Object?> bundle() => {
-      'members': [
-        {
-          'view_id': 'calendar.timeline',
-          'resource': 'primary',
-          'producer_fingerprint': 'fp',
-          'policy_digest': 'a' * 64,
-          'source_authority': {
-            'incarnation': '00000000-0000-4000-8000-0000000000a1',
-            'epoch': 3,
-          },
-          'connection_revision': 1,
-          'provider_identity': 'google:subject-a',
-          'recipient': 'local_only',
-          'expected_grant_id': null,
-          'expected_grant_authority': null,
-        },
-      ],
-    };
-    final gateway = NativeRemoteAccessGateway((request) async {
-      final operation = Map<String, Object?>.from(request['operation']! as Map);
-      if (operation['kind'] == 'read_result') {
-        return _grantSuccess(request, {'connection_observe_status': 'paused'});
-      }
-      actions.add(operation);
-      if (operation['kind'] == 'connection_observe_review') {
-        return _grantSuccess(request, {'reviewed_bundle': bundle()});
-      }
-      return _grantSuccess(request, {
-        'connection_observe_status': operation['enabled'] == true
-            ? 'active'
-            : 'paused',
-      });
-    });
+    final gateway = _ObserveGateway(actions, status: 'paused');
     await tester.pumpWidget(
       _host(
         ServerConnectorPanel(
@@ -339,62 +288,33 @@ void main() {
             store: MemoryServerCredentials(),
             deviceId: _connection.deviceId,
           ),
-          remoteAccessGateway: gateway,
+          connectionObserveGateway: gateway,
           onBack: () {},
           onChanged: () async {},
         ),
       ),
     );
     await tester.pumpAndSettle();
-    expect(actions.single['enabled'], isNull);
+    expect(actions.single['kind'], 'inspect');
 
     await tester.tap(find.byKey(const ValueKey('connection-use-with-floe')));
     await tester.pumpAndSettle();
     expect(find.text('Allow Floe to read Google Calendar?'), findsOneWidget);
-    expect(find.text('calendar.timeline (new permission)'), findsOneWidget);
+    expect(find.text('calendar.timeline'), findsOneWidget);
 
     await tester.tap(find.text('Allow'));
     await tester.pumpAndSettle();
     expect(actions.length, 3);
-    expect(actions[1]['kind'], 'connection_observe_review');
-    expect(actions[2]['kind'], 'connection_observe');
+    expect(actions[1]['kind'], 'review');
+    expect(actions[2]['kind'], 'set_enabled');
     expect(actions[2]['enabled'], true);
-    final echoed = (actions[2]['expected'] as Map)['members'] as List;
-    expect(echoed.single['view_id'], 'calendar.timeline');
-    expect(echoed.single['policy_digest'], 'a' * 64);
+    final echoed = actions[2]['expected'] as ConnectionObserveReview;
+    expect(echoed.members, ['calendar.timeline']);
   });
 
   testWidgets('dismissing the review enables nothing', (tester) async {
     final actions = <Map<String, Object?>>[];
-    final gateway = NativeRemoteAccessGateway((request) async {
-      final operation = Map<String, Object?>.from(request['operation']! as Map);
-      if (operation['kind'] == 'read_result') {
-        return _grantSuccess(request, {'connection_observe_status': 'paused'});
-      }
-      actions.add(operation);
-      if (operation['kind'] == 'connection_observe_review') {
-        return _grantSuccess(request, {
-          'reviewed_bundle': {
-            'members': [
-              {
-                'view_id': 'calendar.timeline',
-                'resource': 'primary',
-                'producer_fingerprint': 'fp',
-                'policy_digest': 'a' * 64,
-                'source_authority': {
-                  'incarnation': '00000000-0000-4000-8000-0000000000a1',
-                  'epoch': 3,
-                },
-                'connection_revision': 1,
-                'provider_identity': 'google:subject-a',
-                'recipient': 'local_only',
-              },
-            ],
-          },
-        });
-      }
-      return _grantSuccess(request, {'connection_observe_status': 'paused'});
-    });
+    final gateway = _ObserveGateway(actions, status: 'paused');
     await tester.pumpWidget(
       _host(
         ServerConnectorPanel(
@@ -405,7 +325,7 @@ void main() {
             store: MemoryServerCredentials(),
             deviceId: _connection.deviceId,
           ),
-          remoteAccessGateway: gateway,
+          connectionObserveGateway: gateway,
           onBack: () {},
           onChanged: () async {},
         ),
@@ -474,15 +394,95 @@ ServerConnector _calendarConnector(String connectionId) => ServerConnector(
   connectionRevision: 1,
 );
 
-Map<String, dynamic> _grantSuccess(
-  Map<String, dynamic> request, [
-  Map<String, Object?> payload = const {},
-]) => {
-  'operation_id':
-      (request['operation'] as Map)['operation_id'] ?? request['request_id'],
-  'done': true,
-  ...payload,
-};
+final class _ObserveGateway implements ConnectionObserveGateway {
+  _ObserveGateway(this.actions, {required this.status});
+
+  final List<Map<String, Object?>> actions;
+  String status;
+
+  @override
+  Future<ConnectionObserveOverview> inspect({
+    required String connectorId,
+    required String connectionId,
+  }) async {
+    actions.add({
+      'kind': 'inspect',
+      'connector_id': connectorId,
+      'connection_id': connectionId,
+    });
+    return _overview(connectorId, connectionId);
+  }
+
+  @override
+  Future<ConnectionObserveReview> review({
+    required String connectorId,
+    required String connectionId,
+  }) async {
+    actions.add({
+      'kind': 'review',
+      'connector_id': connectorId,
+      'connection_id': connectionId,
+    });
+    return ConnectionObserveReview.fromJson({
+      'connector_id': connectorId,
+      'connection_id': connectionId,
+      'source_authority': {
+        'incarnation': '00000000-0000-4000-8000-0000000000a1',
+        'epoch': 3,
+      },
+      'connection_revision': 1,
+      'native_subject': null,
+      'producer_fingerprint': 'a' * 64,
+      'members': [
+        {
+          'view_id': 'calendar.timeline',
+          'resource': 'connection/$connectionId/view/calendar.timeline',
+          'policy_digest': 'a' * 64,
+          'expected_grant_id': null,
+          'expected_grant_authority': null,
+        },
+      ],
+    });
+  }
+
+  @override
+  Future<ConnectionObserveOverview> setEnabled({
+    required String connectorId,
+    required String connectionId,
+    required bool enabled,
+    bool disconnecting = false,
+    ConnectionObserveReview? expected,
+  }) async {
+    actions.add({
+      'kind': 'set_enabled',
+      'connector_id': connectorId,
+      'connection_id': connectionId,
+      'enabled': enabled,
+      'disconnecting': disconnecting,
+      'expected': expected,
+    });
+    status = enabled ? 'active' : 'paused';
+    return _overview(connectorId, connectionId);
+  }
+
+  ConnectionObserveOverview _overview(
+    String connectorId,
+    String connectionId,
+  ) => ConnectionObserveOverview.fromJson({
+    'connector_id': connectorId,
+    'connection_id': connectionId,
+    'status': status,
+    'enabled': status == 'active',
+    'source_resources': ['primary'],
+    'members': [
+      {
+        'view_id': 'calendar.timeline',
+        'state': status == 'active' ? 'active' : 'paused',
+        'review_required': false,
+      },
+    ],
+  });
+}
 
 Widget _host(Widget child) => MaterialApp(
   theme: FloeTheme.light,

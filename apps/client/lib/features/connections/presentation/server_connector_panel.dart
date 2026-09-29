@@ -1,4 +1,5 @@
-import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
+import 'package:floe_client/features/connections/application/connection_observe_gateway.dart';
+import 'package:floe_client/features/connections/domain/connection_observe.dart';
 
 import 'dart:async';
 
@@ -15,7 +16,6 @@ import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/floe_primitives.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/connections/application/local_server_client.dart';
-import 'package:floe_client/features/connections/domain/remote_owner_models.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/connections/application/connector_authorization_gateway.dart';
 import 'package:floe_client/features/connections/presentation/connector_status_presentation.dart';
@@ -33,7 +33,7 @@ class ServerConnectorPanel extends StatefulWidget {
     required this.client,
     required this.onBack,
     required this.onChanged,
-    this.remoteAccessGateway,
+    this.connectionObserveGateway,
     required this.authorization,
     this.authorizationLauncher = _launchConnectorAuthorization,
   });
@@ -43,7 +43,7 @@ class ServerConnectorPanel extends StatefulWidget {
   final LocalServerClient client;
   final VoidCallback onBack;
   final Future<void> Function() onChanged;
-  final RemoteAccessGateway? remoteAccessGateway;
+  final ConnectionObserveGateway? connectionObserveGateway;
   final ConnectorAuthorizationLauncher authorizationLauncher;
   final ConnectorAuthorizationGateway authorization;
 
@@ -312,19 +312,19 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
     String? connectionId,
     bool disconnecting = false,
   }) async {
-    final gateway = widget.remoteAccessGateway;
+    final gateway = widget.connectionObserveGateway;
     connectionId ??= widget.connector.connectionId;
     if (gateway == null || connectionId == null) return;
     // Programmatic enables continue the gesture the user just completed
     // (authorization or scope update): the reviewed snapshot is still
     // fetched and echoed so the enable binds it, without a second dialog.
     final expected = enabled && !disconnecting
-        ? await gateway.connectionObserveReview(
+        ? await gateway.review(
             connectorId: widget.connector.id,
             connectionId: connectionId,
           )
         : null;
-    await gateway.connectionObserve(
+    await gateway.setEnabled(
       connectorId: widget.connector.id,
       connectionId: connectionId,
       enabled: enabled,
@@ -381,7 +381,7 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
                 SizedBox(height: FloeSpace.lg),
                 _ConnectionObserveControl(
                   connector: widget.connector,
-                  gateway: widget.remoteAccessGateway!,
+                  gateway: widget.connectionObserveGateway!,
                 ),
               ],
               SizedBox(height: FloeSpace.lg),
@@ -505,7 +505,7 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
   );
 
   bool get _showConnectionObserve =>
-      widget.remoteAccessGateway != null &&
+      widget.connectionObserveGateway != null &&
       widget.connector.status == ServerConnectorStatus.connected &&
       widget.connector.connectionId != null &&
       const {
@@ -528,7 +528,7 @@ final class _ConnectionObserveControl extends StatefulWidget {
   });
 
   final ServerConnector connector;
-  final RemoteAccessGateway gateway;
+  final ConnectionObserveGateway gateway;
 
   @override
   State<_ConnectionObserveControl> createState() =>
@@ -561,13 +561,13 @@ final class _ConnectionObserveControlState
     final connectionId = widget.connector.connectionId;
     if (connectionId == null) return;
     try {
-      final next = await widget.gateway.connectionObserve(
+      final next = await widget.gateway.inspect(
         connectorId: widget.connector.id,
         connectionId: connectionId,
       );
       if (mounted && connectionId == widget.connector.connectionId) {
         setState(() {
-          status = next;
+          status = next.status;
           error = null;
         });
       }
@@ -589,7 +589,7 @@ final class _ConnectionObserveControlState
       // Enabling reviews the whole bundle first and echoes the reviewed
       // snapshot back; a connection that changed in between refuses.
       final expected = enabled
-          ? await widget.gateway.connectionObserveReview(
+          ? await widget.gateway.review(
               connectorId: widget.connector.id,
               connectionId: connectionId,
             )
@@ -604,14 +604,14 @@ final class _ConnectionObserveControlState
         );
         if (confirmed != true) return;
       }
-      final next = await widget.gateway.connectionObserve(
+      final next = await widget.gateway.setEnabled(
         connectorId: widget.connector.id,
         connectionId: connectionId,
         enabled: enabled,
         expected: expected,
       );
       if (mounted && connectionId == widget.connector.connectionId) {
-        setState(() => status = next);
+        setState(() => status = next.status);
       }
     } on AgentVaultException catch (failure) {
       if (mounted) setState(() => error = _grantError(failure.failure));
@@ -650,7 +650,7 @@ final class _ObserveReviewDialog extends StatelessWidget {
   });
 
   final String connectorName;
-  final ConnectionObserveBundle bundle;
+  final ConnectionObserveReview bundle;
 
   @override
   Widget build(BuildContext context) => FloeDialog(
@@ -665,20 +665,14 @@ final class _ObserveReviewDialog extends StatelessWidget {
           'the enable is refused instead of widened.',
         ),
         const SizedBox(height: FloeSpace.sm),
-        for (final member in bundle.members)
+        for (final viewId in bundle.members)
           Padding(
             padding: const EdgeInsets.only(bottom: FloeSpace.xs),
             child: Row(
               children: [
                 const Icon(LucideIcons.database, size: 16),
                 const SizedBox(width: FloeSpace.xs),
-                Expanded(
-                  child: Text(
-                    member.expectedGrantId == null
-                        ? '${member.viewId} (new permission)'
-                        : '${member.viewId} (re-enable)',
-                  ),
-                ),
+                Expanded(child: Text(viewId)),
               ],
             ),
           ),
