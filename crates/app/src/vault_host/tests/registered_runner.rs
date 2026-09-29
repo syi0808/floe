@@ -2150,11 +2150,12 @@ async fn registered_runner_extension_does_not_change_first_party_observe_policy(
     let before = crate::first_party_observe::calendar_policy().unwrap();
     let fingerprint = crate::first_party_observe::policy_digest(&before).unwrap();
     let remote =
-        crate::first_party_observe::member_policy_digest("gmail", "mail.communication")
-            .unwrap();
-    let attention = crate::first_party_observe::native_consumers("attention.macos").unwrap();
+        crate::first_party_observe::member_policy_digest("gmail", "mail.communication").unwrap();
+    let attention = crate::first_party_observe::personal_policy("attention.macos")
+        .unwrap()
+        .consumers;
     let attention_fingerprint =
-        crate::first_party_observe::member_policy_digest("attention.macos", "attention.macos")
+        crate::first_party_observe::member_policy_digest("attention.macos", "attention.coarse")
             .unwrap();
     let person = PersonId::new();
     let registration = required_source_registration(required_source_runner);
@@ -2171,16 +2172,18 @@ async fn registered_runner_extension_does_not_change_first_party_observe_policy(
     let after = crate::first_party_observe::calendar_policy().unwrap();
     assert_eq!(after, before);
     assert_eq!(
-        crate::first_party_observe::native_consumers("attention.macos").unwrap(),
+        crate::first_party_observe::personal_policy("attention.macos")
+            .unwrap()
+            .consumers,
         attention
     );
     assert!(
         !attention
             .iter()
-            .any(|consumer| consumer == "example.test.expert")
+            .any(|consumer| consumer.identifier() == "example.test.expert")
     );
     assert_eq!(
-        crate::first_party_observe::member_policy_digest("attention.macos", "attention.macos")
+        crate::first_party_observe::member_policy_digest("attention.macos", "attention.coarse")
             .unwrap(),
         attention_fingerprint
     );
@@ -2195,8 +2198,7 @@ async fn registered_runner_extension_does_not_change_first_party_observe_policy(
         fingerprint
     );
     assert_eq!(
-        crate::first_party_observe::member_policy_digest("gmail", "mail.communication")
-            .unwrap(),
+        crate::first_party_observe::member_policy_digest("gmail", "mail.communication").unwrap(),
         remote
     );
 }

@@ -49,6 +49,7 @@ mod expert_setup;
 mod interaction_owners;
 mod interaction_resolution;
 mod learner_worker;
+mod personal_access;
 mod personal_grants;
 mod product_actions;
 mod remote_authority;
@@ -2488,14 +2489,26 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 &command.device_id,
             )
             .await?;
-            let overview = floe_access::apply_personal_access(
-                vault.vault.as_ref(),
-                &personal_grants::native_driver(local_context),
-                job.person,
-                command,
-                job.cancellation.clone(),
-            )
-            .await?;
+            let overview = if command.connector == floe_access::FEASIBILITY_CONNECTOR {
+                floe_access::apply_personal_access(
+                    vault.vault.as_ref(),
+                    &personal_grants::native_driver(local_context),
+                    job.person,
+                    command,
+                    job.cancellation.clone(),
+                )
+                .await?
+            } else {
+                personal_access::apply_personal(
+                    core,
+                    vault.vault.as_ref(),
+                    &personal_grants::native_driver(local_context),
+                    job.person,
+                    command,
+                    job.cancellation.clone(),
+                )
+                .await?
+            };
             Ok(VaultExecutionResult {
                 personal_access: Some(overview),
                 ..VaultExecutionResult::ready()
@@ -2511,7 +2524,8 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 &command.device_id,
             )
             .await?;
-            let overview = floe_access::apply_contacts(
+            let overview = personal_access::apply_contacts(
+                core,
                 vault.vault.as_ref(),
                 &personal_grants::native_driver(local_context),
                 job.person,

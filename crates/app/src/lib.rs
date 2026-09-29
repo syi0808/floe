@@ -31,6 +31,7 @@ mod knowledge_services;
 #[cfg(unix)]
 mod local_access_services;
 mod local_context;
+mod personal_source_spec;
 #[cfg(unix)]
 mod local_operations;
 mod prompts;

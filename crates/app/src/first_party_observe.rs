@@ -1,6 +1,8 @@
 use floe_access::GrantConsumer;
 use floe_agent_contract::AgentFailure;
-use floe_context_contract::{GrantDataCategory, GrantOperation, GrantPurpose, ProcessingRestriction};
+use floe_context_contract::{
+    GrantDataCategory, GrantOperation, GrantPurpose, ProcessingRestriction,
+};
 use floe_kernel::PersonId;
 use sha2::{Digest, Sha256};
 
@@ -103,27 +105,33 @@ pub(crate) fn member_policy_digest(
     {
         return policy_digest(&policy);
     }
-    let native_view = match connector_id {
-        floe_access::ATTENTION_CONNECTOR => floe_access::ATTENTION_CONNECTOR,
-        floe_access::WELLBEING_CONNECTOR => floe_access::WELLBEING_CONNECTOR,
-        "calendar.event_kit" => "calendar.timeline",
-        _ => return Err(AgentFailure::InvalidInput),
-    };
-    if view_id != native_view {
-        return Err(AgentFailure::InvalidInput);
-    }
-    if view_id == "calendar.timeline" {
+    if connector_id == "calendar.event_kit" && view_id == "calendar.timeline" {
         return policy_digest(&calendar_policy()?);
     }
-    let mut consumers = native_consumers(connector_id)?
-        .into_iter()
-        .map(GrantConsumer::builtin)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| AgentFailure::InvalidInput)?;
+    let policy = personal_policy(connector_id)?;
+    if view_id != policy.view_id {
+        return Err(AgentFailure::InvalidInput);
+    }
+    policy_digest(&policy)
+}
+
+pub(crate) fn personal_policy(connector_id: &str) -> Result<FirstPartyObservePolicy, AgentFailure> {
+    let view_id =
+        crate::personal_source_spec::PersonalSourceSpec::for_connector(connector_id)?.view;
+    let mut consumers = Vec::new();
+    if floe_context::manager_direct_native_connector(connector_id) {
+        consumers.push(
+            GrantConsumer::builtin(floe_context::ASSISTANT_CONSUMER)
+                .map_err(|_| AgentFailure::InvalidInput)?,
+        );
+    }
+    if connector_id != "contacts.android" {
+        consumers.extend(trusted_shipped_consumers(view_id)?);
+    }
     consumers.sort();
     consumers.dedup();
-    policy_digest(&FirstPartyObservePolicy {
-        view_id: native_view,
+    Ok(FirstPartyObservePolicy {
+        view_id,
         consumers,
         categories: vec![GrantDataCategory::Derived],
         operation: GrantOperation::Read,
@@ -159,9 +167,7 @@ pub(crate) fn remote_policies(
     };
     views
         .iter()
-        .map(|(view_id, category)| {
-            policy(view_id, vec![*category])
-        })
+        .map(|(view_id, category)| policy(view_id, vec![*category]))
         .collect()
 }
 
@@ -185,41 +191,19 @@ pub(crate) async fn remote_policies_for_target<Keys: floe_vault::VaultKeyProvide
     Ok(policies)
 }
 
-pub(crate) async fn remote_member_policy_digest_for_target<
-    Keys: floe_vault::VaultKeyProvider,
->(
+pub(crate) async fn remote_member_policy_digest_for_target<Keys: floe_vault::VaultKeyProvider>(
     vault: &floe_vault::EncryptedAgentVault<Keys>,
     person_id: PersonId,
     connector_id: &str,
     connection_id: &str,
     view_id: &str,
 ) -> Result<String, AgentFailure> {
-    let policy = remote_policies_for_target(
-        vault,
-        person_id,
-        connector_id,
-        connection_id,
-    )
-    .await?
-    .into_iter()
-    .find(|policy| policy.view_id == view_id)
-    .ok_or(AgentFailure::InvalidInput)?;
+    let policy = remote_policies_for_target(vault, person_id, connector_id, connection_id)
+        .await?
+        .into_iter()
+        .find(|policy| policy.view_id == view_id)
+        .ok_or(AgentFailure::InvalidInput)?;
     policy_digest(&policy)
-}
-
-pub(crate) fn native_consumers(connector_id: &str) -> Result<Vec<String>, AgentFailure> {
-    match connector_id {
-        "attention.macos" | "contacts.apple" | "contacts.android" | "health.apple"
-        | "feasibility.apple" => {}
-        _ => return Err(AgentFailure::InvalidInput),
-    };
-    let mut consumers = Vec::new();
-    if floe_context::manager_direct_native_connector(connector_id) {
-        consumers.push("assistant".to_owned());
-    }
-    consumers.sort();
-    consumers.dedup();
-    Ok(consumers)
 }
 
 pub(crate) async fn native_consumers_for_target<Keys: floe_vault::VaultKeyProvider>(
@@ -231,56 +215,26 @@ pub(crate) async fn native_consumers_for_target<Keys: floe_vault::VaultKeyProvid
     if vault.person_id() != person_id {
         return Err(AgentFailure::CapabilityDenied);
     }
-    let mut consumers = Vec::new();
-    if floe_context::manager_direct_native_connector(connector_id) {
-        consumers.push(floe_context::ASSISTANT_CONSUMER.to_owned());
+    if connector_id == "feasibility.apple" {
+        return Ok(vec![floe_context::ASSISTANT_CONSUMER.to_owned()]);
     }
-    let capability = match connector_id {
-        floe_access::ATTENTION_CONNECTOR => Some("attention.coarse"),
-        "contacts.apple" => Some("people.identity"),
-        floe_access::WELLBEING_CONNECTOR => Some("wellbeing.derived"),
-        "contacts.android" | "feasibility.apple" => None,
-        _ => return Err(AgentFailure::InvalidInput),
-    };
-    if let Some(capability) = capability {
-        consumers.extend(
-            trusted_shipped_consumers(capability)?
-                .into_iter()
-                .map(|consumer| consumer.identifier().to_owned()),
-        );
-    }
-    consumers.sort();
-    consumers.dedup();
-    Ok(consumers)
+    Ok(personal_policy(connector_id)?
+        .consumers
+        .iter()
+        .map(|consumer| consumer.identifier().to_owned())
+        .collect())
 }
 
-pub(crate) async fn native_member_policy_digest_for_target<
-    Keys: floe_vault::VaultKeyProvider,
->(
+pub(crate) async fn native_member_policy_digest_for_target<Keys: floe_vault::VaultKeyProvider>(
     vault: &floe_vault::EncryptedAgentVault<Keys>,
     person_id: PersonId,
     connector_id: &str,
     device_id: &str,
 ) -> Result<String, AgentFailure> {
-    let consumers = native_consumers_for_target(vault, person_id, connector_id, device_id)
-        .await?
-        .into_iter()
-        .map(GrantConsumer::builtin)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| AgentFailure::InvalidInput)?;
-    let view_id = match connector_id {
-        floe_access::ATTENTION_CONNECTOR => floe_access::ATTENTION_CONNECTOR,
-        floe_access::WELLBEING_CONNECTOR => floe_access::WELLBEING_CONNECTOR,
-        _ => return Err(AgentFailure::InvalidInput),
-    };
-    policy_digest(&FirstPartyObservePolicy {
-        view_id,
-        consumers,
-        categories: vec![GrantDataCategory::Derived],
-        operation: GrantOperation::Read,
-        purpose: GrantPurpose::Assistant,
-        processing: ProcessingRestriction::LocalOnly,
-    })
+    if vault.person_id() != person_id || device_id.is_empty() {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    policy_digest(&personal_policy(connector_id)?)
 }
 
 #[cfg(test)]
@@ -301,15 +255,42 @@ mod tests {
     }
 
     #[test]
-    fn native_base_consumers_are_manager_only() {
-        assert_eq!(native_consumers("attention.macos").unwrap(), ["assistant"]);
-        assert_eq!(native_consumers("contacts.apple").unwrap(), ["assistant"]);
-        assert_eq!(native_consumers("health.apple").unwrap(), ["assistant"]);
-        assert!(
-            !native_consumers("attention.macos")
-                .unwrap()
-                .contains(&"example.test.expert".into())
+    fn personal_policy_uses_canonical_view_and_trusted_consumers() {
+        for connector in ["contacts.apple", "attention.macos", "health.apple"] {
+            let policy = personal_policy(connector).unwrap();
+            assert!(policy.consumers.iter().all(|consumer| {
+                consumer.identifier() == "assistant"
+                    || trusted_shipped_consumers(policy.view_id)
+                        .unwrap()
+                        .contains(consumer)
+            }));
+            assert_eq!(
+                member_policy_digest(connector, policy.view_id).unwrap(),
+                policy_digest(&policy).unwrap()
+            );
+            assert!(member_policy_digest(connector, connector).is_err());
+        }
+        assert_eq!(
+            personal_policy("contacts.apple").unwrap().view_id,
+            floe_context_contract::PEOPLE_VIEW_ID
         );
+        assert_eq!(
+            personal_policy("attention.macos").unwrap().view_id,
+            floe_context_contract::ATTENTION_VIEW_ID
+        );
+        assert_eq!(
+            personal_policy("health.apple").unwrap().view_id,
+            floe_context_contract::WELLBEING_VIEW_ID
+        );
+    }
+
+    #[test]
+    fn personal_consumers_are_only_manager_and_trusted_shipped_experts() {
+        for connector in ["attention.macos", "contacts.apple", "health.apple"] {
+            let policy = personal_policy(connector).unwrap();
+            assert!(ids(&policy).contains(&"assistant"));
+            assert!(!ids(&policy).contains(&"example.test.expert"));
+        }
     }
 
     #[test]
