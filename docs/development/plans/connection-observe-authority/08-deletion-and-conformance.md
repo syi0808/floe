@@ -2,7 +2,7 @@
 
 Prerequisite: 07 complete.
 
-Status: Ready for execution. Not started.
+Status: Complete (2026-09-30). Checkpoint 09 not started.
 
 Planning base: main at 55ab664edb1c3022cc73937ccb778f97fab6f227 on 2026-09-29.
 
@@ -768,3 +768,28 @@ Report only:
 28. server verification or not affected;
 29. broad serialized Rust verification;
 30. clean worktree and confirmation Checkpoint 09 was not started.
+
+## 17. Execution evidence (2026-09-30)
+
+1. Start local HEAD and first fetched `origin/main`: `4e50769565e28eb58dc5ad87c0b56dfd5daa13fc`; final fetched `origin/main` remained the same. The start worktree was clean `main`.
+2. Implementation commits: `ffbb317a` policy convergence and Calendar test-module rename; `0e6cef8f` migration-fixture purge; `49c2248d` checker/tool references; `581e21ab` and `3e4f79be` public narrowing; `85202cca` Calendar conformance regressions; `44b47d63` exact digest coverage; `e4156f51`, `0334d10a`, and `647e6a88` checker strengthening. Closure commit is recorded in the follow-up evidence line below.
+3. Final App policy surface is `trusted_shipped_consumers`, `personal_policy`, `calendar_policy`, `remote_policies`, `member_policy_digest`, and `policy_digest`. Remote policy construction now includes the complete sorted/deduplicated Manager-plus-shipped consumer set before any caller receives it; native Calendar and personal policies are likewise identity-neutral.
+4. Deleted `remote_policies_for_target`, `remote_member_policy_digest_for_target`, `native_member_policy_digest_for_target`, and `native_consumers_for_target`. Feasibility constructs its contextual assistant consumer at its owner dispatch rather than using a standing-native helper.
+5. `member_policy_digest` hashes the same canonical policy object used by native Calendar, remote and personal review/activation. The supported-remote and Apple-personal digest test and the Calendar activation regression pass; remote review and enable both call `remote_policies`, and enable compares the reviewed digest to `policy_digest(policy)` before mutation.
+6. `first_party_observe` production has no Vault, Person, connection, Registry, assignment, binding or selected-resource input. An installed Calendar-capable `example.calendar.extension` remains absent from the canonical grant consumers; both the new Calendar scenario and existing Registry policy tests prove this.
+7. Production searches found no removed Calendar/Personal product DTOs, remote Calendar grant/read symbols, target policy wrappers, `ConsumerPolicyAuthority`, selected/granted standing projections or provider-leaf outer Observe selector. The current `calendar_access.rs`, `personal_access.rs` and `remote_observe.rs` remain legitimate internal implementations behind common `ConnectionObserve`.
+8. Renamed `native_calendar_access.rs` to `calendar_connection_observe.rs`. The old local owner and remote wire migration-history operation enumerations were replaced by one generic unknown-kind rejection per envelope, not compatibility aliases. The 11-Calendar test was extended and renamed as the 08 conformance scenario.
+9. Retained current protocol strictness tests for leaf/routing field rejection, exact native/hosted wire, enable expectation and selected/granted projection rejection. Retained Vault reopen rejection of obsolete Calendar/Personal schemas; no old table is decoded or migrated.
+10. Vault residual `calendar_grant_policy_schema`/`calendar_grant_policies`/`calendar_grant_mappings` strings occur only in fail-closed stale-schema detection and negative reopen tests.
+11. Narrowed caller-zero `validate_personal_source_selection` from public Context export to `pub(crate)`, and `RemoteViewGrantReview`/`review_remote_view_grant` to Access-internal symbols. Cross-crate references and exposed return signatures justify the remaining touched App/Access/Context/Protocol/FFI exports, including actual FFI ConnectionObserve DTOs and source commands.
+12. Removed no Cargo dependency: `cargo metadata` and production `floe_*` source-reference audit found every normal dependency in App, Access, Context, Day and Experts still used. The 105-edge dependency policy therefore did not change.
+13. Added `check_connection_observe_conformance.py`: production legacy authority symbols and fields; mutable first-party Registry/binding dependence; connection/View Calendar candidate shape; and Flutter gateway leaf selectors. It excludes Rust `cfg(test)` and test files while allowing source configuration/acquisition leaf values and logical reviewed-member resource.
+14. Checker fixtures exercise each forbidden rule family and allowed source configuration, logical reviewed resource, shipped manifest lookup, and test-only negative literals. The checker and its 3-test fixture suite pass; boundary and Expert extensibility checkers and their fixture suites pass.
+15. The App 11→12 scenario establishes one EventKit SourceConnection, discovers one connection/View candidate, saves one Expert binding, reviews and activates one logical Calendar grant, installs a Calendar-capable arbitrary extension, and verifies that extension is absent from default consumers.
+16. A Connections source edit from 11 to 12 resources advances `SourceAuthority` once. The same scenario proves unchanged `GrantId`, `GrantAuthority`, candidate ID and binding revision, with active Observe retained; the old review expectation fails closed.
+17. The paired Context regression now reads eleven physical resources under one logical dependency, rejects the old dependency after the edit, and reads all twelve current resources with `source_resources` recording those leaves. This pairing avoids a test-only cross-owner forwarding abstraction.
+18. Residual production classifications: `calendar_ids` and `selected_handles` occur in Connections configuration, native/provider acquisition, hosted signed provenance/server scope, Context acquisition, Action source evidence and tests; not standing Observe permission input. `source_resources` is current source/provenance or informational overview data, not a grant-scope selector. `RemoteConnectionObserveExpectation` is crate-private provider evidence with routing facts; `calendar_lease` is current Context provenance; `calendar_access` names current App internals or OS permission state. No blocker or legacy production bucket remains.
+19. Updated the checker references in root README, current architecture README/invariants, and verification skill. Updated current modules architecture only for the newly canonical policy-composition path. No ADR or Checkpoint 09 work was started.
+20. Targeted App: first-party policy, 53 interaction-resolution tests, 18 registered-runner tests, native Calendar conformance and Contacts continuity passed. Context 11→12 focused regression passed. Protocol and FFI suites passed. `cargo check --workspace --lib` passed.
+21. Flutter `flutter analyze` and `flutter test test/features/connections` passed (68 tests). No production Flutter or server code changed; server full tests are reserved for 09. Structural checker suites and `git diff --check` passed.
+22. `cargo test -p floe-context` and `cargo test -p floe-access` (41 tests) passed after public export narrowing. The final same-snapshot `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast -- --test-threads=1` passed across 94 Rust test-result sections, with no failures. Final `cargo check --workspace --lib`, checker suites, boundary policy, and `git diff --check` passed. Checkpoint 09 remains Not started.
