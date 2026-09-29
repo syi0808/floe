@@ -37,6 +37,67 @@ fn native_source_scope(
     }
 }
 
+fn native_inline_operation(
+    target: &floe_conversation::InlineObserveTarget,
+    connector_id: &str,
+) -> Result<crate::ConnectionObserveOperation, AgentFailure> {
+    let source_authority = target
+        .source_revision
+        .as_ref()
+        .and_then(|revision| {
+            std::num::NonZeroU64::new(revision.epoch)
+                .and_then(|epoch| SourceAuthority::from_parts(revision.incarnation, epoch))
+        })
+        .ok_or(AgentFailure::InvalidInput)?;
+    let members = target
+        .members
+        .iter()
+        .map(|member| {
+            let (expected_grant_id, expected_grant_authority) = match &member.expected_grant {
+                floe_conversation::ExpectedGrantState::Absent => (None, None),
+                floe_conversation::ExpectedGrantState::Active {
+                    grant_id,
+                    authority_incarnation,
+                    authority_epoch,
+                } => {
+                    let id = floe_access::GrantId::from_uuid(*grant_id)
+                        .ok_or(AgentFailure::InvalidInput)?;
+                    let authority = std::num::NonZeroU64::new(*authority_epoch)
+                        .and_then(|epoch| {
+                            floe_access::GrantAuthority::from_parts(*authority_incarnation, epoch)
+                        })
+                        .ok_or(AgentFailure::InvalidInput)?;
+                    (Some(id), Some(authority))
+                }
+            };
+            Ok(crate::ConnectionObserveReviewedMember {
+                view_id: member.member_id.clone(),
+                policy_digest: member.policy_digest.clone(),
+                resource: member.resource.clone(),
+                expected_grant_id,
+                expected_grant_authority,
+            })
+        })
+        .collect::<Result<Vec<_>, AgentFailure>>()?;
+    let expectation = crate::ConnectionObserveExpectation {
+        connector_id: connector_id.to_owned(),
+        connection_id: target.connection_id.clone(),
+        source_authority,
+        connection_revision: target.connection_revision,
+        native_subject: target.reviewed_native_subject.clone(),
+        producer_fingerprint: None,
+        members,
+    };
+    expectation.validate()?;
+    Ok(crate::ConnectionObserveOperation::SetEnabled {
+        connector_id: connector_id.to_owned(),
+        connection_id: target.connection_id.clone(),
+        enabled: true,
+        disconnecting: false,
+        expected: Some(expectation),
+    })
+}
+
 /// The host's owner access for interaction decisions: core connections,
 /// vault grants, saved-connection transports, and device subject probes.
 pub(crate) struct HostInteractionOwners<'a, Keys, CalendarSubject, PersonalInspector>
@@ -1047,8 +1108,6 @@ where
         Ok(admitted.client_id)
     }
 
-    /// Native enable through the canonical Calendar Review. The one member
-    /// binds logical permission; current leaves are compare-only source proof.
     async fn enable_native_calendar(
         &self,
         target: &floe_conversation::InlineObserveTarget,
@@ -1056,78 +1115,14 @@ where
         device_id: &str,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<(), AgentFailure> {
-        let [first] = target.members.as_slice() else {
-            return Err(AgentFailure::InvalidInput);
-        };
-        if first.member_id != "calendar.timeline"
-            || first.resource
-                != floe_access::native_calendar_resource(&target.connection_id)?.as_str()
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let source_authority = target
-            .source_revision
-            .as_ref()
-            .and_then(|revision| {
-                std::num::NonZeroU64::new(revision.epoch)
-                    .and_then(|epoch| SourceAuthority::from_parts(revision.incarnation, epoch))
-            })
-            .ok_or(AgentFailure::InvalidInput)?;
-        let (expected_grant_id, expected_grant_authority) = match &first.expected_grant {
-            floe_conversation::ExpectedGrantState::Absent => (None, None),
-            floe_conversation::ExpectedGrantState::Active {
-                grant_id,
-                authority_incarnation,
-                authority_epoch,
-            } => {
-                let id =
-                    floe_access::GrantId::from_uuid(*grant_id).ok_or(AgentFailure::InvalidInput)?;
-                let authority = std::num::NonZeroU64::new(*authority_epoch)
-                    .and_then(|epoch| {
-                        floe_access::GrantAuthority::from_parts(*authority_incarnation, epoch)
-                    })
-                    .ok_or(AgentFailure::InvalidInput)?;
-                (Some(id), Some(authority))
-            }
-        };
-        let fingerprint = target
-            .reviewed_native_subject
-            .clone()
-            .ok_or(AgentFailure::InvalidInput)?;
-        let connection = floe_context::CalendarConnectionReader::calendar_connection(
-            &super::calendar_access::CoreCalendarConnections {
-                core: self.core,
-                person_id,
-            },
-        )
-        .await?
-        .ok_or(AgentFailure::StaleContext)?;
-        if connection.connection_id().as_str() != target.connection_id
-            || connection.execution_owner_id().as_str() != device_id
-            || connection.source_authority() != source_authority
-            || !connection.is_serving()
-        {
-            return Err(AgentFailure::StaleContext);
-        }
-        let calendar_ids: Vec<String> = connection
-            .resources()
-            .iter()
-            .map(|calendar| calendar.handle().as_str().to_owned())
-            .collect();
-        super::calendar_access::apply_calendar_access(
+        let operation = native_inline_operation(target, "calendar.event_kit")?;
+        super::calendar_access::apply_connection_observe(
             self.core,
             self.vault,
             self.calendar_subject,
             person_id,
-            device_id.to_owned(),
-            crate::CalendarAccessChange::Review {
-                connection_id: target.connection_id.clone(),
-                calendar_ids,
-                expected_source_authority: source_authority,
-                expected_native_subject_fingerprint: fingerprint,
-                expected_grant_id,
-                expected_grant_authority,
-            },
+            device_id,
+            &operation,
             cancellation.clone(),
         )
         .await?;
@@ -1142,65 +1137,20 @@ where
         device_id: &str,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<(), AgentFailure> {
-        let spec = crate::personal_source_spec::PersonalSourceSpec::for_connector(connector)?;
         if !matches!(
             connector,
             floe_access::ATTENTION_CONNECTOR | floe_access::WELLBEING_CONNECTOR
         ) {
             return Err(AgentFailure::InvalidInput);
         }
-        let connection_id = floe_context_contract::ConnectionId::try_new(&target.connection_id)
-            .map_err(|_| AgentFailure::InvalidInput)?;
-        let logical = floe_context_contract::connection_view_resource(spec.view, &connection_id)
-            .map_err(|_| AgentFailure::InvalidInput)?;
-        if target.members.len() != 1
-            || target.members[0].member_id != spec.view
-            || target.members[0].resource != logical.as_str()
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let fingerprint = target
-            .reviewed_native_subject
-            .clone()
-            .ok_or(AgentFailure::InvalidInput)?;
-        let (expected_grant_id, expected_grant_authority) = match &target.members[0].expected_grant
-        {
-            floe_conversation::ExpectedGrantState::Absent => (None, None),
-            floe_conversation::ExpectedGrantState::Active {
-                grant_id,
-                authority_incarnation,
-                authority_epoch,
-            } => {
-                let id =
-                    floe_access::GrantId::from_uuid(*grant_id).ok_or(AgentFailure::InvalidInput)?;
-                let authority = std::num::NonZeroU64::new(*authority_epoch)
-                    .and_then(|epoch| {
-                        floe_access::GrantAuthority::from_parts(*authority_incarnation, epoch)
-                    })
-                    .ok_or(AgentFailure::InvalidInput)?;
-                (Some(id), Some(authority))
-            }
-        };
-        let consumers = crate::first_party_observe::native_consumers_for_target(
-            self.vault, person_id, connector, device_id,
-        )
-        .await?;
-        super::personal_access::apply_personal(
+        let operation = native_inline_operation(target, connector)?;
+        super::personal_access::apply_connection_observe(
             self.core,
             self.vault,
             self.personal_subject,
             person_id,
-            floe_access::PersonalAccessConfiguration {
-                connector: connector.to_owned(),
-                device_id: device_id.to_owned(),
-                consumers,
-                change: floe_access::PersonalAccessChange::Review {
-                    expected_native_subject_fingerprint: fingerprint,
-                    feasibility_query: None,
-                    expected_grant_id,
-                    expected_grant_authority,
-                },
-            },
+            device_id,
+            &operation,
             cancellation.clone(),
         )
         .await?;
