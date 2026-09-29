@@ -599,6 +599,16 @@ Required input:
 
 For creation, allow source establishment with the reviewed subject in the first persisted source state.
 
+The reviewed creation path must persist the source directly as:
+
+- revision `1`;
+- one freshly created valid `SourceAuthority`;
+- `Ready`;
+- canonical resources;
+- reviewed native subject.
+
+Do not implement creation as ordinary `establish()` followed by `update_native_subject()`: that would manufacture a synthetic Pending state and an unnecessary second revision/SourceAuthority epoch before the first usable source ever existed.
+
 ### Successor validation
 
 Permit resource-handle and subject changes in the same reviewed native successor.
@@ -620,7 +630,7 @@ Do not weaken stable identity or CAS validation.
 
 ### Tests
 
-1. create reviewed Contacts source -> Ready with subject/resources.
+1. create reviewed Contacts source -> revision 1, Ready, one initial SourceAuthority, subject/resources present, with no synthetic Pending persistence.
 2. `[A] + subject S1` -> `[A,B] + subject S2` in one revision/one SourceAuthority advance.
 3. same exact state -> no-op.
 4. label-only -> revision may advance, SourceAuthority unchanged.
@@ -655,7 +665,17 @@ health.apple.local
 
 These become actual persisted `SourceConnection.connection_id` values, not strings reconstructed as authority at read time.
 
-### Physical resources
+### Canonical resource modes and physical resources
+
+Freeze the mode instead of leaving it caller-selected:
+
+- Contacts (`contacts.apple`, and shared dormant `contacts.android` logic where touched): `ResourceMode::Selected`. The Person explicitly chose a bounded identity set.
+- Attention (`attention.macos`): `ResourceMode::AllAvailable`. The singleton coarse attention source is the source's complete current resource set, not a user-selected subset.
+- Wellbeing (`health.apple`): `ResourceMode::AllAvailable`. The singleton derived wellbeing source is the source's complete current resource set.
+
+A standing personal source with the wrong mode is not equivalent current source state. App review, candidate discovery and Context read validation must require the mode defined by the source spec rather than accepting either mode.
+
+Physical resources:
 
 Contacts:
 - exact selected opaque identity handles;
@@ -1021,6 +1041,7 @@ For standing read:
 - expected connector;
 - exact connection ID;
 - exact execution owner;
+- exact canonical ResourceMode from the standing personal source spec;
 - serving/Ready;
 - valid native subject;
 - expected physical source-resource shape.
