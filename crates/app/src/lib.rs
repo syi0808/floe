@@ -97,7 +97,8 @@ pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalI
 #[cfg(unix)]
 pub use composition::{AppComposition, AppOpenError, open};
 pub use connection_observe::{
-    ConnectionObserveMember, ConnectionObserveOverview, ConnectionObserveStatus,
+    ConnectionObserveExpectation, ConnectionObserveMember, ConnectionObserveOverview,
+    ConnectionObserveReviewedMember, ConnectionObserveStatus,
 };
 #[cfg(unix)]
 pub use connection_services::{
