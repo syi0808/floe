@@ -1156,7 +1156,7 @@ final class _AppleConnectionDetailState extends State<_AppleConnectionDetail> {
             scoped != null &&
             widget.appleContext is AppleFeasibilitySubjectApi) ...[
           SizedBox(height: FloeSpace.lg),
-          PersonalFeasibilityAccessCard(
+          FeasibilityAccessCard(
             gateway: scoped,
             personId: widget.personId,
             requestQuery: _requestQuery,
@@ -1301,7 +1301,8 @@ final class _PersonalFeasibilityDialogState
   );
 }
 
-final class _ScopedFeasibilityAccessGateway implements FeasibilityAccessGateway {
+final class _ScopedFeasibilityAccessGateway
+    implements FeasibilityAccessGateway {
   _ScopedFeasibilityAccessGateway(
     this.delegate, {
     required this.personId,

@@ -5,8 +5,8 @@ import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/settings/domain/feasibility_access.dart';
 
-final class PersonalFeasibilityAccessCard extends StatefulWidget {
-  const PersonalFeasibilityAccessCard({
+final class FeasibilityAccessCard extends StatefulWidget {
+  const FeasibilityAccessCard({
     super.key,
     required this.gateway,
     required this.personId,
@@ -22,12 +22,10 @@ final class PersonalFeasibilityAccessCard extends StatefulWidget {
   final Future<Map<String, dynamic>> Function() inspectSubject;
 
   @override
-  State<PersonalFeasibilityAccessCard> createState() =>
-      _PersonalFeasibilityAccessCardState();
+  State<FeasibilityAccessCard> createState() => _FeasibilityAccessCardState();
 }
 
-final class _PersonalFeasibilityAccessCardState
-    extends State<PersonalFeasibilityAccessCard> {
+final class _FeasibilityAccessCardState extends State<FeasibilityAccessCard> {
   FeasibilityAccessOverview? overview;
   Object? failure;
   bool busy = false;
@@ -142,12 +140,10 @@ final class _PersonalFeasibilityAccessCardState
                 )
               else
                 FloeButton.outlined(
-                  key: const ValueKey('personal-feasibility-review'),
+                  key: const ValueKey('feasibility-review'),
                   onPressed: busy ? null : _review,
                   loading: busy,
-                  child: Text(
-                    enabled ? 'Use with Floe is on' : 'Turn on Use with Floe',
-                  ),
+                  child: Text(enabled ? 'Query reviewed' : 'Review trip query'),
                 ),
               if (enabled) ...[
                 const SizedBox(width: FloeSpace.sm),

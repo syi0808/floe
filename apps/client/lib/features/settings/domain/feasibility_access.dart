@@ -90,7 +90,7 @@ final class FeasibilityAccessOverview {
       );
 
   factory FeasibilityAccessOverview.fromJson(Object? raw) {
-    if (raw is! Map) throw const FormatException('Invalid personal access');
+    if (raw is! Map) throw const FormatException('Invalid Feasibility access');
     final value = Map<String, Object?>.from(raw);
     const fields = {
       'schema_version',
@@ -111,9 +111,9 @@ final class FeasibilityAccessOverview {
     if (value.keys.any((key) => !fields.contains(key)) ||
         value['schema_version'] != 1 ||
         value['person_id'] is! String ||
-        value['connector'] is! String ||
+        value['connector'] != 'feasibility.apple' ||
         value['device_id'] is! String ||
-        value['connection_id'] is! String ||
+        value['connection_id'] != 'feasibility.apple.local' ||
         (value['grant_id'] != null && value['grant_id'] is! String) ||
         (value['grant_authority'] != null &&
             value['grant_authority'] is! Map) ||
@@ -127,7 +127,7 @@ final class FeasibilityAccessOverview {
             value['native_subject_fingerprint'] is! String) ||
         (value['process_incarnation'] != null &&
             value['process_incarnation'] is! String)) {
-      throw const FormatException('Invalid personal access');
+      throw const FormatException('Invalid Feasibility access');
     }
     return FeasibilityAccessOverview(
       schemaVersion: 1,

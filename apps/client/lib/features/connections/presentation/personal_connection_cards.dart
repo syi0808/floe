@@ -75,7 +75,8 @@ final class _PersonalObserveControlState extends State<PersonalObserveControl> {
               connectionId: widget.connectionId,
             )
           : null;
-      if (expected != null && mounted) {
+      if (!mounted) return;
+      if (expected != null) {
         final confirmed = await showFloeDialog<bool>(
           context,
           (context) => FloeDialog(
@@ -95,6 +96,7 @@ final class _PersonalObserveControlState extends State<PersonalObserveControl> {
         );
         if (confirmed != true) return;
       }
+      if (!mounted) return;
       final value = await widget.gateway.setEnabled(
         connectorId: widget.connectorId,
         connectionId: widget.connectionId,

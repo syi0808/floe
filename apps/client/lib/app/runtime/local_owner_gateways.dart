@@ -376,7 +376,7 @@ final class NativeFeasibilityAccessGateway implements FeasibilityAccessGateway {
           : 'access.feasibility.configure',
       if (change['kind'] != 'inspect') 'change': change,
     }),
-    stage: 'personal_access',
+    stage: 'feasibility_access',
     resultKind: 'local_access_operation',
     start: (operationId) => change['kind'] == 'inspect'
         ? ownerQuery(_transport, operationId, {
