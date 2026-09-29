@@ -517,13 +517,7 @@ where
         connector: &str,
         person_id: PersonId,
     ) -> Result<LiveInlineState, AgentFailure> {
-        let policies = crate::first_party_observe::remote_policies_for_target(
-            self.vault,
-            person_id,
-            connector,
-            &target.connection_id,
-        )
-        .await?;
+        let policies = crate::first_party_observe::remote_policies(connector)?;
         if policies.is_empty() {
             return Err(AgentFailure::CapabilityUnavailable);
         }
@@ -542,13 +536,7 @@ where
         person_id: PersonId,
         producer_fingerprint: String,
     ) -> Result<LiveInlineState, AgentFailure> {
-        let policies = crate::first_party_observe::remote_policies_for_target(
-            self.vault,
-            person_id,
-            connector,
-            &target.connection_id,
-        )
-        .await?;
+        let policies = crate::first_party_observe::remote_policies(connector)?;
         let connection_id = floe_context_contract::ConnectionId::try_new(&target.connection_id)
             .map_err(|_| AgentFailure::InvalidInput)?;
         let canonical: Vec<(String, String)> = policies
@@ -626,7 +614,7 @@ where
         member_id: &str,
         resource: &str,
         person_id: PersonId,
-        device_id: Option<&str>,
+        _device_id: Option<&str>,
     ) -> Result<LiveMember, AgentFailure> {
         // Active only: a paused grant authorizes nothing, and capture's
         // sibling verification requires Active, so parity demands the same
@@ -645,27 +633,7 @@ where
         .collect::<Vec<_>>();
         Ok(LiveMember {
             member_id: member_id.to_owned(),
-            policy_digest: if connector == "calendar.event_kit" {
-                crate::first_party_observe::policy_digest(
-                    &crate::first_party_observe::calendar_policy()?,
-                )?
-            } else if let Some(device_id) = device_id {
-                crate::first_party_observe::native_member_policy_digest_for_target(
-                    self.vault, person_id, connector, device_id,
-                )
-                .await?
-            } else if crate::first_party_observe::remote_policies(connector)?.is_empty() {
-                crate::first_party_observe::member_policy_digest(connector, member_id)?
-            } else {
-                crate::first_party_observe::remote_member_policy_digest_for_target(
-                    self.vault,
-                    person_id,
-                    connector,
-                    connection_id,
-                    member_id,
-                )
-                .await?
-            },
+            policy_digest: crate::first_party_observe::member_policy_digest(connector, member_id)?,
             resource: resource.to_owned(),
             live_grants: grants
                 .into_iter()
@@ -1171,13 +1139,7 @@ where
         device_id: &str,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<(), AgentFailure> {
-        let policies = crate::first_party_observe::remote_policies_for_target(
-            self.vault,
-            person_id,
-            connector,
-            &target.connection_id,
-        )
-        .await?;
+        let policies = crate::first_party_observe::remote_policies(connector)?;
         if policies.is_empty() {
             return Err(AgentFailure::InvalidInput);
         }

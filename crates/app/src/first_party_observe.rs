@@ -3,7 +3,6 @@ use floe_agent_contract::AgentFailure;
 use floe_context_contract::{
     GrantDataCategory, GrantOperation, GrantPurpose, ProcessingRestriction,
 };
-use floe_kernel::PersonId;
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -48,9 +47,10 @@ fn policy(
             GrantConsumer::builtin(floe_context::ASSISTANT_CONSUMER)
                 .map_err(|_| AgentFailure::InvalidInput)?,
         );
-        consumers.sort();
-        consumers.dedup();
     }
+    consumers.extend(trusted_shipped_consumers(view_id)?);
+    consumers.sort();
+    consumers.dedup();
     Ok(FirstPartyObservePolicy {
         view_id,
         consumers,
@@ -141,12 +141,10 @@ pub(crate) fn personal_policy(connector_id: &str) -> Result<FirstPartyObservePol
 }
 
 pub(crate) fn calendar_policy() -> Result<FirstPartyObservePolicy, AgentFailure> {
-    let mut policy = policy(
+    policy(
         "calendar.timeline",
         vec![GrantDataCategory::Metadata, GrantDataCategory::Content],
-    )?;
-    policy.consumers = trusted_shipped_consumers("calendar.timeline")?;
-    Ok(policy)
+    )
 }
 
 pub(crate) fn remote_policies(
@@ -171,75 +169,10 @@ pub(crate) fn remote_policies(
         .collect()
 }
 
-pub(crate) async fn remote_policies_for_target<Keys: floe_vault::VaultKeyProvider>(
-    vault: &floe_vault::EncryptedAgentVault<Keys>,
-    person_id: PersonId,
-    connector_id: &str,
-    connection_id: &str,
-) -> Result<Vec<FirstPartyObservePolicy>, AgentFailure> {
-    if vault.person_id() != person_id || connection_id.is_empty() {
-        return Err(AgentFailure::CapabilityDenied);
-    }
-    let mut policies = remote_policies(connector_id)?;
-    for policy in &mut policies {
-        policy
-            .consumers
-            .extend(trusted_shipped_consumers(policy.view_id)?);
-        policy.consumers.sort();
-        policy.consumers.dedup();
-    }
-    Ok(policies)
-}
-
-pub(crate) async fn remote_member_policy_digest_for_target<Keys: floe_vault::VaultKeyProvider>(
-    vault: &floe_vault::EncryptedAgentVault<Keys>,
-    person_id: PersonId,
-    connector_id: &str,
-    connection_id: &str,
-    view_id: &str,
-) -> Result<String, AgentFailure> {
-    let policy = remote_policies_for_target(vault, person_id, connector_id, connection_id)
-        .await?
-        .into_iter()
-        .find(|policy| policy.view_id == view_id)
-        .ok_or(AgentFailure::InvalidInput)?;
-    policy_digest(&policy)
-}
-
-pub(crate) async fn native_consumers_for_target<Keys: floe_vault::VaultKeyProvider>(
-    vault: &floe_vault::EncryptedAgentVault<Keys>,
-    person_id: PersonId,
-    connector_id: &str,
-    _device_id: &str,
-) -> Result<Vec<String>, AgentFailure> {
-    if vault.person_id() != person_id {
-        return Err(AgentFailure::CapabilityDenied);
-    }
-    if connector_id == "feasibility.apple" {
-        return Ok(vec![floe_context::ASSISTANT_CONSUMER.to_owned()]);
-    }
-    Ok(personal_policy(connector_id)?
-        .consumers
-        .iter()
-        .map(|consumer| consumer.identifier().to_owned())
-        .collect())
-}
-
-pub(crate) async fn native_member_policy_digest_for_target<Keys: floe_vault::VaultKeyProvider>(
-    vault: &floe_vault::EncryptedAgentVault<Keys>,
-    person_id: PersonId,
-    connector_id: &str,
-    device_id: &str,
-) -> Result<String, AgentFailure> {
-    if vault.person_id() != person_id || device_id.is_empty() {
-        return Err(AgentFailure::CapabilityDenied);
-    }
-    policy_digest(&personal_policy(connector_id)?)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use floe_kernel::PersonId;
 
     fn ids(policy: &FirstPartyObservePolicy) -> Vec<&str> {
         policy
@@ -300,12 +233,17 @@ mod tests {
             gmail.iter().map(|value| value.view_id).collect::<Vec<_>>(),
             ["mail.communication", "life.logistics"]
         );
-        assert_eq!(ids(&gmail[0]), ["assistant"]);
-        assert_eq!(ids(&gmail[1]), ["assistant"]);
-        assert_eq!(
-            ids(&remote_policies("github.issues").unwrap()[0]),
-            ["assistant"]
-        );
+        for remote in [
+            &gmail[0],
+            &gmail[1],
+            &remote_policies("github.issues").unwrap()[0],
+        ] {
+            let mut expected = trusted_shipped_consumers(remote.view_id).unwrap();
+            expected.push(GrantConsumer::builtin("assistant").unwrap());
+            expected.sort();
+            expected.dedup();
+            assert_eq!(remote.consumers, expected);
+        }
         assert!(remote_policies("unknown.connector").unwrap().is_empty());
     }
 
@@ -348,7 +286,7 @@ mod tests {
         let mut changed = policy.clone();
         changed
             .consumers
-            .push(GrantConsumer::builtin("floe.builtin.commitments").unwrap());
+            .push(GrantConsumer::builtin("example.calendar.extension").unwrap());
         assert_ne!(policy_digest(&changed).unwrap(), digest);
         let mut changed = policy.clone();
         changed.categories = vec![GrantDataCategory::Derived];

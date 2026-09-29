@@ -2373,13 +2373,10 @@ async fn personal_attention_allow_resolves() {
         reviewed_native_subject: Some(NATIVE_FINGERPRINT.into()),
         members: vec![floe_conversation::ReviewedBundleMember {
             member_id: floe_context_contract::ATTENTION_VIEW_ID.into(),
-            policy_digest: crate::first_party_observe::native_member_policy_digest_for_target(
-                &host.base.vault,
-                host.base.person,
+            policy_digest: crate::first_party_observe::member_policy_digest(
                 floe_access::ATTENTION_CONNECTOR,
-                DEVICE,
+                floe_context_contract::ATTENTION_VIEW_ID,
             )
-            .await
             .unwrap(),
             resource: logical.as_str().into(),
             expected_grant: floe_conversation::ExpectedGrantState::Absent,
@@ -2780,14 +2777,7 @@ impl RemoteFixture {
     /// The reviewed target an honest capture binds for the canonical
     /// gmail bundle: live producer pin plus the previewed authority.
     async fn gmail_target(&self) -> floe_conversation::InlineObserveTarget {
-        let policies = crate::first_party_observe::remote_policies_for_target(
-            &self.base.vault,
-            self.base.person,
-            "gmail",
-            &self.connection_id,
-        )
-        .await
-        .unwrap();
+        let policies = crate::first_party_observe::remote_policies("gmail").unwrap();
         assert_eq!(policies.len(), 2);
         let authority = *self.transport.authority.lock().unwrap();
         let mut members: Vec<floe_conversation::ReviewedBundleMember> = policies
@@ -3443,14 +3433,10 @@ async fn remote_calendar_allow_resolves_through_hosted_connection() {
         reviewed_native_subject: None,
         members: vec![floe_conversation::ReviewedBundleMember {
             member_id: "calendar.timeline".into(),
-            policy_digest: crate::first_party_observe::remote_member_policy_digest_for_target(
-                &host.base.vault,
-                host.base.person,
+            policy_digest: crate::first_party_observe::member_policy_digest(
                 "calendar.google",
-                &host.connection_id,
                 "calendar.timeline",
             )
-            .await
             .unwrap(),
             resource: logical_resource.as_str().into(),
             expected_grant: floe_conversation::ExpectedGrantState::Absent,
