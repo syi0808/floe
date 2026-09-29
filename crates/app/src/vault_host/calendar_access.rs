@@ -36,7 +36,7 @@ use crate::{
 const SUBJECT_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The window one device probe must finish inside.
-pub(super) fn subject_window(cancellation: Cancellation) -> RemoteCallWindow {
+pub(crate) fn subject_window(cancellation: Cancellation) -> RemoteCallWindow {
     RemoteCallWindow {
         deadline: tokio::time::Instant::now() + SUBJECT_DEADLINE,
         cancellation,
@@ -179,7 +179,7 @@ impl<Keys: VaultKeyProvider> floe_access::DependencyResolver
 }
 
 /// The device this host runs on, asked what calendar subject it would answer for.
-pub(super) struct DeviceCalendarSubject<'a> {
+pub(crate) struct DeviceCalendarSubject<'a> {
     pub local_context: &'a LocalContextHost,
 }
 

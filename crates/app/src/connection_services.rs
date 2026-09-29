@@ -3,12 +3,13 @@ use crate::personal_source_spec::PersonalSourceSpec;
 use crate::{
     AgentFailure, AppComposition, CallerContext, CoreError, ErrorCode, ServiceError, VaultState,
 };
-use floe_access::{valid_subject_fingerprint, PersonalSubjectInspector, PersonalSubjectProbe};
+use floe_access::{PersonalSubjectInspector, PersonalSubjectProbe, valid_subject_fingerprint};
 use floe_connections::{
     ConnectionId, ConnectionResource, ConnectorId, ResourceMode, SourceConnection,
     SourceConnectionError, SourceRepositoryError, SourceServiceError,
 };
-use floe_context_contract::ExecutionOwnerId;
+use floe_context::{NativeCalendarSubjectSource, NativeSubjectRequest};
+use floe_context_contract::{CalendarProvider, ExecutionOwnerId};
 use floe_kernel::PersonId;
 use uuid::Uuid;
 
@@ -273,6 +274,9 @@ impl NativeCalendarSourceCommands for AppComposition {
     ) -> Result<SourceConnection, CoreError> {
         let person_id = PersonId(caller.person_id());
         let service = self.core.source_service();
+        let subject = crate::vault_host::calendar_access::DeviceCalendarSubject {
+            local_context: &self.local_context,
+        };
         self.runtime.block_on(async {
             match mutation {
                 NativeCalendarSourceMutation::Establish {
@@ -292,16 +296,27 @@ impl NativeCalendarSourceCommands for AppComposition {
                             "disconnect the current native Calendar source first",
                         ));
                     }
+                    let connection_id = ConnectionId::new();
+                    let fingerprint = probe_calendar_source(
+                        &subject,
+                        person_id,
+                        caller.device_id(),
+                        &connection_id,
+                        1,
+                        &resources,
+                    )
+                    .await?;
                     service
-                        .establish(
+                        .establish_reviewed_native(
                             person_id,
                             native_connector(),
-                            ConnectionId::new(),
+                            connection_id,
                             ExecutionOwnerId::try_new(caller.device_id()).map_err(|_| {
                                 CoreError::new(ErrorCode::Validation, "invalid device identity")
                             })?,
                             resource_mode,
                             resources,
+                            fingerprint,
                         )
                         .await
                         .map_err(source_error)
@@ -314,13 +329,23 @@ impl NativeCalendarSourceCommands for AppComposition {
                 } => {
                     verify_native_source(&service, person_id, caller.device_id(), &connection_id)
                         .await?;
+                    let fingerprint = probe_calendar_source(
+                        &subject,
+                        person_id,
+                        caller.device_id(),
+                        &connection_id,
+                        expected_revision,
+                        &resources,
+                    )
+                    .await?;
                     service
-                        .configure(
+                        .configure_reviewed_native(
                             person_id,
                             &connection_id,
                             expected_revision,
                             resource_mode,
                             resources,
+                            fingerprint,
                         )
                         .await
                         .map_err(source_error)
@@ -332,12 +357,30 @@ impl NativeCalendarSourceCommands for AppComposition {
                 } => {
                     verify_native_source(&service, person_id, caller.device_id(), &connection_id)
                         .await?;
+                    let source = service
+                        .load(person_id, &connection_id)
+                        .await
+                        .map_err(source_error)?
+                        .ok_or_else(|| {
+                            CoreError::new(ErrorCode::NotFound, "native Calendar source not found")
+                        })?;
+                    let fingerprint = probe_calendar_source(
+                        &subject,
+                        person_id,
+                        caller.device_id(),
+                        &connection_id,
+                        expected_revision,
+                        &resources,
+                    )
+                    .await?;
                     service
-                        .reconcile_inventory(
+                        .configure_reviewed_native(
                             person_id,
                             &connection_id,
                             expected_revision,
+                            source.resource_mode(),
                             resources,
+                            fingerprint,
                         )
                         .await
                         .map_err(source_error)
@@ -356,6 +399,57 @@ impl NativeCalendarSourceCommands for AppComposition {
             }
         })
     }
+}
+
+async fn probe_calendar_source(
+    subject: &impl NativeCalendarSubjectSource,
+    person_id: PersonId,
+    device_id: &str,
+    connection_id: &ConnectionId,
+    connection_revision: u64,
+    resources: &[ConnectionResource],
+) -> Result<String, CoreError> {
+    let mut calendar_ids: Vec<String> = resources
+        .iter()
+        .map(|resource| resource.handle().as_str().to_owned())
+        .collect();
+    calendar_ids.sort();
+    if calendar_ids.is_empty()
+        || calendar_ids
+            .windows(2)
+            .any(|neighbors| neighbors[0] == neighbors[1])
+    {
+        return Err(CoreError::new(
+            ErrorCode::Validation,
+            "invalid Calendar resources",
+        ));
+    }
+    let observed = subject
+        .subject(NativeSubjectRequest {
+            person_id,
+            device_id: device_id.to_owned(),
+            provider: CalendarProvider::EventKit,
+            calendar_ids,
+            connection_id: connection_id.as_str().to_owned(),
+            connection_revision,
+            window: crate::vault_host::calendar_access::subject_window(
+                floe_execution::Cancellation::default(),
+            ),
+        })
+        .await
+        .map_err(|_| CoreError::new(ErrorCode::Validation, "native Calendar unavailable"))?;
+    if observed
+        .after
+        .as_ref()
+        .is_some_and(|after| after != &observed.before)
+        || !valid_subject_fingerprint(&observed.before)
+    {
+        return Err(CoreError::new(
+            ErrorCode::Conflict,
+            "native Calendar subject changed",
+        ));
+    }
+    Ok(observed.before)
 }
 
 async fn verify_native_source<Repository: floe_connections::SourceRepository + ?Sized>(
@@ -694,6 +788,75 @@ mod source_tests {
         fn attention_presence(&self, _person_id: PersonId, _device_id: &str) -> Option<Uuid> {
             None
         }
+    }
+
+    struct CalendarSubject {
+        probes: Mutex<Vec<Vec<String>>>,
+        after: Option<String>,
+    }
+
+    impl NativeCalendarSubjectSource for CalendarSubject {
+        async fn subject(
+            &self,
+            request: NativeSubjectRequest,
+        ) -> Result<floe_context::NativeSubjectObservation, AgentFailure> {
+            self.probes.lock().unwrap().push(request.calendar_ids);
+            Ok(floe_context::NativeSubjectObservation {
+                before: "a".repeat(64),
+                after: self.after.clone(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn native_calendar_source_probe_handles_eleven_ids_and_rejects_drift() {
+        let subject = CalendarSubject {
+            probes: Mutex::new(Vec::new()),
+            after: None,
+        };
+        let resources: Vec<_> = (0..11)
+            .rev()
+            .map(|index| {
+                ConnectionResource::new(
+                    ResourceHandle::try_new(format!("calendar-{index:02}")).unwrap(),
+                    format!("Calendar {index}"),
+                )
+                .unwrap()
+            })
+            .collect();
+        let fingerprint = probe_calendar_source(
+            &subject,
+            PersonId::new(),
+            "mac-local",
+            &ConnectionId::new(),
+            1,
+            &resources,
+        )
+        .await
+        .unwrap();
+        assert_eq!(fingerprint, "a".repeat(64));
+        let probes = subject.probes.lock().unwrap();
+        assert_eq!(probes[0].len(), 11);
+        assert_eq!(probes[0].first().unwrap(), "calendar-00");
+        drop(probes);
+        let drifted = CalendarSubject {
+            probes: Mutex::new(Vec::new()),
+            after: Some("b".repeat(64)),
+        };
+        assert_eq!(
+            probe_calendar_source(
+                &drifted,
+                PersonId::new(),
+                "mac-local",
+                &ConnectionId::new(),
+                1,
+                &resources,
+            )
+            .await
+            .unwrap_err()
+            .code,
+            ErrorCode::Conflict
+        );
     }
 
     #[derive(Clone, Default)]

@@ -42,7 +42,7 @@ use crate::local_context::LocalContextHost;
 use crate::local_operations::{LocalOperationAdmission, LocalOperationIntent, LocalOperationOwner};
 use crate::{FloeCore, diagnostics};
 
-mod calendar_access;
+pub(crate) mod calendar_access;
 mod conversation_turn;
 mod expert_binding_settings;
 mod expert_setup;
