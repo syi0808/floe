@@ -275,7 +275,7 @@ where
         })
     }
 
-    /// Personal attention/wellbeing: one reviewed member, one live subject.
+    /// Personal attention/wellbeing: one current Connections source and logical View.
     async fn capture_personal(
         &self,
         requirement: &SourceAccessRequirement,
@@ -287,21 +287,31 @@ where
             .connector_id()
             .map(|id| id.as_str())
             .ok_or(AgentFailure::InvalidInput)?;
-        let (probe, identity_resource) = match connector {
-            floe_access::ATTENTION_CONNECTOR => (
-                floe_access::PersonalSubjectProbe::Attention,
-                floe_access::ATTENTION_RESOURCE,
-            ),
-            floe_access::WELLBEING_CONNECTOR => (
-                floe_access::PersonalSubjectProbe::Wellbeing,
-                floe_access::WELLBEING_RESOURCE,
-            ),
+        let spec = crate::personal_source_spec::PersonalSourceSpec::for_connector(connector)?;
+        let probe = match connector {
+            floe_access::ATTENTION_CONNECTOR => floe_access::PersonalSubjectProbe::Attention,
+            floe_access::WELLBEING_CONNECTOR => floe_access::PersonalSubjectProbe::Wellbeing,
             _ => return Err(AgentFailure::CapabilityUnavailable),
         };
-        if requirement.resources().len() != 1
-            || requirement.resources()[0].as_str() != identity_resource
+        let connection_id = requirement
+            .connection_id()
+            .ok_or(AgentFailure::InvalidInput)?;
+        let source = self
+            .core
+            .source_service()
+            .load(person_id, connection_id)
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .ok_or(AgentFailure::AccessReviewRequired)?;
+        spec.validate_connection(&source, device_id)?;
+        let logical =
+            floe_context_contract::connection_view_resource(spec.view, source.connection_id())
+                .map_err(|_| AgentFailure::InvalidInput)?;
+        if source.connector_id().as_str() != connector
+            || requirement.resources() != [logical.clone()]
+            || requirement.source_authority() != Some(source.source_authority())
         {
-            return Err(AgentFailure::InvalidInput);
+            return Err(AgentFailure::AccessReviewRequired);
         }
         let evidence = self
             .personal_subject
@@ -309,33 +319,59 @@ where
                 person_id,
                 device_id,
                 probe,
-                None,
+                Some(
+                    source
+                        .native_subject_fingerprint()
+                        .ok_or(AgentFailure::AccessReviewRequired)?
+                        .to_owned(),
+                ),
                 Some(self.capture_deadline),
                 cancellation.clone(),
             )
             .await?;
-        if evidence.before != evidence.after {
+        if evidence.before != evidence.after
+            || Some(evidence.before.as_str()) != source.native_subject_fingerprint()
+        {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
+        let current = self
+            .core
+            .source_service()
+            .load(person_id, source.connection_id())
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .ok_or(AgentFailure::AccessReviewRequired)?;
+        if current.source_authority() != source.source_authority()
+            || current.native_subject_fingerprint() != source.native_subject_fingerprint()
+            || current
+                .resources()
+                .iter()
+                .map(|resource| resource.handle())
+                .ne(source.resources().iter().map(|resource| resource.handle()))
+            || !current.is_serving()
+        {
             return Err(AgentFailure::AccessReviewRequired);
         }
         let expected = observed_expectation(requirement);
-        let connection = requirement
-            .connection_id()
-            .map(|id| id.as_str())
-            .ok_or(AgentFailure::InvalidInput)?;
-        self.verify_observed_live(person_id, connector, connection, expected)
-            .await?;
+        self.verify_blocked_grant(
+            person_id,
+            connector,
+            source.connection_id().as_str(),
+            logical.as_str(),
+            expected,
+        )
+        .await?;
         Ok(InlineReviewSnapshot {
-            source_revision: requirement.source_authority(),
+            source_revision: Some(current.source_authority()),
             members: vec![SnapshotMember {
-                member_id: connector.to_owned(),
-                policy_digest: crate::first_party_observe::native_member_policy_digest_for_target(
-                    self.vault, person_id, connector, device_id,
-                )
-                .await?,
-                resource: identity_resource.to_owned(),
+                member_id: spec.view.to_owned(),
+                policy_digest: crate::first_party_observe::policy_digest(
+                    &crate::first_party_observe::personal_policy(connector)?,
+                )?,
+                resource: logical.as_str().to_owned(),
                 expected_grant: expected,
             }],
-            connection_revision: None,
+            connection_revision: Some(current.revision()),
             producer_fingerprint: None,
             native_subject: Some(evidence.before),
         })
@@ -456,30 +492,6 @@ where
             }
         }
     }
-
-    /// The observed grant of a native/personal review still holds now.
-    async fn verify_observed_live(
-        &self,
-        person_id: PersonId,
-        connector: &str,
-        connection: &str,
-        expected: Option<(GrantId, GrantAuthority)>,
-    ) -> Result<(), AgentFailure> {
-        let Some((grant_id, authority)) = expected else {
-            return Ok(());
-        };
-        let live = self.vault.get_data_access_grant(grant_id).await?;
-        if live.source().person_id() != person_id
-            || live.source().connector().as_str() != connector
-            || live.source().connection_id().as_str() != connection
-            || live.authority() != authority
-            || live.state() == floe_access::GrantState::Revoked
-        {
-            return Err(AgentFailure::AccessReviewRequired);
-        }
-        Ok(())
-    }
-
 }
 
 /// The live non-revoked grants naming one bundle member resource:
@@ -723,6 +735,31 @@ mod tests {
     #[tokio::test]
     async fn attention_capture_binds_live_subject_and_reviewed_absence() {
         let fixture = Fixture::open().await;
+        let source = fixture
+            .core
+            .source_service()
+            .establish_reviewed_native(
+                fixture.person_id,
+                ConnectorId::try_new(floe_access::ATTENTION_CONNECTOR).unwrap(),
+                ConnectionId::try_new(floe_access::ATTENTION_CONNECTION).unwrap(),
+                floe_context_contract::ExecutionOwnerId::try_new("macos:device").unwrap(),
+                floe_connections::ResourceMode::AllAvailable,
+                vec![
+                    floe_connections::ConnectionResource::new(
+                        ResourceHandle::try_new(floe_access::ATTENTION_RESOURCE).unwrap(),
+                        "Attention".into(),
+                    )
+                    .unwrap(),
+                ],
+                "c".repeat(64),
+            )
+            .await
+            .unwrap();
+        let logical = floe_context_contract::connection_view_resource(
+            floe_context_contract::ATTENTION_VIEW_ID,
+            source.connection_id(),
+        )
+        .unwrap();
         let calendar = FixtureCalendarSubject {
             fingerprint: "a".repeat(64),
         };
@@ -733,13 +770,21 @@ mod tests {
         let cancellation = floe_execution::Cancellation::default();
         let snapshot = snapshots
             .capture_inline(
-                &requirement(
+                &SourceAccessRequirement::try_new(
                     "floe.source.attention",
-                    Some(floe_access::ATTENTION_CONNECTOR),
-                    Some(floe_access::ATTENTION_CONNECTION),
-                    vec![floe_access::ATTENTION_RESOURCE],
+                    Some(source.connector_id().clone()),
+                    Some(source.connection_id().clone()),
+                    GrantOperation::Read,
+                    GrantConsumer::builtin("assistant").unwrap(),
+                    GrantPurpose::Assistant,
+                    vec![logical.clone()],
+                    None,
                     SourceAccessRequirementKind::EnableObserve,
-                ),
+                    Some(source.source_authority()),
+                    None,
+                    true,
+                )
+                .unwrap(),
                 fixture.person_id,
                 "device",
                 &cancellation,
@@ -749,18 +794,16 @@ mod tests {
         assert_eq!(snapshot.members.len(), 1);
         assert_eq!(
             snapshot.members[0].member_id,
-            floe_access::ATTENTION_CONNECTOR
+            floe_context_contract::ATTENTION_VIEW_ID
         );
-        assert_eq!(
-            snapshot.members[0].resource,
-            floe_access::ATTENTION_RESOURCE
-        );
+        assert_eq!(snapshot.members[0].resource, logical.as_str());
         assert_eq!(snapshot.members[0].expected_grant, None);
         assert_eq!(
             snapshot.native_subject.as_deref(),
             Some("c".repeat(64).as_str())
         );
-        assert_eq!(snapshot.connection_revision, None);
+        assert_eq!(snapshot.connection_revision, Some(source.revision()));
+        assert_eq!(snapshot.source_revision, Some(source.source_authority()));
         assert_eq!(snapshot.producer_fingerprint, None);
     }
 
@@ -848,10 +891,7 @@ mod tests {
             current.native_subject_fingerprint(),
             Some("d".repeat(64).as_str())
         );
-        assert_eq!(
-            snapshot.source_revision,
-            Some(current.source_authority())
-        );
+        assert_eq!(snapshot.source_revision, Some(current.source_authority()));
         assert_eq!(
             snapshot.native_subject.as_deref(),
             Some("d".repeat(64).as_str())

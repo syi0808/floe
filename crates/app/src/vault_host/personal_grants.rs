@@ -44,6 +44,7 @@ impl floe_context::PersonalConnectionReader for CorePersonalConnections<'_> {
 }
 
 pub(crate) struct PersonalDependencyResolver<'a, Keys: VaultKeyProvider> {
+    pub(crate) core: &'a FloeCore,
     pub(crate) vault: &'a EncryptedAgentVault<Keys>,
     pub(crate) local_context: &'a LocalContextHost,
     pub(crate) person_id: PersonId,
@@ -88,6 +89,7 @@ impl<Keys: VaultKeyProvider> DependencyResolver for PersonalDependencyResolver<'
     ) -> Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
         Box::pin(async move {
             floe_context::authorize_personal_dependency(
+                &CorePersonalConnections { core: self.core },
                 &VaultGrantRecords::new(self.vault),
                 &native_driver(self.local_context),
                 self.person_id,

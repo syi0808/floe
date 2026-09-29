@@ -337,6 +337,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 floe_access::SystemConsentClock,
             );
             let personal_resolver = personal_grants::PersonalDependencyResolver {
+                core: &self.core,
                 vault: &self.vault,
                 local_context: &self.local_context,
                 person_id,
@@ -402,6 +403,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 device_id: &context.device_id,
             };
             let wellbeing_reader = PersonalWellbeingReader {
+                core: &self.core,
                 vault: &self.vault,
                 local_context: &self.local_context,
                 device_id: &context.device_id,

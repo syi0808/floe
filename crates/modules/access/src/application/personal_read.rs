@@ -28,9 +28,6 @@ pub struct PersonalReadRequirement<'a> {
     pub resource: &'a str,
     /// Who the read is for.
     pub consumer: &'a GrantConsumer,
-    /// The grant must name the same source authority too, not only the same
-    /// Person, connector, connection and execution owner.
-    pub same_authority: bool,
     /// A second live grant on the same source is a review the Person owes,
     /// rather than a choice this read may make on their behalf.
     pub reject_ambiguous: bool,
@@ -53,14 +50,9 @@ pub fn active_read_grant(
     requirement: &PersonalReadRequirement<'_>,
 ) -> Result<DataAccessGrant, AgentFailure> {
     let source = requirement.source;
-    let mut live = grants.iter().filter(|grant| {
-        grant.state() != GrantState::Revoked
-            && if requirement.same_authority {
-                grant.source() == source
-            } else {
-                binds_source(grant, source)
-            }
-    });
+    let mut live = grants
+        .iter()
+        .filter(|grant| grant.state() != GrantState::Revoked && binds_source(grant, source));
     let grant = live.next().ok_or(AgentFailure::AccessReviewRequired)?;
     if requirement.reject_ambiguous && live.next().is_some() {
         return Err(AgentFailure::AccessReviewRequired);
@@ -253,7 +245,6 @@ mod tests {
             source,
             resource: "attention.coarse",
             consumer,
-            same_authority: false,
             reject_ambiguous: false,
         }
     }

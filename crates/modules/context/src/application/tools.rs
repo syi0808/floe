@@ -12,12 +12,15 @@ use floe_agent_contract::{
     AgentFailure, DependencyCoverage, PersonId, ToolCall, ToolDescriptor, ToolResult,
 };
 use floe_context_contract::{
-    GrantConsumer, GrantOperation, GrantPurpose, SourceAccessBlockers, SourceAccessRequirement,
-    SourceAccessRequirementKind, SourceReadOutcome,
+    ConnectionId, GrantConsumer, GrantOperation, GrantPurpose, SourceAccessBlockers,
+    SourceAccessRequirement, SourceAccessRequirementKind, SourceReadOutcome,
+    SourceSelectionReference, connection_view_resource,
 };
 
 use crate::application::service::{ContextService, PreparedContext};
-use crate::ports::personal_source::{PersonalGrantRecords, PersonalSourceDriver};
+use crate::ports::personal_source::{
+    PersonalConnectionReader, PersonalGrantRecords, PersonalSourceDriver,
+};
 use crate::ports::source_reader::SourceReader;
 use crate::{ASSISTANT_CONSUMER, SourceView};
 
@@ -145,18 +148,22 @@ pub fn manager_tool_descriptors() -> Vec<ToolDescriptor> {
 /// tools read through the injected remote source reader. A missing remote
 /// reader means the remote sources are unavailable — never a reason to fall
 /// back to another route.
-pub struct ContextToolService<Records, Driver, Remote> {
+pub struct ContextToolService<Connections, Records, Driver, Remote> {
     person_id: PersonId,
     device_id: String,
+    connections: Connections,
     records: Records,
     driver: Driver,
     remote: Option<Remote>,
 }
 
-impl<Records, Driver, Remote> ContextToolService<Records, Driver, Remote> {
+impl<Connections, Records, Driver, Remote>
+    ContextToolService<Connections, Records, Driver, Remote>
+{
     pub fn new(
         person_id: PersonId,
         device_id: impl Into<String>,
+        connections: Connections,
         records: Records,
         driver: Driver,
         remote: Option<Remote>,
@@ -168,6 +175,7 @@ impl<Records, Driver, Remote> ContextToolService<Records, Driver, Remote> {
         Ok(Self {
             person_id,
             device_id,
+            connections,
             records,
             driver,
             remote,
@@ -190,12 +198,76 @@ struct MailInput {
     limit: usize,
 }
 
-impl<Records, Driver, Remote> ContextToolService<Records, Driver, Remote>
+impl<Connections, Records, Driver, Remote> ContextToolService<Connections, Records, Driver, Remote>
 where
+    Connections: PersonalConnectionReader,
     Records: PersonalGrantRecords,
     Driver: PersonalSourceDriver,
     Remote: SourceReader,
 {
+    async fn standing_selection(
+        &self,
+        view: &str,
+        connections: &[&str],
+    ) -> Result<Option<SourceSelectionReference>, AgentFailure> {
+        let mut selected = None;
+        for connection_id in connections {
+            let connection_id =
+                ConnectionId::try_new(*connection_id).map_err(|_| AgentFailure::InvalidInput)?;
+            let Some(source) = self
+                .connections
+                .load(self.person_id, &connection_id)
+                .await?
+            else {
+                continue;
+            };
+            let reference = SourceSelectionReference {
+                connector_id: source.connector_id().clone(),
+                connection_id: source.connection_id().clone(),
+                execution_owner_id: source.execution_owner_id().clone(),
+                capability_id: view.to_owned(),
+                resource: connection_view_resource(view, source.connection_id())
+                    .map_err(|_| AgentFailure::InvalidInput)?,
+                contract_version: 1,
+            };
+            crate::validate_personal_source_selection(
+                &reference,
+                &source,
+                self.person_id,
+                &self.device_id,
+            )?;
+            if selected.replace(reference).is_some() {
+                return Err(AgentFailure::PolicyDenied);
+            }
+        }
+        Ok(selected)
+    }
+
+    fn missing_standing_source(
+        source_id: &str,
+        consumer: GrantConsumer,
+    ) -> Result<SourceReadOutcome<ToolResult>, AgentFailure> {
+        let requirement = SourceAccessRequirement::try_new(
+            source_id,
+            None,
+            None,
+            GrantOperation::Read,
+            consumer,
+            GrantPurpose::Assistant,
+            vec![],
+            None,
+            SourceAccessRequirementKind::SelectResource,
+            None,
+            None,
+            false,
+        )
+        .map_err(|_| AgentFailure::InvalidInput)?;
+        Ok(SourceReadOutcome::NeedsUserAction(
+            SourceAccessBlockers::try_new(vec![requirement])
+                .map_err(|_| AgentFailure::InvalidInput)?,
+        ))
+    }
+
     fn empty_input(call: &ToolCall) -> Result<(), AgentFailure> {
         serde_json::from_str::<EmptyInput>(&call.input).map_err(|_| AgentFailure::InvalidInput)?;
         Ok(())
@@ -319,13 +391,23 @@ where
                 Self::empty_input(call)?;
                 let consumer = GrantConsumer::builtin(ASSISTANT_CONSUMER)
                     .map_err(|_| AgentFailure::InvalidInput)?;
-                match crate::read_manager_people_outcome(
+                let Some(selected) = self
+                    .standing_selection(
+                        floe_context_contract::PEOPLE_VIEW_ID,
+                        &["contacts.apple.local", "contacts.android.local"],
+                    )
+                    .await?
+                else {
+                    return Self::missing_standing_source("floe.source.contacts", consumer);
+                };
+                match crate::read_selected_people_outcome(
+                    &self.connections,
                     &self.records,
                     &self.driver,
                     self.person_id,
                     &self.device_id,
+                    &selected,
                     ASSISTANT_CONSUMER,
-                    consumer,
                     deadline,
                     &cancellation,
                 )
@@ -381,11 +463,22 @@ where
             ATTENTION_COARSE_READ => {
                 Self::empty_input(call)?;
                 let consumer = floe_access::attention_consumer(ASSISTANT_CONSUMER)?;
-                match crate::admit_attention_outcome(
+                let Some(selected) = self
+                    .standing_selection(
+                        floe_context_contract::ATTENTION_VIEW_ID,
+                        &["attention.macos.local"],
+                    )
+                    .await?
+                else {
+                    return Self::missing_standing_source("floe.source.attention", consumer);
+                };
+                match crate::admit_selected_attention_outcome(
+                    &self.connections,
                     &self.records,
                     &self.driver,
                     self.person_id,
                     &self.device_id,
+                    &selected,
                     consumer,
                     call.call_id,
                     deadline,
@@ -410,15 +503,27 @@ where
             }
             WELLBEING_DERIVED_READ => {
                 Self::empty_input(call)?;
-                let consumer = GrantConsumer::builtin(ASSISTANT_CONSUMER)
-                    .map_err(|_| AgentFailure::InvalidInput)?;
-                match crate::read_wellbeing_outcome(
+                let Some(selected) = self
+                    .standing_selection(
+                        floe_context_contract::WELLBEING_VIEW_ID,
+                        &["health.apple.local"],
+                    )
+                    .await?
+                else {
+                    return Self::missing_standing_source(
+                        "floe.source.wellbeing",
+                        GrantConsumer::builtin(ASSISTANT_CONSUMER)
+                            .map_err(|_| AgentFailure::InvalidInput)?,
+                    );
+                };
+                match crate::read_selected_wellbeing_outcome(
+                    &self.connections,
                     &self.records,
                     &self.driver,
                     self.person_id,
                     &self.device_id,
+                    &selected,
                     ASSISTANT_CONSUMER,
-                    consumer,
                     call.call_id,
                     deadline,
                     &cancellation,
@@ -524,8 +629,8 @@ mod tests {
 
     use chrono::{Duration, Utc};
     use floe_access::{
-        DataAccessGrant, FeasibilityGrantQuery, GrantDataCategory,
-        GrantId, GrantOperation, GrantPurpose, GrantScope, ResourceHandle, SourceAuthority,
+        DataAccessGrant, FeasibilityGrantQuery, GrantDataCategory, GrantId, GrantOperation,
+        GrantPurpose, GrantScope, ResourceHandle, SourceAuthority,
     };
     use floe_agent_contract::{AGENT_VERSION, AgentFailure, BoxFuture, InvocationKey, ToolCall};
     use floe_context_contract::{
@@ -544,6 +649,81 @@ mod tests {
 
     const DEVICE: &str = "device";
     const SUBJECT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    #[derive(Clone)]
+    struct FixtureConnections {
+        sources: Vec<floe_connections::SourceConnection>,
+    }
+
+    impl FixtureConnections {
+        fn new(person_id: PersonId) -> Self {
+            let sources = [
+                "contacts.apple.local",
+                "attention.macos.local",
+                "health.apple.local",
+            ]
+            .iter()
+            .map(|connection| {
+                let (connector, owner, mode, handle) = match *connection {
+                    "contacts.apple.local" => (
+                        "contacts.apple",
+                        "apple:device",
+                        floe_connections::ResourceMode::Selected,
+                        "alice",
+                    ),
+                    "attention.macos.local" => (
+                        "attention.macos",
+                        "macos:device",
+                        floe_connections::ResourceMode::AllAvailable,
+                        "attention.coarse",
+                    ),
+                    _ => (
+                        "health.apple",
+                        "apple:device",
+                        floe_connections::ResourceMode::AllAvailable,
+                        "wellbeing.derived",
+                    ),
+                };
+                floe_connections::SourceConnection::establish_reviewed_native(
+                    person_id,
+                    floe_context_contract::ConnectorId::try_new(connector).unwrap(),
+                    ConnectionId::try_new(*connection).unwrap(),
+                    floe_context_contract::ExecutionOwnerId::try_new(owner).unwrap(),
+                    mode,
+                    vec![
+                        floe_connections::ConnectionResource::new(
+                            floe_context_contract::ResourceHandle::try_new(handle).unwrap(),
+                            handle.into(),
+                        )
+                        .unwrap(),
+                    ],
+                    SUBJECT.into(),
+                )
+                .unwrap()
+            })
+            .collect();
+            Self { sources }
+        }
+    }
+
+    impl PersonalConnectionReader for FixtureConnections {
+        fn load<'a>(
+            &'a self,
+            person_id: PersonId,
+            connection_id: &'a ConnectionId,
+        ) -> BoxFuture<'a, Result<Option<floe_connections::SourceConnection>, AgentFailure>>
+        {
+            Box::pin(async move {
+                Ok(self
+                    .sources
+                    .iter()
+                    .find(|source| {
+                        source.person_id() == person_id && source.connection_id() == connection_id
+                    })
+                    .cloned())
+            })
+        }
+    }
 
     fn scope_fixture(resource: &str) -> GrantScope {
         GrantScope::try_new(
@@ -566,9 +746,7 @@ mod tests {
             scope.clone(),
         )
         .unwrap();
-        grant
-            .activate_review(grant.authority(), scope)
-            .unwrap();
+        grant.activate_review(grant.authority(), scope).unwrap();
         grant
     }
 
@@ -581,24 +759,31 @@ mod tests {
 
     impl FixtureRecords {
         fn new(person_id: PersonId) -> Self {
-            let people = floe_access::contacts_source(
-                person_id,
-                DEVICE,
-                "contacts.apple",
+            let people = floe_access::contacts_source(person_id, DEVICE, "contacts.apple").unwrap();
+            let feasibility = floe_access::feasibility_source(person_id, DEVICE).unwrap();
+            let wellbeing = floe_access::wellbeing_source(person_id, DEVICE).unwrap();
+            let attention = floe_access::attention_source(person_id, DEVICE).unwrap();
+            let people_resource = connection_view_resource(
+                floe_context_contract::PEOPLE_VIEW_ID,
+                &people.connection_id(),
             )
             .unwrap();
-            let feasibility =
-                floe_access::feasibility_source(person_id, DEVICE).unwrap();
-            let wellbeing =
-                floe_access::wellbeing_source(person_id, DEVICE).unwrap();
-            let attention =
-                floe_access::attention_source(person_id, DEVICE).unwrap();
+            let attention_resource = connection_view_resource(
+                floe_context_contract::ATTENTION_VIEW_ID,
+                &attention.connection_id(),
+            )
+            .unwrap();
+            let wellbeing_resource = connection_view_resource(
+                floe_context_contract::WELLBEING_VIEW_ID,
+                &wellbeing.connection_id(),
+            )
+            .unwrap();
             Self {
                 grants: vec![
-                    active_grant(people, floe_access::PEOPLE_RESOURCE),
+                    active_grant(people, people_resource.as_str()),
                     active_grant(feasibility, floe_access::FEASIBILITY_RESOURCE),
-                    active_grant(wellbeing, floe_access::WELLBEING_RESOURCE),
-                    active_grant(attention, floe_access::ATTENTION_RESOURCE),
+                    active_grant(wellbeing, wellbeing_resource.as_str()),
+                    active_grant(attention, attention_resource.as_str()),
                 ],
                 subject: SUBJECT.into(),
                 handles: vec!["alice".into()],
@@ -934,10 +1119,11 @@ mod tests {
     fn service(
         person_id: PersonId,
         remote: Option<StaticRemote>,
-    ) -> ContextToolService<FixtureRecords, FixtureDriver, StaticRemote> {
+    ) -> ContextToolService<FixtureConnections, FixtureRecords, FixtureDriver, StaticRemote> {
         ContextToolService::new(
             person_id,
             DEVICE,
+            FixtureConnections::new(person_id),
             FixtureRecords::new(person_id),
             FixtureDriver {
                 process: Uuid::new_v4(),
@@ -983,7 +1169,12 @@ mod tests {
     }
 
     async fn ready(
-        service: &ContextToolService<FixtureRecords, FixtureDriver, StaticRemote>,
+        service: &ContextToolService<
+            FixtureConnections,
+            FixtureRecords,
+            FixtureDriver,
+            StaticRemote,
+        >,
         call: &ToolCall,
         scope: &ExecutionScope,
     ) -> ToolResult {
@@ -1043,6 +1234,7 @@ mod tests {
             ContextToolService::new(
                 PersonId::new(),
                 "",
+                FixtureConnections::new(PersonId::new()),
                 FixtureRecords::new(PersonId::new()),
                 FixtureDriver {
                     process: Uuid::new_v4()
@@ -1209,6 +1401,7 @@ mod tests {
         let service = ContextToolService::new(
             person_id,
             DEVICE,
+            FixtureConnections::new(person_id),
             FixtureRecords::new(person_id),
             FixtureDriver {
                 process: Uuid::new_v4(),
@@ -1279,13 +1472,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn revoked_people_selection_requires_review() {
+    async fn standing_people_selection_comes_from_connections_not_grant_records() {
         let person_id = PersonId::new();
         let mut records = FixtureRecords::new(person_id);
         records.handles.clear();
         let service = ContextToolService::new(
             person_id,
             DEVICE,
+            FixtureConnections::new(person_id),
             records,
             FixtureDriver {
                 process: Uuid::new_v4(),
@@ -1298,15 +1492,13 @@ mod tests {
             .invoke_outcome(&call(PEOPLE_IDENTITY_READ, "{}"), &scope)
             .await
             .unwrap();
-        let requirement = blocked_requirement(outcome);
+        let floe_context_contract::SourceReadOutcome::Ready(result) = outcome else {
+            panic!("current Connections selection must admit the read");
+        };
         assert_eq!(
-            requirement.reason(),
-            floe_context_contract::SourceAccessRequirementKind::SelectResource
+            dependent_of(&result).source_resources()[0].as_str(),
+            "alice"
         );
-        // The granting connection is known, but selection happens in the
-        // picker, never inline.
-        assert!(requirement.connection_id().is_some());
-        assert!(!requirement.inline_resolution());
     }
 
     #[tokio::test]
@@ -1317,6 +1509,7 @@ mod tests {
         let service = ContextToolService::new(
             person_id,
             DEVICE,
+            FixtureConnections::new(person_id),
             records,
             FixtureDriver {
                 process: Uuid::new_v4(),
@@ -1345,8 +1538,7 @@ mod tests {
             assert!(requirement.connection_id().is_some());
             assert!(requirement.inline_resolution());
         }
-        // Contacts span two platform connectors: no grant names one, so no
-        // connection is invented and the review navigates to settings.
+        // The current Contacts connection is known even though no grant exists.
         let outcome = service
             .invoke_outcome(&call(PEOPLE_IDENTITY_READ, "{}"), &scope)
             .await
@@ -1357,15 +1549,14 @@ mod tests {
             requirement.reason(),
             floe_context_contract::SourceAccessRequirementKind::EnableObserve
         );
-        assert!(requirement.connection_id().is_none());
+        assert!(requirement.connection_id().is_some());
         assert!(!requirement.inline_resolution());
     }
 
     #[tokio::test]
     async fn paused_personal_grant_binds_the_observed_grant() {
         let person_id = PersonId::new();
-        let source =
-            floe_access::attention_source(person_id, DEVICE).unwrap();
+        let source = floe_access::attention_source(person_id, DEVICE).unwrap();
         let scope_fixture = scope_fixture(floe_access::ATTENTION_RESOURCE);
         let paused =
             DataAccessGrant::new(GrantId::new(), Uuid::new_v4(), source, scope_fixture).unwrap();
@@ -1375,6 +1566,7 @@ mod tests {
         let service = ContextToolService::new(
             person_id,
             DEVICE,
+            FixtureConnections::new(person_id),
             records,
             FixtureDriver {
                 process: Uuid::new_v4(),
@@ -1400,8 +1592,7 @@ mod tests {
     #[tokio::test]
     async fn duplicate_and_corrupt_personal_authority_fail_closed() {
         let person_id = PersonId::new();
-        let source =
-            floe_access::attention_source(person_id, DEVICE).unwrap();
+        let source = floe_access::attention_source(person_id, DEVICE).unwrap();
         let grants = vec![
             DataAccessGrant::new(
                 GrantId::new(),
@@ -1423,6 +1614,7 @@ mod tests {
         let service = ContextToolService::new(
             person_id,
             DEVICE,
+            FixtureConnections::new(person_id),
             records,
             FixtureDriver {
                 process: Uuid::new_v4(),
@@ -1476,6 +1668,7 @@ mod tests {
         let service = ContextToolService::new(
             person_id,
             DEVICE,
+            FixtureConnections::new(person_id),
             CorruptRecords,
             FixtureDriver {
                 process: Uuid::new_v4(),

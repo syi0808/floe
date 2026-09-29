@@ -288,6 +288,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         None => None,
     };
     let personal_resolver = personal_grants::PersonalDependencyResolver {
+        core: inputs.core,
         vault,
         local_context,
         person_id,
@@ -389,6 +390,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         let tool_service = floe_context::ContextToolService::new(
             person_id,
             request.device_id.clone(),
+            personal_grants::CorePersonalConnections { core: inputs.core },
             floe_vault::VaultGrantRecords::new(vault),
             personal_grants::native_driver(local_context),
             remote_reader.as_ref(),
@@ -1270,7 +1272,9 @@ mod tests {
     ) -> floe_conversation::AgentSession {
         let person_id = session.person_id;
         let local_context = LocalContextHost::default();
+        let core = FloeCore::open(":memory:").await.unwrap();
         let resolver = personal_grants::PersonalDependencyResolver {
+            core: &core,
             vault: vault.as_ref(),
             local_context: &local_context,
             person_id,
@@ -1645,7 +1649,9 @@ mod tests {
             read_count.clone(),
         ));
 
-        let inspected = floe_access::apply_personal_access(
+        let core = FloeCore::open(":memory:").await.unwrap();
+        let inspected = super::super::personal_access::apply_personal(
+            &core,
             &vault,
             &personal_grants::native_driver(&local_context),
             person_id,
@@ -1660,7 +1666,8 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(inspected.native_subject_fingerprint, Some(subject.clone()));
-        let reviewed = floe_access::apply_personal_access(
+        let reviewed = super::super::personal_access::apply_personal(
+            &core,
             &vault,
             &personal_grants::native_driver(&local_context),
             person_id,
@@ -1680,9 +1687,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(reviewed.state, floe_access::PersonalAccessState::Active);
-        assert_eq!(
-            reviewed.consumers,
-            vec![floe_access::ATTENTION_ASSISTANT_CONSUMER]
+        assert!(
+            reviewed
+                .consumers
+                .contains(&floe_access::ATTENTION_ASSISTANT_CONSUMER.to_owned())
         );
 
         let liveness = personal_grants::PersonalDependencyLiveness {
@@ -1691,31 +1699,20 @@ mod tests {
             device_id: "test-device",
         };
         let store = vault.governed_general_store_with_liveness(session.id, &liveness);
-        let core = FloeCore::open(":memory:").await.unwrap();
         let reader = PersonalAttentionReader {
             core: &core,
             vault: &vault,
             local_context: &local_context,
             device_id: "test-device",
         };
-        let source = floe_connections::SourceConnection::establish_reviewed_native(
-            person_id,
-            floe_context_contract::ConnectorId::try_new("attention.macos").unwrap(),
-            floe_context_contract::ConnectionId::try_new("attention.macos.local").unwrap(),
-            floe_context_contract::ExecutionOwnerId::try_new("macos:test-device").unwrap(),
-            floe_connections::ResourceMode::AllAvailable,
-            vec![
-                floe_connections::ConnectionResource::new(
-                    floe_context_contract::ResourceHandle::try_new("attention.coarse").unwrap(),
-                    "Attention".into(),
-                )
-                .unwrap(),
-            ],
-            subject.clone(),
-        )
-        .unwrap();
-        floe_connections::SourceRepository::create(&core.store, &source)
+        let source = core
+            .source_service()
+            .load(
+                person_id,
+                &floe_context_contract::ConnectionId::try_new("attention.macos.local").unwrap(),
+            )
             .await
+            .unwrap()
             .unwrap();
         let selected =
             floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
@@ -1774,6 +1771,7 @@ mod tests {
         store.compare_and_swap(&admitted, 0).await.unwrap();
 
         let resolver = personal_grants::PersonalDependencyResolver {
+            core: &core,
             vault: &vault,
             local_context: &local_context,
             person_id,
@@ -2085,9 +2083,11 @@ mod tests {
         let local_context = LocalContextHost::default();
         // No remote reader: IO is impossible, so an unknown `authority` field
         // must fail input validation rather than reach any transport.
+        let core = FloeCore::open(":memory:").await.unwrap();
         let tools = floe_context::ContextToolService::new(
             person_id,
             "test-device",
+            personal_grants::CorePersonalConnections { core: &core },
             floe_vault::VaultGrantRecords::new(&vault),
             personal_grants::native_driver(&local_context),
             None::<&remote_views::RemoteViewReader<AttentionTestKeys>>,
@@ -2120,9 +2120,11 @@ mod tests {
         let local_context = LocalContextHost::default();
         // A fresh vault holds no reviewed grants: every personal tool fails
         // closed without consulting any model route.
+        let core = FloeCore::open(":memory:").await.unwrap();
         let tools = floe_context::ContextToolService::new(
             person_id,
             "test-device",
+            personal_grants::CorePersonalConnections { core: &core },
             floe_vault::VaultGrantRecords::new(&vault),
             personal_grants::native_driver(&local_context),
             None::<&remote_views::RemoteViewReader<AttentionTestKeys>>,
@@ -2155,7 +2157,11 @@ mod tests {
             assert_eq!(blockers.blockers().len(), 1, "{tool_id}");
             assert_eq!(
                 blockers.blockers()[0].reason(),
-                floe_context_contract::SourceAccessRequirementKind::EnableObserve,
+                if tool_id == "schedule.feasibility.read" {
+                    floe_context_contract::SourceAccessRequirementKind::EnableObserve
+                } else {
+                    floe_context_contract::SourceAccessRequirementKind::SelectResource
+                },
                 "{tool_id}"
             );
         }
@@ -2251,15 +2257,34 @@ mod tests {
             .unwrap();
 
         let local_context = LocalContextHost::default();
+        let core = FloeCore::open(":memory:").await.unwrap();
+        core.source_service()
+            .establish_reviewed_native(
+                person_id,
+                floe_context_contract::ConnectorId::try_new("attention.macos").unwrap(),
+                floe_context_contract::ConnectionId::try_new("attention.macos.local").unwrap(),
+                floe_context_contract::ExecutionOwnerId::try_new("macos:test-device").unwrap(),
+                floe_connections::ResourceMode::AllAvailable,
+                vec![
+                    floe_connections::ConnectionResource::new(
+                        floe_context_contract::ResourceHandle::try_new("attention.coarse").unwrap(),
+                        "Attention".into(),
+                    )
+                    .unwrap(),
+                ],
+                "b".repeat(64),
+            )
+            .await
+            .unwrap();
         let tools = floe_context::ContextToolService::new(
             person_id,
             "test-device".to_owned(),
+            personal_grants::CorePersonalConnections { core: &core },
             floe_vault::VaultGrantRecords::new(vault.as_ref()),
             personal_grants::native_driver(&local_context),
             None::<&remote_views::RemoteViewReader<'_, AttentionTestKeys>>,
         )
         .unwrap();
-        let core = FloeCore::open(":memory:").await.unwrap();
         let calendar_subject =
             crate::vault_host::review_snapshot::fixtures::FixtureCalendarSubject {
                 fingerprint: "a".repeat(64),
@@ -2463,9 +2488,11 @@ mod tests {
         let remote = StaticSourceReader {
             payload: serde_json::json!({"hits": ["m1"]}),
         };
+        let core = FloeCore::open(":memory:").await.unwrap();
         let tools = floe_context::ContextToolService::new(
             person_id,
             "test-device",
+            personal_grants::CorePersonalConnections { core: &core },
             floe_vault::VaultGrantRecords::new(&vault),
             personal_grants::native_driver(&local_context),
             Some(remote),
@@ -2579,7 +2606,9 @@ mod tests {
         let local_context = LocalContextHost::default();
         // The exact root composition shape: vault evidence plus the composite
         // Context dependency authority the model fence uses.
+        let core = FloeCore::open(":memory:").await.unwrap();
         let personal_resolver = personal_grants::PersonalDependencyResolver {
+            core: &core,
             vault: &vault,
             local_context: &local_context,
             person_id,
@@ -3361,6 +3390,7 @@ mod tests {
 
     struct B2Attention {
         _root: tempfile::TempDir,
+        core: FloeCore,
         vault: EncryptedAgentVault<AttentionTestKeys>,
         local_context: Arc<LocalContextHost>,
         stop: Arc<AtomicBool>,
@@ -3376,6 +3406,7 @@ mod tests {
                 EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
                     .await
                     .unwrap();
+            let core = FloeCore::open(":memory:").await.unwrap();
             let local_context = Arc::new(LocalContextHost::default());
             let host_epoch = "attention-b2-host".to_owned();
             local_context
@@ -3398,7 +3429,8 @@ mod tests {
                 Arc::new(AtomicUsize::new(0)),
                 Arc::new(AtomicUsize::new(0)),
             ));
-            let inspected = floe_access::apply_personal_access(
+            let inspected = super::super::personal_access::apply_personal(
+                &core,
                 &vault,
                 &personal_grants::native_driver(&local_context),
                 person_id,
@@ -3413,7 +3445,8 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(inspected.native_subject_fingerprint, Some(subject.clone()));
-            let reviewed = floe_access::apply_personal_access(
+            let reviewed = super::super::personal_access::apply_personal(
+                &core,
                 &vault,
                 &personal_grants::native_driver(&local_context),
                 person_id,
@@ -3435,6 +3468,7 @@ mod tests {
             assert_eq!(reviewed.state, floe_access::PersonalAccessState::Active);
             Self {
                 _root: root,
+                core,
                 vault,
                 local_context,
                 stop,
@@ -3443,7 +3477,8 @@ mod tests {
         }
 
         async fn disable(&self) {
-            let overview = floe_access::apply_personal_access(
+            let overview = super::super::personal_access::apply_personal(
+                &self.core,
                 &self.vault,
                 &personal_grants::native_driver(&self.local_context),
                 self.person_id,
@@ -3471,6 +3506,7 @@ mod tests {
             let tools = floe_context::ContextToolService::new(
                 self.person_id,
                 "test-device",
+                personal_grants::CorePersonalConnections { core: &self.core },
                 floe_vault::VaultGrantRecords::new(&self.vault),
                 personal_grants::native_driver(&self.local_context),
                 None::<&remote_views::RemoteViewReader<AttentionTestKeys>>,
@@ -3527,6 +3563,7 @@ mod tests {
         current_turn: Vec<floe_agent_contract::ModelConversationEntry>,
     ) -> floe_agent_contract::AuthorizedModelProjection {
         let personal = personal_grants::PersonalDependencyResolver {
+            core: &fixture.core,
             vault: &fixture.vault,
             local_context: &fixture.local_context,
             person_id: fixture.person_id,
@@ -3612,6 +3649,7 @@ mod tests {
         );
         // The dispatch fence admits while the grant is live.
         let personal = personal_grants::PersonalDependencyResolver {
+            core: &fixture.core,
             vault: &fixture.vault,
             local_context: &fixture.local_context,
             person_id: fixture.person_id,
@@ -3648,7 +3686,7 @@ mod tests {
         assert_eq!(
             floe_access::consume_model_dispatch(permit).await.err(),
             Some(floe_access::ModelDispatchDenial::Hard(
-                AgentFailure::AccessReviewRequired
+                AgentFailure::PolicyDenied
             ))
         );
         // End to end through InferenceService: dispatch denies, the provider
@@ -3679,7 +3717,7 @@ mod tests {
             )
             .await
             .err(),
-            Some(AgentFailure::AccessReviewRequired)
+            Some(AgentFailure::PolicyDenied)
         );
         assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
         let snapshot = ledger.snapshot();
@@ -3694,6 +3732,7 @@ mod tests {
     /// succeeds, so post-response revalidation observes revoked authority.
     struct RevokeAfterConsume<'a> {
         inner: CompositeDependencyResolver<'a>,
+        core: &'a FloeCore,
         vault: &'a EncryptedAgentVault<AttentionTestKeys>,
         local_context: &'a LocalContextHost,
         person_id: PersonId,
@@ -3714,7 +3753,8 @@ mod tests {
                 // before the post-response revalidation (3rd).
                 if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
                     result.as_ref().unwrap();
-                    floe_access::apply_personal_access(
+                    super::super::personal_access::apply_personal(
+                        self.core,
                         self.vault,
                         &personal_grants::native_driver(self.local_context),
                         self.person_id,
@@ -3755,6 +3795,7 @@ mod tests {
         )
         .await;
         let personal = personal_grants::PersonalDependencyResolver {
+            core: &fixture.core,
             vault: &fixture.vault,
             local_context: &fixture.local_context,
             person_id: fixture.person_id,
@@ -3766,6 +3807,7 @@ mod tests {
                 remote: None,
                 calendar: None,
             },
+            core: &fixture.core,
             vault: &fixture.vault,
             local_context: &fixture.local_context,
             person_id: fixture.person_id,

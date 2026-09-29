@@ -364,55 +364,86 @@ where
         device_id: &str,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<LiveInlineState, AgentFailure> {
-        let (probe, identity_resource) = match connector {
-            floe_access::ATTENTION_CONNECTOR => (
-                floe_access::PersonalSubjectProbe::Attention,
-                floe_access::ATTENTION_RESOURCE,
-            ),
-            floe_access::WELLBEING_CONNECTOR => (
-                floe_access::PersonalSubjectProbe::Wellbeing,
-                floe_access::WELLBEING_RESOURCE,
-            ),
+        let spec = crate::personal_source_spec::PersonalSourceSpec::for_connector(connector)?;
+        let probe = match connector {
+            floe_access::ATTENTION_CONNECTOR => floe_access::PersonalSubjectProbe::Attention,
+            floe_access::WELLBEING_CONNECTOR => floe_access::PersonalSubjectProbe::Wellbeing,
             _ => return Err(AgentFailure::CapabilityUnavailable),
         };
+        let connection_id = floe_context_contract::ConnectionId::try_new(&target.connection_id)
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        let Some(source) = self
+            .core
+            .source_service()
+            .load(person_id, &connection_id)
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+        else {
+            return Ok(Self::unusable());
+        };
+        if spec.validate_connection(&source, device_id).is_err() {
+            return Ok(Self::unusable());
+        }
+        let logical =
+            floe_context_contract::connection_view_resource(spec.view, source.connection_id())
+                .map_err(|_| AgentFailure::InvalidInput)?;
         if target.members.len() != 1
-            || target.members[0].member_id != connector
-            || target.members[0].resource != identity_resource
+            || target.members[0].member_id != spec.view
+            || target.members[0].resource != logical.as_str()
         {
             return Ok(Self::unusable());
         }
+        let subject = source
+            .native_subject_fingerprint()
+            .ok_or(AgentFailure::AccessReviewRequired)?;
         let evidence = self
             .personal_subject
             .inspect(
                 person_id,
                 device_id,
                 probe,
-                None,
+                Some(subject.to_owned()),
                 Some(self.probe_deadline),
                 cancellation.clone(),
             )
             .await?;
-        if evidence.before != evidence.after {
+        if evidence.before != subject || evidence.after != subject {
             return Err(AgentFailure::AccessReviewRequired);
+        }
+        let Some(current) = self
+            .core
+            .source_service()
+            .load(person_id, source.connection_id())
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+        else {
+            return Ok(Self::unusable());
+        };
+        if current.source_authority() != source.source_authority()
+            || current.native_subject_fingerprint() != source.native_subject_fingerprint()
+            || current
+                .resources()
+                .iter()
+                .map(|resource| resource.handle())
+                .ne(source.resources().iter().map(|resource| resource.handle()))
+            || !current.is_serving()
+        {
+            return Ok(Self::unusable());
         }
         let member = self
             .probed_member(
                 connector,
-                &target.connection_id,
-                connector,
-                identity_resource,
+                source.connection_id().as_str(),
+                spec.view,
+                logical.as_str(),
                 person_id,
                 Some(device_id),
             )
             .await?;
-        let source_revision = match member.live_grants.as_slice() {
-            [grant] => Some(self.vault.personal_grant_source_authority(grant.id).await?),
-            _ => None,
-        };
         Ok(LiveInlineState {
-            source_revision,
+            source_revision: Some(current.source_authority()),
             members: vec![member],
-            connection_revision: None,
+            connection_revision: Some(current.revision()),
             producer_fingerprint: None,
             native_subject: Some(evidence.before),
             connection_usable: true,
@@ -610,6 +641,19 @@ where
                 return Ok(true);
             }
         }
+        if let Ok(connection_id) = floe_context_contract::ConnectionId::try_new(connection_id) {
+            if let Some(source) = self
+                .core
+                .source_service()
+                .load(person_id, &connection_id)
+                .await
+                .map_err(|_| AgentFailure::StorageUnavailable)?
+            {
+                if source.is_serving() {
+                    return Ok(true);
+                }
+            }
+        }
         match self.vault.remote_pinned_producer().await {
             Ok(_) => Ok(true),
             Err(AgentFailure::NotFound) => Ok(false),
@@ -733,53 +777,86 @@ where
         device_id: &str,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<bool, AgentFailure> {
-        for (connector, probe) in [
-            (
-                floe_access::ATTENTION_CONNECTOR,
-                floe_access::PersonalSubjectProbe::Attention,
-            ),
-            (
-                floe_access::WELLBEING_CONNECTOR,
-                floe_access::PersonalSubjectProbe::Wellbeing,
-            ),
-        ] {
-            let grants = self
-                .vault
-                .list_data_access_grants(128)
-                .await?
-                .into_iter()
-                .filter(|grant| {
-                    grant.source().person_id() == person_id
-                        && grant.source().connector().as_str() == connector
-                        && grant.source().connection_id().as_str() == connection_id
-                        && grant.state() != floe_access::GrantState::Revoked
-                })
-                .collect::<Vec<_>>();
-            if grants.len() != 1 {
-                continue;
+        let connection_id = floe_context_contract::ConnectionId::try_new(connection_id)
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        let Some(source) = self
+            .core
+            .source_service()
+            .load(person_id, &connection_id)
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+        else {
+            return Ok(false);
+        };
+        let spec = match crate::personal_source_spec::PersonalSourceSpec::for_connector(
+            source.connector_id().as_str(),
+        ) {
+            Ok(spec)
+                if matches!(
+                    spec.view,
+                    floe_context_contract::ATTENTION_VIEW_ID
+                        | floe_context_contract::WELLBEING_VIEW_ID
+                ) =>
+            {
+                spec
             }
-            let evidence = self
-                .personal_subject
-                .inspect(
-                    person_id,
-                    device_id,
-                    probe,
-                    None,
-                    Some(self.probe_deadline),
-                    cancellation.clone(),
-                )
-                .await;
-            match evidence {
-                Ok(evidence) if evidence.before == evidence.after => return Ok(true),
-                _ => continue,
-            }
+            _ => return Ok(false),
+        };
+        if spec.validate_connection(&source, device_id).is_err() {
+            return Ok(false);
         }
-        Ok(false)
+        let logical =
+            floe_context_contract::connection_view_resource(spec.view, source.connection_id())
+                .map_err(|_| AgentFailure::InvalidInput)?;
+        let grants = super::review_snapshot::live_grants_for_member(
+            self.vault,
+            person_id,
+            spec.connector,
+            source.connection_id().as_str(),
+            logical.as_str(),
+        )
+        .await?;
+        if !matches!(grants.as_slice(), [grant] if grant.state() == floe_access::GrantState::Active)
+        {
+            return Ok(false);
+        }
+        let probe = if spec.view == floe_context_contract::ATTENTION_VIEW_ID {
+            floe_access::PersonalSubjectProbe::Attention
+        } else {
+            floe_access::PersonalSubjectProbe::Wellbeing
+        };
+        let Some(subject) = source.native_subject_fingerprint() else {
+            return Ok(false);
+        };
+        let evidence = self
+            .personal_subject
+            .inspect(
+                person_id,
+                device_id,
+                probe,
+                Some(subject.to_owned()),
+                Some(self.probe_deadline),
+                cancellation.clone(),
+            )
+            .await;
+        let Ok(evidence) = evidence else {
+            return Ok(false);
+        };
+        if evidence.before != subject || evidence.after != subject {
+            return Ok(false);
+        }
+        let current = self
+            .core
+            .source_service()
+            .load(person_id, source.connection_id())
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        Ok(current.is_some_and(|current| {
+            current.is_serving()
+                && current.source_authority() == source.source_authority()
+                && current.native_subject_fingerprint() == source.native_subject_fingerprint()
+        }))
     }
-
-    /// Remote satisfaction: some remote connector on this connection has
-    /// every canonical view covered by exactly one live grant, and the
-    /// remote authority is still paired. A satisfied-then-revoked scope
     /// fails here and the resumed read re-authorizes anyway.
     async fn remote_scope_satisfied(
         &self,
@@ -1065,14 +1142,20 @@ where
         device_id: &str,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<(), AgentFailure> {
-        let identity_resource = match connector {
-            floe_access::ATTENTION_CONNECTOR => floe_access::ATTENTION_RESOURCE,
-            floe_access::WELLBEING_CONNECTOR => floe_access::WELLBEING_RESOURCE,
-            _ => return Err(AgentFailure::InvalidInput),
-        };
+        let spec = crate::personal_source_spec::PersonalSourceSpec::for_connector(connector)?;
+        if !matches!(
+            connector,
+            floe_access::ATTENTION_CONNECTOR | floe_access::WELLBEING_CONNECTOR
+        ) {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let connection_id = floe_context_contract::ConnectionId::try_new(&target.connection_id)
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        let logical = floe_context_contract::connection_view_resource(spec.view, &connection_id)
+            .map_err(|_| AgentFailure::InvalidInput)?;
         if target.members.len() != 1
-            || target.members[0].member_id != connector
-            || target.members[0].resource != identity_resource
+            || target.members[0].member_id != spec.view
+            || target.members[0].resource != logical.as_str()
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -1102,7 +1185,8 @@ where
             self.vault, person_id, connector, device_id,
         )
         .await?;
-        floe_access::apply_personal_access(
+        super::personal_access::apply_personal(
+            self.core,
             self.vault,
             self.personal_subject,
             person_id,

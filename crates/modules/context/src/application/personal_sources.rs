@@ -14,7 +14,6 @@ use floe_access::{
     ContextDependency, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose,
     GrantSourceBinding, PersonalReadRequirement, ProcessingRestriction, ResourceHandle,
     SourceAuthority, active_read_grant, grant_unchanged, subject_unchanged,
-    valid_subject_fingerprint,
 };
 use floe_agent_contract::{AgentFailure, PersonId};
 use floe_connections::SourceConnection;
@@ -71,7 +70,6 @@ struct PersonalRead<'a> {
     resource: &'static str,
     domain: PersonalDomain,
     consumer: GrantConsumer,
-    same_authority: bool,
     reject_ambiguous: bool,
     selected_handles: Vec<String>,
     /// The device subject this read insists answered it: the one the caller was
@@ -97,7 +95,6 @@ fn read_requirement<'a>(read: &'a PersonalRead<'a>) -> PersonalReadRequirement<'
         source: &read.source,
         resource: read.resource,
         consumer: &read.consumer,
-        same_authority: read.same_authority,
         reject_ambiguous: read.reject_ambiguous,
     }
 }
@@ -209,119 +206,6 @@ fn decode<View: DeserializeOwned>(value: serde_json::Value) -> Result<View, Agen
     serde_json::from_value(value).map_err(|_| AgentFailure::CapabilityUnavailable)
 }
 
-/// Read the people the Person selected, as the identities they granted.
-#[allow(clippy::too_many_arguments)]
-pub async fn read_people(
-    records: &impl PersonalGrantRecords,
-    driver: &impl PersonalSourceDriver,
-    person_id: PersonId,
-    device_id: &str,
-    source: GrantSourceBinding,
-    selected_handles: &[String],
-    expected_native_subject_fingerprint: &str,
-    consumer_name: &str,
-    deadline: Instant,
-    cancellation: &Cancellation,
-) -> Result<(PeopleView, ContextDependency), AgentFailure> {
-    if source.person_id() != person_id
-        || !matches!(
-            source.connector().as_str(),
-            "contacts.apple" | "contacts.android"
-        )
-        || selected_handles.is_empty()
-        || selected_handles.len() > 64
-        || selected_handles.windows(2).any(|pair| pair[0] >= pair[1])
-        || !valid_subject_fingerprint(expected_native_subject_fingerprint)
-    {
-        return Err(AgentFailure::InvalidInput);
-    }
-    let read = PersonalRead {
-        person_id,
-        device_id,
-        source,
-        resource: PEOPLE_RESOURCE,
-        domain: PersonalDomain::People,
-        consumer: GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?,
-        same_authority: true,
-        reject_ambiguous: false,
-        selected_handles: selected_handles.to_vec(),
-        expected_subject: Some(expected_native_subject_fingerprint.to_owned()),
-        lease_invocation_id: Uuid::new_v4(),
-        deadline,
-    };
-    let grant = admit_personal_read(records, &read).await?;
-    let completed =
-        acquire_personal_source(records, driver, &read, &grant, None, cancellation).await?;
-    let view: PeopleView = decode(completed.value.clone())?;
-    validate_people_view(&view, Utc::now().timestamp_millis())
-        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-    let query_fingerprint = people_query_fingerprint(
-        &view,
-        selected_handles,
-        &completed.subject,
-        completed.observation_id,
-        completed.process,
-    );
-    let dependency = personal_dependency(
-        &read,
-        &completed,
-        query_fingerprint.clone(),
-        view.observed_at_unix_ms,
-        view.expires_at_unix_ms,
-    )?;
-    driver.commit_personal_observation(
-        person_id,
-        device_id,
-        completed.observation_id,
-        completed.process,
-        &completed.subject,
-        view.observed_at_unix_ms,
-        view.expires_at_unix_ms,
-        query_fingerprint,
-    )?;
-    Ok((view, dependency))
-}
-
-/// Read the people the Manager may show, under the Person's reviewed grant.
-///
-/// The Manager helper owns the whole selection: the one grant that admits the
-/// read, the handles it admits, and the subject it was reviewed against. No
-/// caller performs its own handle lookup.
-pub async fn read_manager_people(
-    records: &impl PersonalGrantRecords,
-    driver: &impl PersonalSourceDriver,
-    person_id: PersonId,
-    device_id: &str,
-    consumer_name: &str,
-    deadline: Instant,
-    cancellation: &Cancellation,
-) -> Result<(PeopleView, ContextDependency), AgentFailure> {
-    let grant = floe_access::people_read_grant(
-        &records.grants().await?,
-        person_id,
-        device_id,
-        consumer_name,
-    )?;
-    let selected_handles = records.selected_handles(grant.id()).await?;
-    if selected_handles.is_empty() {
-        return Err(AgentFailure::AccessReviewRequired);
-    }
-    let subject = records.reviewed_subject(grant.id()).await?;
-    read_people(
-        records,
-        driver,
-        person_id,
-        device_id,
-        grant.source().clone(),
-        &selected_handles,
-        &subject,
-        consumer_name,
-        deadline,
-        cancellation,
-    )
-    .await
-}
-
 /// Read whether the Person can still make the event they asked about.
 pub async fn read_feasibility(
     records: &impl PersonalGrantRecords,
@@ -343,7 +227,6 @@ pub async fn read_feasibility(
         resource: FEASIBILITY_RESOURCE,
         domain: PersonalDomain::Feasibility,
         consumer,
-        same_authority: false,
         reject_ambiguous: true,
         selected_handles: vec![],
         expected_subject: None,
@@ -392,168 +275,6 @@ pub async fn read_feasibility(
         view.expires_at_unix_ms,
         query_fingerprint,
     )?;
-    Ok((view, dependency))
-}
-
-/// Read what the Person's own device says about their capacity today.
-pub async fn read_wellbeing(
-    records: &impl PersonalGrantRecords,
-    driver: &impl PersonalSourceDriver,
-    person_id: PersonId,
-    device_id: &str,
-    consumer_name: &str,
-    lease_invocation_id: Uuid,
-    deadline: Instant,
-    cancellation: &Cancellation,
-) -> Result<(WellbeingView, ContextDependency), AgentFailure> {
-    let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
-    let read = PersonalRead {
-        person_id,
-        device_id,
-        source: wellbeing_source(person_id, device_id)?,
-        resource: WELLBEING_RESOURCE,
-        domain: PersonalDomain::Wellbeing,
-        consumer,
-        same_authority: false,
-        reject_ambiguous: true,
-        selected_handles: vec![],
-        expected_subject: None,
-        lease_invocation_id,
-        deadline,
-    };
-    let grant = admit_personal_read(records, &read).await?;
-    let completed =
-        acquire_personal_source(records, driver, &read, &grant, None, cancellation).await?;
-    let view: WellbeingView = decode(completed.value.clone())?;
-    validate_wellbeing_view(&view, Utc::now().timestamp_millis())
-        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-    let query_fingerprint = wellbeing_query_fingerprint(
-        &view,
-        &completed.subject,
-        completed.observation_id,
-        completed.process,
-    );
-    let dependency = personal_dependency(
-        &read,
-        &completed,
-        query_fingerprint.clone(),
-        view.observed_at_unix_ms,
-        view.expires_at_unix_ms,
-    )?;
-    driver.commit_personal_observation(
-        person_id,
-        device_id,
-        completed.observation_id,
-        completed.process,
-        &completed.subject,
-        view.observed_at_unix_ms,
-        view.expires_at_unix_ms,
-        query_fingerprint,
-    )?;
-    Ok((view, dependency))
-}
-
-/// The attention projection an Expert or the assistant may read.
-///
-/// Attention is a live projection rather than a stored view: the observation is
-/// committed by the driver as it is admitted, and the dependency is bound to the
-/// observation it committed.
-pub async fn admit_attention(
-    records: &impl PersonalGrantRecords,
-    driver: &impl PersonalSourceDriver,
-    person_id: PersonId,
-    device_id: &str,
-    consumer: GrantConsumer,
-    lease_invocation_id: Uuid,
-    deadline: Instant,
-    cancellation: &Cancellation,
-) -> Result<(AttentionView, ContextDependency), AgentFailure> {
-    use crate::ports::personal_source::AttentionAcquisition;
-
-    within_read_window(deadline, cancellation)?;
-    let source = attention_source(person_id, device_id)?;
-    let requirement = PersonalReadRequirement {
-        source: &source,
-        resource: ATTENTION_RESOURCE,
-        consumer: &consumer,
-        same_authority: false,
-        reject_ambiguous: false,
-    };
-    let grant = active_read_grant(&records.grants().await?, &requirement)?;
-    let source_authority = records.current_source_authority(grant.id()).await?;
-    let reviewed_subject = records.reviewed_subject(grant.id()).await?;
-    let host_epoch = driver.attention_host_epoch(person_id)?;
-    let acquired = driver
-        .acquire_attention(
-            AttentionAcquisition {
-                person_id,
-                device_id,
-                host_epoch: host_epoch.clone(),
-                mode: crate::ports::personal_source::AttentionAcquisitionMode::ReadProjection,
-                expected_subject: Some(reviewed_subject.clone()),
-                deadline,
-            },
-            cancellation.clone(),
-        )
-        .await?;
-    subject_unchanged(
-        &reviewed_subject,
-        &acquired.subject_before,
-        &acquired.subject_after,
-    )?;
-    let native_subject = acquired.subject_before.clone();
-    let view: AttentionView = decode(acquired.view.ok_or(AgentFailure::CapabilityUnavailable)?)?;
-    if view.state == crate::AttentionState::Unknown || view.evidence_handles.is_empty() {
-        return Err(AgentFailure::CapabilityUnavailable);
-    }
-    let (observed_at, expires_at) = freshness(view.observed_at_unix_ms, view.expires_at_unix_ms)?;
-    within_read_window(deadline, cancellation)?;
-    let current_grant = active_read_grant(&records.grants().await?, &requirement)?;
-    grant_unchanged(&grant, &current_grant)?;
-    if records.current_source_authority(current_grant.id()).await? != source_authority {
-        return Err(AgentFailure::StaleContext);
-    }
-    // The reviewed subject is read again, because the Person may have
-    // re-reviewed the same grant against a different device while this ran.
-    let current_subject = records.reviewed_subject(current_grant.id()).await?;
-    if current_subject != reviewed_subject || current_subject != native_subject {
-        return Err(AgentFailure::AccessReviewRequired);
-    }
-    let (observation_id, process_incarnation_id) = driver.commit_attention_projection(
-        person_id,
-        &host_epoch,
-        device_id,
-        &view,
-        &native_subject,
-    )?;
-    let dependency = ContextDependency::try_new(
-        person_id,
-        current_grant.id(),
-        current_grant.authority(),
-        current_grant.source().clone(),
-        vec![ResourceHandle::try_new(ATTENTION_RESOURCE).map_err(|_| AgentFailure::InvalidInput)?],
-        source_authority,
-        vec![ResourceHandle::try_new(ATTENTION_RESOURCE).map_err(|_| AgentFailure::InvalidInput)?],
-        vec![GrantDataCategory::Derived],
-        GrantOperation::Read,
-        GrantPurpose::Assistant,
-        consumer,
-        ProcessingRestriction::LocalOnly,
-        observation_id,
-        attention_query_fingerprint(
-            person_id,
-            device_id,
-            &view,
-            observation_id,
-            process_incarnation_id,
-        ),
-        lease_invocation_id,
-        process_incarnation_id,
-        observed_at,
-        expires_at,
-    )
-    .map_err(|_| AgentFailure::InvalidInput)?;
-    within_read_window(deadline, cancellation)?;
     Ok((view, dependency))
 }
 
@@ -699,7 +420,9 @@ pub fn personal_dependency_holds(
 /// Route-neutral: model placement is never consulted here. Whether a
 /// reauthorized dependency may reach a Device or External model target is
 /// decided by Access model dispatch.
-pub async fn authorize_personal_dependency(
+#[allow(clippy::too_many_arguments)]
+async fn authorize_standing_dependency(
+    connections: &impl PersonalConnectionReader,
     records: &impl PersonalGrantRecords,
     driver: &impl PersonalSourceDriver,
     person_id: PersonId,
@@ -708,70 +431,122 @@ pub async fn authorize_personal_dependency(
     deadline: Instant,
     cancellation: &Cancellation,
 ) -> Result<(), AgentFailure> {
-    let expected_source_resources = match dependency.source().connector().as_str() {
-        "contacts.apple" | "contacts.android" => records
-            .selected_handles(dependency.grant_id())
-            .await?
-            .into_iter()
-            .map(ResourceHandle::try_new)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| AgentFailure::PolicyDenied)?,
-        FEASIBILITY_CONNECTOR => vec![
-            ResourceHandle::try_new(FEASIBILITY_RESOURCE)
-                .map_err(|_| AgentFailure::PolicyDenied)?,
-        ],
-        WELLBEING_CONNECTOR => vec![
-            ResourceHandle::try_new(WELLBEING_RESOURCE).map_err(|_| AgentFailure::PolicyDenied)?,
-        ],
-        ATTENTION_CONNECTOR => vec![
-            ResourceHandle::try_new(ATTENTION_RESOURCE).map_err(|_| AgentFailure::PolicyDenied)?,
-        ],
-        _ => return Err(AgentFailure::PolicyDenied),
-    };
-    if dependency.source_authority()
-        != records
-            .current_source_authority(dependency.grant_id())
-            .await?
-        || dependency.source_resources() != expected_source_resources
+    if dependency.person_id() != person_id
+        || dependency.source().person_id() != person_id
+        || dependency.operation() != GrantOperation::Read
+        || dependency.purpose() != GrantPurpose::Assistant
+        || dependency.processing() != &ProcessingRestriction::LocalOnly
+        || dependency.categories() != [GrantDataCategory::Derived]
+        || dependency.lease_invocation_id().is_nil()
     {
         return Err(AgentFailure::PolicyDenied);
     }
-    if matches!(
-        dependency.source().connector().as_str(),
-        "contacts.apple" | "contacts.android"
-    ) {
-        if dependency.source().connection_id().as_str()
-            != contacts_connection(dependency.source().connector().as_str())
-            || dependency.source().execution_owner().as_str()
-                != contacts_execution_owner(dependency.source().connector().as_str(), device_id)
-            || dependency.operation() != GrantOperation::Read
-            || dependency.purpose() != GrantPurpose::Assistant
-            || dependency.processing() != &ProcessingRestriction::LocalOnly
-            || dependency.resources()
-                != [ResourceHandle::try_new(PEOPLE_RESOURCE)
-                    .map_err(|_| AgentFailure::PolicyDenied)?]
-            || dependency.categories() != [GrantDataCategory::Derived]
-            || dependency.lease_invocation_id().is_nil()
+    let view = match dependency.source().connector().as_str() {
+        "contacts.apple" | "contacts.android" => floe_context_contract::PEOPLE_VIEW_ID,
+        ATTENTION_CONNECTOR => floe_context_contract::ATTENTION_VIEW_ID,
+        WELLBEING_CONNECTOR => floe_context_contract::WELLBEING_VIEW_ID,
+        _ => return Err(AgentFailure::PolicyDenied),
+    };
+    let logical = connection_view_resource(view, &dependency.source().connection_id())
+        .map_err(|_| AgentFailure::PolicyDenied)?;
+    if dependency.resources() != [logical.clone()] {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let selected = floe_context_contract::SourceSelectionReference {
+        connector_id: dependency.source().connector().clone(),
+        connection_id: dependency.source().connection_id(),
+        execution_owner_id: dependency.source().execution_owner().clone(),
+        capability_id: view.to_owned(),
+        resource: logical.clone(),
+        contract_version: 1,
+    };
+    let connection = connections
+        .load(person_id, &selected.connection_id)
+        .await?
+        .ok_or(AgentFailure::PolicyDenied)?;
+    crate::validate_personal_source_selection(&selected, &connection, person_id, device_id)
+        .map_err(|_| AgentFailure::PolicyDenied)?;
+    let source = GrantSourceBinding::try_new(
+        person_id,
+        connection.connection_id().clone(),
+        connection.connector_id().clone(),
+        connection.execution_owner_id().clone(),
+    )
+    .map_err(|_| AgentFailure::PolicyDenied)?;
+    if dependency.source() != &source
+        || dependency.source_authority() != connection.source_authority()
+        || dependency.source_resources()
+            != connection
+                .resources()
+                .iter()
+                .map(|resource| resource.handle().clone())
+                .collect::<Vec<_>>()
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let requirement = PersonalReadRequirement {
+        source: &source,
+        resource: logical.as_str(),
+        consumer: dependency.consumer(),
+        reject_ambiguous: view != floe_context_contract::ATTENTION_VIEW_ID,
+    };
+    let grant = active_read_grant(&records.grants().await?, &requirement)
+        .map_err(|_| AgentFailure::PolicyDenied)?;
+    if dependency.grant_id() != grant.id() || dependency.grant_authority() != grant.authority() {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let subject = connection
+        .native_subject_fingerprint()
+        .ok_or(AgentFailure::PolicyDenied)?;
+    if view == floe_context_contract::ATTENTION_VIEW_ID {
+        let (current_view, observation_subject) = driver
+            .trusted_attention_observation(
+                person_id,
+                device_id,
+                dependency.observation_id(),
+                dependency.process_incarnation_id(),
+            )
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        if observation_subject != subject
+            || dependency.observed_at().timestamp_millis() != current_view.observed_at_unix_ms
+            || dependency.expires_at().timestamp_millis() != current_view.expires_at_unix_ms
+            || dependency.query_fingerprint()
+                != attention_query_fingerprint(
+                    person_id,
+                    device_id,
+                    &current_view,
+                    dependency.observation_id(),
+                    dependency.process_incarnation_id(),
+                )
         {
             return Err(AgentFailure::PolicyDenied);
         }
-        let grants = records.grants().await?;
-        let grant = active_read_grant(
-            &grants,
-            &PersonalReadRequirement {
-                source: dependency.source(),
-                resource: PEOPLE_RESOURCE,
-                consumer: dependency.consumer(),
-                same_authority: true,
-                reject_ambiguous: false,
-            },
-        )?;
-        if dependency.grant_id() != grant.id()
-            || dependency.grant_authority() != grant.authority()
-            || dependency.source() != grant.source()
-        {
+        let probe = driver
+            .acquire_attention(
+                AttentionAcquisition {
+                    person_id,
+                    device_id,
+                    host_epoch: driver.attention_host_epoch(person_id)?,
+                    mode: AttentionAcquisitionMode::InspectSubject,
+                    expected_subject: None,
+                    deadline,
+                },
+                cancellation.clone(),
+            )
+            .await
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        if probe.subject_before != subject || probe.subject_after != subject {
             return Err(AgentFailure::PolicyDenied);
         }
+        let current = connections
+            .load(person_id, connection.connection_id())
+            .await?
+            .ok_or(AgentFailure::PolicyDenied)?;
+        standing_source_unchanged(&connection, &current).map_err(|_| AgentFailure::PolicyDenied)?;
+        let current_grant = active_read_grant(&records.grants().await?, &requirement)
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        grant_unchanged(&grant, &current_grant).map_err(|_| AgentFailure::PolicyDenied)?;
+    } else {
         let observation = driver
             .trusted_personal_observation(
                 person_id,
@@ -780,201 +555,98 @@ pub async fn authorize_personal_dependency(
                 dependency.process_incarnation_id(),
             )
             .map_err(|_| AgentFailure::PolicyDenied)?;
-        let reviewed_subject = records.reviewed_subject(grant.id()).await?;
-        if observation.native_subject_fingerprint != reviewed_subject
+        if observation.native_subject_fingerprint != subject
             || dependency.observed_at().timestamp_millis() != observation.observed_at_unix_ms
             || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
             || dependency.query_fingerprint() != observation.query_fingerprint
         {
             return Err(AgentFailure::PolicyDenied);
         }
-        return Ok(());
     }
-    if dependency.source().connector().as_str() == FEASIBILITY_CONNECTOR {
-        if dependency.source().connection_id().as_str() != FEASIBILITY_CONNECTION
-            || dependency.source().execution_owner().as_str() != apple_execution_owner(device_id)
-            || dependency.consumer().identifier() != crate::ASSISTANT_CONSUMER
-            || dependency.operation() != GrantOperation::Read
-            || dependency.purpose() != GrantPurpose::Assistant
-            || dependency.processing() != &ProcessingRestriction::LocalOnly
-            || dependency.resources()
-                != [ResourceHandle::try_new(FEASIBILITY_RESOURCE)
-                    .map_err(|_| AgentFailure::PolicyDenied)?]
-            || dependency.categories() != [GrantDataCategory::Derived]
-            || dependency.lease_invocation_id().is_nil()
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        let grants = records.grants().await?;
-        let grant = active_read_grant(
-            &grants,
-            &PersonalReadRequirement {
-                source: dependency.source(),
-                resource: FEASIBILITY_RESOURCE,
-                consumer: dependency.consumer(),
-                same_authority: false,
-                reject_ambiguous: true,
-            },
-        )?;
-        if dependency.grant_id() != grant.id()
-            || dependency.grant_authority() != grant.authority()
-            || dependency.source() != grant.source()
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        let observation = driver
-            .trusted_personal_observation(
-                person_id,
-                device_id,
-                dependency.observation_id(),
-                dependency.process_incarnation_id(),
-            )
-            .map_err(|_| AgentFailure::PolicyDenied)?;
-        if dependency.observed_at().timestamp_millis() != observation.observed_at_unix_ms
-            || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
-            || dependency.query_fingerprint() != observation.query_fingerprint
-            || observation.native_subject_fingerprint
-                != records.reviewed_subject(grant.id()).await?
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        return Ok(());
-    }
-    if dependency.source().connector().as_str() == WELLBEING_CONNECTOR {
-        if dependency.source().connection_id().as_str() != WELLBEING_CONNECTION
-            || dependency.source().execution_owner().as_str() != apple_execution_owner(device_id)
-            || dependency.operation() != GrantOperation::Read
-            || dependency.purpose() != GrantPurpose::Assistant
-            || dependency.processing() != &ProcessingRestriction::LocalOnly
-            || dependency.resources()
-                != [ResourceHandle::try_new(WELLBEING_RESOURCE)
-                    .map_err(|_| AgentFailure::PolicyDenied)?]
-            || dependency.categories() != [GrantDataCategory::Derived]
-            || dependency.lease_invocation_id().is_nil()
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        let grants = records.grants().await?;
-        let grant = active_read_grant(
-            &grants,
-            &PersonalReadRequirement {
-                source: dependency.source(),
-                resource: WELLBEING_RESOURCE,
-                consumer: dependency.consumer(),
-                same_authority: false,
-                reject_ambiguous: true,
-            },
-        )?;
-        if dependency.grant_id() != grant.id()
-            || dependency.grant_authority() != grant.authority()
-            || dependency.source() != grant.source()
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        let observation = driver
-            .trusted_personal_observation(
-                person_id,
-                device_id,
-                dependency.observation_id(),
-                dependency.process_incarnation_id(),
-            )
-            .map_err(|_| AgentFailure::PolicyDenied)?;
-        if dependency.observed_at().timestamp_millis() != observation.observed_at_unix_ms
-            || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
-            || dependency.query_fingerprint() != observation.query_fingerprint
-            || observation.native_subject_fingerprint
-                != records.reviewed_subject(grant.id()).await?
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        return Ok(());
+    Ok(())
+}
+
+pub async fn authorize_personal_dependency(
+    connections: &impl PersonalConnectionReader,
+    records: &impl PersonalGrantRecords,
+    driver: &impl PersonalSourceDriver,
+    person_id: PersonId,
+    device_id: &str,
+    dependency: &ContextDependency,
+    deadline: Instant,
+    cancellation: &Cancellation,
+) -> Result<(), AgentFailure> {
+    if matches!(
+        dependency.source().connector().as_str(),
+        "contacts.apple" | "contacts.android" | ATTENTION_CONNECTOR | WELLBEING_CONNECTOR
+    ) {
+        return authorize_standing_dependency(
+            connections,
+            records,
+            driver,
+            person_id,
+            device_id,
+            dependency,
+            deadline,
+            cancellation,
+        )
+        .await;
     }
     if dependency.person_id() != person_id
         || dependency.source().person_id() != person_id
-        || dependency.source().connector().as_str() != ATTENTION_CONNECTOR
-        || dependency.source().connection_id().as_str() != ATTENTION_CONNECTION
-        || dependency.source().execution_owner().as_str() != attention_execution_owner(device_id)
+        || dependency.source().connector().as_str() != FEASIBILITY_CONNECTOR
+        || dependency.source().connection_id().as_str() != FEASIBILITY_CONNECTION
+        || dependency.source().execution_owner().as_str() != apple_execution_owner(device_id)
+        || dependency.consumer().identifier() != crate::ASSISTANT_CONSUMER
         || dependency.operation() != GrantOperation::Read
         || dependency.purpose() != GrantPurpose::Assistant
         || dependency.processing() != &ProcessingRestriction::LocalOnly
-        || dependency.resources().len() != 1
-        || dependency.resources()[0].as_str() != ATTENTION_RESOURCE
+        || dependency.resources()
+            != [ResourceHandle::try_new(FEASIBILITY_RESOURCE)
+                .map_err(|_| AgentFailure::PolicyDenied)?]
+        || dependency.source_resources()
+            != [ResourceHandle::try_new(FEASIBILITY_RESOURCE)
+                .map_err(|_| AgentFailure::PolicyDenied)?]
         || dependency.categories() != [GrantDataCategory::Derived]
+        || dependency.lease_invocation_id().is_nil()
     {
         return Err(AgentFailure::PolicyDenied);
     }
-    let grants = records.grants().await?;
-    let attention_source = attention_source(person_id, device_id)?;
+    if dependency.source_authority()
+        != records
+            .current_source_authority(dependency.grant_id())
+            .await?
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
     let grant = active_read_grant(
-        &grants,
+        &records.grants().await?,
         &PersonalReadRequirement {
-            source: &attention_source,
-            resource: ATTENTION_RESOURCE,
+            source: dependency.source(),
+            resource: FEASIBILITY_RESOURCE,
             consumer: dependency.consumer(),
-            same_authority: false,
-            reject_ambiguous: false,
+            reject_ambiguous: true,
         },
     )?;
     if dependency.grant_id() != grant.id()
         || dependency.grant_authority() != grant.authority()
         || dependency.source() != grant.source()
-        || dependency.operation() != GrantOperation::Read
-        || dependency.purpose() != GrantPurpose::Assistant
-        || dependency.processing() != &ProcessingRestriction::LocalOnly
-        || dependency
-            .resources()
-            .iter()
-            .any(|item| !grant.scope().resources().contains(item))
-        || dependency
-            .categories()
-            .iter()
-            .any(|item| !grant.scope().categories().contains(item))
     {
         return Err(AgentFailure::PolicyDenied);
     }
-    let (current_view, trusted_observation_subject) = driver
-        .trusted_attention_observation(
+    let observation = driver
+        .trusted_personal_observation(
             person_id,
             device_id,
             dependency.observation_id(),
             dependency.process_incarnation_id(),
         )
         .map_err(|_| AgentFailure::PolicyDenied)?;
-    let reviewed_subject = records.reviewed_subject(grant.id()).await?;
-    if trusted_observation_subject != reviewed_subject
-        || dependency.lease_invocation_id().is_nil()
-        || dependency.observed_at().timestamp_millis() != current_view.observed_at_unix_ms
-        || dependency.expires_at().timestamp_millis() != current_view.expires_at_unix_ms
-        || dependency.query_fingerprint()
-            != attention_query_fingerprint(
-                person_id,
-                device_id,
-                &current_view,
-                dependency.observation_id(),
-                dependency.process_incarnation_id(),
-            )
+    if dependency.observed_at().timestamp_millis() != observation.observed_at_unix_ms
+        || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
+        || dependency.query_fingerprint() != observation.query_fingerprint
+        || observation.native_subject_fingerprint != records.reviewed_subject(grant.id()).await?
     {
-        return Err(AgentFailure::PolicyDenied);
-    }
-    // The device is asked once more which subject would answer now: a Person
-    // who re-paired or switched devices has not re-reviewed this grant.
-    let probe = driver
-        .acquire_attention(
-            AttentionAcquisition {
-                person_id,
-                device_id,
-                host_epoch: driver
-                    .attention_host_epoch(person_id)
-                    .map_err(|_| AgentFailure::PolicyDenied)?,
-                mode: AttentionAcquisitionMode::InspectSubject,
-                expected_subject: None,
-                deadline,
-            },
-            cancellation.clone(),
-        )
-        .await
-        .map_err(|_| AgentFailure::PolicyDenied)?;
-    if probe.subject_before != reviewed_subject || probe.subject_after != reviewed_subject {
         return Err(AgentFailure::PolicyDenied);
     }
     Ok(())
@@ -991,37 +663,6 @@ struct PersonalSourceIdentity {
     known_identity: Option<(&'static str, &'static str)>,
 }
 
-fn people_identity(
-    person_id: PersonId,
-    device_id: &str,
-) -> Result<PersonalSourceIdentity, AgentFailure> {
-    let mut expected = Vec::with_capacity(2);
-    for connector in ["contacts.apple", "contacts.android"] {
-        expected.push(
-            GrantSourceBinding::try_new(
-                person_id,
-                floe_context_contract::ConnectionId::try_new(contacts_connection(connector))
-                    .map_err(|_| AgentFailure::InvalidInput)?,
-                floe_context_contract::ConnectorId::try_new(connector)
-                    .map_err(|_| AgentFailure::InvalidInput)?,
-                floe_context_contract::ExecutionOwnerId::try_new(contacts_execution_owner(
-                    connector, device_id,
-                ))
-                .map_err(|_| AgentFailure::InvalidInput)?,
-            )
-            .map_err(|_| AgentFailure::InvalidInput)?,
-        );
-    }
-    Ok(PersonalSourceIdentity {
-        source_id: "floe.source.contacts",
-        resource: PEOPLE_RESOURCE,
-        expected,
-        // The platform connector is unknown until a grant names it: a missing
-        // grant cannot offer inline enable.
-        known_identity: None,
-    })
-}
-
 fn feasibility_identity(
     person_id: PersonId,
     device_id: &str,
@@ -1031,30 +672,6 @@ fn feasibility_identity(
         resource: FEASIBILITY_RESOURCE,
         expected: vec![feasibility_source(person_id, device_id)?],
         known_identity: Some((FEASIBILITY_CONNECTOR, FEASIBILITY_CONNECTION)),
-    })
-}
-
-fn attention_identity(
-    person_id: PersonId,
-    device_id: &str,
-) -> Result<PersonalSourceIdentity, AgentFailure> {
-    Ok(PersonalSourceIdentity {
-        source_id: "floe.source.attention",
-        resource: ATTENTION_RESOURCE,
-        expected: vec![attention_source(person_id, device_id)?],
-        known_identity: Some((ATTENTION_CONNECTOR, ATTENTION_CONNECTION)),
-    })
-}
-
-fn wellbeing_identity(
-    person_id: PersonId,
-    device_id: &str,
-) -> Result<PersonalSourceIdentity, AgentFailure> {
-    Ok(PersonalSourceIdentity {
-        source_id: "floe.source.wellbeing",
-        resource: WELLBEING_RESOURCE,
-        expected: vec![wellbeing_source(person_id, device_id)?],
-        known_identity: Some((WELLBEING_CONNECTOR, WELLBEING_CONNECTION)),
     })
 }
 
@@ -1300,92 +917,63 @@ async fn classify_personal_blocker(
     PersonalBlock::blocked(requirement)
 }
 
-/// Classify a failed people read: an admitting grant with no selection needs
-/// source selection, otherwise the personal ladder applies.
-async fn classify_people_blocker(
+async fn selected_standing_grant(
     records: &impl PersonalGrantRecords,
-    identity: &PersonalSourceIdentity,
-    person_id: PersonId,
-    device_id: &str,
-    consumer_name: &str,
-    consumer: GrantConsumer,
-    error: AgentFailure,
-) -> Result<PersonalBlock, AgentFailure> {
-    use floe_context_contract::SourceAccessRequirementKind;
-
-    if error == AgentFailure::AccessReviewRequired {
-        let grants = records.grants().await?;
-        if let Ok(grant) =
-            floe_access::people_read_grant(&grants, person_id, device_id, consumer_name)
-        {
-            let handles = records.selected_handles(grant.id()).await?;
-            if handles.is_empty() {
-                let requirement = personal_requirement(
-                    identity,
-                    Some(grant.source().connector().clone()),
-                    Some(grant.source().connection_id()),
-                    consumer,
-                    SourceAccessRequirementKind::SelectResource,
-                    Some(records.current_source_authority(grant.id()).await?),
-                    None,
-                )?;
-                // Selection happens in the picker, never inline.
-                debug_assert!(!requirement.inline_resolution());
-                return PersonalBlock::blocked(requirement);
-            }
-            let requirement = personal_requirement(
-                identity,
-                Some(grant.source().connector().clone()),
-                Some(grant.source().connection_id()),
-                consumer,
-                SourceAccessRequirementKind::ReviewChangedSource,
-                Some(records.current_source_authority(grant.id()).await?),
-                Some(observed_grant(&grant)?),
-            )?;
-            return PersonalBlock::blocked(requirement);
-        }
+    connection: &SourceConnection,
+    source: &GrantSourceBinding,
+    logical: &ResourceHandle,
+    consumer: &GrantConsumer,
+    source_id: &str,
+    inline: bool,
+) -> Result<floe_context_contract::SourceReadOutcome<floe_access::DataAccessGrant>, AgentFailure> {
+    let grants = records.grants().await?;
+    let matching = grants
+        .iter()
+        .filter(|grant| {
+            grant.source() == source && grant.state() != floe_access::GrantState::Revoked
+        })
+        .collect::<Vec<_>>();
+    if matching.len() > 1 {
+        return Err(AgentFailure::PolicyDenied);
     }
-    classify_personal_blocker(records, identity, consumer, error).await
-}
-
-/// Read the Manager people view, preserving a recoverable blocker as a typed
-/// outcome instead of raising it. Only hard failures raise.
-#[allow(clippy::too_many_arguments)]
-pub async fn read_manager_people_outcome(
-    records: &impl PersonalGrantRecords,
-    driver: &impl PersonalSourceDriver,
-    person_id: PersonId,
-    device_id: &str,
-    consumer_name: &str,
-    consumer: GrantConsumer,
-    deadline: Instant,
-    cancellation: &Cancellation,
-) -> Result<floe_context_contract::SourceReadOutcome<(PeopleView, ContextDependency)>, AgentFailure>
-{
-    let identity = people_identity(person_id, device_id)?;
-    match read_manager_people(
-        records,
-        driver,
-        person_id,
-        device_id,
-        consumer_name,
-        deadline,
-        cancellation,
-    )
-    .await
-    {
-        Ok(read) => Ok(floe_context_contract::SourceReadOutcome::Ready(read)),
-        Err(error) => Ok(classify_people_blocker(
-            records,
-            &identity,
-            person_id,
-            device_id,
-            consumer_name,
-            consumer,
-            error,
-        )
-        .await?
-        .into_outcome()),
+    let requirement = PersonalReadRequirement {
+        source,
+        resource: logical.as_str(),
+        consumer,
+        reject_ambiguous: true,
+    };
+    match active_read_grant(&grants, &requirement) {
+        Ok(grant) => Ok(floe_context_contract::SourceReadOutcome::Ready(grant)),
+        Err(AgentFailure::AccessReviewRequired) => {
+            let observed = matching
+                .first()
+                .map(|grant| observed_grant(grant))
+                .transpose()?;
+            let reason = match matching.first() {
+                None => floe_context_contract::SourceAccessRequirementKind::EnableObserve,
+                Some(grant) if grant.state() == floe_access::GrantState::Paused => {
+                    floe_context_contract::SourceAccessRequirementKind::EnableObserve
+                }
+                Some(_) => floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource,
+            };
+            let requirement = floe_context_contract::SourceAccessRequirement::try_new(
+                source_id,
+                Some(connection.connector_id().clone()),
+                Some(connection.connection_id().clone()),
+                GrantOperation::Read,
+                consumer.clone(),
+                GrantPurpose::Assistant,
+                vec![logical.clone()],
+                None,
+                reason,
+                Some(connection.source_authority()),
+                observed,
+                inline,
+            )
+            .map_err(|_| AgentFailure::InvalidInput)?;
+            Ok(PersonalBlock::blocked(requirement)?.into_outcome())
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -1424,36 +1012,28 @@ pub async fn read_selected_people_outcome(
     )
     .map_err(|_| AgentFailure::InvalidInput)?;
     let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
-    let grant = match active_read_grant(
-        &records.grants().await?,
-        &PersonalReadRequirement {
-            source: &source,
-            resource: logical.as_str(),
-            consumer: &consumer,
-            same_authority: false,
-            reject_ambiguous: true,
-        },
-    ) {
-        Ok(grant) => grant,
-        Err(AgentFailure::AccessReviewRequired) => {
-            let requirement = floe_context_contract::SourceAccessRequirement::try_new(
-                "floe.source.contacts",
-                Some(connection.connector_id().clone()),
-                Some(connection.connection_id().clone()),
-                GrantOperation::Read,
-                consumer,
-                GrantPurpose::Assistant,
-                vec![logical],
-                None,
-                floe_context_contract::SourceAccessRequirementKind::EnableObserve,
-                Some(connection.source_authority()),
-                None,
-                false,
-            )
-            .map_err(|_| AgentFailure::InvalidInput)?;
-            return Ok(PersonalBlock::blocked(requirement)?.into_outcome());
+    let grant = match selected_standing_grant(
+        records,
+        &connection,
+        &source,
+        &logical,
+        &consumer,
+        "floe.source.contacts",
+        false,
+    )
+    .await?
+    {
+        floe_context_contract::SourceReadOutcome::Ready(grant) => grant,
+        floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
+            return Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(
+                blockers,
+            ));
         }
-        Err(error) => return Err(error),
+        floe_context_contract::SourceReadOutcome::Unavailable(reason) => {
+            return Ok(floe_context_contract::SourceReadOutcome::Unavailable(
+                reason,
+            ));
+        }
     };
     let handles = connection
         .resources()
@@ -1492,7 +1072,6 @@ pub async fn read_selected_people_outcome(
             source: &source,
             resource: logical.as_str(),
             consumer: &consumer,
-            same_authority: false,
             reject_ambiguous: true,
         },
     )?;
@@ -1568,6 +1147,281 @@ fn standing_source_unchanged(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+pub async fn read_selected_wellbeing_outcome(
+    connections: &impl PersonalConnectionReader,
+    records: &impl PersonalGrantRecords,
+    driver: &impl PersonalSourceDriver,
+    person_id: PersonId,
+    device_id: &str,
+    selected: &floe_context_contract::SourceSelectionReference,
+    consumer_name: &str,
+    lease_invocation_id: Uuid,
+    deadline: Instant,
+    cancellation: &Cancellation,
+) -> Result<
+    floe_context_contract::SourceReadOutcome<(WellbeingView, ContextDependency)>,
+    AgentFailure,
+> {
+    within_read_window(deadline, cancellation)?;
+    let connection = connections
+        .load(person_id, &selected.connection_id)
+        .await?
+        .ok_or(AgentFailure::StaleContext)?;
+    crate::validate_personal_source_selection(selected, &connection, person_id, device_id)?;
+    if selected.capability_id != floe_context_contract::WELLBEING_VIEW_ID {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    let source = GrantSourceBinding::try_new(
+        person_id,
+        connection.connection_id().clone(),
+        connection.connector_id().clone(),
+        connection.execution_owner_id().clone(),
+    )
+    .map_err(|_| AgentFailure::InvalidInput)?;
+    let logical = connection_view_resource(
+        floe_context_contract::WELLBEING_VIEW_ID,
+        connection.connection_id(),
+    )
+    .map_err(|_| AgentFailure::InvalidInput)?;
+    let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
+    let requirement = PersonalReadRequirement {
+        source: &source,
+        resource: logical.as_str(),
+        consumer: &consumer,
+        reject_ambiguous: true,
+    };
+    let grant = match selected_standing_grant(
+        records,
+        &connection,
+        &source,
+        &logical,
+        &consumer,
+        "floe.source.wellbeing",
+        true,
+    )
+    .await?
+    {
+        floe_context_contract::SourceReadOutcome::Ready(grant) => grant,
+        floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
+            return Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(
+                blockers,
+            ));
+        }
+        floe_context_contract::SourceReadOutcome::Unavailable(reason) => {
+            return Ok(floe_context_contract::SourceReadOutcome::Unavailable(
+                reason,
+            ));
+        }
+    };
+    let subject = connection
+        .native_subject_fingerprint()
+        .ok_or(AgentFailure::StaleContext)?
+        .to_owned();
+    let acquired = driver
+        .acquire(
+            PersonalAcquisition {
+                person_id,
+                device_id,
+                host_epoch: driver.personal_host_epoch(person_id)?,
+                domain: PersonalDomain::Wellbeing,
+                selected_handles: Vec::new(),
+                feasibility: None,
+                expected_subject: subject.clone(),
+                deadline,
+            },
+            cancellation.clone(),
+        )
+        .await?;
+    within_read_window(deadline, cancellation)?;
+    subject_unchanged(&subject, &acquired.subject_before, &acquired.subject_after)?;
+    let current = connections
+        .load(person_id, connection.connection_id())
+        .await?
+        .ok_or(AgentFailure::StaleContext)?;
+    standing_source_unchanged(&connection, &current)?;
+    let current_grant = active_read_grant(&records.grants().await?, &requirement)?;
+    grant_unchanged(&grant, &current_grant)?;
+    let view: WellbeingView = decode(acquired.view.ok_or(AgentFailure::CapabilityUnavailable)?)?;
+    validate_wellbeing_view(&view, Utc::now().timestamp_millis())
+        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+    let observation_id = Uuid::new_v4();
+    let process = driver.process_incarnation();
+    let query_fingerprint = wellbeing_query_fingerprint(&view, &subject, observation_id, process);
+    let (observed, expires) = freshness(view.observed_at_unix_ms, view.expires_at_unix_ms)?;
+    let dependency = ContextDependency::try_new(
+        person_id,
+        current_grant.id(),
+        current_grant.authority(),
+        source,
+        vec![logical],
+        connection.source_authority(),
+        connection
+            .resources()
+            .iter()
+            .map(|resource| resource.handle().clone())
+            .collect(),
+        vec![GrantDataCategory::Derived],
+        GrantOperation::Read,
+        GrantPurpose::Assistant,
+        consumer,
+        ProcessingRestriction::LocalOnly,
+        observation_id,
+        query_fingerprint.clone(),
+        lease_invocation_id,
+        process,
+        observed,
+        expires,
+    )
+    .map_err(|_| AgentFailure::InvalidInput)?;
+    driver.commit_personal_observation(
+        person_id,
+        device_id,
+        observation_id,
+        process,
+        &subject,
+        view.observed_at_unix_ms,
+        view.expires_at_unix_ms,
+        query_fingerprint,
+    )?;
+    Ok(floe_context_contract::SourceReadOutcome::Ready((
+        view, dependency,
+    )))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn admit_selected_attention_outcome(
+    connections: &impl PersonalConnectionReader,
+    records: &impl PersonalGrantRecords,
+    driver: &impl PersonalSourceDriver,
+    person_id: PersonId,
+    device_id: &str,
+    selected: &floe_context_contract::SourceSelectionReference,
+    consumer: GrantConsumer,
+    lease_invocation_id: Uuid,
+    deadline: Instant,
+    cancellation: &Cancellation,
+) -> Result<
+    floe_context_contract::SourceReadOutcome<(AttentionView, ContextDependency)>,
+    AgentFailure,
+> {
+    within_read_window(deadline, cancellation)?;
+    let connection = connections
+        .load(person_id, &selected.connection_id)
+        .await?
+        .ok_or(AgentFailure::StaleContext)?;
+    crate::validate_personal_source_selection(selected, &connection, person_id, device_id)?;
+    if selected.capability_id != floe_context_contract::ATTENTION_VIEW_ID {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    let source = GrantSourceBinding::try_new(
+        person_id,
+        connection.connection_id().clone(),
+        connection.connector_id().clone(),
+        connection.execution_owner_id().clone(),
+    )
+    .map_err(|_| AgentFailure::InvalidInput)?;
+    let logical = connection_view_resource(
+        floe_context_contract::ATTENTION_VIEW_ID,
+        connection.connection_id(),
+    )
+    .map_err(|_| AgentFailure::InvalidInput)?;
+    let requirement = PersonalReadRequirement {
+        source: &source,
+        resource: logical.as_str(),
+        consumer: &consumer,
+        reject_ambiguous: false,
+    };
+    let grant = match selected_standing_grant(
+        records,
+        &connection,
+        &source,
+        &logical,
+        &consumer,
+        "floe.source.attention",
+        true,
+    )
+    .await?
+    {
+        floe_context_contract::SourceReadOutcome::Ready(grant) => grant,
+        floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
+            return Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(
+                blockers,
+            ));
+        }
+        floe_context_contract::SourceReadOutcome::Unavailable(reason) => {
+            return Ok(floe_context_contract::SourceReadOutcome::Unavailable(
+                reason,
+            ));
+        }
+    };
+    let subject = connection
+        .native_subject_fingerprint()
+        .ok_or(AgentFailure::StaleContext)?
+        .to_owned();
+    let host_epoch = driver.attention_host_epoch(person_id)?;
+    let acquired = driver
+        .acquire_attention(
+            AttentionAcquisition {
+                person_id,
+                device_id,
+                host_epoch: host_epoch.clone(),
+                mode: AttentionAcquisitionMode::ReadProjection,
+                expected_subject: Some(subject.clone()),
+                deadline,
+            },
+            cancellation.clone(),
+        )
+        .await?;
+    within_read_window(deadline, cancellation)?;
+    subject_unchanged(&subject, &acquired.subject_before, &acquired.subject_after)?;
+    let view: AttentionView = decode(acquired.view.ok_or(AgentFailure::CapabilityUnavailable)?)?;
+    if view.state == crate::AttentionState::Unknown || view.evidence_handles.is_empty() {
+        return Ok(floe_context_contract::SourceReadOutcome::Unavailable(
+            floe_context_contract::SourceUnavailable::TemporarilyUnavailable,
+        ));
+    }
+    let (observed, expires) = freshness(view.observed_at_unix_ms, view.expires_at_unix_ms)?;
+    let current = connections
+        .load(person_id, connection.connection_id())
+        .await?
+        .ok_or(AgentFailure::StaleContext)?;
+    standing_source_unchanged(&connection, &current)?;
+    let current_grant = active_read_grant(&records.grants().await?, &requirement)?;
+    grant_unchanged(&grant, &current_grant)?;
+    let (observation_id, process) =
+        driver.commit_attention_projection(person_id, &host_epoch, device_id, &view, &subject)?;
+    let dependency = ContextDependency::try_new(
+        person_id,
+        current_grant.id(),
+        current_grant.authority(),
+        source,
+        vec![logical],
+        connection.source_authority(),
+        connection
+            .resources()
+            .iter()
+            .map(|resource| resource.handle().clone())
+            .collect(),
+        vec![GrantDataCategory::Derived],
+        GrantOperation::Read,
+        GrantPurpose::Assistant,
+        consumer,
+        ProcessingRestriction::LocalOnly,
+        observation_id,
+        attention_query_fingerprint(person_id, device_id, &view, observation_id, process),
+        lease_invocation_id,
+        process,
+        observed,
+        expires,
+    )
+    .map_err(|_| AgentFailure::InvalidInput)?;
+    within_read_window(deadline, cancellation)?;
+    Ok(floe_context_contract::SourceReadOutcome::Ready((
+        view, dependency,
+    )))
+}
+
 /// Read the feasibility view, preserving a recoverable blocker as a typed
 /// outcome instead of raising it. Only hard failures raise.
 #[allow(clippy::too_many_arguments)]
@@ -1592,83 +1446,6 @@ pub async fn read_feasibility_outcome(
         person_id,
         device_id,
         consumer_name,
-        lease_invocation_id,
-        deadline,
-        cancellation,
-    )
-    .await
-    {
-        Ok(read) => Ok(floe_context_contract::SourceReadOutcome::Ready(read)),
-        Err(error) => Ok(
-            classify_personal_blocker(records, &identity, consumer, error)
-                .await?
-                .into_outcome(),
-        ),
-    }
-}
-
-/// Read the wellbeing view, preserving a recoverable blocker as a typed
-/// outcome instead of raising it. Only hard failures raise.
-#[allow(clippy::too_many_arguments)]
-pub async fn read_wellbeing_outcome(
-    records: &impl PersonalGrantRecords,
-    driver: &impl PersonalSourceDriver,
-    person_id: PersonId,
-    device_id: &str,
-    consumer_name: &str,
-    consumer: GrantConsumer,
-    lease_invocation_id: Uuid,
-    deadline: Instant,
-    cancellation: &Cancellation,
-) -> Result<
-    floe_context_contract::SourceReadOutcome<(WellbeingView, ContextDependency)>,
-    AgentFailure,
-> {
-    let identity = wellbeing_identity(person_id, device_id)?;
-    match read_wellbeing(
-        records,
-        driver,
-        person_id,
-        device_id,
-        consumer_name,
-        lease_invocation_id,
-        deadline,
-        cancellation,
-    )
-    .await
-    {
-        Ok(read) => Ok(floe_context_contract::SourceReadOutcome::Ready(read)),
-        Err(error) => Ok(
-            classify_personal_blocker(records, &identity, consumer, error)
-                .await?
-                .into_outcome(),
-        ),
-    }
-}
-
-/// Admit one attention read, preserving a recoverable blocker as a typed
-/// outcome instead of raising it. Only hard failures raise.
-#[allow(clippy::too_many_arguments)]
-pub async fn admit_attention_outcome(
-    records: &impl PersonalGrantRecords,
-    driver: &impl PersonalSourceDriver,
-    person_id: PersonId,
-    device_id: &str,
-    consumer: GrantConsumer,
-    lease_invocation_id: Uuid,
-    deadline: Instant,
-    cancellation: &Cancellation,
-) -> Result<
-    floe_context_contract::SourceReadOutcome<(AttentionView, ContextDependency)>,
-    AgentFailure,
-> {
-    let identity = attention_identity(person_id, device_id)?;
-    match admit_attention(
-        records,
-        driver,
-        person_id,
-        device_id,
-        consumer.clone(),
         lease_invocation_id,
         deadline,
         cancellation,
@@ -2145,6 +1922,29 @@ mod tests {
         assert_ne!(dependency.source_authority(), original_authority);
         assert_eq!(dependency.grant_id(), grant.id());
         assert_eq!(dependency.grant_authority(), grant.authority());
+        let mut changed = connection.clone();
+        changed
+            .configure_reviewed_native(
+                connection.revision(),
+                floe_connections::ResourceMode::Selected,
+                connection.resources().to_vec(),
+                SUBJECT_A.into(),
+            )
+            .unwrap();
+        assert_eq!(
+            authorize_personal_dependency(
+                &FixtureConnections(changed),
+                &records,
+                &driver,
+                person_id,
+                "device",
+                &dependency,
+                Instant::now() + std::time::Duration::from_secs(5),
+                &Cancellation::default(),
+            )
+            .await,
+            Err(AgentFailure::PolicyDenied)
+        );
     }
 
     #[tokio::test]

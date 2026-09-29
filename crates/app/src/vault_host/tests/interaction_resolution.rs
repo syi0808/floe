@@ -2331,6 +2331,33 @@ async fn native_deselected_scope_supersedes_without_mutation() {
 #[tokio::test]
 async fn personal_attention_allow_resolves() {
     let host = HostFixture::open().await;
+    let source = host
+        .core
+        .source_service()
+        .establish_reviewed_native(
+            host.base.person,
+            floe_context_contract::ConnectorId::try_new(floe_access::ATTENTION_CONNECTOR).unwrap(),
+            floe_context_contract::ConnectionId::try_new(floe_access::ATTENTION_CONNECTION)
+                .unwrap(),
+            floe_context_contract::ExecutionOwnerId::try_new(format!("macos:{DEVICE}")).unwrap(),
+            floe_connections::ResourceMode::AllAvailable,
+            vec![
+                floe_connections::ConnectionResource::new(
+                    floe_context_contract::ResourceHandle::try_new(floe_access::ATTENTION_RESOURCE)
+                        .unwrap(),
+                    floe_access::ATTENTION_RESOURCE.into(),
+                )
+                .unwrap(),
+            ],
+            NATIVE_FINGERPRINT.into(),
+        )
+        .await
+        .unwrap();
+    let logical = floe_context_contract::connection_view_resource(
+        floe_context_contract::ATTENTION_VIEW_ID,
+        source.connection_id(),
+    )
+    .unwrap();
     let target = floe_conversation::InlineObserveTarget {
         connection_id: floe_access::ATTENTION_CONNECTION.into(),
         device_id: Some(DEVICE.into()),
@@ -2338,22 +2365,24 @@ async fn personal_attention_allow_resolves() {
         connector_id: Some(floe_access::ATTENTION_CONNECTOR.into()),
         consumer: "floe.builtin.schedule".into(),
         purpose: "scheduling".into(),
-        source_revision: None,
-        connection_revision: None,
+        source_revision: Some(floe_conversation::AuthorityRevision {
+            incarnation: source.source_authority().incarnation(),
+            epoch: source.source_authority().epoch().get(),
+        }),
+        connection_revision: Some(source.revision()),
         reviewed_producer_fingerprint: None,
         reviewed_native_subject: Some(NATIVE_FINGERPRINT.into()),
         members: vec![floe_conversation::ReviewedBundleMember {
-            member_id: floe_access::ATTENTION_CONNECTOR.into(),
-            policy_digest:
-                crate::first_party_observe::native_member_policy_digest_for_target(
-                    &host.base.vault,
-                    host.base.person,
-                    floe_access::ATTENTION_CONNECTOR,
-                    DEVICE,
-                )
-                .await
-                .unwrap(),
-            resource: floe_access::ATTENTION_RESOURCE.into(),
+            member_id: floe_context_contract::ATTENTION_VIEW_ID.into(),
+            policy_digest: crate::first_party_observe::native_member_policy_digest_for_target(
+                &host.base.vault,
+                host.base.person,
+                floe_access::ATTENTION_CONNECTOR,
+                DEVICE,
+            )
+            .await
+            .unwrap(),
+            resource: logical.as_str().into(),
             expected_grant: floe_conversation::ExpectedGrantState::Absent,
         }],
     };
@@ -2398,6 +2427,7 @@ async fn personal_attention_allow_resolves() {
         grants[0].source().connector().as_str(),
         floe_access::ATTENTION_CONNECTOR
     );
+    assert_eq!(grants[0].scope().resources(), [logical]);
 }
 
 #[tokio::test]
@@ -2539,7 +2569,11 @@ impl ScriptedRemoteTransport {
         query: floe_access::RemoteSourceQuery<'_>,
     ) -> floe_access::SignedSourcePreview {
         let authority = *self.authority.lock().unwrap();
-        let connection_revision = if query.view_id == "calendar.timeline" { 1 } else { 11 };
+        let connection_revision = if query.view_id == "calendar.timeline" {
+            1
+        } else {
+            11
+        };
         let descriptor = serde_json::json!({
             "v": 1,
             "operation": "remote_view_source_preview",
@@ -2573,7 +2607,6 @@ impl ScriptedRemoteTransport {
             producer: self.producer.clone(),
         }
     }
-
 }
 
 impl floe_access::RemoteGrantTransport for ScriptedRemoteTransport {
@@ -2593,7 +2626,6 @@ impl floe_access::RemoteGrantTransport for ScriptedRemoteTransport {
         let preview = self.view_preview(query);
         Box::pin(async move { Ok(preview) })
     }
-
 }
 
 impl floe_context::RemoteViewTransport for ScriptedRemoteTransport {
@@ -3162,9 +3194,11 @@ async fn manager_mail_read_requires_assistant_in_reviewed_product_policy() {
         "Manager assistant grant must not authorize the extension: {extension:?}"
     );
     let local_context = crate::local_context::LocalContextHost::default();
+    let core = crate::FloeCore::open(":memory:").await.unwrap();
     let tools = floe_context::ContextToolService::new(
         host.base.person,
         DEVICE,
+        crate::vault_host::personal_grants::CorePersonalConnections { core: &core },
         floe_vault::VaultGrantRecords::new(&host.base.vault),
         crate::vault_host::personal_grants::native_driver(&local_context),
         Some(ProductMailReader {
@@ -3417,16 +3451,15 @@ async fn remote_calendar_allow_resolves_through_hosted_connection() {
         reviewed_native_subject: None,
         members: vec![floe_conversation::ReviewedBundleMember {
             member_id: "calendar.timeline".into(),
-            policy_digest:
-                crate::first_party_observe::remote_member_policy_digest_for_target(
-                    &host.base.vault,
-                    host.base.person,
-                    "calendar.google",
-                    &host.connection_id,
-                    "calendar.timeline",
-                )
-                .await
-                .unwrap(),
+            policy_digest: crate::first_party_observe::remote_member_policy_digest_for_target(
+                &host.base.vault,
+                host.base.person,
+                "calendar.google",
+                &host.connection_id,
+                "calendar.timeline",
+            )
+            .await
+            .unwrap(),
             resource: logical_resource.as_str().into(),
             expected_grant: floe_conversation::ExpectedGrantState::Absent,
         }],

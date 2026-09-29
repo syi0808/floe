@@ -1167,24 +1167,13 @@ impl<Keys: VaultKeyProvider> PersonalAttentionReaderApi for PersonalAttentionRea
             if selected.capability_id != "attention.coarse" {
                 return Err(AgentFailure::CapabilityDenied);
             }
-            let source = floe_context::PersonalConnectionReader::load(
+            floe_context::admit_selected_attention_outcome(
                 &personal_grants::CorePersonalConnections { core: self.core },
-                person_id,
-                &selected.connection_id,
-            )
-            .await?
-            .ok_or(AgentFailure::StaleContext)?;
-            floe_context::validate_personal_source_selection(
-                selected,
-                &source,
-                person_id,
-                self.device_id,
-            )?;
-            floe_context::admit_attention_outcome(
                 &floe_vault::VaultGrantRecords::new(self.vault),
                 &personal_grants::native_driver(self.local_context),
                 person_id,
                 self.device_id,
+                selected,
                 floe_access::attention_consumer(consumer)?,
                 call_id,
                 deadline,
@@ -1203,6 +1192,7 @@ pub(super) struct PersonalPeopleReader<'a, Keys: VaultKeyProvider> {
 }
 
 pub(super) struct PersonalWellbeingReader<'a, Keys: VaultKeyProvider> {
+    pub(super) core: &'a FloeCore,
     pub(super) vault: &'a EncryptedAgentVault<Keys>,
     pub(super) local_context: &'a LocalContextHost,
     pub(super) device_id: &'a str,
@@ -1232,19 +1222,14 @@ impl<Keys: VaultKeyProvider> PersonalWellbeingReaderApi for PersonalWellbeingRea
         >,
     > {
         Box::pin(async move {
-            floe_context::validate_local_source_selection(selected, self.device_id)?;
-            if selected.capability_id != "wellbeing.derived" {
-                return Err(AgentFailure::CapabilityDenied);
-            }
-            let grant_consumer = floe_context_contract::GrantConsumer::builtin(consumer)
-                .map_err(|_| AgentFailure::InvalidInput)?;
-            floe_context::read_wellbeing_outcome(
+            floe_context::read_selected_wellbeing_outcome(
+                &personal_grants::CorePersonalConnections { core: self.core },
                 &floe_vault::VaultGrantRecords::new(self.vault),
                 &personal_grants::native_driver(self.local_context),
                 person_id,
                 self.device_id,
+                selected,
                 consumer,
-                grant_consumer,
                 call_id,
                 deadline,
                 cancellation,

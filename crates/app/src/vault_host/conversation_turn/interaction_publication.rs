@@ -30,9 +30,10 @@ pub(crate) trait ToolOutcomePort: Sync {
     ) -> BoxFuture<'a, Result<SourceReadOutcome<ToolResult>, AgentFailure>>;
 }
 
-impl<Records, Driver, Remote> ToolOutcomePort
-    for floe_context::ContextToolService<Records, Driver, Remote>
+impl<Connections, Records, Driver, Remote> ToolOutcomePort
+    for floe_context::ContextToolService<Connections, Records, Driver, Remote>
 where
+    Connections: floe_context::PersonalConnectionReader,
     Records: floe_context::PersonalGrantRecords,
     Driver: floe_context::PersonalSourceDriver,
     Remote: floe_context::SourceReader,

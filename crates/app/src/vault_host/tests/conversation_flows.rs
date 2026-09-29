@@ -2272,6 +2272,7 @@ fn delegated_model_dispatch_uses_the_same_owner_checks_as_root() {
         floe_access::SystemConsentClock,
     );
     let personal = crate::vault_host::personal_grants::PersonalDependencyResolver {
+        core: &fixture.core,
         vault: &fixture.vault,
         local_context: &fixture.local_context,
         person_id: person,
