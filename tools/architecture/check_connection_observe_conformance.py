@@ -28,7 +28,7 @@ LEGACY = re.compile(
     r"remote_member_policy_digest_for_target|native_member_policy_digest_for_target|"
     r"RemoteCalendarQuery|SignedCalendarPreview|RemoteCalendarSourceReference|"
     r"CalendarAccessChange|CalendarAccessOverview|PersonalAccessChange|"
-    r"ContactsAccessChange|PersonalAccessOverview|remote_calendar_grant_\w+|"
+    r"ContactsAccessChange|PersonalAccessOverview|remote_calendar_grant(?:_\w+)?|"
     r"consumer_policy|policy_authority|policy_incarnation|policy_epoch)\b"
 )
 FORBIDDEN_POLICY = re.compile(
