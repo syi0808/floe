@@ -123,6 +123,32 @@ impl SourceConnection {
         Ok(source)
     }
 
+    pub fn establish_reviewed_native(
+        person_id: PersonId,
+        connector_id: ConnectorId,
+        connection_id: ConnectionId,
+        execution_owner_id: ExecutionOwnerId,
+        resource_mode: ResourceMode,
+        resources: Vec<ConnectionResource>,
+        fingerprint: String,
+    ) -> Result<Self, SourceConnectionError> {
+        let mut source = Self::establish(
+            person_id,
+            connector_id,
+            connection_id,
+            execution_owner_id,
+            resource_mode,
+            resources,
+        )?;
+        if !source.requires_native_subject() || !valid_fingerprint(&fingerprint) {
+            return Err(SourceConnectionError::InvalidSubject);
+        }
+        source.native_subject_fingerprint = Some(fingerprint);
+        source.state = SourceState::Ready;
+        source.validate()?;
+        Ok(source)
+    }
+
     pub fn validate(&self) -> Result<(), SourceConnectionError> {
         if !self.person_id.is_valid()
             || ConnectorId::try_new(self.connector_id.as_str()).is_err()
@@ -187,11 +213,9 @@ impl SourceConnection {
             {
                 return Err(SourceConnectionError::InvalidTransition);
             }
-        } else if self.native_subject_fingerprint != next.native_subject_fingerprint {
-            if self.resource_mode != next.resource_mode || self.resources != next.resources {
-                return Err(SourceConnectionError::InvalidTransition);
-            }
-        } else if self.state != next.state {
+        } else if self.state != next.state
+            && !(self.state == SourceState::Pending && next.state == SourceState::Ready)
+        {
             return Err(SourceConnectionError::InvalidTransition);
         }
         let scope_changed = self.resource_mode != next.resource_mode
@@ -306,6 +330,41 @@ impl SourceConnection {
         Ok(true)
     }
 
+    pub fn configure_reviewed_native(
+        &mut self,
+        expected_revision: u64,
+        resource_mode: ResourceMode,
+        resources: Vec<ConnectionResource>,
+        fingerprint: String,
+    ) -> Result<bool, SourceConnectionError> {
+        self.check_mutation(expected_revision)?;
+        if !self.requires_native_subject() || !valid_fingerprint(&fingerprint) {
+            return Err(SourceConnectionError::InvalidSubject);
+        }
+        let resources = normalize_resources(resources)?;
+        if self.resource_mode == resource_mode
+            && self.resources == resources
+            && self.native_subject_fingerprint.as_deref() == Some(&fingerprint)
+            && self.state == SourceState::Ready
+        {
+            return Ok(false);
+        }
+        let source_changed = self.resource_mode != resource_mode
+            || self
+                .resources
+                .iter()
+                .map(ConnectionResource::handle)
+                .ne(resources.iter().map(ConnectionResource::handle))
+            || self.native_subject_fingerprint.as_deref() != Some(&fingerprint)
+            || self.state != SourceState::Ready;
+        self.advance(source_changed)?;
+        self.resource_mode = resource_mode;
+        self.resources = resources;
+        self.native_subject_fingerprint = Some(fingerprint);
+        self.state = SourceState::Ready;
+        Ok(true)
+    }
+
     pub fn disconnect(&mut self, expected_revision: u64) -> Result<bool, SourceConnectionError> {
         if self.revision != expected_revision {
             return Err(SourceConnectionError::Conflict);
@@ -351,7 +410,12 @@ impl SourceConnection {
     fn requires_native_subject(&self) -> bool {
         matches!(
             self.connector_id.as_str(),
-            "calendar.event_kit" | "calendar.android"
+            "calendar.event_kit"
+                | "calendar.android"
+                | "contacts.apple"
+                | "contacts.android"
+                | "attention.macos"
+                | "health.apple"
         )
     }
 }

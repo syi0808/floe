@@ -211,3 +211,133 @@ fn inventory_reconciliation_requires_all_available_scope() {
     );
     assert_eq!(connection.revision(), 3);
 }
+
+#[test]
+fn reviewed_native_creation_is_ready_at_first_revision() {
+    for connector in ["contacts.apple", "attention.macos", "health.apple"] {
+        let mode = if connector == "contacts.apple" {
+            ResourceMode::Selected
+        } else {
+            ResourceMode::AllAvailable
+        };
+        let connection = SourceConnection::establish_reviewed_native(
+            PersonId::new(),
+            ConnectorId::try_new(connector).unwrap(),
+            ConnectionId::new(),
+            ExecutionOwnerId::try_new("device-1").unwrap(),
+            mode,
+            vec![resource("a", "A")],
+            "a".repeat(64),
+        )
+        .unwrap();
+        assert_eq!(connection.revision(), 1);
+        assert_eq!(connection.state(), SourceState::Ready);
+        assert!(connection.source_authority().is_valid());
+        assert_eq!(
+            connection.native_subject_fingerprint(),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+        connection.validate().unwrap();
+    }
+}
+
+#[test]
+fn reviewed_contacts_configuration_advances_once_for_resources_and_subject() {
+    let mut connection = SourceConnection::establish_reviewed_native(
+        PersonId::new(),
+        ConnectorId::try_new("contacts.apple").unwrap(),
+        ConnectionId::new(),
+        ExecutionOwnerId::try_new("device-1").unwrap(),
+        ResourceMode::Selected,
+        vec![resource("a", "A")],
+        "a".repeat(64),
+    )
+    .unwrap();
+    let original = connection.clone();
+    assert!(
+        connection
+            .configure_reviewed_native(
+                1,
+                ResourceMode::Selected,
+                vec![resource("b", "B"), resource("a", "A")],
+                "b".repeat(64),
+            )
+            .unwrap()
+    );
+    original.validate_successor(&connection).unwrap();
+    assert_eq!(connection.revision(), 2);
+    assert_eq!(
+        connection.source_authority().incarnation(),
+        original.source_authority().incarnation()
+    );
+    assert_eq!(
+        connection.source_authority().epoch().get(),
+        original.source_authority().epoch().get() + 1
+    );
+    assert!(
+        !connection
+            .configure_reviewed_native(
+                2,
+                ResourceMode::Selected,
+                vec![resource("a", "A"), resource("b", "B")],
+                "b".repeat(64),
+            )
+            .unwrap()
+    );
+    assert_eq!(connection.revision(), 2);
+    let original = connection.clone();
+    assert!(
+        connection
+            .configure_reviewed_native(
+                2,
+                ResourceMode::Selected,
+                vec![resource("a", "Renamed"), resource("b", "B")],
+                "b".repeat(64),
+            )
+            .unwrap()
+    );
+    original.validate_successor(&connection).unwrap();
+    assert_eq!(connection.source_authority(), original.source_authority());
+    let original = connection.clone();
+    assert!(
+        connection
+            .configure_reviewed_native(
+                3,
+                ResourceMode::Selected,
+                vec![resource("a", "Renamed"), resource("b", "B")],
+                "c".repeat(64),
+            )
+            .unwrap()
+    );
+    original.validate_successor(&connection).unwrap();
+    assert_eq!(
+        connection.source_authority().epoch().get(),
+        original.source_authority().epoch().get() + 1
+    );
+    let original = connection.clone();
+    assert!(
+        connection
+            .configure_reviewed_native(
+                4,
+                ResourceMode::Selected,
+                vec![resource("a", "Renamed")],
+                "c".repeat(64),
+            )
+            .unwrap()
+    );
+    original.validate_successor(&connection).unwrap();
+    assert_eq!(
+        connection.source_authority().epoch().get(),
+        original.source_authority().epoch().get() + 1
+    );
+    assert!(connection.disconnect(5).unwrap());
+    assert_eq!(
+        connection.configure_reviewed_native(
+            6,
+            ResourceMode::Selected,
+            vec![resource("a", "A")],
+            "d".repeat(64)
+        ),
+        Err(SourceConnectionError::Disconnected)
+    );
+}

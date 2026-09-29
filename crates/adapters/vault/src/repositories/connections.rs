@@ -254,4 +254,67 @@ mod tests {
             Err(SourceRepositoryError::Corrupt)
         );
     }
+
+    #[tokio::test]
+    async fn reviewed_contacts_creation_and_combined_change_persist_as_single_transitions() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = TursoStore::open(directory.path().join("sources.db"))
+            .await
+            .unwrap();
+        let person_id = PersonId::new();
+        let connection_id = ConnectionId::new();
+        let mut source = SourceConnection::establish_reviewed_native(
+            person_id,
+            ConnectorId::try_new("contacts.apple").unwrap(),
+            connection_id.clone(),
+            ExecutionOwnerId::try_new("apple:device-1").unwrap(),
+            ResourceMode::Selected,
+            vec![
+                ConnectionResource::new(ResourceHandle::try_new("a").unwrap(), "A".into()).unwrap(),
+            ],
+            "a".repeat(64),
+        )
+        .unwrap();
+        store.create(&source).await.unwrap();
+        let persisted = store
+            .load(person_id, &connection_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.revision(), 1);
+        assert!(persisted.is_serving());
+        assert_eq!(persisted, source);
+
+        source
+            .configure_reviewed_native(
+                1,
+                ResourceMode::Selected,
+                vec![
+                    ConnectionResource::new(ResourceHandle::try_new("a").unwrap(), "A".into())
+                        .unwrap(),
+                    ConnectionResource::new(ResourceHandle::try_new("b").unwrap(), "B".into())
+                        .unwrap(),
+                ],
+                "b".repeat(64),
+            )
+            .unwrap();
+        store.update(&source, 1).await.unwrap();
+        assert_eq!(
+            store.update(&source, 1).await,
+            Err(SourceRepositoryError::Conflict)
+        );
+        drop(store);
+
+        let store = TursoStore::open(directory.path().join("sources.db"))
+            .await
+            .unwrap();
+        let persisted = store
+            .load(person_id, &connection_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted, source);
+        assert_eq!(persisted.revision(), 2);
+        assert_eq!(persisted.source_authority().epoch().get(), 2);
+    }
 }
