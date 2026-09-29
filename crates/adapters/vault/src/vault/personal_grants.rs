@@ -343,6 +343,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn feasibility_query_change_advances_only_grant_authority() {
+        let (_root, _keys, vault, person) = vault().await;
+        let source = floe_access::feasibility_source(person, "device-a").unwrap();
+        let scope = GrantScope::try_new(
+            vec![ResourceHandle::try_new(floe_access::FEASIBILITY_RESOURCE).unwrap()],
+            vec![GrantDataCategory::Derived],
+            vec![GrantOperation::Read],
+            vec![GrantPurpose::Assistant],
+            vec![GrantConsumer::builtin("assistant").unwrap()],
+            ProcessingRestriction::LocalOnly,
+        )
+        .unwrap();
+        let query_a = FeasibilityGrantQuery {
+            event_handle: "event-a".into(),
+            evidence_handles: vec!["evidence-a".into()],
+            destination_latitude: 37.0,
+            destination_longitude: 127.0,
+            event_start_unix_ms: 1_800_000_000_000,
+            event_end_unix_ms: 1_800_000_060_000,
+            travel_mode: "walking".into(),
+        };
+        let first = vault
+            .review_personal_grant_with_feasibility_query(
+                source.clone(),
+                scope.clone(),
+                &"a".repeat(64),
+                None,
+                query_a.clone(),
+            )
+            .await
+            .unwrap();
+        let source_authority = vault.personal_grant_source_authority(first.id()).await.unwrap();
+        let mut query_b = query_a.clone();
+        query_b.event_handle = "event-b".into();
+        let changed = vault
+            .review_personal_grant_with_feasibility_query(
+                source.clone(),
+                scope.clone(),
+                &"a".repeat(64),
+                Some((first.id(), first.authority())),
+                query_b.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(changed.authority(), first.authority().advance().unwrap());
+        assert_eq!(
+            vault.personal_grant_source_authority(first.id()).await.unwrap(),
+            source_authority
+        );
+        assert_eq!(
+            vault.personal_feasibility_query(first.id()).await.unwrap(),
+            query_b
+        );
+        assert_eq!(
+            vault
+                .review_personal_grant_with_feasibility_query(
+                    source.clone(),
+                    scope.clone(),
+                    &"a".repeat(64),
+                    Some((first.id(), first.authority())),
+                    query_a,
+                )
+                .await
+                .unwrap_err(),
+            AgentFailure::Conflict
+        );
+        let stable = vault
+            .review_personal_grant_with_feasibility_query(
+                source,
+                scope,
+                &"a".repeat(64),
+                Some((changed.id(), changed.authority())),
+                query_b,
+            )
+            .await
+            .unwrap();
+        assert_eq!(stable.authority(), changed.authority());
+        assert_eq!(
+            vault.personal_grant_source_authority(first.id()).await.unwrap(),
+            source_authority
+        );
+    }
+
+    #[tokio::test]
     async fn personal_review_rejects_stale_cas_and_preserves_source_replacement() {
         let (_root, _keys, vault, person) = vault().await;
         let first_source = source(person, "device-a");
@@ -734,6 +818,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 (None, None) => {}
                 (Some(_), _) | (None, Some(_)) => return Err(AgentFailure::Conflict),
             }
+            let query_changed = if let (Some(grant), Some(query)) =
+                (existing.as_ref(), feasibility_query.as_ref())
+            {
+                self.feasibility_query_in_transaction(&transaction, grant.id())
+                    .await?
+                    .as_ref()
+                    != Some(query)
+            } else {
+                false
+            };
             let grant = match existing {
                 Some(grant) if grant.state() == floe_access::GrantState::Revoked => {
                     let created = self
@@ -753,11 +847,19 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     .await?
                 }
                 Some(grant) => {
+                    let mutation = if query_changed
+                        && grant.state() == floe_access::GrantState::Active
+                        && grant.scope() == &scope
+                    {
+                        AccessGrantMutation::ReviewActive { scope }
+                    } else {
+                        AccessGrantMutation::Activate { scope }
+                    };
                     self.mutate_data_access_grant_in_transaction(
                         &transaction,
                         grant.id(),
                         grant.authority(),
-                        AccessGrantMutation::Activate { scope },
+                        mutation,
                     )
                     .await?
                 }
@@ -849,6 +951,38 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         };
         query.validate()?;
         Ok(query)
+    }
+
+    async fn feasibility_query_in_transaction(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        grant_id: GrantId,
+    ) -> Result<Option<FeasibilityGrantQuery>, AgentFailure> {
+        let mut rows = transaction
+            .query(
+                "SELECT event_handle, evidence_handles, destination_latitude, destination_longitude, event_start_unix_ms, event_end_unix_ms, travel_mode FROM personal_feasibility_queries WHERE grant_id = ? AND person_id = ?",
+                (grant_id.as_uuid().to_string(), self.person_id.to_string()),
+            )
+            .await
+            .map_err(storage)?;
+        let Some(row) = rows.next().await.map_err(storage)? else {
+            return Ok(None);
+        };
+        let query = FeasibilityGrantQuery {
+            event_handle: row.get::<String>(0).map_err(storage)?,
+            evidence_handles: serde_json::from_str(&row.get::<String>(1).map_err(storage)?)
+                .map_err(|_| AgentFailure::VaultUnavailable)?,
+            destination_latitude: row.get::<f64>(2).map_err(storage)?,
+            destination_longitude: row.get::<f64>(3).map_err(storage)?,
+            event_start_unix_ms: row.get::<i64>(4).map_err(storage)?,
+            event_end_unix_ms: row.get::<i64>(5).map_err(storage)?,
+            travel_mode: row.get::<String>(6).map_err(storage)?,
+        };
+        query.validate().map_err(|_| AgentFailure::VaultUnavailable)?;
+        if rows.next().await.map_err(storage)?.is_some() {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        Ok(Some(query))
     }
 
     async fn upsert_feasibility_query_in_transaction(
