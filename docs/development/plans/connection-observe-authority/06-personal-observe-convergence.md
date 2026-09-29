@@ -234,7 +234,7 @@ The current `SourceConnection` APIs separate:
 ~~~
 configure(resources)
 update_native_subject(subject)
-```
+~~~
 
 and `validate_successor` rejects some simultaneous subject/config transitions.
 
@@ -256,7 +256,7 @@ configure_reviewed_native(
   resources,
   native_subject_fingerprint,
 )
-```
+~~~
 
 Exact naming may differ. Required semantics:
 
@@ -438,7 +438,7 @@ ContextToolService<Records, Driver, Remote>
   records
   driver
   remote
-```
+~~~
 
 App constructs it at multiple sites in `conversation_turn.rs`, currently with:
 - `VaultGrantRecords`;
@@ -479,7 +479,7 @@ Contract:
 
 ~~~
 MAX_RESOURCE_HANDLE_BYTES = 256
-```
+~~~
 
 Apple generated identity handle:
 - HMAC-derived;
@@ -530,7 +530,7 @@ git rev-parse HEAD
 git rev-parse origin/main
 git log -1 --oneline
 python3 tools/architecture/check_boundaries.py
-```
+~~~
 
 Read:
 
@@ -545,7 +545,7 @@ docs/architecture/runtime.md
 docs/architecture/modules.md
 docs/architecture/authority-recovery.md
 docs/product/integrations-and-privacy.md
-```
+~~~
 
 Capture:
 
@@ -559,7 +559,7 @@ rg -n "same_authority|active_resource_grant" crates
 rg -n "calendar_connection:" crates
 rg -n "PersonalGrantRecords" crates
 rg -n "native_member_policy_digest_for_target" crates
-```
+~~~
 
 Classify Feasibility matches separately from standing personal matches.
 
@@ -571,7 +571,7 @@ Modify:
 crates/modules/connections/src/source.rs
 crates/modules/connections/src/application/source_connections.rs
 crates/adapters/vault/src/repositories/connections.rs tests
-```
+~~~
 
 ### Native-subject connectors
 
@@ -583,7 +583,7 @@ At minimum current Apple-priority sources:
 attention.macos
 contacts.apple
 health.apple
-```
+~~~
 
 Keep existing dormant `contacts.android` behavior coherent if shared code touches it, but do not add Android platform work or verification.
 
@@ -614,7 +614,7 @@ labels only
 
 exact no-op
   -> preserve revision/authority
-```
+~~~
 
 Do not weaken stable identity or CAS validation.
 
@@ -643,7 +643,7 @@ View ID
 resource mode
 initial/current physical resource rule
 native subject required
-```
+~~~
 
 Planning-base stable IDs may remain:
 
@@ -651,7 +651,7 @@ Planning-base stable IDs may remain:
 contacts.apple.local
 attention.macos.local
 health.apple.local
-```
+~~~
 
 These become actual persisted `SourceConnection.connection_id` values, not strings reconstructed as authority at read time.
 
@@ -680,7 +680,7 @@ Create/expand an App owner module such as:
 
 ~~~
 crates/app/src/vault_host/personal_access.rs
-```
+~~~
 
 or refactor `personal_grants.rs` if the final naming remains honest.
 
@@ -795,7 +795,7 @@ consumers
 
 processing
   LocalOnly
-```
+~~~
 
 ### Remove plain View grant resource
 
@@ -826,7 +826,7 @@ crates/modules/access/src/application/personal_sources.rs
 crates/modules/access/src/application/personal_read.rs
 crates/modules/access/src/ports/personal_grants.rs
 crates/modules/access/src/lib.rs
-```
+~~~
 
 ### Remove standing source construction
 
@@ -887,7 +887,7 @@ Modify/rename:
 crates/adapters/vault/src/vault/personal_grants.rs
 crates/adapters/vault/src/repositories/personal_grants.rs
 crates/adapters/vault/src/vault.rs
-```
+~~~
 
 ### Delete standing table
 
@@ -929,7 +929,7 @@ personal_feasibility_reviews
 
 UNIQUE(person_id, connector, connection_id, execution_owner)
 UNIQUE(grant_id, person_id)
-```
+~~~
 
 This is a real contextual review record, not a standing source owner.
 
@@ -963,7 +963,7 @@ Modify:
 ~~~
 crates/modules/context/src/ports/personal_source.rs
 crates/adapters/vault/src/repositories/personal_grants.rs
-```
+~~~
 
 ### Standing connection port
 
@@ -974,7 +974,7 @@ trait PersonalConnectionReader {
   load(person_id, connection_id) -> Option<SourceConnection>
   list_current(person_id, connector_id) -> Vec<SourceConnection>  # only if live callers need it
 }
-```
+~~~
 
 Exact API may be narrower.
 
@@ -1009,7 +1009,7 @@ Refactor:
 
 ~~~
 crates/modules/context/src/application/personal_sources.rs
-```
+~~~
 
 Split standing source acquisition from Feasibility where that clarifies ownership.
 
@@ -1043,7 +1043,7 @@ Use exact current grant with:
 
 ~~~
 connection.resources[].handle
-```
+~~~
 
 Require:
 - non-empty;
@@ -1063,7 +1063,7 @@ Expected subject comes only from:
 
 ~~~
 connection.native_subject_fingerprint()
-```
+~~~
 
 Pass it to driver.
 
@@ -1101,7 +1101,7 @@ source_authority
 
 source_resources
   exact current ConnectionResource handles
-```
+~~~
 
 No Vault side-table source data.
 
@@ -1153,13 +1153,13 @@ Modify:
 ~~~
 crates/modules/context/src/application/tools.rs
 crates/app/src/vault_host/conversation_turn.rs
-```
+~~~
 
 Current:
 
 ~~~
 ContextToolService<Records, Driver, Remote>
-```
+~~~
 
 Target includes current personal Connections source reader.
 
@@ -1167,7 +1167,7 @@ Example:
 
 ~~~
 ContextToolService<Connections, Records, Driver, Remote>
-```
+~~~
 
 or an equally direct composition.
 
@@ -1192,7 +1192,7 @@ Modify:
 crates/modules/context/src/application/source_candidates.rs
 crates/app/src/vault_host/expert_binding_settings.rs
 relevant registry/binding tests
-```
+~~~
 
 ### Generalize request
 
@@ -1200,13 +1200,13 @@ Replace Calendar-only:
 
 ~~~
 calendar_connection: Option<&SourceConnection>
-```
+~~~
 
 with a general current source collection, e.g.:
 
 ~~~
 source_connections: &[SourceConnection]
-```
+~~~
 
 Use it for:
 - Calendar;
@@ -1240,7 +1240,7 @@ resource
 
 contract_version
   = requirement version
-```
+~~~
 
 No leaf handles.
 
@@ -1274,7 +1274,7 @@ Modify:
 
 ~~~
 crates/app/src/vault_host/conversation_turn/expert_host.rs
-```
+~~~
 
 Add core/current connection access to:
 - `PersonalAttentionReader`;
@@ -1296,7 +1296,7 @@ Modify:
 
 ~~~
 crates/app/src/first_party_observe.rs
-```
+~~~
 
 Create/reuse one exact standing personal policy helper.
 
@@ -1329,7 +1329,7 @@ Modify:
 crates/app/src/vault_host/review_snapshot.rs
 crates/app/src/vault_host/interaction_owners.rs
 crates/app/src/vault_host/conversation_turn/interaction_publication.rs tests
-```
+~~~
 
 ### Capture standing personal
 
@@ -1376,7 +1376,7 @@ personal_grant_selected_handles
 personal_grant_mapping_in_transaction
 upsert_personal_source_review_in_transaction
 review_personal_grant_with_selection
-```
+~~~
 
 Delete `personal_grant_policies`.
 
@@ -1397,7 +1397,7 @@ apps/client/lib/features/settings/domain/agent_personal_access.dart
 apps/client/lib/app/runtime/local_owner_gateways.dart
 apps/client/lib/features/connections/presentation/personal_access_cards.dart
 related tests
-```
+~~~
 
 ### Allowed retained pre-07 surface
 
@@ -1562,7 +1562,7 @@ rg -n "calendar_connection:" crates
 rg -n "validate_local_source_selection" crates
 rg -n "PersonalGrantRecords" crates
 rg -n "source_incarnation|source_epoch" crates/adapters/vault/src/vault
-```
+~~~
 
 ### Required zero production matches
 
@@ -1599,7 +1599,7 @@ docs/architecture/modules.md
 docs/architecture/runtime.md
 docs/architecture/authority-recovery.md
 docs/product/integrations-and-privacy.md
-```
+~~~
 
 After 06 they must say:
 
@@ -1629,7 +1629,7 @@ Suggested commit:
 
 ~~~
 connections: own standing personal source truth
-```
+~~~
 
 ### 06-B — App standing personal review orchestration
 
@@ -1642,7 +1642,7 @@ Suggested commit:
 
 ~~~
 app: compose standing personal observe from connections and access
-```
+~~~
 
 ### 06-C — remove personal standing Vault side state
 
@@ -1655,7 +1655,7 @@ Suggested commit:
 
 ~~~
 vault: retain only contextual feasibility review state
-```
+~~~
 
 ### 06-D — Context read/reauthorization cutover
 
@@ -1668,7 +1668,7 @@ Suggested commit:
 
 ~~~
 context: read standing personal sources from connections
-```
+~~~
 
 ### 06-E — Expert candidate/binding convergence
 
@@ -1680,7 +1680,7 @@ Suggested commit:
 
 ~~~
 experts: bind personal sources by connection view
-```
+~~~
 
 ### 06-F — review/product caller convergence
 
@@ -1693,7 +1693,7 @@ Suggested commit:
 
 ~~~
 app: converge personal review on connection source state
-```
+~~~
 
 ### 06-G — docs/closure
 
@@ -1706,7 +1706,7 @@ Suggested commit:
 
 ~~~
 docs: complete connection observe checkpoint 06
-```
+~~~
 
 Combine slices when a direct cutover makes the final system smaller. Do not add compatibility wrappers to make intermediate commits compile.
 
@@ -1732,7 +1732,7 @@ cargo check --workspace --lib
 python3 tools/architecture/check_boundaries.py
 python3 tools/architecture/check_expert_extensibility.py
 git diff --check
-```
+~~~
 
 If a filter matches zero tests, run the actual full crate/nearest test target and record the command.
 
@@ -1762,7 +1762,7 @@ flutter test test/features/connections
 flutter test test/features/conversation
 flutter test
 flutter build macos
-```
+~~~
 
 Distinguish the known unrelated Expert-registry golden mismatch if it remains.
 
@@ -1772,7 +1772,7 @@ Final:
 
 ~~~
 CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast -- --test-threads=1
-```
+~~~
 
 Default-parallel `floe-app` may separately expose the known global runner race; report it separately, do not weaken tests.
 
