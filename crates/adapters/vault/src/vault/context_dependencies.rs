@@ -323,7 +323,7 @@ mod tests {
     use crate::ContextEvidenceReader;
     use chrono::{Duration, Utc};
     use floe_access::{
-        ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, DependencyCoverage,
+        ConnectionId, ConnectorId, ContextDependency, DependencyCoverage,
         ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
         GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, MAX_CONTEXT_DEPENDENCIES,
         ProcessingRestriction, ResourceHandle,
@@ -503,7 +503,6 @@ mod tests {
             GrantPurpose::Scheduling,
             GrantConsumer::builtin("calendar").unwrap(),
             ProcessingRestriction::LocalOnly,
-            ConsumerPolicyAuthority::new(),
             Uuid::new_v4(),
             marker.to_vec(),
             Uuid::new_v4(),
@@ -536,10 +535,6 @@ mod tests {
             .review_personal_grant(source, scope, &"a".repeat(64), None)
             .await
             .unwrap();
-        let policy = vault
-            .personal_grant_consumer_policy(grant.id())
-            .await
-            .unwrap();
         let observed_at = Utc::now();
         ContextDependency::try_new(
             vault.person_id,
@@ -554,7 +549,6 @@ mod tests {
             GrantPurpose::Assistant,
             consumer,
             ProcessingRestriction::LocalOnly,
-            policy,
             Uuid::new_v4(),
             marker.to_vec(),
             Uuid::new_v4(),

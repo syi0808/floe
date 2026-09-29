@@ -11,7 +11,7 @@ use floe_access::{
     DataAccessGrant, DependencyAuthorization, GrantState, RemoteCallWindow, RemoteGrantStore,
     RemoteGrantTransport, RemotePairingIdentity, RemoteSourceQuery,
     admit_remote_view_binding, admit_remote_view_source, grant_unchanged,
-    remote_dependency_binding_matches, remote_dependency_live, remote_dependency_resource,
+    remote_dependency_live, remote_dependency_resource,
     remote_dependency_source_admits, remote_view_source, source_matches_producer,
 };
 use floe_agent_contract::{AgentFailure, BoxFuture, PersonId};
@@ -35,7 +35,7 @@ use crate::application::remote_views::{
 /// The read a remote transport performs once the grant has admitted it.
 pub struct AdmittedRemoteRead<'a> {
     pub view_id: &'a str,
-    pub binding: &'a floe_access::RemoteGrantBinding,
+    pub grant: &'a DataAccessGrant,
     pub source_authority: floe_context_contract::SourceAuthority,
     pub consumer: &'a str,
     pub resource: &'a str,
@@ -304,15 +304,16 @@ async fn read_one_remote_source(
         .await?;
     source_matches_producer(&reference, &preview.producer, preview.connection_revision)?;
     admit_remote_view_source(&reference, source)?;
-    let binding = store
-        .view_grant_binding(view_id, source.connector().as_str(), connection_id_text)
-        .await?;
-    admit_remote_view_binding(&binding.grant, grant, source, &resource)?;
+    let current_grant = store
+        .find_view_grant(view_id, source)
+        .await?
+        .ok_or(AgentFailure::AccessReviewRequired)?;
+    admit_remote_view_binding(&current_grant, grant, source, &resource)?;
     let raw = transport
         .read_admitted_view(
             AdmittedRemoteRead {
                 view_id,
-                binding: &binding,
+                grant: &current_grant,
                 source_authority: reference.source_authority,
                 consumer: consumer_name,
                 resource: &resource,
@@ -327,7 +328,7 @@ async fn read_one_remote_source(
         .await?;
     check_window(window)?;
     let current_grant = store
-        .find_view_grant(view_id, source, consumer_name)
+        .find_view_grant(view_id, source)
         .await?
         .ok_or(AgentFailure::AccessReviewRequired)?;
     grant_unchanged(grant, &current_grant)?;
@@ -343,20 +344,13 @@ async fn read_one_remote_source(
     if current_reference != reference {
         return Err(AgentFailure::StaleContext);
     }
-    let current_binding = store
-        .view_grant_binding(view_id, source.connector().as_str(), connection_id_text)
-        .await?;
-    admit_remote_view_binding(&current_binding.grant, grant, source, &resource)?;
-    if current_binding.consumer_policy != binding.consumer_policy {
-        return Err(AgentFailure::PolicyDenied);
-    }
+    admit_remote_view_binding(&current_grant, grant, source, &resource)?;
     check_window(window)?;
     let (value, observed, expires) =
         validate_remote_view(view_id, raw, query, now, max_items, max_bytes)?;
     let dependency = remote_view_dependency(
         person_id,
-        &binding.grant,
-        binding.consumer_policy,
+        &current_grant,
         remote_view_source(&reference)?,
         &resource,
         reference.source_authority,
@@ -372,7 +366,7 @@ async fn read_one_remote_source(
         value,
         AuthorizedSourceBinding {
             dependency,
-            scope: binding.grant.scope().clone(),
+            scope: current_grant.scope().clone(),
         },
     ))
 }
@@ -631,18 +625,11 @@ pub async fn authorize_remote_dependency(
         preview.connection_revision,
         &preview.producer.audience,
     )?;
-    let binding = store
-        .view_grant_binding(
-            view_id,
-            dependency.source().connector().as_str(),
-            connection_id,
-        )
-        .await?;
-    remote_dependency_binding_matches(
-        binding.consumer_policy,
-        binding.grant.authority(),
-        dependency,
-    )
+    let current = store
+        .find_view_grant(view_id, dependency.source())
+        .await?
+        .ok_or(AgentFailure::PolicyDenied)?;
+    admit_remote_view_binding(&current, grant, dependency.source(), resource)
 }
 
 #[cfg(test)]
@@ -650,8 +637,8 @@ mod remote_view_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use floe_access::{
-        ConsumerPolicyAuthority, DataAccessGrant, GrantAuthority, GrantDataCategory, GrantId,
-        GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, RemoteGrantBinding,
+        DataAccessGrant, GrantAuthority, GrantDataCategory, GrantId,
+        GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding,
         RemoteProducerIdentity, RemoteViewSourceReference, SignedSourcePreview,
     };
     use floe_context_contract::{
@@ -677,7 +664,6 @@ mod remote_view_tests {
         grant: DataAccessGrant,
         source_authority: SourceAuthority,
         source_resources: Vec<ResourceHandle>,
-        policy: ConsumerPolicyAuthority,
         view: Value,
         expired_credential: bool,
     }
@@ -775,7 +761,6 @@ mod remote_view_tests {
                 grant,
                 source_authority: authority,
                 source_resources: vec![ResourceHandle::try_new(resource).unwrap()],
-                policy: ConsumerPolicyAuthority::new(),
                 view,
                 expired_credential: false,
             });
@@ -907,16 +892,21 @@ mod remote_view_tests {
             &'a self,
             view_id: &'a str,
             source: &'a GrantSourceBinding,
-            consumer: &'a str,
         ) -> BoxFuture<'a, Result<Option<DataAccessGrant>, AgentFailure>> {
-            let grant = self.sources.iter().find(|candidate| {
+            let grants: Vec<_> = self.sources.iter().filter(|candidate| {
                 candidate.grant.source() == source
                     && candidate.grant.scope().resources().iter().any(|resource| {
                         resource.as_str() == fixture_view_resource(view_id, source.connection_id().as_str())
                     })
-                    && candidate.grant.scope().consumers().iter().any(|allowed| allowed.identifier() == consumer)
-            }).map(|candidate| candidate.grant.clone());
-            Box::pin(async move { Ok(grant) })
+                    && candidate.grant.state() != floe_access::GrantState::Revoked
+            }).map(|candidate| candidate.grant.clone()).collect();
+            Box::pin(async move {
+                match grants.as_slice() {
+                    [] => Ok(None),
+                    [grant] => Ok(Some(grant.clone())),
+                    _ => Err(AgentFailure::Conflict),
+                }
+            })
         }
 
         fn activate_view_grant<'a>(
@@ -928,34 +918,6 @@ mod remote_view_tests {
             _: GrantScope,
         ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
             Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
-        }
-
-        fn view_grant_binding<'a>(
-            &'a self,
-            view_id: &'a str,
-            connector: &'a str,
-            connection_id: &'a str,
-        ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>> {
-            let found = self
-                .sources
-                .iter()
-                .map(|source| (source.grant.clone(), source.policy))
-                .find(|(grant, _)| {
-                    let source = grant.source();
-                    source.connector().as_str() == connector
-                        && source.connection_id().as_str() == connection_id
-                        && grant.scope().resources().iter().any(|resource| {
-                            resource.as_str() == fixture_view_resource(view_id, connection_id)
-                        })
-                });
-            Box::pin(async move {
-                found
-                    .map(|(grant, consumer_policy)| RemoteGrantBinding {
-                        grant,
-                        consumer_policy,
-                    })
-                    .ok_or(AgentFailure::AccessReviewRequired)
-            })
         }
 
     }
@@ -1066,7 +1028,6 @@ mod remote_view_tests {
             .collect();
         let grant_id = fixture.sources[0].grant.id();
         let grant_authority = fixture.sources[0].grant.authority();
-        let policy = fixture.sources[0].policy;
         let selected = SourceSelectionReference {
             connector_id: ConnectorId::try_new("calendar.google").unwrap(),
             connection_id: ConnectionId::try_new("calendar-account").unwrap(),
@@ -1116,7 +1077,6 @@ mod remote_view_tests {
         assert_eq!(dependency.source_resources().iter().map(ResourceHandle::as_str).collect::<Vec<_>>(), vec!["A", "B"]);
         assert_eq!(dependency.grant_id(), grant_id);
         assert_eq!(dependency.grant_authority(), grant_authority);
-        assert_eq!(dependency.consumer_policy(), policy);
         fixture.sources[0].source_resources.push(ResourceHandle::try_new("C").unwrap());
         assert_eq!(
             authorize_remote_dependency(
@@ -1135,7 +1095,6 @@ mod remote_view_tests {
         );
         assert_eq!(fixture.sources[0].grant.id(), grant_id);
         assert_eq!(fixture.sources[0].grant.authority(), grant_authority);
-        assert_eq!(fixture.sources[0].policy, policy);
     }
 
     #[tokio::test]

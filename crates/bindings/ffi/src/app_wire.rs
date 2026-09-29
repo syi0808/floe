@@ -2630,10 +2630,6 @@ mod tests {
             "source_authority": {
                 "incarnation": Uuid::new_v4(),
                 "epoch": 1
-            },
-            "policy_authority": {
-                "incarnation": Uuid::new_v4(),
-                "epoch": 1
             }
         }))
         .unwrap();

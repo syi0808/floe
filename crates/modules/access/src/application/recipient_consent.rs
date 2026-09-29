@@ -524,7 +524,7 @@ mod tests {
     use std::sync::Mutex;
 
     use floe_context_contract::{
-        ConnectionId, ConnectorId, ConsumerPolicyAuthority, GrantAuthority, GrantConsumer,
+        ConnectionId, ConnectorId, GrantAuthority, GrantConsumer,
         GrantDataCategory, GrantId, GrantOperation, GrantPurpose, ProcessingSourceScope,
         RecipientLineage, ResourceHandle, SourceAuthority,
     };
@@ -703,7 +703,6 @@ mod tests {
         let grant_id = GrantId::new();
         let grant_authority = GrantAuthority::new();
         let source_authority = SourceAuthority::new();
-        let policy_authority = ConsumerPolicyAuthority::new();
         let scope = |grant_resources: Vec<&str>, source_resources: Vec<&str>, source_authority| {
             ProcessingSourceScope::try_new(
                 ConnectionId::try_new("account").unwrap(),
@@ -723,7 +722,6 @@ mod tests {
                 grant_id,
                 grant_authority,
                 source_authority,
-                policy_authority,
             )
             .unwrap()
         };

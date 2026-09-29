@@ -13,8 +13,8 @@
 //!   review time; re-reading latest and substituting it would swap the
 //!   expected authority the decision binds.
 //! - Everything else is read now, because capture is its review time: sibling
-//!   bundle members, the live native subject, the pinned producer, the local
-//!   connection revision and the recorded policy of the reviewed grant. A
+//!   bundle members, the live native subject, the pinned producer and the
+//!   local connection revision. A
 //!   sibling live grant the requirement never named is reviewed as observed,
 //!   never silently adopted later.
 //!
@@ -24,7 +24,7 @@
 
 use floe_access::{GrantAuthority, GrantId};
 use floe_agent_contract::{AgentFailure, BoxFuture};
-use floe_context_contract::{ConsumerPolicyAuthority, SourceAccessRequirement, SourceAuthority};
+use floe_context_contract::{SourceAccessRequirement, SourceAuthority};
 use floe_kernel::PersonId;
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 
@@ -32,17 +32,16 @@ use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 #[derive(Clone, Debug)]
 pub(crate) struct SnapshotMember {
     pub member_id: String,
-    pub policy_fingerprint: String,
+    pub policy_digest: String,
     pub resource: String,
-    pub source_revision: Option<SourceAuthority>,
     /// The reviewed grant expectation: `None` is reviewed absence.
     pub expected_grant: Option<(GrantId, GrantAuthority)>,
-    pub policy_authority: Option<ConsumerPolicyAuthority>,
 }
 
 /// The owner identity an inline Observe decision binds.
 #[derive(Clone, Debug)]
 pub(crate) struct InlineReviewSnapshot {
+    pub source_revision: Option<SourceAuthority>,
     pub members: Vec<SnapshotMember>,
     pub connection_revision: Option<u64>,
     pub producer_fingerprint: Option<String>,
@@ -85,6 +84,7 @@ impl ReviewSnapshotSource for NoCaptureSnapshots {
 pub(crate) struct HostReviewSnapshots<'a, Keys: VaultKeyProvider, CalendarSubject> {
     pub core: &'a crate::FloeCore,
     pub vault: &'a EncryptedAgentVault<Keys>,
+    pub remote_source_client: Option<&'a floe_provider_adapters::sources::ServerSourceClient>,
     pub calendar_subject: &'a CalendarSubject,
     pub personal_subject: &'a dyn floe_access::PersonalSubjectInspector,
     /// Capture must stay fast: probes run under this deadline, not the turn's.
@@ -154,7 +154,7 @@ where
         }
         if !crate::first_party_observe::remote_policies(connector)?.is_empty() {
             return self
-                .capture_remote(requirement, person_id, connector, connection)
+                .capture_remote(requirement, person_id, connector, connection, cancellation)
                 .await;
         }
         // Unknown connectors, query-bound feasibility and picker-owned
@@ -233,7 +233,7 @@ where
             .connector_id()
             .map(|id| id.as_str())
             .ok_or(AgentFailure::InvalidInput)?;
-        let policy_fingerprint = crate::first_party_observe::policy_fingerprint(
+        let policy_digest = crate::first_party_observe::policy_digest(
             &crate::first_party_observe::calendar_policy()?,
         )?;
         let current = self
@@ -262,13 +262,12 @@ where
         .await?;
         let members = vec![SnapshotMember {
             member_id: "calendar.timeline".to_owned(),
-            policy_fingerprint,
+            policy_digest,
             resource: logical_resource.as_str().to_owned(),
-            source_revision: Some(current.source_authority()),
             expected_grant: expected,
-            policy_authority: self.calendar_policy(expected).await?,
         }];
         Ok(InlineReviewSnapshot {
+            source_revision: Some(current.source_authority()),
             members,
             connection_revision: Some(current.revision()),
             producer_fingerprint: None,
@@ -326,17 +325,15 @@ where
         self.verify_observed_live(person_id, connector, connection, expected)
             .await?;
         Ok(InlineReviewSnapshot {
+            source_revision: requirement.source_authority(),
             members: vec![SnapshotMember {
                 member_id: connector.to_owned(),
-                policy_fingerprint:
-                    crate::first_party_observe::native_member_policy_fingerprint_for_target(
-                        self.vault, person_id, connector, device_id,
-                    )
-                    .await?,
+                policy_digest: crate::first_party_observe::native_member_policy_digest_for_target(
+                    self.vault, person_id, connector, device_id,
+                )
+                .await?,
                 resource: identity_resource.to_owned(),
-                source_revision: requirement.source_authority(),
                 expected_grant: expected,
-                policy_authority: self.personal_policy(expected).await?,
             }],
             connection_revision: None,
             producer_fingerprint: None,
@@ -353,59 +350,57 @@ where
         person_id: PersonId,
         connector: &str,
         connection: &str,
+        cancellation: &floe_execution::Cancellation,
     ) -> Result<InlineReviewSnapshot, AgentFailure> {
         let requested: Vec<String> = requirement
             .resources()
             .iter()
             .map(|resource| resource.as_str().to_owned())
             .collect();
-        let policies = crate::first_party_observe::remote_policies_for_target(
-            self.vault,
+        let source_client = self
+            .remote_source_client
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
+        let person_text = person_id.to_string();
+        let window = floe_access::RemoteCallWindow {
+            deadline: self.capture_deadline,
+            cancellation: cancellation.clone(),
+        };
+        let context = super::remote_observe::RemoteObserveContext {
+            vault: self.vault,
             person_id,
-            connector,
-            connection,
-        )
-        .await?;
-        if policies.is_empty() {
-            return Err(AgentFailure::CapabilityUnavailable);
+            pairing: floe_access::RemotePairingIdentity {
+                person_id: &person_text,
+                client_id: source_client.source().client_id(),
+                device_id: source_client.source().device_id(),
+            },
+            connector_id: connector,
+            connection_id: connection,
+            resource: None,
+            window: &window,
+        };
+        let transport =
+            floe_provider_adapters::sources::AuthorizedSourceClient::new(source_client, self.vault);
+        let reviewed = super::remote_observe::review_bundle(&context, &transport).await?;
+        let source_revision = reviewed.members[0].source_authority;
+        if requirement.source_authority() != Some(source_revision) {
+            return Err(AgentFailure::AccessReviewRequired);
         }
-        let producer = self.vault.remote_pinned_producer().await?;
-        let mut members = Vec::with_capacity(policies.len());
-        let connection_revision = None;
-        for policy in &policies {
-            let resource = floe_context_contract::connection_view_resource(
-                policy.view_id,
-                &floe_context_contract::ConnectionId::try_new(connection)
-                    .map_err(|_| AgentFailure::InvalidInput)?,
-            )
-            .map_err(|_| AgentFailure::InvalidInput)?
-            .as_str()
-            .to_owned();
-            let blocked = requested.contains(&resource);
-            let expected = if blocked {
-                let expected = observed_expectation(requirement);
-                self.verify_blocked_grant(person_id, connector, connection, &resource, expected)
-                    .await?;
-                expected
-            } else {
-                self.sibling_grant(person_id, connector, connection, &resource)
-                    .await?
+        let mut members = Vec::with_capacity(reviewed.members.len());
+        for member in &reviewed.members {
+            let expected = match (member.expected_grant_id, member.expected_grant_authority) {
+                (Some(id), Some(authority)) => Some((id, authority)),
+                (None, None) => None,
+                _ => return Err(AgentFailure::AccessReviewRequired),
             };
-            let policy_authority = self.remote_view_policy(
-                policy.view_id,
-                connector,
-                connection,
-                requirement,
-                expected,
-            )
-            .await?;
+            if requested.contains(&member.resource) && expected != observed_expectation(requirement)
+            {
+                return Err(AgentFailure::AccessReviewRequired);
+            }
             members.push(SnapshotMember {
-                member_id: policy.view_id.to_owned(),
-                policy_fingerprint: crate::first_party_observe::policy_fingerprint(policy)?,
-                resource,
-                source_revision: requirement.source_authority(),
+                member_id: member.view_id.clone(),
+                policy_digest: member.policy_digest.clone(),
+                resource: member.resource.clone(),
                 expected_grant: expected,
-                policy_authority,
             });
         }
         for resource in &requested {
@@ -413,15 +408,11 @@ where
                 return Err(AgentFailure::CapabilityUnavailable);
             }
         }
-        members.sort_by(|left, right| {
-            left.member_id
-                .cmp(&right.member_id)
-                .then_with(|| left.resource.cmp(&right.resource))
-        });
         Ok(InlineReviewSnapshot {
+            source_revision: Some(source_revision),
             members,
-            connection_revision,
-            producer_fingerprint: Some(producer.fingerprint),
+            connection_revision: reviewed.members[0].connection_revision,
+            producer_fingerprint: Some(reviewed.members[0].producer_fingerprint.clone()),
             native_subject: None,
         })
     }
@@ -489,76 +480,6 @@ where
         Ok(())
     }
 
-    /// A sibling bundle member as observed now: one live grant is reviewed
-    /// as observed, proven absence as absence. Duplicates navigate.
-    async fn sibling_grant(
-        &self,
-        person_id: PersonId,
-        connector: &str,
-        connection: &str,
-        resource: &str,
-    ) -> Result<Option<(GrantId, GrantAuthority)>, AgentFailure> {
-        let live = self
-            .live_member_grants(person_id, connector, connection, resource)
-            .await?;
-        match live.as_slice() {
-            [] => Ok(None),
-            [grant] => Ok(Some((grant.id(), grant.authority()))),
-            _ => Err(AgentFailure::Conflict),
-        }
-    }
-
-    async fn calendar_policy(
-        &self,
-        expected: Option<(GrantId, GrantAuthority)>,
-    ) -> Result<Option<ConsumerPolicyAuthority>, AgentFailure> {
-        match expected {
-            None => Ok(None),
-            Some((grant_id, _)) => self
-                .vault
-                .calendar_grant_policy_authority(grant_id)
-                .await
-                .map(Some),
-        }
-    }
-
-    async fn personal_policy(
-        &self,
-        expected: Option<(GrantId, GrantAuthority)>,
-    ) -> Result<Option<ConsumerPolicyAuthority>, AgentFailure> {
-        match expected {
-            None => Ok(None),
-            Some((grant_id, _)) => self
-                .vault
-                .personal_grant_consumer_policy(grant_id)
-                .await
-                .map(Some),
-        }
-    }
-
-    /// The recorded policy of a reviewed remote-view grant: the mapping must
-    /// name the reviewed grant id, never a substituted one.
-    #[allow(clippy::too_many_arguments)]
-    async fn remote_view_policy(
-        &self,
-        view_id: &str,
-        connector: &str,
-        connection: &str,
-        _requirement: &SourceAccessRequirement,
-        expected: Option<(GrantId, GrantAuthority)>,
-    ) -> Result<Option<ConsumerPolicyAuthority>, AgentFailure> {
-        let Some((grant_id, _)) = expected else {
-            return Ok(None);
-        };
-        let (recorded, policy) = self
-            .vault
-            .remote_view_grant_policy(view_id, connector, connection)
-            .await?;
-        if recorded != grant_id {
-            return Err(AgentFailure::AccessReviewRequired);
-        }
-        Ok(Some(policy))
-    }
 }
 
 /// The live non-revoked grants naming one bundle member resource:
@@ -727,6 +648,7 @@ mod tests {
             HostReviewSnapshots {
                 core: &self.core,
                 vault: &self.vault,
+                remote_source_client: None,
                 calendar_subject: calendar,
                 personal_subject: personal,
                 capture_deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
@@ -834,7 +756,6 @@ mod tests {
             floe_access::ATTENTION_RESOURCE
         );
         assert_eq!(snapshot.members[0].expected_grant, None);
-        assert_eq!(snapshot.members[0].policy_authority, None);
         assert_eq!(
             snapshot.native_subject.as_deref(),
             Some("c".repeat(64).as_str())
@@ -928,7 +849,7 @@ mod tests {
             Some("d".repeat(64).as_str())
         );
         assert_eq!(
-            snapshot.members[0].source_revision,
+            snapshot.source_revision,
             Some(current.source_authority())
         );
         assert_eq!(

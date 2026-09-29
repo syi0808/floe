@@ -28,7 +28,7 @@ use std::num::NonZeroU64;
 
 use floe_access::{GrantAuthority, GrantId};
 use floe_agent_contract::{AgentFailure, BoxFuture};
-use floe_context_contract::{ConsumerPolicyAuthority, SourceAuthority};
+use floe_context_contract::SourceAuthority;
 use floe_kernel::PersonId;
 use uuid::Uuid;
 
@@ -48,11 +48,9 @@ pub(crate) struct LiveGrant {
 #[derive(Clone, Debug)]
 pub(crate) struct LiveMember {
     pub member_id: String,
-    pub policy_fingerprint: String,
+    pub policy_digest: String,
     pub resource: String,
-    pub source_revision: Option<SourceAuthority>,
     pub live_grants: Vec<LiveGrant>,
-    pub policy_authority: Option<ConsumerPolicyAuthority>,
 }
 
 /// Current owner truth for an inline Observe review: every canonical
@@ -60,6 +58,7 @@ pub(crate) struct LiveMember {
 /// bound owner identity.
 #[derive(Clone, Debug)]
 pub(crate) struct LiveInlineState {
+    pub source_revision: Option<SourceAuthority>,
     pub members: Vec<LiveMember>,
     pub connection_revision: Option<u64>,
     pub producer_fingerprint: Option<String>,
@@ -76,15 +75,8 @@ pub(crate) enum DriftReason {
     ProducerFingerprint,
     NativeSubject,
     MemberSet,
-    SourceRevision {
-        member_id: String,
-        resource: String,
-    },
-    PolicyAuthority {
-        member_id: String,
-        resource: String,
-    },
-    PolicyFingerprint {
+    SourceRevision,
+    PolicyDigest {
         member_id: String,
         resource: String,
     },
@@ -140,19 +132,8 @@ pub(crate) fn compare_reviewed_live(
     let mut out_of_band = false;
     for member in &reviewed.members {
         let current = find_live_member(live, member)?;
-        if current.policy_fingerprint != member.policy_fingerprint {
-            return Err(DriftReason::PolicyFingerprint {
-                member_id: member.member_id.clone(),
-                resource: member.resource.clone(),
-            });
-        }
-        // A locally unobservable source (personal, remote) skips the
-        // provider-level check: the grant record, the mutation-time fresh
-        // compare, and resume re-authorization are the fences there.
-        if let (Some(expected), Some(actual)) = (reviewed_source(member), current.source_revision)
-            && source_key(Some(actual)) != source_key(Some(expected))
-        {
-            return Err(DriftReason::SourceRevision {
+        if current.policy_digest != member.policy_digest {
+            return Err(DriftReason::PolicyDigest {
                 member_id: member.member_id.clone(),
                 resource: member.resource.clone(),
             });
@@ -182,14 +163,6 @@ pub(crate) fn compare_reviewed_live(
                 });
             }
         };
-        if member.policy_authority.is_some()
-            && policy_key(current.policy_authority) != policy_key(reviewed_policy(member))
-        {
-            return Err(DriftReason::PolicyAuthority {
-                member_id: member.member_id.clone(),
-                resource: member.resource.clone(),
-            });
-        }
         match grant_match {
             MemberGrantMatch::Missing => needs_mutation = true,
             MemberGrantMatch::OutOfBand => out_of_band = true,
@@ -220,8 +193,8 @@ pub(crate) fn verify_post_mutation(
     compare_identity(reviewed, live)?;
     for member in &reviewed.members {
         let current = find_live_member(live, member)?;
-        if current.policy_fingerprint != member.policy_fingerprint {
-            return Err(DriftReason::PolicyFingerprint {
+        if current.policy_digest != member.policy_digest {
+            return Err(DriftReason::PolicyDigest {
                 member_id: member.member_id.clone(),
                 resource: member.resource.clone(),
             });
@@ -258,6 +231,11 @@ fn compare_identity(
     {
         return Err(DriftReason::NativeSubject);
     }
+    if let (Some(expected), Some(actual)) = (reviewed_source(reviewed), live.source_revision)
+        && source_key(Some(actual)) != source_key(Some(expected))
+    {
+        return Err(DriftReason::SourceRevision);
+    }
     if live.members.iter().any(|current| {
         !reviewed.members.iter().any(|member| {
             member.member_id == current.member_id && member.resource == current.resource
@@ -291,23 +269,10 @@ fn source_key(authority: Option<SourceAuthority>) -> Option<(Uuid, u64)> {
     authority.map(|value| (value.incarnation(), value.epoch().get()))
 }
 
-fn policy_key(authority: Option<ConsumerPolicyAuthority>) -> Option<(Uuid, u64)> {
-    authority.map(|value| (value.incarnation(), value.epoch().get()))
-}
-
-fn reviewed_source(member: &floe_conversation::ReviewedBundleMember) -> Option<SourceAuthority> {
-    member.source_revision.as_ref().and_then(|revision| {
+fn reviewed_source(target: &floe_conversation::InlineObserveTarget) -> Option<SourceAuthority> {
+    target.source_revision.as_ref().and_then(|revision| {
         NonZeroU64::new(revision.epoch)
             .and_then(|epoch| SourceAuthority::from_parts(revision.incarnation, epoch))
-    })
-}
-
-fn reviewed_policy(
-    member: &floe_conversation::ReviewedBundleMember,
-) -> Option<ConsumerPolicyAuthority> {
-    member.policy_authority.as_ref().and_then(|revision| {
-        NonZeroU64::new(revision.epoch)
-            .and_then(|epoch| ConsumerPolicyAuthority::from_parts(revision.incarnation, epoch))
     })
 }
 
@@ -1675,6 +1640,12 @@ where
             connector_id: target.connector_id.clone(),
             consumer: target.consumer.clone(),
             purpose: target.purpose.clone(),
+            source_revision: live.source_revision.map(|authority| {
+                floe_conversation::AuthorityRevision {
+                    incarnation: authority.incarnation(),
+                    epoch: authority.epoch().get(),
+                }
+            }),
             connection_revision: live.connection_revision,
             reviewed_producer_fingerprint: live.producer_fingerprint.clone(),
             reviewed_native_subject: live.native_subject.clone(),
@@ -1713,21 +1684,9 @@ fn reviewed_member(
 ) -> floe_conversation::ReviewedBundleMember {
     floe_conversation::ReviewedBundleMember {
         member_id: current.member_id.clone(),
-        policy_fingerprint: current.policy_fingerprint.clone(),
+        policy_digest: current.policy_digest.clone(),
         resource: current.resource.clone(),
-        source_revision: current.source_revision.map(|authority| {
-            floe_conversation::AuthorityRevision {
-                incarnation: authority.incarnation(),
-                epoch: authority.epoch().get(),
-            }
-        }),
         expected_grant,
-        policy_authority: current.policy_authority.map(|authority| {
-            floe_conversation::AuthorityRevision {
-                incarnation: authority.incarnation(),
-                epoch: authority.epoch().get(),
-            }
-        }),
     }
 }
 
@@ -1845,10 +1804,6 @@ mod tests {
         SourceAuthority::from_parts(Uuid::new_v4(), NonZeroU64::new(3).unwrap()).unwrap()
     }
 
-    fn policy() -> ConsumerPolicyAuthority {
-        ConsumerPolicyAuthority::from_parts(Uuid::new_v4(), NonZeroU64::new(5).unwrap()).unwrap()
-    }
-
     fn grant() -> (GrantId, GrantAuthority) {
         (
             GrantId::from_uuid(Uuid::new_v4()).unwrap(),
@@ -1858,26 +1813,17 @@ mod tests {
 
     fn reviewed_member(
         expected: floe_conversation::ExpectedGrantState,
-        source: SourceAuthority,
-        policy: Option<ConsumerPolicyAuthority>,
     ) -> floe_conversation::ReviewedBundleMember {
         floe_conversation::ReviewedBundleMember {
             member_id: "calendar.timeline".into(),
-            policy_fingerprint: "a".repeat(64),
+            policy_digest: "a".repeat(64),
             resource: "personal".into(),
-            source_revision: Some(floe_conversation::AuthorityRevision {
-                incarnation: source.incarnation(),
-                epoch: source.epoch().get(),
-            }),
             expected_grant: expected,
-            policy_authority: policy.map(|authority| floe_conversation::AuthorityRevision {
-                incarnation: authority.incarnation(),
-                epoch: authority.epoch().get(),
-            }),
         }
     }
 
     fn reviewed_target(
+        source: SourceAuthority,
         members: Vec<floe_conversation::ReviewedBundleMember>,
     ) -> floe_conversation::InlineObserveTarget {
         floe_conversation::InlineObserveTarget {
@@ -1887,6 +1833,10 @@ mod tests {
             connector_id: Some("calendar.macos".into()),
             consumer: "floe.builtin.schedule".into(),
             purpose: "scheduling".into(),
+            source_revision: Some(floe_conversation::AuthorityRevision {
+                incarnation: source.incarnation(),
+                epoch: source.epoch().get(),
+            }),
             connection_revision: Some(9),
             reviewed_producer_fingerprint: None,
             reviewed_native_subject: Some("subject".into()),
@@ -1896,14 +1846,11 @@ mod tests {
 
     fn live_member(
         grants: Vec<(GrantId, GrantAuthority)>,
-        source: SourceAuthority,
-        policy: Option<ConsumerPolicyAuthority>,
     ) -> LiveMember {
         LiveMember {
             member_id: "calendar.timeline".into(),
-            policy_fingerprint: "a".repeat(64),
+            policy_digest: "a".repeat(64),
             resource: "personal".into(),
-            source_revision: Some(source),
             live_grants: grants
                 .into_iter()
                 .map(|(id, authority)| LiveGrant {
@@ -1911,12 +1858,12 @@ mod tests {
                     authority,
                 })
                 .collect(),
-            policy_authority: policy,
         }
     }
 
-    fn live_state(members: Vec<LiveMember>) -> LiveInlineState {
+    fn live_state(source: SourceAuthority, members: Vec<LiveMember>) -> LiveInlineState {
         LiveInlineState {
+            source_revision: Some(source),
             members,
             connection_revision: Some(9),
             producer_fingerprint: None,
@@ -1928,12 +1875,10 @@ mod tests {
     #[test]
     fn precondition_requires_exact_identity_and_still_absent_grants() {
         let source = authority();
-        let target = reviewed_target(vec![reviewed_member(
+        let target = reviewed_target(source, vec![reviewed_member(
             floe_conversation::ExpectedGrantState::Absent,
-            source,
-            None,
         )]);
-        let live = live_state(vec![live_member(vec![], source, None)]);
+        let live = live_state(source, vec![live_member(vec![])]);
         assert_eq!(
             compare_reviewed_live(&target, &live),
             Ok(ReviewMatch::Precondition)
@@ -1944,12 +1889,10 @@ mod tests {
     fn satisfied_needs_no_mutation_but_is_not_a_fresh_approval() {
         let source = authority();
         let (id, grant_authority) = grant();
-        let target = reviewed_target(vec![reviewed_member(
+        let target = reviewed_target(source, vec![reviewed_member(
             floe_conversation::ExpectedGrantState::Absent,
-            source,
-            None,
         )]);
-        let live = live_state(vec![live_member(vec![(id, grant_authority)], source, None)]);
+        let live = live_state(source, vec![live_member(vec![(id, grant_authority)])]);
         assert_eq!(
             compare_reviewed_live(&target, &live),
             Ok(ReviewMatch::SatisfiedChanged)
@@ -1960,36 +1903,32 @@ mod tests {
     fn reviewed_live_grant_must_be_identical() {
         let source = authority();
         let (id, grant_authority) = grant();
-        let target = reviewed_target(vec![reviewed_member(
+        let target = reviewed_target(source, vec![reviewed_member(
             floe_conversation::ExpectedGrantState::Active {
                 grant_id: id.as_uuid(),
                 authority_incarnation: grant_authority.incarnation(),
                 authority_epoch: grant_authority.access_epoch().get(),
             },
-            source,
-            None,
         )]);
-        let same = live_state(vec![live_member(vec![(id, grant_authority)], source, None)]);
+        let same = live_state(source, vec![live_member(vec![(id, grant_authority)])]);
         assert_eq!(
             compare_reviewed_live(&target, &same),
             Ok(ReviewMatch::SatisfiedUnchanged)
         );
         let advanced = grant_authority.advance().unwrap();
-        let rotated = live_state(vec![live_member(vec![(id, advanced)], source, None)]);
+        let rotated = live_state(source, vec![live_member(vec![(id, advanced)])]);
         assert!(matches!(
             compare_reviewed_live(&target, &rotated),
             Err(DriftReason::GrantState { .. })
         ));
-        let vanished = live_state(vec![live_member(vec![], source, None)]);
+        let vanished = live_state(source, vec![live_member(vec![])]);
         assert!(matches!(
             compare_reviewed_live(&target, &vanished),
             Err(DriftReason::GrantState { .. })
         ));
         let (other_id, other_authority) = grant();
-        let duplicated = live_state(vec![live_member(
+        let duplicated = live_state(source, vec![live_member(
             vec![(id, grant_authority), (other_id, other_authority)],
-            source,
-            None,
         )]);
         assert!(matches!(
             compare_reviewed_live(&target, &duplicated),
@@ -2001,29 +1940,22 @@ mod tests {
     fn partial_out_of_band_enablement_is_drift() {
         let source = authority();
         let (id, grant_authority) = grant();
-        let target = reviewed_target(vec![
-            reviewed_member(floe_conversation::ExpectedGrantState::Absent, source, None),
+        let target = reviewed_target(source, vec![
+            reviewed_member(floe_conversation::ExpectedGrantState::Absent),
             floe_conversation::ReviewedBundleMember {
                 member_id: "calendar.timeline".into(),
-                policy_fingerprint: "a".repeat(64),
+                policy_digest: "a".repeat(64),
                 resource: "work".into(),
-                source_revision: Some(floe_conversation::AuthorityRevision {
-                    incarnation: source.incarnation(),
-                    epoch: source.epoch().get(),
-                }),
                 expected_grant: floe_conversation::ExpectedGrantState::Absent,
-                policy_authority: None,
             },
         ]);
-        let mut live = live_state(vec![
-            live_member(vec![(id, grant_authority)], source, None),
+        let mut live = live_state(source, vec![
+            live_member(vec![(id, grant_authority)]),
             LiveMember {
                 member_id: "calendar.timeline".into(),
-                policy_fingerprint: "a".repeat(64),
+                policy_digest: "a".repeat(64),
                 resource: "work".into(),
-                source_revision: Some(source),
                 live_grants: vec![],
-                policy_authority: None,
             },
         ]);
         assert_eq!(
@@ -2033,11 +1965,9 @@ mod tests {
         // A new canonical member outside the reviewed set invalidates too.
         live.members.push(LiveMember {
             member_id: "calendar.timeline".into(),
-            policy_fingerprint: "a".repeat(64),
+            policy_digest: "a".repeat(64),
             resource: "family".into(),
-            source_revision: Some(source),
             live_grants: vec![],
-            policy_authority: None,
         });
         assert_eq!(
             compare_reviewed_live(&target, &live),
@@ -2049,28 +1979,24 @@ mod tests {
     fn post_mutation_verifies_shape_not_reviewed_authority() {
         let source = authority();
         let (id, grant_authority) = grant();
-        let target = reviewed_target(vec![reviewed_member(
+        let target = reviewed_target(source, vec![reviewed_member(
             floe_conversation::ExpectedGrantState::Absent,
-            source,
-            None,
         )]);
         // The committed grant verifies even though no reviewed authority
         // bound it.
-        let created = live_state(vec![live_member(vec![(id, grant_authority)], source, None)]);
+        let created = live_state(source, vec![live_member(vec![(id, grant_authority)])]);
         assert_eq!(verify_post_mutation(&target, &created), Ok(()));
         // A re-review that advances authority still verifies: the owner
         // operation owned that transition.
         let advanced = grant_authority.advance().unwrap();
-        let re_reviewed = live_state(vec![live_member(vec![(id, advanced)], source, None)]);
+        let re_reviewed = live_state(source, vec![live_member(vec![(id, advanced)])]);
         assert_eq!(verify_post_mutation(&target, &re_reviewed), Ok(()));
         // Missing, duplicated or unbound members never verify.
-        let missing = live_state(vec![live_member(vec![], source, None)]);
+        let missing = live_state(source, vec![live_member(vec![])]);
         assert!(verify_post_mutation(&target, &missing).is_err());
         let (other_id, other_authority) = grant();
-        let duplicated = live_state(vec![live_member(
+        let duplicated = live_state(source, vec![live_member(
             vec![(id, grant_authority), (other_id, other_authority)],
-            source,
-            None,
         )]);
         assert!(verify_post_mutation(&target, &duplicated).is_err());
         let mut unusable = created;
@@ -2084,13 +2010,11 @@ mod tests {
         // source authority: the reviewed value binds audit, not the
         // decision-time compare.
         let source = authority();
-        let target = reviewed_target(vec![reviewed_member(
+        let target = reviewed_target(source, vec![reviewed_member(
             floe_conversation::ExpectedGrantState::Absent,
-            source,
-            None,
         )]);
-        let mut live = live_state(vec![live_member(vec![], source, None)]);
-        live.members[0].source_revision = None;
+        let mut live = live_state(source, vec![live_member(vec![])]);
+        live.source_revision = None;
         assert_eq!(
             compare_reviewed_live(&target, &live),
             Ok(ReviewMatch::Precondition)
@@ -2100,13 +2024,10 @@ mod tests {
     #[test]
     fn identity_drift_invalidates_before_grants() {
         let source = authority();
-        let policy_value = policy();
-        let target = reviewed_target(vec![reviewed_member(
+        let target = reviewed_target(source, vec![reviewed_member(
             floe_conversation::ExpectedGrantState::Absent,
-            source,
-            Some(policy_value),
         )]);
-        let base = live_state(vec![live_member(vec![], source, Some(policy_value))]);
+        let base = live_state(source, vec![live_member(vec![])]);
         let mut unusable = base.clone();
         unusable.connection_usable = false;
         assert_eq!(
@@ -2126,16 +2047,10 @@ mod tests {
             Err(DriftReason::NativeSubject)
         );
         let mut source_live = base.clone();
-        source_live.members[0].source_revision = Some(authority());
+        source_live.source_revision = Some(authority());
         assert!(matches!(
             compare_reviewed_live(&target, &source_live),
-            Err(DriftReason::SourceRevision { .. })
-        ));
-        let mut policy_live = base;
-        policy_live.members[0].policy_authority = Some(policy());
-        assert!(matches!(
-            compare_reviewed_live(&target, &policy_live),
-            Err(DriftReason::PolicyAuthority { .. })
+            Err(DriftReason::SourceRevision)
         ));
     }
 }

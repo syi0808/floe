@@ -263,6 +263,7 @@ where
     /// Callers supersede against this; it never looks satisfied.
     fn unusable() -> LiveInlineState {
         LiveInlineState {
+            source_revision: None,
             members: Vec::new(),
             connection_revision: None,
             producer_fingerprint: None,
@@ -330,7 +331,7 @@ where
             },
         )
         .await?;
-        let policy_fingerprint = crate::first_party_observe::policy_fingerprint(
+        let policy_digest = crate::first_party_observe::policy_digest(
             &crate::first_party_observe::calendar_policy()?,
         )?;
         let member = &target.members[0];
@@ -340,14 +341,13 @@ where
                 &target.connection_id,
                 &member.member_id,
                 &member.resource,
-                Some(connection.source_authority()),
                 person_id,
-                PolicyStore::Calendar,
                 Some(device_id),
             )
             .await?;
-        live.policy_fingerprint = policy_fingerprint;
+        live.policy_digest = policy_digest;
         Ok(LiveInlineState {
+            source_revision: Some(connection.source_authority()),
             members: vec![live],
             connection_revision: Some(connection.revision()),
             producer_fingerprint: None,
@@ -401,13 +401,16 @@ where
                 &target.connection_id,
                 connector,
                 identity_resource,
-                None,
                 person_id,
-                PolicyStore::Personal,
                 Some(device_id),
             )
             .await?;
+        let source_revision = match member.live_grants.as_slice() {
+            [grant] => Some(self.vault.personal_grant_source_authority(grant.id).await?),
+            _ => None,
+        };
         Ok(LiveInlineState {
+            source_revision,
             members: vec![member],
             connection_revision: None,
             producer_fingerprint: None,
@@ -484,9 +487,7 @@ where
                     &target.connection_id,
                     &member.member_id,
                     &member.resource,
-                    None,
                     person_id,
-                    PolicyStore::RemoteView,
                     None,
                 )
                 .await?,
@@ -508,15 +509,14 @@ where
                     &target.connection_id,
                     view_id,
                     resource,
-                    None,
                     person_id,
-                    PolicyStore::RemoteView,
                     None,
                 )
                 .await?,
             );
         }
         Ok(LiveInlineState {
+            source_revision: None,
             members,
             connection_revision: None,
             producer_fingerprint: Some(producer_fingerprint),
@@ -525,10 +525,7 @@ where
         })
     }
 
-    /// Probe one member key: live grants with their bound source authority,
-    /// plus the recorded policy of a single live grant. A policy mapping
-    /// that names a different grant refuses the read: the live state is
-    /// ambiguous, not adoptable.
+    /// Probe one member key and its live grants with their source authority.
     #[allow(clippy::too_many_arguments)]
     async fn probed_member(
         &self,
@@ -536,9 +533,7 @@ where
         connection_id: &str,
         member_id: &str,
         resource: &str,
-        source_revision: Option<SourceAuthority>,
         person_id: PersonId,
-        policy: PolicyStore,
         device_id: Option<&str>,
     ) -> Result<LiveMember, AgentFailure> {
         // Active only: a paused grant authorizes nothing, and capture's
@@ -556,41 +551,21 @@ where
         .into_iter()
         .filter(|grant| grant.state() == floe_access::GrantState::Active)
         .collect::<Vec<_>>();
-        let source_revision = if matches!(policy, PolicyStore::Personal) {
-            match grants.as_slice() {
-                [grant] => Some(
-                    self.vault
-                        .personal_grant_source_authority(grant.id())
-                        .await?,
-                ),
-                _ => None,
-            }
-        } else {
-            source_revision
-        };
-        let policy_authority = match grants.as_slice() {
-            [grant] => Some(
-                policy
-                    .recorded(self.vault, connector, connection_id, member_id, grant)
-                    .await?,
-            ),
-            _ => None,
-        };
         Ok(LiveMember {
             member_id: member_id.to_owned(),
-            policy_fingerprint: if connector == "calendar.event_kit" {
-                crate::first_party_observe::policy_fingerprint(
+            policy_digest: if connector == "calendar.event_kit" {
+                crate::first_party_observe::policy_digest(
                     &crate::first_party_observe::calendar_policy()?,
                 )?
             } else if let Some(device_id) = device_id {
-                crate::first_party_observe::native_member_policy_fingerprint_for_target(
+                crate::first_party_observe::native_member_policy_digest_for_target(
                     self.vault, person_id, connector, device_id,
                 )
                 .await?
             } else if crate::first_party_observe::remote_policies(connector)?.is_empty() {
-                crate::first_party_observe::member_policy_fingerprint(connector, member_id)?
+                crate::first_party_observe::member_policy_digest(connector, member_id)?
             } else {
-                crate::first_party_observe::remote_member_policy_fingerprint_for_target(
+                crate::first_party_observe::remote_member_policy_digest_for_target(
                     self.vault,
                     person_id,
                     connector,
@@ -600,7 +575,6 @@ where
                 .await?
             },
             resource: resource.to_owned(),
-            source_revision,
             live_grants: grants
                 .into_iter()
                 .map(|grant| LiveGrant {
@@ -608,7 +582,6 @@ where
                     authority: grant.authority(),
                 })
                 .collect(),
-            policy_authority,
         })
     }
 
@@ -1015,7 +988,7 @@ where
         {
             return Err(AgentFailure::InvalidInput);
         }
-        let source_authority = first
+        let source_authority = target
             .source_revision
             .as_ref()
             .and_then(|revision| {
@@ -1231,39 +1204,6 @@ where
     super::remote_observe::enable_bundle(ctx, transport, &fresh).await
 }
 
-/// Which policy store recorded one member's reviewed grant.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PolicyStore {
-    Calendar,
-    Personal,
-    RemoteView,
-}
-
-impl PolicyStore {
-    async fn recorded<Keys: VaultKeyProvider>(
-        self,
-        vault: &EncryptedAgentVault<Keys>,
-        connector: &str,
-        connection_id: &str,
-        member_id: &str,
-        grant: &floe_access::DataAccessGrant,
-    ) -> Result<floe_context_contract::ConsumerPolicyAuthority, AgentFailure> {
-        match self {
-            Self::Calendar => vault.calendar_grant_policy_authority(grant.id()).await,
-            Self::Personal => vault.personal_grant_consumer_policy(grant.id()).await,
-            Self::RemoteView => {
-                let (recorded, policy) = vault
-                    .remote_view_grant_policy(member_id, connector, connection_id)
-                    .await?;
-                if recorded != grant.id() {
-                    return Err(AgentFailure::AccessReviewRequired);
-                }
-                Ok(policy)
-            }
-        }
-    }
-}
-
 /// Compare a freshly re-read remote bundle with the reviewed target: every
 /// authority field must equal the reviewed values. Provider identity and
 /// recipient are live routing facts, verified live inside the enable; they
@@ -1288,6 +1228,18 @@ fn compare_fresh_reviewed(
         .reviewed_producer_fingerprint
         .as_deref()
         .ok_or(AgentFailure::InvalidInput)?;
+    let reviewed_source = reviewed.source_revision.as_ref().and_then(|revision| {
+        std::num::NonZeroU64::new(revision.epoch)
+            .and_then(|epoch| SourceAuthority::from_parts(revision.incarnation, epoch))
+    });
+    if reviewed_source.is_some()
+        && fresh
+            .members
+            .iter()
+            .any(|member| Some(member.source_authority) != reviewed_source)
+    {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
     for member in &reviewed.members {
         let Some(current) = fresh
             .members
@@ -1298,15 +1250,8 @@ fn compare_fresh_reviewed(
         };
         if current.resource != member.resource
             || current.producer_fingerprint != reviewed_producer
-            || current.policy_fingerprint != member.policy_fingerprint
+            || current.policy_digest != member.policy_digest
         {
-            return Err(AgentFailure::AccessReviewRequired);
-        }
-        let reviewed_source = member.source_revision.as_ref().and_then(|revision| {
-            std::num::NonZeroU64::new(revision.epoch)
-                .and_then(|epoch| SourceAuthority::from_parts(revision.incarnation, epoch))
-        });
-        if reviewed_source.is_some() && Some(current.source_authority) != reviewed_source {
             return Err(AgentFailure::AccessReviewRequired);
         }
         match (
@@ -1328,17 +1273,6 @@ fn compare_fresh_reviewed(
                 && authority.access_epoch().get() == *authority_epoch => {}
             _ => return Err(AgentFailure::AccessReviewRequired),
         }
-        let reviewed_policy = member.policy_authority.as_ref().and_then(|revision| {
-            std::num::NonZeroU64::new(revision.epoch).and_then(|epoch| {
-                floe_context_contract::ConsumerPolicyAuthority::from_parts(
-                    revision.incarnation,
-                    epoch,
-                )
-            })
-        });
-        if reviewed_policy.is_some() && current.expected_policy != reviewed_policy {
-            return Err(AgentFailure::AccessReviewRequired);
-        }
     }
     Ok(())
 }
@@ -1352,21 +1286,15 @@ mod tests {
     }
 
     fn reviewed_member() -> floe_conversation::ReviewedBundleMember {
-        let source = authority();
         floe_conversation::ReviewedBundleMember {
             member_id: "mail.communication".into(),
-            policy_fingerprint: crate::first_party_observe::member_policy_fingerprint(
+            policy_digest: crate::first_party_observe::member_policy_digest(
                 "gmail",
                 "mail.communication",
             )
             .unwrap(),
             resource: "mail.communication:connection".into(),
-            source_revision: Some(floe_conversation::AuthorityRevision {
-                incarnation: source.incarnation(),
-                epoch: source.epoch().get(),
-            }),
             expected_grant: floe_conversation::ExpectedGrantState::Absent,
-            policy_authority: None,
         }
     }
 
@@ -1378,6 +1306,10 @@ mod tests {
             connector_id: Some("gmail".into()),
             consumer: "floe.builtin.schedule".into(),
             purpose: "scheduling".into(),
+            source_revision: Some(floe_conversation::AuthorityRevision {
+                incarnation: authority().incarnation(),
+                epoch: 1,
+            }),
             connection_revision: None,
             reviewed_producer_fingerprint: Some("producer".into()),
             reviewed_native_subject: None,
@@ -1388,7 +1320,7 @@ mod tests {
     fn fresh_member(source: SourceAuthority) -> crate::RemoteObserveMemberExpectation {
         crate::RemoteObserveMemberExpectation {
             view_id: "mail.communication".into(),
-            policy_fingerprint: crate::first_party_observe::member_policy_fingerprint(
+            policy_digest: crate::first_party_observe::member_policy_digest(
                 "gmail",
                 "mail.communication",
             )
@@ -1401,7 +1333,6 @@ mod tests {
             recipient: "floe.server:instance".into(),
             expected_grant_id: None,
             expected_grant_authority: None,
-            expected_policy: None,
         }
     }
 
@@ -1411,8 +1342,8 @@ mod tests {
         }
     }
 
-    fn reviewed_source(member: &floe_conversation::ReviewedBundleMember) -> SourceAuthority {
-        let revision = member.source_revision.as_ref().unwrap();
+    fn reviewed_source(target: &floe_conversation::InlineObserveTarget) -> SourceAuthority {
+        let revision = target.source_revision.as_ref().unwrap();
         SourceAuthority::from_parts(
             revision.incarnation,
             std::num::NonZeroU64::new(revision.epoch).unwrap(),
@@ -1423,7 +1354,7 @@ mod tests {
     #[test]
     fn fresh_match_ignores_routing_but_binds_authority() {
         let target = reviewed_target();
-        let source = reviewed_source(&target.members[0]);
+        let source = reviewed_source(&target);
         // Exact authority match verifies even though provider identity and
         // recipient are live routing facts the review never carried.
         let mut fresh = fresh_bundle(source);

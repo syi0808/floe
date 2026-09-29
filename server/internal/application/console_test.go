@@ -862,7 +862,6 @@ func TestRemoteViewAdmissionRejectsUnboundResourceBeforeProviderRead(test *testi
 	body := map[string]any{
 		"schema_version": 1, "connector_id": "gmail", "connection_id": connectionID,
 		"connection_revision": 1, "resources": []string{"mail.communication:forged"},
-		"policy":  map[string]any{"incarnation": "00000000-0000-4000-8000-000000000011", "epoch": 1},
 		"grant":   map[string]any{"id": "00000000-0000-4000-8000-000000000012", "incarnation": "00000000-0000-4000-8000-000000000013", "epoch": 1},
 		"purpose": "everyday_assistance", "consumer": "assistant", "max_items": 25,
 		"max_bytes": 65536, "query": map[string]any{"schema_version": 1, "query": "", "cursor": 0, "limit": 25},

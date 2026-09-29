@@ -586,7 +586,7 @@ mod tests {
         ProjectionRef, RuntimeContext, ScopedInstructions,
     };
     use floe_context_contract::{
-        ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, ExecutionOwnerId,
+        ConnectionId, ConnectorId, ContextDependency, ExecutionOwnerId,
         GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
         GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
@@ -1078,7 +1078,6 @@ mod tests {
                 recipient: recipient.into(),
                 categories: vec![GrantDataCategory::Metadata],
             },
-            ConsumerPolicyAuthority::new(),
             Uuid::new_v4(),
             b"f".to_vec(),
             Uuid::new_v4(),

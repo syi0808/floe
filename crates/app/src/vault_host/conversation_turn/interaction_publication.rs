@@ -190,14 +190,8 @@ fn inline_target_from_snapshot(
         .into_iter()
         .map(|member| floe_conversation::ReviewedBundleMember {
             member_id: member.member_id,
-            policy_fingerprint: member.policy_fingerprint,
+            policy_digest: member.policy_digest,
             resource: member.resource,
-            source_revision: member.source_revision.map(|authority| {
-                floe_conversation::AuthorityRevision {
-                    incarnation: authority.incarnation(),
-                    epoch: authority.epoch().get(),
-                }
-            }),
             expected_grant: match member.expected_grant {
                 Some((grant_id, authority)) => floe_conversation::ExpectedGrantState::Active {
                     grant_id: grant_id.as_uuid(),
@@ -206,12 +200,6 @@ fn inline_target_from_snapshot(
                 },
                 None => floe_conversation::ExpectedGrantState::Absent,
             },
-            policy_authority: member.policy_authority.map(|authority| {
-                floe_conversation::AuthorityRevision {
-                    incarnation: authority.incarnation(),
-                    epoch: authority.epoch().get(),
-                }
-            }),
         })
         .collect();
     members.sort_by(|left, right| {
@@ -233,6 +221,12 @@ fn inline_target_from_snapshot(
             connector_id: Some(connector_id),
             consumer,
             purpose,
+            source_revision: snapshot.source_revision.map(|authority| {
+                floe_conversation::AuthorityRevision {
+                    incarnation: authority.incarnation(),
+                    epoch: authority.epoch().get(),
+                }
+            }),
             connection_revision: snapshot.connection_revision,
             reviewed_producer_fingerprint: snapshot.producer_fingerprint,
             reviewed_native_subject: snapshot.native_subject,
@@ -704,6 +698,7 @@ mod tests {
             let snapshot = self.snapshot.lock().unwrap();
             let cloned = match &*snapshot {
                 Ok(snapshot) => Ok(crate::vault_host::review_snapshot::InlineReviewSnapshot {
+                    source_revision: snapshot.source_revision,
                     members: snapshot.members.clone(),
                     connection_revision: snapshot.connection_revision,
                     producer_fingerprint: snapshot.producer_fingerprint.clone(),
@@ -717,13 +712,12 @@ mod tests {
 
     fn captured_snapshot() -> crate::vault_host::review_snapshot::InlineReviewSnapshot {
         crate::vault_host::review_snapshot::InlineReviewSnapshot {
+            source_revision: None,
             members: vec![crate::vault_host::review_snapshot::SnapshotMember {
                 member_id: "attention.macos".into(),
-                policy_fingerprint: "a".repeat(64),
+                policy_digest: "a".repeat(64),
                 resource: "attention.coarse".into(),
-                source_revision: None,
                 expected_grant: None,
-                policy_authority: None,
             }],
             connection_revision: None,
             producer_fingerprint: None,

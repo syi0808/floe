@@ -216,7 +216,6 @@ fn fresh_review_creates_an_active_grant() {
     assert_eq!(overview.granted_resources, vec!["home".to_owned()]);
     assert!(overview.grant_id.is_some());
     assert!(overview.grant_authority.is_some());
-    assert!(overview.consumer_policy.is_some());
     let reread = fixture.apply(CalendarAccessChange::Inspect).unwrap();
     assert_eq!(reread.state, CalendarAccessState::Active);
     assert_eq!(reread.grant_id, overview.grant_id);
@@ -467,7 +466,6 @@ fn resource_change_stales_review_but_preserves_standing_grant() {
     );
     assert_eq!(current.grant_id, active.grant_id);
     assert_eq!(current.grant_authority, active.grant_authority);
-    assert_eq!(current.consumer_policy, active.consumer_policy);
     assert_eq!(
         current.granted_resources,
         vec!["home".to_owned(), "work".to_owned()]

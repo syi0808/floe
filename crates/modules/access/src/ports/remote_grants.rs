@@ -5,9 +5,7 @@
 //! work; verifying the signature and committing the grant atomically is the
 //! store's. Neither of them decides whether the grant is admissible.
 
-use floe_context_contract::{
-    ConsumerPolicyAuthority, GrantAuthority, GrantId, GrantScope, GrantSourceBinding,
-};
+use floe_context_contract::{GrantAuthority, GrantId, GrantScope, GrantSourceBinding};
 use floe_execution::Cancellation;
 use floe_kernel::AgentFailure;
 use tokio::time::Instant;
@@ -16,13 +14,6 @@ use crate::application::remote_view::{RemoteProducerIdentity, RemoteViewSourceRe
 use crate::data_access_grant::DataAccessGrant;
 
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
-
-/// The grant a source read runs under, with the consumer policy that admitted it.
-#[derive(Clone, Debug)]
-pub struct RemoteGrantBinding {
-    pub grant: DataAccessGrant,
-    pub consumer_policy: ConsumerPolicyAuthority,
-}
 
 /// One signed source descriptor, exactly as the producer returned it.
 pub struct SignedSourcePreview {
@@ -68,7 +59,6 @@ pub trait RemoteGrantTransport: Sync {
         query: RemoteSourceQuery<'a>,
         window: &'a RemoteCallWindow,
     ) -> BoxFuture<'a, Result<SignedSourcePreview, AgentFailure>>;
-
 }
 
 /// The Person's own record of who they trust and what they have granted.
@@ -95,7 +85,6 @@ pub trait RemoteGrantStore: Sync {
         &'a self,
         view_id: &'a str,
         source: &'a GrantSourceBinding,
-        consumer: &'a str,
     ) -> BoxFuture<'a, Result<Option<DataAccessGrant>, AgentFailure>>;
 
     /// Commit the activation atomically against the authority it expects.
@@ -107,12 +96,4 @@ pub trait RemoteGrantStore: Sync {
         source: GrantSourceBinding,
         scope: GrantScope,
     ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>>;
-
-    fn view_grant_binding<'a>(
-        &'a self,
-        view_id: &'a str,
-        connector_id: &'a str,
-        connection_id: &'a str,
-    ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>>;
-
 }

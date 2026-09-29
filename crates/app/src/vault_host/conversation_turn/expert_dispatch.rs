@@ -429,6 +429,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
             let snapshots = crate::vault_host::review_snapshot::HostReviewSnapshots {
                 core: &self.core,
                 vault: &self.vault,
+                remote_source_client: source_client.as_ref(),
                 calendar_subject: &calendar_subject,
                 personal_subject: &personal_subject,
                 capture_deadline: scope
@@ -1616,7 +1617,6 @@ mod capture_tests {
                     floe_context_contract::GrantPurpose::Assistant,
                     floe_context_contract::GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
                     floe_context_contract::ProcessingRestriction::LocalOnly,
-                    floe_context_contract::ConsumerPolicyAuthority::new(),
                     uuid::Uuid::new_v4(),
                     vec![7; 32],
                     uuid::Uuid::new_v4(),
@@ -1852,7 +1852,6 @@ mod capture_tests {
                 floe_context_contract::GrantConsumer::builtin("floe.builtin.focus-attention")
                     .unwrap(),
                 floe_context_contract::ProcessingRestriction::LocalOnly,
-                floe_context_contract::ConsumerPolicyAuthority::new(),
                 uuid::Uuid::new_v4(),
                 vec![7; 32],
                 uuid::Uuid::new_v4(),

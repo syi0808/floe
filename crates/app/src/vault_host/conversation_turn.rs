@@ -399,6 +399,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         let review_snapshots = crate::vault_host::review_snapshot::HostReviewSnapshots {
             core: inputs.core,
             vault,
+            remote_source_client: source_client.as_ref(),
             calendar_subject: &calendar_subject,
             personal_subject: &personal_subject,
             capture_deadline: deadline
@@ -783,7 +784,6 @@ mod tests {
                     floe_context_contract::GrantPurpose::Assistant,
                     consumer,
                     scope.processing().clone(),
-                    floe_context_contract::ConsumerPolicyAuthority::new(),
                     Uuid::new_v4(),
                     request.query_fingerprint().to_vec(),
                     Uuid::new_v4(),
@@ -895,7 +895,6 @@ mod tests {
                         recipient: "server-audience".into(),
                         categories: vec![floe_context_contract::GrantDataCategory::Derived],
                     },
-                    floe_context_contract::ConsumerPolicyAuthority::new(),
                     Uuid::new_v4(),
                     serde_json::to_vec(query).map_err(|_| AgentFailure::InvalidInput)?,
                     Uuid::new_v4(),
@@ -2195,6 +2194,7 @@ mod tests {
         let snapshots = crate::vault_host::review_snapshot::HostReviewSnapshots {
             core: &core,
             vault: vault.as_ref(),
+            remote_source_client: None,
             calendar_subject: &calendar_subject,
             personal_subject: &personal_subject,
             capture_deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
@@ -2344,7 +2344,6 @@ mod tests {
                     request.purpose(),
                     consumer.clone(),
                     processing.clone(),
-                    floe_context_contract::ConsumerPolicyAuthority::new(),
                     uuid::Uuid::new_v4(),
                     request.query_fingerprint().to_vec(),
                     uuid::Uuid::new_v4(),
@@ -2472,7 +2471,6 @@ mod tests {
                 recipient: "gateway-local".into(),
                 categories: vec![floe_context_contract::GrantDataCategory::Metadata],
             },
-            floe_context_contract::ConsumerPolicyAuthority::new(),
             uuid::Uuid::new_v4(),
             b"fingerprint".to_vec(),
             uuid::Uuid::new_v4(),

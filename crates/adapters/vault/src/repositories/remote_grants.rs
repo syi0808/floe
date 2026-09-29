@@ -5,13 +5,13 @@
 //! transaction. It makes no admission judgment of its own.
 
 use floe_access::{
-    DataAccessGrant, RemoteGrantBinding, RemoteGrantStore, RemotePairingIdentity,
+    DataAccessGrant, RemoteGrantStore, RemotePairingIdentity,
     RemoteProducerIdentity, RemoteSourceQuery, RemoteViewSourceReference, SignedSourcePreview,
 };
 use floe_access::{GrantAuthority, GrantId, GrantScope, GrantSourceBinding};
 use floe_agent_contract::{AgentFailure, BoxFuture};
 
-use crate::{EncryptedAgentVault, VaultKeyProvider};
+use crate::{AccessGrantActivation, EncryptedAgentVault, VaultKeyProvider};
 
 impl<Keys: VaultKeyProvider> RemoteGrantStore for EncryptedAgentVault<Keys> {
     fn pinned_producer<'a>(
@@ -53,9 +53,14 @@ impl<Keys: VaultKeyProvider> RemoteGrantStore for EncryptedAgentVault<Keys> {
         &'a self,
         view_id: &'a str,
         source: &'a GrantSourceBinding,
-        consumer: &'a str,
     ) -> BoxFuture<'a, Result<Option<DataAccessGrant>, AgentFailure>> {
-        Box::pin(async move { self.find_remote_view_grant(view_id, source, consumer).await })
+        Box::pin(async move {
+            let resource =
+                floe_context_contract::connection_view_resource(view_id, &source.connection_id())
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+            self.data_access_grant_for_source_resource(source, &resource)
+                .await
+        })
     }
 
     fn activate_view_grant<'a>(
@@ -67,28 +72,22 @@ impl<Keys: VaultKeyProvider> RemoteGrantStore for EncryptedAgentVault<Keys> {
         scope: GrantScope,
     ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
         Box::pin(async move {
-            self.review_and_activate_remote_view_grant(
-                view_id, grant_id, expected, source, scope, None,
-            )
-            .await
+            let resource =
+                floe_context_contract::connection_view_resource(view_id, &source.connection_id())
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+            if scope.resources() != [resource] {
+                return Err(AgentFailure::InvalidInput);
+            }
+            self.activate_access_grants(vec![AccessGrantActivation {
+                grant_id,
+                expected,
+                source,
+                scope,
+            }])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or(AgentFailure::VaultUnavailable)
         })
     }
-
-    fn view_grant_binding<'a>(
-        &'a self,
-        view_id: &'a str,
-        connector_id: &'a str,
-        connection_id: &'a str,
-    ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>> {
-        Box::pin(async move {
-            let binding = self
-                .remote_view_grant_binding(view_id, connector_id, connection_id)
-                .await?;
-            Ok(RemoteGrantBinding {
-                grant: binding.grant,
-                consumer_policy: binding.consumer_policy,
-            })
-        })
-    }
-
 }

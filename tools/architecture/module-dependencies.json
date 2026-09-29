@@ -253,6 +253,7 @@
       "allowed_internal_dependencies": [
         "kernel",
         "agent_contract",
+        "context_contract",
         "execution",
         "native",
         "conversation",

@@ -171,7 +171,6 @@ func TestCalendarAuthoritySignedAdmissionReadRelease(t *testing.T) {
 	admitBody := map[string]any{
 		"schema_version": 1, "connector_id": "calendar.google", "connection_id": connectionID,
 		"connection_revision": 1, "resources": []string{"calendar.timeline:" + connectionID},
-		"policy":  map[string]any{"incarnation": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "epoch": 1},
 		"grant":   map[string]any{"id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "incarnation": "dddddddd-dddd-4ddd-8ddd-dddddddddddd", "epoch": 1},
 		"purpose": "everyday_assistance", "consumer": "floe.builtin.schedule", "max_items": 25, "max_bytes": 65536,
 		"query": map[string]any{"range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25},

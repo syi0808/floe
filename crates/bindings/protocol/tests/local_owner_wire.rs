@@ -1,6 +1,27 @@
-use floe_protocol::{AppCommandRequestDto, AppQueryRequestDto};
+use floe_protocol::{AppCommandRequestDto, AppQueryRequestDto, CalendarAccessOverviewDto};
 use serde_json::json;
 use uuid::Uuid;
+
+#[test]
+fn calendar_overview_rejects_obsolete_policy_field() {
+    let overview = json!({
+        "schema_version": 1,
+        "person_id": Uuid::new_v4().to_string(),
+        "provider": "event_kit",
+        "connection_id": "connection",
+        "selected_resources": ["home"],
+        "granted_resources": ["home"],
+        "source_authority": {"incarnation": Uuid::new_v4(), "epoch": 1},
+        "grant_id": Uuid::new_v4(),
+        "grant_authority": {"incarnation": Uuid::new_v4(), "access_epoch": 1},
+        "state": "active",
+        "review_required": false,
+    });
+    assert!(serde_json::from_value::<CalendarAccessOverviewDto>(overview.clone()).is_ok());
+    let mut obsolete = overview;
+    obsolete["consumer_policy"] = json!({"incarnation": Uuid::new_v4(), "epoch": 1});
+    assert!(serde_json::from_value::<CalendarAccessOverviewDto>(obsolete).is_err());
+}
 
 #[test]
 fn vault_commands_are_strict_owner_intent() {

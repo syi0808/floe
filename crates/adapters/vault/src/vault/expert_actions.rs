@@ -60,16 +60,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         let grant = self.get_data_access_grant(dependency.grant_id()).await?;
         floe_access::validate_grant_dependency(&grant, &dependency)?;
-        let policy = self
-            .calendar_grant_policy(dependency.grant_id())
-            .await
-            .map_err(|error| match error {
-                AgentFailure::AccessReviewRequired => AgentFailure::PolicyDenied,
-                other => other,
-            })?;
-        if policy.consumer_policy != dependency.consumer_policy() {
-            return Err(AgentFailure::PolicyDenied);
-        }
         Ok(dependency)
     }
 

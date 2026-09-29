@@ -421,7 +421,7 @@ final _uuidPattern = RegExp(
 final class ConnectionObserveMember {
   const ConnectionObserveMember({
     required this.viewId,
-    required this.policyFingerprint,
+    required this.policyDigest,
     required this.resource,
     required this.producerFingerprint,
     required this.sourceAuthority,
@@ -430,11 +430,10 @@ final class ConnectionObserveMember {
     required this.recipient,
     this.expectedGrantId,
     this.expectedGrantAuthority,
-    this.expectedPolicy,
   });
 
   final String viewId;
-  final String policyFingerprint;
+  final String policyDigest;
   final String resource;
   final String producerFingerprint;
   final ObserveAuthority sourceAuthority;
@@ -443,14 +442,13 @@ final class ConnectionObserveMember {
   final String recipient;
   final String? expectedGrantId;
   final ObserveGrantAuthority? expectedGrantAuthority;
-  final ObserveAuthority? expectedPolicy;
 
   factory ConnectionObserveMember.fromJson(Object? raw) {
     if (raw is! Map) throw const FormatException('Invalid observe member');
     final value = Map<String, Object?>.from(raw);
     const fields = {
       'view_id',
-      'policy_fingerprint',
+      'policy_digest',
       'resource',
       'producer_fingerprint',
       'source_authority',
@@ -459,7 +457,6 @@ final class ConnectionObserveMember {
       'recipient',
       'expected_grant_id',
       'expected_grant_authority',
-      'expected_policy',
     };
     if (value.keys.any((key) => !fields.contains(key))) {
       throw const FormatException('Invalid observe member');
@@ -478,18 +475,17 @@ final class ConnectionObserveMember {
     }
     final grantId = value['expected_grant_id'];
     final grantAuthority = value['expected_grant_authority'];
-    final policy = value['expected_policy'];
     final coherent =
-        (grantId == null && grantAuthority == null && policy == null) ||
-        (grantId != null && grantAuthority != null && policy != null);
+        (grantId == null && grantAuthority == null) ||
+        (grantId != null && grantAuthority != null);
     if (!coherent) throw const FormatException('Invalid observe member');
-    final policyFingerprint = text('policy_fingerprint');
-    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(policyFingerprint)) {
+    final policyDigest = text('policy_digest');
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(policyDigest)) {
       throw const FormatException('Invalid observe member');
     }
     return ConnectionObserveMember(
       viewId: text('view_id'),
-      policyFingerprint: policyFingerprint,
+      policyDigest: policyDigest,
       resource: text('resource'),
       producerFingerprint: text('producer_fingerprint'),
       sourceAuthority: ObserveAuthority.fromJson(
@@ -508,15 +504,12 @@ final class ConnectionObserveMember {
               grantAuthority,
               'expected_grant_authority',
             ),
-      expectedPolicy: policy == null
-          ? null
-          : ObserveAuthority.fromJson(policy, 'expected_policy'),
     );
   }
 
   Map<String, Object?> toJson() => {
     'view_id': viewId,
-    'policy_fingerprint': policyFingerprint,
+    'policy_digest': policyDigest,
     'resource': resource,
     'producer_fingerprint': producerFingerprint,
     'source_authority': sourceAuthority.toJson(),
@@ -525,7 +518,6 @@ final class ConnectionObserveMember {
     'recipient': recipient,
     'expected_grant_id': expectedGrantId,
     'expected_grant_authority': expectedGrantAuthority?.toJson(),
-    'expected_policy': expectedPolicy?.toJson(),
   };
 }
 

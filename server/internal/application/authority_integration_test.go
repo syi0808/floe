@@ -434,7 +434,7 @@ func TestIndeterminateStateSaveLatchesCachedSourceAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	queryDigest := sha256.Sum256([]byte("query"))
-	request := authorization.Request{Audience: "local-owner", Purpose: "quick_response", Consumer: "owner", Policy: authorization.PolicyReference{Incarnation: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", Epoch: 1}, Source: authorization.SourceReference{ConnectorID: "gmail", ConnectionID: connectionID, ExecutionOwner: executionOwner, Incarnation: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Epoch: 1}, Grant: authorization.GrantReference{ID: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", Incarnation: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", Epoch: 1}, Resources: []string{"source"}, QueryDigest: queryDigest, MaxItems: 1, MaxBytes: 1}
+	request := authorization.Request{Audience: "local-owner", Purpose: "quick_response", Consumer: "owner", Source: authorization.SourceReference{ConnectorID: "gmail", ConnectionID: connectionID, ExecutionOwner: executionOwner, Incarnation: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Epoch: 1}, Grant: authorization.GrantReference{ID: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", Incarnation: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", Epoch: 1}, Resources: []string{"source"}, QueryDigest: queryDigest, MaxItems: 1, MaxBytes: 1}
 	if _, err := cachedEngine.IssueAdmission(principal, request, fixture.console); err != nil {
 		t.Fatalf("cached authority was not initially usable: %v", err)
 	}

@@ -8,7 +8,7 @@
 use std::future::Future;
 
 use floe_context_contract::{
-    CALENDAR_CONTEXT_VIEW_ID, CalendarProvider, CalendarReadAccessStamp, ConsumerPolicyAuthority,
+    CALENDAR_CONTEXT_VIEW_ID, CalendarProvider, CalendarReadAccessStamp,
     ContextDependency, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation,
     GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     SourceAuthority, connection_view_resource,
@@ -37,7 +37,6 @@ pub struct CalendarReadAccessAdmission {
     pub(crate) source: GrantSourceBinding,
     pub(crate) source_authority: SourceAuthority,
     pub(crate) scope: GrantScope,
-    pub(crate) consumer_policy: ConsumerPolicyAuthority,
     pub(crate) operation: GrantOperation,
     pub(crate) purpose: GrantPurpose,
     pub(crate) consumer: GrantConsumer,
@@ -55,7 +54,6 @@ impl CalendarReadAccessAdmission {
         source: GrantSourceBinding,
         source_authority: SourceAuthority,
         scope: GrantScope,
-        consumer_policy: ConsumerPolicyAuthority,
         consumer: GrantConsumer,
     ) -> Self {
         Self {
@@ -65,7 +63,6 @@ impl CalendarReadAccessAdmission {
             source,
             source_authority,
             scope,
-            consumer_policy,
             operation: GrantOperation::Read,
             purpose: GrantPurpose::Assistant,
             consumer,
@@ -80,7 +77,6 @@ impl CalendarReadAccessAdmission {
         source: GrantSourceBinding,
         source_authority: SourceAuthority,
         scope: GrantScope,
-        consumer_policy: ConsumerPolicyAuthority,
         consumer: GrantConsumer,
         processing: ProcessingRestriction,
     ) -> Self {
@@ -91,7 +87,6 @@ impl CalendarReadAccessAdmission {
             source,
             source_authority,
             scope,
-            consumer_policy,
             operation: GrantOperation::Read,
             purpose: GrantPurpose::Assistant,
             consumer,
@@ -109,10 +104,6 @@ impl CalendarReadAccessAdmission {
 
     pub fn grant_authority(&self) -> GrantAuthority {
         self.grant_authority
-    }
-
-    pub fn consumer_policy(&self) -> ConsumerPolicyAuthority {
-        self.consumer_policy
     }
 
     pub fn source(&self) -> &GrantSourceBinding {
@@ -300,7 +291,6 @@ pub fn admission_matches_dependency(
         && admission.scope.resources() == dependency.resources()
         && !dependency.source_resources().is_empty()
         && admission.scope.categories() == dependency.categories()
-        && admission.consumer_policy == dependency.consumer_policy()
         && admission.operation == dependency.operation()
         && admission.purpose == dependency.purpose()
         && admission.consumer == dependency.consumer().clone()

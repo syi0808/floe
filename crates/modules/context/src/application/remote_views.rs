@@ -321,14 +321,13 @@ pub fn merge_remote_views(
 
 /// What one remote view read owes its provenance to.
 ///
-/// The categories, the processing restriction and the consumer policy come from
+/// The categories and processing restriction come from
 /// the grant the read ran under, not from the caller: a dependency describes the
 /// authority it was produced beneath.
 #[allow(clippy::too_many_arguments)]
 pub fn remote_view_dependency(
     person_id: floe_agent_contract::PersonId,
     grant: &floe_access::DataAccessGrant,
-    consumer_policy: floe_access::ConsumerPolicyAuthority,
     source: floe_access::GrantSourceBinding,
     resource: &str,
     source_authority: floe_access::SourceAuthority,
@@ -362,7 +361,6 @@ pub fn remote_view_dependency(
         floe_access::GrantPurpose::Assistant,
         consumer,
         grant.scope().processing().clone(),
-        consumer_policy,
         uuid::Uuid::new_v4(),
         query_fingerprint,
         lease_invocation_id,

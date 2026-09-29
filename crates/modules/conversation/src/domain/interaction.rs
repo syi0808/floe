@@ -125,8 +125,7 @@ impl InteractionRequirement {
     }
 }
 
-/// One observed authority revision: source incarnation/epoch or the
-/// consumer-policy authority where applicable.
+/// One observed source-authority revision.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuthorityRevision {
@@ -177,8 +176,7 @@ impl ExpectedGrantState {
 }
 
 /// One reviewed grant of an inline Observe bundle: the exact member, its
-/// resource, and the per-member source revision, grant expectation (including
-/// expected absence) and policy authority the decision binds. Members are the
+/// resource, and the grant expectation (including expected absence) the decision binds. Members are the
 /// whole affected bundle, not just the view the blocked read named: a live
 /// member outside this set, or a changed per-member expectation, invalidates
 /// the review instead of widening it.
@@ -186,32 +184,24 @@ impl ExpectedGrantState {
 #[serde(deny_unknown_fields)]
 pub struct ReviewedBundleMember {
     pub member_id: String,
-    pub policy_fingerprint: String,
+    pub policy_digest: String,
     pub resource: String,
-    pub source_revision: Option<AuthorityRevision>,
     pub expected_grant: ExpectedGrantState,
-    pub policy_authority: Option<AuthorityRevision>,
 }
 
 impl ReviewedBundleMember {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         if validate_identifier(&self.member_id, MAX_REVIEWED_SOURCE_BYTES).is_err()
             || validate_identifier(&self.resource, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
-            || self.policy_fingerprint.len() != 64
+            || self.policy_digest.len() != 64
             || !self
-                .policy_fingerprint
+                .policy_digest
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         {
             return Err(AgentFailure::StorageUnavailable);
         }
-        if let Some(revision) = &self.source_revision {
-            revision.validate()?;
-        }
         self.expected_grant.validate()?;
-        if let Some(authority) = &self.policy_authority {
-            authority.validate()?;
-        }
         Ok(())
     }
 }
@@ -230,6 +220,7 @@ pub struct InlineObserveTarget {
     pub connector_id: Option<String>,
     pub consumer: String,
     pub purpose: String,
+    pub source_revision: Option<AuthorityRevision>,
     pub connection_revision: Option<u64>,
     pub reviewed_producer_fingerprint: Option<String>,
     pub reviewed_native_subject: Option<String>,
@@ -265,6 +256,9 @@ impl InlineObserveTarget {
             || self.members.len() > MAX_TARGET_BUNDLE_MEMBERS
         {
             return Err(AgentFailure::StorageUnavailable);
+        }
+        if let Some(revision) = &self.source_revision {
+            revision.validate()?;
         }
         let mut previous: Option<(&str, &str)> = None;
         for member in &self.members {
@@ -859,19 +853,19 @@ pub fn canonical_target_digest(target: &ReviewedTarget) -> Result<[u8; 32], Agen
                 }
                 None => bytes.push(0),
             }
+            match &target.source_revision {
+                Some(revision) => {
+                    bytes.push(1);
+                    append_authority(&mut bytes, revision);
+                }
+                None => bytes.push(0),
+            }
             let member_count = u64::try_from(target.members.len()).unwrap_or(u64::MAX);
             bytes.extend_from_slice(&member_count.to_be_bytes());
             for member in &target.members {
                 append_str(&mut bytes, &member.member_id);
-                append_str(&mut bytes, &member.policy_fingerprint);
+                append_str(&mut bytes, &member.policy_digest);
                 append_str(&mut bytes, &member.resource);
-                match &member.source_revision {
-                    Some(revision) => {
-                        bytes.push(1);
-                        append_authority(&mut bytes, revision);
-                    }
-                    None => bytes.push(0),
-                }
                 match &member.expected_grant {
                     ExpectedGrantState::Absent => bytes.push(0),
                     ExpectedGrantState::Active {
@@ -884,13 +878,6 @@ pub fn canonical_target_digest(target: &ReviewedTarget) -> Result<[u8; 32], Agen
                         bytes.extend_from_slice(authority_incarnation.as_bytes());
                         bytes.extend_from_slice(&authority_epoch.to_be_bytes());
                     }
-                }
-                match &member.policy_authority {
-                    Some(authority) => {
-                        bytes.push(1);
-                        append_authority(&mut bytes, authority);
-                    }
-                    None => bytes.push(0),
                 }
             }
         }
@@ -1138,11 +1125,9 @@ mod tests {
     pub(crate) fn member(member_id: &str, resource: &str) -> ReviewedBundleMember {
         ReviewedBundleMember {
             member_id: member_id.into(),
-            policy_fingerprint: "a".repeat(64),
+            policy_digest: "a".repeat(64),
             resource: resource.into(),
-            source_revision: None,
             expected_grant: ExpectedGrantState::Absent,
-            policy_authority: None,
         }
     }
 
@@ -1154,6 +1139,7 @@ mod tests {
             connector_id: Some("floe.connector.calendar".into()),
             consumer: "floe.builtin.schedule".into(),
             purpose: "scheduling".into(),
+            source_revision: None,
             connection_revision: None,
             reviewed_producer_fingerprint: None,
             reviewed_native_subject: None,
@@ -1202,6 +1188,23 @@ mod tests {
     }
 
     #[test]
+    fn obsolete_per_member_authorities_are_not_durable_target_fields() {
+        let target = target();
+        let mut old = serde_json::to_value(&target).unwrap();
+        old["value"]["members"][0]["policy_authority"] = serde_json::json!({
+            "incarnation": Uuid::new_v4(),
+            "epoch": 1,
+        });
+        assert!(serde_json::from_value::<ReviewedTarget>(old).is_err());
+        let mut old = serde_json::to_value(&target).unwrap();
+        old["value"]["members"][0]["source_revision"] = serde_json::json!({
+            "incarnation": Uuid::new_v4(),
+            "epoch": 1,
+        });
+        assert!(serde_json::from_value::<ReviewedTarget>(old).is_err());
+    }
+
+    #[test]
     fn identity_is_deterministic_and_binds_origin_and_digests() {
         let first = record();
         let mut second = first.clone();
@@ -1237,12 +1240,12 @@ mod tests {
         let ReviewedTarget::InlineObserve(inline) = &mut changed_policy else {
             panic!("test target is inline");
         };
-        inline.members[0].policy_fingerprint = "b".repeat(64);
+        inline.members[0].policy_digest = "b".repeat(64);
         assert_ne!(canonical_target_digest(&changed_policy).unwrap(), base);
         let ReviewedTarget::InlineObserve(inline) = &mut changed_policy else {
             panic!("test target is inline");
         };
-        inline.members[0].policy_fingerprint = "B".repeat(64);
+        inline.members[0].policy_digest = "B".repeat(64);
         assert!(canonical_target_digest(&changed_policy).is_err());
         let mut absent = target();
         let ReviewedTarget::InlineObserve(inline) = &mut absent else {

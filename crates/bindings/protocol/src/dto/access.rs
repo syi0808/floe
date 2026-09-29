@@ -2,7 +2,7 @@ use super::AgentVaultFailureDto;
 use super::connections::{
     validate_envelope, validate_identifier, validate_producer, validate_text, validate_uuid,
 };
-use floe_context_contract::{ConsumerPolicyAuthority, GrantAuthority, GrantId, SourceAuthority};
+use floe_context_contract::{GrantAuthority, GrantId, SourceAuthority};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -50,7 +50,7 @@ pub enum RemoteAccessOperationDto {
 #[serde(deny_unknown_fields)]
 pub struct ConnectionObserveMemberDto {
     pub view_id: String,
-    pub policy_fingerprint: String,
+    pub policy_digest: String,
     pub resource: String,
     pub producer_fingerprint: String,
     pub source_authority: SourceAuthority,
@@ -62,8 +62,6 @@ pub struct ConnectionObserveMemberDto {
     pub expected_grant_id: Option<GrantId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_grant_authority: Option<GrantAuthority>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_policy: Option<ConsumerPolicyAuthority>,
 }
 
 /// The whole reviewed bundle a remote Observe enable binds.
@@ -128,13 +126,13 @@ fn validate_observe_expectation(
     }
     let mut previous: Option<&str> = None;
     for member in &expected.members {
-        if member.policy_fingerprint.len() != 64
+        if member.policy_digest.len() != 64
             || !member
-                .policy_fingerprint
+                .policy_digest
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         {
-            return Err("operation.expected.member.policy_fingerprint");
+            return Err("operation.expected.member.policy_digest");
         }
         for value in [
             member.view_id.as_str(),
@@ -151,11 +149,9 @@ fn validate_observe_expectation(
         match (
             &member.expected_grant_id,
             &member.expected_grant_authority,
-            &member.expected_policy,
         ) {
-            (None, None, None) => {}
-            (Some(id), Some(authority), Some(policy))
-                if id.is_valid() && authority.is_valid() && policy.is_valid() => {}
+            (None, None) => {}
+            (Some(id), Some(authority)) if id.is_valid() && authority.is_valid() => {}
             _ => return Err("operation.expected.member.grant"),
         }
         if previous.is_some_and(|previous| previous >= member.view_id.as_str()) {

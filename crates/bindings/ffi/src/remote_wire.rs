@@ -238,7 +238,7 @@ fn observe_expectation(
             .iter()
             .map(|member| floe_app::RemoteObserveMemberExpectation {
                 view_id: member.view_id.clone(),
-                policy_fingerprint: member.policy_fingerprint.clone(),
+                policy_digest: member.policy_digest.clone(),
                 resource: member.resource.clone(),
                 producer_fingerprint: member.producer_fingerprint.clone(),
                 source_authority: member.source_authority,
@@ -247,7 +247,6 @@ fn observe_expectation(
                 recipient: member.recipient.clone(),
                 expected_grant_id: member.expected_grant_id,
                 expected_grant_authority: member.expected_grant_authority,
-                expected_policy: member.expected_policy,
             })
             .collect(),
     }
@@ -262,7 +261,7 @@ fn observe_expectation_dto(
             .iter()
             .map(|member| ConnectionObserveMemberDto {
                 view_id: member.view_id.clone(),
-                policy_fingerprint: member.policy_fingerprint.clone(),
+                policy_digest: member.policy_digest.clone(),
                 resource: member.resource.clone(),
                 producer_fingerprint: member.producer_fingerprint.clone(),
                 source_authority: member.source_authority,
@@ -271,7 +270,6 @@ fn observe_expectation_dto(
                 recipient: member.recipient.clone(),
                 expected_grant_id: member.expected_grant_id,
                 expected_grant_authority: member.expected_grant_authority,
-                expected_policy: member.expected_policy,
             })
             .collect(),
     }

@@ -106,6 +106,9 @@ permission resource per connection. The signed preview names the exact current C
 composite cursor pages across all configured Calendars. Requests cover up to 32 days. Floe exports title
 and timing only—calendar IDs, provider event IDs, descriptions, locations and attendees are excluded from
 Agent context. Editing source IDs does not automatically re-review an active Observe grant.
+The owner-key admission and release challenge binds the current `GrantAuthority` and
+`SourceAuthority` independently. It contains no separate policy epoch; source-transport
+audience is signed routing evidence and does not approve an external model recipient.
 
 ### Microsoft Mail read-only OAuth
 

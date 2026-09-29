@@ -51,11 +51,6 @@ func calendarScopeResources(record connections.Record) ([]string, bool) {
 	return calendarIDs, true
 }
 
-type viewPolicyWire struct {
-	Incarnation string `json:"incarnation"`
-	Epoch       uint64 `json:"epoch"`
-}
-
 type viewGrantWire struct {
 	ID          string `json:"id"`
 	Incarnation string `json:"incarnation"`
@@ -98,7 +93,6 @@ type ViewAdmission struct {
 	ConnectionID       string          `json:"connection_id"`
 	ConnectionRevision uint64          `json:"connection_revision"`
 	Resources          []string        `json:"resources"`
-	Policy             viewPolicyWire  `json:"policy"`
 	Grant              viewGrantWire   `json:"grant"`
 	Purpose            string          `json:"purpose"`
 	Consumer           string          `json:"consumer"`
@@ -183,7 +177,7 @@ func boundedCalendarView(view any) ([]byte, uint32, error) {
 
 var calendarFieldNames = map[string]struct{}{
 	"schema_version": {}, "connector_id": {}, "connection_id": {}, "connection_revision": {},
-	"resources": {}, "policy": {}, "grant": {}, "purpose": {}, "consumer": {},
+	"resources": {}, "grant": {}, "purpose": {}, "consumer": {},
 	"max_items": {}, "max_bytes": {}, "query": {}, "range_start_unix_ms": {},
 	"range_end_unix_ms": {}, "cursor": {}, "limit": {}, "incarnation": {},
 	"epoch": {}, "id": {}, "proof": {}, "challenge_id": {}, "key_id": {}, "signature": {},
@@ -449,7 +443,6 @@ func (service *SourceService) AdmitView(ctx context.Context, principal Principal
 	}
 	challenge, err := authority.IssueAdmission(principal, Request{
 		Audience: audience, Purpose: input.Purpose, Consumer: input.Consumer,
-		Policy:    PolicyReference{Incarnation: input.Policy.Incarnation, Epoch: input.Policy.Epoch},
 		Source:    SourceReference{ConnectorID: record.ConnectorID, ConnectionID: record.ConnectionID, ExecutionOwner: service.ExecutionOwner(), Incarnation: record.Incarnation, Epoch: record.Epoch},
 		Grant:     GrantReference{ID: input.Grant.ID, Incarnation: input.Grant.Incarnation, Epoch: input.Grant.Epoch},
 		Resources: append([]string(nil), input.Resources...), QueryDigest: queryDigest, MaxItems: input.MaxItems, MaxBytes: input.MaxBytes,

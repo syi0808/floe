@@ -1,17 +1,15 @@
-use chrono::Utc;
 use floe_access::DataAccessGrant;
 
 /// What a feasibility grant admits reading is part of the grant, so Access owns
 /// it; this module stores and reads the record.
 pub use floe_access::FeasibilityGrantQuery;
-use floe_access::{ConsumerPolicyAuthority, GrantConsumer, GrantId, SourceAuthority};
+use floe_access::{GrantId, SourceAuthority};
 use turso::transaction::TransactionBehavior;
 
 use super::access_grants::AccessGrantMutation;
 use super::*;
 
-const SCHEMA_VERSION: i64 = 5;
-const ATTENTION_CONNECTOR: &str = "attention.macos";
+const SCHEMA_VERSION: i64 = 6;
 
 fn decode_source_authority(
     incarnation: String,
@@ -45,7 +43,7 @@ mod tests {
     };
 
     use floe_access::{
-        ConnectionId, ConnectorId, ExecutionOwnerId, GrantDataCategory, GrantOperation,
+        ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation,
         GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
     use uuid::Uuid;
@@ -143,15 +141,7 @@ mod tests {
             .unwrap();
         assert_eq!(reviewed.state(), floe_access::GrantState::Active);
         assert_eq!(reviewed.source(), &source);
-        assert_eq!(
-            vault
-                .personal_grant_consumer_policy(reviewed.id())
-                .await
-                .unwrap()
-                .epoch()
-                .get(),
-            1
-        );
+        assert_eq!(vault.personal_grant_source_authority(reviewed.id()).await.unwrap().epoch().get(), 1);
         vault.checkpoint().await.unwrap();
         drop(vault);
         let reopened = EncryptedAgentVault::open(root.path(), person, keys)
@@ -200,10 +190,6 @@ mod tests {
             .review_personal_grant(source.clone(), scope(&["assistant"]), &"b".repeat(64), None)
             .await
             .unwrap();
-        let policy = vault
-            .personal_grant_consumer_policy(first.id())
-            .await
-            .unwrap();
         let first_source_authority = vault.personal_grant_source_authority(first.id()).await.unwrap();
         let stable = vault
             .review_personal_grant(
@@ -219,13 +205,7 @@ mod tests {
             vault.personal_grant_source_authority(first.id()).await.unwrap(),
             first_source_authority
         );
-        assert_eq!(
-            vault
-                .personal_grant_consumer_policy(first.id())
-                .await
-                .unwrap(),
-            policy
-        );
+        assert_eq!(stable.scope(), first.scope());
         let changed_subject = vault
             .review_personal_grant(
                 source.clone(),
@@ -241,13 +221,7 @@ mod tests {
             changed_source_authority,
             first_source_authority.advance().unwrap()
         );
-        assert_eq!(
-            vault
-                .personal_grant_consumer_policy(first.id())
-                .await
-                .unwrap(),
-            policy
-        );
+        assert_eq!(changed_subject.scope(), stable.scope());
         let paused = vault
             .pause_personal_grant(changed_subject.id(), changed_subject.authority())
             .await
@@ -264,19 +238,13 @@ mod tests {
             .review_personal_grant(
                 source,
                 scope(&["attention.expert"]),
-                &"b".repeat(64),
+                &"9".repeat(64),
                 Some((paused.id(), paused.authority())),
             )
             .await
             .unwrap();
         assert!(changed.authority().access_epoch() > paused.authority().access_epoch());
-        assert_ne!(
-            vault
-                .personal_grant_consumer_policy(first.id())
-                .await
-                .unwrap(),
-            policy
-        );
+        assert_eq!(vault.personal_grant_source_authority(first.id()).await.unwrap(), changed_source_authority);
     }
 
     #[tokio::test]
@@ -309,7 +277,6 @@ mod tests {
             .await
             .unwrap();
         let first_source = vault.personal_grant_source_authority(first.id()).await.unwrap();
-        let first_policy = vault.personal_grant_consumer_policy(first.id()).await.unwrap();
         let selected_b = vec!["contact-b".to_owned()];
         let changed = vault
             .review_personal_grant_with_selection(
@@ -326,7 +293,6 @@ mod tests {
         assert_eq!(changed.source(), &source);
         let second_source = vault.personal_grant_source_authority(first.id()).await.unwrap();
         assert_eq!(second_source, first_source.advance().unwrap());
-        assert_eq!(vault.personal_grant_consumer_policy(first.id()).await.unwrap(), first_policy);
         let consumer_changed = vault
             .review_personal_grant_with_selection(
                 source,
@@ -339,7 +305,7 @@ mod tests {
             .unwrap();
         assert_ne!(consumer_changed.authority(), changed.authority());
         assert_eq!(vault.personal_grant_source_authority(first.id()).await.unwrap(), second_source);
-        assert_ne!(vault.personal_grant_consumer_policy(first.id()).await.unwrap(), first_policy);
+        assert_ne!(consumer_changed.scope().consumers(), changed.scope().consumers());
     }
 
     #[tokio::test]
@@ -375,6 +341,28 @@ mod tests {
             .await
             .unwrap();
         let source_authority = vault.personal_grant_source_authority(first.id()).await.unwrap();
+        let observed_at = chrono::Utc::now();
+        let old_dependency = floe_access::ContextDependency::try_new(
+            person,
+            first.id(),
+            first.authority(),
+            first.source().clone(),
+            first.scope().resources().to_vec(),
+            source_authority,
+            first.scope().resources().to_vec(),
+            first.scope().categories().to_vec(),
+            GrantOperation::Read,
+            GrantPurpose::Assistant,
+            GrantConsumer::builtin("assistant").unwrap(),
+            ProcessingRestriction::LocalOnly,
+            Uuid::new_v4(),
+            vec![1],
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            observed_at,
+            observed_at + chrono::Duration::minutes(59),
+        )
+        .unwrap();
         let mut query_b = query_a.clone();
         query_b.event_handle = "event-b".into();
         let changed = vault
@@ -388,6 +376,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(changed.authority(), first.authority().advance().unwrap());
+        assert_eq!(
+            floe_access::validate_grant_dependency(&changed, &old_dependency),
+            Err(AgentFailure::PolicyDenied)
+        );
         assert_eq!(
             vault.personal_grant_source_authority(first.id()).await.unwrap(),
             source_authority
@@ -488,7 +480,7 @@ mod tests {
         let connection = vault.database.connect().unwrap();
         connection
             .execute(
-                "UPDATE personal_grant_policies SET policy_epoch = 0 WHERE grant_id = ?",
+                "UPDATE personal_grant_policies SET source_epoch = 0 WHERE grant_id = ?",
                 [first.id().as_uuid().to_string()],
             )
             .await
@@ -542,6 +534,30 @@ mod tests {
             Err(AgentFailure::VaultUnavailable)
         ));
     }
+
+    #[tokio::test]
+    async fn obsolete_personal_schema_is_not_migrated_on_reopen() {
+        let (root, keys, vault, person) = vault().await;
+        let connection = vault.database.connect().unwrap();
+        connection.execute("DROP TABLE personal_grant_schema", ()).await.unwrap();
+        connection
+            .execute(
+                "CREATE TABLE personal_grant_schema (id INTEGER PRIMARY KEY, version INTEGER NOT NULL)",
+                (),
+            )
+            .await
+            .unwrap();
+        connection
+            .execute("INSERT INTO personal_grant_schema VALUES (1, 5)", ())
+            .await
+            .unwrap();
+        vault.checkpoint().await.unwrap();
+        drop(vault);
+        assert!(matches!(
+            EncryptedAgentVault::open(root.path(), person, keys).await,
+            Err(AgentFailure::UnsupportedVersion)
+        ));
+    }
 }
 
 fn validate_subject_fingerprint(fingerprint: &str) -> Result<(), AgentFailure> {
@@ -561,131 +577,6 @@ fn storage(_: impl std::fmt::Debug) -> AgentFailure {
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    pub(super) async fn validate_grant_policy_authority_in_transaction(
-        &self,
-        transaction: &turso::transaction::Transaction<'_>,
-        dependency: &floe_access::ContextDependency,
-    ) -> Result<(), AgentFailure> {
-        let connector = dependency.source().connector().as_str();
-        if connector == ATTENTION_CONNECTOR
-            || connector == floe_access::FEASIBILITY_CONNECTOR
-            || connector == floe_access::WELLBEING_CONNECTOR
-            || matches!(connector, "contacts.apple" | "contacts.android")
-        {
-            self.validate_personal_dependency_policy_in_transaction(transaction, dependency)
-                .await?;
-        } else if connector.starts_with("calendar.") {
-            self.validate_access_grant_dependency_in_transaction(transaction, dependency)
-                .await?;
-            self.validate_calendar_dependency_policy_in_transaction(transaction, dependency)
-                .await?;
-        } else {
-            self.validate_access_grant_dependency_in_transaction(transaction, dependency)
-                .await?;
-            self.validate_remote_view_dependency_policy_in_transaction(transaction, dependency)
-                .await?;
-        }
-        Ok(())
-    }
-
-    pub(super) async fn validate_context_dependency_coverage_in_transaction(
-        &self,
-        transaction: &turso::transaction::Transaction<'_>,
-        coverage: &floe_access::DependencyCoverage,
-    ) -> Result<(), AgentFailure> {
-        let floe_access::DependencyCoverage::Dependent { dependencies } = coverage else {
-            return Ok(());
-        };
-        for dependency in dependencies {
-            if dependency.person_id() != self.person_id {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            if dependency.expires_at() <= Utc::now() {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            self.validate_grant_policy_authority_in_transaction(transaction, dependency)
-                .await?;
-        }
-        Ok(())
-    }
-
-    async fn validate_calendar_dependency_policy_in_transaction(
-        &self,
-        transaction: &turso::transaction::Transaction<'_>,
-        dependency: &floe_access::ContextDependency,
-    ) -> Result<(), AgentFailure> {
-        let grant_id = dependency.grant_id().as_uuid().to_string();
-        let person_id = self.person_id.to_string();
-        let mut rows = transaction.query(
-            "SELECT policy_incarnation, policy_epoch FROM calendar_grant_policies WHERE grant_id = ? AND person_id = ?",
-            (grant_id, person_id),
-        ).await.map_err(storage)?;
-        let row = rows
-            .next()
-            .await
-            .map_err(storage)?
-            .ok_or(AgentFailure::PolicyDenied)?;
-        if rows.next().await.map_err(storage)?.is_some()
-            || row.get::<String>(0).map_err(storage)?
-                != dependency.consumer_policy().incarnation().to_string()
-            || row.get::<i64>(1).map_err(storage)?
-                != i64::try_from(dependency.consumer_policy().epoch().get())
-                    .map_err(|_| AgentFailure::PolicyDenied)?
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        Ok(())
-    }
-
-    async fn validate_access_grant_dependency_in_transaction(
-        &self,
-        transaction: &turso::transaction::Transaction<'_>,
-        dependency: &floe_access::ContextDependency,
-    ) -> Result<(), AgentFailure> {
-        let grant = self
-            .read_data_access_grant_in_transaction(transaction, dependency.grant_id())
-            .await
-            .map_err(|error| match error {
-                AgentFailure::NotFound => AgentFailure::PolicyDenied,
-                other => other,
-            })?;
-        floe_access::validate_grant_dependency(&grant, dependency)
-    }
-
-    async fn validate_personal_dependency_policy_in_transaction(
-        &self,
-        transaction: &turso::transaction::Transaction<'_>,
-        dependency: &floe_access::ContextDependency,
-    ) -> Result<(), AgentFailure> {
-        self.validate_access_grant_dependency_in_transaction(transaction, dependency)
-            .await?;
-        let mut policy_rows = transaction
-                .query(
-                    "SELECT policy_incarnation, policy_epoch FROM personal_grant_policies WHERE grant_id = ? AND person_id = ?",
-                    (dependency.grant_id().as_uuid().to_string(), self.person_id.to_string()),
-                )
-                .await
-                .map_err(storage)?;
-        let row = policy_rows
-            .next()
-            .await
-            .map_err(storage)?
-            .ok_or(AgentFailure::PolicyDenied)?;
-        let incarnation = uuid::Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
-            .map_err(|_| AgentFailure::VaultUnavailable)?;
-        let epoch = std::num::NonZeroU64::new(
-            u64::try_from(row.get::<i64>(1).map_err(storage)?)
-                .map_err(|_| AgentFailure::VaultUnavailable)?,
-        )
-        .ok_or(AgentFailure::VaultUnavailable)?;
-        let policy = ConsumerPolicyAuthority::from_parts(incarnation, epoch)
-            .ok_or(AgentFailure::VaultUnavailable)?;
-        if dependency.consumer_policy() != policy {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        Ok(())
-    }
-
     pub async fn pause_personal_grant(
         &self,
         grant_id: GrantId,
@@ -793,7 +684,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         {
             return Err(AgentFailure::InvalidInput);
         }
-        let consumers = scope.consumers().to_vec();
         validate_subject_fingerprint(reviewed_subject_fingerprint)?;
         let mut connection = self.connection()?;
         let transaction = transaction_start(&mut connection).await?;
@@ -881,10 +771,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     .await?
                 }
             };
-            self.upsert_personal_policy_in_transaction(
+            self.upsert_personal_source_review_in_transaction(
                 &transaction,
                 &grant,
-                &consumers,
                 reviewed_subject_fingerprint,
                 selected_handles,
             )
@@ -1042,20 +931,18 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .transpose()
     }
 
-    async fn upsert_personal_policy_in_transaction(
+    async fn upsert_personal_source_review_in_transaction(
         &self,
         transaction: &turso::transaction::Transaction<'_>,
         grant: &DataAccessGrant,
-        consumers: &[GrantConsumer],
         fingerprint: &str,
         selected_handles: &[String],
-    ) -> Result<ConsumerPolicyAuthority, AgentFailure> {
-        let encoded = serde_json::to_string(consumers).map_err(|_| AgentFailure::InvalidInput)?;
+    ) -> Result<(), AgentFailure> {
         let encoded_handles =
             serde_json::to_string(selected_handles).map_err(|_| AgentFailure::InvalidInput)?;
         let mut rows = transaction
             .query(
-                "SELECT grant_id, policy_incarnation, policy_epoch, consumers, reviewed_subject_fingerprint, selected_handles, source_incarnation, source_epoch FROM personal_grant_policies WHERE person_id = ? AND connector = ? AND connection_id = ? AND execution_owner = ?",
+                "SELECT grant_id, reviewed_subject_fingerprint, selected_handles, source_incarnation, source_epoch FROM personal_grant_policies WHERE person_id = ? AND connector = ? AND connection_id = ? AND execution_owner = ?",
                 (
                     self.person_id.to_string(),
                     grant.source().connector().as_str().to_owned(),
@@ -1070,70 +957,50 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .ok()
                 .and_then(GrantId::from_uuid)
                 .ok_or(AgentFailure::VaultUnavailable)?;
-            let incarnation = uuid::Uuid::parse_str(&row.get::<String>(1).map_err(storage)?)
-                .map_err(|_| AgentFailure::VaultUnavailable)?;
-            let epoch = std::num::NonZeroU64::new(
-                u64::try_from(row.get::<i64>(2).map_err(storage)?)
-                    .map_err(|_| AgentFailure::VaultUnavailable)?,
-            )
-            .ok_or(AgentFailure::VaultUnavailable)?;
-            let current = ConsumerPolicyAuthority::from_parts(incarnation, epoch)
-                .ok_or(AgentFailure::VaultUnavailable)?;
             let current_source = decode_source_authority(
-                row.get::<String>(6).map_err(storage)?,
-                row.get::<i64>(7).map_err(storage)?,
+                row.get::<String>(3).map_err(storage)?,
+                row.get::<i64>(4).map_err(storage)?,
             )?;
-            let source_changed = row.get::<String>(4).map_err(storage)? != fingerprint
-                || row.get::<String>(5).map_err(storage)? != encoded_handles;
+            let source_changed = row.get::<String>(1).map_err(storage)? != fingerprint
+                || row.get::<String>(2).map_err(storage)? != encoded_handles;
             let next_source = if source_changed {
                 current_source.advance().ok_or(AgentFailure::Conflict)?
             } else {
                 current_source
             };
-            if row.get::<String>(3).map_err(storage)? == encoded {
-                if old_grant_id != grant.id()
-                    || source_changed
-                {
-                    transaction
-                        .execute(
-                            "UPDATE personal_grant_policies SET grant_id = ?, reviewed_subject_fingerprint = ?, selected_handles = ?, source_incarnation = ?, source_epoch = ? WHERE person_id = ? AND connector = ? AND connection_id = ? AND execution_owner = ?",
-                            (
-                                grant.id().as_uuid().to_string(),
-                                fingerprint.to_owned(),
-                                encoded_handles.clone(),
-                                next_source.incarnation().to_string(),
-                                i64::try_from(next_source.epoch().get()).map_err(|_| AgentFailure::Conflict)?,
-                                self.person_id.to_string(),
-                                grant.source().connector().as_str().to_owned(),
-                                grant.source().connection_id().as_str().to_owned(),
-                                grant.source().execution_owner().as_str().to_owned(),
-                            ),
-                        )
-                        .await
-                        .map_err(storage)?;
-                }
-                return Ok(current);
+            if rows.next().await.map_err(storage)?.is_some() {
+                return Err(AgentFailure::VaultUnavailable);
             }
-            let next = current.advance().ok_or(AgentFailure::Conflict)?;
-            transaction
-                .execute(
-                    "UPDATE personal_grant_policies SET grant_id = ?, policy_incarnation = ?, policy_epoch = ?, consumers = ?, reviewed_subject_fingerprint = ?, selected_handles = ?, source_incarnation = ?, source_epoch = ? WHERE person_id = ? AND connector = ? AND connection_id = ? AND execution_owner = ?",
-                    (grant.id().as_uuid().to_string(), next.incarnation().to_string(), i64::try_from(next.epoch().get()).map_err(|_| AgentFailure::Conflict)?, encoded, fingerprint.to_owned(), encoded_handles, next_source.incarnation().to_string(), i64::try_from(next_source.epoch().get()).map_err(|_| AgentFailure::Conflict)?, self.person_id.to_string(), grant.source().connector().as_str().to_owned(), grant.source().connection_id().as_str().to_owned(), grant.source().execution_owner().as_str().to_owned()),
-                )
-                .await
-                .map_err(storage)?;
-            return Ok(next);
+            if old_grant_id != grant.id() || source_changed {
+                transaction
+                    .execute(
+                        "UPDATE personal_grant_policies SET grant_id = ?, reviewed_subject_fingerprint = ?, selected_handles = ?, source_incarnation = ?, source_epoch = ? WHERE person_id = ? AND connector = ? AND connection_id = ? AND execution_owner = ?",
+                        (
+                            grant.id().as_uuid().to_string(),
+                            fingerprint.to_owned(),
+                            encoded_handles,
+                            next_source.incarnation().to_string(),
+                            i64::try_from(next_source.epoch().get()).map_err(|_| AgentFailure::Conflict)?,
+                            self.person_id.to_string(),
+                            grant.source().connector().as_str().to_owned(),
+                            grant.source().connection_id().as_str().to_owned(),
+                            grant.source().execution_owner().as_str().to_owned(),
+                        ),
+                    )
+                    .await
+                    .map_err(storage)?;
+            }
+            return Ok(());
         }
-        let policy = ConsumerPolicyAuthority::new();
         let source_authority = SourceAuthority::new();
         transaction
             .execute(
-                "INSERT INTO personal_grant_policies (grant_id, person_id, connector, connection_id, execution_owner, reviewed_subject_fingerprint, policy_incarnation, policy_epoch, consumers, selected_handles, source_incarnation, source_epoch) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (grant.id().as_uuid().to_string(), self.person_id.to_string(), grant.source().connector().as_str().to_owned(), grant.source().connection_id().as_str().to_owned(), grant.source().execution_owner().as_str().to_owned(), fingerprint.to_owned(), policy.incarnation().to_string(), i64::try_from(policy.epoch().get()).map_err(|_| AgentFailure::Conflict)?, encoded, encoded_handles, source_authority.incarnation().to_string(), i64::try_from(source_authority.epoch().get()).map_err(|_| AgentFailure::Conflict)?),
+                "INSERT INTO personal_grant_policies (grant_id, person_id, connector, connection_id, execution_owner, reviewed_subject_fingerprint, selected_handles, source_incarnation, source_epoch) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (grant.id().as_uuid().to_string(), self.person_id.to_string(), grant.source().connector().as_str().to_owned(), grant.source().connection_id().as_str().to_owned(), grant.source().execution_owner().as_str().to_owned(), fingerprint.to_owned(), encoded_handles, source_authority.incarnation().to_string(), i64::try_from(source_authority.epoch().get()).map_err(|_| AgentFailure::Conflict)?),
             )
             .await
             .map_err(storage)?;
-        Ok(policy)
+        Ok(())
     }
 
     pub(super) async fn initialize_personal_grant_store(
@@ -1163,14 +1030,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .map_err(storage)?;
             transaction
                 .execute(
-                    "CREATE TABLE personal_grant_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 5))",
+                    "CREATE TABLE personal_grant_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 6))",
                     (),
                 )
                 .await
                 .map_err(storage)?;
             transaction
                 .execute(
-                    "CREATE TABLE personal_grant_policies (grant_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, connector TEXT NOT NULL, connection_id TEXT NOT NULL, execution_owner TEXT NOT NULL, reviewed_subject_fingerprint TEXT NOT NULL, policy_incarnation TEXT NOT NULL, policy_epoch INTEGER NOT NULL, consumers TEXT NOT NULL, selected_handles TEXT NOT NULL DEFAULT '[]', source_incarnation TEXT NOT NULL, source_epoch INTEGER NOT NULL, UNIQUE(person_id, connector, connection_id, execution_owner))",
+                    "CREATE TABLE personal_grant_policies (grant_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, connector TEXT NOT NULL, connection_id TEXT NOT NULL, execution_owner TEXT NOT NULL, reviewed_subject_fingerprint TEXT NOT NULL, selected_handles TEXT NOT NULL, source_incarnation TEXT NOT NULL, source_epoch INTEGER NOT NULL, UNIQUE(person_id, connector, connection_id, execution_owner))",
                     (),
                 )
                 .await
@@ -1184,7 +1051,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .map_err(storage)?;
             transaction
                 .execute(
-                    "INSERT INTO personal_grant_schema (id, version) VALUES (1, 5)",
+                    "INSERT INTO personal_grant_schema (id, version) VALUES (1, 6)",
                     (),
                 )
                 .await
@@ -1213,7 +1080,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .get::<i64>(0)
             .map_err(storage)?;
         if version != SCHEMA_VERSION {
-            return Err(AgentFailure::VaultUnavailable);
+            return Err(AgentFailure::UnsupportedVersion);
         }
         if marker.next().await.map_err(storage)?.is_some() {
             return Err(AgentFailure::VaultUnavailable);
@@ -1227,7 +1094,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     ) -> Result<(), AgentFailure> {
         let mut rows = connection
             .query(
-                "SELECT grant_id, person_id, connector, connection_id, execution_owner, reviewed_subject_fingerprint, policy_incarnation, policy_epoch, consumers, selected_handles, source_incarnation, source_epoch FROM personal_grant_policies ORDER BY grant_id",
+                "SELECT grant_id, person_id, connector, connection_id, execution_owner, reviewed_subject_fingerprint, selected_handles, source_incarnation, source_epoch FROM personal_grant_policies ORDER BY grant_id",
                 (),
             )
             .await
@@ -1253,36 +1120,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .map_err(|_| AgentFailure::VaultUnavailable)?;
             validate_subject_fingerprint(&row.get::<String>(5).map_err(storage)?)
                 .map_err(|_| AgentFailure::VaultUnavailable)?;
-            let incarnation = uuid::Uuid::parse_str(&row.get::<String>(6).map_err(storage)?)
-                .map_err(|_| AgentFailure::VaultUnavailable)?;
-            let epoch = std::num::NonZeroU64::new(
-                u64::try_from(row.get::<i64>(7).map_err(storage)?)
-                    .map_err(|_| AgentFailure::VaultUnavailable)?,
-            )
-            .ok_or(AgentFailure::VaultUnavailable)?;
-            ConsumerPolicyAuthority::from_parts(incarnation, epoch)
-                .ok_or(AgentFailure::VaultUnavailable)?;
-            let consumers: Vec<GrantConsumer> =
-                serde_json::from_str(&row.get::<String>(8).map_err(storage)?)
-                    .map_err(|_| AgentFailure::VaultUnavailable)?;
-            if consumers.is_empty() || consumers.len() > 32 {
-                return Err(AgentFailure::VaultUnavailable);
-            }
-            for consumer in &consumers {
-                let valid = match consumer {
-                    GrantConsumer::Builtin(value) => GrantConsumer::builtin(value.clone()),
-                    GrantConsumer::Extension(value) => GrantConsumer::extension(value.clone()),
-                };
-                valid.map_err(|_| AgentFailure::VaultUnavailable)?;
-            }
-            let mut canonical = consumers.clone();
-            canonical.sort();
-            canonical.dedup();
-            if canonical != consumers {
-                return Err(AgentFailure::VaultUnavailable);
-            }
             let selected_handles: Vec<String> =
-                serde_json::from_str(&row.get::<String>(9).map_err(storage)?)
+                serde_json::from_str(&row.get::<String>(6).map_err(storage)?)
                     .map_err(|_| AgentFailure::VaultUnavailable)?;
             if selected_handles.len() > 64
                 || selected_handles.iter().any(|handle| {
@@ -1295,8 +1134,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 return Err(AgentFailure::VaultUnavailable);
             }
             decode_source_authority(
-                row.get::<String>(10).map_err(storage)?,
-                row.get::<i64>(11).map_err(storage)?,
+                row.get::<String>(7).map_err(storage)?,
+                row.get::<i64>(8).map_err(storage)?,
             )?;
             let mut grant_rows = connection
                 .query(
@@ -1323,34 +1162,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
         }
         Ok(())
-    }
-
-    pub async fn personal_grant_consumer_policy(
-        &self,
-        grant_id: GrantId,
-    ) -> Result<ConsumerPolicyAuthority, AgentFailure> {
-        let connection = self.connection()?;
-        let mut rows = connection
-            .query(
-                "SELECT policy_incarnation, policy_epoch FROM personal_grant_policies WHERE grant_id = ? AND person_id = ?",
-                (grant_id.as_uuid().to_string(), self.person_id.to_string()),
-            )
-            .await
-            .map_err(storage)?;
-        let row = rows
-            .next()
-            .await
-            .map_err(storage)?
-            .ok_or(AgentFailure::AccessReviewRequired)?;
-        let incarnation = uuid::Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
-            .map_err(|_| AgentFailure::VaultUnavailable)?;
-        let epoch = std::num::NonZeroU64::new(
-            u64::try_from(row.get::<i64>(1).map_err(storage)?)
-                .map_err(|_| AgentFailure::VaultUnavailable)?,
-        )
-        .ok_or(AgentFailure::VaultUnavailable)?;
-        ConsumerPolicyAuthority::from_parts(incarnation, epoch)
-            .ok_or(AgentFailure::VaultUnavailable)
     }
 
     /// Bounded current personal-source owner until checkpoint 06 moves standing

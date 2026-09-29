@@ -168,7 +168,7 @@ mod tests {
     async fn rechecks_dependent_authority_before_returning_text() {
         use chrono::{TimeZone, Utc};
         use floe_context_contract::{
-            ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
+            ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority,
             GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
             GrantSourceBinding, ProcessingRestriction, ResourceHandle,
         };
@@ -192,7 +192,6 @@ mod tests {
             GrantPurpose::Scheduling,
             GrantConsumer::builtin("calendar").unwrap(),
             ProcessingRestriction::LocalOnly,
-            ConsumerPolicyAuthority::new(),
             Uuid::new_v4(),
             b"archive".to_vec(),
             Uuid::new_v4(),

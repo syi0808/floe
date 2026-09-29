@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use floe_context_contract::{
-    ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, ExecutionOwnerId,
+    ConnectionId, ConnectorId, ContextDependency, ExecutionOwnerId,
     GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
     GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
 };
@@ -54,7 +54,7 @@ pub struct RemoteViewApproval<'a> {
     pub source_authority: SourceAuthority,
     /// The server revision the review observed, when the reviewer probed
     /// for it. `None` leaves the revision unbound: the review still binds
-    /// producer, authority, provider, recipient, grant and policy.
+    /// producer, authority, provider, recipient and grant.
     pub connection_revision: Option<u64>,
     pub provider_identity: &'a str,
     pub recipient: &'a str,
@@ -308,19 +308,6 @@ pub fn remote_dependency_source_admits(
         || reference.connection_revision != connection_revision
         || reference.audience != recipient
         || dependency.processing() != &ProcessingRestriction::LocalOnly
-    {
-        return Err(AgentFailure::PolicyDenied);
-    }
-    Ok(())
-}
-
-/// The binding recorded for the dependency's source, still the one it names.
-pub fn remote_dependency_binding_matches(
-    consumer_policy: ConsumerPolicyAuthority,
-    authority: GrantAuthority,
-    dependency: &ContextDependency,
-) -> Result<(), AgentFailure> {
-    if consumer_policy != dependency.consumer_policy() || authority != dependency.grant_authority()
     {
         return Err(AgentFailure::PolicyDenied);
     }

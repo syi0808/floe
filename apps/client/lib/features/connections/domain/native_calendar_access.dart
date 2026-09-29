@@ -39,7 +39,6 @@ final class NativeCalendarAccessOverview {
     required this.reviewRequired,
     this.grantId,
     this.grantAuthority,
-    this.consumerPolicy,
   });
 
   final String personId;
@@ -52,17 +51,28 @@ final class NativeCalendarAccessOverview {
   final bool reviewRequired;
   final String? grantId;
   final Map<String, Object?>? grantAuthority;
-  final Map<String, Object?>? consumerPolicy;
-
-  bool get hasGrant =>
-      grantId != null && grantAuthority != null && consumerPolicy != null;
+  bool get hasGrant => grantId != null && grantAuthority != null;
 
   factory NativeCalendarAccessOverview.fromJson(Object? raw) {
     if (raw is! Map) {
       throw const FormatException('Invalid Calendar access overview');
     }
     final value = Map<String, Object?>.from(raw);
+    const fields = {
+      'schema_version',
+      'person_id',
+      'provider',
+      'connection_id',
+      'selected_resources',
+      'granted_resources',
+      'source_authority',
+      'state',
+      'review_required',
+      'grant_id',
+      'grant_authority',
+    };
     if (value['schema_version'] != 1 ||
+        value.keys.any((key) => !fields.contains(key)) ||
         value['person_id'] is! String ||
         value['provider'] is! String ||
         value['connection_id'] is! String ||
@@ -70,28 +80,27 @@ final class NativeCalendarAccessOverview {
         value['granted_resources'] is! List ||
         value['source_authority'] is! Map ||
         value['review_required'] is! bool ||
-        !const {'needs_review', 'paused', 'active', 'revoked'}.contains(
-          value['state'],
-        )) {
+        !const {
+          'needs_review',
+          'paused',
+          'active',
+          'revoked',
+        }.contains(value['state'])) {
       throw const FormatException('Invalid Calendar access overview');
     }
     final grantId = value['grant_id'];
     final grantAuthority = value['grant_authority'];
-    final consumerPolicy = value['consumer_policy'];
     if ((grantId != null && grantId is! String) ||
-        (grantAuthority != null && grantAuthority is! Map) ||
-        (consumerPolicy != null && consumerPolicy is! Map)) {
+        (grantAuthority != null && grantAuthority is! Map)) {
       throw const FormatException('Invalid Calendar access overview');
     }
     final present =
-        (grantId != null ? 1 : 0) +
-        (grantAuthority != null ? 1 : 0) +
-        (consumerPolicy != null ? 1 : 0);
-    if (present != 0 && present != 3) {
+        (grantId != null ? 1 : 0) + (grantAuthority != null ? 1 : 0);
+    if (present != 0 && present != 2) {
       throw const FormatException('Invalid Calendar access overview');
     }
     final state = value['state'] as String;
-    if ((state == 'needs_review') == (present == 3)) {
+    if ((state == 'needs_review') == (present == 2)) {
       throw const FormatException('Invalid Calendar access overview');
     }
     return NativeCalendarAccessOverview(
@@ -100,16 +109,15 @@ final class NativeCalendarAccessOverview {
       connectionId: value['connection_id'] as String,
       selectedResources: List<String>.from(value['selected_resources'] as List),
       grantedResources: List<String>.from(value['granted_resources'] as List),
-      sourceAuthority: Map<String, Object?>.from(value['source_authority'] as Map),
+      sourceAuthority: Map<String, Object?>.from(
+        value['source_authority'] as Map,
+      ),
       state: state,
       reviewRequired: value['review_required'] as bool,
       grantId: grantId as String?,
       grantAuthority: grantAuthority == null
           ? null
           : Map<String, Object?>.from(grantAuthority as Map),
-      consumerPolicy: consumerPolicy == null
-          ? null
-          : Map<String, Object?>.from(consumerPolicy as Map),
     );
   }
 }
@@ -157,7 +165,9 @@ final class NativeCalendarSubjectPreview {
       connectionScope: value['connection_scope'] as String,
       connectionId: value['connection_id'] as String,
       connectionRevision: value['connection_revision'] as int,
-      sourceAuthority: Map<String, Object?>.from(value['source_authority'] as Map),
+      sourceAuthority: Map<String, Object?>.from(
+        value['source_authority'] as Map,
+      ),
       nativeSubjectFingerprint: value['native_subject_fingerprint'] as String,
     );
   }

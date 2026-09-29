@@ -78,7 +78,6 @@ pub struct CalendarAccessOverview {
     pub source_authority: SourceAuthority,
     pub grant_id: Option<floe_access::GrantId>,
     pub grant_authority: Option<floe_access::GrantAuthority>,
-    pub consumer_policy: Option<floe_context_contract::ConsumerPolicyAuthority>,
     pub state: CalendarAccessState,
     pub review_required: bool,
 }

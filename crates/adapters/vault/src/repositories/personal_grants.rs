@@ -33,13 +33,6 @@ impl<Keys: VaultKeyProvider> PersonalGrantRecords for VaultGrantRecords<'_, Keys
         Box::pin(async move { self.vault.personal_grant_subject_fingerprint(grant).await })
     }
 
-    fn consumer_policy<'a>(
-        &'a self,
-        grant: floe_access::GrantId,
-    ) -> BoxFuture<'a, Result<floe_access::ConsumerPolicyAuthority, AgentFailure>> {
-        Box::pin(async move { self.vault.personal_grant_consumer_policy(grant).await })
-    }
-
     fn current_source_authority<'a>(
         &'a self,
         grant: floe_access::GrantId,

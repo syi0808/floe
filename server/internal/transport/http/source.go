@@ -35,7 +35,7 @@ func serveSource(writer http.ResponseWriter, request *http.Request, principal au
 		}
 		writeResult(writer, service.PreviewView(principal, viewID, input))
 	case "admit":
-		allowed := map[string]struct{}{"schema_version": {}, "connector_id": {}, "connection_id": {}, "connection_revision": {}, "resources": {}, "policy": {}, "grant": {}, "purpose": {}, "consumer": {}, "max_items": {}, "max_bytes": {}, "query": {}}
+		allowed := map[string]struct{}{"schema_version": {}, "connector_id": {}, "connection_id": {}, "connection_revision": {}, "resources": {}, "grant": {}, "purpose": {}, "consumer": {}, "max_items": {}, "max_bytes": {}, "query": {}}
 		var input authorization.ViewAdmission
 		if !decodeSourceEnvelope(writer, request, allowed, &input) {
 			failure(writer, http.StatusBadRequest, "validation")

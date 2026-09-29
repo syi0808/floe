@@ -2,7 +2,7 @@ use super::{
     AgentVaultFailureDto, AgentVaultStateDto, CalendarProviderDto, CalendarScopeDto,
     CalendarSubjectPreviewDto, PersonalAccessOverviewDto,
 };
-use floe_context_contract::{ConsumerPolicyAuthority, GrantAuthority, GrantId, SourceAuthority};
+use floe_context_contract::{GrantAuthority, GrantId, SourceAuthority};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -54,8 +54,6 @@ pub struct CalendarAccessOverviewDto {
     pub grant_id: Option<GrantId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant_authority: Option<GrantAuthority>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub consumer_policy: Option<ConsumerPolicyAuthority>,
     pub state: String,
     pub review_required: bool,
 }

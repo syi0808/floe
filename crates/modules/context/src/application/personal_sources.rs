@@ -87,7 +87,6 @@ struct CompletedRead {
     observation_id: Uuid,
     process: Uuid,
     grant: floe_access::DataAccessGrant,
-    policy: floe_access::ConsumerPolicyAuthority,
     source_authority: SourceAuthority,
 }
 
@@ -153,14 +152,12 @@ async fn acquire_personal_source(
     if records.current_source_authority(current.id()).await? != source_authority {
         return Err(AgentFailure::StaleContext);
     }
-    let policy = records.consumer_policy(current.id()).await?;
     Ok(CompletedRead {
         value,
         subject,
         observation_id: Uuid::new_v4(),
         process: driver.process_incarnation(),
         grant: current,
-        policy,
         source_authority,
     })
 }
@@ -196,7 +193,6 @@ fn personal_dependency(
         GrantPurpose::Assistant,
         read.consumer.clone(),
         ProcessingRestriction::LocalOnly,
-        completed.policy,
         completed.observation_id,
         query_fingerprint,
         read.lease_invocation_id,
@@ -521,7 +517,6 @@ pub async fn admit_attention(
     if current_subject != reviewed_subject || current_subject != native_subject {
         return Err(AgentFailure::AccessReviewRequired);
     }
-    let policy = records.consumer_policy(current_grant.id()).await?;
     let (observation_id, process_incarnation_id) = driver.commit_attention_projection(
         person_id,
         &host_epoch,
@@ -542,7 +537,6 @@ pub async fn admit_attention(
         GrantPurpose::Assistant,
         consumer,
         ProcessingRestriction::LocalOnly,
-        policy,
         observation_id,
         attention_query_fingerprint(
             person_id,
@@ -786,10 +780,6 @@ pub async fn authorize_personal_dependency(
         {
             return Err(AgentFailure::PolicyDenied);
         }
-        let policy = records.consumer_policy(grant.id()).await?;
-        if dependency.consumer_policy() != policy {
-            return Err(AgentFailure::PolicyDenied);
-        }
         return Ok(());
     }
     if dependency.source().connector().as_str() == FEASIBILITY_CONNECTOR {
@@ -840,9 +830,6 @@ pub async fn authorize_personal_dependency(
         {
             return Err(AgentFailure::PolicyDenied);
         }
-        if dependency.consumer_policy() != records.consumer_policy(grant.id()).await? {
-            return Err(AgentFailure::PolicyDenied);
-        }
         return Ok(());
     }
     if dependency.source().connector().as_str() == WELLBEING_CONNECTOR {
@@ -890,9 +877,6 @@ pub async fn authorize_personal_dependency(
             || observation.native_subject_fingerprint
                 != records.reviewed_subject(grant.id()).await?
         {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        if dependency.consumer_policy() != records.consumer_policy(grant.id()).await? {
             return Err(AgentFailure::PolicyDenied);
         }
         return Ok(());
@@ -962,10 +946,6 @@ pub async fn authorize_personal_dependency(
                 dependency.process_incarnation_id(),
             )
     {
-        return Err(AgentFailure::PolicyDenied);
-    }
-    let policy = records.consumer_policy(grant.id()).await?;
-    if dependency.consumer_policy() != policy {
         return Err(AgentFailure::PolicyDenied);
     }
     // The device is asked once more which subject would answer now: a Person
@@ -1693,13 +1673,6 @@ mod tests {
                 .position(|held| held.id() == grant)
                 .map(|index| self.subjects[index].clone());
             Box::pin(async move { subject.ok_or(AgentFailure::NotFound) })
-        }
-
-        fn consumer_policy<'a>(
-            &'a self,
-            _: GrantId,
-        ) -> BoxFuture<'a, Result<floe_access::ConsumerPolicyAuthority, AgentFailure>> {
-            Box::pin(async { Ok(floe_access::ConsumerPolicyAuthority::default()) })
         }
 
         fn feasibility_query<'a>(

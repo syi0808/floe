@@ -20,7 +20,6 @@ pub struct AuthorizedViewRead<'a> {
     pub view_id: &'a str,
     pub grant: &'a floe_access::DataAccessGrant,
     pub source_authority: floe_context_contract::SourceAuthority,
-    pub consumer_policy: floe_access::ConsumerPolicyAuthority,
     pub consumer: &'a str,
     pub resource: &'a str,
     pub connection_revision: u64,
@@ -142,7 +141,6 @@ impl ServerSourceClient {
         let connection = source.connection_id();
         let grant_id = read.grant.id().as_uuid().to_string();
         let grant_incarnation = read.grant.authority().incarnation().to_string();
-        let policy_incarnation = read.consumer_policy.incarnation().to_string();
         let max_items = u32::try_from(read.max_items).map_err(|_| AgentFailure::BudgetExceeded)?;
         let max_bytes = u32::try_from(read.max_bytes).map_err(|_| AgentFailure::BudgetExceeded)?;
         let path = format!("/v1/views/{}/admit", read.view_id);
@@ -172,8 +170,6 @@ impl ServerSourceClient {
             connection_id: connection.as_str(),
             connection_revision: read.connection_revision,
             resource: read.resource,
-            policy_incarnation: &policy_incarnation,
-            policy_epoch: read.consumer_policy.epoch().get(),
             grant_id: &grant_id,
             grant_incarnation: &grant_incarnation,
             grant_epoch: read.grant.authority().access_epoch().get(),
@@ -483,8 +479,6 @@ mod tests {
             connection_id: "00000000-0000-4000-8000-000000000012",
             connection_revision: 1,
             resource: "mail.communication:00000000-0000-4000-8000-000000000012",
-            policy_incarnation: "policy",
-            policy_epoch: 1,
             grant_id: "grant",
             grant_incarnation: "grant-incarnation",
             grant_epoch: 1,
@@ -865,9 +859,8 @@ impl<Keys: RemoteAuthorizationKeys> floe_context::RemoteViewTransport
                     self.keys,
                     AuthorizedViewRead {
                         view_id: read.view_id,
-                        grant: &read.binding.grant,
+                        grant: read.grant,
                         source_authority: read.source_authority,
-                        consumer_policy: read.binding.consumer_policy,
                         consumer: read.consumer,
                         resource: read.resource,
                         connection_revision: read.connection_revision,

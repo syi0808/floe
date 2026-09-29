@@ -21,7 +21,6 @@ use zeroize::Zeroizing;
 
 mod access_grants;
 mod agent_actions;
-mod calendar_grant_policy;
 mod calendar_grants;
 mod context_cleanup;
 mod context_dependencies;
@@ -34,7 +33,6 @@ mod personal_grants;
 mod recipient_consents;
 mod registry;
 mod remote_authority;
-mod remote_view_grants;
 mod session_archive;
 mod tasks;
 pub use access_grants::AccessGrantCleanup;
@@ -53,7 +51,7 @@ pub use remote_authority::{
     RemoteViewAuthorizationExpectation, RemoteEnrollmentSignature, RemoteOwnerPublicKey, RemotePairingChallenge,
     RemoteProducerIdentity, RemoteViewSourceReference,
 };
-pub use remote_view_grants::RemoteViewGrantBinding;
+pub use access_grants::AccessGrantActivation;
 pub use session_archive::*;
 pub use tasks::{VaultTaskActivation, VaultTaskAdmission, VaultTaskRecord};
 
@@ -145,7 +143,7 @@ impl<Keys: VaultKeyProvider> floe_access::CurrentAuthority
     ) -> Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
         Box::pin(async move {
             self.vault
-                .validate_grant_policy_authority_in_transaction(self.transaction, dependency)
+                .validate_current_grant_in_transaction(self.transaction, dependency)
                 .await
         })
     }
@@ -230,8 +228,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_access_grant_store().await?;
         vault.initialize_agent_action_store().await?;
         vault.initialize_personal_grant_store(true).await?;
-        vault.initialize_calendar_grant_policy_store(true).await?;
-        vault.initialize_remote_view_grant_store(true).await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_conversation_store().await?;
         vault.initialize_task_store().await?;
@@ -314,13 +310,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .query("SELECT task_id, session_id, turn_id FROM agent_task_delegations LIMIT 0", ())
             .await
             .map_err(unavailable)?;
+        vault.reject_obsolete_policy_schemas().await?;
         vault.initialize_session_archive().await?;
         vault.initialize_learning_store().await?;
         vault.initialize_access_grant_store().await?;
         vault.initialize_agent_action_store().await?;
         vault.initialize_personal_grant_store(false).await?;
-        vault.initialize_calendar_grant_policy_store(false).await?;
-        vault.initialize_remote_view_grant_store(false).await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_conversation_store().await?;
         vault.initialize_task_store().await?;
@@ -332,6 +327,21 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     pub async fn create_session(&self) -> Result<AgentSession, AgentFailure> {
         self.insert_session(AgentSession::new(self.person_id)).await
+    }
+
+    async fn reject_obsolete_policy_schemas(&self) -> Result<(), AgentFailure> {
+        let connection = self.connection()?;
+        let mut rows = connection
+            .query(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('calendar_grant_policy_schema', 'calendar_grant_policies', 'calendar_grant_mappings', 'remote_view_grant_schema', 'remote_view_grant_mappings')",
+                (),
+            )
+            .await
+            .map_err(unavailable)?;
+        if rows.next().await.map_err(unavailable)?.is_some() {
+            return Err(AgentFailure::UnsupportedVersion);
+        }
+        Ok(())
     }
 
     /// The Session store Conversation drives, backed by this vault.

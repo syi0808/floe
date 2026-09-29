@@ -267,7 +267,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use floe_context_contract::PersonId;
     use floe_context_contract::{
-        ConsumerPolicyAuthority, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
+        GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
         GrantOperation, GrantPurpose, GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
 
@@ -295,7 +295,6 @@ mod tests {
             GrantPurpose::Scheduling,
             GrantConsumer::builtin("calendar").unwrap(),
             ProcessingRestriction::LocalOnly,
-            ConsumerPolicyAuthority::new(),
             observation_id,
             fingerprint.to_vec(),
             Uuid::new_v4(),

@@ -44,7 +44,7 @@ pub struct RemoteViewGrantPreview {
 }
 
 /// What the Person says they already reviewed: the live descriptor fields
-/// plus the exact grant (or reviewed absence) and recorded policy the
+/// plus the exact grant (or reviewed absence) the
 /// decision binds. A fresh read never substitutes for these values.
 #[derive(Clone, Copy)]
 pub struct RemoteViewGrantExpectation<'a> {
@@ -57,7 +57,6 @@ pub struct RemoteViewGrantExpectation<'a> {
         floe_context_contract::GrantId,
         floe_context_contract::GrantAuthority,
     )>,
-    pub expected_policy: Option<floe_context_contract::ConsumerPolicyAuthority>,
 }
 
 #[derive(Clone, Debug)]
@@ -65,7 +64,6 @@ pub struct RemoteViewGrantActivation {
     pub view_id: String,
     pub grant_id: floe_context_contract::GrantId,
     pub expected: Option<floe_context_contract::GrantAuthority>,
-    pub expected_policy: Option<floe_context_contract::ConsumerPolicyAuthority>,
     pub source: floe_context_contract::GrantSourceBinding,
     pub scope: floe_context_contract::GrantScope,
 }
@@ -200,11 +198,6 @@ pub async fn prepare_remote_view_grant_activation(
         &preview.producer,
         preview.connection_revision,
     )?;
-    match (&expectation.expected_grant, &expectation.expected_policy) {
-        (None, None) => {}
-        (Some(_), Some(policy)) if policy.is_valid() => {}
-        _ => return Err(AgentFailure::InvalidInput),
-    }
     if expectation.connection_revision == Some(0) {
         return Err(AgentFailure::InvalidInput);
     }
@@ -215,7 +208,7 @@ pub async fn prepare_remote_view_grant_activation(
     )?;
     let source = remote_view_source(&preview.reference)?;
     let existing = store
-        .find_view_grant(request.view_id, &source, request.consumers[0].identifier())
+        .find_view_grant(request.view_id, &source)
         .await?;
     match (&expectation.expected_grant, existing.as_ref()) {
         (None, None) => {}
@@ -232,7 +225,6 @@ pub async fn prepare_remote_view_grant_activation(
                 view_id: request.view_id.to_owned(),
                 grant_id,
                 expected,
-                expected_policy: expectation.expected_policy,
                 source,
                 scope,
             }),

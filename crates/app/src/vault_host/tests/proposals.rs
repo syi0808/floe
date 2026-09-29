@@ -146,7 +146,6 @@ async fn seed(
         GrantPurpose::Assistant,
         consumer,
         ProcessingRestriction::LocalOnly,
-        admission.consumer_policy,
         evidence_id,
         vec![1],
         Uuid::new_v4(),

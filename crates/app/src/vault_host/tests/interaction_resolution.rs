@@ -577,29 +577,27 @@ fn reviewed_target() -> floe_conversation::InlineObserveTarget {
         connector_id: Some("calendar.macos".into()),
         consumer: "floe.builtin.schedule".into(),
         purpose: "scheduling".into(),
+        source_revision: None,
         connection_revision: Some(9),
         reviewed_producer_fingerprint: None,
         reviewed_native_subject: Some("subject".into()),
         members: vec![floe_conversation::ReviewedBundleMember {
             member_id: "calendar.timeline".into(),
-            policy_fingerprint: "a".repeat(64),
+            policy_digest: "a".repeat(64),
             resource: "personal".into(),
-            source_revision: None,
             expected_grant: floe_conversation::ExpectedGrantState::Absent,
-            policy_authority: None,
         }],
     }
 }
 
 fn live_precondition() -> LiveInlineState {
     LiveInlineState {
+        source_revision: None,
         members: vec![LiveMember {
             member_id: "calendar.timeline".into(),
-            policy_fingerprint: "a".repeat(64),
+            policy_digest: "a".repeat(64),
             resource: "personal".into(),
-            source_revision: None,
             live_grants: vec![],
-            policy_authority: None,
         }],
         connection_revision: Some(9),
         producer_fingerprint: None,
@@ -611,13 +609,12 @@ fn live_precondition() -> LiveInlineState {
 fn live_satisfied() -> LiveInlineState {
     let (id, authority) = grant_pair();
     LiveInlineState {
+        source_revision: None,
         members: vec![LiveMember {
             member_id: "calendar.timeline".into(),
-            policy_fingerprint: "a".repeat(64),
+            policy_digest: "a".repeat(64),
             resource: "personal".into(),
-            source_revision: None,
             live_grants: vec![LiveGrant { id, authority }],
-            policy_authority: None,
         }],
         connection_revision: Some(9),
         producer_fingerprint: None,
@@ -988,7 +985,7 @@ async fn fresh_approve_on_unchanged_live_grant_rereviews_and_resolves() {
     )
     .unwrap();
     let mut target = reviewed_target();
-    target.members[0].source_revision = Some(floe_conversation::AuthorityRevision {
+    target.source_revision = Some(floe_conversation::AuthorityRevision {
         incarnation: source.incarnation(),
         epoch: source.epoch().get(),
     });
@@ -1003,13 +1000,12 @@ async fn fresh_approve_on_unchanged_live_grant_rereviews_and_resolves() {
     // Live matches the reviewed grant exactly: confirmation runs the
     // canonical re-review instead of superseding again.
     let live = LiveInlineState {
+        source_revision: Some(source),
         members: vec![LiveMember {
             member_id: "calendar.timeline".into(),
-            policy_fingerprint: "a".repeat(64),
+            policy_digest: "a".repeat(64),
             resource: "personal".into(),
-            source_revision: Some(source),
             live_grants: vec![LiveGrant { id, authority }],
-            policy_authority: None,
         }],
         connection_revision: Some(9),
         producer_fingerprint: None,
@@ -1776,7 +1772,7 @@ impl HostFixture {
             .await
             .unwrap()
             .unwrap();
-        let policy_fingerprint = crate::first_party_observe::policy_fingerprint(
+        let policy_digest = crate::first_party_observe::policy_digest(
             &crate::first_party_observe::calendar_policy().unwrap(),
         )
         .unwrap();
@@ -1787,22 +1783,21 @@ impl HostFixture {
             connector_id: Some("calendar.event_kit".into()),
             consumer: "floe.builtin.schedule".into(),
             purpose: "scheduling".into(),
+            source_revision: Some(floe_conversation::AuthorityRevision {
+                incarnation: live.source_authority().incarnation(),
+                epoch: live.source_authority().epoch().get(),
+            }),
             connection_revision: Some(live.revision()),
             reviewed_producer_fingerprint: None,
             reviewed_native_subject: Some(fingerprint.into()),
             members: vec![floe_conversation::ReviewedBundleMember {
                 member_id: "calendar.timeline".into(),
-                policy_fingerprint,
+                policy_digest,
                 resource: floe_access::native_calendar_resource("connection")
                     .unwrap()
                     .as_str()
                     .to_owned(),
-                source_revision: Some(floe_conversation::AuthorityRevision {
-                    incarnation: live.source_authority().incarnation(),
-                    epoch: live.source_authority().epoch().get(),
-                }),
                 expected_grant: floe_conversation::ExpectedGrantState::Absent,
-                policy_authority: None,
             }],
         }
     }
@@ -2343,13 +2338,14 @@ async fn personal_attention_allow_resolves() {
         connector_id: Some(floe_access::ATTENTION_CONNECTOR.into()),
         consumer: "floe.builtin.schedule".into(),
         purpose: "scheduling".into(),
+        source_revision: None,
         connection_revision: None,
         reviewed_producer_fingerprint: None,
         reviewed_native_subject: Some(NATIVE_FINGERPRINT.into()),
         members: vec![floe_conversation::ReviewedBundleMember {
             member_id: floe_access::ATTENTION_CONNECTOR.into(),
-            policy_fingerprint:
-                crate::first_party_observe::native_member_policy_fingerprint_for_target(
+            policy_digest:
+                crate::first_party_observe::native_member_policy_digest_for_target(
                     &host.base.vault,
                     host.base.person,
                     floe_access::ATTENTION_CONNECTOR,
@@ -2358,9 +2354,7 @@ async fn personal_attention_allow_resolves() {
                 .await
                 .unwrap(),
             resource: floe_access::ATTENTION_RESOURCE.into(),
-            source_revision: None,
             expected_grant: floe_conversation::ExpectedGrantState::Absent,
-            policy_authority: None,
         }],
     };
     let current = host
@@ -2454,16 +2448,6 @@ async fn sibling_grant_revoked_out_of_band_supersedes_with_absent_replacement() 
         authority_incarnation: grants[0].authority().incarnation(),
         authority_epoch: grants[0].authority().access_epoch().get(),
     };
-    sibling_target.members[0].policy_authority = host
-        .base
-        .vault
-        .calendar_grant_policy_authority(grants[0].id())
-        .await
-        .ok()
-        .map(|authority| floe_conversation::AuthorityRevision {
-            incarnation: authority.incarnation(),
-            epoch: authority.epoch().get(),
-        });
     let sibling = host
         .base
         .seed_inline(sibling_target, "floe.source.calendar", "connection")
@@ -2783,7 +2767,7 @@ impl RemoteFixture {
             .iter()
             .map(|policy| floe_conversation::ReviewedBundleMember {
                 member_id: policy.view_id.to_owned(),
-                policy_fingerprint: crate::first_party_observe::policy_fingerprint(policy).unwrap(),
+                policy_digest: crate::first_party_observe::policy_digest(policy).unwrap(),
                 resource: floe_context_contract::connection_view_resource(
                     policy.view_id,
                     &floe_context_contract::ConnectionId::try_new(&self.connection_id).unwrap(),
@@ -2791,12 +2775,7 @@ impl RemoteFixture {
                 .unwrap()
                 .as_str()
                 .to_owned(),
-                source_revision: Some(floe_conversation::AuthorityRevision {
-                    incarnation: authority.incarnation(),
-                    epoch: authority.epoch().get(),
-                }),
                 expected_grant: floe_conversation::ExpectedGrantState::Absent,
-                policy_authority: None,
             })
             .collect();
         members.sort_by(|left, right| {
@@ -2811,6 +2790,10 @@ impl RemoteFixture {
             connector_id: Some("gmail".into()),
             consumer: "floe.builtin.schedule".into(),
             purpose: "scheduling".into(),
+            source_revision: Some(floe_conversation::AuthorityRevision {
+                incarnation: authority.incarnation(),
+                epoch: authority.epoch().get(),
+            }),
             connection_revision: None,
             reviewed_producer_fingerprint: Some(self.transport.producer.fingerprint.clone()),
             reviewed_native_subject: None,
@@ -3016,16 +2999,10 @@ async fn gmail_views_allow_enables_bundle_atomically_and_resolves() {
 }
 
 #[tokio::test]
-async fn gmail_reviewed_absence_policy_fingerprint_drift_supersedes() {
+async fn gmail_reviewed_absence_policy_digest_drift_supersedes() {
     let host = RemoteFixture::open().await;
     let mut target = host.gmail_target().await;
-    assert!(
-        target
-            .members
-            .iter()
-            .all(|member| member.policy_authority.is_none())
-    );
-    target.members[0].policy_fingerprint = "b".repeat(64);
+    target.members[0].policy_digest = "b".repeat(64);
     let current = host
         .base
         .seed_inline(target, "floe.source.gmail", host.connection_id.as_str())
@@ -3057,7 +3034,7 @@ async fn gmail_reviewed_absence_policy_fingerprint_drift_supersedes() {
         matches!(
             outcome,
             ResolveOutcome::Superseded {
-                reason: DriftReason::PolicyFingerprint { .. },
+                reason: DriftReason::PolicyDigest { .. },
                 ..
             }
         ),
@@ -3097,7 +3074,7 @@ async fn gmail_connection_review_rejects_changed_policy_before_enable() {
     let mut review = super::super::remote_observe::review_bundle(&ctx, &host.transport)
         .await
         .unwrap();
-    review.members[0].policy_fingerprint = "b".repeat(64);
+    review.members[0].policy_digest = "b".repeat(64);
     assert!(matches!(
         super::super::remote_observe::enable_bundle(&ctx, &host.transport, &review).await,
         Err(AgentFailure::AccessReviewRequired)
@@ -3431,13 +3408,17 @@ async fn remote_calendar_allow_resolves_through_hosted_connection() {
         connector_id: Some("calendar.google".into()),
         consumer: "floe.builtin.schedule".into(),
         purpose: "scheduling".into(),
+        source_revision: Some(floe_conversation::AuthorityRevision {
+            incarnation: authority.incarnation(),
+            epoch: authority.epoch().get(),
+        }),
         connection_revision: None,
         reviewed_producer_fingerprint: Some(host.transport.producer.fingerprint.clone()),
         reviewed_native_subject: None,
         members: vec![floe_conversation::ReviewedBundleMember {
             member_id: "calendar.timeline".into(),
-            policy_fingerprint:
-                crate::first_party_observe::remote_member_policy_fingerprint_for_target(
+            policy_digest:
+                crate::first_party_observe::remote_member_policy_digest_for_target(
                     &host.base.vault,
                     host.base.person,
                     "calendar.google",
@@ -3447,12 +3428,7 @@ async fn remote_calendar_allow_resolves_through_hosted_connection() {
                 .await
                 .unwrap(),
             resource: logical_resource.as_str().into(),
-            source_revision: Some(floe_conversation::AuthorityRevision {
-                incarnation: authority.incarnation(),
-                epoch: authority.epoch().get(),
-            }),
             expected_grant: floe_conversation::ExpectedGrantState::Absent,
-            policy_authority: None,
         }],
     };
     let current = host

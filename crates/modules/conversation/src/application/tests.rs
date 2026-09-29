@@ -2132,7 +2132,7 @@ async fn continuation_profile_mismatch_fails_closed() {
 
 fn history_dependency() -> floe_agent_contract::ContextDependency {
     use floe_context_contract::{
-        ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
+        ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority,
         GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
         GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
@@ -2158,7 +2158,6 @@ fn history_dependency() -> floe_agent_contract::ContextDependency {
         GrantPurpose::Assistant,
         GrantConsumer::builtin("assistant").unwrap(),
         ProcessingRestriction::LocalOnly,
-        ConsumerPolicyAuthority::new(),
         Uuid::new_v4(),
         b"fingerprint".to_vec(),
         Uuid::new_v4(),
@@ -2559,8 +2558,8 @@ fn resume_requirement() -> crate::InteractionRequirement {
         source_id: "floe.source.calendar".into(),
         connection_id: Some("calendar-connection".into()),
         consumer: "floe.builtin.schedule".into(),
-        purpose: "scheduling".into(),
-        inline: true,
+            purpose: "scheduling".into(),
+            inline: true,
     }
 }
 
@@ -2569,19 +2568,18 @@ fn resume_target() -> crate::ReviewedTarget {
         connection_id: "calendar-connection".into(),
         device_id: None,
         source_id: "floe.source.calendar".into(),
-        connector_id: Some("floe.connector.calendar".into()),
-        consumer: "floe.builtin.schedule".into(),
-        purpose: "scheduling".into(),
-        connection_revision: None,
+            connector_id: Some("floe.connector.calendar".into()),
+            consumer: "floe.builtin.schedule".into(),
+            purpose: "scheduling".into(),
+            source_revision: None,
+            connection_revision: None,
         reviewed_producer_fingerprint: None,
         reviewed_native_subject: None,
         members: vec![crate::ReviewedBundleMember {
             member_id: "calendar.timeline".into(),
-            policy_fingerprint: "a".repeat(64),
+            policy_digest: "a".repeat(64),
             resource: "personal".into(),
-            source_revision: None,
             expected_grant: crate::ExpectedGrantState::Absent,
-            policy_authority: None,
         }],
     })
 }

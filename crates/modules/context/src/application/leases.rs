@@ -223,7 +223,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use floe_context_contract::{
-        ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
+        ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority,
         GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
         GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
@@ -257,7 +257,6 @@ mod tests {
             GrantPurpose::Assistant,
             consumer,
             ProcessingRestriction::LocalOnly,
-            ConsumerPolicyAuthority::new(),
             observation_id,
             b"fixture-query".to_vec(),
             Uuid::new_v4(),
@@ -462,7 +461,6 @@ mod tests {
             dependency.purpose(),
             dependency.consumer().clone(),
             dependency.processing().clone(),
-            dependency.consumer_policy(),
             dependency.observation_id(),
             b"changed-query".to_vec(),
             dependency.lease_invocation_id(),

@@ -138,7 +138,7 @@ pub trait RemotePairingCommands {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteObserveMemberExpectation {
     pub view_id: String,
-    pub policy_fingerprint: String,
+    pub policy_digest: String,
     pub resource: String,
     pub producer_fingerprint: String,
     pub source_authority: crate::SourceAuthority,
@@ -147,7 +147,6 @@ pub struct RemoteObserveMemberExpectation {
     pub recipient: String,
     pub expected_grant_id: Option<GrantId>,
     pub expected_grant_authority: Option<GrantAuthority>,
-    pub expected_policy: Option<floe_context_contract::ConsumerPolicyAuthority>,
 }
 
 /// The whole reviewed bundle a remote Observe enable binds: exactly the

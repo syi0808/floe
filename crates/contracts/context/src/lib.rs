@@ -612,55 +612,6 @@ pub struct ContextIssue {
     pub reason: ContextIssueReason,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConsumerPolicyAuthority {
-    incarnation: Uuid,
-    epoch: NonZeroU64,
-}
-
-impl ConsumerPolicyAuthority {
-    pub fn from_parts(incarnation: Uuid, epoch: NonZeroU64) -> Option<Self> {
-        (!incarnation.is_nil()).then_some(Self { incarnation, epoch })
-    }
-
-    pub fn new() -> Self {
-        Self {
-            incarnation: Uuid::new_v4(),
-            epoch: NonZeroU64::MIN,
-        }
-    }
-
-    pub fn incarnation(self) -> Uuid {
-        self.incarnation
-    }
-
-    pub fn epoch(self) -> NonZeroU64 {
-        self.epoch
-    }
-
-    pub fn is_valid(self) -> bool {
-        !self.incarnation.is_nil()
-    }
-
-    pub fn advance(self) -> Option<Self> {
-        self.epoch
-            .get()
-            .checked_add(1)
-            .and_then(NonZeroU64::new)
-            .map(|epoch| Self {
-                incarnation: self.incarnation,
-                epoch,
-            })
-    }
-}
-
-impl Default for ConsumerPolicyAuthority {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContextDependency {
@@ -676,7 +627,6 @@ pub struct ContextDependency {
     purpose: GrantPurpose,
     consumer: GrantConsumer,
     processing: ProcessingRestriction,
-    consumer_policy: ConsumerPolicyAuthority,
     observation_id: Uuid,
     query_fingerprint: Vec<u8>,
     lease_invocation_id: Uuid,
@@ -700,7 +650,6 @@ impl ContextDependency {
         purpose: GrantPurpose,
         consumer: GrantConsumer,
         processing: ProcessingRestriction,
-        consumer_policy: ConsumerPolicyAuthority,
         observation_id: Uuid,
         query_fingerprint: Vec<u8>,
         lease_invocation_id: Uuid,
@@ -712,7 +661,6 @@ impl ContextDependency {
             || !grant_id.is_valid()
             || !grant_authority.is_valid()
             || !source_authority.is_valid()
-            || !consumer_policy.is_valid()
             || observation_id.is_nil()
             || lease_invocation_id.is_nil()
             || process_incarnation_id.is_nil()
@@ -794,7 +742,6 @@ impl ContextDependency {
             purpose,
             consumer,
             processing,
-            consumer_policy,
             observation_id,
             query_fingerprint,
             lease_invocation_id,
@@ -820,7 +767,6 @@ impl ContextDependency {
             self.purpose,
             self.consumer.clone(),
             self.processing.clone(),
-            self.consumer_policy,
             self.observation_id,
             self.query_fingerprint.clone(),
             self.lease_invocation_id,
@@ -870,9 +816,6 @@ impl ContextDependency {
     }
     pub fn processing(&self) -> &ProcessingRestriction {
         &self.processing
-    }
-    pub fn consumer_policy(&self) -> ConsumerPolicyAuthority {
-        self.consumer_policy
     }
     pub fn observation_id(&self) -> Uuid {
         self.observation_id
@@ -1161,7 +1104,6 @@ mod tests {
             GrantPurpose::Assistant,
             GrantConsumer::builtin("manager").unwrap(),
             processing,
-            ConsumerPolicyAuthority::new(),
             Uuid::new_v4(),
             b"synthetic-query".to_vec(),
             Uuid::new_v4(),
@@ -1183,6 +1125,10 @@ mod tests {
 
         let dependency = admit_dependency(source, ProcessingRestriction::LocalOnly).unwrap();
         assert_ne!(dependency.resources(), dependency.source_resources());
+        let mut obsolete_policy = serde_json::to_value(&dependency).unwrap();
+        obsolete_policy["consumer_policy"] =
+            serde_json::json!({"incarnation": Uuid::new_v4(), "epoch": 1});
+        assert!(serde_json::from_value::<ContextDependency>(obsolete_policy).is_err());
         let mut old_dependency = serde_json::to_value(dependency).unwrap();
         old_dependency.as_object_mut().unwrap().remove("source_authority");
         old_dependency.as_object_mut().unwrap().remove("source_resources");
@@ -1217,7 +1163,6 @@ mod tests {
             dependency.purpose,
             dependency.consumer.clone(),
             dependency.processing.clone(),
-            dependency.consumer_policy,
             dependency.observation_id,
             dependency.query_fingerprint.clone(),
             dependency.lease_invocation_id,

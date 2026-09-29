@@ -99,7 +99,6 @@ impl<Keys: VaultKeyProvider> NativeCalendarGrantReader for VaultNativeCalendarGr
             admission.source,
             connection.source_authority(),
             admission.scope,
-            admission.consumer_policy,
             consumer,
         ))
     }
@@ -516,12 +515,11 @@ async fn overview<Keys: VaultKeyProvider>(
     person_id: PersonId,
     connection: &floe_connections::SourceConnection,
     grant: Option<&floe_access::DataAccessGrant>,
-    vault: &EncryptedAgentVault<Keys>,
+    _vault: &EncryptedAgentVault<Keys>,
 ) -> Result<CalendarAccessOverview, AgentFailure> {
-    let (state, review_required, grant_id, grant_authority, consumer_policy) = match grant {
-        None => (CalendarAccessState::NeedsReview, true, None, None, None),
+    let (state, review_required, grant_id, grant_authority) = match grant {
+        None => (CalendarAccessState::NeedsReview, true, None, None),
         Some(grant) => {
-            let policy = vault.calendar_grant_policy_authority(grant.id()).await?;
             let state = match grant.state() {
                 floe_access::GrantState::Active => CalendarAccessState::Active,
                 floe_access::GrantState::Paused => CalendarAccessState::Paused,
@@ -532,7 +530,6 @@ async fn overview<Keys: VaultKeyProvider>(
                 grant.review_required(),
                 Some(grant.id()),
                 Some(grant.authority()),
-                Some(policy),
             )
         }
     };
@@ -555,7 +552,6 @@ async fn overview<Keys: VaultKeyProvider>(
         source_authority: connection.source_authority(),
         grant_id,
         grant_authority,
-        consumer_policy,
         state,
         review_required,
     })

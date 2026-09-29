@@ -396,7 +396,6 @@ mod tests {
             GrantPurpose::Assistant,
             consumer,
             ProcessingRestriction::LocalOnly,
-            admission.consumer_policy,
             observation_id,
             vec![1],
             Uuid::new_v4(),
@@ -408,7 +407,6 @@ mod tests {
         assert_eq!(dependency.grant_id(), grant.id());
         assert_eq!(dependency.grant_authority(), grant.authority());
         assert_eq!(dependency.source(), grant.source());
-        assert_eq!(dependency.consumer_policy(), admission.consumer_policy);
         assert_eq!(
             dependency.consumer().identifier(),
             BuiltinExpertKind::Schedule.package_id()

@@ -37,7 +37,7 @@ pub use application::{
     admit_remote_view_binding, admit_remote_view_source, apply_grant_mutation,
     authorize_grant, consume_release, create_grant, grant_unchanged, matches_review,
     people_read_grant, prepare_remote_view_grant_activation, preview_remote_view_grant,
-    producer_is_pinned, remote_dependency_binding_matches, remote_dependency_live,
+    producer_is_pinned, remote_dependency_live,
     remote_dependency_resource, remote_dependency_source_admits, remote_view_scope,
     remote_view_source, review_and_activate_remote_view_grant, review_remote_view_grant,
     source_matches_producer, subject_unchanged, valid_subject_fingerprint,
@@ -57,7 +57,7 @@ pub use application::{
 };
 pub use data_access_grant::{DataAccessGrant, GrantState, GrantTransitionError};
 pub use floe_context_contract::{
-    ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, ContextDependencyError,
+    ConnectionId, ConnectorId, ContextDependency, ContextDependencyError,
     DependencyCoverage, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory,
     GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, GrantValidationError,
     MAX_CONNECTOR_ID_BYTES, MAX_CONSUMER_ID_BYTES, MAX_CONSUMERS, MAX_CONTEXT_DEPENDENCIES,
@@ -86,7 +86,7 @@ pub use ports::remote_authorization::{
     RemoteOwnerPublicKey, RemotePairingChallenge,
 };
 pub use ports::remote_grants::{
-    BoxFuture, RemoteCallWindow, RemoteGrantBinding, RemoteGrantStore, RemoteGrantTransport,
+    BoxFuture, RemoteCallWindow, RemoteGrantStore, RemoteGrantTransport,
     RemotePairingIdentity, RemoteSourceQuery, SignedSourcePreview,
 };
 

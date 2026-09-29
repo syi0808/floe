@@ -113,7 +113,7 @@ mod tests {
 
     use chrono::{Duration, Utc};
     use floe_context_contract::{
-        ConnectionId, ConsumerPolicyAuthority, ContextDependency, ExecutionOwnerId, GrantAuthority,
+        ConnectionId, ContextDependency, ExecutionOwnerId, GrantAuthority,
         GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
         GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
@@ -180,7 +180,6 @@ mod tests {
             GrantPurpose::Assistant,
             GrantConsumer::builtin("assistant").unwrap(),
             ProcessingRestriction::LocalOnly,
-            ConsumerPolicyAuthority::new(),
             Uuid::new_v4(),
             vec![1],
             Uuid::new_v4(),

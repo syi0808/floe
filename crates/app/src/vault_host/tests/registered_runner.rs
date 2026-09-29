@@ -2148,13 +2148,13 @@ async fn registered_runner_missing_and_duplicate_supplied_implementations_do_not
 #[tokio::test]
 async fn registered_runner_extension_does_not_change_first_party_observe_policy() {
     let before = crate::first_party_observe::calendar_policy().unwrap();
-    let fingerprint = crate::first_party_observe::policy_fingerprint(&before).unwrap();
+    let fingerprint = crate::first_party_observe::policy_digest(&before).unwrap();
     let remote =
-        crate::first_party_observe::member_policy_fingerprint("gmail", "mail.communication")
+        crate::first_party_observe::member_policy_digest("gmail", "mail.communication")
             .unwrap();
     let attention = crate::first_party_observe::native_consumers("attention.macos").unwrap();
     let attention_fingerprint =
-        crate::first_party_observe::member_policy_fingerprint("attention.macos", "attention.macos")
+        crate::first_party_observe::member_policy_digest("attention.macos", "attention.macos")
             .unwrap();
     let person = PersonId::new();
     let registration = required_source_registration(required_source_runner);
@@ -2180,7 +2180,7 @@ async fn registered_runner_extension_does_not_change_first_party_observe_policy(
             .any(|consumer| consumer == "example.test.expert")
     );
     assert_eq!(
-        crate::first_party_observe::member_policy_fingerprint("attention.macos", "attention.macos")
+        crate::first_party_observe::member_policy_digest("attention.macos", "attention.macos")
             .unwrap(),
         attention_fingerprint
     );
@@ -2191,11 +2191,11 @@ async fn registered_runner_extension_does_not_change_first_party_observe_policy(
             .any(|consumer| consumer.identifier() == "example.test.expert")
     );
     assert_eq!(
-        crate::first_party_observe::policy_fingerprint(&after).unwrap(),
+        crate::first_party_observe::policy_digest(&after).unwrap(),
         fingerprint
     );
     assert_eq!(
-        crate::first_party_observe::member_policy_fingerprint("gmail", "mail.communication")
+        crate::first_party_observe::member_policy_digest("gmail", "mail.communication")
             .unwrap(),
         remote
     );

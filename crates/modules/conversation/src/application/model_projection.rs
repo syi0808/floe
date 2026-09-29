@@ -150,7 +150,7 @@ mod tests {
     };
     use floe_context::{DependencyAuthorization, DependencyResolver, EvidenceReader};
     use floe_context_contract::{
-        ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
+        ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority,
         GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
         GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
@@ -181,7 +181,6 @@ mod tests {
             GrantPurpose::Assistant,
             GrantConsumer::builtin("assistant").unwrap(),
             ProcessingRestriction::LocalOnly,
-            ConsumerPolicyAuthority::new(),
             Uuid::new_v4(),
             b"fingerprint".to_vec(),
             Uuid::new_v4(),

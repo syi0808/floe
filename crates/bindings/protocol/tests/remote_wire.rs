@@ -40,14 +40,13 @@ fn observe_member(view_id: &str, resource: &str) -> Value {
         "view_id": view_id,
         "resource": resource,
         "producer_fingerprint": "fp",
-        "policy_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "policy_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "source_authority": authority(),
         "connection_revision": 11,
         "provider_identity": "google:subject-a",
         "recipient": "floe.server:test",
         "expected_grant_id": null,
         "expected_grant_authority": null,
-        "expected_policy": null,
     })
 }
 
@@ -70,7 +69,7 @@ fn observe_review_and_echoed_enable_roundtrip() {
     let decoded: RemoteAccessRequestDto = serde_json::from_value(envelope(enable)).unwrap();
     assert_eq!(decoded.validate(), Ok(()));
 
-    // An incoherent grant triple never validates.
+    // An incoherent grant pair never validates.
     let mut broken = observe_member("mail.communication", &resource);
     broken["expected_grant_id"] = json!(Uuid::new_v4().to_string());
     let enable = json!({
@@ -102,11 +101,21 @@ fn observe_review_and_echoed_enable_roundtrip() {
     let bundle = decoded.reviewed_bundle.unwrap();
     assert_eq!(bundle.members.len(), 1);
     assert_eq!(bundle.members[0].view_id, "mail.communication");
-    assert_eq!(bundle.members[0].policy_fingerprint, "a".repeat(64));
+    assert_eq!(bundle.members[0].policy_digest, "a".repeat(64));
     assert_eq!(bundle.members[0].connection_revision, Some(11));
     assert_eq!(bundle.members[0].expected_grant_id, None);
+    let mut obsolete = observe_member("mail.communication", &resource);
+    obsolete["expected_policy"] = authority();
+    let enable = json!({
+        "kind": "connection_observe",
+        "connector_id": "gmail",
+        "connection_id": connection,
+        "enabled": true,
+        "expected": {"members": [obsolete]},
+    });
+    assert!(serde_json::from_value::<RemoteAccessRequestDto>(envelope(enable)).is_err());
     let mut invalid = observe_member("mail.communication", &resource);
-    invalid["policy_fingerprint"] = json!("A".repeat(64));
+    invalid["policy_digest"] = json!("A".repeat(64));
     let enable = json!({
         "kind": "connection_observe",
         "connector_id": "gmail",

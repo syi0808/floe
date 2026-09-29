@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, DataClass,
+    ConnectionId, ConnectorId, ContextDependency, DataClass,
     GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
     GrantValidationError, ResourceHandle, SourceAuthority,
 };
@@ -70,8 +70,8 @@ impl RecipientLineage {
 }
 
 /// One reviewed source scope entry: the exact source identity, resources,
-/// categories, operation, purpose, consumer, and grant/source/policy
-/// authorities the consent binds.
+/// categories, operation, purpose, consumer, and grant/source authorities the
+/// consent binds.
 ///
 /// Observation-specific values (observation id, fingerprints, invocation ids,
 /// timestamps) are deliberately absent: a fresh resume re-observes, and
@@ -91,7 +91,6 @@ pub struct ProcessingSourceScope {
     grant_id: GrantId,
     grant_authority: GrantAuthority,
     source_authority: SourceAuthority,
-    policy_authority: ConsumerPolicyAuthority,
 }
 
 impl ProcessingSourceScope {
@@ -108,7 +107,6 @@ impl ProcessingSourceScope {
         grant_id: GrantId,
         grant_authority: GrantAuthority,
         source_authority: SourceAuthority,
-        policy_authority: ConsumerPolicyAuthority,
     ) -> Result<Self, GrantValidationError> {
         grant_resources.sort();
         source_resources.sort();
@@ -125,7 +123,6 @@ impl ProcessingSourceScope {
             grant_id,
             grant_authority,
             source_authority,
-            policy_authority,
         };
         scope.validate()?;
         Ok(scope)
@@ -148,7 +145,6 @@ impl ProcessingSourceScope {
             dependency.grant_id(),
             dependency.grant_authority(),
             dependency.source_authority(),
-            dependency.consumer_policy(),
         )
     }
 
@@ -186,7 +182,6 @@ impl ProcessingSourceScope {
         if !self.grant_id.is_valid()
             || !self.grant_authority.is_valid()
             || !self.source_authority.is_valid()
-            || !self.policy_authority.is_valid()
         {
             return Err(GrantValidationError::InvalidState);
         }
@@ -241,9 +236,6 @@ impl ProcessingSourceScope {
         self.source_authority
     }
 
-    pub fn policy_authority(&self) -> ConsumerPolicyAuthority {
-        self.policy_authority
-    }
 }
 
 /// The typed recoverable requirement for one blocked external dispatch.
@@ -385,7 +377,7 @@ impl ProcessingRequirement {
 mod tests {
     use super::*;
     use crate::{
-        ConsumerPolicyAuthority, ContextDependency, ExecutionOwnerId, GrantAuthority, GrantId,
+        ContextDependency, ExecutionOwnerId, GrantAuthority, GrantId,
         GrantSourceBinding, SourceAuthority,
     };
     use chrono::{Duration, Utc};
@@ -420,7 +412,6 @@ mod tests {
                 recipient: "model.example".into(),
                 categories: vec![GrantDataCategory::Metadata],
             },
-            ConsumerPolicyAuthority::new(),
             Uuid::new_v4(),
             b"fingerprint".to_vec(),
             Uuid::new_v4(),
@@ -461,6 +452,10 @@ mod tests {
         let person_id = PersonId::new();
         let scope = ProcessingSourceScope::from_dependency(&dependency(person_id)).unwrap();
         assert_eq!(scope.grant_resources().len(), 1);
+        let mut obsolete_policy = serde_json::to_value(&scope).unwrap();
+        obsolete_policy["policy_authority"] =
+            serde_json::json!({"incarnation": Uuid::new_v4(), "epoch": 1});
+        assert!(serde_json::from_value::<ProcessingSourceScope>(obsolete_policy).is_err());
         let requirement = ProcessingRequirement::try_new(
             "model.example",
             "server-model",

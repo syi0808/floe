@@ -95,10 +95,6 @@ type SourceSnapshot struct {
 	Active   bool
 }
 
-type PolicyReference struct {
-	Incarnation string
-	Epoch       uint64
-}
 type GrantReference struct {
 	ID          string
 	Incarnation string
@@ -109,7 +105,6 @@ type Request struct {
 	Audience    string
 	Purpose     string
 	Consumer    string
-	Policy      PolicyReference
 	Source      SourceReference
 	Grant       GrantReference
 	Resources   []string
@@ -1144,7 +1139,6 @@ func (engine *Engine) makeChallenge(operation Operation, principal Principal, ke
 	expires := now.Add(ChallengeTTL)
 	wire := challengeWire{SchemaVersion: SchemaVersion, Operation: string(operation), ChallengeID: id, Nonce: encodeB64(nonce), KeyID: keyID, PersonID: principal.PersonID, ClientID: principal.ClientID, DeviceID: principal.DeviceID, Audience: request.Audience, Purpose: request.Purpose, Consumer: request.Consumer, IssuedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: expires.UnixMilli()}
 	if operation != OperationEnrollment {
-		wire.Policy = &policyWire{Incarnation: request.Policy.Incarnation, Epoch: request.Policy.Epoch}
 		wire.Source = &sourceWire{ConnectorID: source.ConnectorID, ConnectionID: source.ConnectionID, ExecutionOwner: source.ExecutionOwner, Incarnation: source.Incarnation, Epoch: source.Epoch}
 		wire.Grant = &grantWire{ID: request.Grant.ID, Incarnation: request.Grant.Incarnation, Epoch: request.Grant.Epoch}
 		wire.Resources = append([]string(nil), request.Resources...)
@@ -1181,7 +1175,6 @@ type challengeWire struct {
 	Audience        string      `json:"audience"`
 	Purpose         string      `json:"purpose"`
 	Consumer        string      `json:"consumer"`
-	Policy          *policyWire `json:"policy,omitempty"`
 	Source          *sourceWire `json:"source,omitempty"`
 	Grant           *grantWire  `json:"grant,omitempty"`
 	Resources       []string    `json:"resources,omitempty"`
@@ -1192,10 +1185,6 @@ type challengeWire struct {
 	AdmissionID     string      `json:"admission_id,omitempty"`
 	IssuedAtUnixMS  int64       `json:"issued_at_unix_ms"`
 	ExpiresAtUnixMS int64       `json:"expires_at_unix_ms"`
-}
-type policyWire struct {
-	Incarnation string `json:"incarnation"`
-	Epoch       uint64 `json:"epoch"`
 }
 type sourceWire struct {
 	ConnectorID    string `json:"connector_id"`
@@ -1289,16 +1278,13 @@ func validateWire(wire challengeWire) error {
 		return fmt.Errorf("%w: timestamps", ErrInvalid)
 	}
 	if wire.Operation == string(OperationEnrollment) {
-		if wire.Policy != nil || wire.Source != nil || wire.Grant != nil || len(wire.Resources) != 0 || wire.QueryDigest != "" || wire.MaxItems != 0 || wire.MaxBytes != 0 || wire.ResultDigest != "" || wire.AdmissionID != "" {
+		if wire.Source != nil || wire.Grant != nil || len(wire.Resources) != 0 || wire.QueryDigest != "" || wire.MaxItems != 0 || wire.MaxBytes != 0 || wire.ResultDigest != "" || wire.AdmissionID != "" {
 			return fmt.Errorf("%w: enrollment fields", ErrInvalid)
 		}
 		return nil
 	}
-	if wire.Policy == nil || wire.Source == nil || wire.Grant == nil {
+	if wire.Source == nil || wire.Grant == nil {
 		return fmt.Errorf("%w: missing authority references", ErrInvalid)
-	}
-	if err := validatePolicy(*wire.Policy); err != nil {
-		return err
 	}
 	if err := validateSource(*wire.Source); err != nil {
 		return err
@@ -1342,12 +1328,12 @@ func requestFromWire(wire challengeWire) Request {
 	var digest [32]byte
 	digestBytes, _ := decodeHexDigest(wire.QueryDigest)
 	copy(digest[:], digestBytes)
-	return Request{Audience: wire.Audience, Purpose: wire.Purpose, Consumer: wire.Consumer, Policy: PolicyReference{wire.Policy.Incarnation, wire.Policy.Epoch}, Source: SourceReference{wire.Source.ConnectorID, wire.Source.ConnectionID, wire.Source.ExecutionOwner, wire.Source.Incarnation, wire.Source.Epoch}, Grant: GrantReference{wire.Grant.ID, wire.Grant.Incarnation, wire.Grant.Epoch}, Resources: append([]string(nil), wire.Resources...), QueryDigest: digest, MaxItems: wire.MaxItems, MaxBytes: wire.MaxBytes}
+	return Request{Audience: wire.Audience, Purpose: wire.Purpose, Consumer: wire.Consumer, Source: SourceReference{wire.Source.ConnectorID, wire.Source.ConnectionID, wire.Source.ExecutionOwner, wire.Source.Incarnation, wire.Source.Epoch}, Grant: GrantReference{wire.Grant.ID, wire.Grant.Incarnation, wire.Grant.Epoch}, Resources: append([]string(nil), wire.Resources...), QueryDigest: digest, MaxItems: wire.MaxItems, MaxBytes: wire.MaxBytes}
 }
 
 func requestsEqual(a, b Request) bool {
 	return a.Audience == b.Audience && a.Purpose == b.Purpose && a.Consumer == b.Consumer &&
-		a.Policy == b.Policy && a.Source == b.Source && a.Grant == b.Grant &&
+		a.Source == b.Source && a.Grant == b.Grant &&
 		a.MaxItems == b.MaxItems && a.MaxBytes == b.MaxBytes &&
 		bytes.Equal(a.QueryDigest[:], b.QueryDigest[:]) && slicesEqual(a.Resources, b.Resources)
 }
@@ -1380,9 +1366,6 @@ func validateRequest(r Request) error {
 		return err
 	}
 	if err := validateBoundString(r.Consumer, MaxConsumerBytes); err != nil {
-		return err
-	}
-	if err := validatePolicy(policyWire{r.Policy.Incarnation, r.Policy.Epoch}); err != nil {
 		return err
 	}
 	if err := validateSource(sourceWire{r.Source.ConnectorID, r.Source.ConnectionID, r.Source.ExecutionOwner, r.Source.Incarnation, r.Source.Epoch}); err != nil {
@@ -1418,16 +1401,6 @@ func validPurpose(purpose string) bool {
 		return false
 	}
 }
-func validatePolicy(p policyWire) error {
-	if err := validateUUID(p.Incarnation); err != nil {
-		return fmt.Errorf("%w: policy", ErrInvalid)
-	}
-	if p.Epoch == 0 {
-		return fmt.Errorf("%w: policy epoch", ErrInvalid)
-	}
-	return nil
-}
-
 func validateSource(source sourceWire) error {
 	for _, field := range []struct {
 		value     string

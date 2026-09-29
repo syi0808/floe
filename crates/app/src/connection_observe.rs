@@ -1,5 +1,5 @@
 use floe_access::{GrantAuthority, GrantId, GrantState};
-use floe_context_contract::{ConsumerPolicyAuthority, SourceAuthority};
+use floe_context_contract::SourceAuthority;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConnectionObserveStatus {
@@ -16,7 +16,6 @@ pub struct ConnectionObserveMember {
     pub view_id: String,
     pub grant_id: GrantId,
     pub grant_authority: GrantAuthority,
-    pub consumer_policy: ConsumerPolicyAuthority,
     pub source_authority: SourceAuthority,
     pub state: GrantState,
     pub review_required: bool,
@@ -90,13 +89,12 @@ impl ConnectionObserveOverview {
     }
 
     pub(crate) fn from_calendar(value: crate::CalendarAccessOverview) -> Self {
-        let members = match (value.grant_id, value.grant_authority, value.consumer_policy) {
-            (Some(grant_id), Some(grant_authority), Some(consumer_policy)) => {
+        let members = match (value.grant_id, value.grant_authority) {
+            (Some(grant_id), Some(grant_authority)) => {
                 vec![ConnectionObserveMember {
                     view_id: "calendar.timeline".into(),
                     grant_id,
                     grant_authority,
-                    consumer_policy,
                     source_authority: value.source_authority,
                     state: match value.state {
                         crate::CalendarAccessState::Active => GrantState::Active,
@@ -142,7 +140,6 @@ mod tests {
             view_id: view.into(),
             grant_id: GrantId::new(),
             grant_authority: GrantAuthority::new(),
-            consumer_policy: ConsumerPolicyAuthority::new(),
             source_authority: SourceAuthority::new(),
             state,
             review_required: false,

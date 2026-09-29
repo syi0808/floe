@@ -420,7 +420,7 @@ fn request(
 fn archive_dependency(person_id: PersonId) -> floe_context::ContextDependency {
     use chrono::{Duration, Utc};
     use floe_access::{
-        ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
+        ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority,
         GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
         GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
@@ -445,7 +445,6 @@ fn archive_dependency(person_id: PersonId) -> floe_context::ContextDependency {
         GrantPurpose::Scheduling,
         GrantConsumer::builtin("manager").unwrap(),
         ProcessingRestriction::LocalOnly,
-        ConsumerPolicyAuthority::new(),
         Uuid::new_v4(),
         b"archive-query".to_vec(),
         Uuid::new_v4(),
@@ -1910,16 +1909,15 @@ fn interaction_target() -> floe_conversation::ReviewedTarget {
         connector_id: Some("floe.connector.calendar".into()),
         consumer: "floe.builtin.schedule".into(),
         purpose: "scheduling".into(),
+        source_revision: None,
         connection_revision: None,
         reviewed_producer_fingerprint: None,
         reviewed_native_subject: None,
         members: vec![floe_conversation::ReviewedBundleMember {
             member_id: "calendar.timeline".into(),
-            policy_fingerprint: "a".repeat(64),
+            policy_digest: "a".repeat(64),
             resource: "personal".into(),
-            source_revision: None,
             expected_grant: floe_conversation::ExpectedGrantState::Absent,
-            policy_authority: None,
         }],
     })
 }
@@ -2519,16 +2517,15 @@ fn vault_record(
             connector_id: Some("floe.connector.calendar".into()),
             consumer: "floe.builtin.schedule".into(),
             purpose: "scheduling".into(),
+            source_revision: None,
             connection_revision: None,
             reviewed_producer_fingerprint: None,
             reviewed_native_subject: None,
             members: vec![floe_conversation::ReviewedBundleMember {
                 member_id: "calendar.timeline".into(),
-                policy_fingerprint: "a".repeat(64),
+                policy_digest: "a".repeat(64),
                 resource: "personal".into(),
-                source_revision: None,
                 expected_grant: floe_conversation::ExpectedGrantState::Absent,
-                policy_authority: None,
             }],
         });
     let requirement_digest = floe_conversation::canonical_requirement_digest(&requirement).unwrap();

@@ -1135,7 +1135,7 @@ mod tests {
     #[test]
     fn child_resume_must_match_parent_projection_coverage() {
         use floe_context_contract::{
-            ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency,
+            ConnectionId, ConnectorId, ContextDependency,
             ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
             GrantOperation, GrantPurpose, GrantSourceBinding, ProcessingRestriction,
             ResourceHandle,
@@ -1169,7 +1169,6 @@ mod tests {
                 GrantPurpose::Assistant,
                 GrantConsumer::builtin("assistant").unwrap(),
                 ProcessingRestriction::LocalOnly,
-                ConsumerPolicyAuthority::new(),
                 Uuid::new_v4(),
                 b"fingerprint".to_vec(),
                 Uuid::new_v4(),

@@ -10,7 +10,7 @@ use floe_agent_contract::{
 };
 use floe_context_contract::{
     AttentionView, AuthorizedRead, CalendarContextView, ConnectionId, ConnectorId,
-    ConsumerPolicyAuthority, ContextDependency, ExecutionOwnerId, GrantAuthority, GrantConsumer,
+    ContextDependency, ExecutionOwnerId, GrantAuthority, GrantConsumer,
     GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding, HeldGrant,
     PeopleView, ProcessingRestriction, ResourceHandle, SourceAccessBlockers,
     SourceAccessRequirement, SourceAccessRequirementKind, SourceReadOutcome,
@@ -311,7 +311,6 @@ pub fn attention_fixture(
         GrantPurpose::Assistant,
         GrantConsumer::builtin("floe.builtin.focus-attention").unwrap(),
         ProcessingRestriction::LocalOnly,
-        ConsumerPolicyAuthority::new(),
         uuid::Uuid::new_v4(),
         vec![7; 32],
         uuid::Uuid::new_v4(),

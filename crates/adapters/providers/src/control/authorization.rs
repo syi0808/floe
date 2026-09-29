@@ -164,7 +164,6 @@ pub struct RemoteViewChallengeParts {
     pub audience: String,
     pub purpose: String,
     pub consumer: String,
-    pub policy: RemoteViewPolicyParts,
     pub source: RemoteViewSourceParts,
     pub grant: RemoteViewGrantParts,
     pub resources: Vec<String>,
@@ -175,13 +174,6 @@ pub struct RemoteViewChallengeParts {
     pub admission_id: String,
     pub issued_at_unix_ms: i64,
     pub expires_at_unix_ms: i64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteViewPolicyParts {
-    pub incarnation: String,
-    pub epoch: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -266,8 +258,6 @@ pub struct RemoteViewAuthorizationRequest<'value> {
     pub connection_id: &'value str,
     pub connection_revision: u64,
     pub resource: &'value str,
-    pub policy_incarnation: &'value str,
-    pub policy_epoch: u64,
     pub grant_id: &'value str,
     pub grant_incarnation: &'value str,
     pub grant_epoch: u64,
@@ -511,8 +501,6 @@ impl RemoteAuthorizationClient {
             || request.connection_revision == 0
             || request.resource.is_empty()
             || request.resource.len() > 256
-            || request.policy_incarnation.is_empty()
-            || request.policy_epoch == 0
             || request.grant_id.is_empty()
             || request.grant_incarnation.is_empty()
             || request.grant_epoch == 0
@@ -531,10 +519,6 @@ impl RemoteAuthorizationClient {
             "connection_id": request.connection_id,
             "connection_revision": request.connection_revision,
             "resources": [request.resource],
-            "policy": {
-                "incarnation": request.policy_incarnation,
-                "epoch": request.policy_epoch,
-            },
             "grant": {
                 "id": request.grant_id,
                 "incarnation": request.grant_incarnation,

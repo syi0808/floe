@@ -469,7 +469,6 @@ pub(crate) fn calendar_access_dto(
         source_authority: overview.source_authority,
         grant_id: overview.grant_id,
         grant_authority: overview.grant_authority,
-        consumer_policy: overview.consumer_policy,
         state: match overview.state {
             floe_app::CalendarAccessState::NeedsReview => "needs_review".into(),
             floe_app::CalendarAccessState::Paused => "paused".into(),

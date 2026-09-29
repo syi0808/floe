@@ -1,5 +1,5 @@
 use floe_access::{
-    ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority, GrantConsumer,
+    ConnectorId, ExecutionOwnerId, GrantAuthority, GrantConsumer,
     GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding,
     ProcessingRestriction, SourceAuthority,
 };
@@ -7,7 +7,6 @@ use floe_access::{DataAccessGrant, GrantState};
 use floe_agent_contract::CalendarProvider;
 use turso::transaction::TransactionBehavior;
 
-use super::calendar_grant_policy::CalendarGrantPolicy;
 use super::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16,7 +15,6 @@ pub struct CalendarGrantAdmission {
     pub authority: GrantAuthority,
     pub source: GrantSourceBinding,
     pub scope: GrantScope,
-    pub consumer_policy: ConsumerPolicyAuthority,
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
@@ -57,7 +55,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if grant.authority_owner() != self.vault_id {
             return Err(AgentFailure::AccessReviewRequired);
         }
-        let policy = self.calendar_grant_policy(grant.id()).await?;
         let logical_resource = floe_access::native_calendar_resource(connection_id)?;
         let requested_scope = GrantScope::try_new(
             vec![logical_resource],
@@ -86,7 +83,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             authority: grant.authority(),
             source: grant.source().clone(),
             scope: requested_scope,
-            consumer_policy: policy.consumer_policy,
         })
     }
 
@@ -125,8 +121,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(storage)?;
         let result = async {
-            self.ensure_calendar_grant_policy_schema(&transaction)
-                .await?;
             let found = self
                 .data_access_grants_for_source_in_transaction(&transaction, &source, 2)
                 .await?;
@@ -153,19 +147,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                             },
                         )
                         .await?;
-                    let consumer_policy =
-                        super::calendar_grant_policy::evolve_calendar_consumer_policy(
-                            None, None, &source, &scope,
-                        )?;
-                    self.upsert_calendar_grant_policy_in_transaction(
-                        &transaction,
-                        &CalendarGrantPolicy {
-                            grant_id: grant.id(),
-                            person_id: self.person_id,
-                            consumer_policy,
-                        },
-                    )
-                    .await?;
                     grant
                 }
                 [current] => {
@@ -177,16 +158,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     if current.scope().resources() != scope.resources() {
                         return Err(AgentFailure::AccessReviewRequired);
                     }
-                    let previous_policy = self
-                        .maybe_calendar_grant_policy_in_transaction(&transaction, current.id())
-                        .await?;
-                    let consumer_policy =
-                        super::calendar_grant_policy::evolve_calendar_consumer_policy(
-                            Some(current),
-                            previous_policy.as_ref(),
-                            &source,
-                            &scope,
-                        )?;
                     let grant = self
                         .mutate_data_access_grant_in_transaction(
                             &transaction,
@@ -197,15 +168,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                             },
                         )
                         .await?;
-                    self.upsert_calendar_grant_policy_in_transaction(
-                        &transaction,
-                        &CalendarGrantPolicy {
-                            grant_id: grant.id(),
-                            person_id: self.person_id,
-                            consumer_policy,
-                        },
-                    )
-                    .await?;
                     grant
                 }
                 _ => return Err(AgentFailure::VaultUnavailable),
@@ -222,7 +184,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     ///
     /// The caller supplies the grant id plus the GrantAuthority the Person
     /// reviewed. The grant must still belong to the exact current native
-    /// source; pause changes GrantAuthority only, never consumer policy.
+    /// source; pause changes GrantAuthority only.
     #[allow(clippy::too_many_arguments)]
     pub async fn pause_native_calendar_grant(
         &self,
@@ -317,31 +279,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    async fn data_access_grants_for_source_in_transaction(
-        &self,
-        transaction: &turso::transaction::Transaction<'_>,
-        source: &GrantSourceBinding,
-        limit: usize,
-    ) -> Result<Vec<DataAccessGrant>, AgentFailure> {
-        if limit == 0 || limit > 128 {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        self.ensure_access_grant_schema_transaction(transaction)
-            .await?;
-        let mut rows = transaction
-            .query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? AND connection_id = ? AND connector = ? AND execution_owner = ? ORDER BY access_epoch DESC, grant_id LIMIT ?", (self.person_id.to_string(), self.vault_id.to_string(), source.connection_id().as_str().to_owned(), source.connector().as_str().to_owned(), source.execution_owner().as_str().to_owned(), i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?))
-            .await
-            .map_err(storage)?;
-        let mut grants = Vec::new();
-        while let Some(row) = rows.next().await.map_err(storage)? {
-            let grant = super::access_grants::decode_grant(&row)?;
-            if grant.source() != source {
-                return Err(AgentFailure::VaultUnavailable);
-            }
-            grants.push(grant);
-        }
-        Ok(grants)
-    }
 }
 
 pub(super) fn is_native_provider(provider: CalendarProvider) -> bool {
@@ -558,8 +495,7 @@ mod tests {
             .await,
             Err(AgentFailure::AccessReviewRequired)
         );
-        let stable_policy = admission.consumer_policy;
-        // No-op review keeps the policy.
+        // No-op review keeps the standing grant authority.
         let reviewed = vault
             .review_native_calendar_grant(
                 "opaque-eventkit-connection",
@@ -580,8 +516,8 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(retry_admission.consumer_policy, stable_policy);
-        // Pause blocks reads; re-review reactivates with stable policy but a
+        assert_eq!(retry_admission.authority, admission.authority);
+        // Pause blocks reads; re-review reactivates with a
         // new GrantAuthority.
         let paused = vault
             .pause_native_calendar_grant(
@@ -626,7 +562,6 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(reactivated.consumer_policy, stable_policy);
         assert_ne!(reactivated.authority, admission.authority);
         vault
             .revoke_native_calendar_grant(
@@ -692,7 +627,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_source_rotation_preserves_standing_grant_and_policy() {
+    async fn native_source_rotation_preserves_standing_grant() {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let person_id = floe_kernel::PersonId::new();
@@ -732,13 +667,12 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(new.consumer_policy, old.consumer_policy);
         assert_eq!(new.grant_id, grant.id());
         assert_eq!(new.authority, old.authority);
     }
 
     #[tokio::test]
-    async fn failed_review_leaves_grant_and_policy_unchanged() {
+    async fn failed_review_leaves_grant_unchanged() {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let person_id = floe_kernel::PersonId::new();
@@ -794,7 +728,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn policy_identity_corruption_fails_closed_on_reopen() {
+    async fn grant_identity_corruption_fails_closed_on_reopen() {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let person_id = floe_kernel::PersonId::new();
@@ -814,7 +748,7 @@ mod tests {
             .unwrap();
         let raw = vault.database.connect().unwrap();
         raw.execute(
-            "UPDATE calendar_grant_policies SET person_id = ?",
+            "UPDATE data_access_grants SET person_id = ?",
             [floe_kernel::PersonId::new().to_string()],
         )
         .await
@@ -825,6 +759,34 @@ mod tests {
             EncryptedAgentVault::open(root.path(), person_id, keys).await,
             Err(AgentFailure::VaultUnavailable)
         ));
+    }
+
+    #[tokio::test]
+    async fn obsolete_policy_tables_are_rejected_on_reopen() {
+        for table in [
+            "calendar_grant_policy_schema",
+            "calendar_grant_policies",
+            "remote_view_grant_schema",
+            "remote_view_grant_mappings",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            let person_id = floe_kernel::PersonId::new();
+            let keys = TestKeys::default();
+            let vault = EncryptedAgentVault::create(root.path(), person_id, keys.clone())
+                .await
+                .unwrap();
+            let raw = vault.database.connect().unwrap();
+            raw.execute(&format!("CREATE TABLE {table} (id TEXT PRIMARY KEY)"), ())
+                .await
+                .unwrap();
+            drop(raw);
+            drop(vault);
+            assert!(matches!(
+                EncryptedAgentVault::open(root.path(), person_id, keys).await,
+                Err(AgentFailure::UnsupportedVersion)
+            ));
+        }
     }
 
     #[tokio::test]
@@ -907,24 +869,8 @@ mod tests {
             .unwrap()
     }
 
-    async fn stored_policy(
-        vault: &EncryptedAgentVault<TestKeys>,
-        grant_id: GrantId,
-    ) -> (String, i64) {
-        let raw = vault.database.connect().unwrap();
-        let mut rows = raw
-            .query(
-                "SELECT policy_incarnation, policy_epoch FROM calendar_grant_policies WHERE grant_id = ?",
-                [grant_id.as_uuid().to_string()],
-            )
-            .await
-            .unwrap();
-        let row = rows.next().await.unwrap().unwrap();
-        (row.get::<String>(0).unwrap(), row.get::<i64>(1).unwrap())
-    }
-
     #[tokio::test]
-    async fn fresh_review_creates_active_grant_and_policy() {
+    async fn fresh_review_creates_active_grant() {
         let (_root, vault, _) = fresh_vault().await;
         let authority = SourceAuthority::new();
         let calendars = vec!["home".to_owned()];
@@ -949,11 +895,9 @@ mod tests {
         .unwrap();
         assert_eq!(admission.grant_id, grant.id());
         assert_eq!(admission.authority, grant.authority());
-        let (incarnation, _) = stored_policy(&vault, grant.id()).await;
-        assert_eq!(
-            incarnation,
-            admission.consumer_policy.incarnation().to_string()
-        );
+        assert_eq!(admission.scope.resources(), grant.scope().resources());
+        assert_eq!(admission.scope.processing(), grant.scope().processing());
+        assert!(grant.scope().consumers().contains(&GrantConsumer::builtin("floe.builtin.schedule").unwrap()));
     }
 
     #[tokio::test]
@@ -1162,7 +1106,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resource_change_preserves_logical_grant_and_consumer_policy() {
+    async fn resource_change_preserves_logical_grant() {
         let (_root, vault, _) = fresh_vault().await;
         let authority = SourceAuthority::new();
         let fingerprint = "a".repeat(64);
@@ -1197,12 +1141,11 @@ mod tests {
         .unwrap();
         assert_eq!(after.grant_id, grant.id());
         assert_eq!(after.authority, grant.authority());
-        assert_eq!(after.consumer_policy, before.consumer_policy);
         assert_eq!(after.scope.resources(), before.scope.resources());
     }
 
     #[tokio::test]
-    async fn consumer_change_advances_consumer_policy() {
+    async fn consumer_change_advances_grant_authority() {
         let (_root, vault, _) = fresh_vault().await;
         let authority = SourceAuthority::new();
         let fingerprint = "a".repeat(64);
@@ -1247,11 +1190,12 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_ne!(after.consumer_policy, before.consumer_policy);
+        assert_eq!(after.authority, updated.authority());
+        assert_ne!(after.authority, before.authority);
     }
 
     #[tokio::test]
-    async fn missing_policy_row_for_existing_grant_fails_closed() {
+    async fn missing_grant_row_for_reviewed_expectation_fails_closed() {
         let (_root, vault, _) = fresh_vault().await;
         let authority = SourceAuthority::new();
         let calendars = vec!["home".to_owned()];
@@ -1266,7 +1210,7 @@ mod tests {
         .await;
         let raw = vault.database.connect().unwrap();
         raw.execute(
-            "DELETE FROM calendar_grant_policies WHERE grant_id = ?",
+            "DELETE FROM data_access_grants WHERE grant_id = ?",
             [grant.id().as_uuid().to_string()],
         )
         .await
@@ -1294,12 +1238,12 @@ mod tests {
                     Some((grant.id(), grant.authority())),
                 )
                 .await,
-            Err(AgentFailure::VaultUnavailable)
+            Err(AgentFailure::Conflict)
         );
     }
 
     #[tokio::test]
-    async fn corrupt_policy_payload_fails_closed_on_review() {
+    async fn corrupt_grant_payload_fails_closed_on_review() {
         let (_root, vault, _) = fresh_vault().await;
         let authority = SourceAuthority::new();
         let calendars = vec!["home".to_owned()];
@@ -1314,7 +1258,7 @@ mod tests {
         .await;
         let raw = vault.database.connect().unwrap();
         raw.execute(
-            "UPDATE calendar_grant_policies SET payload = 'not-json' WHERE grant_id = ?",
+            "UPDATE data_access_grants SET payload = 'not-json' WHERE grant_id = ?",
             [grant.id().as_uuid().to_string()],
         )
         .await
@@ -1335,7 +1279,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pause_alone_preserves_consumer_policy() {
+    async fn pause_alone_preserves_grant_scope() {
         let (_root, vault, _) = fresh_vault().await;
         let authority = SourceAuthority::new();
         let calendars = vec!["home".to_owned()];
@@ -1348,7 +1292,7 @@ mod tests {
             &fingerprint,
         )
         .await;
-        let before = stored_policy(&vault, grant.id()).await;
+        let before = grant.scope().clone();
         let paused = vault
             .pause_native_calendar_grant(
                 grant.id(),
@@ -1360,7 +1304,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(stored_policy(&vault, grant.id()).await, before);
+        assert_eq!(paused.scope(), &before);
         let reactivated = vault
             .review_native_calendar_grant(
                 "opaque-eventkit-connection",
@@ -1371,12 +1315,12 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(stored_policy(&vault, grant.id()).await, before);
+        assert_eq!(reactivated.scope(), &before);
         assert_ne!(reactivated.authority(), grant.authority());
     }
 
     #[tokio::test]
-    async fn old_dependency_fails_after_grant_and_policy_change() {
+    async fn old_dependency_fails_after_grant_change() {
         let (_root, vault, person_id) = fresh_vault().await;
         let authority = SourceAuthority::new();
         let calendars = vec!["home".to_owned()];
@@ -1413,7 +1357,6 @@ mod tests {
             GrantPurpose::Assistant,
             GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
             ProcessingRestriction::LocalOnly,
-            admission.consumer_policy,
             Uuid::new_v4(),
             vec![1],
             Uuid::new_v4(),
@@ -1469,7 +1412,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(current.grant_id, rotated.id());
-        assert_eq!(current.consumer_policy, old_dependency.consumer_policy());
+        assert_eq!(current.authority, rotated.authority());
         assert_eq!(
             floe_access::validate_grant_dependency(&rotated, &old_dependency),
             Err(AgentFailure::PolicyDenied)
@@ -1477,7 +1420,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fresh_native_grant_and_policy_survive_reopen() {
+    async fn fresh_native_grant_survives_reopen() {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let person_id = floe_kernel::PersonId::new();
@@ -1485,7 +1428,7 @@ mod tests {
         let authority = SourceAuthority::new();
         let calendars = vec!["home".to_owned()];
         let fingerprint = "a".repeat(64);
-        let (grant_id, grant_authority, consumer_policy) = {
+        let (grant_id, grant_authority) = {
             let vault = EncryptedAgentVault::create(root.path(), person_id, keys.clone())
                 .await
                 .unwrap();
@@ -1508,7 +1451,7 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(admission.grant_id, grant.id());
-            (grant.id(), grant.authority(), admission.consumer_policy)
+            (grant.id(), grant.authority())
         };
         let vault = EncryptedAgentVault::open(root.path(), person_id, keys)
             .await
@@ -1525,6 +1468,5 @@ mod tests {
         .unwrap();
         assert_eq!(admission.grant_id, grant_id);
         assert_eq!(admission.authority, grant_authority);
-        assert_eq!(admission.consumer_policy, consumer_policy);
     }
 }

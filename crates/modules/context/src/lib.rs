@@ -118,7 +118,7 @@ pub use application::tools::{
 /// The authorization input Context's own coverage entry points take.
 pub use floe_access::{
     DependencyAuthorization, DependencyLiveness, DependencyResolver, RemoteCallWindow,
-    RemoteGrantBinding, RemoteGrantStore, RemoteGrantTransport, RemotePairingIdentity,
+    RemoteGrantStore, RemoteGrantTransport, RemotePairingIdentity,
     RemoteSourceQuery, SignedSourcePreview,
 };
 pub use floe_agent_contract::{HistoryMessageSize, bounded_history_start};

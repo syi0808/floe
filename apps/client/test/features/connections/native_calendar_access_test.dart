@@ -32,7 +32,6 @@ void main() {
       'granted_resources': ['home'],
       'grant_id': '00000000-0000-4000-8000-000000000010',
       'grant_authority': {'incarnation': 'fixture', 'access_epoch': 1},
-      'consumer_policy': {'incarnation': 'policy', 'epoch': 1},
       'state': 'active',
       'review_required': false,
     });
@@ -62,7 +61,16 @@ void main() {
         ...overviewJson(),
         'grant_id': '00000000-0000-4000-8000-000000000010',
         'grant_authority': {'incarnation': 'fixture', 'access_epoch': 1},
-        'consumer_policy': {'incarnation': 'policy', 'epoch': 1},
+      }),
+      throwsFormatException,
+    );
+  });
+
+  test('overview rejects obsolete policy fields', () {
+    expect(
+      () => NativeCalendarAccessOverview.fromJson({
+        ...overviewJson(),
+        'consumer_policy': {'incarnation': 'old', 'epoch': 1},
       }),
       throwsFormatException,
     );

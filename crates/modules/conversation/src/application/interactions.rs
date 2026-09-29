@@ -496,16 +496,15 @@ mod tests {
             connector_id: Some("floe.connector.calendar".into()),
             consumer: "floe.builtin.schedule".into(),
             purpose: "scheduling".into(),
+            source_revision: None,
             connection_revision: None,
             reviewed_producer_fingerprint: None,
             reviewed_native_subject: None,
             members: vec![crate::ReviewedBundleMember {
                 member_id: "calendar.timeline".into(),
-                policy_fingerprint: "a".repeat(64),
+                policy_digest: "a".repeat(64),
                 resource: "personal".into(),
-                source_revision: None,
                 expected_grant: crate::ExpectedGrantState::Absent,
-                policy_authority: None,
             }],
         })
     }

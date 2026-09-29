@@ -523,7 +523,7 @@ mod tests {
     async fn background_dispatch_ports_fail_closed_when_consulted() {
         use floe_access::{DependencyResolver, ModelDispatchRecipientAuthority};
         use floe_context_contract::{
-            ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency,
+            ConnectionId, ConnectorId, ContextDependency,
             ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
             GrantOperation, GrantPurpose, GrantSourceBinding, ProcessingRestriction,
             ResourceHandle,
@@ -551,7 +551,6 @@ mod tests {
             GrantPurpose::Assistant,
             GrantConsumer::builtin("assistant").unwrap(),
             ProcessingRestriction::LocalOnly,
-            ConsumerPolicyAuthority::new(),
             Uuid::new_v4(),
             b"fingerprint".to_vec(),
             Uuid::new_v4(),

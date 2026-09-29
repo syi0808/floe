@@ -334,7 +334,6 @@ impl Fixture {
             GrantPurpose::Assistant,
             consumer,
             ProcessingRestriction::LocalOnly,
-            admission.consumer_policy,
             evidence_id,
             vec![1],
             Uuid::new_v4(),
@@ -1473,7 +1472,6 @@ impl GovernedFocus {
             GrantPurpose::Assistant,
             self.consumer.clone(),
             ProcessingRestriction::LocalOnly,
-            self.admission.consumer_policy,
             observation_id,
             vec![1],
             Uuid::new_v4(),
@@ -1619,7 +1617,7 @@ async fn governed_focus_proposal_publishes_under_current_grant_and_policy_with_s
 }
 
 #[tokio::test]
-async fn governed_focus_proposal_rejects_a_stale_consumer_policy() {
+async fn governed_focus_proposal_rejects_a_stale_grant_authority() {
     let mut fixture = GovernedFocus::new().await;
     let (_, reference) = fixture.commit_evidence().await;
     assert_eq!(fixture.inspect(&reference).await.unwrap(), None);
@@ -1658,7 +1656,7 @@ async fn governed_focus_proposal_rejects_a_stale_consumer_policy() {
         )
         .await
         .unwrap();
-    assert_ne!(fresh.consumer_policy, fixture.admission.consumer_policy);
+    assert_eq!(fresh.authority, rereviewed.authority());
     assert_eq!(
         fixture.inspect(&reference).await,
         Err(AgentFailure::PolicyDenied)

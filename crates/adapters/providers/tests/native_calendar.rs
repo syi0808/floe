@@ -261,7 +261,6 @@ async fn native_action_source_validation_rejects_wrong_subject() {
         GrantPurpose::Assistant,
         consumer,
         ProcessingRestriction::LocalOnly,
-        floe_context_contract::ConsumerPolicyAuthority::new(),
         uuid::Uuid::new_v4(),
         vec![1],
         uuid::Uuid::new_v4(),

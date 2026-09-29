@@ -61,7 +61,6 @@ pub fn calendar_dependency(
         *purpose,
         consumer.clone(),
         admission.processing().clone(),
-        admission.consumer_policy(),
         observation_id,
         query_fingerprint,
         invocation_id,
@@ -76,7 +75,7 @@ pub fn calendar_dependency(
 mod tests {
     use super::*;
     use floe_context_contract::{
-        ConnectorId, ConsumerPolicyAuthority, GrantAuthority, GrantConsumer, GrantDataCategory,
+        ConnectorId, GrantAuthority, GrantConsumer, GrantDataCategory,
         GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding,
         ProcessingRestriction, ResourceHandle, SourceAuthority,
     };
@@ -108,7 +107,6 @@ mod tests {
             source,
             SourceAuthority::new(),
             scope,
-            ConsumerPolicyAuthority::new(),
             consumer,
             ProcessingRestriction::LocalOnly,
         );
@@ -174,7 +172,6 @@ mod tests {
             dependency.purpose(),
             dependency.consumer().clone(),
             dependency.processing().clone(),
-            dependency.consumer_policy(),
             dependency.observation_id(),
             b"different-query".to_vec(),
             dependency.lease_invocation_id(),

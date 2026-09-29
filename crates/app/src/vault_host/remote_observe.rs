@@ -2,8 +2,8 @@
 //!
 //! Enabling Observe over a remote connection mutates authority, so it binds
 //! the exact bundle the Person reviewed: every canonical policy view with
-//! its live descriptor fields, grant expectation (or reviewed absence) and
-//! recorded policy. The owner re-probes live and compares every field
+//! its live descriptor fields and grant expectation (or reviewed absence).
+//! The owner re-probes live and compares every field
 //! inside the existing atomic activation; a changed member, a new or
 //! duplicate member, or a live grant outside the reviewed set refuses the
 //! enable instead of widening it.
@@ -47,7 +47,7 @@ pub(crate) fn validate_observe_identity(
 }
 
 /// The reviewed bundle shape: 1-8 members in canonical view order, coherent
-/// grant/policy pairs, valid authorities, no blank identifiers.
+/// grant pairs, valid authorities, no blank identifiers.
 pub(crate) fn validate_observe_expectation(
     expected: &crate::RemoteConnectionObserveExpectation,
 ) -> Result<(), AgentFailure> {
@@ -56,9 +56,9 @@ pub(crate) fn validate_observe_expectation(
     }
     let mut previous: Option<&str> = None;
     for member in &expected.members {
-        if member.policy_fingerprint.len() != 64
+        if member.policy_digest.len() != 64
             || !member
-                .policy_fingerprint
+                .policy_digest
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         {
@@ -86,14 +86,9 @@ pub(crate) fn validate_observe_expectation(
         {
             return Err(AgentFailure::InvalidInput);
         }
-        match (
-            &member.expected_grant_id,
-            &member.expected_grant_authority,
-            &member.expected_policy,
-        ) {
-            (None, None, None) => {}
-            (Some(id), Some(authority), Some(policy))
-                if id.is_valid() && authority.is_valid() && policy.is_valid() => {}
+        match (&member.expected_grant_id, &member.expected_grant_authority) {
+            (None, None) => {}
+            (Some(id), Some(authority)) if id.is_valid() && authority.is_valid() => {}
             _ => return Err(AgentFailure::InvalidInput),
         }
         if previous.is_some_and(|previous| previous >= member.view_id.as_str()) {
@@ -101,11 +96,16 @@ pub(crate) fn validate_observe_expectation(
         }
         previous = Some(member.view_id.as_str());
     }
+    if expected.members.iter().any(|member| {
+        member.source_authority != expected.members[0].source_authority
+    }) {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
     Ok(())
 }
 
 /// Read the reviewable bundle without mutating: probe each canonical member
-/// and attach the live grant (or reviewed absence) and recorded policy.
+/// and attach the live grant (or reviewed absence).
 /// Duplicate live authority for one member fails instead of presenting an
 /// ambiguous snapshot.
 pub(crate) async fn review_bundle<Keys, Transport>(
@@ -187,7 +187,7 @@ where
             .iter()
             .find(|member| member.view_id == policy.view_id)
             .ok_or(AgentFailure::InvalidInput)?;
-        if reviewed.policy_fingerprint != crate::first_party_observe::policy_fingerprint(policy)? {
+        if reviewed.policy_digest != crate::first_party_observe::policy_digest(policy)? {
             return Err(AgentFailure::AccessReviewRequired);
         }
     }
@@ -233,7 +233,19 @@ where
         }
     }
     if !activations.is_empty() {
-        ctx.vault.activate_remote_view_grants(activations).await?;
+        ctx.vault
+            .activate_access_grants(
+                activations
+                    .into_iter()
+                    .map(|activation| floe_vault::AccessGrantActivation {
+                        grant_id: activation.grant_id,
+                        expected: activation.expected,
+                        source: activation.source,
+                        scope: activation.scope,
+                    })
+                    .collect(),
+            )
+            .await?;
     }
     Ok(())
 }
@@ -278,7 +290,7 @@ pub(crate) async fn disable_bundle<Keys: VaultKeyProvider>(
                     .await?;
             } else {
                 vault
-                    .pause_remote_view_grant(grant.id(), grant.authority())
+                    .pause_data_access_grant(grant.id(), grant.authority())
                     .await?;
             }
         }
@@ -395,27 +407,14 @@ where
         &resource,
     )
     .await?;
-    let (expected_grant_id, expected_grant_authority, expected_policy) = match live.as_slice() {
-        [] => (None, None, None),
-        [grant] => {
-            let (recorded, policy) = ctx
-                .vault
-                .remote_view_grant_policy(
-                    policy.view_id,
-                    ctx.connector_id,
-                    ctx.connection_id,
-                )
-                .await?;
-            if recorded != grant.id() {
-                return Err(AgentFailure::AccessReviewRequired);
-            }
-            (Some(grant.id()), Some(grant.authority()), Some(policy))
-        }
+    let (expected_grant_id, expected_grant_authority) = match live.as_slice() {
+        [] => (None, None),
+        [grant] => (Some(grant.id()), Some(grant.authority())),
         _ => return Err(AgentFailure::Conflict),
     };
     Ok(crate::RemoteObserveMemberExpectation {
         view_id: policy.view_id.to_owned(),
-        policy_fingerprint: crate::first_party_observe::policy_fingerprint(policy)?,
+        policy_digest: crate::first_party_observe::policy_digest(policy)?,
         resource,
         producer_fingerprint: preview.producer.fingerprint,
         source_authority: preview.reference.source_authority,
@@ -424,7 +423,6 @@ where
         recipient: preview.producer.audience,
         expected_grant_id,
         expected_grant_authority,
-        expected_policy,
     })
 }
 
@@ -465,7 +463,6 @@ where
             provider_identity: &member.provider_identity,
             recipient: &member.recipient,
             expected_grant,
-            expected_policy: member.expected_policy,
         },
         true,
         true,
@@ -562,6 +559,7 @@ mod tests {
         connector_id: String,
         revision: Mutex<u64>,
         authority: Mutex<SourceAuthority>,
+        second_view_authority: Mutex<Option<SourceAuthority>>,
         source_resources: Mutex<Vec<String>>,
         provider_identity: Mutex<String>,
         view_probes: Mutex<u64>,
@@ -577,7 +575,14 @@ mod tests {
 
         fn view_preview(&self, view_id: &str, resource: &str) -> SignedSourcePreview {
             *self.view_probes.lock().unwrap() += 1;
-            let authority = *self.authority.lock().unwrap();
+            let authority = if view_id == "life.logistics" {
+                self.second_view_authority
+                    .lock()
+                    .unwrap()
+                    .unwrap_or(*self.authority.lock().unwrap())
+            } else {
+                *self.authority.lock().unwrap()
+            };
             let revision = *self.revision.lock().unwrap();
             let descriptor = serde_json::json!({
                 "v": 1,
@@ -678,6 +683,7 @@ mod tests {
                 connector_id: "gmail".into(),
                 revision: Mutex::new(11),
                 authority: Mutex::new(SourceAuthority::new()),
+                second_view_authority: Mutex::new(None),
                 source_resources: Mutex::new(vec!["calendar-a".into()]),
                 provider_identity: Mutex::new("google:subject-a".into()),
                 view_probes: Mutex::new(0),
@@ -743,6 +749,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn divergent_member_source_authority_refuses_bundle_review() {
+        let fixture = Fixture::open().await;
+        *fixture.transport.second_view_authority.lock().unwrap() = Some(SourceAuthority::new());
+        let cancellation = floe_execution::Cancellation::default();
+        let window = window(&cancellation);
+        let person = fixture.person_id.to_string();
+        let context = fixture.ctx(&window, fixture.pairing(&person), None);
+        assert_eq!(
+            review_bundle(&context, &fixture.transport).await,
+            Err(AgentFailure::AccessReviewRequired)
+        );
+        assert!(fixture.live_grants().await.is_empty());
+    }
+
+    #[tokio::test]
     async fn review_then_enable_binds_gmail_bundle_atomically() {
         let fixture = Fixture::open().await;
         let cancellation = floe_execution::Cancellation::default();
@@ -783,7 +804,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn calendar_resource_edit_keeps_logical_grant_and_policy_without_automatic_review() {
+    async fn calendar_resource_edit_keeps_logical_grant_without_automatic_review() {
         let fixture = Fixture::open_calendar().await;
         let cancellation = floe_execution::Cancellation::default();
         let window = window(&cancellation);
@@ -803,15 +824,6 @@ mod tests {
             before[0].scope().categories(),
             &[GrantDataCategory::Metadata, GrantDataCategory::Content]
         );
-        let (_, policy_before) = fixture
-            .vault
-            .remote_view_grant_policy(
-                "calendar.timeline",
-                "calendar.google",
-                &fixture.connection_id,
-            )
-            .await
-            .unwrap();
         *fixture.transport.source_resources.lock().unwrap() =
             vec!["calendar-a".into(), "calendar-b".into()];
         *fixture.transport.revision.lock().unwrap() += 1;
@@ -831,19 +843,9 @@ mod tests {
         );
         let next = review_bundle(&ctx, &fixture.transport).await.unwrap();
         assert_eq!(next.members[0].expected_grant_id, Some(before[0].id()));
-        assert_eq!(next.members[0].expected_policy, Some(policy_before));
+        assert_eq!(next.members[0].policy_digest, reviewed.members[0].policy_digest);
         assert_ne!(next.members[0].source_authority, reviewed.members[0].source_authority);
         assert_eq!(fixture.live_grants().await.len(), 1);
-        let (_, policy_after) = fixture
-            .vault
-            .remote_view_grant_policy(
-                "calendar.timeline",
-                "calendar.google",
-                &fixture.connection_id,
-            )
-            .await
-            .unwrap();
-        assert_eq!(policy_after, policy_before);
         let legacy = fixture.ctx(&window, fixture.pairing(&person), Some("calendar-a"));
         assert!(matches!(
             review_bundle(&legacy, &fixture.transport).await,
@@ -941,16 +943,15 @@ mod tests {
         .unwrap();
         let concurrent = fixture
             .vault
-            .review_and_activate_remote_view_grant(
-                &reviewed.members[0].view_id,
-                floe_access::GrantId::new(),
-                None,
+            .activate_access_grants(vec![floe_vault::AccessGrantActivation {
+                grant_id: floe_access::GrantId::new(),
+                expected: None,
                 source,
                 scope,
-                None,
-            )
+            }])
             .await
-            .unwrap();
+            .unwrap()
+            .remove(0);
 
         assert_eq!(
             enable_bundle(&ctx, &fixture.transport, &reviewed).await,

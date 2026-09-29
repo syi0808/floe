@@ -1,22 +1,17 @@
 use floe_access::GrantConsumer;
 use floe_agent_contract::AgentFailure;
-use floe_context_contract::{GrantDataCategory, GrantPurpose};
+use floe_context_contract::{GrantDataCategory, GrantOperation, GrantPurpose, ProcessingRestriction};
 use floe_kernel::PersonId;
 use sha2::{Digest, Sha256};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SourceProcessingPolicy {
-    LocalOnly,
-    PairedSourceRecipient,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FirstPartyObservePolicy {
     pub view_id: &'static str,
     pub consumers: Vec<GrantConsumer>,
     pub categories: Vec<GrantDataCategory>,
+    pub operation: GrantOperation,
     pub purpose: GrantPurpose,
-    pub source_processing: SourceProcessingPolicy,
+    pub processing: ProcessingRestriction,
 }
 
 pub(crate) fn trusted_shipped_consumers(
@@ -44,7 +39,6 @@ pub(crate) fn trusted_shipped_consumers(
 fn policy(
     view_id: &'static str,
     categories: Vec<GrantDataCategory>,
-    source_processing: SourceProcessingPolicy,
 ) -> Result<FirstPartyObservePolicy, AgentFailure> {
     let mut consumers = Vec::new();
     if floe_context::manager_direct_remote_view(view_id) {
@@ -59,12 +53,13 @@ fn policy(
         view_id,
         consumers,
         categories,
+        operation: GrantOperation::Read,
         purpose: GrantPurpose::Assistant,
-        source_processing,
+        processing: ProcessingRestriction::LocalOnly,
     })
 }
 
-pub(crate) fn policy_fingerprint(policy: &FirstPartyObservePolicy) -> Result<String, AgentFailure> {
+pub(crate) fn policy_digest(policy: &FirstPartyObservePolicy) -> Result<String, AgentFailure> {
     let mut consumers: Vec<&str> = policy
         .consumers
         .iter()
@@ -82,24 +77,23 @@ pub(crate) fn policy_fingerprint(policy: &FirstPartyObservePolicy) -> Result<Str
         return Err(AgentFailure::InvalidInput);
     }
     let representation = serde_json::to_vec(&(
-        "floe.first-party-observe-policy.sha256.v1",
+        "floe.first-party-observe-policy.sha256.v2",
         policy.view_id,
         consumers,
         categories,
+        policy.operation,
         policy.purpose,
-        match policy.source_processing {
-            SourceProcessingPolicy::LocalOnly => "local-only",
-            SourceProcessingPolicy::PairedSourceRecipient => "paired-source-recipient",
-        },
+        &policy.processing,
     ))
     .map_err(|_| AgentFailure::InvalidInput)?;
     if representation.len() > 4096 {
         return Err(AgentFailure::InvalidInput);
     }
-    Ok(format!("{:x}", Sha256::digest(representation)))
+    let bytes: [u8; 32] = Sha256::digest(representation).into();
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-pub(crate) fn member_policy_fingerprint(
+pub(crate) fn member_policy_digest(
     connector_id: &str,
     view_id: &str,
 ) -> Result<String, AgentFailure> {
@@ -107,7 +101,7 @@ pub(crate) fn member_policy_fingerprint(
         .into_iter()
         .find(|policy| policy.view_id == view_id)
     {
-        return policy_fingerprint(&policy);
+        return policy_digest(&policy);
     }
     let native_view = match connector_id {
         floe_access::ATTENTION_CONNECTOR => floe_access::ATTENTION_CONNECTOR,
@@ -119,7 +113,7 @@ pub(crate) fn member_policy_fingerprint(
         return Err(AgentFailure::InvalidInput);
     }
     if view_id == "calendar.timeline" {
-        return policy_fingerprint(&calendar_policy()?);
+        return policy_digest(&calendar_policy()?);
     }
     let mut consumers = native_consumers(connector_id)?
         .into_iter()
@@ -128,12 +122,13 @@ pub(crate) fn member_policy_fingerprint(
         .map_err(|_| AgentFailure::InvalidInput)?;
     consumers.sort();
     consumers.dedup();
-    policy_fingerprint(&FirstPartyObservePolicy {
+    policy_digest(&FirstPartyObservePolicy {
         view_id: native_view,
         consumers,
         categories: vec![GrantDataCategory::Derived],
+        operation: GrantOperation::Read,
         purpose: GrantPurpose::Assistant,
-        source_processing: SourceProcessingPolicy::LocalOnly,
+        processing: ProcessingRestriction::LocalOnly,
     })
 }
 
@@ -141,7 +136,6 @@ pub(crate) fn calendar_policy() -> Result<FirstPartyObservePolicy, AgentFailure>
     let mut policy = policy(
         "calendar.timeline",
         vec![GrantDataCategory::Metadata, GrantDataCategory::Content],
-        SourceProcessingPolicy::LocalOnly,
     )?;
     policy.consumers = trusted_shipped_consumers("calendar.timeline")?;
     Ok(policy)
@@ -160,22 +154,13 @@ pub(crate) fn remote_policies(
             &[("work.context", GrantDataCategory::Derived)]
         }
         "home_assistant.states" => &[("life.logistics", GrantDataCategory::Derived)],
-        "calendar.google" | "calendar.microsoft" => {
-            return Ok(vec![FirstPartyObservePolicy {
-                source_processing: SourceProcessingPolicy::PairedSourceRecipient,
-                ..calendar_policy()?
-            }]);
-        }
+        "calendar.google" | "calendar.microsoft" => return Ok(vec![calendar_policy()?]),
         _ => return Ok(Vec::new()),
     };
     views
         .iter()
         .map(|(view_id, category)| {
-            policy(
-                view_id,
-                vec![*category],
-                SourceProcessingPolicy::PairedSourceRecipient,
-            )
+            policy(view_id, vec![*category])
         })
         .collect()
 }
@@ -200,7 +185,7 @@ pub(crate) async fn remote_policies_for_target<Keys: floe_vault::VaultKeyProvide
     Ok(policies)
 }
 
-pub(crate) async fn remote_member_policy_fingerprint_for_target<
+pub(crate) async fn remote_member_policy_digest_for_target<
     Keys: floe_vault::VaultKeyProvider,
 >(
     vault: &floe_vault::EncryptedAgentVault<Keys>,
@@ -219,7 +204,7 @@ pub(crate) async fn remote_member_policy_fingerprint_for_target<
     .into_iter()
     .find(|policy| policy.view_id == view_id)
     .ok_or(AgentFailure::InvalidInput)?;
-    policy_fingerprint(&policy)
+    policy_digest(&policy)
 }
 
 pub(crate) fn native_consumers(connector_id: &str) -> Result<Vec<String>, AgentFailure> {
@@ -269,7 +254,7 @@ pub(crate) async fn native_consumers_for_target<Keys: floe_vault::VaultKeyProvid
     Ok(consumers)
 }
 
-pub(crate) async fn native_member_policy_fingerprint_for_target<
+pub(crate) async fn native_member_policy_digest_for_target<
     Keys: floe_vault::VaultKeyProvider,
 >(
     vault: &floe_vault::EncryptedAgentVault<Keys>,
@@ -288,12 +273,13 @@ pub(crate) async fn native_member_policy_fingerprint_for_target<
         floe_access::WELLBEING_CONNECTOR => floe_access::WELLBEING_CONNECTOR,
         _ => return Err(AgentFailure::InvalidInput),
     };
-    policy_fingerprint(&FirstPartyObservePolicy {
+    policy_digest(&FirstPartyObservePolicy {
         view_id,
         consumers,
         categories: vec![GrantDataCategory::Derived],
+        operation: GrantOperation::Read,
         purpose: GrantPurpose::Assistant,
-        source_processing: SourceProcessingPolicy::LocalOnly,
+        processing: ProcessingRestriction::LocalOnly,
     })
 }
 
@@ -374,24 +360,43 @@ mod tests {
     }
 
     #[test]
-    fn fingerprint_binds_exact_prospective_policy_scope() {
+    fn digest_binds_exact_prospective_permission_scope() {
         let policy = remote_policies("microsoft.mail").unwrap().remove(0);
-        let fingerprint = policy_fingerprint(&policy).unwrap();
-        assert_eq!(fingerprint.len(), 64);
+        let digest = policy_digest(&policy).unwrap();
+        assert_eq!(digest.len(), 64);
         let mut changed = policy.clone();
         changed
             .consumers
             .push(GrantConsumer::builtin("floe.builtin.commitments").unwrap());
-        assert_ne!(policy_fingerprint(&changed).unwrap(), fingerprint);
+        assert_ne!(policy_digest(&changed).unwrap(), digest);
         let mut changed = policy.clone();
         changed.categories = vec![GrantDataCategory::Derived];
-        assert_ne!(policy_fingerprint(&changed).unwrap(), fingerprint);
+        assert_ne!(policy_digest(&changed).unwrap(), digest);
+        let mut changed = policy.clone();
+        changed.operation = GrantOperation::Suggestion;
+        assert_ne!(policy_digest(&changed).unwrap(), digest);
         let mut changed = policy.clone();
         changed.purpose = GrantPurpose::Scheduling;
-        assert_ne!(policy_fingerprint(&changed).unwrap(), fingerprint);
+        assert_ne!(policy_digest(&changed).unwrap(), digest);
         let mut changed = policy.clone();
-        changed.source_processing = SourceProcessingPolicy::LocalOnly;
-        assert_ne!(policy_fingerprint(&changed).unwrap(), fingerprint);
+        changed.processing = ProcessingRestriction::ApprovedRecipient {
+            recipient: "model.example".into(),
+            categories: vec![GrantDataCategory::Content],
+        };
+        assert_ne!(policy_digest(&changed).unwrap(), digest);
+    }
+
+    #[test]
+    fn digest_is_canonical_under_consumer_and_category_order() {
+        let mut policy = calendar_policy().unwrap();
+        let digest = policy_digest(&policy).unwrap();
+        policy.consumers.reverse();
+        policy.categories.reverse();
+        assert_eq!(policy_digest(&policy).unwrap(), digest);
+        assert_eq!(
+            policy_digest(&remote_policies("calendar.google").unwrap().remove(0)).unwrap(),
+            digest
+        );
     }
 
     #[test]
@@ -429,9 +434,9 @@ mod tests {
     }
 
     #[test]
-    fn shipped_consumer_policy_does_not_depend_on_registry_state() {
+    fn shipped_permission_digest_does_not_depend_on_registry_state() {
         let before = calendar_policy().unwrap();
-        let before_fingerprint = policy_fingerprint(&before).unwrap();
+        let before_fingerprint = policy_digest(&before).unwrap();
         let mut registry = floe_experts::AgentRegistry::new(uuid::Uuid::new_v4());
         let person = PersonId::new();
         let manifest = floe_experts_builtin::manifests()
@@ -509,7 +514,7 @@ mod tests {
             .unwrap();
         assert_eq!(calendar_policy().unwrap(), before);
         assert_eq!(
-            policy_fingerprint(&calendar_policy().unwrap()).unwrap(),
+            policy_digest(&calendar_policy().unwrap()).unwrap(),
             before_fingerprint
         );
         assert_eq!(

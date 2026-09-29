@@ -72,8 +72,9 @@ func (store *testStore) CommitIssuerRevocation(r IssuerRecord) error {
 }
 
 type testAuthority struct {
-	active bool
-	calls  int
+	active        bool
+	calls         int
+	currentSource *SourceReference
 }
 
 type blockingAuthority struct {
@@ -99,6 +100,9 @@ func (authority *blockingAuthority) WithCurrentSource(p Principal, ref SourceRef
 
 func (authority *testAuthority) WithCurrentSource(p Principal, ref SourceReference, consume func(SourceSnapshot) error) error {
 	authority.calls++
+	if authority.currentSource != nil {
+		ref = *authority.currentSource
+	}
 	return consume(SourceSnapshot{SourceReference: ref, PersonID: p.PersonID, Active: authority.active})
 }
 
@@ -108,7 +112,7 @@ func testPrincipal() Principal {
 func testKeyID() string { return "22222222-2222-4222-8222-222222222222" }
 func testRequest() Request {
 	queryDigest := sha256.Sum256([]byte(`{"messages":[{"role":"user","content":"hi"}]}`))
-	return Request{Audience: "local-producer", Purpose: "everyday_assistance", Consumer: "day-canvas", Policy: PolicyReference{"33333333-3333-4333-8333-333333333333", 2}, Source: SourceReference{"gmail", "44444444-4444-4444-8444-444444444444", "person-runtime", "55555555-5555-4555-8555-555555555555", 7}, Grant: GrantReference{"66666666-6666-4666-8666-666666666666", "77777777-7777-4777-8777-777777777777", 3}, Resources: []string{"mail.read"}, QueryDigest: queryDigest, MaxItems: 10, MaxBytes: 4096}
+	return Request{Audience: "local-producer", Purpose: "everyday_assistance", Consumer: "day-canvas", Source: SourceReference{"gmail", "44444444-4444-4444-8444-444444444444", "person-runtime", "55555555-5555-4555-8555-555555555555", 7}, Grant: GrantReference{"66666666-6666-4666-8666-666666666666", "77777777-7777-4777-8777-777777777777", 3}, Resources: []string{"mail.read"}, QueryDigest: queryDigest, MaxItems: 10, MaxBytes: 4096}
 }
 func testEngine(t *testing.T) (*Engine, ed25519.PrivateKey, Principal, *testClock, *testAuthority, *testStore) {
 	t.Helper()
@@ -211,6 +215,17 @@ func TestAdmissionReleaseExactSignatureSourceAndReplay(t *testing.T) {
 	authority.active = false
 	if _, _, err := engine.ClaimAdmission(principal, signProof(challenge, testKeyID(), private), authority); !errors.Is(err, ErrDenied) {
 		t.Fatalf("stale source accepted: %v", err)
+	}
+	authority.active = true
+	challenge, err = engine.IssueAdmission(principal, request, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleSource := request.Source
+	staleSource.Epoch++
+	authority.currentSource = &staleSource
+	if _, _, err := engine.ClaimAdmission(principal, signProof(challenge, testKeyID(), private), authority); !errors.Is(err, ErrDenied) {
+		t.Fatalf("stale source epoch accepted: %v", err)
 	}
 }
 
@@ -543,7 +558,7 @@ func TestSharedPositiveVector(t *testing.T) {
 			if _, decodeErr := decodeB64(negative.Signature, ed25519.SignatureSize); decodeErr == nil {
 				t.Fatalf("%s accepted", negative.Name)
 			}
-		case "changed_source", "changed_grant", "changed_policy", "changed_query", "changed_audience", "changed_operation":
+		case "changed_source", "changed_grant", "changed_query", "changed_audience", "changed_operation":
 			mutated := bytes.Replace([]byte(fixture.Positive.ChallengeBytes), []byte(negative.Mutation), []byte(negative.Replacement), 1)
 			if err := ParseChallengeBytes(mutated); err != nil && negative.Name != "changed_operation" {
 				t.Fatalf("%s structural rejection: %v", negative.Name, err)

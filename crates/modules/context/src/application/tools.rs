@@ -524,7 +524,7 @@ mod tests {
 
     use chrono::{Duration, Utc};
     use floe_access::{
-        ConsumerPolicyAuthority, DataAccessGrant, FeasibilityGrantQuery, GrantDataCategory,
+        DataAccessGrant, FeasibilityGrantQuery, GrantDataCategory,
         GrantId, GrantOperation, GrantPurpose, GrantScope, ResourceHandle, SourceAuthority,
     };
     use floe_agent_contract::{AGENT_VERSION, AgentFailure, BoxFuture, InvocationKey, ToolCall};
@@ -640,13 +640,6 @@ mod tests {
         ) -> BoxFuture<'a, Result<String, AgentFailure>> {
             let subject = self.subject.clone();
             Box::pin(async move { Ok(subject) })
-        }
-
-        fn consumer_policy<'a>(
-            &'a self,
-            _: GrantId,
-        ) -> BoxFuture<'a, Result<ConsumerPolicyAuthority, AgentFailure>> {
-            Box::pin(async { Ok(ConsumerPolicyAuthority::default()) })
         }
 
         fn feasibility_query<'a>(
@@ -909,7 +902,6 @@ mod tests {
                     request.purpose(),
                     consumer.clone(),
                     processing.clone(),
-                    ConsumerPolicyAuthority::new(),
                     Uuid::new_v4(),
                     request.query_fingerprint().to_vec(),
                     Uuid::new_v4(),
@@ -1464,13 +1456,6 @@ mod tests {
                 &'a self,
                 _: GrantId,
             ) -> BoxFuture<'a, Result<String, AgentFailure>> {
-                Box::pin(async { Err(AgentFailure::StorageUnavailable) })
-            }
-
-            fn consumer_policy<'a>(
-                &'a self,
-                _: GrantId,
-            ) -> BoxFuture<'a, Result<ConsumerPolicyAuthority, AgentFailure>> {
                 Box::pin(async { Err(AgentFailure::StorageUnavailable) })
             }
 

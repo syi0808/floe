@@ -295,7 +295,6 @@ void main() {
         reviewRequired: false,
         grantId: 'grant',
         grantAuthority: const {'access_epoch': 1},
-        consumerPolicy: const {'epoch': 1},
       );
       Widget screen(List<String> calendarIds, int revision) => MaterialApp(
         theme: FloeTheme.light,
@@ -351,7 +350,6 @@ void main() {
         reviewRequired: false,
         grantId: 'grant',
         grantAuthority: const {'access_epoch': 1},
-        consumerPolicy: const {'epoch': 1},
       );
       await tester.pumpWidget(screen(const ['home', 'work'], 2));
       await tester.pumpAndSettle();
@@ -951,7 +949,6 @@ final class _StubCalendarAccessGateway implements NativeCalendarAccessGateway {
         reviewRequired: false,
         grantId: 'grant',
         grantAuthority: const {'access_epoch': 1},
-        consumerPolicy: const {'epoch': 1},
       );
 
   @override

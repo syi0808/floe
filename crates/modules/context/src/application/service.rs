@@ -194,7 +194,7 @@ mod tests {
 
     use chrono::Utc;
     use floe_context_contract::{
-        ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
+        ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority,
         GrantConsumer, GrantDataCategory, GrantId, GrantPurpose, GrantSourceBinding,
         ProcessingRestriction, ResourceHandle,
     };
@@ -292,7 +292,6 @@ mod tests {
             GrantPurpose::Assistant,
             request.consumer().clone(),
             ProcessingRestriction::LocalOnly,
-            ConsumerPolicyAuthority::new(),
             Uuid::new_v4(),
             if wrong_binding {
                 vec![9; 32]

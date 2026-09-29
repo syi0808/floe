@@ -2,7 +2,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use floe_access::GrantState;
 use floe_agent_contract::AgentFailure;
 
-use floe_access::{GrantOperation, GrantPurpose, ProcessingRestriction, SourceAuthority};
+use floe_access::{GrantId, GrantOperation, GrantPurpose, ProcessingRestriction, SourceAuthority};
 /// The remote authority values this vault stores. Who a producer is and what a
 /// signed source names are Access's; this module holds and signs the records.
 pub use floe_access::{
@@ -71,8 +71,6 @@ struct ChallengeWire {
     #[serde(rename = "consumer")]
     _consumer: String,
     #[serde(default)]
-    policy: Option<PolicyWire>,
-    #[serde(default)]
     source: Option<SourceWire>,
     #[serde(default)]
     grant: Option<GrantWire>,
@@ -90,13 +88,6 @@ struct ChallengeWire {
     admission_id: String,
     issued_at_unix_ms: i64,
     expires_at_unix_ms: i64,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PolicyWire {
-    incarnation: String,
-    epoch: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -906,10 +897,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         transaction: &turso::transaction::Transaction<'_>,
         wire: &ChallengeWire,
     ) -> Result<(), AgentFailure> {
-        let policy = wire.policy.as_ref().ok_or(AgentFailure::PolicyDenied)?;
-        if Uuid::parse_str(&policy.incarnation).is_err() || policy.epoch == 0 {
-            return Err(AgentFailure::PolicyDenied);
-        }
         let source = wire.source.as_ref().ok_or(AgentFailure::PolicyDenied)?;
         let grant_wire = wire.grant.as_ref().ok_or(AgentFailure::PolicyDenied)?;
         if Uuid::parse_str(&grant_wire.id)
@@ -918,60 +905,24 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         {
             return Err(AgentFailure::PolicyDenied);
         }
-        let mut policy_rows = transaction
-            .query(
-                "SELECT view_id, connector, connection_id, execution_owner, policy_incarnation, policy_epoch FROM remote_view_grant_mappings WHERE grant_id = ? AND person_id = ?",
-                (grant_wire.id.clone(), self.person_id.to_string()),
-            )
+        let grant_id = GrantId::from_uuid(
+            Uuid::parse_str(&grant_wire.id).map_err(|_| AgentFailure::PolicyDenied)?,
+        )
+        .ok_or(AgentFailure::PolicyDenied)?;
+        let grant = self
+            .read_data_access_grant_in_transaction(transaction, grant_id)
             .await
             .map_err(|_| AgentFailure::PolicyDenied)?;
-        let policy_row = policy_rows
-            .next()
-            .await
-            .map_err(|_| AgentFailure::PolicyDenied)?
-            .ok_or(AgentFailure::PolicyDenied)?;
-        let mapped_view = policy_row.get::<String>(0).map_err(|_| AgentFailure::PolicyDenied)?;
-        let mapped_connector = policy_row.get::<String>(1).map_err(|_| AgentFailure::PolicyDenied)?;
-        let mapped_connection = policy_row.get::<String>(2).map_err(|_| AgentFailure::PolicyDenied)?;
-        let mapped_owner = policy_row.get::<String>(3).map_err(|_| AgentFailure::PolicyDenied)?;
-        let mapped_policy_incarnation = policy_row
-            .get::<String>(4)
-            .map_err(|_| AgentFailure::PolicyDenied)?;
-        let mapped_policy_epoch = policy_row
-            .get::<i64>(5)
-            .map_err(|_| AgentFailure::PolicyDenied)?;
-        if mapped_view.contains(':')
-            || mapped_connection.contains(':')
-            || floe_access::ConnectionId::try_new(mapped_connection.as_str()).is_err()
-        {
+        let [logical_resource] = wire.resources.as_slice() else {
             return Err(AgentFailure::PolicyDenied);
-        }
-        let logical_resource = format!("{mapped_view}:{mapped_connection}");
-        if mapped_connector != source.connector_id
-            || mapped_connection != source.connection_id
-            || mapped_owner != source.execution_owner
-            || wire.resources.len() != 1
-            || wire.resources[0] != logical_resource
-            || mapped_policy_incarnation != policy.incarnation
-            || mapped_policy_epoch <= 0
-            || mapped_policy_epoch as u64 != policy.epoch
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        let mut grant_rows = transaction
-            .query(
-                "SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ? AND authority_owner = ?",
-                (grant_wire.id.clone(), self.person_id.to_string(), self.vault_id.to_string()),
-            )
-            .await
+        };
+        let resource = floe_access::ResourceHandle::try_new(logical_resource.clone())
             .map_err(|_| AgentFailure::PolicyDenied)?;
-        let grant_row = grant_rows
-            .next()
-            .await
-            .map_err(|_| AgentFailure::PolicyDenied)?
-            .ok_or(AgentFailure::PolicyDenied)?;
-        let grant = super::access_grants::decode_grant(&grant_row)
-            .map_err(|_| AgentFailure::PolicyDenied)?;
+        floe_context_contract::split_connection_view_resource(
+            &resource,
+            &grant.source().connection_id(),
+        )
+        .map_err(|_| AgentFailure::PolicyDenied)?;
         if grant.state() != GrantState::Active
             || grant.review_required()
             || grant.source().person_id() != self.person_id
@@ -981,12 +932,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             || grant.authority().incarnation().to_string() != grant_wire.incarnation
             || grant.authority().access_epoch().get() != grant_wire.epoch
             || !grant.scope().operations().contains(&GrantOperation::Read)
-            || !grant
-                .scope()
-                .resources()
-                .iter()
-                .map(|resource| resource.as_str())
-                .eq(wire.resources.iter().map(String::as_str))
+            || grant.scope().resources() != [resource]
         {
             return Err(AgentFailure::PolicyDenied);
         }
@@ -1293,8 +1239,7 @@ fn parse_challenge(data: &[u8]) -> Result<ChallengeWire, AgentFailure> {
         if wire._consumer != "owner" {
             return Err(AgentFailure::InvalidInput);
         }
-        if wire.policy.is_some()
-            || wire.source.is_some()
+        if wire.source.is_some()
             || wire.grant.is_some()
             || !wire.resources.is_empty()
             || !wire.query_sha256.is_empty()
@@ -1308,12 +1253,9 @@ fn parse_challenge(data: &[u8]) -> Result<ChallengeWire, AgentFailure> {
         if !valid_text(&wire._consumer, 256) {
             return Err(AgentFailure::InvalidInput);
         }
-        let policy = wire.policy.as_ref().ok_or(AgentFailure::InvalidInput)?;
         let source = wire.source.as_ref().ok_or(AgentFailure::InvalidInput)?;
         let grant = wire.grant.as_ref().ok_or(AgentFailure::InvalidInput)?;
-        if Uuid::parse_str(&policy.incarnation).is_err()
-            || policy.epoch == 0
-            || source.connector_id.is_empty()
+        if source.connector_id.is_empty()
             || source.connector_id.len() > 128
             || source.connection_id.is_empty()
             || source.connection_id.len() > 128
@@ -2304,20 +2246,15 @@ mod tests {
             )
             .unwrap();
             let grant = vault
-                .review_and_activate_remote_view_grant(
-                    view_id,
-                    GrantId::new(),
-                    None,
-                    source.clone(),
-                    scope.clone(),
-                    None,
-                )
+                .activate_access_grants(vec![super::super::access_grants::AccessGrantActivation {
+                    grant_id: GrantId::new(),
+                    expected: None,
+                    source: source.clone(),
+                    scope: scope.clone(),
+                }])
                 .await
-                .unwrap();
-            let binding = vault
-                .remote_view_grant_binding(view_id, connector, connection_id)
-                .await
-                .unwrap();
+                .unwrap()
+                .remove(0);
             let owner_key = vault.remote_owner_public_key().await.unwrap();
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -2340,7 +2277,6 @@ mod tests {
                     "audience": audience,
                     "purpose": "everyday_assistance",
                     "consumer": consumer.identifier(),
-                    "policy": {"incarnation": binding.consumer_policy.incarnation().to_string(), "epoch": binding.consumer_policy.epoch().get()},
                     "source": {"connector_id": connector, "connection_id": connection_id, "execution_owner": source.execution_owner().as_str(), "incarnation": source_authority.incarnation().to_string(), "epoch": source_authority.epoch().get()},
                     "grant": {"id": grant.id().as_uuid().to_string(), "incarnation": grant.authority().incarnation().to_string(), "epoch": grant.authority().access_epoch().get()},
                     "resources": [resource],
@@ -2382,6 +2318,18 @@ mod tests {
                 max_items: 1,
                 max_bytes: 4096,
             };
+            let mut stale_source = admission_expected.clone();
+            stale_source.source_epoch += 1;
+            assert_eq!(
+                vault
+                    .remote_sign_view_authorization(
+                        &stale_source,
+                        &URL_SAFE_NO_PAD.encode(&admission_bytes),
+                        &URL_SAFE_NO_PAD.encode(admission_signature.as_ref()),
+                    )
+                    .await,
+                Err(AgentFailure::PolicyDenied)
+            );
             let owner_signature = vault
                 .remote_sign_view_authorization(
                     &admission_expected,
@@ -2523,7 +2471,7 @@ mod tests {
             second_release_expected.admission_id = second_admission_id.to_string();
             second_release_expected.result_sha256 = second_result_digest;
             let paused = vault
-                .pause_remote_view_grant(grant.id(), grant.authority())
+                .pause_data_access_grant(grant.id(), grant.authority())
                 .await
                 .unwrap();
             assert_eq!(
@@ -2541,19 +2489,16 @@ mod tests {
             let corruption_connection = vault.database.connect().unwrap();
             corruption_connection
                 .execute(
-                    "UPDATE remote_view_grant_mappings SET payload = '{}' WHERE grant_id = ?",
+                    "UPDATE data_access_grants SET payload = '{}' WHERE grant_id = ?",
                     [grant.id().as_uuid().to_string()],
                 )
                 .await
                 .unwrap();
             drop(vault);
-            let reopened = EncryptedAgentVault::open(root.path(), person_id, keys)
-                .await
-                .unwrap();
-            assert!(reopened
-                .remote_view_grant_binding(view_id, connector, connection_id)
-                .await
-                .is_err());
+            assert!(matches!(
+                EncryptedAgentVault::open(root.path(), person_id, keys).await,
+                Err(AgentFailure::VaultUnavailable)
+            ));
         }
     }
 }

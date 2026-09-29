@@ -10,7 +10,7 @@ use chrono::TimeZone;
 
 use floe_access::{
     CalendarReadAccessAdmission, CalendarReadAccessRequest, ConnectionId, ConnectorId,
-    ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory,
+    ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory,
     GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction,
     RemoteCallWindow, ResourceHandle,
 };
@@ -135,7 +135,6 @@ struct Grants {
     calls: AtomicUsize,
     grant_id: GrantId,
     authority: GrantAuthority,
-    policy: ConsumerPolicyAuthority,
 }
 
 impl NativeCalendarGrantReader for Grants {
@@ -196,7 +195,6 @@ impl NativeCalendarGrantReader for Grants {
             source,
             connection.source_authority(),
             scope,
-            self.policy,
             consumer,
         ))
     }
@@ -241,7 +239,6 @@ fn fixture() -> (Connections, Device, Grants, PersonId) {
             calls: AtomicUsize::new(0),
             grant_id: GrantId::new(),
             authority: GrantAuthority::new(),
-            policy: ConsumerPolicyAuthority::new(),
         },
         person_id,
     )
