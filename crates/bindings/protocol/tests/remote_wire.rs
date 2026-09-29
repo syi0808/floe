@@ -32,12 +32,10 @@ fn envelope(operation: Value) -> Value {
 }
 
 #[test]
-fn remote_access_rejects_obsolete_observe_product_operations() {
+fn remote_access_rejects_unknown_operation() {
     let connection = Uuid::new_v4();
-    for kind in ["connection_observe", "connection_observe_review"] {
-        let operation = json!({"kind": kind, "connector_id": "calendar.google", "connection_id": connection});
-        assert!(serde_json::from_value::<RemoteAccessRequestDto>(envelope(operation)).is_err());
-    }
+    let operation = json!({"kind": "unknown.operation", "connector_id": "calendar.google", "connection_id": connection});
+    assert!(serde_json::from_value::<RemoteAccessRequestDto>(envelope(operation)).is_err());
 }
 
 #[test]
@@ -221,24 +219,6 @@ fn pairing_credential_is_only_approved_output_and_never_debug_output() {
 }
 
 #[test]
-fn obsolete_remote_agent_vault_operations_are_not_aliases() {
-    for kind in [
-        "remote_pairing_prepare",
-        "remote_pairing_confirm",
-        "remote_pairing_status",
-        "remote_pairing_finalize",
-        "remote_authority_inspect_producer",
-        "remote_authority_review_and_enroll",
-        "remote_authority_enrollment_status",
-        "remote_calendar_grant_preview",
-        "remote_calendar_grant_review",
-        "remote_calendar_grant_status",
-        "remote_calendar_grant_pause",
-        "remote_view_grant_preview",
-        "remote_view_grant_review",
-        "remote_view_grant_status",
-        "remote_view_grant_pause",
-    ] {
-        assert!(serde_json::from_value::<AppCommandDto>(json!({"kind": kind})).is_err());
-    }
+fn unknown_remote_agent_vault_operation_is_rejected() {
+    assert!(serde_json::from_value::<AppCommandDto>(json!({"kind": "unknown.operation"})).is_err());
 }

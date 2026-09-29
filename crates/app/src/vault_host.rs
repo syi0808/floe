@@ -2581,13 +2581,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
         WorkerAction::FeasibilityAccess { change } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let mut command = (**change).clone();
-            command.consumers = crate::first_party_observe::native_consumers_for_target(
-                vault.vault.as_ref(),
-                job.person,
-                floe_access::FEASIBILITY_CONNECTOR,
-                &command.device_id,
-            )
-            .await?;
+            command.consumers = vec![floe_context::ASSISTANT_CONSUMER.to_owned()];
             let overview = floe_access::apply_feasibility_access(
                 vault.vault.as_ref(),
                 &personal_grants::native_driver(local_context),
@@ -3132,7 +3126,7 @@ mod tests {
     mod learner_worker;
     mod local_product;
     mod memory_review;
-    mod native_calendar_access;
+    mod calendar_connection_observe;
     mod proposals;
     mod registered_runner;
     mod remote_product;

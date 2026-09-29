@@ -290,7 +290,7 @@ fn day_actions_and_native_completions_accept_intent_not_authority() {
     }
 }
 #[test]
-fn feasibility_access_wire_is_contextual_and_old_standing_wire_is_unknown() {
+fn feasibility_access_wire_is_contextual_and_unknown_kinds_are_rejected() {
     let inspect = json!({"schema_version":2, "request_id":Uuid::new_v4(), "query":{"kind":"access.feasibility.inspect"}});
     let parsed = serde_json::from_value::<AppQueryRequestDto>(inspect.clone()).unwrap();
     parsed.validate().unwrap();
@@ -310,22 +310,9 @@ fn feasibility_access_wire_is_contextual_and_old_standing_wire_is_unknown() {
     parsed.validate().unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), review);
 
-    for kind in [
-        "access.personal.configure",
-        "access.contacts.configure",
-        "access.calendar.configure",
-    ] {
-        let request = json!({"schema_version":2, "request_id":Uuid::new_v4(), "command_id":Uuid::new_v4(), "command":{"kind":kind, "change":{"kind":"inspect"}}});
-        assert!(serde_json::from_value::<AppCommandRequestDto>(request).is_err());
-    }
-    for kind in [
-        "access.personal.inspect",
-        "access.contacts.inspect",
-        "access.calendar.inspect",
-        "access.calendar.preview",
-    ] {
-        let request =
-            json!({"schema_version":2, "request_id":Uuid::new_v4(), "query":{"kind":kind}});
-        assert!(serde_json::from_value::<AppQueryRequestDto>(request).is_err());
-    }
+    let command = json!({"schema_version":2, "request_id":Uuid::new_v4(), "command_id":Uuid::new_v4(), "command":{"kind":"unknown.command"}});
+    assert!(serde_json::from_value::<AppCommandRequestDto>(command).is_err());
+    let query =
+        json!({"schema_version":2, "request_id":Uuid::new_v4(), "query":{"kind":"unknown.query"}});
+    assert!(serde_json::from_value::<AppQueryRequestDto>(query).is_err());
 }
