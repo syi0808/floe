@@ -9,30 +9,13 @@ abstract interface class RemoteAccessGateway {
   Future<RemoteEnrollmentStatus> remoteEnrollmentStatus({
     required String enrollmentId,
   });
-  Future<String> connectionObserve({
-    required String connectorId,
-    required String connectionId,
-    bool? enabled,
-    bool disconnecting = false,
-    ConnectionObserveBundle? expected,
-  });
-  Future<ConnectionObserveBundle> connectionObserveReview({
-    required String connectorId,
-    required String connectionId,
-  });
 }
 
 final class NativeRemoteAccessGateway implements RemoteAccessGateway {
   NativeRemoteAccessGateway(RemoteOwnerRequest request)
     : _operations = RemoteOwnerOperation(
         request,
-        resultFields: {
-          'producer',
-          'owner',
-          'enrollment',
-          'connection_observe_status',
-          'reviewed_bundle',
-        },
+        resultFields: {'producer', 'owner', 'enrollment'},
       );
 
   final RemoteOwnerOperation _operations;
@@ -65,37 +48,4 @@ final class NativeRemoteAccessGateway implements RemoteAccessGateway {
     'kind': 'enrollment_status',
     'enrollment_id': enrollmentId,
   }, (result) => RemoteEnrollmentStatus.fromJson(result['enrollment']));
-
-  @override
-  Future<String> connectionObserve({
-    required String connectorId,
-    required String connectionId,
-    bool? enabled,
-    bool disconnecting = false,
-    ConnectionObserveBundle? expected,
-  }) => _operations.perform({
-    'kind': 'connection_observe',
-    'connector_id': connectorId,
-    'connection_id': connectionId,
-    'enabled': enabled,
-    'disconnecting': disconnecting,
-    'expected': expected?.toJson(),
-  }, (result) => result['connection_observe_status']! as String);
-
-  @override
-  Future<ConnectionObserveBundle> connectionObserveReview({
-    required String connectorId,
-    required String connectionId,
-  }) => _operations.perform(
-    {
-      'kind': 'connection_observe_review',
-      'connector_id': connectorId,
-      'connection_id': connectionId,
-    },
-    (result) {
-      final bundle = result['reviewed_bundle'];
-      if (bundle == null) throw const FormatException('Missing observe bundle');
-      return ConnectionObserveBundle.fromJson(bundle);
-    },
-  );
 }
