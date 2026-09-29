@@ -1,46 +1,18 @@
-abstract interface class AgentPersonalAccessGateway {
-  Future<PersonalAccessOverview> inspectPersonalAttention(String personId);
-  Future<PersonalAccessOverview> reviewPersonalAttention(
+abstract interface class FeasibilityAccessGateway {
+  Future<FeasibilityAccessOverview> inspectFeasibility(String personId);
+  Future<FeasibilityAccessOverview> reviewFeasibility(
     String personId, {
-    required PersonalAccessOverview reviewedPreview,
+    required FeasibilityQuery query,
+    required FeasibilityAccessOverview reviewedPreview,
   });
-  Future<PersonalAccessOverview> setPersonalAttentionEnabled(
+  Future<FeasibilityAccessOverview> setFeasibilityEnabled(
     String personId,
     bool enabled,
   );
-  Future<PersonalAccessOverview> inspectPersonalFeasibility(String personId);
-  Future<PersonalAccessOverview> reviewPersonalFeasibility(
-    String personId, {
-    required PersonalFeasibilityQuery query,
-    required PersonalAccessOverview reviewedPreview,
-  });
-  Future<PersonalAccessOverview> setPersonalFeasibilityEnabled(
-    String personId,
-    bool enabled,
-  );
-  Future<PersonalAccessOverview> inspectPersonalWellbeing(String personId);
-  Future<PersonalAccessOverview> reviewPersonalWellbeing(
-    String personId, {
-    required PersonalAccessOverview reviewedPreview,
-    required String nativeSubjectFingerprint,
-  });
-  Future<PersonalAccessOverview> setPersonalWellbeingEnabled(
-    String personId,
-    bool enabled,
-  );
-  Future<PersonalAccessOverview> inspectPersonalContacts(
-    String personId,
-    List<String> selectedHandles,
-  );
-  Future<PersonalAccessOverview> reviewPersonalContacts(
-    String personId, {
-    required List<String> selectedHandles,
-    required PersonalAccessOverview reviewedPreview,
-  });
 }
 
-final class PersonalFeasibilityQuery {
-  const PersonalFeasibilityQuery({
+final class FeasibilityQuery {
+  const FeasibilityQuery({
     required this.eventHandle,
     required this.evidenceHandles,
     required this.destinationLatitude,
@@ -69,8 +41,8 @@ final class PersonalFeasibilityQuery {
   };
 }
 
-final class PersonalAccessOverview {
-  const PersonalAccessOverview({
+final class FeasibilityAccessOverview {
+  const FeasibilityAccessOverview({
     required this.schemaVersion,
     required this.personId,
     required this.connector,
@@ -100,8 +72,8 @@ final class PersonalAccessOverview {
   final String? nativeSubjectFingerprint;
   final String? processIncarnation;
 
-  PersonalAccessOverview withNativeSubjectFingerprint(String fingerprint) =>
-      PersonalAccessOverview(
+  FeasibilityAccessOverview withNativeSubjectFingerprint(String fingerprint) =>
+      FeasibilityAccessOverview(
         schemaVersion: schemaVersion,
         personId: personId,
         connector: connector,
@@ -117,7 +89,7 @@ final class PersonalAccessOverview {
         processIncarnation: processIncarnation,
       );
 
-  factory PersonalAccessOverview.fromJson(Object? raw) {
+  factory FeasibilityAccessOverview.fromJson(Object? raw) {
     if (raw is! Map) throw const FormatException('Invalid personal access');
     final value = Map<String, Object?>.from(raw);
     const fields = {
@@ -157,7 +129,7 @@ final class PersonalAccessOverview {
             value['process_incarnation'] is! String)) {
       throw const FormatException('Invalid personal access');
     }
-    return PersonalAccessOverview(
+    return FeasibilityAccessOverview(
       schemaVersion: 1,
       personId: value['person_id']! as String,
       connector: value['connector']! as String,

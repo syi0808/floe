@@ -30,8 +30,9 @@ import 'package:floe_client/features/connections/presentation/server_connector_p
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 
 import 'package:floe_client/features/connections/domain/agent_connections.dart';
-import 'package:floe_client/features/settings/domain/agent_personal_access.dart';
-import 'package:floe_client/features/connections/presentation/personal_access_cards.dart';
+import 'package:floe_client/features/settings/domain/feasibility_access.dart';
+import 'package:floe_client/features/connections/presentation/feasibility_access_card.dart';
+import 'package:floe_client/features/connections/presentation/personal_connection_cards.dart';
 import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/macos_context_gateway.dart';
 
@@ -49,7 +50,7 @@ class ConnectorScreen extends StatefulWidget {
     this.deviceId,
     this.platform,
     this.agentController,
-    this.personalAccessGateway,
+    this.feasibilityAccessGateway,
     this.connectionObserveGateway,
     this.nativePersonalSourceGateway,
     this.connectorAuthorization,
@@ -75,7 +76,7 @@ class ConnectorScreen extends StatefulWidget {
   final AgentController? agentController;
   final ConnectionObserveGateway? connectionObserveGateway;
   final NativePersonalSourceGateway? nativePersonalSourceGateway;
-  final AgentPersonalAccessGateway? personalAccessGateway;
+  final FeasibilityAccessGateway? feasibilityAccessGateway;
   final AppleContextApi? appleContext;
   final MacOSContextApi? macOSContext;
   final DaySnapshot? daySnapshot;
@@ -453,7 +454,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     connection: connection,
     personId: widget.query.personId,
     deviceId: connection.descriptor.execution.deviceId ?? widget.deviceId ?? '',
-    personalAccessGateway: widget.personalAccessGateway,
+    feasibilityAccessGateway: widget.feasibilityAccessGateway,
     connectionObserveGateway: widget.connectionObserveGateway,
     nativePersonalSourceGateway: widget.nativePersonalSourceGateway,
     appleContext: widget.appleContext,
@@ -949,7 +950,7 @@ final class _AppleConnectionDetail extends StatefulWidget {
     required this.connection,
     required this.personId,
     required this.deviceId,
-    required this.personalAccessGateway,
+    required this.feasibilityAccessGateway,
     required this.connectionObserveGateway,
     required this.nativePersonalSourceGateway,
     required this.appleContext,
@@ -962,7 +963,7 @@ final class _AppleConnectionDetail extends StatefulWidget {
   final AgentConnection connection;
   final String personId;
   final String deviceId;
-  final AgentPersonalAccessGateway? personalAccessGateway;
+  final FeasibilityAccessGateway? feasibilityAccessGateway;
   final ConnectionObserveGateway? connectionObserveGateway;
   final NativePersonalSourceGateway? nativePersonalSourceGateway;
   final AppleContextApi? appleContext;
@@ -1049,7 +1050,7 @@ final class _AppleConnectionDetailState extends State<_AppleConnectionDetail> {
     }
   }
 
-  Future<PersonalFeasibilityQuery?> _requestQuery() async {
+  Future<FeasibilityQuery?> _requestQuery() async {
     final snapshot = widget.daySnapshot;
     final eventId = snapshot?.nextEventId;
     if (snapshot == null || eventId == null) return null;
@@ -1058,7 +1059,7 @@ final class _AppleConnectionDetailState extends State<_AppleConnectionDetail> {
         .where((item) => item.id == eventId)
         .firstOrNull;
     if (event == null || event.isAllDay) return null;
-    return showFloeDialog<PersonalFeasibilityQuery>(
+    return showFloeDialog<FeasibilityQuery>(
       context,
       (_) => _PersonalFeasibilityDialog(event: event),
     );
@@ -1066,19 +1067,13 @@ final class _AppleConnectionDetailState extends State<_AppleConnectionDetail> {
 
   @override
   Widget build(BuildContext context) {
-    final gateway = widget.personalAccessGateway;
-    final scoped = gateway == null
+    final gateway = widget.feasibilityAccessGateway;
+    final scoped = gateway == null || provider != 'apple_feasibility'
         ? null
-        : _ScopedPersonalAccessGateway(
+        : _ScopedFeasibilityAccessGateway(
             gateway,
             personId: widget.personId,
-            connectionId: widget.connection.descriptor.id == 'contacts.apple'
-                ? 'contacts.apple.local'
-                : widget.connection.descriptor.id == 'feasibility.apple'
-                ? 'feasibility.apple.local'
-                : widget.connection.descriptor.id == 'health.apple'
-                ? 'health.apple.local'
-                : 'attention.macos.local',
+            connectionId: 'feasibility.apple.local',
           );
     final title = _nativeConnectionName(provider);
     return Column(
@@ -1130,29 +1125,29 @@ final class _AppleConnectionDetailState extends State<_AppleConnectionDetail> {
         if (!blocked &&
             provider == 'apple_contacts' &&
             _hasObserveCapability('contacts.identity.read') &&
-            scoped != null &&
-            widget.appleContext is AppleContextSubjectApi) ...[
+            widget.nativePersonalSourceGateway != null &&
+            widget.connectionObserveGateway != null &&
+            widget.appleContext != null) ...[
           SizedBox(height: FloeSpace.lg),
-          PersonalContactsAccessCard(
-            gateway: scoped,
-            personId: widget.personId,
+          PersonalContactsSourceCard(
+            sourceGateway: widget.nativePersonalSourceGateway!,
+            observeGateway: widget.connectionObserveGateway!,
             readContacts: () => widget.appleContext!.readContacts(),
-            inspectSubject: (handles) =>
-                (widget.appleContext! as AppleContextSubjectApi)
-                    .inspectContactsSubject(handles),
           ),
         ],
         if (!blocked &&
             provider == 'attention.macos' &&
             _hasObserveCapability('attention.coarse.read') &&
-            scoped != null &&
+            widget.nativePersonalSourceGateway != null &&
+            widget.connectionObserveGateway != null &&
             widget.macOSContext != null) ...[
           SizedBox(height: FloeSpace.lg),
-          PersonalAttentionAccessCard(
-            gateway: scoped,
-            personId: widget.personId,
-            inspectSubject: () =>
-                widget.macOSContext!.inspectAttentionSubject(widget.deviceId),
+          PersonalSingletonSourceCard(
+            title: 'Attention source',
+            description: 'Coarse device-local attention only. No app or window names are collected.',
+            connectorId: 'attention.macos',
+            sourceGateway: widget.nativePersonalSourceGateway!,
+            observeGateway: widget.connectionObserveGateway!,
           ),
         ],
         if (!blocked &&
@@ -1176,18 +1171,19 @@ final class _AppleConnectionDetailState extends State<_AppleConnectionDetail> {
         if (!blocked &&
             provider == 'apple_health' &&
             _hasObserveCapability('health.derived.read') &&
-            scoped != null &&
+            widget.nativePersonalSourceGateway != null &&
+            widget.connectionObserveGateway != null &&
             widget.appleContext is AppleHealthSubjectApi) ...[
           SizedBox(height: FloeSpace.lg),
-          PersonalWellbeingAccessCard(
-            gateway: scoped,
-            personId: widget.personId,
+          PersonalSingletonSourceCard(
+            title: 'Wellbeing source',
+            description: 'A short-lived derived summary from Apple Health. Raw samples stay on this device.',
+            connectorId: 'health.apple',
+            sourceGateway: widget.nativePersonalSourceGateway!,
+            observeGateway: widget.connectionObserveGateway!,
             requestPermission: () =>
                 (widget.appleContext! as AppleHealthSubjectApi)
                     .requestWellbeingPermission(),
-            inspectSubject: () =>
-                (widget.appleContext! as AppleHealthSubjectApi)
-                    .inspectWellbeingSubject(),
           ),
         ],
       ],
@@ -1284,7 +1280,7 @@ final class _PersonalFeasibilityDialogState
           }
           Navigator.pop(
             context,
-            PersonalFeasibilityQuery(
+            FeasibilityQuery(
               eventHandle: 'event:${widget.event.id}',
               evidenceHandles: ['calendar.event:${widget.event.id}'],
               destinationLatitude: parsedLatitude,
@@ -1305,56 +1301,35 @@ final class _PersonalFeasibilityDialogState
   );
 }
 
-final class _ScopedPersonalAccessGateway implements AgentPersonalAccessGateway {
-  _ScopedPersonalAccessGateway(
+final class _ScopedFeasibilityAccessGateway implements FeasibilityAccessGateway {
+  _ScopedFeasibilityAccessGateway(
     this.delegate, {
     required this.personId,
     required this.connectionId,
   });
 
-  final AgentPersonalAccessGateway delegate;
+  final FeasibilityAccessGateway delegate;
   final String personId;
   final String connectionId;
 
-  PersonalAccessOverview _check(PersonalAccessOverview value) {
+  FeasibilityAccessOverview _check(FeasibilityAccessOverview value) {
     if (value.personId != personId || value.connectionId != connectionId) {
-      throw const FormatException('Personal access connection changed.');
+      throw const FormatException('Feasibility access connection changed.');
     }
     return value;
   }
 
   @override
-  Future<PersonalAccessOverview> inspectPersonalAttention(String id) async =>
-      _check(await delegate.inspectPersonalAttention(id));
+  Future<FeasibilityAccessOverview> inspectFeasibility(String id) async =>
+      _check(await delegate.inspectFeasibility(id));
 
   @override
-  Future<PersonalAccessOverview> reviewPersonalAttention(
+  Future<FeasibilityAccessOverview> reviewFeasibility(
     String id, {
-    required PersonalAccessOverview reviewedPreview,
+    required FeasibilityQuery query,
+    required FeasibilityAccessOverview reviewedPreview,
   }) async => _check(
-    await delegate.reviewPersonalAttention(
-      id,
-      reviewedPreview: reviewedPreview,
-    ),
-  );
-
-  @override
-  Future<PersonalAccessOverview> setPersonalAttentionEnabled(
-    String id,
-    bool enabled,
-  ) async => _check(await delegate.setPersonalAttentionEnabled(id, enabled));
-
-  @override
-  Future<PersonalAccessOverview> inspectPersonalFeasibility(String id) async =>
-      _check(await delegate.inspectPersonalFeasibility(id));
-
-  @override
-  Future<PersonalAccessOverview> reviewPersonalFeasibility(
-    String id, {
-    required PersonalFeasibilityQuery query,
-    required PersonalAccessOverview reviewedPreview,
-  }) async => _check(
-    await delegate.reviewPersonalFeasibility(
+    await delegate.reviewFeasibility(
       id,
       query: query,
       reviewedPreview: reviewedPreview,
@@ -1362,53 +1337,10 @@ final class _ScopedPersonalAccessGateway implements AgentPersonalAccessGateway {
   );
 
   @override
-  Future<PersonalAccessOverview> setPersonalFeasibilityEnabled(
+  Future<FeasibilityAccessOverview> setFeasibilityEnabled(
     String id,
     bool enabled,
-  ) async => _check(await delegate.setPersonalFeasibilityEnabled(id, enabled));
-
-  @override
-  Future<PersonalAccessOverview> inspectPersonalWellbeing(String id) async =>
-      _check(await delegate.inspectPersonalWellbeing(id));
-
-  @override
-  Future<PersonalAccessOverview> reviewPersonalWellbeing(
-    String id, {
-    required PersonalAccessOverview reviewedPreview,
-    required String nativeSubjectFingerprint,
-  }) async => _check(
-    await delegate.reviewPersonalWellbeing(
-      id,
-      reviewedPreview: reviewedPreview,
-      nativeSubjectFingerprint: nativeSubjectFingerprint,
-    ),
-  );
-
-  @override
-  Future<PersonalAccessOverview> setPersonalWellbeingEnabled(
-    String id,
-    bool enabled,
-  ) async => _check(await delegate.setPersonalWellbeingEnabled(id, enabled));
-
-  @override
-  Future<PersonalAccessOverview> inspectPersonalContacts(
-    String id,
-    List<String> selectedHandles,
-  ) async =>
-      _check(await delegate.inspectPersonalContacts(id, selectedHandles));
-
-  @override
-  Future<PersonalAccessOverview> reviewPersonalContacts(
-    String id, {
-    required List<String> selectedHandles,
-    required PersonalAccessOverview reviewedPreview,
-  }) async => _check(
-    await delegate.reviewPersonalContacts(
-      id,
-      selectedHandles: selectedHandles,
-      reviewedPreview: reviewedPreview,
-    ),
-  );
+  ) async => _check(await delegate.setFeasibilityEnabled(id, enabled));
 }
 
 String _nativeConnectionName(String provider) => switch (provider) {

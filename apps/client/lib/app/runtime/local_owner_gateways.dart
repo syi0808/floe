@@ -1,6 +1,3 @@
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:floe_client/app/runtime/floe_client.dart';
 import 'package:floe_client/app/runtime/app_read_model.dart';
 import 'package:floe_client/features/conversation/application/conversation_runtime_gateway.dart';
@@ -10,7 +7,7 @@ import 'package:floe_client/features/conversation/application/agent_interaction_
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/knowledge/presentation/agent_memory_review.dart';
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
-import 'package:floe_client/features/settings/domain/agent_personal_access.dart';
+import 'package:floe_client/features/settings/domain/feasibility_access.dart';
 import 'package:floe_client/features/actions/domain/agent_proposal.dart';
 import 'package:floe_client/features/experts/domain/agent_registry.dart';
 
@@ -329,280 +326,88 @@ final class NativeProposalGateway implements AgentProposalGateway {
   }
 }
 
-final class NativePersonalAccessGateway implements AgentPersonalAccessGateway {
-  NativePersonalAccessGateway(this._transport, {required this.deviceId});
+final class NativeFeasibilityAccessGateway implements FeasibilityAccessGateway {
+  NativeFeasibilityAccessGateway(this._transport, {required this.deviceId});
 
   final AppWireTransport _transport;
   final OwnerOperationObserver _operations = OwnerOperationObserver();
   final String deviceId;
 
   @override
-  Future<PersonalAccessOverview> inspectPersonalAttention(
-    String personId,
-  ) async {
-    return _personalAccess(personId, {'kind': 'inspect'});
-  }
+  Future<FeasibilityAccessOverview> inspectFeasibility(String personId) =>
+      _feasibilityAccess(personId, {'kind': 'inspect'});
 
   @override
-  Future<PersonalAccessOverview> reviewPersonalAttention(
+  Future<FeasibilityAccessOverview> reviewFeasibility(
     String personId, {
-    required PersonalAccessOverview reviewedPreview,
-  }) async {
-    final fingerprint = reviewedPreview.nativeSubjectFingerprint;
-    if (fingerprint == null) {
-      throw const FormatException('Attention preview unavailable');
-    }
-    if (reviewedPreview.personId != personId ||
-        reviewedPreview.deviceId != deviceId) {
-      throw const FormatException('Attention review scope changed');
-    }
-    return _personalAccess(personId, {
-      'kind': 'review',
-      'expected_native_subject_fingerprint': fingerprint,
-      'expected_grant_id': reviewedPreview.grantId,
-      'expected_grant_authority': reviewedPreview.grantAuthority,
-    });
-  }
-
-  @override
-  Future<PersonalAccessOverview> setPersonalAttentionEnabled(
-    String personId,
-    bool enabled,
-  ) async {
-    return _personalAccess(personId, {
-      'kind': 'set_enabled',
-      'enabled': enabled,
-    });
-  }
-
-  @override
-  Future<PersonalAccessOverview> inspectPersonalFeasibility(
-    String personId,
-  ) async {
-    return _personalAccess(personId, {
-      'kind': 'inspect',
-    }, connector: 'feasibility.apple');
-  }
-
-  @override
-  Future<PersonalAccessOverview> reviewPersonalFeasibility(
-    String personId, {
-    required PersonalFeasibilityQuery query,
-    required PersonalAccessOverview reviewedPreview,
-  }) async {
+    required FeasibilityQuery query,
+    required FeasibilityAccessOverview reviewedPreview,
+  }) {
     final fingerprint = reviewedPreview.nativeSubjectFingerprint;
     if (fingerprint == null ||
         reviewedPreview.personId != personId ||
         reviewedPreview.deviceId != deviceId) {
       throw const FormatException('Feasibility review scope changed');
     }
-    return _personalAccess(personId, {
+    return _feasibilityAccess(personId, {
       'kind': 'review',
       'expected_native_subject_fingerprint': fingerprint,
       'expected_grant_id': reviewedPreview.grantId,
       'expected_grant_authority': reviewedPreview.grantAuthority,
       'feasibility_query': query.toJson(),
-    }, connector: 'feasibility.apple');
-  }
-
-  @override
-  Future<PersonalAccessOverview> setPersonalFeasibilityEnabled(
-    String personId,
-    bool enabled,
-  ) async {
-    return _personalAccess(personId, {
-      'kind': 'set_enabled',
-      'enabled': enabled,
-    }, connector: 'feasibility.apple');
-  }
-
-  @override
-  Future<PersonalAccessOverview> inspectPersonalWellbeing(
-    String personId,
-  ) async {
-    return _personalAccess(personId, {
-      'kind': 'inspect',
-    }, connector: 'health.apple');
-  }
-
-  @override
-  Future<PersonalAccessOverview> reviewPersonalWellbeing(
-    String personId, {
-    required PersonalAccessOverview reviewedPreview,
-    required String nativeSubjectFingerprint,
-  }) async {
-    if (reviewedPreview.personId != personId ||
-        reviewedPreview.deviceId != deviceId ||
-        !RegExp(r'^[0-9a-f]{64}$').hasMatch(nativeSubjectFingerprint)) {
-      throw const FormatException('Wellbeing review scope changed');
-    }
-    return _personalAccess(personId, {
-      'kind': 'review',
-      'expected_native_subject_fingerprint': nativeSubjectFingerprint,
-      'expected_grant_id': reviewedPreview.grantId,
-      'expected_grant_authority': reviewedPreview.grantAuthority,
-    }, connector: 'health.apple');
-  }
-
-  @override
-  Future<PersonalAccessOverview> setPersonalWellbeingEnabled(
-    String personId,
-    bool enabled,
-  ) async {
-    return _personalAccess(personId, {
-      'kind': 'set_enabled',
-      'enabled': enabled,
-    }, connector: 'health.apple');
-  }
-
-  @override
-  Future<PersonalAccessOverview> inspectPersonalContacts(
-    String personId,
-    List<String> selectedHandles,
-  ) async {
-    final handles = _canonicalContactHandles(selectedHandles);
-    return _personalContacts(personId, {
-      'kind': 'inspect',
-      'selected_handles': handles,
     });
   }
 
   @override
-  Future<PersonalAccessOverview> reviewPersonalContacts(
-    String personId, {
-    required List<String> selectedHandles,
-    required PersonalAccessOverview reviewedPreview,
-  }) async {
-    final fingerprint = reviewedPreview.nativeSubjectFingerprint;
-    if (fingerprint == null ||
-        reviewedPreview.personId != personId ||
-        reviewedPreview.deviceId != deviceId) {
-      throw const FormatException('Contacts review scope changed');
-    }
-    return _personalContacts(personId, {
-      'kind': 'review',
-      'selected_handles': _canonicalContactHandles(selectedHandles),
-      'expected_native_subject_fingerprint': fingerprint,
-      'expected_grant_id': reviewedPreview.grantId,
-      'expected_grant_authority': reviewedPreview.grantAuthority,
-    });
-  }
-
-  Future<PersonalAccessOverview> _personalAccess(
+  Future<FeasibilityAccessOverview> setFeasibilityEnabled(
     String personId,
-    Map<String, Object?> change, {
-    String connector = 'attention.macos',
-  }) async {
-    return _observe(
-      personId,
-      {
-        'kind': change['kind'] == 'inspect'
-            ? 'access.personal.inspect'
-            : 'access.personal.configure',
-        'connector': connector,
-        if (change['kind'] != 'inspect') 'change': change,
-      },
-      decode: (result) {
-        if (result['state'] != 'ready' || result['personal_access'] is! Map) {
-          throw const FormatException('Missing personal access overview');
-        }
-        final overview = PersonalAccessOverview.fromJson(
-          result['personal_access'],
-        );
-        if (overview.personId != personId || overview.deviceId != deviceId) {
-          throw const FormatException('Personal access scope mismatch');
-        }
-        return overview;
-      },
-    );
-  }
+    bool enabled,
+  ) =>
+      _feasibilityAccess(personId, {'kind': 'set_enabled', 'enabled': enabled});
 
-  Future<PersonalAccessOverview> _personalContacts(
+  Future<FeasibilityAccessOverview> _feasibilityAccess(
     String personId,
     Map<String, Object?> change,
-  ) async {
-    return _observe(
-      personId,
-      {
-        'kind': change['kind'] == 'inspect'
-            ? 'access.contacts.inspect'
-            : 'access.contacts.configure',
-        'connector': 'contacts.$platformContactsConnector',
-        if (change['kind'] == 'inspect')
-          'selected_handles': change['selected_handles'],
-        if (change['kind'] != 'inspect') 'change': change,
-      },
-      decode: (result) {
-        if (result['state'] != 'ready' || result['personal_access'] is! Map) {
-          throw const FormatException('Missing Contacts access overview');
-        }
-        final overview = PersonalAccessOverview.fromJson(
-          result['personal_access'],
-        );
-        if (overview.personId != personId || overview.deviceId != deviceId) {
-          throw const FormatException('Contacts access scope mismatch');
-        }
-        return overview;
-      },
-    );
-  }
-
-  String get platformContactsConnector => Platform.isAndroid
-      ? 'android'
-      : Platform.isIOS
-      ? 'apple'
-      : 'unsupported';
-
-  List<String> _canonicalContactHandles(List<String> handles) {
-    final value = handles.toSet().toList()..sort();
-    if (value.isEmpty ||
-        value.length > 64 ||
-        value.length != handles.length ||
-        value.any(
-          (handle) =>
-              handle.isEmpty ||
-              handle.trim() != handle ||
-              utf8.encode(handle).length > 256 ||
-              handle.contains('*') ||
-              RegExp(r'[\x00-\x1f\x7f]').hasMatch(handle) ||
-              handle.toLowerCase() == '00000000-0000-0000-0000-000000000000',
-        )) {
-      throw const FormatException('Invalid Contacts selection');
-    }
-    return List.unmodifiable(value);
-  }
-
-  Future<T> _observe<T>(
-    String personId,
-    Map<String, Object?> intent, {
-    required T Function(Map<String, dynamic>) decode,
-  }) {
-    final command = const <String>{
-      'access.personal.configure',
-      'access.contacts.configure',
-    }.contains(intent['kind']);
-    return _operations.observe(
-      scope: personId,
-      intent: ownerIntent(intent),
-      stage: const {
-        "access.personal.inspect": "personal_access",
-        "access.personal.configure": "personal_access",
-        "access.contacts.inspect": "contacts_access",
-        "access.contacts.configure": "contacts_access",
-      }[intent['kind']]!,
-      resultKind: 'local_access_operation',
-      start: (operationId) => command
-          ? ownerCommand(_transport, operationId, intent)
-          : ownerQuery(_transport, operationId, intent),
-      read: (operationId, release) => ownerResult(
-        _transport,
-        'access.local.read_result',
-        operationId,
-        release,
-      ),
-      decode: decode,
-    );
-  }
+  ) => _operations.observe(
+    scope: personId,
+    intent: ownerIntent({
+      'kind': change['kind'] == 'inspect'
+          ? 'access.personal.inspect'
+          : 'access.personal.configure',
+      'connector': 'feasibility.apple',
+      if (change['kind'] != 'inspect') 'change': change,
+    }),
+    stage: 'personal_access',
+    resultKind: 'local_access_operation',
+    start: (operationId) => change['kind'] == 'inspect'
+        ? ownerQuery(_transport, operationId, {
+            'kind': 'access.personal.inspect',
+            'connector': 'feasibility.apple',
+          })
+        : ownerCommand(_transport, operationId, {
+            'kind': 'access.personal.configure',
+            'connector': 'feasibility.apple',
+            'change': change,
+          }),
+    read: (operationId, release) => ownerResult(
+      _transport,
+      'access.local.read_result',
+      operationId,
+      release,
+    ),
+    decode: (result) {
+      if (result['state'] != 'ready' || result['personal_access'] is! Map) {
+        throw const FormatException('Missing Feasibility access overview');
+      }
+      final overview = FeasibilityAccessOverview.fromJson(
+        result['personal_access'],
+      );
+      if (overview.personId != personId || overview.deviceId != deviceId) {
+        throw const FormatException('Feasibility access scope mismatch');
+      }
+      return overview;
+    },
+  );
 }
 
 final class NativeRegistryGateway implements AgentRegistryGateway {

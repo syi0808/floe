@@ -8,7 +8,7 @@ class _DataPrivacy extends StatefulWidget {
     this.androidContext,
     this.appleContext,
     this.daySnapshot,
-    this.personalAccessGateway,
+    this.feasibilityAccessGateway,
     this.platform,
   });
 
@@ -18,7 +18,7 @@ class _DataPrivacy extends StatefulWidget {
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
   final DaySnapshot? daySnapshot;
-  final AgentPersonalAccessGateway? personalAccessGateway;
+  final FeasibilityAccessGateway? feasibilityAccessGateway;
   final TargetPlatform? platform;
 
   @override

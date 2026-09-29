@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/app/runtime/owner_operation.dart';
 import 'package:floe_client/features/connections/domain/source_connection.dart';
@@ -48,7 +50,17 @@ final class AppWireNativePersonalSourceGateway
     if (expectedRevision != null && expectedRevision <= 0 ||
         connectorId == 'contacts.apple' && handles.isEmpty ||
         connectorId != 'contacts.apple' && handles.isNotEmpty ||
-        handles.toSet().length != handles.length) {
+        handles.length > 64 ||
+        handles.toSet().length != handles.length ||
+        handles.any(
+          (handle) =>
+              handle.isEmpty ||
+              handle.trim() != handle ||
+              utf8.encode(handle).length > 256 ||
+              handle.contains('*') ||
+              RegExp(r'[\x00-\x1f\x7f]').hasMatch(handle) ||
+              handle.toLowerCase() == '00000000-0000-0000-0000-000000000000',
+        )) {
       throw const FormatException('Invalid personal source setup');
     }
     final commandId = newAgentRequestId();
@@ -70,8 +82,11 @@ final class AppWireNativePersonalSourceGateway
   SourceConnection _decode(Object? raw, String connectorId) {
     if (raw is! Map) throw const FormatException('Missing personal source');
     final source = SourceConnection.fromJson(Map<String, dynamic>.from(raw));
+    final owner = connectorId == 'attention.macos'
+        ? 'macos:$deviceId'
+        : 'apple:$deviceId';
     if (source.connectorId != connectorId ||
-        source.executionOwnerId != deviceId ||
+        source.executionOwnerId != owner ||
         source.state != 'ready') {
       throw const FormatException('Personal source identity changed');
     }

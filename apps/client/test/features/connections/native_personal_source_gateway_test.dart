@@ -8,7 +8,7 @@ const deviceId = 'mac-local';
 Map<String, Object?> source(List<String> handles, int revision) => {
   'connector_id': 'contacts.apple',
   'connection_id': 'contacts.apple.local',
-  'execution_owner_id': deviceId,
+  'execution_owner_id': 'apple:$deviceId',
   'state': 'ready',
   'revision': revision,
   'source_authority': {

@@ -65,7 +65,7 @@ final class AppRuntime {
     readModel: readModel,
   );
   late final registry = NativeRegistryGateway(_transport);
-  late final personalAccess = NativePersonalAccessGateway(
+  late final feasibilityAccess = NativeFeasibilityAccessGateway(
     _transport,
     deviceId: deviceId,
   );
@@ -79,7 +79,7 @@ final class AppRuntime {
   late final owners = LocalOwnerGateways(
     vault: vault,
     registry: registry,
-    personalAccess: personalAccess,
+    feasibilityAccess: feasibilityAccess,
     memory: memory,
     memoryReview: memory,
     connections: connections,

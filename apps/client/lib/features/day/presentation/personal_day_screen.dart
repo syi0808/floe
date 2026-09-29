@@ -356,7 +356,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         macOSContext: widget.macOSContext,
         daySnapshot: controller.snapshot,
         agentController: agentController,
-        personalAccessGateway: widget.ownerGateways.personalAccess,
+        feasibilityAccessGateway: widget.ownerGateways.feasibilityAccess,
         initialDeviceCalendarDetail: openDeviceCalendarDetail,
       );
     }
@@ -364,7 +364,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       return SettingsScreen(
         pairingGateway: widget.pairingGateway,
         client: widget.serverClient,
-        personalAccessGateway: widget.ownerGateways.personalAccess,
+        feasibilityAccessGateway: widget.ownerGateways.feasibilityAccess,
         actionController: actionController,
         agentController: agentController,
         expertBindingTarget: expertBindingTarget,
