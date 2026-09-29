@@ -21,6 +21,83 @@ pub struct ConnectionObserveExpectation {
     pub members: Vec<ConnectionObserveReviewedMember>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConnectionObserveOperation {
+    Inspect {
+        connector_id: String,
+        connection_id: String,
+    },
+    Review {
+        connector_id: String,
+        connection_id: String,
+    },
+    SetEnabled {
+        connector_id: String,
+        connection_id: String,
+        enabled: bool,
+        disconnecting: bool,
+        expected: Option<ConnectionObserveExpectation>,
+    },
+}
+
+impl ConnectionObserveOperation {
+    pub fn identity(&self) -> (&str, &str) {
+        match self {
+            Self::Inspect {
+                connector_id,
+                connection_id,
+            }
+            | Self::Review {
+                connector_id,
+                connection_id,
+            }
+            | Self::SetEnabled {
+                connector_id,
+                connection_id,
+                ..
+            } => (connector_id, connection_id),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), crate::AgentFailure> {
+        use crate::AgentFailure;
+
+        let (connector_id, connection_id) = self.identity();
+        floe_context_contract::ConnectorId::try_new(connector_id)
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        floe_context_contract::ConnectionId::try_new(connection_id)
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        if let Self::SetEnabled {
+            enabled,
+            disconnecting,
+            expected,
+            ..
+        } = self
+        {
+            if *enabled == expected.is_none() || (*enabled && *disconnecting) {
+                return Err(AgentFailure::InvalidInput);
+            }
+            if let Some(expected) = expected {
+                expected.validate()?;
+                if expected.connector_id != connector_id || expected.connection_id != connection_id
+                {
+                    return Err(AgentFailure::InvalidInput);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            Self::Inspect { .. } => "connection_observe_inspect",
+            Self::Review { .. } => "connection_observe_review",
+            Self::SetEnabled { enabled: true, .. } => "connection_observe_enable",
+            Self::SetEnabled { enabled: false, .. } => "connection_observe_disable",
+        }
+    }
+}
+
 impl ConnectionObserveExpectation {
     pub fn validate(&self) -> Result<(), crate::AgentFailure> {
         use crate::AgentFailure;
@@ -181,6 +258,95 @@ impl ConnectionObserveOverview {
     }
 }
 
+#[cfg(unix)]
+#[derive(Clone, Debug)]
+pub struct ConnectionObserveResult {
+    pub operation_id: uuid::Uuid,
+    pub stage: String,
+    pub done: bool,
+    pub state: Option<crate::VaultState>,
+    pub overview: Option<ConnectionObserveOverview>,
+    pub reviewed: Option<ConnectionObserveExpectation>,
+    pub failure: Option<crate::AgentFailure>,
+}
+
+#[cfg(unix)]
+pub trait ConnectionObserveCommands {
+    fn connection_observe(
+        &self,
+        caller: &crate::CallerContext,
+        operation_id: uuid::Uuid,
+        operation: ConnectionObserveOperation,
+    ) -> Result<ConnectionObserveResult, crate::ServiceError>;
+
+    fn read_connection_observe_result(
+        &self,
+        caller: &crate::CallerContext,
+        operation_id: uuid::Uuid,
+        release: bool,
+    ) -> Result<ConnectionObserveResult, crate::ServiceError>;
+}
+
+#[cfg(unix)]
+impl ConnectionObserveCommands for crate::AppComposition {
+    fn connection_observe(
+        &self,
+        caller: &crate::CallerContext,
+        operation_id: uuid::Uuid,
+        operation: ConnectionObserveOperation,
+    ) -> Result<ConnectionObserveResult, crate::ServiceError> {
+        operation
+            .validate()
+            .map_err(crate::composition::service_failure)?;
+        self.connection_observe_operation(
+            caller,
+            operation_id,
+            Some(crate::local_operations::LocalOperationIntent::ConnectionObserve(operation)),
+            false,
+        )
+    }
+
+    fn read_connection_observe_result(
+        &self,
+        caller: &crate::CallerContext,
+        operation_id: uuid::Uuid,
+        release: bool,
+    ) -> Result<ConnectionObserveResult, crate::ServiceError> {
+        self.connection_observe_operation(caller, operation_id, None, release)
+    }
+}
+
+#[cfg(unix)]
+impl crate::AppComposition {
+    fn connection_observe_operation(
+        &self,
+        caller: &crate::CallerContext,
+        operation_id: uuid::Uuid,
+        intent: Option<crate::local_operations::LocalOperationIntent>,
+        release: bool,
+    ) -> Result<ConnectionObserveResult, crate::ServiceError> {
+        let result = self
+            .agent_vault
+            .local_request(
+                caller,
+                operation_id,
+                intent,
+                crate::local_operations::LocalOperationOwner::Access,
+                release,
+            )
+            .map_err(crate::composition::service_failure)?;
+        Ok(ConnectionObserveResult {
+            operation_id: result.request_id,
+            stage: result.stage,
+            done: result.done,
+            state: result.state,
+            overview: result.connection_observe,
+            reviewed: result.reviewed_connection_observe,
+            failure: result.failure,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,6 +405,49 @@ mod tests {
             mixed_source.validate(),
             Err(crate::AgentFailure::InvalidInput)
         );
+    }
+
+    #[test]
+    fn mutation_requires_exact_review_only_for_enable() {
+        let expected = expectation();
+        let operation = ConnectionObserveOperation::SetEnabled {
+            connector_id: expected.connector_id.clone(),
+            connection_id: expected.connection_id.clone(),
+            enabled: true,
+            disconnecting: false,
+            expected: Some(expected.clone()),
+        };
+        assert_eq!(operation.validate(), Ok(()));
+        let mut missing = operation.clone();
+        if let ConnectionObserveOperation::SetEnabled { expected, .. } = &mut missing {
+            *expected = None;
+        }
+        assert_eq!(missing.validate(), Err(crate::AgentFailure::InvalidInput));
+        let mut wrong_connection = operation.clone();
+        if let ConnectionObserveOperation::SetEnabled { connection_id, .. } = &mut wrong_connection
+        {
+            *connection_id = Uuid::new_v4().to_string();
+        }
+        assert_eq!(
+            wrong_connection.validate(),
+            Err(crate::AgentFailure::InvalidInput)
+        );
+        let mut disconnecting = operation;
+        if let ConnectionObserveOperation::SetEnabled { disconnecting, .. } = &mut disconnecting {
+            *disconnecting = true;
+        }
+        assert_eq!(
+            disconnecting.validate(),
+            Err(crate::AgentFailure::InvalidInput)
+        );
+        let disable = ConnectionObserveOperation::SetEnabled {
+            connector_id: expected.connector_id,
+            connection_id: expected.connection_id,
+            enabled: false,
+            disconnecting: false,
+            expected: None,
+        };
+        assert_eq!(disable.validate(), Ok(()));
     }
 
     fn member(view: &str, state: GrantState) -> ConnectionObserveMember {

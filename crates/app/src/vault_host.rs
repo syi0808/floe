@@ -634,6 +634,8 @@ struct Progress {
     remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
     connection_observe_status: Option<String>,
     reviewed_observe_bundle: Option<crate::RemoteConnectionObserveExpectation>,
+    connection_observe: Option<crate::ConnectionObserveOverview>,
+    reviewed_connection_observe: Option<crate::ConnectionObserveExpectation>,
     personal_access: Option<floe_access::PersonalAccessOverview>,
     calendar_access: Option<crate::CalendarAccessOverview>,
     calendar_actions: Option<crate::CalendarActionsResult>,
@@ -1297,6 +1299,8 @@ impl Worker {
             remote_pairing: progress.remote_pairing.clone(),
             connection_observe_status: progress.connection_observe_status.clone(),
             reviewed_observe_bundle: progress.reviewed_observe_bundle.clone(),
+            connection_observe: progress.connection_observe.clone(),
+            reviewed_connection_observe: progress.reviewed_connection_observe.clone(),
             personal_access: progress.personal_access.clone(),
             calendar_access: progress.calendar_access.clone(),
             calendar_actions: progress.calendar_actions.clone(),
@@ -1805,6 +1809,8 @@ struct VaultExecutionResult {
     remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
     connection_observe_status: Option<String>,
     reviewed_observe_bundle: Option<crate::RemoteConnectionObserveExpectation>,
+    connection_observe: Option<crate::ConnectionObserveOverview>,
+    reviewed_connection_observe: Option<crate::ConnectionObserveExpectation>,
     personal_access: Option<floe_access::PersonalAccessOverview>,
     calendar_access: Option<crate::CalendarAccessOverview>,
     calendar_actions: Option<crate::CalendarActionsResult>,
@@ -1870,6 +1876,8 @@ fn finish_job(
                 progress.remote_owner = result.remote_owner;
                 progress.connection_observe_status = result.connection_observe_status;
                 progress.reviewed_observe_bundle = result.reviewed_observe_bundle;
+                progress.connection_observe = result.connection_observe;
+                progress.reviewed_connection_observe = result.reviewed_connection_observe;
                 progress.personal_access = result.personal_access;
                 progress.calendar_access = result.calendar_access;
                 progress.calendar_actions = result.calendar_actions;
@@ -2457,6 +2465,27 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     source_authority: subject.source_authority,
                     native_subject_fingerprint: subject.native_subject_fingerprint,
                 }),
+                ..VaultExecutionResult::ready()
+            })
+        }
+        WorkerAction::ConnectionObserve {
+            operation,
+            device_id,
+        } => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            let (overview, reviewed) = personal_access::apply_connection_observe(
+                core,
+                vault.vault.as_ref(),
+                &personal_grants::native_driver(local_context),
+                job.person,
+                device_id,
+                operation,
+                job.cancellation.clone(),
+            )
+            .await?;
+            Ok(VaultExecutionResult {
+                connection_observe: overview,
+                reviewed_connection_observe: reviewed,
                 ..VaultExecutionResult::ready()
             })
         }

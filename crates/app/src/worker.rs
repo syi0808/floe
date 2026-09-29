@@ -152,6 +152,10 @@ pub enum WorkerAction {
     ContactsAccess {
         change: Box<floe_access::ContactsAccessConfiguration>,
     },
+    ConnectionObserve {
+        operation: crate::ConnectionObserveOperation,
+        device_id: String,
+    },
     CalendarAction {
         operation: CalendarActionOperation,
     },
@@ -211,6 +215,7 @@ impl WorkerAction {
             Self::CalendarAction { .. } => "calendar_action",
             Self::CalendarSubjectPreview { .. } => "calendar_subject_preview",
             Self::CalendarAccess { .. } => "calendar_access",
+            Self::ConnectionObserve { operation, .. } => operation.name(),
             Self::InspectProposal { .. } => "inspect_proposal",
             Self::ConversationSession { .. } => "conversation_session",
             Self::ConversationTurn { .. } => "conversation_turn",
@@ -239,6 +244,7 @@ impl WorkerAction {
                 | Self::PersonalAccess { .. }
                 | Self::ContactsAccess { .. }
                 | Self::CalendarAccess { .. }
+                | Self::ConnectionObserve { .. }
                 | Self::CalendarSubjectPreview { .. }
                 | Self::ConversationTurn { .. }
                 | Self::ConversationResume { .. }
@@ -281,6 +287,8 @@ pub struct WorkerResult {
     pub remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
     pub connection_observe_status: Option<String>,
     pub reviewed_observe_bundle: Option<crate::RemoteConnectionObserveExpectation>,
+    pub connection_observe: Option<crate::ConnectionObserveOverview>,
+    pub reviewed_connection_observe: Option<crate::ConnectionObserveExpectation>,
     pub personal_access: Option<floe_access::PersonalAccessOverview>,
     pub calendar_access: Option<crate::CalendarAccessOverview>,
     pub calendar_actions: Option<crate::CalendarActionsResult>,

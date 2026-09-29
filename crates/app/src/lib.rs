@@ -97,9 +97,11 @@ pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalI
 #[cfg(unix)]
 pub use composition::{AppComposition, AppOpenError, open};
 pub use connection_observe::{
-    ConnectionObserveExpectation, ConnectionObserveMember, ConnectionObserveOverview,
-    ConnectionObserveReviewedMember, ConnectionObserveStatus,
+    ConnectionObserveExpectation, ConnectionObserveMember, ConnectionObserveOperation,
+    ConnectionObserveOverview, ConnectionObserveReviewedMember, ConnectionObserveStatus,
 };
+#[cfg(unix)]
+pub use connection_observe::{ConnectionObserveCommands, ConnectionObserveResult};
 #[cfg(unix)]
 pub use connection_services::{
     ConnectionsQueries, ConnectionsResult, NativeCalendarSourceCommands,

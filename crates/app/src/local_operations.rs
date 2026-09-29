@@ -13,6 +13,7 @@ pub(crate) enum LocalOperationIntent {
     ExpertInspection(ExpertInspection),
     LocalAccessCommand(LocalAccessCommand),
     LocalAccessInspection(LocalAccessInspection),
+    ConnectionObserve(crate::ConnectionObserveOperation),
     KnowledgeInspection(KnowledgeInspection),
     MemoryDecision(MemoryReviewDecision),
     Connections,
@@ -40,6 +41,7 @@ impl LocalOperationIntent {
             Self::LocalAccessCommand(_) | Self::LocalAccessInspection(_) => {
                 LocalOperationOwner::Access
             }
+            Self::ConnectionObserve(_) => LocalOperationOwner::Access,
             Self::KnowledgeInspection(_) | Self::MemoryDecision(_) => {
                 LocalOperationOwner::Knowledge
             }
@@ -81,6 +83,10 @@ impl LocalOperationIntent {
             }
             Self::LocalAccessCommand(command) => command.action(caller),
             Self::LocalAccessInspection(inspection) => inspection.action(caller),
+            Self::ConnectionObserve(operation) => WorkerAction::ConnectionObserve {
+                operation: operation.clone(),
+                device_id: caller.device_id().to_owned(),
+            },
             Self::KnowledgeInspection(KnowledgeInspection::Memory) => WorkerAction::Memory,
             Self::KnowledgeInspection(KnowledgeInspection::Review) => {
                 WorkerAction::MemoryReview { decision: None }
