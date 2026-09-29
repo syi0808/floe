@@ -37,6 +37,7 @@ For Rust workspace or shared-contract/runtime changes, the default broad gate is
 cargo check --workspace --lib
 cargo test --workspace --no-fail-fast
 python3 tools/architecture/check_boundaries.py
+python3 tools/architecture/check_connection_observe_conformance.py
 git diff --check
 ~~~
 
@@ -115,6 +116,7 @@ For architecture-affecting changes, tests are only one part of the gate. Also co
 - migration-only optional state is absent,
 - residual searches for removed symbols/branches are clean or explicitly explained,
 - current architecture docs match the code.
+- Connection-owned Observe source semantics pass `tools/architecture/check_connection_observe_conformance.py` when affected.
 
 Use the architecture-change skill's residual-audit section.
 

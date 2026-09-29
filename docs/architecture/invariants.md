@@ -106,7 +106,7 @@ Temporary complexity without an explicit deletion step is permanent complexity i
 
 When a rule can be checked mechanically, repository tooling or CI should enforce it.
 
-Current examples include dependency policy via tools/architecture/check_boundaries.py and source-level Expert extensibility invariants via tools/architecture/check_expert_extensibility.py. Future checks may cover public/FFI surface and architectural exception registries.
+Current examples include dependency policy via tools/architecture/check_boundaries.py, Expert extensibility via tools/architecture/check_expert_extensibility.py, and Connection-owned Observe authority via tools/architecture/check_connection_observe_conformance.py. Future checks may cover public/FFI surface and architectural exception registries.
 
 Documentation explains semantics and intent. It should not become a second manually maintained representation of facts that can be derived from the repository.
 

@@ -55,6 +55,7 @@ Pure cross-owner value contracts live in `crates/contracts/`. Built-in Experts a
 - `tools/architecture/module-dependencies.json` is the **allowed dependency policy**, not a manually copied current graph.
 - `tools/architecture/check_boundaries.py` compares manifests with that policy and requires the current target packages and paths.
 - `tools/architecture/check_expert_extensibility.py` checks source-level Expert deletion and generic-runtime invariants separately from dependency topology.
+- `tools/architecture/check_connection_observe_conformance.py` checks source-level Connection-owned Observe authority and first-party policy invariants.
 - These architecture documents describe stable current ownership and runtime boundaries.
 - `invariants.md` defines cross-cutting final-state properties; [architecture evolution](../development/architecture-evolution.md) defines how changes converge back to those properties.
 - Task-specific execution plans may own temporary sequencing. ADRs own durable rationale. Neither replaces current architecture documentation.

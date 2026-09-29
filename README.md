@@ -42,6 +42,7 @@ During structural work, check the affected module and boundaries rather than sta
 cargo check -p floe-conversation
 python3 tools/architecture/check_boundaries.py
 python3 tools/architecture/check_expert_extensibility.py
+python3 tools/architecture/check_connection_observe_conformance.py
 git diff --check
 ```
 
