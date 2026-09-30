@@ -2,7 +2,7 @@
 
 Prerequisite: 08 complete.
 
-Status: Incomplete — residual Calendar native-fixture closure ready. Golden tests are explicitly excluded from the 09 completion gate by operator instruction; execute section 17.
+Status: Incomplete — native bundle fixture passes the three Day scenarios; the required Action evidence-fence assertion fails against the current user-proposal contract. Golden tests remain excluded from the 09 completion gate.
 
 Planning base: main at `a4f292cb77bf3dc6a3593c035fc80a5245c79645` on 2026-09-30.
 
@@ -952,6 +952,135 @@ under `/tmp/floe09/`. They are diagnostics, not a second repository progress doc
 - Plan bundle and `docs/README.md` active-plan pointer are retained.
 - Plan retirement was **not performed**. No work beyond Checkpoint 09 was started.
 
+
+### Residual closure — 2026-09-30 (blocked, not complete)
+
+#### Snapshot and bounded implementation
+
+- Residual start: clean `main` at `2a08dd1bc81719d4a76f0fa6df6f126872183a24`.
+- First and final successful `git fetch origin`: `origin/main` remained
+  `2a08dd1bc81719d4a76f0fa6df6f126872183a24`.
+- Harness commit: `10b8a2437555d878d19acd1d5edba54fd5b3d6ea`
+  (`test: reproduce calendar residual gate in native fixture bundle`).
+- Committed reproduction snapshot: that harness commit. Final HEAD is the
+  evidence-only commit containing this subsection, titled
+  `docs: record checkpoint 09 residual action gate blocker`; resolve it with
+  `git log -1 --format=%H -- docs/development/plans/connection-observe-authority/09-verification-and-docs.md`.
+- No completion/closure commit was made. Parent 09 remains Incomplete.
+
+Added:
+- `apps/client/integration/native_calendar_fixture_test.dart`;
+- `apps/client/integration/support/native_calendar_fixture_host.dart`;
+- `tools/validation/native-calendar-fixture-Info.plist`.
+
+Changed test support:
+- `apps/client/integration/support/disposable_product_profile.dart`: allow an
+  explicitly supplied Person for private validation profiles. The default random
+  Person remains unchanged for existing callers. Native Calendar requires the
+  canonical local Person (`NativeCalendarReadAccess::validate_request`); supplying
+  a random Person correctly failed source establishment in the first harness run.
+  The Calendar scenarios use `localPersonId` with fresh private profile roots and
+  unique device IDs. They never create a Vault or touch shared credential slots.
+
+The parent copies, rather than modifies, the SDK `flutter_tester` into a private
+temporary `.app`, builds the child assets, compiles the existing
+`NativeCalendarFixture.swift` with `xcrun swiftc -emit-library -warnings-as-errors`,
+sets `@rpath/libfloe_eventkit.dylib`, ad-hoc signs and verifies the dylib/bundle,
+and launches the copied executable. Only the same-source FFI path is added to the
+child environment. Production bundle-relative loading, `probe_calendar_source`,
+`DeviceCalendarSubject`, and native provider validation execute unchanged.
+The child uses `AppRuntime`, its `AppWireCalendarSourceGateway`, `NativeDayGateway`
+and `CalendarActionFacade`; no `flutter_test` or `test/support/app_host.dart` import.
+It checks the fixture subject fingerprint and Ready lifecycle explicitly.
+The existing Swift fixture's `creates.txt` sentinel proves no native write occurred.
+
+Production Rust/App/Flutter runtime, permission checks, public/FFI contracts,
+dependencies, schemas, native loader and provider fixture: **unchanged**.
+Registry UI/test, `agent_registry.png`, and golden tolerance: **unchanged**.
+No fallback, subject bypass, compatibility route or new skip was added.
+
+#### Exact reproduction and results
+
+Commands actually run:
+- `cargo build -p floe-ffi`: PASS.
+- `cd apps/client && dart format integration/native_calendar_fixture_test.dart integration/support/native_calendar_fixture_host.dart`:
+  PASS; changed test-support Dart was also formatted.
+- `cd apps/client && flutter test integration/native_calendar_fixture_test.dart --reporter expanded`:
+  FAIL on the working harness and again on committed `10b8a243`;
+  parent result **0 passed / 1 failed**, child exit **1**.
+- `git diff --check`: PASS; production/golden-path diff search: empty.
+
+Child scenario evidence on the committed snapshot:
+
+| Scenario | Result |
+|---|---|
+| A. Day mirror/source continuity | PASS — both sync mirror revisions, content change, unchanged source revision/authority, and reopen identity/resources/content/revisions checked; `DAY_MIRROR_SOURCE_CONTINUITY_PASSED` |
+| B. AllAvailable 1→2 reconciliation | PASS — production inventory reconciliation grows resources, increments source revision, advances authority; permission-denied read status retains the expanded revision/authority/resources; `ALL_AVAILABLE_SOURCE_AUTHORITY_PASSED` |
+| C. Wide source / bounded publication | PASS — reviewed source retains 129 resources, Day imports 129 events without a mirror error; `WIDE_SOURCE_BOUNDED_PUBLICATION_PASSED` |
+| D. Reviewed native source without current evidence | FAIL — proposal returned successfully; `ACTION_FENCE_DIAGNOSTIC rejected=false rows=1`; no native write occurred |
+
+All four private profiles emitted `VALIDATION_PROFILE_REMOVED`; parent teardown
+removed its temporary bundle/assets. No personal Calendar was read or written.
+Raw reproduction logs are `/tmp/floe09-residual/fixture-initial.log`,
+`fixture-final.log`, and `fixture-committed.log`, not a repository progress file.
+
+#### Blocker classification and stop boundary
+
+This failure is **not** the missing-dylib environment mismatch: reviewed native
+creation succeeds with the fixture. It is a mismatch between §17.4 D's required
+evidence-fence assertion and the current user-proposal runtime contract:
+
+- `crates/app/src/vault_host/product_actions.rs:110` maps
+  `CalendarActionOperation::Propose` to the user `CalendarActionCommand::Propose`;
+- `crates/app/src/action_facade.rs:152` calls Actions `propose_calendar_action`;
+- `crates/modules/actions/src/application/service.rs:72` drafts then persists a
+  proposal; `draft_calendar_action` checks the future interval and the current
+  serving source/destination, not a Context dependency or delegated artifact;
+- the old standard test expected Conflict because its source was Pending. The
+  reviewed-native lifecycle now correctly starts Ready. Lack of current evidence
+  does not recreate that old source-state conflict;
+- delegated artifact/evidence publication has a separate current fence, but this
+  facade request supplies no delegated artifact/evidence identity. Substituting
+  that other request merely to obtain a rejection would not prove the planned
+  facade assertion.
+
+No production defect fix was made: imposing a new evidence prerequisite on this
+user-proposal path would change its admission meaning rather than fix native
+fixture availability. §17.4 D must be reconciled with the intended user versus
+delegated proposal contract before proceeding; no assertion was weakened and no
+Ready source was made Pending to manufacture a pass.
+
+Execution stopped during R2 at the reproducible D failure. R3 explicitly requires
+all bundle scenarios to pass first, so **no standard tests were moved/deleted**;
+the original three-test Day file and old Action scenario remain pending that gate.
+No skipped duplicates were introduced. The new failing regression is retained as
+the deterministic blocker reproducer, not claimed as completed migration coverage.
+
+Later gates were **NOT RUN**, not passed or unavailable:
+- R4 Flutter analyze, focused action/Registry tests, full non-golden suite;
+- R5 macOS build, disposable local-server pairing, Contacts, Health,
+  FeasibilityProvider, ScreenTimeGate and `check-native.sh`;
+- R6 three checker suites/checkers, metadata, workspace check/broad serialized
+  Rust, final FFI rebuild, Go test/race/vet and disposable loopback.
+
+Non-golden full-suite count: **not measured in this residual run**.
+Golden result: **IGNORED — operator excluded golden tests**; no new Registry run,
+no golden modification; historical mismatch remains classified separately.
+Live smoke: **SKIPPED — no explicitly approved disposable live source/device/account**.
+
+Diagnostic residual searches from §17.9 were executed:
+- `native Calendar unavailable`: no literal test/integration matches;
+- `pending native source`: original Action test remains, because R3 was not reached;
+- `FixtureCalendarAdapter|calendar_gateway_test\.dart`: original Day/Action test
+  references and new integration child, classified as unclosed migration placement;
+- native library/fixture references: existing runtime bundle paths/provider tests
+  plus the bounded validation parent; no production loader override.
+
+`git diff --check` passes. The harness commit had a clean worktree; after the
+evidence-only commit final cleanliness is checked with `git status --porcelain`.
+The parent README remains **09 Incomplete**, not Complete. Plan bundle and
+`docs/README.md` active-plan pointer remain intact; retirement was not performed.
+No work beyond Checkpoint 09 was started.
 
 ## 17. Residual closure plan — 2026-09-30
 
