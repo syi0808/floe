@@ -2,7 +2,7 @@
 
 Prerequisite: 08 complete.
 
-Status: Incomplete — native bundle fixture passes the three Day scenarios; the required Action evidence-fence assertion fails against the current user-proposal contract. Golden tests remain excluded from the 09 completion gate.
+Status: Incomplete — residual native-fixture closure continues. The stale Action proposal-fence assertion has been corrected to the current user-proposal contract; golden tests remain excluded from the 09 completion gate.
 
 Planning base: main at `a4f292cb77bf3dc6a3593c035fc80a5245c79645` on 2026-09-30.
 
