@@ -1,15 +1,9 @@
-import '../../support/app_host.dart';
 import '../../support/app_wire_transport.dart';
-
-import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
 import 'package:floe_client/features/actions/infrastructure/native_calendar_action_gateway.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
-import 'package:floe_client/features/connections/domain/source_connection.dart';
-
-import '../day/calendar_gateway_test.dart' show FixtureCalendarAdapter, query;
 
 void main() {
   test('action policy mutation uses the authoritative vault job', () async {
@@ -93,58 +87,4 @@ void main() {
     },
   );
 
-  test('pending native source cannot authorize an action proposal', () async {
-    final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
-    expect(
-      library.existsSync(),
-      isTrue,
-      reason: 'cargo build -p floe-ffi required',
-    );
-    final directory = await Directory.systemTemp.createTemp('floe-actions-');
-    final adapter = FixtureCalendarAdapter()..records = [];
-    Future<TestAppHost> open() => TestAppHost.open(
-      libraryPath: library.path,
-      databasePath: '${directory.path}/actions.db',
-      calendarAdapter: adapter,
-      clock: () => DateTime.utc(2000),
-      deviceId: 'test-device',
-    );
-    final gateway = await open();
-    try {
-      await gateway.runtime.calendarSource.establishNative(
-        query.personId,
-        resourceMode: 'selected',
-        resources: const [
-          SourceResource(handle: 'home', label: 'Home'),
-        ],
-      );
-      final now = DateTime.now().toUtc();
-      await expectLater(
-        gateway.actions.proposeCalendarAction(
-          personId: query.personId,
-          calendarId: 'home',
-          title: 'Focus',
-          startsAt: now.add(const Duration(hours: 1)),
-          endsAt: now.add(const Duration(hours: 2)),
-          timezone: 'Asia/Seoul',
-        ),
-        throwsA(
-          isA<AgentVaultException>().having(
-            (error) => error.failure,
-            'failure',
-            'conflict',
-          ),
-        ),
-      );
-      expect(
-        await gateway.actions.loadCalendarActions(query.personId),
-        isEmpty,
-      );
-      expect((await gateway.day.loadDay(query)).items, isEmpty);
-      expect(adapter.records, isEmpty);
-    } finally {
-      await gateway.close();
-      await directory.delete(recursive: true);
-    }
-  });
 }

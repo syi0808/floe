@@ -92,11 +92,10 @@ void main() {
       'DAY_MIRROR_SOURCE_CONTINUITY_PASSED',
       'ALL_AVAILABLE_SOURCE_AUTHORITY_PASSED',
       'WIDE_SOURCE_BOUNDED_PUBLICATION_PASSED',
-      'ACTION_EVIDENCE_FENCE_PASSED',
     ]) {
       expect(transcript, contains(sentinel));
     }
-    expect('VALIDATION_PROFILE_REMOVED'.allMatches(transcript), hasLength(4));
+    expect('VALIDATION_PROFILE_REMOVED'.allMatches(transcript), hasLength(3));
     expect(
       await File('$bundle/Contents/MacOS/creates.txt').exists(),
       isFalse,

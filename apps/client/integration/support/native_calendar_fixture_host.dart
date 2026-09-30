@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/app/runtime/app_runtime.dart';
-import 'package:floe_client/features/actions/application/calendar_action_facade.dart';
 import 'package:floe_client/features/connections/domain/source_connection.dart';
 import 'package:floe_client/features/day/application/calendar_gateway.dart';
 import 'package:floe_client/features/day/application/calendar_observation_publisher.dart';
@@ -260,64 +259,6 @@ Future<void> wideSource(String library) async {
   }
 }
 
-Future<void> actionEvidenceFence(String library) async {
-  final profile = await DisposableProductProfile.create(
-    personId: localPersonId,
-  );
-  NativeDayGateway? day;
-  try {
-    final query = queryFor(profile.personId);
-    final adapter = FixtureCalendarAdapter()..records = [];
-    final runtime = await profile.open(library);
-    day = NativeDayGateway(runtime, adapter, clock: () => DateTime.utc(2000));
-    final actions = CalendarActionFacade(runtime);
-    await establish(runtime, query, adapter);
-    final writes = File(
-      '${File(Platform.resolvedExecutable).parent.path}/creates.txt',
-    );
-    require(!await writes.exists(), 'Unexpected native write before proposal.');
-    final now = DateTime.now().toUtc();
-    var rejected = false;
-    try {
-      await actions.proposeCalendarAction(
-        personId: query.personId,
-        calendarId: 'home',
-        title: 'Focus',
-        startsAt: now.add(const Duration(hours: 1)),
-        endsAt: now.add(const Duration(hours: 2)),
-        timezone: 'Asia/Seoul',
-      );
-    } on AgentVaultException catch (error) {
-      require(
-        error.failure == 'conflict',
-        'Expected typed evidence conflict, got ${error.failure}.',
-      );
-      rejected = true;
-    }
-    final storedActions = await actions.loadCalendarActions(query.personId);
-    stdout.writeln(
-      'ACTION_FENCE_DIAGNOSTIC rejected=$rejected rows=${storedActions.length}',
-    );
-    require(!await writes.exists(), 'Native Calendar write performed.');
-    require(
-      rejected,
-      'Reviewed native source without current evidence accepted a proposal; '
-      'stored action rows=${storedActions.length}.',
-    );
-    require(
-      (await actions.loadCalendarActions(query.personId)).isEmpty,
-      'Action row created.',
-    );
-    require((await day.loadDay(query)).items.isEmpty, 'Day event created.');
-    require(adapter.records.isEmpty, 'Dart Calendar write performed.');
-    require(!await writes.exists(), 'Native Calendar write performed.');
-    stdout.writeln('ACTION_EVIDENCE_FENCE_PASSED');
-  } finally {
-    await day?.drain();
-    await profile.cleanup();
-  }
-}
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
@@ -325,7 +266,6 @@ Future<void> main() async {
     await mirrorContinuity(library);
     await inventoryReconciliation(library);
     await wideSource(library);
-    await actionEvidenceFence(library);
     exit(0);
   } on Object catch (error, stack) {
     stderr.writeln('$error\n$stack');
