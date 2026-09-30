@@ -2,7 +2,7 @@
 
 Prerequisite: 08 complete.
 
-Status: Incomplete — required full Flutter test gate failed on 2026-09-30; see section 16.
+Status: Incomplete — residual Calendar native-fixture closure ready. Golden tests are explicitly excluded from the 09 completion gate by operator instruction; execute section 17.
 
 Planning base: main at `a4f292cb77bf3dc6a3593c035fc80a5245c79645` on 2026-09-30.
 
