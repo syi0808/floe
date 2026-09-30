@@ -2,7 +2,7 @@
 
 Prerequisite: 08 complete.
 
-Status: Ready for execution. Not started.
+Status: Incomplete — required full Flutter test gate failed on 2026-09-30; see section 16.
 
 Planning base: main at `a4f292cb77bf3dc6a3593c035fc80a5245c79645` on 2026-09-30.
 
@@ -726,3 +726,225 @@ After Checkpoint 09 has completed and the user explicitly accepts the final resu
 - use Git history as the archive.
 
 Do not perform this retirement as part of the 09 implementation or closure commit.
+
+## 16. Execution evidence — 2026-09-30
+
+### Outcome and snapshot
+
+**Incomplete.** The required full Flutter test gate failed deterministically. Execution
+stopped at that gate; no macOS build, pairing integration or Apple deterministic gate
+was advanced, and 09 is not marked Complete. No architecture was reopened and no
+production/test assertion or golden was changed to force a pass.
+
+- Start: clean local `main` at `fc761ded422ef979ff3b977000a7c89dfb4a672b`.
+- First fetched `origin/main`: `fc761ded422ef979ff3b977000a7c89dfb4a672b`.
+- Final fetched `origin/main`: `fc761ded422ef979ff3b977000a7c89dfb4a672b`; final fetch succeeded after failure diagnosis.
+- Final verification snapshot: `102eec86faa76dea339f2216ae3998666a26eef4`.
+- 09-B documentation commit: `5cd1f937021af010a41f9595767a1994ca821fcb`.
+- 09-C ADR commit: `102eec86faa76dea339f2216ae3998666a26eef4`.
+- Final HEAD / evidence commit: the commit containing this section, titled
+  `docs: record checkpoint 09 verification blockers`; resolve its SHA with
+  `git log -1 --format=%H -- docs/development/plans/connection-observe-authority/09-verification-and-docs.md`.
+  Its only additional changes are checkpoint status/evidence, not verification inputs.
+- Execution order: fetched baseline/metadata/checkers → all focused regressions →
+  production residual audit → current docs/ADR → full gates through Flutter failure →
+  focused failure diagnosis and evidence. Closure/retirement acceptance was not reached.
+
+Planning anchors were re-resolved on the actual execution HEAD using source searches
+and named test execution. The planning-base-to-start diff changes only this plan,
+not source. Principal current anchors include App 11→12 conformance at
+`crates/app/src/vault_host/tests/calendar_connection_observe.rs:294`,
+Context growth at `crates/modules/context/tests/native_calendar_read.rs:479`,
+policy at `crates/app/src/first_party_observe.rs:251`, hosted resource continuity at
+`crates/app/src/vault_host/remote_observe.rs:951`, native/hosted crash recovery at
+`crates/app/src/vault_host/tests/interaction_resolution.rs:2006` / `:3648`,
+recipient source identity at
+`crates/modules/access/src/application/recipient_consent.rs:700`, and Actions source
+fence / response-loss recovery at
+`crates/app/src/vault_host/tests/proposals.rs:205` /
+`crates/app/src/vault_host/tests/native_actions.rs:177`.
+
+### Frozen owner/path and focused evidence
+
+Connections retains current source resources/subject/`SourceAuthority`; Access retains
+stable logical standing grants/`GrantAuthority`; Experts retains connection/View binding;
+Context reloads current sources and records exact physical provenance. Product callers
+use `ConnectionObserve`; hosted acquisition uses generic signed View
+preview/admission/read/release. No owner, public contract, dependency, permission mode,
+compatibility path or authority was introduced.
+
+All 29 commands from section 4 passed, with one named test matched per filter. App's
+separate integration target can report zero filtered matches, but the requested named
+test in the crate matched and passed; there was no zero-match command.
+
+| Exact command | Result |
+|---|---|
+| `cargo test -p floe-app calendar_connection_observe_conformance_eleven_to_twelve -- --test-threads=1` | PASS — 1 named test |
+| `cargo test -p floe-context --test native_calendar_read current_resource_growth_reads_all_calendars_and_stales_old_dependency` | PASS — 1 named test |
+| `cargo test -p floe-app common_observe_pauses_without_changing_calendar_source -- --test-threads=1` | PASS — 1 named test |
+| `cargo test -p floe-app common_observe_rejects_stale_grant_source_subject_and_identity -- --test-threads=1` | PASS — 1 named test |
+| `cargo test -p floe-context --test native_calendar_read native_view_rejects_connection_change_after_observation` | PASS — 1 named test |
+| `cargo test -p floe-context --test native_calendar_read native_view_rejects_device_generation_drift` | PASS — 1 named test |
+| `cargo test -p floe-context --test native_calendar_read native_admission_rejects_missing_or_changed_authority` | PASS — 1 named test |
+| `cargo test -p floe-app every_member_digest_matches_the_activation_policy` | PASS — 1 named test |
+| `cargo test -p floe-app policy_never_default_grants_extensions_or_wildcards` | PASS — 1 named test |
+| `cargo test -p floe-app shipped_permission_digest_does_not_depend_on_registry_state -- --test-threads=1` | PASS — 1 named test |
+| `cargo test -p floe-app calendar_consumers_match_trusted_shipped_capability_declarations` | PASS — 1 named test |
+| `cargo test -p floe-app product_review_uses_common_connection_expectation_without_routing_fields` | PASS — 1 named test |
+| `cargo test -p floe-app review_then_enable_binds_gmail_bundle_atomically` | PASS — 1 named test |
+| `cargo test -p floe-app calendar_resource_edit_keeps_logical_grant_without_automatic_review` | PASS — 1 named test |
+| `cargo test -p floe-app stale_descriptor_refuses_without_mutation` | PASS — 1 named test |
+| `cargo test -p floe-app disable_still_pauses_and_disconnects_without_expectations` | PASS — 1 named test |
+| `cargo test -p floe-app gmail_authority_rotation_after_review_supersedes_without_mutation -- --test-threads=1` | PASS — 1 named test |
+| `cargo test -p floe-app gmail_bad_signature_never_mutates_nor_resolves -- --test-threads=1` | PASS — 1 named test |
+| `cargo test -p floe-app remote_calendar_allow_resolves_through_hosted_connection -- --test-threads=1` | PASS — 1 named test |
+| `cargo test -p floe-app fresh_approve_with_drift_supersedes_without_mutation -- --test-threads=1` | PASS — 1 named test |
+| `cargo test -p floe-app native_commit_then_crash_reopens_and_resolves_without_second_advance -- --test-threads=1` | PASS — 1 named test |
+| `cargo test -p floe-app gmail_commit_then_crash_reopens_and_resolves_without_second_mutation -- --test-threads=1` | PASS — 1 named test |
+| `cargo test -p floe-app observer_cancellation_never_revokes_a_recorded_decision -- --test-threads=1` | PASS — 1 named test |
+| `cargo test -p floe-access consent_identity_binds_grant_and_exact_source_resources_and_authority` | PASS — 1 named test |
+| `cargo test -p floe-access changed_review_fields_change_consent_identity` | PASS — 1 named test |
+| `cargo test -p floe-app consent_approve_grants_exact_review_and_resolves -- --test-threads=1` | PASS — 1 named test |
+| `cargo test -p floe-app consent_wrong_device_never_grants -- --test-threads=1` | PASS — 1 named test |
+| `cargo test -p floe-app source_resource_change_blocks_old_calendar_receipt_without_mirror_revision_change -- --test-threads=1` | PASS — 1 named test |
+| `cargo test -p floe-app native_executor_uses_rust_ledger_and_lookup_only_after_response_loss -- --test-threads=1` | PASS — 1 named test |
+
+Together these prove 11 physical resources → one candidate/logical permission/binding;
+11→12 advances source authority, preserves GrantId/GrantAuthority/candidate ID/binding
+revision and Active Observe, rejects old review/dependency, and reads all twelve next.
+Native subject/identity/generation drift rejects. Shipped policy/digest is independent
+of Registry and denies extensions/wildcards. Hosted signature/authority drift cannot
+mutate or resolve stale review. Native/hosted commit-then-crash rejoins without a second
+mutation; observer cancellation does not revoke recorded intent. Exact-recipient identity
+binds both resource sets and authorities; wrong device rejects. Actions source fences
+and Rust-ledger lookup-only lost-response recovery remain intact.
+
+### Residual and documentation audit
+
+All production searches in section 5 ran before edits and again after verification;
+`check_connection_observe_conformance.py` also passed.
+
+- Removed remote Calendar types/routes, old per-leaf consumer composition, old
+  product access contracts and leaf-scoped ConnectionObserve inputs: no matches.
+- `consumer_policy` / `policy_authority` strings in Context contracts,
+  Conversation and protocol are negative deserialization tests, not runtime authority.
+- `granted_resources` strings in protocol are rejection tests for obsolete projections.
+- Old Calendar policy/mapping table names in
+  `crates/adapters/vault/src/vault.rs:338` and
+  `crates/adapters/vault/src/vault/calendar_grants.rs:767` are fail-closed stale-schema
+  detection and its regression, not a decoder or fallback.
+- `calendar_ids` / `selected_handles`: Connections source setup, native/provider/server
+  acquisition, Context lease/observation provenance and Actions exact destination/source
+  evidence, plus their tests. Dormant Android adapter fields were not extended or tested.
+- `source_resources`: exact physical provenance, signed hosted evidence and read-only
+  source presentation; not another permission selection list.
+- `RemoteConnectionObserveExpectation`: crate-private hosted signed evidence;
+  not a product wire/routing contract or independent permission owner.
+- `calendar_lease`: current Context lease/provenance; `calendar_access`: canonical
+  App composition/current Context and system-subject checks, not an obsolete product editor.
+- No unexplained legacy production match or compatibility exception remains.
+
+Current architecture modules/runtime/invariants, authority/recovery, product privacy,
+client/server runbooks and relevant Calendar design text were inspected against source.
+Correct ownership statements were left intact. Current doc changes:
+`apps/client/README.md` (multi-Calendar source set, logical Observe, evidence and Action
+fences); `docs/design/s1-calendar-ui.md` (remove false single-native-calendar implementation
+claim); `docs/architecture/authority-recovery.md` (correct accepted ADR 0027 status and
+link the durable amendment).
+
+ADR `docs/decisions/0031-connection-owned-source-scope-and-logical-observe.md`,
+**Connection-owned source scope and logical standing Observe**, amends 0027 standing
+epochs, 0028 physical-source versus logical permission/resource edits and 0030 durable
+Observe reviewed-target semantics; it extends 0029. The ADR index includes 0031 and
+amendment navigation from 0027/0028/0030. Bodies of those historical ADRs are unchanged.
+
+Section 9 searches ran after these edits: current architecture/product/client runbook
+contains none of the old authority/remote-Calendar/leaf-grant claims. Remaining single-
+Calendar phrases are historical ADR/temporary-plan quotations or the design intent
+“not one selected calendar”, not an assertion of current single-Calendar implementation.
+
+### Full gate evidence — one final verification snapshot
+
+The six structural commands passed both at baseline and final snapshot. Final results:
+
+| Exact command | Result |
+|---|---|
+| `cargo metadata --no-deps --format-version 1` | PASS; manifest graph captured at baseline; no manifest/dependency changes |
+| `python3 tools/architecture/test_check_boundaries.py` | PASS — 10 tests |
+| `python3 tools/architecture/check_boundaries.py` | PASS — dependency policy |
+| `python3 tools/architecture/test_check_expert_extensibility.py` | PASS — 7 tests |
+| `python3 tools/architecture/check_expert_extensibility.py` | PASS |
+| `python3 tools/architecture/test_check_connection_observe_conformance.py` | PASS — 3 tests |
+| `python3 tools/architecture/check_connection_observe_conformance.py` | PASS |
+| `cargo check --workspace --lib` | PASS |
+| `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast -- --test-threads=1` | PASS; includes protocol/FFI; ignored live tests not enabled |
+| `cargo build -p floe-ffi` | PASS |
+| `git diff --check` | PASS at baseline, final verification snapshot and evidence preparation |
+| `cd server && go test ./...` | PASS |
+| `cd server && go test -race ./...` | PASS |
+| `cd server && go vet ./...` | PASS |
+| `cargo test -p floe-provider-adapters --test live_server_access` | PASS — 1 disposable loopback test; 1 approved-OAuth/model test ignored |
+| `cd apps/client && flutter analyze` | PASS — no issues |
+| `cd apps/client && flutter test` | FAIL — 366 passed, 5 failed |
+| `cd apps/client && flutter build macos` | NOT RUN — stopped at required Flutter failure |
+| `cd apps/client && flutter test integration/local_server_pairing_test.dart` | NOT RUN — stopped at required Flutter failure; not claimed unavailable |
+| `swift test --package-path apps/client/apple/FloeAppleContacts` | NOT RUN — stopped at required Flutter failure |
+| `swift test --package-path apps/client/apple/FloeAppleHealth` | NOT RUN — stopped at required Flutter failure |
+| `swift test --package-path apps/client/apple/FeasibilityProvider` | NOT RUN — stopped at required Flutter failure |
+| `swift test --package-path apps/client/ios/ScreenTimeGate` | NOT RUN — stopped at required Flutter failure |
+| `bash tools/s3-validation/check-native.sh` | NOT RUN — stopped at required Flutter failure |
+| Live Calendar/Contacts/Health/ScreenTime/provider/account smoke | SKIPPED — no explicitly approved disposable live source/device/account |
+
+Rust's existing dead-code warnings (`Supplied`, `RefreshOutcome.reason`, Vault test
+`unused_mut`) appeared without production changes; they were not suppressed.
+Flutter version: stable 3.47.2, Dart 3.13.2.
+
+### Required failed-gate disposition
+
+The same five failures reproduced with:
+
+`cd apps/client && flutter test test/features/day/calendar_gateway_test.dart test/features/actions/calendar_action_gateway_test.dart test/features/experts/agent_registry_dialog_test.dart`
+
+Result: **FAIL — 6 passed, 5 failed**, not a parallel-only race.
+
+| Named failing regression | Observed failure |
+|---|---|
+| `calendar_action_gateway_test.dart`: pending native source cannot authorize an action proposal | `native Calendar unavailable` during source setup |
+| `calendar_gateway_test.dart`: sync updates Day mirror without changing Connections authority | `native Calendar unavailable` during source setup |
+| `calendar_gateway_test.dart`: all-available inventory changes source authority; read failure does not | `native Calendar unavailable` during source setup |
+| `calendar_gateway_test.dart`: large native source still imports although observation publication is bounded | `native Calendar unavailable` during source setup |
+| `agent_registry_dialog_test.dart`: registry management remains readable and operates real controller at width 520.0 | Golden `agent_registry.png`: 0.02%, 29px diff |
+
+Diagnosis: `TestAppHost.open` injects a fixture adapter into Day but not the native
+acquisition/subject bridge required by reviewed Connections source establishment.
+The failure is mapped at `crates/app/src/connection_services.rs:440`; the four tests
+do not reach their intended mirror/Action assertions. The pending-source fixture also
+assumes the old setup lifecycle. This is not evidence that the production source
+checks should be bypassed. The Registry golden difference is a separate visual gate
+failure, not an Observe ownership defect. Neither was silently skipped, reclassified
+as unavailable, fixed with a compatibility route, or accepted by relaxing assertions.
+
+No code fix was made: the plan requires stopping at a failed gate and 09 cannot
+claim completion with these reproducible failures. A same-snapshot passing Flutter
+gate and all later gates remain necessary before closure. Golden diagnostic artifacts
+were moved out of the worktree to `/tmp/floe09/golden-failures`; raw command logs are
+under `/tmp/floe09/`. They are diagnostics, not a second repository progress document.
+
+### Metrics, safety and closure status
+
+- Production code changed/deleted: **0 files / 0 lines**; no defect-fix commit.
+- Public/FFI/dependency/schema changes: **0**.
+- Test files/tests/goldens changed: **0**.
+- Documentation files changed in 09: **7**, including this evidence and parent status.
+- Final architecture checkers: **3**, with **3 test suites / 20 checker tests**.
+- Focused named Rust regressions: **29 PASS**; full Rust/Go/FFI gates above pass.
+- Flutter full gate: **366 passed / 5 failed**; later gates remain **NOT RUN**.
+- Worktree was clean before execution and after the two documentation commits.
+  Evidence commit stages only this plan and parent status; final clean state is checked
+  with `git status --porcelain` after committing.
+- No TCC, signing, account, shared Keychain or personal Calendar state was changed.
+  Only the documented disposable loopback boundary test was run; ignored live tests
+  and Foundation-model integration were not enabled.
+- Parent README records **09 Incomplete**, not Complete; 00–08 remain Complete.
+- Plan bundle and `docs/README.md` active-plan pointer are retained.
+- Plan retirement was **not performed**. No work beyond Checkpoint 09 was started.
