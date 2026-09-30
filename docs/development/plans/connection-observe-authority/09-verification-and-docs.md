@@ -1082,6 +1082,43 @@ The parent README remains **09 Incomplete**, not Complete. Plan bundle and
 `docs/README.md` active-plan pointer remain intact; retirement was not performed.
 No work beyond Checkpoint 09 was started.
 
+### Residual closure revalidation — 2026-09-30 (incomplete)
+
+Continuation started on clean `main` at
+`8bfe69894abe905808d1f9e745dedceeac1a283b`; both initial and final
+`git fetch origin` resolved `origin/main` to that same SHA.
+Existing implementation commit `10b8a243` was inspected, not replaced.
+
+Re-executed against this source snapshot:
+- `cargo build -p floe-ffi`: PASS (existing dead-code warnings).
+- `cd apps/client && flutter test integration/native_calendar_fixture_test.dart`:
+  FAIL, child exit 1. Day mirror/source continuity, AllAvailable source authority
+  and wide-source bounded publication each emitted their PASS sentinel. Action
+  emitted `ACTION_FENCE_DIAGNOSTIC rejected=false rows=1`, then failed the
+  required rejection assertion. All four private profiles emitted removal
+  sentinels. The native-write absence assertion passed before rejection failed.
+- `cargo test -p floe-actions --test calendar_action`: PASS, 14 tests, zero
+  failures/ignored. This is focused existing-contract evidence, not the broad
+  Rust gate or proof of §17.4 D.
+
+The contradiction remains at the owning contract: `ActionService::draft_calendar_action`
+admits a future user proposal against a serving source and connected destination;
+it carries `agent_origin: None` and no evidence reference. The App facade invokes
+this path. Current `docs/architecture/authority-recovery.md` separately requires
+the artifact/dependency fence for delegated Calendar proposals. Adding an evidence
+prerequisite here would change user-proposal admission, not repair the fixture or
+enforce a missing delegated fence. Substituting a delegated request would change
+the required scenario. Neither change was made without reconciling §17.4 D.
+
+Requested operator resolution of that contract/scenario conflict. No production
+code, assertion, golden, standard-test placement or fixture implementation changed.
+R3 remains gated on all four scenarios passing; R4-R7 acceptance gates were not
+advanced. Full non-golden count remains unmeasured in this continuation. Golden:
+IGNORED — operator excluded golden tests. Live smoke: SKIPPED — no explicitly
+approved disposable live source/device/account. Parent 09 remains Incomplete;
+plan bundle and active-plan pointer remain intact. This evidence-only change is
+committed separately; final cleanliness is checked after that commit.
+
 ## 17. Residual closure plan — 2026-09-30
 
 This section is the authoritative continuation after the failed full Flutter gate recorded
