@@ -39,6 +39,10 @@ Use the smallest relevant context:
 - Do not treat old slice numbers, historical validation counts, or an implementation path mentioned in an ADR as current code.
 - If documentation conflicts with source, determine whether the document is stale. Current code plus accepted architecture policy define implementation reality; product/ADR documents define intent and rationale within their stated scope.
 
+## Active execution plan
+
+The current architecture-changing task is [Dedicated Feasibility vertical retirement](development/plans/feasibility-vertical-retirement.md). The plan removes the event/location/ETA/weather Feasibility vertical as one atomic cutover; current architecture documents remain authoritative for implementation reality until that cutover lands.
+
 ## Maintenance rules
 
 - One fact should have one authoritative home. Other documents link to it instead of copying status tables.
@@ -48,4 +52,3 @@ Use the smallest relevant context:
 - When a decision changes, add/amend/supersede an ADR; do not use an ADR as an implementation checklist.
 - Git history is the archive for removed planning and validation documents.
 - Prefer permanent repository tooling only when it automates a repeated, complex or high-risk procedure against stable inputs. One-off migration residuals and source-shape greps belong in the bounded execution plan or owner tests and should retire with the migration.
-

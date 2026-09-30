@@ -18,9 +18,9 @@ Observe and Act are separate authority classes. Completing a concrete supported 
 
 Pairing a server by itself grants no connector Observe access. Existing connections discovered during startup are never silently promoted; a connection without current grants requires explicit review. Native and hosted Calendar use one stable `calendar.timeline` View permission per connection. Adding or changing Calendar IDs changes the connection's current source resources and stales earlier evidence, but does not change its standing Observe grant or Expert binding and does not automatically trigger another permission review. Provider-side drift fails closed.
 
-Contacts, Attention and Wellbeing also use current device `SourceConnection`s. Contacts selection configures the connection's physical contact handles (1–64), not the grant; its grant covers one logical `people.identity` View for that connection. Attention and Wellbeing use singleton device sources and their own logical Views. A reviewed resource or device-subject change stales old evidence without changing the grant or Expert binding when permission is unchanged. Reads reload the current connection and record the exact physical resources observed. Feasibility is different: each event, destination and travel query needs explicit contextual review; it is not a standing connection or Expert source candidate.
+Contacts, Attention and Wellbeing also use current device `SourceConnection`s. Contacts selection configures the connection's physical contact handles (1–64), not the grant; its grant covers one logical `people.identity` View for that connection. Attention and Wellbeing use singleton device sources and their own logical Views. A reviewed resource or device-subject change stales old evidence without changing the grant or Expert binding when permission is unchanged. Reads reload the current connection and record the exact physical resources observed.
 
-`GrantAuthority` changes when standing Observe permission, scope or state changes; `SourceAuthority` changes when the current source, resources or subject changes. A pending connection review carries a compare-only digest of Floe's intended logical View readers and permission restriction, not another permission epoch. Feasibility management and native acquisition remain a separate contextual substrate, not a standing reader or a callable Manager capability; conversational Expert-backed Feasibility acquisition is not provided. Feasibility's reviewed query is a separate contextual fact: changing it advances the grant authority so older evidence cannot be reused.
+`GrantAuthority` changes when standing Observe permission, scope or state changes; `SourceAuthority` changes when the current source, resources or subject changes. A pending connection review carries a compare-only digest of Floe's intended logical View readers and permission restriction, not another permission epoch. Floe does not define a dedicated event/location/ETA/weather Observe contract; a future travel or mobility integration must establish its own domain and authority boundary rather than reuse a Schedule-specific exception.
 
 Observe does not authorize write/send/create actions and does not approve a new external model recipient. Actions remain separately authorized, and source-backed data may leave its approved processing boundary only under exact-recipient authority. Third-party Experts are never added to a connection's default first-party reader set.
 
@@ -38,8 +38,6 @@ Do not mirror every external source into a global personal database.
 | Mail | bounded index + body/content on demand |
 | Contacts | identity evidence/reference |
 | Health | derived state only by default |
-| current location / ETA | ephemeral context |
-| weather | short-lived context cache |
 | Floe Task / Note | Floe canonical data |
 
 All derived records retain source/provenance appropriate to their use.

@@ -31,25 +31,26 @@ ADR status should describe the **decision**, not whether code, tests or live acc
 - [0011 — Inference performance classes](0011-inference-performance-classes.md)
 - [0012 — Memory and Expert-first slices](0012-memory-and-expert-first-slices.md)
 - [0013 — Conversation, learning and voice sequence](0013-conversational-agent-learning-and-voice-sequence.md)
-- [0014 — Connected Agent sources](0014-s4-connected-agent-sources.md)
+- [0014 — Connected Agent sources](0014-s4-connected-agent-sources.md) — dedicated next-event Feasibility source amended by [0032](0032-retire-dedicated-feasibility-vertical.md).
 - [0015 — Privacy-aware inference](0015-s4-privacy-aware-inference.md)
 - [0016 — Native Agent model protocol](0016-native-agent-model-protocol.md)
 - [0017 — Agent context assembly](0017-agent-context-assembly.md)
 - [0018 — Manager–Expert A2A delegation](0018-manager-expert-a2a-delegation.md)
 - [0019 — Governed Memory and Playbook learning](0019-governed-memory-and-playbook-learning.md)
-- [0020 — Ambient assistant, domain Experts and capability connectors](0020-ambient-assistant-expert-connector-model.md)
-- [0021 — Connected-domain expansion](0021-s5-5-connected-domain-expansion.md)
+- [0020 — Ambient assistant, domain Experts and capability connectors](0020-ambient-assistant-expert-connector-model.md) — Schedule/location Feasibility framing amended by [0032](0032-retire-dedicated-feasibility-vertical.md).
+- [0021 — Connected-domain expansion](0021-s5-5-connected-domain-expansion.md) — location/ETA/weather rollout amended by [0032](0032-retire-dedicated-feasibility-vertical.md).
 - [0022 — Generalizable Agent guidance](0022-generalizable-agent-guidance.md)
 - [0023 — Page-independent assistant conversation](0023-page-independent-assistant-conversation.md)
 - [0030 — Conversation-owned durable interactions and origin-linked resume](0030-durable-interaction-and-linked-resume.md) — Observe reviewed-target semantics amended by ADR 0031.
 
 ### Device context, connections and authority
 
-- [0024 — Device context collection and convergence](0024-device-context-collection-and-convergence.md)
+- [0024 — Device context collection and convergence](0024-device-context-collection-and-convergence.md) — dedicated ETA/weather Feasibility collection amended by [0032](0032-retire-dedicated-feasibility-vertical.md).
 - [0025 — Person-owned connections](0025-person-owned-connections.md)
 - [0026 — Server-owned provider OAuth](0026-server-owned-provider-oauth.md)
 - [0027 — Connection authority and observation](0027-connection-authority-and-observation.md) — accepted source/authority separation; standing Observe epochs amended by [0031](0031-connection-owned-source-scope-and-logical-observe.md).
 - [0028 — Pairing-integrated authority and connection permissions](0028-pairing-integrated-authority-and-connection-permissions.md) — accepted pairing and connection-level presentation; source-resource/standing Observe semantics amended by [0031](0031-connection-owned-source-scope-and-logical-observe.md).
-- [0031 — Connection-owned source scope and logical standing Observe](0031-connection-owned-source-scope-and-logical-observe.md) — amends 0027/0028/0030; source edits stale evidence without changing standing permission or Expert binding.
+- [0031 — Connection-owned source scope and logical standing Observe](0031-connection-owned-source-scope-and-logical-observe.md) — amends 0027/0028/0030; Feasibility contextual-authority exception retired by [0032](0032-retire-dedicated-feasibility-vertical.md).
+- [0032 — Retire the dedicated Schedule Feasibility vertical](0032-retire-dedicated-feasibility-vertical.md) — removes the event/location/ETA/weather vertical and its special contextual authority.
 
 There is no ADR 0009 in the repository; numbering is intentionally preserved rather than renumbered.

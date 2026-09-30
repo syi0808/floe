@@ -24,7 +24,7 @@ Continue to make Timeline, Tasks, Notes, commitments and relevant interventions 
 
 ### Connected context
 
-Expand provider and device coverage through common Views and authority semantics rather than provider-specific Agent prompts. Prioritize context that materially helps time, commitments, people, feasibility, capacity and safe execution.
+Expand provider and device coverage through common Views and authority semantics rather than provider-specific Agent prompts. Prioritize context that materially helps time, commitments, people, capacity and safe execution.
 
 ### Durable personal memory
 

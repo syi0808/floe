@@ -4,7 +4,7 @@
 
 The Manager owns the continuous user relationship, final synthesis and intervention timing. It chooses domain expertise relevant to the request, but deterministic host policy owns permissions, budgets and external effects.
 
-The Manager may answer directly from sufficient already-admitted Conversation, Persona, Memory or product context, delegate, ask for clarification, defer or remain silent. Fresh source-backed domain acquisition and bounded domain judgment belong inside an admitted Expert Task reached through A2A delegation. An unavailable, disabled or unbound Expert is a limitation, not permission for a direct-source fallback. Retained contextual Feasibility infrastructure does not currently provide conversational Expert-backed acquisition.
+The Manager may answer directly from sufficient already-admitted Conversation, Persona, Memory or product context, delegate, ask for clarification, defer or remain silent. Fresh source-backed domain acquisition and bounded domain judgment belong inside an admitted Expert Task reached through A2A delegation. An unavailable, disabled or unbound Expert is a limitation, not permission for a direct-source fallback.
 
 ## Experts are domain judgment agents
 
@@ -16,7 +16,7 @@ Representative judgment domains are:
 
 | Domain | Perspective |
 |---|---|
-| Schedule & Feasibility | conflicts, available time, travel constraints and plan feasibility |
+| Schedule | conflicts, available time, calendar constraints and realistic plan changes |
 | Commitments | promises, deadlines, expected replies and missing follow-up |
 | Communication | response need, summary, draft/tone and supported channel |
 | Relationships | identity, interaction context and important follow-up |
