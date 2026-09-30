@@ -372,3 +372,168 @@ Raw logs, before/after Cargo timing HTML, dependency-tree snapshots and metadata
 are local ignored artifacts under `target/validation/dependency-study/`, not new
 permanent validation tooling. Source rebuilds do not establish the size of a
 clean-build improvement; cold dependency compilation was not measured.
+
+## Fourth-stage compiler/linker measurements (2026-09-30–2026-10-01)
+
+The retained change is `opt-level = 1` for non-workspace dependencies in the test
+profile only. Dev dependencies, workspace code, debug information, assertions,
+incremental iteration, the Apple linker and the default Cargo final gate are
+unchanged. No global compiler wrapper, linker requirement or explicit codegen-unit
+count was added. This improves warmed test execution, not demonstrated clean-build
+speed. The [Cargo profile reference](https://doc.rust-lang.org/cargo/reference/profiles.html)
+describes dependency overrides and the compilation/runtime tradeoff.
+
+### Conditions and scope
+
+Measurements used the M2 Pro / 10 logical CPU / 16 GiB host described above,
+macOS 26.5.2, Rust/Cargo 1.93.1, Apple clang 17.0.0, bundled Mach-O LLD 21.1.8
+and sccache 0.18.0. The comparison table uses source revision `1eabfcfc`; product
+Rust sources and test assertions were not changed during those trials.
+
+Early attempts overlapped another chat's CLI work, including a temporarily
+uncompilable example, and were discarded. An initial control on `d4e45a95` also
+overlapped its follow-up CLI edit and is not used in the table. After that work
+completed, candidate trials and the final baseline control used the same snapshot.
+The initial control's rebuild median was 36.513 seconds versus the final control's
+38.901 seconds; this drift is another reason not to claim small compile-time gains.
+
+Every command used `CARGO_INCREMENTAL=0`, the existing `target/`, the same target,
+features and line-table profiles, except for the single setting being tested.
+No cache cleaning, separate target directory, toolchain installation, signing or
+security-policy changes were made. Commands ran serially; the harness waited for
+other Cargo/compiler processes before starting a command. Desktop, thermal and
+security-scanner load were not controlled.
+
+For each candidate, first prepare its artifacts, then touch only modification
+times of all 22 workspace `src/lib.rs` files before each of three timed builds:
+
+```sh
+CARGO_INCREMENTAL=0 cargo test --workspace --no-run --timings
+```
+
+Contents remain unchanged. These are **external-dependency-warm workspace-source
+rebuilds**, not cold builds, leaf edits or incremental development measurements.
+After the last build, run the full test command once for warming (recorded but
+excluded from warm statistics), then three timed runs without source changes:
+
+```sh
+CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast
+```
+
+Whole-command wall time comes from Python's monotonic clock with output redirected
+to logs. Warm test rows include Cargo startup, unit/integration execution and all
+doctest phases, unlike the earlier nextest-only measurements. Each successful run
+passed the same 1,236 runnable tests across 38 binaries, with two existing ignored
+tests and zero runnable doctests. Native child-process summaries are not counted
+twice. Candidate runs were blocks, not alternating pairs; the baseline was repeated
+at the end to expose drift. The numbers are local observations, not guarantees for
+other Apple hardware or combined configurations.
+
+### Results
+
+| Setting | Source rebuild seconds (3 runs) | Median | Warm complete gate seconds (3 runs) | Median |
+| --- | --- | ---: | --- | ---: |
+| Baseline final control: dependency opt 0, default CGU, Apple linker | 38.858, 38.901, 39.555 | 38.901 | 73.505, 73.984, 73.411 | 73.505 |
+| Dependency `opt-level=1` | 36.585, 37.070, 36.926 | 36.926 | 50.112, 49.101, 49.535 | 49.535 |
+| `codegen-units=64` | 42.725, 41.519, 41.887 | 41.887 | 72.952, 72.990, 75.391 | 72.990 |
+| `codegen-units=128` | 43.001, 50.051, 41.429 | 43.001 | 72.278, **72.660 failed**, 73.543 | — |
+| Mach-O LLD | 38.245, 38.152, 37.986 | 38.152 | 75.809, 72.583, 72.978 | 72.978 |
+| Filled sccache, unchanged source contents | 39.315, 44.793, 39.806 | 39.806 | 73.451, 74.443, 74.018 | 74.018 |
+
+Dependency optimization reduced the warmed complete-gate median by **32.6%**,
+about 24 seconds. Its test-run ranges do not overlap the control's. Rebuild timing
+is roughly unchanged relative to the initial/final control range; the apparent
+5% reduction against the later control is not an established compile improvement.
+Only the dependency optimization is retained. Do not add these percentage gains
+to previous stages or assume combining candidates preserves their isolated results.
+
+One CGU-128 trial failed the native-action response-loss regression:
+`vault_host::tests::native_actions::native_executor_uses_rust_ledger_and_lookup_only_after_response_loss`.
+The child reported `Some(Conflict)` instead of `None` at vault initialization
+(`crates/app/src/vault_host/tests/native_actions.rs:124`). This same failure shape
+was observed in the earlier nextest experiment, but its cause is not established.
+The failed 72.660-second run is not a successful speed measurement; no retries,
+weaker assertions, extra ignored tests or test-thread restrictions were introduced.
+The two other CGU-128 trials passed; this does not prove the failure is fixed.
+
+### Preparation costs and reproduction
+
+Cargo's default CGU count is **16 with incremental disabled**, not 256; incremental
+builds default to 256. The CGU candidates explicitly set
+`CARGO_PROFILE_TEST_CODEGEN_UNITS=64` or `128`. They did not improve this broad-gate
+workload, and targeted incremental CGU tuning was not measured.
+
+Before adopting the manifest change, the optimization experiment supplied:
+
+```sh
+CARGO_INCREMENTAL=0 cargo test --workspace \
+  --config 'profile.test.package."*".opt-level=1' --no-fail-fast
+```
+
+With the retained manifest, reproduce the baseline using the same command with
+`opt-level=0`; the optimized command no longer needs an override. Add `--no-run
+--timings` instead of `--no-fail-fast` for compilation measurements. Prepare and
+warm each variant before comparing execution; normal affected-crate iteration
+still uses incremental compilation.
+
+The opt-1 variant's initial artifact preparation took 207.219 seconds. CGU-64,
+CGU-128 and correctly configured LLD preparation took 124.864, 116.817 and 173.208
+seconds respectively. These reused different pre-existing caches; they are not
+comparable clean-build measurements. The first complete execution after source
+rebuilds took 139–172 seconds and was excluded from warmed statistics. This
+preparation/first-execution cost is real and must not be advertised as a warm-run
+speedup or silently folded into a before/after comparison.
+
+The successful LLD experiment used the toolchain's main `rust-lld` executable
+in Mach-O mode, with the selected macOS SDK, without nightly flags:
+
+```sh
+SYSROOT="$(rustc --print sysroot)"
+CARGO_INCREMENTAL=0 \
+SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \
+CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="$SYSROOT/lib/rustlib/aarch64-apple-darwin/bin/rust-lld" \
+CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS='-C linker-flavor=ld64.lld' \
+cargo test --workspace --no-fail-fast
+```
+
+Directly selecting `gcc-ld/ld64.lld` without a flavor first failed because it
+received compiler-driver arguments; pairing that shim with the legacy LLD flavor
+then failed on `-flavor`. Those setup failures were retained in raw logs, not
+timing samples. The main executable plus explicit stable flavor resolved them.
+No LLD default was adopted: source rebuilds and warmed tests show no meaningful
+gain, and the pilot did not validate production Flutter bundling or iOS delivery.
+See the [rustc linker options](https://doc.rust-lang.org/rustc/codegen-options/index.html#linker-flavor)
+and [Mach-O LLD documentation](https://lld.llvm.org/MachO/index.html).
+
+Sccache used `RUSTC_WRAPPER` pointing to the local 0.18.0 executable, a private
+`SCCACHE_DIR` under this study, `SCCACHE_CACHE_SIZE=2G` and server port 43294.
+Initial preparation took 340.466 seconds and a following source rebuild/cache-fill
+took 41.236 seconds; neither is included in hit-path medians. After zeroing stats,
+the three measured rebuilds recorded 63 Rust hits, zero misses and 126 non-cacheable
+crate-type calls, with no cache errors. Hits were real, but did not reduce wall
+time: test binaries and other linked crate types still compile/link. The private
+server was stopped afterward; no global wrapper was installed. This does not
+measure fresh-worktree/CI dependency reuse, where sccache may have a different
+tradeoff. Its [Rust documentation](https://github.com/mozilla/sccache/blob/main/docs/Rust.md)
+explains the incremental and linked-output limitations.
+
+Raw logs, copied Cargo timing HTML, settings and one-off scripts remain under
+`target/validation/compiler-stage4/`. Discarded concurrent/setup attempts are
+preserved separately there. They are ignored experiment artifacts, not another
+maintained benchmark runner or validation path.
+
+### Retained-setting verification
+
+After putting the selected dependency optimization in `Cargo.toml`, normal
+incremental `cargo test -p floe-vault` passed all 140 tests across its two binaries.
+`CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast --timings` then passed
+all 1,236 runnable tests, with two ignored tests and passing zero-test doctest
+phases. The architecture checker passed with 22 nodes, 103 production edges and
+no errors/warnings; `git diff --check` passed. Existing App dead-code and Vault
+test-field warnings remain. Assertions, cancellation, recovery, fixture isolation,
+test grouping and ignored status are unchanged.
+
+Flutter builds/analyze/widget tests, Go tests and iOS/device execution were not
+run for this retained test-profile-only change: production dev/release profiles,
+Apple bundling, public/FFI contracts and runtime source are unchanged. Successful
+Rust native tests do not establish an LLD production-bundle acceptance gate.

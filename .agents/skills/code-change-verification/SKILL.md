@@ -35,7 +35,7 @@ Iteration and final gates are separate:
 - Flutter: from `apps/client/`, use `flutter test test/<affected-directory-or-file>` during iteration; retain `flutter analyze`, full `flutter test` and the affected Apple build at the final application boundary.
 - Go: from `server/`, use `go test ./internal/<affected-package>` during iteration; retain `go test -race ./...` and `go vet ./...` at the final server gate.
 
-Keep Cargo profiles, features, target triples, `RUSTFLAGS` and `CARGO_TARGET_DIR` consistent across routine runs. Do not add separate target directories or clean the cache for ordinary verification. Dev/test workspace code uses line-table debug info; use `cargo test --profile debugging -p <affected-crate>` only when full debugger information is needed, not for routine gates.
+Keep Cargo profiles, features, target triples, `RUSTFLAGS` and `CARGO_TARGET_DIR` consistent across routine runs. Do not add separate target directories or clean the cache for ordinary verification. Dev/test workspace code uses line-table debug info; non-workspace test dependencies use `opt-level = 1` after the measured fourth-stage experiment. Keep normal dev dependencies unoptimized, and do not force a linker, codegen-unit count or compiler wrapper for routine gates. Use `cargo test --profile debugging -p <affected-crate>` only when full debugger information is needed, not for routine gates.
 
 ## 3. Rust and architecture gate
 

@@ -36,6 +36,7 @@ debug = "line-tables-only"
 
 [profile.test.package."*"]
 debug = 0
+opt-level = 1
 
 [profile.debugging]
 inherits = "dev"
