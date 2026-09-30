@@ -136,7 +136,7 @@ No new workspace crate is expected. Existing Connections, Access, Context, Exper
 | 06 | [Standing personal Observe convergence](06-personal-observe-convergence.md) | Complete |
 | 07 | [Product wire, FFI and UI convergence](07-product-wire-and-ui.md) | Complete |
 | 08 | [Legacy purge and conformance closure](08-deletion-and-conformance.md) | Complete |
-| 09 | [Full verification and documentation/ADR convergence](09-verification-and-docs.md) | Incomplete — full Flutter gate failed |
+| 09 | [Full verification and documentation/ADR convergence](09-verification-and-docs.md) | Incomplete — residual Calendar fixture closure planned; golden tests excluded from gate |
 
 Order is 00 -> 01 -> 02 -> 03 -> 04 -> 05 -> 06 -> 07 -> 08 -> 09.
 
