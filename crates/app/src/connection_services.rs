@@ -606,7 +606,7 @@ async fn setup_personal_source(
             return Err(CoreError::new(
                 ErrorCode::Conflict,
                 "personal source changed",
-            ))
+            ));
         }
     }
     let probe = match spec.connector {
@@ -622,7 +622,7 @@ async fn setup_personal_source(
             return Err(CoreError::new(
                 ErrorCode::Validation,
                 "invalid personal connector",
-            ))
+            ));
         }
     };
     let evidence = inspector
@@ -769,7 +769,7 @@ mod source_tests {
             &'a self,
             _person_id: PersonId,
             _device_id: &'a str,
-            probe: PersonalSubjectProbe<'a>,
+            probe: PersonalSubjectProbe,
             _expected_native_subject_fingerprint: Option<String>,
             _deadline: Option<tokio::time::Instant>,
             _cancellation: floe_execution::Cancellation,
@@ -1009,11 +1009,13 @@ mod source_tests {
                 ConnectionId::new(),
                 ExecutionOwnerId::try_new("mac-local").unwrap(),
                 ResourceMode::Selected,
-                vec![ConnectionResource::new(
-                    ResourceHandle::try_new("home").unwrap(),
-                    "Home".into(),
-                )
-                .unwrap()],
+                vec![
+                    ConnectionResource::new(
+                        ResourceHandle::try_new("home").unwrap(),
+                        "Home".into(),
+                    )
+                    .unwrap(),
+                ],
             )
             .await
             .unwrap();

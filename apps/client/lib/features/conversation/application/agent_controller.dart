@@ -70,7 +70,6 @@ final class AgentController extends ChangeNotifier {
           (gateway is AgentProposalGateway
               ? gateway as AgentProposalGateway
               : null),
-      feasibilityAccess: owners.feasibilityAccess,
     ),
   );
 

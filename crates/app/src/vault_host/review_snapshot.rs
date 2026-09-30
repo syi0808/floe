@@ -157,7 +157,7 @@ where
                 .capture_remote(requirement, person_id, connector, connection, cancellation)
                 .await;
         }
-        // Unknown connectors, query-bound feasibility and picker-owned
+        // Unknown connectors and picker-owned
         // contacts selection cannot bind an inline mutation: navigate.
         Err(AgentFailure::CapabilityUnavailable)
     }
@@ -561,7 +561,7 @@ pub(crate) mod fixtures {
             &'a self,
             _person_id: PersonId,
             _device_id: &'a str,
-            _probe: floe_access::PersonalSubjectProbe<'a>,
+            _probe: floe_access::PersonalSubjectProbe,
             _expected_native_subject_fingerprint: Option<String>,
             _deadline: Option<tokio::time::Instant>,
             _cancellation: floe_execution::Cancellation,
@@ -707,7 +707,7 @@ mod tests {
         let cancellation = floe_execution::Cancellation::default();
         for connector in [
             "unknown.connector",
-            "feasibility.apple",
+            "unknown.connector",
             "contacts.apple",
             "contacts.android",
         ] {

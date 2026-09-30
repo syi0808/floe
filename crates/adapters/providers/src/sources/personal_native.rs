@@ -69,20 +69,9 @@ impl PersonalSourceDriver for NativePersonalDriver<'_> {
                 device_id: request.device_id.to_owned(),
                 domain: match request.domain {
                     PersonalDomain::People => NativePersonalDomain::People,
-                    PersonalDomain::Feasibility => NativePersonalDomain::Feasibility,
                     PersonalDomain::Wellbeing => NativePersonalDomain::Wellbeing,
                 },
                 selected_handles: request.selected_handles,
-                event_handle: request.feasibility.map(|query| query.event_handle.clone()),
-                evidence_handles: request
-                    .feasibility
-                    .map(|query| query.evidence_handles.clone())
-                    .unwrap_or_default(),
-                destination_latitude: request.feasibility.map(|query| query.destination_latitude),
-                destination_longitude: request.feasibility.map(|query| query.destination_longitude),
-                event_start_unix_ms: request.feasibility.map(|query| query.event_start_unix_ms),
-                event_end_unix_ms: request.feasibility.map(|query| query.event_end_unix_ms),
-                travel_mode: request.feasibility.map(|query| query.travel_mode.clone()),
                 deadline_unix_ms: deadline_unix_ms(request.deadline)?,
                 expected_native_subject_fingerprint: Some(request.expected_subject),
             };
@@ -250,7 +239,7 @@ impl floe_access::PersonalSubjectInspector for NativePersonalDriver<'_> {
         &'a self,
         person_id: PersonId,
         device_id: &'a str,
-        probe: floe_access::PersonalSubjectProbe<'a>,
+        probe: floe_access::PersonalSubjectProbe,
         expected_native_subject_fingerprint: Option<String>,
         deadline: Option<tokio::time::Instant>,
         cancellation: Cancellation,
@@ -290,15 +279,12 @@ impl floe_access::PersonalSubjectInspector for NativePersonalDriver<'_> {
                     )
                 }
                 probe => {
-                    let (domain, selected_handles, query) = match probe {
+                    let (domain, selected_handles) = match probe {
                         floe_access::PersonalSubjectProbe::People { selected_handles } => {
-                            (NativePersonalDomain::People, selected_handles, None)
-                        }
-                        floe_access::PersonalSubjectProbe::Feasibility { query } => {
-                            (NativePersonalDomain::Feasibility, Vec::new(), Some(query))
+                            (NativePersonalDomain::People, selected_handles)
                         }
                         floe_access::PersonalSubjectProbe::Wellbeing => {
-                            (NativePersonalDomain::Wellbeing, Vec::new(), None)
+                            (NativePersonalDomain::Wellbeing, Vec::new())
                         }
                         floe_access::PersonalSubjectProbe::Attention => unreachable!(),
                     };
@@ -309,15 +295,6 @@ impl floe_access::PersonalSubjectInspector for NativePersonalDriver<'_> {
                         device_id: device_id.to_owned(),
                         domain,
                         selected_handles,
-                        event_handle: query.map(|query| query.event_handle.clone()),
-                        evidence_handles: query
-                            .map(|query| query.evidence_handles.clone())
-                            .unwrap_or_default(),
-                        destination_latitude: query.map(|query| query.destination_latitude),
-                        destination_longitude: query.map(|query| query.destination_longitude),
-                        event_start_unix_ms: query.map(|query| query.event_start_unix_ms),
-                        event_end_unix_ms: query.map(|query| query.event_end_unix_ms),
-                        travel_mode: query.map(|query| query.travel_mode.clone()),
                         deadline_unix_ms: now_unix_ms().saturating_add(30_000),
                         expected_native_subject_fingerprint,
                     };

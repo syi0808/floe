@@ -2,7 +2,6 @@ use crate::{ActionInspection, CalendarActionOperation};
 use crate::{CallerContext, ConversationSessionOperation, VaultLifecycleCommand, WorkerAction};
 use crate::{ExpertCommand, ExpertInspection};
 use crate::{KnowledgeInspection, MemoryReviewDecision};
-use crate::{LocalAccessCommand, LocalAccessInspection};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum LocalOperationIntent {
@@ -11,8 +10,6 @@ pub(crate) enum LocalOperationIntent {
     ConversationSession(ConversationSessionOperation),
     ExpertCommand(ExpertCommand),
     ExpertInspection(ExpertInspection),
-    LocalAccessCommand(LocalAccessCommand),
-    LocalAccessInspection(LocalAccessInspection),
     ConnectionObserve(crate::ConnectionObserveOperation),
     KnowledgeInspection(KnowledgeInspection),
     MemoryDecision(MemoryReviewDecision),
@@ -38,9 +35,6 @@ impl LocalOperationIntent {
             Self::VaultStatus | Self::VaultCommand(_) => LocalOperationOwner::Vault,
             Self::ConversationSession(_) => LocalOperationOwner::Conversation,
             Self::ExpertCommand(_) | Self::ExpertInspection(_) => LocalOperationOwner::Experts,
-            Self::LocalAccessCommand(_) | Self::LocalAccessInspection(_) => {
-                LocalOperationOwner::Access
-            }
             Self::ConnectionObserve(_) => LocalOperationOwner::Access,
             Self::KnowledgeInspection(_) | Self::MemoryDecision(_) => {
                 LocalOperationOwner::Knowledge
@@ -81,8 +75,6 @@ impl LocalOperationIntent {
                     device_id: caller.device_id().to_owned(),
                 }
             }
-            Self::LocalAccessCommand(command) => command.action(caller),
-            Self::LocalAccessInspection(inspection) => inspection.action(caller),
             Self::ConnectionObserve(operation) => WorkerAction::ConnectionObserve {
                 operation: operation.clone(),
                 device_id: caller.device_id().to_owned(),

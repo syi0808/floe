@@ -1,4 +1,4 @@
-//! Personal context views: people, feasibility, attention and wellbeing.
+//! Personal context views: people, attention and wellbeing.
 //!
 //! Context owns each view's shape, freshness bound and byte bound. The Experts
 //! that read them live in their own crate.
@@ -13,12 +13,10 @@ use floe_kernel::AGENT_VERSION;
 use crate::ContextEvidence;
 
 pub const PEOPLE_VIEW_ID: &str = "people.identity";
-pub const FEASIBILITY_VIEW_ID: &str = "schedule.feasibility";
 pub const ATTENTION_VIEW_ID: &str = "attention.coarse";
 pub const WELLBEING_VIEW_ID: &str = "wellbeing.derived";
 pub const MAX_PERSONAL_CONTEXT_BYTES: usize = 32_768;
 const PEOPLE_MAX_LIFETIME_MS: i64 = 300_000;
-const FEASIBILITY_MAX_LIFETIME_MS: i64 = 300_000;
 const ATTENTION_MAX_LIFETIME_MS: i64 = 120_000;
 const WELLBEING_MAX_LIFETIME_MS: i64 = 1_800_000;
 
@@ -42,37 +40,6 @@ pub struct PeopleView {
     pub expires_at_unix_ms: i64,
     pub coverage_complete: bool,
     pub identities: Vec<PeopleIdentity>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WeatherImpact {
-    None,
-    Minor,
-    Significant,
-    Unknown,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct FeasibilityItem {
-    pub event_handle: String,
-    pub evidence_handles: Vec<String>,
-    pub travel_duration_seconds: u32,
-    pub leave_by_unix_ms: i64,
-    pub weather_impact: WeatherImpact,
-    pub confidence_millis: u16,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct FeasibilityView {
-    pub schema_version: u32,
-    pub view_id: String,
-    pub source_handle: String,
-    pub observed_at_unix_ms: i64,
-    pub expires_at_unix_ms: i64,
-    pub items: Vec<FeasibilityItem>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -160,7 +127,6 @@ macro_rules! projection {
 }
 
 projection!(PeopleView);
-projection!(FeasibilityView);
 projection!(AttentionView);
 projection!(WellbeingView);
 
@@ -189,41 +155,6 @@ pub fn validate_people_view(view: &PeopleView, now_unix_ms: i64) -> Result<(), A
             || view.identities[..index]
                 .iter()
                 .any(|other| other.identity_handle == identity.identity_handle)
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-    }
-    validate_size(view)
-}
-
-pub fn validate_feasibility_view(
-    view: &FeasibilityView,
-    now_unix_ms: i64,
-) -> Result<(), AgentFailure> {
-    validate_envelope(
-        view,
-        FEASIBILITY_VIEW_ID,
-        now_unix_ms,
-        FEASIBILITY_MAX_LIFETIME_MS,
-    )?;
-    if view.items.len() > 16 {
-        return Err(AgentFailure::BudgetExceeded);
-    }
-    for (index, item) in view.items.iter().enumerate() {
-        if !valid_handle(&item.event_handle)
-            || item.evidence_handles.is_empty()
-            || item.evidence_handles.len() > 8
-            || item
-                .evidence_handles
-                .iter()
-                .any(|value| !valid_handle(value))
-            || item.travel_duration_seconds > 86_400
-            || item.leave_by_unix_ms < 0
-            || item.confidence_millis == 0
-            || item.confidence_millis > 1000
-            || view.items[..index]
-                .iter()
-                .any(|other| other.event_handle == item.event_handle)
         {
             return Err(AgentFailure::InvalidInput);
         }

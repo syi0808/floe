@@ -10,7 +10,7 @@
 use sha2::Digest;
 use uuid::Uuid;
 
-use floe_context_contract::{AttentionView, FeasibilityView, PeopleView, PersonId, WellbeingView};
+use floe_context_contract::{AttentionView, PeopleView, PersonId, WellbeingView};
 
 fn digest(value: String) -> Vec<u8> {
     sha2::Sha256::digest(value.as_bytes()).to_vec()
@@ -81,43 +81,6 @@ pub fn wellbeing_query_fingerprint(
     digest(format!(
         "wellbeing.query\0{}\0{}\0{}\0{}\0{}\0{}",
         view.source_handle,
-        native_subject_fingerprint,
-        observation,
-        process,
-        view.observed_at_unix_ms,
-        view.expires_at_unix_ms,
-    ))
-}
-
-/// What a feasibility read asked for. The grant record that stores it belongs
-/// to the vault; what shaped the answer belongs here.
-pub struct FeasibilityQueryLineage<'a> {
-    pub event_handle: &'a str,
-    pub evidence_handles: &'a [String],
-    pub destination_latitude: f64,
-    pub destination_longitude: f64,
-    pub event_start_unix_ms: i64,
-    pub event_end_unix_ms: i64,
-    pub travel_mode: &'a str,
-}
-
-pub fn feasibility_query_fingerprint(
-    view: &FeasibilityView,
-    query: &FeasibilityQueryLineage<'_>,
-    native_subject_fingerprint: &str,
-    observation: Uuid,
-    process: Uuid,
-) -> Vec<u8> {
-    digest(format!(
-        "feasibility.query\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
-        view.source_handle,
-        query.event_handle,
-        query.evidence_handles.join("\0"),
-        query.destination_latitude,
-        query.destination_longitude,
-        query.event_start_unix_ms,
-        query.event_end_unix_ms,
-        query.travel_mode,
         native_subject_fingerprint,
         observation,
         process,

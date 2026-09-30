@@ -131,46 +131,6 @@ fn terminal_session_reads_can_overlap_the_finishing_turn_job() {
 }
 
 #[test]
-fn local_expert_and_access_intents_inject_only_the_admitted_device() {
-    let caller = remote_caller(PersonId::new(), "verified-device");
-    let expected_grant_id = crate::GrantId::new();
-    let expected_grant_authority = crate::GrantAuthority::new();
-    let intent = LocalOperationIntent::LocalAccessCommand(crate::LocalAccessCommand::Feasibility {
-        change: crate::FeasibilityAccessChange::Review {
-            expected_native_subject_fingerprint: "b".repeat(64),
-            feasibility_query: crate::FeasibilityGrantQuery {
-                event_handle: "event".into(),
-                evidence_handles: vec!["evidence".into()],
-                destination_latitude: 0.0,
-                destination_longitude: 0.0,
-                event_start_unix_ms: 1,
-                event_end_unix_ms: 2,
-                travel_mode: "automobile".into(),
-            },
-            expected_grant_id: Some(expected_grant_id),
-            expected_grant_authority: Some(expected_grant_authority),
-        },
-    });
-    let WorkerAction::FeasibilityAccess { change } = intent.action(&caller) else {
-        panic!("wrong owner action")
-    };
-    assert_eq!(change.device_id, caller.device_id());
-    assert!(change.consumers.is_empty());
-    let crate::FeasibilityAccessChange::Review {
-        expected_grant_id: actual_id,
-        expected_grant_authority: actual_authority,
-        expected_native_subject_fingerprint,
-        ..
-    } = change.change
-    else {
-        panic!("wrong review")
-    };
-    assert_eq!(actual_id, Some(expected_grant_id));
-    assert_eq!(actual_authority, Some(expected_grant_authority));
-    assert_eq!(expected_native_subject_fingerprint, "b".repeat(64));
-}
-
-#[test]
 fn local_vault_results_bind_identity_epoch_and_exact_intent() {
     let directory = tempfile::tempdir().unwrap();
     let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();

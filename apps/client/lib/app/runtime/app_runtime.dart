@@ -65,10 +65,6 @@ final class AppRuntime {
     readModel: readModel,
   );
   late final registry = NativeRegistryGateway(_transport);
-  late final feasibilityAccess = NativeFeasibilityAccessGateway(
-    _transport,
-    deviceId: deviceId,
-  );
   late final memory = NativeMemoryGateway(_transport);
   late final connections = NativeConnectionsGateway(_transport);
   late final calendarSource = AppWireCalendarSourceGateway(
@@ -79,7 +75,6 @@ final class AppRuntime {
   late final owners = LocalOwnerGateways(
     vault: vault,
     registry: registry,
-    feasibilityAccess: feasibilityAccess,
     memory: memory,
     memoryReview: memory,
     connections: connections,

@@ -41,7 +41,7 @@ Use the smallest relevant context:
 
 ## Active execution plan
 
-The current architecture-changing task is [Dedicated Feasibility vertical retirement](development/plans/feasibility-vertical-retirement.md). The plan removes the event/location/ETA/weather Feasibility vertical as one atomic cutover; current architecture documents remain authoritative for implementation reality until that cutover lands.
+The current architecture-changing task is [Dedicated Feasibility vertical retirement](development/plans/feasibility-vertical-retirement.md). The plan removes the event/location/ETA/weather Feasibility vertical as one atomic cutover; current architecture documents describe the resulting owner boundaries. Execution evidence remains in the plan until operator acceptance, after which the temporary plan and this pointer retire.
 
 ## Maintenance rules
 

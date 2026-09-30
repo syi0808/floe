@@ -1,6 +1,6 @@
 # Dedicated Feasibility vertical retirement
 
-- **Status:** active
+- **Status:** implemented; awaiting operator acceptance
 - **Execution shape:** one atomic architecture deletion task; no checkpoint series
 - **Planning baseline:** `main` at `d33b1df5b51abacd2a0452ebb2134414d4864b6e`
 - **Baseline date:** 2026-09-30
@@ -730,3 +730,81 @@ At completion report:
 11. worktree status and any remaining blocker.
 
 Record execution evidence in a final section of this plan only while the task is active. After operator acceptance, retire the plan and README pointer.
+
+## 10. Execution evidence — 2026-09-30
+
+### 1. Baseline and local history
+
+- Start HEAD and fetched `origin/main`: `86df5a7898144c4970c7ae6ac316e92481d5e5df`; initial worktree clean. Current symbols were resolved against that snapshot rather than the planning locators.
+- Implementation is one local atomic commit, whose parent is that baseline and whose tree includes this report. Its final SHA is reported in the operator handoff; no intermediate public design is committed.
+- No branch creation, push, PR, deployment or external-account change was performed.
+
+### 2. Deleted contracts and owners
+
+- Context contract: Feasibility View/item/weather types, identifiers, validation and projection removed.
+- Access: Feasibility query/source authority and personal-grant service/port removed. Surviving personal subject evidence lives in `personal_subject`; Attention consumer validation remains in personal read authorization.
+- Context: contextual acquisition, blockers, review/query lineage and assistant-specific exception removed. One canonical standing personal-dependency authorization path remains.
+- Vault: review module, records, initialization and store adapter removed, together with the retired transactional source lookup.
+- App/Native/Providers: local Access service, intents, worker/result branches, Feasibility domain/probe and provider translation removed. No compatibility adapter or replacement source remains.
+
+### 3. Final source and acquisition shapes
+
+- Personal observations are People, Attention, Wellbeing and Calendar. Standing grant/provenance/CAS/recovery paths remain; the removed vertical is not a standing source.
+- Native personal acquisition has People and Wellbeing only. People requires a nonempty subject selection; Wellbeing accepts empty selection. Attention retains its separate existing path.
+- Event identifier, destination latitude/longitude, window start/end, travel mode and current-location purpose fields are absent from the native and wire acquisition contracts.
+
+### 4. Persistence and profile safety
+
+- Fresh Vault create/reopen tests prove neither retired review table is created.
+- Opening a database containing retired review tables returns `UnsupportedVersion`; tests prove the original table, Vault identity and key slots remain unchanged. The existing obsolete personal-policy/query fences remain fail-closed too.
+- No old decoder, migration chain, version bump, automatic reset, key replacement or user-database deletion was added. Tests use isolated stores, not an existing development profile.
+
+### 5. AppWire and FFI
+
+- Local Feasibility Access requests/results/DTOs and FFI conversions are deleted; wire versions are unchanged and same-snapshot callers are migrated.
+- `retired_access_routes_are_unknown` proves configure, inspect and local-read-result routes reject as unknown variants, alongside arbitrary unknown routes.
+- `personal_acquisition_accepts_only_current_domains_and_fields` proves current DTOs succeed while the retired domain and all seven retired fields reject. Remaining correlation and standing-authority assertions are retained.
+
+### 6. Flutter and Apple
+
+- Gateway, controller/scope plumbing, cards, review UI, stale labels/icons and native broker branches are removed. Inventory is Contacts/Health/ScreenTime (three entries); regression tests reject two/four entries.
+- All tracked `apps/client/apple/FeasibilityProvider` files and its inspected ignored build cache are removed; the physical directory and tracked-file inventory are empty.
+- Xcode package/product references, location API/permission declarations and WeatherKit entitlement are removed. HealthKit, Contacts/Health/ScreenTime packages, key identity and Calendar native integration remain.
+- Source plist/entitlement/project checks pass; simulator output retains Contacts/Calendar/Health usage descriptions and has no location usage key. No signing account, shared credential or TCC state was changed.
+
+### 7. Schedule scope
+
+- Schedule is Calendar/time-planning: authorized calendar/task/note context, events/conflicts/availability/priorities, optional coarse `wellbeing.derived` capacity and possible changes.
+- Unavailable capacity remains uncertain. No travel/location/ETA/weather/leave-by claim, replacement feature or retired tool fixture remains.
+
+### 8. Residual audit
+
+- Section 4's exact primary-symbol search has no current production/test/config matches; only this temporary plan, ADR 0032 and historical ADR text name those identities.
+- Apple location/MapKit/WeatherKit search and retired-package tracked-file search return no matches. The package directory is physically absent.
+- Expanded local Access/Feasibility symbol audit leaves only negative wire rejection fixtures. Obsolete table names remain solely as required fail-closed schema fences and preservation tests, not as authority or initialized tables.
+- Broad ordinary-word matches are classified as temporary plan/README evidence, decision/history references, negative protocol fixtures and unrelated ScreenTime engineering prose. No executable retired vertical remains; no permanent regex checker was added.
+
+### 9. Verification results
+
+Environment: Rust 1.93.1; Flutter 3.47.2 stable / Dart 3.13.2; Xcode 26.0.1 (17A400).
+
+- PASS: `cargo test -p floe-context-contract`, `cargo test -p floe-access`, `cargo test -p floe-context`, `cargo test -p floe-vault`, `cargo test -p floe-native`, `cargo test -p floe-provider-adapters`, `cargo test -p floe-protocol`, `cargo test -p floe-ffi`, `cargo test -p floe-app`.
+- PASS: `cargo check --workspace --lib`; `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast`; `python3 tools/architecture/check_boundaries.py` (22 nodes, 105 edges, no errors/warnings); `git diff --check` and staged equivalent.
+- PASS from `apps/client`: `flutter analyze` (no issues), `flutter test test/infrastructure/native/apple_context_gateway_test.dart test/infrastructure/native/local_context_publication_test.dart test/infrastructure/native/personal_acquisition_broker_test.dart test/features/connections/connector_screen_test.dart test/features/connections/remote_authority_test.dart test/features/settings/settings_screen_test.dart` (44 passing), `flutter build macos`, `flutter build ios --simulator --no-codesign`. Final builds follow `cargo build -p floe-ffi` from the same source snapshot (PASS).
+- Full `flutter test`: 366 pass, one pre-existing failure in `agent_registry_dialog_test.dart` at width 520. The unchanged starting HEAD was archived outside the repository and the same test rerun: identical 29-pixel (0.02%) golden difference, identical isolated-diff SHA-256 `cd8d1fb2afc840a77357eeb9e0fda5f536e3845e838f0ad236fffb2b73b44caa`. The unrelated golden was not changed; generated failures were removed from the worktree.
+- PASS: `swift test --package-path apps/client/apple/FloeAppleContacts` (11 tests), `swift test --package-path apps/client/apple/FloeAppleHealth` (8), `swift test --package-path apps/client/ios/ScreenTimeGate` (5), `bash tools/validation/calendar/check-native.sh` (32 deterministic assertions). Calendar validation performs no permission request or event read.
+- PASS: `plutil -lint` on changed Apple plist/entitlement/project files and the residual audits above. Changed Rust/Dart files were formatted without a repository-wide formatting gate.
+- During iteration, a missed obsolete positive protocol fixture was removed, not reaccepted. Initial App fixture failures under concurrent build load were rerun without weakening assertions/timeouts; final targeted App and broad workspace runs pass. The non-executable Calendar script was invoked through `bash` successfully.
+- Local logs: `/tmp/floe-retirement-{context-final,protocol-final,app-final,check-final,workspace-test,boundaries-final,analyze-final,flutter-targeted,flutter-test-final,baseline-golden,native,calendar-native,ffi-snapshot,macos-snapshot,ios-snapshot,residual-final,apple-residual-final,broad-residual-final}.log`; other targeted crate logs use `/tmp/floe-retirement-floe-<crate>.log`. These are local diagnostic artifacts, not a permanent repository ledger.
+
+### 10. Architecture and documentation convergence
+
+- Current modules/runtime/authority-recovery documents describe the resulting owners, standing personal paths, schema rejection and Calendar/time-planning boundary.
+- ADR 0032 and the decision-map amendments preserve the rationale; historical ADR bodies remain historical. No new progress document or replacement architecture was introduced.
+- This report and the README pointer remain pending operator acceptance, after which both temporary artifacts should be retired as specified above.
+
+### 11. Completion and safety audit
+
+- The section 7 acceptance criteria are satisfied by source deletion, rejection/persistence regressions, residual audits and platform gates; the full Flutter golden exception is reproduced and classified as permitted by the verification policy.
+- Final worktree must be clean after the single local implementation commit. No implementation blocker or unavailable required platform gate remains; the known baseline golden failure is explicitly not claimed as a passing full Flutter suite.
+- No user data, uncertain external-operation record, provider data, connected-account state, shared credential, signing account or TCC permission state was deleted or changed. Only the exact retired package's inspected generated cache and test-generated golden failures were cleaned.

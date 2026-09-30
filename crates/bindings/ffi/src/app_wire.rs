@@ -34,7 +34,6 @@ where
         + floe_app::VaultLifecycleCommands
         + floe_app::ConversationSessionCommands
         + floe_app::ExpertCommands
-        + floe_app::LocalAccessCommands
         + floe_app::KnowledgeCommands
         + floe_app::DayCommands
         + floe_app::NativeCalendarSourceCommands
@@ -177,18 +176,6 @@ where
                 .map_err(service_error)?;
             Ok(AppCommandResultDto::KnowledgeOperation {
                 result: knowledge_result(result, request.command_id)?,
-            })
-        }
-        AppCommandDto::AccessFeasibilityConfigure { change } => {
-            let command = floe_app::LocalAccessCommand::Feasibility {
-                change: crate::conversion::owners::feasibility_access_change(&change),
-            };
-            let result = host_request
-                .services()
-                .local_access_command(host_request.caller(), request.command_id, command)
-                .map_err(service_error)?;
-            Ok(AppCommandResultDto::LocalAccessOperation {
-                result: local_access_result(result, request.command_id)?,
             })
         }
         AppCommandDto::ExpertsRegistryConfigure { change } => {
@@ -457,7 +444,6 @@ fn query_with_host<
         + floe_app::VaultLifecycleQueries
         + floe_app::ConversationSessionQueries
         + floe_app::ExpertQueries
-        + floe_app::LocalAccessQueries
         + floe_app::KnowledgeQueries
         + floe_app::ConnectionsQueries
         + floe_app::NativeCalendarSourceCommands
@@ -589,8 +575,14 @@ fn query_with_host<
                 source: source.as_ref().map(source_connection_dto),
             })
         }
-        AppQueryDto::ConnectionObserveInspect { connector_id, connection_id } => {
-            let operation = floe_app::ConnectionObserveOperation::Inspect { connector_id, connection_id };
+        AppQueryDto::ConnectionObserveInspect {
+            connector_id,
+            connection_id,
+        } => {
+            let operation = floe_app::ConnectionObserveOperation::Inspect {
+                connector_id,
+                connection_id,
+            };
             let result = services
                 .connection_observe(caller, request.request_id, operation)
                 .map_err(service_error)?;
@@ -598,8 +590,14 @@ fn query_with_host<
                 result: connection_observe_result(result, request.request_id)?,
             })
         }
-        AppQueryDto::ConnectionObserveReview { connector_id, connection_id } => {
-            let operation = floe_app::ConnectionObserveOperation::Review { connector_id, connection_id };
+        AppQueryDto::ConnectionObserveReview {
+            connector_id,
+            connection_id,
+        } => {
+            let operation = floe_app::ConnectionObserveOperation::Review {
+                connector_id,
+                connection_id,
+            };
             let result = services
                 .connection_observe(caller, request.request_id, operation)
                 .map_err(service_error)?;
@@ -607,7 +605,10 @@ fn query_with_host<
                 result: connection_observe_result(result, request.request_id)?,
             })
         }
-        AppQueryDto::ConnectionObserveReadResult { operation_id, release } => {
+        AppQueryDto::ConnectionObserveReadResult {
+            operation_id,
+            release,
+        } => {
             let result = services
                 .read_connection_observe_result(caller, operation_id, release)
                 .map_err(service_error)?;
@@ -632,29 +633,6 @@ fn query_with_host<
                 .map_err(service_error)?;
             Ok(AppQueryResultDto::ConnectionsOperation {
                 result: connections_result(result, operation_id)?,
-            })
-        }
-        AppQueryDto::AccessFeasibilityInspect {} => {
-            let result = services
-                .inspect_local_access(
-                    caller,
-                    request.request_id,
-                    floe_app::LocalAccessInspection::Feasibility,
-                )
-                .map_err(service_error)?;
-            Ok(AppQueryResultDto::LocalAccessOperation {
-                result: local_access_result(result, request.request_id)?,
-            })
-        }
-        AppQueryDto::AccessLocalReadResult {
-            operation_id,
-            release,
-        } => {
-            let result = services
-                .read_local_access_result(caller, operation_id, release)
-                .map_err(service_error)?;
-            Ok(AppQueryResultDto::LocalAccessOperation {
-                result: local_access_result(result, operation_id)?,
             })
         }
         AppQueryDto::ExpertsRegistryInspect {} => {
@@ -995,13 +973,17 @@ fn connection_observe_expectation(
         connection_revision: expected.connection_revision,
         native_subject: expected.native_subject,
         producer_fingerprint: expected.producer_fingerprint,
-        members: expected.members.into_iter().map(|member| floe_app::ConnectionObserveReviewedMember {
-            view_id: member.view_id,
-            policy_digest: member.policy_digest,
-            resource: member.resource,
-            expected_grant_id: member.expected_grant_id,
-            expected_grant_authority: member.expected_grant_authority,
-        }).collect(),
+        members: expected
+            .members
+            .into_iter()
+            .map(|member| floe_app::ConnectionObserveReviewedMember {
+                view_id: member.view_id,
+                policy_digest: member.policy_digest,
+                resource: member.resource,
+                expected_grant_id: member.expected_grant_id,
+                expected_grant_authority: member.expected_grant_authority,
+            })
+            .collect(),
     }
 }
 
@@ -1015,13 +997,17 @@ fn connection_observe_expectation_dto(
         connection_revision: expected.connection_revision,
         native_subject: expected.native_subject,
         producer_fingerprint: expected.producer_fingerprint,
-        members: expected.members.into_iter().map(|member| floe_protocol::ConnectionObserveReviewedMemberDto {
-            view_id: member.view_id,
-            policy_digest: member.policy_digest,
-            resource: member.resource,
-            expected_grant_id: member.expected_grant_id,
-            expected_grant_authority: member.expected_grant_authority,
-        }).collect(),
+        members: expected
+            .members
+            .into_iter()
+            .map(|member| floe_protocol::ConnectionObserveReviewedMemberDto {
+                view_id: member.view_id,
+                policy_digest: member.policy_digest,
+                resource: member.resource,
+                expected_grant_id: member.expected_grant_id,
+                expected_grant_authority: member.expected_grant_authority,
+            })
+            .collect(),
     }
 }
 
@@ -1036,50 +1022,54 @@ fn connection_observe_result(
         operation_id,
         done: result.done,
         state: result.state.map(crate::conversion::owners::vault_state_dto),
-        overview: result.overview.map(|overview| floe_protocol::ConnectionObserveOverviewDto {
-            connector_id: overview.connector_id,
-            connection_id: overview.connection_id,
-            status: match overview.status {
-                floe_app::ConnectionObserveStatus::Active => floe_protocol::ConnectionObserveStatusDto::Active,
-                floe_app::ConnectionObserveStatus::Paused => floe_protocol::ConnectionObserveStatusDto::Paused,
-                floe_app::ConnectionObserveStatus::NeedsReview => floe_protocol::ConnectionObserveStatusDto::NeedsReview,
-                floe_app::ConnectionObserveStatus::NeedsSystemAccess => floe_protocol::ConnectionObserveStatusDto::NeedsSystemAccess,
-                floe_app::ConnectionObserveStatus::ReconnectRequired => floe_protocol::ConnectionObserveStatusDto::ReconnectRequired,
-                floe_app::ConnectionObserveStatus::Unavailable => floe_protocol::ConnectionObserveStatusDto::Unavailable,
-            },
-            enabled: overview.enabled,
-            source_resources: overview.source_resources,
-            members: overview.members.into_iter().map(|member| floe_protocol::ConnectionObserveMemberDto {
-                view_id: member.view_id,
-                state: match member.state {
-                    floe_app::GrantState::Active => floe_protocol::ConnectionObserveGrantStateDto::Active,
-                    floe_app::GrantState::Paused => floe_protocol::ConnectionObserveGrantStateDto::Paused,
-                    floe_app::GrantState::Revoked => floe_protocol::ConnectionObserveGrantStateDto::Revoked,
+        overview: result
+            .overview
+            .map(|overview| floe_protocol::ConnectionObserveOverviewDto {
+                connector_id: overview.connector_id,
+                connection_id: overview.connection_id,
+                status: match overview.status {
+                    floe_app::ConnectionObserveStatus::Active => {
+                        floe_protocol::ConnectionObserveStatusDto::Active
+                    }
+                    floe_app::ConnectionObserveStatus::Paused => {
+                        floe_protocol::ConnectionObserveStatusDto::Paused
+                    }
+                    floe_app::ConnectionObserveStatus::NeedsReview => {
+                        floe_protocol::ConnectionObserveStatusDto::NeedsReview
+                    }
+                    floe_app::ConnectionObserveStatus::NeedsSystemAccess => {
+                        floe_protocol::ConnectionObserveStatusDto::NeedsSystemAccess
+                    }
+                    floe_app::ConnectionObserveStatus::ReconnectRequired => {
+                        floe_protocol::ConnectionObserveStatusDto::ReconnectRequired
+                    }
+                    floe_app::ConnectionObserveStatus::Unavailable => {
+                        floe_protocol::ConnectionObserveStatusDto::Unavailable
+                    }
                 },
-                review_required: member.review_required,
-            }).collect(),
-        }),
+                enabled: overview.enabled,
+                source_resources: overview.source_resources,
+                members: overview
+                    .members
+                    .into_iter()
+                    .map(|member| floe_protocol::ConnectionObserveMemberDto {
+                        view_id: member.view_id,
+                        state: match member.state {
+                            floe_app::GrantState::Active => {
+                                floe_protocol::ConnectionObserveGrantStateDto::Active
+                            }
+                            floe_app::GrantState::Paused => {
+                                floe_protocol::ConnectionObserveGrantStateDto::Paused
+                            }
+                            floe_app::GrantState::Revoked => {
+                                floe_protocol::ConnectionObserveGrantStateDto::Revoked
+                            }
+                        },
+                        review_required: member.review_required,
+                    })
+                    .collect(),
+            }),
         reviewed: result.reviewed.map(connection_observe_expectation_dto),
-        failure: result.failure.as_ref().map(|failure| {
-            crate::conversion::owners::failure_envelope(failure, &result.stage, &operation_id.to_string())
-        }),
-    })
-}
-
-fn local_access_result(
-    result: floe_app::LocalAccessResult,
-    operation_id: uuid::Uuid,
-) -> AppWireResult<floe_protocol::LocalAccessResultDto> {
-    if result.operation_id != operation_id {
-        return Err(service_error(floe_app::ServiceError::Internal));
-    }
-    Ok(floe_protocol::LocalAccessResultDto {
-        operation_id,
-        done: result.done,
-        state: result.state.map(crate::conversion::owners::vault_state_dto),
-        feasibility_access: result
-            .feasibility_access
-            .map(crate::conversion::owners::feasibility_access_dto),
         failure: result.failure.as_ref().map(|failure| {
             crate::conversion::owners::failure_envelope(
                 failure,
@@ -1908,17 +1898,6 @@ mod tests {
         }
     }
 
-    impl floe_app::LocalAccessCommands for Services {
-        fn local_access_command(
-            &self,
-            _caller: &floe_app::CallerContext,
-            _operation_id: Uuid,
-            _command: floe_app::LocalAccessCommand,
-        ) -> Result<floe_app::LocalAccessResult, floe_app::ServiceError> {
-            Err(floe_app::ServiceError::Unavailable)
-        }
-    }
-
     impl floe_app::KnowledgeCommands for Services {
         fn decide_memory(
             &self,
@@ -2119,25 +2098,6 @@ mod tests {
         }
     }
 
-    impl floe_app::LocalAccessQueries for Services {
-        fn inspect_local_access(
-            &self,
-            _caller: &floe_app::CallerContext,
-            _operation_id: Uuid,
-            _inspection: floe_app::LocalAccessInspection,
-        ) -> Result<floe_app::LocalAccessResult, floe_app::ServiceError> {
-            Err(floe_app::ServiceError::Unavailable)
-        }
-        fn read_local_access_result(
-            &self,
-            _caller: &floe_app::CallerContext,
-            _operation_id: Uuid,
-            _release: bool,
-        ) -> Result<floe_app::LocalAccessResult, floe_app::ServiceError> {
-            Err(floe_app::ServiceError::Unavailable)
-        }
-    }
-
     impl floe_app::ExpertQueries for Services {
         fn inspect_experts(
             &self,
@@ -2229,18 +2189,20 @@ mod tests {
             failure: None,
         });
         assert!(command_with_host(&host, command()).is_err());
-        assert!(query_with_host(
-            &host,
-            AppQueryRequestDto {
-                schema_version: 2,
-                request_id: Uuid::new_v4(),
-                query: AppQueryDto::VaultReadResult {
-                    operation_id,
-                    release: true
-                },
-            }
-        )
-        .is_err());
+        assert!(
+            query_with_host(
+                &host,
+                AppQueryRequestDto {
+                    schema_version: 2,
+                    request_id: Uuid::new_v4(),
+                    query: AppQueryDto::VaultReadResult {
+                        operation_id,
+                        release: true
+                    },
+                }
+            )
+            .is_err()
+        );
     }
 
     impl floe_app::ConversationQueries for Services {
@@ -2705,9 +2667,11 @@ mod tests {
             error.metadata.get("recovery_action").map(String::as_str),
             Some("retry_read")
         );
-        assert!(!agent_failure(AgentFailure::Cancelled)
-            .metadata
-            .contains_key("recovery_action"));
+        assert!(
+            !agent_failure(AgentFailure::Cancelled)
+                .metadata
+                .contains_key("recovery_action")
+        );
     }
 
     #[test]

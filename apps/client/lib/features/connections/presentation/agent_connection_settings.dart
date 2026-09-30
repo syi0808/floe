@@ -141,7 +141,6 @@ final class _ConnectionCard extends StatelessWidget {
     'android_contacts' => 'Android Contacts',
     'health_connect' => 'Health Connect',
     'apple_contacts' => 'Apple Contacts',
-    'apple_feasibility' => 'Apple Location, ETA & Weather',
     'apple_health' => 'Apple Health',
     'apple_screen_time' => 'Apple Screen Time',
     'google_calendar' => 'Google Calendar',

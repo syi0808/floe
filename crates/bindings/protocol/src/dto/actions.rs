@@ -42,7 +42,7 @@ pub(crate) fn validate_command(operation: &CalendarActionOperationDto) -> Result
             timezone,
             ..
         } => {
-            if !super::local_access::identifier(calendar_id)
+            if !identifier(calendar_id)
                 || title.is_empty()
                 || title.len() > 4096
                 || timezone.is_empty()
@@ -75,4 +75,11 @@ pub(crate) fn validate_command(operation: &CalendarActionOperationDto) -> Result
         | CalendarActionOperationDto::Get { .. } => return Err("command.operation"),
     }
     Ok(())
+}
+
+fn identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
 }

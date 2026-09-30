@@ -219,7 +219,7 @@ async fn partial_source_failure_keeps_the_healthy_calendar_situation_runnable() 
         .unwrap();
     let situation = SituationDescriptor {
         schema_version: CONNECTED_CONTEXT_VERSION,
-        id: "schedule.feasibility".into(),
+        id: "schedule.availability".into(),
         version: "1.0.0".into(),
         trigger: SituationTrigger::ExplicitForegroundRequest,
         required_view_ids: vec!["calendar.timeline".into()],
@@ -374,7 +374,7 @@ async fn expired_calendar_projection_becomes_typed_unavailable_evidence() {
         .unwrap();
     let situation = SituationDescriptor {
         schema_version: CONNECTED_CONTEXT_VERSION,
-        id: "schedule.feasibility".into(),
+        id: "schedule.availability".into(),
         version: "1.0.0".into(),
         trigger: SituationTrigger::ExplicitForegroundRequest,
         required_view_ids: vec!["calendar.timeline".into()],

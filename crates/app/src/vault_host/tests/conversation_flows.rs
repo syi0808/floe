@@ -2977,7 +2977,6 @@ fn common_schedule_review_requirement_completes_root_run() {
 fn manager_rejects_all_domain_tools_without_source_dispatch() {
     for tool_id in [
         "people.identity.read",
-        "schedule.feasibility.read",
         "attention.coarse.read",
         "wellbeing.derived.read",
         "mail.communication.read",
@@ -3424,7 +3423,7 @@ impl floe_access::PersonalSubjectInspector for StubPersonalInspector {
         &'a self,
         _person_id: PersonId,
         _device_id: &'a str,
-        _probe: floe_access::PersonalSubjectProbe<'a>,
+        _probe: floe_access::PersonalSubjectProbe,
         _expected_native_subject_fingerprint: Option<String>,
         _deadline: Option<tokio::time::Instant>,
         _cancellation: floe_execution::Cancellation,

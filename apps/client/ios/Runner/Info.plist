@@ -34,8 +34,6 @@
 	<string>Floe reads calendars you select to show your day and prepare scheduling suggestions on this device.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>Floe reads selected health data to derive a short-lived capacity and recovery summary on this device.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Floe uses your current location only when estimating travel feasibility for an event.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

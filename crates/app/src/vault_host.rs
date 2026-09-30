@@ -632,7 +632,6 @@ struct Progress {
     remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
     connection_observe: Option<crate::ConnectionObserveOverview>,
     reviewed_connection_observe: Option<crate::ConnectionObserveExpectation>,
-    feasibility_access: Option<floe_access::FeasibilityAccessOverview>,
     calendar_actions: Option<crate::CalendarActionsResult>,
     failure: Option<AgentFailure>,
 }
@@ -1293,7 +1292,6 @@ impl Worker {
             remote_pairing: progress.remote_pairing.clone(),
             connection_observe: progress.connection_observe.clone(),
             reviewed_connection_observe: progress.reviewed_connection_observe.clone(),
-            feasibility_access: progress.feasibility_access.clone(),
             calendar_actions: progress.calendar_actions.clone(),
             failure: progress.failure,
         };
@@ -1799,7 +1797,6 @@ struct VaultExecutionResult {
     remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
     connection_observe: Option<crate::ConnectionObserveOverview>,
     reviewed_connection_observe: Option<crate::ConnectionObserveExpectation>,
-    feasibility_access: Option<floe_access::FeasibilityAccessOverview>,
     calendar_actions: Option<crate::CalendarActionsResult>,
     run_receipt: Option<floe_conversation::RunReceipt>,
 }
@@ -1862,7 +1859,6 @@ fn finish_job(
                 progress.remote_owner = result.remote_owner;
                 progress.connection_observe = result.connection_observe;
                 progress.reviewed_connection_observe = result.reviewed_connection_observe;
-                progress.feasibility_access = result.feasibility_access;
                 progress.calendar_actions = result.calendar_actions;
                 progress.done = true;
                 if let Some(receipt) = run_receipt {
@@ -2578,23 +2574,6 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 ..VaultExecutionResult::ready()
             })
         }
-        WorkerAction::FeasibilityAccess { change } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let mut command = (**change).clone();
-            command.consumers = vec![floe_context::ASSISTANT_CONSUMER.to_owned()];
-            let overview = floe_access::apply_feasibility_access(
-                vault.vault.as_ref(),
-                &personal_grants::native_driver(local_context),
-                job.person,
-                command,
-                job.cancellation.clone(),
-            )
-            .await?;
-            Ok(VaultExecutionResult {
-                feasibility_access: Some(overview),
-                ..VaultExecutionResult::ready()
-            })
-        }
         WorkerAction::CalendarAction { operation } => {
             let result = product_actions::execute(
                 core,
@@ -3118,6 +3097,7 @@ mod tests {
         time::{Instant, SystemTime, UNIX_EPOCH},
     };
 
+    mod calendar_connection_observe;
     mod conversation_flows;
     mod expert_actions;
     pub(in crate::vault_host) mod expert_evidence;
@@ -3126,7 +3106,6 @@ mod tests {
     mod learner_worker;
     mod local_product;
     mod memory_review;
-    mod calendar_connection_observe;
     mod proposals;
     mod registered_runner;
     mod remote_product;

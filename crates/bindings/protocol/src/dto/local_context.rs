@@ -53,7 +53,6 @@ pub enum LocalContextAttentionAcquisitionModeDto {
 pub enum LocalContextPersonalDomainDto {
     People,
     Wellbeing,
-    Feasibility,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -65,13 +64,6 @@ pub struct LocalContextPersonalAcquisitionRequestDto {
     pub device_id: String,
     pub domain: LocalContextPersonalDomainDto,
     pub selected_handles: Vec<String>,
-    pub event_handle: Option<String>,
-    pub evidence_handles: Vec<String>,
-    pub destination_latitude: Option<f64>,
-    pub destination_longitude: Option<f64>,
-    pub event_start_unix_ms: Option<i64>,
-    pub event_end_unix_ms: Option<i64>,
-    pub travel_mode: Option<String>,
     pub deadline_unix_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_native_subject_fingerprint: Option<String>,

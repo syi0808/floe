@@ -27,7 +27,6 @@ mod context_dependencies;
 mod conversation_interactions;
 mod conversations;
 mod expert_actions;
-mod feasibility_reviews;
 mod keyring;
 mod learning;
 mod recipient_consents;
@@ -226,7 +225,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_learning_store().await?;
         vault.initialize_access_grant_store().await?;
         vault.initialize_agent_action_store().await?;
-        vault.initialize_feasibility_review_store(true).await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_conversation_store().await?;
         vault.initialize_task_store().await?;
@@ -317,7 +315,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_learning_store().await?;
         vault.initialize_access_grant_store().await?;
         vault.initialize_agent_action_store().await?;
-        vault.initialize_feasibility_review_store(false).await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_conversation_store().await?;
         vault.initialize_task_store().await?;
@@ -335,7 +332,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let connection = self.connection()?;
         let mut rows = connection
             .query(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('calendar_grant_policy_schema', 'calendar_grant_policies', 'calendar_grant_mappings', 'remote_view_grant_schema', 'remote_view_grant_mappings')",
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('calendar_grant_policy_schema', 'calendar_grant_policies', 'calendar_grant_mappings', 'remote_view_grant_schema', 'remote_view_grant_mappings', 'personal_feasibility_review_schema', 'personal_feasibility_reviews', 'personal_grant_schema', 'personal_grant_policies', 'personal_feasibility_queries')",
                 (),
             )
             .await

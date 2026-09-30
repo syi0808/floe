@@ -22,9 +22,8 @@ use floe_protocol::{
 };
 use uuid::Uuid;
 
-const ALLOWED_VIEW_IDS: [&str; 5] = [
+const ALLOWED_VIEW_IDS: [&str; 4] = [
     "people.identity",
-    "schedule.feasibility",
     "attention.coarse",
     "wellbeing.derived",
     "calendar.timeline",
@@ -185,7 +184,6 @@ pub(crate) fn personal_domain(value: LocalContextPersonalDomainDto) -> PersonalD
     match value {
         LocalContextPersonalDomainDto::People => PersonalDomain::People,
         LocalContextPersonalDomainDto::Wellbeing => PersonalDomain::Wellbeing,
-        LocalContextPersonalDomainDto::Feasibility => PersonalDomain::Feasibility,
     }
 }
 
@@ -193,7 +191,6 @@ fn personal_domain_dto(value: PersonalDomain) -> LocalContextPersonalDomainDto {
     match value {
         PersonalDomain::People => LocalContextPersonalDomainDto::People,
         PersonalDomain::Wellbeing => LocalContextPersonalDomainDto::Wellbeing,
-        PersonalDomain::Feasibility => LocalContextPersonalDomainDto::Feasibility,
     }
 }
 
@@ -241,13 +238,6 @@ pub fn personal_request_dto(
         device_id: request.device_id,
         domain: personal_domain_dto(request.domain),
         selected_handles: request.selected_handles,
-        event_handle: request.event_handle,
-        evidence_handles: request.evidence_handles,
-        destination_latitude: request.destination_latitude,
-        destination_longitude: request.destination_longitude,
-        event_start_unix_ms: request.event_start_unix_ms,
-        event_end_unix_ms: request.event_end_unix_ms,
-        travel_mode: request.travel_mode,
         deadline_unix_ms: request.deadline_unix_ms,
         expected_native_subject_fingerprint: request.expected_native_subject_fingerprint,
     }

@@ -4,6 +4,67 @@ import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:floe_client/infrastructure/native/personal_acquisition_broker.dart';
 
 void main() {
+  test('Wellbeing acquisition accepts no selected handles', () async {
+    final transport = _FakeTransport();
+    transport.request['domain'] = 'wellbeing';
+    transport.request['selected_handles'] = <String>[];
+    final broker = PersonalAcquisitionBroker(
+      transport: transport,
+      personId: 'person',
+      hostEpoch: 'host-a',
+    );
+    expect(
+      await broker.pollAndComplete(
+        (request) async => {
+          'request_id': request['request_id'],
+          'host_epoch': request['host_epoch'],
+          'person_id': request['person_id'],
+          'device_id': request['device_id'],
+          'domain': request['domain'],
+          'native_subject_fingerprint_before': 'a' * 64,
+          'native_subject_fingerprint_after': 'a' * 64,
+          'permission_class': 'authorized',
+          'provider': 'apple_health',
+          'view': {'view_id': 'wellbeing.derived'},
+        },
+      ),
+      isTrue,
+    );
+    expect(transport.completed, isNotNull);
+    await broker.dispose();
+  });
+
+  test(
+    'invalid selection or unknown request shape never reaches the reader',
+    () async {
+      for (final change in [
+        {'domain': 'people', 'selected_handles': <String>[]},
+        {'domain': 'wellbeing'},
+        {'domain': 'unknown'},
+        {'unexpected_field': null},
+      ]) {
+        final transport = _FakeTransport();
+        transport.request.addAll(change);
+        final broker = PersonalAcquisitionBroker(
+          transport: transport,
+          personId: 'person',
+          hostEpoch: 'host-a',
+        );
+        var reads = 0;
+        await expectLater(
+          broker.pollAndComplete((request) async {
+            reads += 1;
+            return {};
+          }),
+          throwsFormatException,
+        );
+        expect(reads, 0);
+        expect(transport.completed, isNull);
+        await broker.dispose();
+      }
+    },
+  );
+
   test('completes exact selected People acquisition', () async {
     final transport = _FakeTransport();
     final broker = PersonalAcquisitionBroker(
@@ -77,13 +138,6 @@ final class _FakeTransport implements LocalContextTransport {
     'device_id': 'device-a',
     'domain': 'people',
     'selected_handles': ['person.identity:a'],
-    'event_handle': null,
-    'evidence_handles': <String>[],
-    'destination_latitude': null,
-    'destination_longitude': null,
-    'event_start_unix_ms': null,
-    'event_end_unix_ms': null,
-    'travel_mode': null,
     'deadline_unix_ms': 9999999999999,
   };
   Map<String, dynamic>? completed;

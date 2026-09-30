@@ -413,7 +413,7 @@ mod tests {
             &'a self,
             _person_id: PersonId,
             _device_id: &'a str,
-            probe: PersonalSubjectProbe<'a>,
+            probe: PersonalSubjectProbe,
             _expected_native_subject_fingerprint: Option<String>,
             _deadline: Option<tokio::time::Instant>,
             _cancellation: Cancellation,

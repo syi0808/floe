@@ -2,8 +2,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use floe_context_contract::{GrantAuthority, GrantId, SourceAuthority};
-
 pub use floe_agent_contract::{
     AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction, AgentRetryPolicy,
 };
@@ -74,85 +72,6 @@ pub struct RegistryConfigurationDto {
 pub enum RegistryConfigurationTargetDto {
     Installation { id: Uuid, enabled: bool },
     Assignment { id: Uuid, enabled: bool },
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum FeasibilityAccessChangeDto {
-    Inspect {},
-    Review {
-        expected_native_subject_fingerprint: String,
-        feasibility_query: FeasibilityGrantQueryDto,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        expected_grant_id: Option<GrantId>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        expected_grant_authority: Option<GrantAuthority>,
-    },
-    SetEnabled {
-        enabled: bool,
-    },
-}
-
-impl FeasibilityAccessChangeDto {
-    pub(crate) fn validate(&self) -> Result<(), &'static str> {
-        match self {
-            Self::Inspect {} => Err("command.change"),
-            Self::SetEnabled { .. } => Ok(()),
-            Self::Review {
-                expected_native_subject_fingerprint,
-                feasibility_query,
-                expected_grant_id,
-                expected_grant_authority,
-            } => {
-                if expected_native_subject_fingerprint.is_empty()
-                    || expected_native_subject_fingerprint.len() > 256
-                    || expected_native_subject_fingerprint.trim()
-                        != expected_native_subject_fingerprint
-                    || feasibility_query.event_handle.is_empty()
-                    || feasibility_query.event_handle.len() > 256
-                    || feasibility_query.event_start_unix_ms >= feasibility_query.event_end_unix_ms
-                {
-                    return Err("command.change");
-                }
-                match (expected_grant_id, expected_grant_authority) {
-                    (None, None) => Ok(()),
-                    (Some(id), Some(authority)) if id.is_valid() && authority.is_valid() => Ok(()),
-                    _ => Err("command.change.expected_grant"),
-                }
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct FeasibilityGrantQueryDto {
-    pub event_handle: String,
-    pub evidence_handles: Vec<String>,
-    pub destination_latitude: f64,
-    pub destination_longitude: f64,
-    pub event_start_unix_ms: i64,
-    pub event_end_unix_ms: i64,
-    pub travel_mode: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct FeasibilityAccessOverviewDto {
-    pub schema_version: u32,
-    pub person_id: String,
-    pub connector: String,
-    pub device_id: String,
-    pub connection_id: String,
-    pub source_authority: Option<SourceAuthority>,
-    pub grant_id: Option<GrantId>,
-    pub grant_authority: Option<GrantAuthority>,
-    pub state: String,
-    pub review_required: bool,
-    pub presence_available: bool,
-    pub consumers: Vec<String>,
-    pub native_subject_fingerprint: Option<String>,
-    pub process_incarnation: Option<Uuid>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

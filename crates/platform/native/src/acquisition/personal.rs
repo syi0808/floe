@@ -9,7 +9,6 @@ use super::{AcquisitionBroker, AcquisitionExchange, CompletionOutcome};
 pub enum PersonalDomain {
     People,
     Wellbeing,
-    Feasibility,
 }
 
 /// How the host's reported failure reaches the waiter.
@@ -29,13 +28,6 @@ pub struct PersonalAcquisitionRequest {
     pub device_id: String,
     pub domain: PersonalDomain,
     pub selected_handles: Vec<String>,
-    pub event_handle: Option<String>,
-    pub evidence_handles: Vec<String>,
-    pub destination_latitude: Option<f64>,
-    pub destination_longitude: Option<f64>,
-    pub event_start_unix_ms: Option<i64>,
-    pub event_end_unix_ms: Option<i64>,
-    pub travel_mode: Option<String>,
     pub deadline_unix_ms: i64,
     pub expected_native_subject_fingerprint: Option<String>,
 }

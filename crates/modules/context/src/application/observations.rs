@@ -22,14 +22,13 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::{
-    AttentionView, FeasibilityView, PeopleView, WellbeingView, validate_attention_view,
-    validate_feasibility_view, validate_people_view, validate_wellbeing_view,
+    AttentionView, PeopleView, WellbeingView, validate_attention_view, validate_people_view,
+    validate_wellbeing_view,
 };
 
 /// The views a device may publish here.
-pub const ALLOWED_VIEW_IDS: [&str; 5] = [
+pub const ALLOWED_VIEW_IDS: [&str; 4] = [
     "people.identity",
-    "schedule.feasibility",
     "attention.coarse",
     "wellbeing.derived",
     "calendar.timeline",
@@ -566,7 +565,6 @@ pub fn validate_view(
     }
     Ok(match view_id {
         "people.identity" => parse!(PeopleView, validate_people_view),
-        "schedule.feasibility" => parse!(FeasibilityView, validate_feasibility_view),
         "attention.coarse" => parse!(AttentionView, validate_attention_view),
         "wellbeing.derived" => parse!(WellbeingView, validate_wellbeing_view),
         _ => return Err(AgentFailure::CapabilityDenied),

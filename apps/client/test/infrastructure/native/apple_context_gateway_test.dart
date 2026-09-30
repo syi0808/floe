@@ -4,6 +4,23 @@ import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
 void main() {
   const observed = 1789056000000;
 
+  test('Apple inventory contains exactly three supported entries', () {
+    final inventory = [
+      {'connector_id': 'contacts.apple'},
+      {'connector_id': 'health.apple'},
+      {'connector_id': 'attention.apple'},
+    ];
+    validateAppleConnectionInventory(inventory);
+    expect(
+      () => validateAppleConnectionInventory(inventory.take(2).toList()),
+      throwsFormatException,
+    );
+    expect(
+      () => validateAppleConnectionInventory([...inventory, {}]),
+      throwsFormatException,
+    );
+  });
+
   test('uses the validated local cache producer ID at the native boundary', () {
     const deviceId = 'local-00000000-0000-4000-8000-000000000001';
     expect(appleNativeArguments(deviceId), {'device_id': deviceId});
@@ -53,33 +70,6 @@ void main() {
       'authorization': 'not_determined',
       'region_availability': 'unknown',
       'observed_at_unix_ms': observed,
-    });
-  });
-
-  test('accepts feasibility with required WeatherKit attribution', () {
-    validateAppleFeasibilityResult({
-      'view': {
-        'schema_version': 1,
-        'view_id': 'schedule.feasibility',
-        'source_handle': 'feasibility:apple',
-        'observed_at_unix_ms': observed,
-        'expires_at_unix_ms': observed + 300000,
-        'items': [
-          {
-            'event_handle': 'event:one',
-            'evidence_handles': ['calendar:event:one'],
-            'travel_duration_seconds': 900,
-            'leave_by_unix_ms': observed + 900000,
-            'weather_impact': 'minor',
-            'confidence_millis': 800,
-          },
-        ],
-      },
-      'weather_attribution': {
-        'legal_page_url': 'https://weather.example/legal',
-        'combined_mark_light_url': 'https://weather.example/light.svg',
-        'combined_mark_dark_url': 'https://weather.example/dark.svg',
-      },
     });
   });
 

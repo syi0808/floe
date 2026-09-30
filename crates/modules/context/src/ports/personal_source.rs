@@ -5,7 +5,7 @@
 //! device, are the host's; both reach this module as ports so the read itself
 //! names neither a vault nor a native bridge.
 
-use floe_access::{DataAccessGrant, FeasibilityGrantQuery, FeasibilityReviewRecord, GrantId};
+use floe_access::DataAccessGrant;
 use floe_agent_contract::{AgentFailure, BoxFuture, PersonId};
 use floe_connections::SourceConnection;
 use floe_context_contract::ConnectionId;
@@ -14,14 +14,9 @@ use serde_json::Value;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-/// Vault-owned grant and contextual Feasibility review facts.
+/// Vault-owned grant records.
 pub trait PersonalGrantRecords: Sync {
     fn grants<'a>(&'a self) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>>;
-
-    fn feasibility_review<'a>(
-        &'a self,
-        grant: GrantId,
-    ) -> BoxFuture<'a, Result<FeasibilityReviewRecord, AgentFailure>>;
 }
 
 pub trait PersonalConnectionReader: Sync {
@@ -36,7 +31,6 @@ pub trait PersonalConnectionReader: Sync {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PersonalDomain {
     People,
-    Feasibility,
     Wellbeing,
 }
 
@@ -47,7 +41,6 @@ pub struct PersonalAcquisition<'a> {
     pub host_epoch: String,
     pub domain: PersonalDomain,
     pub selected_handles: Vec<String>,
-    pub feasibility: Option<&'a FeasibilityGrantQuery>,
     /// The device subject this read insists answered it.
     pub expected_subject: String,
     pub deadline: Instant,

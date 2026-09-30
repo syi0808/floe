@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{AppCommandReceiptDto, AppWireErrorDto, APP_WIRE_VERSION};
+use super::{APP_WIRE_VERSION, AppCommandReceiptDto, AppWireErrorDto};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -73,10 +73,6 @@ pub enum AppQueryDto {
     RemoteCalendarSources {},
     #[serde(rename = "connections.read_result")]
     ConnectionsReadResult { operation_id: Uuid, release: bool },
-    #[serde(rename = "access.feasibility.inspect")]
-    AccessFeasibilityInspect {},
-    #[serde(rename = "access.local.read_result")]
-    AccessLocalReadResult { operation_id: Uuid, release: bool },
     #[serde(rename = "experts.registry.inspect")]
     ExpertsRegistryInspect {},
     #[serde(rename = "experts.sources.candidates")]
@@ -138,20 +134,26 @@ impl AppQueryDto {
                     Err("query.connector_id")
                 };
             }
-            Self::ConnectionObserveInspect { connector_id, connection_id }
-            | Self::ConnectionObserveReview { connector_id, connection_id } => {
+            Self::ConnectionObserveInspect {
+                connector_id,
+                connection_id,
+            }
+            | Self::ConnectionObserveReview {
+                connector_id,
+                connection_id,
+            } => {
                 return super::connection_observe::validate_identity(connector_id, connection_id);
             }
             Self::ConnectionObserveReadResult { operation_id, .. } => {
-                return if operation_id.is_nil() { Err("query.operation_id") } else { Ok(()) };
+                return if operation_id.is_nil() {
+                    Err("query.operation_id")
+                } else {
+                    Ok(())
+                };
             }
             Self::RemoteCalendarSources {} => return Ok(()),
             Self::KnowledgeReadResult { operation_id, .. }
             | Self::ConnectionsReadResult { operation_id, .. } => {
-                ("query.operation_id", operation_id)
-            }
-            Self::AccessFeasibilityInspect {} => return Ok(()),
-            Self::AccessLocalReadResult { operation_id, .. } => {
                 ("query.operation_id", operation_id)
             }
             Self::ExpertsRegistryInspect {} => return Ok(()),
@@ -184,11 +186,7 @@ impl AppQueryDto {
             }
             Self::ConversationInteractionList { session_id } => ("query.session_id", session_id),
         };
-        if id.is_nil() {
-            Err(field)
-        } else {
-            Ok(())
-        }
+        if id.is_nil() { Err(field) } else { Ok(()) }
     }
 }
 
@@ -225,10 +223,6 @@ pub enum AppQueryResultDto {
     },
     RemoteCalendarSources {
         sources: Vec<super::SourceConnectionDto>,
-    },
-    LocalAccessOperation {
-        #[serde(flatten)]
-        result: super::LocalAccessResultDto,
     },
     ExpertOperation {
         #[serde(flatten)]

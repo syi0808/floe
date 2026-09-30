@@ -1,8 +1,6 @@
-import CoreLocation
 import CryptoKit
 import FloeAppleContacts
 import FloeAppleHealth
-import FloeFeasibilityProvider
 import FloeScreenTimeGate
 import Flutter
 import Foundation
@@ -13,7 +11,6 @@ final class AppleContextChannel {
   private static let channelName = "floe/apple_context"
   private static let contactsScope = "CNContactStore.read"
   private static let healthScope = "HKHealthStore.derived.read"
-  private static let locationScope = "CLLocationManager.when_in_use"
 
   private let channel: FlutterMethodChannel
   private let contacts: AppleContactsProvider
@@ -21,15 +18,10 @@ final class AppleContextChannel {
   private let health = HealthKitWellbeingProvider.currentHostProvider(
     sourceHandle: "wellbeing:apple-health"
   )
-  private let feasibility: AppleFeasibilityProvider
-  private let governedFeasibility: AppleFeasibilityProvider
-  private let feasibilityPermission = CoreLocationOneShotProvider()
   private var contactsLastView: [String: Any]?
   private var contactsLastSuccess: Int64?
   private var healthLastView: [String: Any]?
   private var healthLastSuccess: Int64?
-  private var feasibilityLastView: [String: Any]?
-  private var feasibilityLastSuccess: Int64?
   private var boundDeviceID: String?
 
   init(messenger: FlutterBinaryMessenger) throws {
@@ -37,16 +29,6 @@ final class AppleContextChannel {
     let handleSecret = try Self.contactsHandleSecret()
     nativeSubjectKey = SymmetricKey(data: handleSecret)
     contacts = try AppleContactsProvider(handleSecret: handleSecret)
-    feasibility = AppleFeasibilityProvider(
-      location: CoreLocationOneShotProvider(),
-      directions: MapKitDirectionsProvider(),
-      weather: WeatherKitEventWeatherProvider()
-    )
-    governedFeasibility = AppleFeasibilityProvider(
-      location: CoreLocationOneShotProvider(allowPermissionRequest: false),
-      directions: MapKitDirectionsProvider(),
-      weather: WeatherKitEventWeatherProvider()
-    )
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self else {
         result(FlutterError(code: "unavailable", message: "Apple context host is unavailable.", details: nil))
@@ -72,21 +54,6 @@ final class AppleContextChannel {
         result(try readContacts(arguments))
       case "inspectContactsSubject":
         result(try inspectContactsSubject(arguments))
-      case "readFeasibility":
-        result(try await readFeasibility(arguments))
-      case "readGovernedFeasibility":
-        _ = try inspectFeasibilitySubject(deviceID: deviceID)
-        result(try await readFeasibility(arguments, governed: true))
-      case "inspectFeasibilitySubject":
-        try requireExactKeys(arguments, ["device_id"])
-        result(try inspectFeasibilitySubject(deviceID: deviceID))
-      case "requestFeasibilityPermission":
-        try requireExactKeys(arguments, ["device_id"])
-        if CLLocationManager().authorizationStatus == .notDetermined {
-          _ = try? await feasibilityPermission.currentLocation(deadline: Date().addingTimeInterval(20))
-        }
-        let authorization = CLLocationManager().authorizationStatus
-        result(authorization == .authorizedAlways || authorization == .authorizedWhenInUse)
       case "inspectWellbeingSubject":
         try requireExactKeys(arguments, ["device_id"])
         result(try await inspectWellbeingSubject(deviceID: deviceID))
@@ -105,8 +72,6 @@ final class AppleContextChannel {
       }
     } catch let failure as ChannelFailure {
       result(FlutterError(code: failure.code, message: failure.message, details: nil))
-    } catch let failure as FeasibilityFailure {
-      result(FlutterError(code: failure.code.rawValue, message: "Apple feasibility source failed.", details: ["provider": failure.provider]))
     } catch let failure as AppleContactsProviderError {
       result(FlutterError(code: contactsErrorCode(failure), message: "Apple Contacts source failed.", details: nil))
     } catch let failure as HealthKitWellbeingFailure {
@@ -171,61 +136,6 @@ final class AppleContextChannel {
     ]
   }
 
-  private func inspectFeasibilitySubject(deviceID: String) throws -> [String: Any] {
-    let manager = CLLocationManager()
-    guard CLLocationManager.locationServicesEnabled(),
-          manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse else {
-      throw ChannelFailure(code: "permission_denied", message: "Location access requires explicit review.")
-    }
-    let permissionClass = manager.accuracyAuthorization == .fullAccuracy ? "location_precise" : "location_reduced"
-    let identity = ["floe.feasibility.subject.v1", deviceID, String(manager.authorizationStatus.rawValue), permissionClass]
-    let data = try JSONSerialization.data(withJSONObject: identity)
-    let fingerprint = HMAC<SHA256>.authenticationCode(for: data, using: nativeSubjectKey)
-      .map { String(format: "%02x", $0) }.joined()
-    return ["schema_version": 1, "subject_fingerprint": fingerprint, "permission_class": permissionClass]
-  }
-
-  private func readFeasibility(_ arguments: [String: Any], governed: Bool = false) async throws -> [String: Any] {
-    let keys: Set<String> = [
-      "device_id",
-      "event_handle", "evidence_handles", "destination_latitude", "destination_longitude",
-      "event_start_unix_ms", "event_end_unix_ms", "travel_mode", "source_handle", "timeout_ms",
-    ]
-    try requireExactKeys(arguments, keys)
-    guard let eventHandle = boundedHandle(arguments["event_handle"]),
-          let evidenceHandles = arguments["evidence_handles"] as? [String],
-          !evidenceHandles.isEmpty, evidenceHandles.count <= 8,
-          evidenceHandles.allSatisfy({ boundedHandle($0) != nil }),
-          Set(evidenceHandles).count == evidenceHandles.count,
-          let latitude = arguments["destination_latitude"] as? Double,
-          let longitude = arguments["destination_longitude"] as? Double,
-          let startMs = int64(arguments["event_start_unix_ms"]),
-          let endMs = int64(arguments["event_end_unix_ms"]),
-          let modeName = arguments["travel_mode"] as? String,
-          let mode = TravelMode(rawValue: modeName),
-          let sourceHandle = boundedHandle(arguments["source_handle"]),
-          let timeoutMs = arguments["timeout_ms"] as? Int,
-          (1...30_000).contains(timeoutMs)
-    else { throw ChannelFailure.invalidInput }
-    let now = Date()
-    let result = try await (governed ? governedFeasibility : feasibility).feasibility(
-      for: FeasibilityRequest(
-        eventHandle: eventHandle,
-        evidenceHandles: evidenceHandles,
-        destination: Coordinate(latitude: latitude, longitude: longitude),
-        eventStart: date(startMs),
-        eventEnd: date(endMs),
-        travelMode: mode,
-        sourceHandle: sourceHandle,
-        deadline: now.addingTimeInterval(Double(timeoutMs) / 1_000)
-      )
-    )
-    let value = try encodedObject(result)
-    feasibilityLastView = value["view"] as? [String: Any]
-    feasibilityLastSuccess = feasibilityLastView?["observed_at_unix_ms"] as? Int64
-    return value
-  }
-
   private func readWellbeing() async throws -> [String: Any] {
     let view = try await health.readDerivedWellbeing()
     let value = try encodedObject(view)
@@ -283,7 +193,6 @@ final class AppleContextChannel {
     let observed = nowMilliseconds()
     let contactsSnapshot = contacts.connectionSnapshot()
     let healthLifecycle = await health.lifecycle()
-    let locationAuthorization = CLLocationManager.authorizationStatus()
     let screenTime = try? screenTimeCapability()
     return [
       connectionSnapshot(
@@ -293,15 +202,6 @@ final class AppleContextChannel {
         authorized: contactsSnapshot.canRead, unsupported: false,
         lastView: contactsLastView, lastSuccess: contactsLastSuccess,
         itemKey: "identities", observed: observed, deviceID: deviceID
-      ),
-      connectionSnapshot(
-        connectorID: "feasibility.apple", provider: "apple_feasibility",
-        capabilityID: "schedule.feasibility.read", requiredScopes: [Self.locationScope],
-        viewID: "schedule.feasibility", freshnessMs: 300_000, maxItems: 1, maxBytes: 16_384,
-        authorized: locationAuthorization == .authorizedAlways || locationAuthorization == .authorizedWhenInUse,
-        unsupported: !CLLocationManager.locationServicesEnabled(),
-        lastView: feasibilityLastView, lastSuccess: feasibilityLastSuccess,
-        itemKey: "items", observed: observed, deviceID: deviceID
       ),
       connectionSnapshot(
         connectorID: "health.apple", provider: "apple_health",
@@ -427,21 +327,10 @@ final class AppleContextChannel {
     }
   }
 
-  private func int64(_ value: Any?) -> Int64? {
-    if let value = value as? Int64 { return value }
-    if let value = value as? Int { return Int64(value) }
-    if let value = value as? NSNumber { return value.int64Value }
-    return nil
-  }
-
   private func boundedHandle(_ value: Any?) -> String? {
     guard let value = value as? String, !value.isEmpty, value.utf8.count <= 512,
           !value.contains(where: { $0.isWhitespace }) else { return nil }
     return value
-  }
-
-  private func date(_ unixMs: Int64) -> Date {
-    Date(timeIntervalSince1970: Double(unixMs) / 1_000)
   }
 
   private func nowMilliseconds() -> Int64 {

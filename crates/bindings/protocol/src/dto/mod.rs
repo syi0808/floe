@@ -2,8 +2,7 @@ mod access;
 mod actions;
 pub use access::{
     RemoteAccessOperationDto, RemoteAccessRequestDto, RemoteAccessResultDto,
-    RemoteAuthorityEnrollmentStatusDto,
-    RemoteOwnerPublicKeyDto, RemoteProducerIdentityDto,
+    RemoteAuthorityEnrollmentStatusDto, RemoteOwnerPublicKeyDto, RemoteProducerIdentityDto,
 };
 pub use actions::ActionOperationResultDto;
 mod connection_observe;
@@ -45,8 +44,6 @@ pub use context::{
 };
 mod knowledge;
 pub use knowledge::KnowledgeOperationResultDto;
-mod local_access;
-pub use local_access::LocalAccessResultDto;
 mod queries;
 mod vault;
 pub use vault::VaultLifecycleResultDto;
@@ -60,11 +57,9 @@ pub use agent::{
     AgentMemoryReviewDecisionKindDto, AgentMemoryReviewOverviewDto, AgentMemorySummaryDto,
     AgentProposalActionDto, AgentProposalInspectionDto, AgentProposalStatusDto, AgentRetryPolicy,
     AgentSessionDto, AgentVaultFailureDto, AgentVaultRecoveryActionDto, AgentVaultStateDto,
-    CalendarActionDecisionDto, CalendarActionOperationDto,
-    ConnectorSnapshotDto, EpistemicStatusDto, FeasibilityAccessChangeDto,
-    FeasibilityAccessOverviewDto, FeasibilityGrantQueryDto, KnowledgeCandidateDto,
-    KnowledgeDecisionResultDto, PersonalMemoryKindDto, RegistryConfigurationDto,
-    RegistryConfigurationTargetDto, RegistryOverviewDto,
+    CalendarActionDecisionDto, CalendarActionOperationDto, ConnectorSnapshotDto,
+    EpistemicStatusDto, KnowledgeCandidateDto, KnowledgeDecisionResultDto, PersonalMemoryKindDto,
+    RegistryConfigurationDto, RegistryConfigurationTargetDto, RegistryOverviewDto,
 };
 pub use calendar::{
     CalendarFailureDto, CalendarMirrorStateDto, CalendarProviderDto, CalendarRangeDto,

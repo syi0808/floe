@@ -12,7 +12,6 @@ abstract interface class AppleContextApi {
     int limit = 64,
     List<String>? selectedHandles,
   });
-  Future<Map<String, dynamic>> readFeasibility(AppleFeasibilityQuery query);
   Future<Map<String, dynamic>> readWellbeing();
   Future<Map<String, dynamic>> screenTimeCapability();
 }
@@ -23,11 +22,6 @@ abstract interface class AppleContextSubjectApi {
   );
 }
 
-abstract interface class AppleFeasibilitySubjectApi {
-  Future<Map<String, dynamic>> inspectFeasibilitySubject();
-  Future<bool> requestFeasibilityPermission();
-}
-
 abstract interface class AppleHealthSubjectApi {
   Future<Map<String, dynamic>> inspectWellbeingSubject();
   Future<bool> requestWellbeingPermission();
@@ -35,38 +29,8 @@ abstract interface class AppleHealthSubjectApi {
 
 enum AppleContextSource { contacts, health }
 
-final class AppleFeasibilityQuery {
-  const AppleFeasibilityQuery({
-    required this.eventHandle,
-    required this.evidenceHandles,
-    required this.latitude,
-    required this.longitude,
-    required this.eventStart,
-    required this.eventEnd,
-    required this.travelMode,
-    this.sourceHandle = 'feasibility:apple',
-    this.timeout = const Duration(seconds: 20),
-  });
-
-  final String eventHandle;
-  final List<String> evidenceHandles;
-  final double latitude;
-  final double longitude;
-  final DateTime eventStart;
-  final DateTime eventEnd;
-  final AppleTravelMode travelMode;
-  final String sourceHandle;
-  final Duration timeout;
-}
-
-enum AppleTravelMode { automobile, transit, walking }
-
 final class AppleContextGateway
-    implements
-        AppleContextApi,
-        AppleContextSubjectApi,
-        AppleFeasibilitySubjectApi,
-        AppleHealthSubjectApi {
+    implements AppleContextApi, AppleContextSubjectApi, AppleHealthSubjectApi {
   AppleContextGateway({required String deviceId}) : _deviceId = deviceId {
     validateAppleDeviceId(deviceId);
   }
@@ -83,9 +47,7 @@ final class AppleContextGateway
     final connections = (values ?? const <Object?>[])
         .map(_strictMap)
         .toList(growable: false);
-    if (connections.length != 4) {
-      throw const FormatException('Invalid Apple connection inventory.');
-    }
+    validateAppleConnectionInventory(connections);
     return connections;
   }
 
@@ -154,74 +116,6 @@ final class AppleContextGateway
       throw const FormatException('Invalid Apple Contacts subject.');
     }
     return value;
-  }
-
-  @override
-  Future<Map<String, dynamic>> readFeasibility(
-    AppleFeasibilityQuery query, {
-    bool governed = false,
-  }) async {
-    _requireAppleMobile();
-    final view = _strictMap(
-      await _channel.invokeMapMethod<Object?, Object?>(
-        governed ? 'readGovernedFeasibility' : 'readFeasibility',
-        {
-          'device_id': _deviceId,
-          'event_handle': query.eventHandle,
-          'evidence_handles': query.evidenceHandles,
-          'destination_latitude': query.latitude,
-          'destination_longitude': query.longitude,
-          'event_start_unix_ms': query.eventStart
-              .toUtc()
-              .millisecondsSinceEpoch,
-          'event_end_unix_ms': query.eventEnd.toUtc().millisecondsSinceEpoch,
-          'travel_mode': query.travelMode.name,
-          'source_handle': query.sourceHandle,
-          'timeout_ms': query.timeout.inMilliseconds,
-        },
-      ),
-    );
-    validateAppleFeasibilityResult(view);
-    return view;
-  }
-
-  @override
-  Future<Map<String, dynamic>> inspectFeasibilitySubject() async {
-    _requireAppleMobile();
-    final value = _strictMap(
-      await _channel.invokeMapMethod<Object?, Object?>(
-        'inspectFeasibilitySubject',
-        appleNativeArguments(_deviceId, const {}),
-      ),
-    );
-    const fields = {
-      'schema_version',
-      'subject_fingerprint',
-      'permission_class',
-    };
-    if (value.keys.toSet().difference(fields).isNotEmpty ||
-        !value.keys.toSet().containsAll(fields) ||
-        value['schema_version'] != 1 ||
-        value['subject_fingerprint'] is! String ||
-        !RegExp(r'^[0-9a-f]{64}$')
-            .hasMatch(value['subject_fingerprint'] as String) ||
-        !{
-          'location_precise',
-          'location_reduced',
-        }.contains(value['permission_class'])) {
-      throw const FormatException('Invalid Apple Feasibility subject.');
-    }
-    return value;
-  }
-
-  @override
-  Future<bool> requestFeasibilityPermission() async {
-    _requireAppleMobile();
-    final value = await _channel.invokeMethod<bool>(
-      'requestFeasibilityPermission',
-      appleNativeArguments(_deviceId, const {}),
-    );
-    return value == true;
   }
 
   @override
@@ -298,6 +192,13 @@ final class AppleContextGateway
         'Apple mobile context is available only on iOS and iPadOS.',
       );
     }
+  }
+}
+
+@visibleForTesting
+void validateAppleConnectionInventory(List<Map<String, dynamic>> connections) {
+  if (connections.length != 3) {
+    throw const FormatException('Invalid Apple connection inventory.');
   }
 }
 
@@ -403,73 +304,6 @@ void validateAppleWellbeingView(Map<String, dynamic> view) {
     throw const FormatException('Invalid Apple Wellbeing View.');
   }
   _validateTimes(view, maximumTtlMs: 1800000);
-}
-
-void validateAppleFeasibilityResult(Map<String, dynamic> result) {
-  _requireExactKeys(result, {
-    'view',
-    'weather_attribution',
-  }, 'Apple feasibility result');
-  final view = _strictMap(result['view']);
-  const keys = {
-    'schema_version',
-    'view_id',
-    'source_handle',
-    'observed_at_unix_ms',
-    'expires_at_unix_ms',
-    'items',
-  };
-  _requireExactKeys(view, keys, 'Apple Feasibility View');
-  final items = view['items'];
-  if (view['schema_version'] != 1 ||
-      view['view_id'] != 'schedule.feasibility' ||
-      !_validHandle(view['source_handle'], maximum: 512) ||
-      items is! List ||
-      items.length != 1) {
-    throw const FormatException('Invalid Apple Feasibility View.');
-  }
-  _validateTimes(view, maximumTtlMs: 300000);
-  final item = _strictMap(items.single);
-  const itemKeys = {
-    'event_handle',
-    'evidence_handles',
-    'travel_duration_seconds',
-    'leave_by_unix_ms',
-    'weather_impact',
-    'confidence_millis',
-  };
-  _requireExactKeys(item, itemKeys, 'Apple feasibility item');
-  final evidence = item['evidence_handles'];
-  if (!_validHandle(item['event_handle'], maximum: 512) ||
-      evidence is! List ||
-      evidence.isEmpty ||
-      evidence.length > 8 ||
-      evidence.any((value) => !_validHandle(value, maximum: 512)) ||
-      _integer(item['travel_duration_seconds']) < 0 ||
-      _integer(item['travel_duration_seconds']) > 86400 ||
-      _integer(item['leave_by_unix_ms']) < 0 ||
-      !{
-        'none',
-        'minor',
-        'significant',
-        'unknown',
-      }.contains(item['weather_impact']) ||
-      _integer(item['confidence_millis']) < 0 ||
-      _integer(item['confidence_millis']) > 1000) {
-    throw const FormatException('Invalid Apple feasibility item.');
-  }
-  final attribution = _strictMap(result['weather_attribution']);
-  const attributionKeys = {
-    'legal_page_url',
-    'combined_mark_light_url',
-    'combined_mark_dark_url',
-  };
-  _requireExactKeys(attribution, attributionKeys, 'Weather attribution');
-  if (attribution.values.any(
-    (value) => value is! String || Uri.tryParse(value)?.hasScheme != true,
-  )) {
-    throw const FormatException('Invalid Weather attribution.');
-  }
 }
 
 void validateAppleScreenTimeCapability(Map<String, dynamic> value) {

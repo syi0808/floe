@@ -115,9 +115,6 @@ pub enum WorkerAction {
         change: crate::ExpertBindingSelectionIntent,
         device_id: String,
     },
-    FeasibilityAccess {
-        change: Box<floe_access::FeasibilityAccessConfiguration>,
-    },
     ConnectionObserve {
         operation: crate::ConnectionObserveOperation,
         device_id: String,
@@ -176,7 +173,6 @@ impl WorkerAction {
             Self::Registry { .. } => "registry",
             Self::ExpertCandidates { .. } => "expert_candidates",
             Self::ExpertReplaceBinding { .. } => "expert_binding",
-            Self::FeasibilityAccess { .. } => "feasibility_access",
             Self::CalendarAction { .. } => "calendar_action",
             Self::ConnectionObserve { operation, .. } => operation.name(),
             Self::InspectProposal { .. } => "inspect_proposal",
@@ -204,7 +200,6 @@ impl WorkerAction {
                 | Self::Registry { .. }
                 | Self::ExpertCandidates { .. }
                 | Self::ExpertReplaceBinding { .. }
-                | Self::FeasibilityAccess { .. }
                 | Self::ConnectionObserve { .. }
                 | Self::ConversationTurn { .. }
                 | Self::ConversationResume { .. }
@@ -246,7 +241,6 @@ pub struct WorkerResult {
     pub remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
     pub connection_observe: Option<crate::ConnectionObserveOverview>,
     pub reviewed_connection_observe: Option<crate::ConnectionObserveExpectation>,
-    pub feasibility_access: Option<floe_access::FeasibilityAccessOverview>,
     pub calendar_actions: Option<crate::CalendarActionsResult>,
     pub failure: Option<AgentFailure>,
 }

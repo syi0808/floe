@@ -139,9 +139,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: FloeTheme.light,
-        home: Scaffold(
-          body: SettingsScreen(client: null, feasibilityAccessGateway: null),
-        ),
+        home: Scaffold(body: SettingsScreen(client: null)),
       ),
     );
     await tester.pumpAndSettle();

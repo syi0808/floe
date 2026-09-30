@@ -1,6 +1,5 @@
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/experts/domain/agent_registry.dart';
-import 'package:floe_client/features/settings/domain/feasibility_access.dart';
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
 import 'package:floe_client/features/knowledge/presentation/agent_memory_review.dart';
 import 'package:floe_client/features/connections/domain/agent_connections.dart';
@@ -10,7 +9,6 @@ final class LocalOwnerGateways {
   const LocalOwnerGateways({
     this.vault,
     this.registry,
-    this.feasibilityAccess,
     this.memory,
     this.memoryReview,
     this.connections,
@@ -18,7 +16,6 @@ final class LocalOwnerGateways {
   });
   final AgentVaultGateway? vault;
   final AgentRegistryGateway? registry;
-  final FeasibilityAccessGateway? feasibilityAccess;
   final AgentMemoryGateway? memory;
   final AgentMemoryReviewGateway? memoryReview;
   final AgentConnectionsGateway? connections;

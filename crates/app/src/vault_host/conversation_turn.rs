@@ -1248,7 +1248,6 @@ mod tests {
     async fn root_domain_tool_corrections_are_durable_without_dispatch_or_fallback() {
         for tool_id in [
             "people.identity.read",
-            "schedule.feasibility.read",
             "attention.coarse.read",
             "wellbeing.derived.read",
             "mail.communication.read",

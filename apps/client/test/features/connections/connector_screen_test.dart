@@ -61,10 +61,6 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.byKey(const ValueKey('connector-feasibility.apple')),
-      findsOneWidget,
-    );
-    expect(
       find.byKey(const ValueKey('connector-health.apple')),
       findsOneWidget,
     );
@@ -619,12 +615,7 @@ void main() {
     final source = gateway._source(
       'calendar.google',
       '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
-      const [
-        SourceResource(
-          handle: 'primary@example.test',
-          label: 'Primary',
-        ),
-      ],
+      const [SourceResource(handle: 'primary@example.test', label: 'Primary')],
     );
     final date = DateTime.utc(2026, 9, 4);
     await tester.pumpWidget(
@@ -821,8 +812,7 @@ final class _RecordingCalendarGateway extends _DeviceCalendarGateway
       const [];
 
   @override
-  Future<SourceConnection?> inspectNative(String personId) async =>
-      null;
+  Future<SourceConnection?> inspectNative(String personId) async => null;
 
   @override
   Future<SourceConnection> establishNative(
@@ -1126,7 +1116,6 @@ final class _AppleConnections implements AppleContextApi {
   Future<List<Map<String, dynamic>>> connections() async => [
     _appleConnection('contacts.apple', 'apple_contacts', 'revoked'),
     _appleConnection('attention.apple', 'apple_screen_time', 'unsupported'),
-    _appleConnection('feasibility.apple', 'apple_feasibility', 'pending'),
     _appleConnection('health.apple', 'apple_health', 'pending'),
   ];
 
@@ -1138,11 +1127,6 @@ final class _AppleConnections implements AppleContextApi {
     int limit = 64,
     List<String>? selectedHandles,
   }) async => {};
-
-  @override
-  Future<Map<String, dynamic>> readFeasibility(
-    AppleFeasibilityQuery query,
-  ) async => {};
 
   @override
   Future<Map<String, dynamic>> readWellbeing() async => {};
@@ -1158,19 +1142,16 @@ Map<String, dynamic> _appleConnection(
 ) {
   final viewId = switch (provider) {
     'apple_contacts' => 'people.identity',
-    'apple_feasibility' => 'schedule.feasibility',
     'apple_health' || 'apple_screen_time' => 'wellbeing.derived',
     _ => 'attention.coarse',
   };
   final capability = switch (provider) {
     'apple_contacts' => 'contacts.identity.read',
-    'apple_feasibility' => 'schedule.feasibility.read',
     'apple_health' => 'health.derived.read',
     _ => 'attention.coarse.read',
   };
   final scopes = switch (provider) {
     'apple_contacts' => ['CNContactStore.contacts.read'],
-    'apple_feasibility' => ['CLLocationManager.whenInUse'],
     'apple_health' => ['HKHealthStore.derived.read'],
     _ => ['FamilyControls.authorization'],
   };

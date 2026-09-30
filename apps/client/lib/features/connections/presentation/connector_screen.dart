@@ -16,13 +16,11 @@ import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_badge.dart';
 import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_feedback.dart';
-import 'package:floe_client/app/floe_input.dart';
-import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_primitives.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/connections/application/local_server_client.dart';
 import 'package:floe_client/features/day/application/calendar_gateway.dart';
-import 'package:floe_client/features/day/domain/day_models.dart';
+import 'package:floe_client/features/day/domain/day_models.dart' show DayQuery;
 import 'package:floe_client/features/day/presentation/calendar_panel.dart';
 import 'package:floe_client/features/connections/application/connector_authorization_gateway.dart';
 import 'package:floe_client/features/connections/presentation/connector_status_presentation.dart';
@@ -30,8 +28,6 @@ import 'package:floe_client/features/connections/presentation/server_connector_p
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 
 import 'package:floe_client/features/connections/domain/agent_connections.dart';
-import 'package:floe_client/features/settings/domain/feasibility_access.dart';
-import 'package:floe_client/features/connections/presentation/feasibility_access_card.dart';
 import 'package:floe_client/features/connections/presentation/personal_connection_cards.dart';
 import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/macos_context_gateway.dart';
@@ -50,13 +46,11 @@ class ConnectorScreen extends StatefulWidget {
     this.deviceId,
     this.platform,
     this.agentController,
-    this.feasibilityAccessGateway,
     this.connectionObserveGateway,
     this.nativePersonalSourceGateway,
     this.connectorAuthorization,
     this.appleContext,
     this.macOSContext,
-    this.daySnapshot,
     this.initialDeviceCalendarDetail = false,
   });
 
@@ -76,10 +70,8 @@ class ConnectorScreen extends StatefulWidget {
   final AgentController? agentController;
   final ConnectionObserveGateway? connectionObserveGateway;
   final NativePersonalSourceGateway? nativePersonalSourceGateway;
-  final FeasibilityAccessGateway? feasibilityAccessGateway;
   final AppleContextApi? appleContext;
   final MacOSContextApi? macOSContext;
-  final DaySnapshot? daySnapshot;
   final bool initialDeviceCalendarDetail;
 
   @override
@@ -454,12 +446,10 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     connection: connection,
     personId: widget.query.personId,
     deviceId: connection.descriptor.execution.deviceId ?? widget.deviceId ?? '',
-    feasibilityAccessGateway: widget.feasibilityAccessGateway,
     connectionObserveGateway: widget.connectionObserveGateway,
     nativePersonalSourceGateway: widget.nativePersonalSourceGateway,
     appleContext: widget.appleContext,
     macOSContext: widget.macOSContext,
-    daySnapshot: widget.daySnapshot,
     onBack: () => setState(() => selectedLocalConnectionId = null),
     onChanged: _loadLocalConnections,
   );
@@ -950,12 +940,10 @@ final class _AppleConnectionDetail extends StatefulWidget {
     required this.connection,
     required this.personId,
     required this.deviceId,
-    required this.feasibilityAccessGateway,
     required this.connectionObserveGateway,
     required this.nativePersonalSourceGateway,
     required this.appleContext,
     required this.macOSContext,
-    required this.daySnapshot,
     required this.onBack,
     required this.onChanged,
   });
@@ -963,12 +951,10 @@ final class _AppleConnectionDetail extends StatefulWidget {
   final AgentConnection connection;
   final String personId;
   final String deviceId;
-  final FeasibilityAccessGateway? feasibilityAccessGateway;
   final ConnectionObserveGateway? connectionObserveGateway;
   final NativePersonalSourceGateway? nativePersonalSourceGateway;
   final AppleContextApi? appleContext;
   final MacOSContextApi? macOSContext;
-  final DaySnapshot? daySnapshot;
   final VoidCallback onBack;
   final Future<void> Function() onChanged;
 
@@ -1012,14 +998,6 @@ final class _AppleConnectionDetailState extends State<_AppleConnectionDetail> {
             }
           }
           await apple.readContacts();
-        case 'apple_feasibility':
-          if (apple is! AppleFeasibilitySubjectApi) {
-            throw UnsupportedError('Apple Location access unavailable.');
-          }
-          if (!await (apple as AppleFeasibilitySubjectApi)
-              .requestFeasibilityPermission()) {
-            throw StateError('Location permission was not granted.');
-          }
         case 'apple_health':
           if (apple is! AppleHealthSubjectApi) {
             throw UnsupportedError('Apple Health unavailable.');
@@ -1050,31 +1028,8 @@ final class _AppleConnectionDetailState extends State<_AppleConnectionDetail> {
     }
   }
 
-  Future<FeasibilityQuery?> _requestQuery() async {
-    final snapshot = widget.daySnapshot;
-    final eventId = snapshot?.nextEventId;
-    if (snapshot == null || eventId == null) return null;
-    final event = snapshot.items
-        .whereType<EventItem>()
-        .where((item) => item.id == eventId)
-        .firstOrNull;
-    if (event == null || event.isAllDay) return null;
-    return showFloeDialog<FeasibilityQuery>(
-      context,
-      (_) => _PersonalFeasibilityDialog(event: event),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final gateway = widget.feasibilityAccessGateway;
-    final scoped = gateway == null || provider != 'apple_feasibility'
-        ? null
-        : _ScopedFeasibilityAccessGateway(
-            gateway,
-            personId: widget.personId,
-            connectionId: 'feasibility.apple.local',
-          );
     final title = _nativeConnectionName(provider);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1151,24 +1106,6 @@ final class _AppleConnectionDetailState extends State<_AppleConnectionDetail> {
           ),
         ],
         if (!blocked &&
-            provider == 'apple_feasibility' &&
-            _hasObserveCapability('schedule.feasibility.read') &&
-            scoped != null &&
-            widget.appleContext is AppleFeasibilitySubjectApi) ...[
-          SizedBox(height: FloeSpace.lg),
-          FeasibilityAccessCard(
-            gateway: scoped,
-            personId: widget.personId,
-            requestQuery: _requestQuery,
-            requestPermission: () =>
-                (widget.appleContext! as AppleFeasibilitySubjectApi)
-                    .requestFeasibilityPermission(),
-            inspectSubject: () =>
-                (widget.appleContext! as AppleFeasibilitySubjectApi)
-                    .inspectFeasibilitySubject(),
-          ),
-        ],
-        if (!blocked &&
             provider == 'apple_health' &&
             _hasObserveCapability('health.derived.read') &&
             widget.nativePersonalSourceGateway != null &&
@@ -1191,163 +1128,9 @@ final class _AppleConnectionDetailState extends State<_AppleConnectionDetail> {
   }
 }
 
-final class _PersonalFeasibilityDialog extends StatefulWidget {
-  const _PersonalFeasibilityDialog({required this.event});
-
-  final EventItem event;
-
-  @override
-  State<_PersonalFeasibilityDialog> createState() =>
-      _PersonalFeasibilityDialogState();
-}
-
-final class _PersonalFeasibilityDialogState
-    extends State<_PersonalFeasibilityDialog> {
-  final latitude = TextEditingController();
-  final longitude = TextEditingController();
-  AppleTravelMode travelMode = AppleTravelMode.transit;
-
-  @override
-  void dispose() {
-    latitude.dispose();
-    longitude.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => FloeDialog(
-    title: const Text('Review trip feasibility'),
-    content: SizedBox(
-      width: 420,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(widget.event.title, style: FloeType.body),
-          const SizedBox(height: FloeSpace.sm),
-          FloeInput(
-            key: const ValueKey('connection-feasibility-latitude'),
-            label: 'Destination latitude',
-            controller: latitude,
-            keyboardType: const TextInputType.numberWithOptions(
-              decimal: true,
-              signed: true,
-            ),
-          ),
-          const SizedBox(height: FloeSpace.sm),
-          FloeInput(
-            key: const ValueKey('connection-feasibility-longitude'),
-            label: 'Destination longitude',
-            controller: longitude,
-            keyboardType: const TextInputType.numberWithOptions(
-              decimal: true,
-              signed: true,
-            ),
-          ),
-          const SizedBox(height: FloeSpace.sm),
-          FloeRadioGroup<AppleTravelMode>(
-            value: travelMode,
-            onChanged: (value) {
-              if (value != null) setState(() => travelMode = value);
-            },
-            child: Column(
-              children: [
-                for (final mode in AppleTravelMode.values)
-                  FloeRadioTile(value: mode, title: Text(mode.name)),
-              ],
-            ),
-          ),
-        ],
-      ),
-    ),
-    actions: [
-      FloeButton.text(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('Cancel'),
-      ),
-      FloeButton.filled(
-        key: const ValueKey('connection-feasibility-confirm'),
-        onPressed: () {
-          final parsedLatitude = double.tryParse(latitude.text.trim());
-          final parsedLongitude = double.tryParse(longitude.text.trim());
-          if (parsedLatitude == null ||
-              parsedLatitude < -90 ||
-              parsedLatitude > 90 ||
-              parsedLongitude == null ||
-              parsedLongitude < -180 ||
-              parsedLongitude > 180) {
-            return;
-          }
-          Navigator.pop(
-            context,
-            FeasibilityQuery(
-              eventHandle: 'event:${widget.event.id}',
-              evidenceHandles: ['calendar.event:${widget.event.id}'],
-              destinationLatitude: parsedLatitude,
-              destinationLongitude: parsedLongitude,
-              eventStartUnixMs: widget.event.startsAt
-                  .toUtc()
-                  .millisecondsSinceEpoch,
-              eventEndUnixMs: widget.event.endsAt
-                  .toUtc()
-                  .millisecondsSinceEpoch,
-              travelMode: travelMode.name,
-            ),
-          );
-        },
-        child: const Text('Review access'),
-      ),
-    ],
-  );
-}
-
-final class _ScopedFeasibilityAccessGateway
-    implements FeasibilityAccessGateway {
-  _ScopedFeasibilityAccessGateway(
-    this.delegate, {
-    required this.personId,
-    required this.connectionId,
-  });
-
-  final FeasibilityAccessGateway delegate;
-  final String personId;
-  final String connectionId;
-
-  FeasibilityAccessOverview _check(FeasibilityAccessOverview value) {
-    if (value.personId != personId || value.connectionId != connectionId) {
-      throw const FormatException('Feasibility access connection changed.');
-    }
-    return value;
-  }
-
-  @override
-  Future<FeasibilityAccessOverview> inspectFeasibility(String id) async =>
-      _check(await delegate.inspectFeasibility(id));
-
-  @override
-  Future<FeasibilityAccessOverview> reviewFeasibility(
-    String id, {
-    required FeasibilityQuery query,
-    required FeasibilityAccessOverview reviewedPreview,
-  }) async => _check(
-    await delegate.reviewFeasibility(
-      id,
-      query: query,
-      reviewedPreview: reviewedPreview,
-    ),
-  );
-
-  @override
-  Future<FeasibilityAccessOverview> setFeasibilityEnabled(
-    String id,
-    bool enabled,
-  ) async => _check(await delegate.setFeasibilityEnabled(id, enabled));
-}
-
 String _nativeConnectionName(String provider) => switch (provider) {
   'apple_contacts' => 'Apple Contacts',
   'attention.macos' || 'apple_screen_time' => 'Attention',
-  'apple_feasibility' => 'Apple Location, ETA & Weather',
   'apple_health' => 'Wellbeing',
   _ => 'Apple connection',
 };
@@ -1356,7 +1139,6 @@ String _nativeConnectionDescription(String provider) => switch (provider) {
   'apple_contacts' => 'Choose bounded contact identities for Floe.',
   'attention.macos' ||
   'apple_screen_time' => 'Use coarse device attention signals.',
-  'apple_feasibility' => 'Review location, route and weather estimates.',
   'apple_health' => 'Use a derived wellbeing summary from Apple Health.',
   _ => 'Manage this Apple connection.',
 };
@@ -1364,7 +1146,6 @@ String _nativeConnectionDescription(String provider) => switch (provider) {
 IconData _nativeConnectionIcon(String provider) => switch (provider) {
   'apple_contacts' => LucideIcons.contact,
   'attention.macos' || 'apple_screen_time' => LucideIcons.focus,
-  'apple_feasibility' => LucideIcons.map,
   'apple_health' => LucideIcons.heartPulse,
   _ => LucideIcons.circleHelp,
 };

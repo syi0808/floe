@@ -35,9 +35,6 @@ mod ports {
     pub mod source_reader;
 }
 
-/// The consumer identity retained by contextual Feasibility authority.
-pub const ASSISTANT_CONSUMER: &str = "assistant";
-
 pub use application::archive::read_authorized_archive;
 pub use application::assembler::acquire_memory_context;
 pub use application::calendar_connector::{
@@ -80,15 +77,13 @@ pub use application::observations::{
     validate_view,
 };
 pub use application::personal_lineage::{
-    FeasibilityQueryLineage, attention_query_fingerprint, attention_subject_fingerprint,
-    feasibility_query_fingerprint, people_query_fingerprint, wellbeing_query_fingerprint,
+    attention_query_fingerprint, attention_subject_fingerprint, people_query_fingerprint,
+    wellbeing_query_fingerprint,
 };
 pub use application::personal_sources::{
-    ATTENTION_CONNECTOR, ATTENTION_RESOURCE, FEASIBILITY_CONNECTION, FEASIBILITY_CONNECTOR,
-    FEASIBILITY_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTOR, WELLBEING_RESOURCE,
-    admit_selected_attention_outcome, apple_execution_owner, authorize_personal_dependency,
-    feasibility_source, read_feasibility, read_feasibility_outcome, read_selected_people_outcome,
-    read_selected_wellbeing_outcome,
+    ATTENTION_CONNECTOR, ATTENTION_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTOR,
+    WELLBEING_RESOURCE, admit_selected_attention_outcome, apple_execution_owner,
+    authorize_personal_dependency, read_selected_people_outcome, read_selected_wellbeing_outcome,
 };
 pub use application::projection::{CoverageProjection, project_coverage};
 pub use application::remote_sources::{

@@ -7,8 +7,6 @@ class _DataPrivacy extends StatefulWidget {
     required this.onManageMemory,
     this.androidContext,
     this.appleContext,
-    this.daySnapshot,
-    this.feasibilityAccessGateway,
     this.platform,
   });
 
@@ -17,8 +15,6 @@ class _DataPrivacy extends StatefulWidget {
   final VoidCallback onManageMemory;
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
-  final DaySnapshot? daySnapshot;
-  final FeasibilityAccessGateway? feasibilityAccessGateway;
   final TargetPlatform? platform;
 
   @override

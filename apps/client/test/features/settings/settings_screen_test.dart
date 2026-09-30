@@ -141,7 +141,6 @@ void main() {
     expect(find.text('Apple Contacts'), findsNothing);
     expect(find.text('Open Connections'), findsNothing);
     expect(appleContext.connectionsCalls, 0);
-    expect(appleContext.feasibilityReads, 0);
     expect(appleContext.wellbeingReads, 0);
   });
 
@@ -182,7 +181,10 @@ void main() {
 
     await tester.tap(find.byKey(const Key('settings-dataPrivacy')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('connections-privacy-navigation')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('connections-privacy-navigation')),
+      findsOneWidget,
+    );
     expect(find.text('Allow all supported actions'), findsNothing);
 
     await tester.tap(find.byKey(const Key('settings-remoteServer')));
@@ -250,7 +252,10 @@ void main() {
       find.byKey(const ValueKey('connections-privacy-navigation')),
       findsOneWidget,
     );
-    expect((await client.connection())!.toJson(), isNot(contains('allow_external')));
+    expect(
+      (await client.connection())!.toJson(),
+      isNot(contains('allow_external')),
+    );
   });
 
   testWidgets('server connection inventory stays out of Data & privacy', (
@@ -523,48 +528,16 @@ final class _AndroidContext implements AndroidContextApi {
   }
 }
 
-final class _AppleContext
-    implements
-        AppleContextApi,
-        AppleFeasibilitySubjectApi,
-        AppleHealthSubjectApi {
-  AppleFeasibilityQuery? query;
+final class _AppleContext implements AppleContextApi, AppleHealthSubjectApi {
   int connectionsCalls = 0;
-  int feasibilityReads = 0;
   int wellbeingReads = 0;
-  int feasibilityPermissionRequests = 0;
   bool exposeHealthConnection = false;
   int wellbeingPermissionRequests = 0;
 
   @override
   Future<List<Map<String, dynamic>>> connections() async {
     connectionsCalls += 1;
-    return [
-      if (exposeHealthConnection) _appleHealthConnection(),
-      if (!exposeHealthConnection) _appleFeasibilityConnection(),
-    ];
-  }
-
-  @override
-  Future<Map<String, dynamic>> readFeasibility(
-    AppleFeasibilityQuery query,
-  ) async {
-    this.query = query;
-    feasibilityReads += 1;
-    return <String, dynamic>{};
-  }
-
-  @override
-  Future<Map<String, dynamic>> inspectFeasibilitySubject() async => {
-    'schema_version': 1,
-    'subject_fingerprint': 'a' * 64,
-    'permission_class': 'location_precise',
-  };
-
-  @override
-  Future<bool> requestFeasibilityPermission() async {
-    feasibilityPermissionRequests += 1;
-    return true;
+    return [if (exposeHealthConnection) _appleHealthConnection()];
   }
 
   @override
@@ -764,47 +737,6 @@ Map<String, dynamic> _appleHealthConnection() => {
     'connector_id': 'health.apple',
     'state': 'pending',
     'granted_scopes': ['HKHealthStore.derived.read'],
-    'observed_at_unix_ms': 2000,
-  },
-  'views': <Object>[],
-};
-
-Map<String, dynamic> _appleFeasibilityConnection() => {
-  'descriptor': {
-    'schema_version': 1,
-    'id': 'feasibility.apple',
-    'version': '1.0.0',
-    'provider': 'apple_feasibility',
-    'execution': {'kind': 'device', 'device_id': 'apple-test'},
-    'capabilities': [
-      {
-        'schema_version': 1,
-        'id': 'schedule.feasibility.read',
-        'version': '1.0.0',
-        'authority': 'observe',
-        'required_scopes': ['CLLocationManager.whenInUse'],
-        'output_view_id': 'schedule.feasibility',
-      },
-    ],
-    'views': [
-      {
-        'schema_version': 1,
-        'id': 'schedule.feasibility',
-        'version': '1.0.0',
-        'data_class': 'personal',
-        'retention': 'ephemeral',
-        'freshness_ttl_ms': 300000,
-        'max_items': 1,
-        'max_bytes': 16384,
-        'provenance_required': true,
-      },
-    ],
-  },
-  'connection': {
-    'schema_version': 1,
-    'connector_id': 'feasibility.apple',
-    'state': 'pending',
-    'granted_scopes': ['CLLocationManager.whenInUse'],
     'observed_at_unix_ms': 2000,
   },
   'views': <Object>[],

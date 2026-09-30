@@ -1,16 +1,10 @@
-//! Personal View identifiers and the contextual Feasibility grant source.
+//! Personal View identifiers.
 //!
 //! Standing personal source resources and subjects belong to Connections.
-
-use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId, GrantSourceBinding};
-use floe_kernel::{AgentFailure, PersonId};
 
 pub const ATTENTION_CONNECTOR: &str = "attention.macos";
 pub const ATTENTION_RESOURCE: &str = "attention.coarse";
 pub const PEOPLE_RESOURCE: &str = "people.identity";
-pub const FEASIBILITY_CONNECTOR: &str = "feasibility.apple";
-pub const FEASIBILITY_CONNECTION: &str = "feasibility.apple.local";
-pub const FEASIBILITY_RESOURCE: &str = "schedule.feasibility";
 pub const WELLBEING_CONNECTOR: &str = "health.apple";
 pub const WELLBEING_RESOURCE: &str = "wellbeing.derived";
 
@@ -30,32 +24,4 @@ pub fn is_device_local_source(connector: &str) -> bool {
             connector,
             "contacts.apple" | "contacts.android" | "health.apple"
         )
-}
-
-fn source_binding(
-    person_id: PersonId,
-    connection: &str,
-    connector: &str,
-    execution_owner: String,
-) -> Result<GrantSourceBinding, AgentFailure> {
-    GrantSourceBinding::try_new(
-        person_id,
-        ConnectionId::try_new(connection).map_err(|_| AgentFailure::InvalidInput)?,
-        ConnectorId::try_new(connector).map_err(|_| AgentFailure::InvalidInput)?,
-        ExecutionOwnerId::try_new(execution_owner).map_err(|_| AgentFailure::InvalidInput)?,
-    )
-    .map_err(|_| AgentFailure::InvalidInput)
-}
-
-/// The source binding a feasibility grant is bound to.
-pub fn feasibility_source(
-    person_id: PersonId,
-    device_id: &str,
-) -> Result<GrantSourceBinding, AgentFailure> {
-    source_binding(
-        person_id,
-        FEASIBILITY_CONNECTION,
-        FEASIBILITY_CONNECTOR,
-        apple_execution_owner(device_id),
-    )
 }

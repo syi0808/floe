@@ -1,30 +1,6 @@
-use floe_protocol::{AppCommandRequestDto, AppQueryRequestDto, FeasibilityAccessOverviewDto};
+use floe_protocol::{AppCommandRequestDto, AppQueryRequestDto};
 use serde_json::json;
 use uuid::Uuid;
-
-#[test]
-fn feasibility_overview_rejects_obsolete_policy_field() {
-    let overview = json!({
-        "schema_version": 1,
-        "person_id": Uuid::new_v4().to_string(),
-        "connector": "feasibility.apple",
-        "device_id": "device",
-        "connection_id": "feasibility",
-        "source_authority": null,
-        "grant_id": Uuid::new_v4(),
-        "grant_authority": {"incarnation": Uuid::new_v4(), "access_epoch": 1},
-        "state": "active",
-        "review_required": false,
-        "presence_available": true,
-        "consumers": ["assistant"],
-        "native_subject_fingerprint": "subject",
-        "process_incarnation": null,
-    });
-    assert!(serde_json::from_value::<FeasibilityAccessOverviewDto>(overview.clone()).is_ok());
-    let mut obsolete = overview;
-    obsolete["consumer_policy"] = json!({"incarnation": Uuid::new_v4(), "epoch": 1});
-    assert!(serde_json::from_value::<FeasibilityAccessOverviewDto>(obsolete).is_err());
-}
 
 #[test]
 fn personal_source_setup_uses_connections_product_wire() {
@@ -143,7 +119,6 @@ fn local_owner_commands_reject_identity_topology_and_malformed_ids() {
         json!({"kind":"conversation.session.resume"}),
         json!({"kind":"conversation.session.recover", "session_id":Uuid::new_v4(), "expected_revision":1}),
         json!({"kind":"experts.registry.configure", "change":{"instance_id":Uuid::new_v4(), "expected_revision":1, "target":{"kind":"installation", "id":Uuid::new_v4(), "enabled":true}}}),
-        json!({"kind":"access.feasibility.configure", "change":{"kind":"set_enabled", "enabled":false}}),
         json!({"kind":"knowledge.memory.decide", "candidate_id":Uuid::new_v4(), "decision":"approve"}),
     ];
     for command in commands {
@@ -199,7 +174,6 @@ fn every_owner_result_query_requires_non_nil_correlation_and_rejects_authority_f
     for kind in [
         "conversation.session.read_result",
         "experts.read_result",
-        "access.local.read_result",
         "knowledge.read_result",
         "connections.read_result",
         "actions.read_result",
@@ -290,29 +264,65 @@ fn day_actions_and_native_completions_accept_intent_not_authority() {
     }
 }
 #[test]
-fn feasibility_access_wire_is_contextual_and_unknown_kinds_are_rejected() {
-    let inspect = json!({"schema_version":2, "request_id":Uuid::new_v4(), "query":{"kind":"access.feasibility.inspect"}});
-    let parsed = serde_json::from_value::<AppQueryRequestDto>(inspect.clone()).unwrap();
-    parsed.validate().unwrap();
-    assert_eq!(serde_json::to_value(parsed).unwrap(), inspect);
+fn retired_access_routes_are_unknown() {
+    for kind in ["access.feasibility.configure", "unknown.command"] {
+        let command = json!({"schema_version":2, "request_id":Uuid::new_v4(), "command_id":Uuid::new_v4(), "command":{"kind":kind, "change":{"kind":"set_enabled", "enabled":false}}});
+        let error = serde_json::from_value::<AppCommandRequestDto>(command).unwrap_err();
+        assert!(error.to_string().contains("unknown variant"));
+    }
+    for kind in [
+        "access.feasibility.inspect",
+        "access.local.read_result",
+        "unknown.query",
+    ] {
+        let query = json!({"schema_version":2, "request_id":Uuid::new_v4(), "query":{"kind":kind}});
+        let error = serde_json::from_value::<AppQueryRequestDto>(query).unwrap_err();
+        assert!(error.to_string().contains("unknown variant"));
+    }
+}
 
-    let query = json!({
-        "event_handle": "event",
-        "evidence_handles": [],
-        "destination_latitude": 0.0,
-        "destination_longitude": 0.0,
-        "event_start_unix_ms": 1000,
-        "event_end_unix_ms": 2000,
-        "travel_mode": "automobile"
+#[test]
+fn personal_acquisition_accepts_only_current_domains_and_fields() {
+    let request = json!({
+        "request_id":Uuid::new_v4().to_string(),
+        "host_epoch":"host", "person_id":Uuid::new_v4().to_string(),
+        "device_id":"device", "domain":"people", "selected_handles":["person.identity:one"],
+        "deadline_unix_ms":2000
     });
-    let review = json!({"schema_version":2, "request_id":Uuid::new_v4(), "command_id":Uuid::new_v4(), "command":{"kind":"access.feasibility.configure", "change":{"kind":"review", "expected_native_subject_fingerprint":"subject", "feasibility_query":query}}});
-    let parsed = serde_json::from_value::<AppCommandRequestDto>(review.clone()).unwrap();
-    parsed.validate().unwrap();
-    assert_eq!(serde_json::to_value(parsed).unwrap(), review);
-
-    let command = json!({"schema_version":2, "request_id":Uuid::new_v4(), "command_id":Uuid::new_v4(), "command":{"kind":"unknown.command"}});
-    assert!(serde_json::from_value::<AppCommandRequestDto>(command).is_err());
-    let query =
-        json!({"schema_version":2, "request_id":Uuid::new_v4(), "query":{"kind":"unknown.query"}});
-    assert!(serde_json::from_value::<AppQueryRequestDto>(query).is_err());
+    assert!(
+        serde_json::from_value::<floe_protocol::LocalContextPersonalAcquisitionRequestDto>(
+            request.clone()
+        )
+        .is_ok()
+    );
+    let mut unknown_domain = request.clone();
+    unknown_domain["domain"] = json!("feasibility");
+    assert!(
+        serde_json::from_value::<floe_protocol::LocalContextPersonalAcquisitionRequestDto>(
+            unknown_domain
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("unknown variant")
+    );
+    for field in [
+        "event_handle",
+        "evidence_handles",
+        "destination_latitude",
+        "destination_longitude",
+        "event_start_unix_ms",
+        "event_end_unix_ms",
+        "travel_mode",
+    ] {
+        let mut obsolete = request.clone();
+        obsolete[field] = serde_json::Value::Null;
+        assert!(
+            serde_json::from_value::<floe_protocol::LocalContextPersonalAcquisitionRequestDto>(
+                obsolete
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("unknown field")
+        );
+    }
 }

@@ -264,7 +264,6 @@ impl LocalContextHost {
                 let view_id = match result.domain {
                     PersonalDomain::People => "people.identity",
                     PersonalDomain::Wellbeing => "wellbeing.derived",
-                    PersonalDomain::Feasibility => "schedule.feasibility",
                 };
                 floe_context::validate_view(view_id, view, now_unix_ms)
                     .map_err(|_| AgentFailure::InvalidInput)?;

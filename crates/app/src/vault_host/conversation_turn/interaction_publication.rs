@@ -29,7 +29,6 @@ pub(crate) fn generic_source_label(source_id: &str) -> &'static str {
         "floe.source.contacts" => "Contacts",
         "floe.source.attention" => "Attention",
         "floe.source.wellbeing" => "Wellbeing",
-        "floe.source.feasibility" => "Schedule feasibility",
         "floe.source.mail" => "Mail",
         "floe.source.work-context" => "Work context",
         "floe.source.logistics" => "Logistics",

@@ -1,8 +1,7 @@
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_context_contract::validate_feasibility_view;
 use floe_context_contract::{
-    AttentionState, AttentionView, CapacityState, FeasibilityView, RecoveryState, WellbeingView,
+    AttentionState, AttentionView, CapacityState, RecoveryState, WellbeingView,
     validate_attention_view, validate_wellbeing_view,
 };
 
@@ -18,17 +17,6 @@ fn attention(lifetime_ms: i64) -> AttentionView {
         state: AttentionState::Focused,
         confidence_millis: 800,
         evidence_handles: vec!["attention:aggregate".into()],
-    }
-}
-
-fn feasibility(lifetime_ms: i64) -> FeasibilityView {
-    FeasibilityView {
-        schema_version: AGENT_VERSION,
-        view_id: "schedule.feasibility".into(),
-        source_handle: "feasibility:fixture".into(),
-        observed_at_unix_ms: NOW,
-        expires_at_unix_ms: NOW + lifetime_ms,
-        items: vec![],
     }
 }
 
@@ -51,12 +39,6 @@ fn personal_views_enforce_their_purpose_specific_lifetimes() {
     validate_attention_view(&attention(120_000), NOW).unwrap();
     assert_eq!(
         validate_attention_view(&attention(120_001), NOW),
-        Err(AgentFailure::InvalidInput)
-    );
-
-    validate_feasibility_view(&feasibility(300_000), NOW).unwrap();
-    assert_eq!(
-        validate_feasibility_view(&feasibility(300_001), NOW),
         Err(AgentFailure::InvalidInput)
     );
 

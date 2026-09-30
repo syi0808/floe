@@ -1,7 +1,7 @@
 use floe_access::{
-    ConnectorId, ExecutionOwnerId, GrantAuthority, GrantConsumer,
-    GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding,
-    ProcessingRestriction, SourceAuthority,
+    ConnectorId, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
+    GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction,
+    SourceAuthority,
 };
 use floe_access::{DataAccessGrant, GrantState};
 use floe_agent_contract::CalendarProvider;
@@ -278,7 +278,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.finish_access_grant_transaction(transaction, result)
             .await
     }
-
 }
 
 pub(super) fn is_native_provider(provider: CalendarProvider) -> bool {
@@ -762,12 +761,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fresh_vault_reopens_without_retired_review_tables() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = floe_kernel::PersonId::new();
+        let keys = TestKeys::default();
+        let vault = EncryptedAgentVault::create(root.path(), person_id, keys.clone())
+            .await
+            .unwrap();
+        drop(vault);
+        let vault = EncryptedAgentVault::open(root.path(), person_id, keys)
+            .await
+            .unwrap();
+        let raw = vault.database.connect().unwrap();
+        let mut rows = raw.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('personal_feasibility_review_schema', 'personal_feasibility_reviews')",
+            (),
+        ).await.unwrap();
+        assert!(rows.next().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn obsolete_policy_tables_are_rejected_on_reopen() {
         for table in [
             "calendar_grant_policy_schema",
             "calendar_grant_policies",
             "remote_view_grant_schema",
             "remote_view_grant_mappings",
+            "personal_feasibility_review_schema",
+            "personal_feasibility_reviews",
+            "personal_grant_schema",
+            "personal_grant_policies",
+            "personal_feasibility_queries",
         ] {
             let root = tempfile::tempdir().unwrap();
             std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -780,12 +805,32 @@ mod tests {
             raw.execute(&format!("CREATE TABLE {table} (id TEXT PRIMARY KEY)"), ())
                 .await
                 .unwrap();
+            let vault_id = vault.vault_id;
+            let database = vault.database.clone();
+            let original_keys = keys.0.lock().unwrap().clone();
             drop(raw);
             drop(vault);
             assert!(matches!(
-                EncryptedAgentVault::open(root.path(), person_id, keys).await,
+                EncryptedAgentVault::open(root.path(), person_id, keys.clone()).await,
                 Err(AgentFailure::UnsupportedVersion)
             ));
+            assert_eq!(*keys.0.lock().unwrap(), original_keys);
+            assert!(
+                root.path()
+                    .join(person_id.to_string())
+                    .join("vault.id")
+                    .exists()
+            );
+            assert!(original_keys.contains_key(&(person_id, vault_id)));
+            let raw = database.connect().unwrap();
+            let mut rows = raw
+                .query(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+                    [table],
+                )
+                .await
+                .unwrap();
+            assert!(rows.next().await.unwrap().is_some());
         }
     }
 
@@ -897,7 +942,12 @@ mod tests {
         assert_eq!(admission.authority, grant.authority());
         assert_eq!(admission.scope.resources(), grant.scope().resources());
         assert_eq!(admission.scope.processing(), grant.scope().processing());
-        assert!(grant.scope().consumers().contains(&GrantConsumer::builtin("floe.builtin.schedule").unwrap()));
+        assert!(
+            grant
+                .scope()
+                .consumers()
+                .contains(&GrantConsumer::builtin("floe.builtin.schedule").unwrap())
+        );
     }
 
     #[tokio::test]

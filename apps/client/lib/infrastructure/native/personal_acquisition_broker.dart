@@ -108,13 +108,6 @@ final class PersonalAcquisitionBroker {
       'device_id',
       'domain',
       'selected_handles',
-      'event_handle',
-      'evidence_handles',
-      'destination_latitude',
-      'destination_longitude',
-      'event_start_unix_ms',
-      'event_end_unix_ms',
-      'travel_mode',
       'deadline_unix_ms',
     };
     const optional = {'expected_native_subject_fingerprint'};
@@ -128,7 +121,7 @@ final class PersonalAcquisitionBroker {
         !_validOpaque(request['request_id']) ||
         !_validOpaque(request['host_epoch']) ||
         !_validOpaque(request['device_id']) ||
-        !{'people', 'wellbeing', 'feasibility'}.contains(request['domain']) ||
+        !{'people', 'wellbeing'}.contains(request['domain']) ||
         request['deadline_unix_ms'] is! int ||
         (request['deadline_unix_ms']! as int) <=
             DateTime.now().toUtc().millisecondsSinceEpoch ||
@@ -139,38 +132,17 @@ final class PersonalAcquisitionBroker {
       throw const FormatException('Invalid personal acquisition request.');
     }
     final selected = request['selected_handles'];
-    final evidence = request['evidence_handles'];
-    if (selected is! List ||
-        evidence is! List ||
-        selected.any((value) => !_validOpaque(value)) ||
-        evidence.any((value) => !_validOpaque(value))) {
+    if (selected is! List || selected.any((value) => !_validOpaque(value))) {
       throw const FormatException('Invalid personal acquisition handles.');
     }
     switch (request['domain']) {
       case 'people':
-        if (selected.isEmpty ||
-            evidence.isNotEmpty ||
-            request['event_handle'] != null) {
+        if (selected.isEmpty) {
           throw const FormatException('Invalid People acquisition request.');
         }
       case 'wellbeing':
-        if (selected.isNotEmpty ||
-            evidence.isNotEmpty ||
-            request['event_handle'] != null) {
+        if (selected.isNotEmpty) {
           throw const FormatException('Invalid Wellbeing acquisition request.');
-        }
-      case 'feasibility':
-        if (selected.isNotEmpty ||
-            evidence.isEmpty ||
-            request['event_handle'] is! String ||
-            request['destination_latitude'] is! num ||
-            request['destination_longitude'] is! num ||
-            request['event_start_unix_ms'] is! int ||
-            request['event_end_unix_ms'] is! int ||
-            request['travel_mode'] is! String) {
-          throw const FormatException(
-            'Invalid Feasibility acquisition request.',
-          );
         }
     }
   }
@@ -213,9 +185,7 @@ final class PersonalAcquisitionBroker {
     if (request['domain'] == 'people' &&
             (result['view']! as Map)['view_id'] != 'people.identity' ||
         request['domain'] == 'wellbeing' &&
-            (result['view']! as Map)['view_id'] != 'wellbeing.derived' ||
-        request['domain'] == 'feasibility' &&
-            (result['view']! as Map)['view_id'] != 'schedule.feasibility') {
+            (result['view']! as Map)['view_id'] != 'wellbeing.derived') {
       throw const FormatException(
         'Personal acquisition view does not match domain.',
       );

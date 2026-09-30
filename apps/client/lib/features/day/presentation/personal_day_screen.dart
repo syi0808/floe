@@ -354,9 +354,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         deviceId: widget.serverClient?.deviceId,
         appleContext: widget.appleContext,
         macOSContext: widget.macOSContext,
-        daySnapshot: controller.snapshot,
         agentController: agentController,
-        feasibilityAccessGateway: widget.ownerGateways.feasibilityAccess,
         initialDeviceCalendarDetail: openDeviceCalendarDetail,
       );
     }
@@ -364,13 +362,11 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       return SettingsScreen(
         pairingGateway: widget.pairingGateway,
         client: widget.serverClient,
-        feasibilityAccessGateway: widget.ownerGateways.feasibilityAccess,
         actionController: actionController,
         agentController: agentController,
         expertBindingTarget: expertBindingTarget,
         androidContext: widget.androidContext,
         appleContext: widget.appleContext,
-        daySnapshot: controller.snapshot,
         platform: defaultTargetPlatform,
       );
     }

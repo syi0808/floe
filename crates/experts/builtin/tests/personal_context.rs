@@ -1,11 +1,10 @@
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
 use floe_context_contract::{
-    AttentionState, AttentionView, CapacityState, FeasibilityView, PeopleIdentity, PeopleView,
-    RecoveryState, WellbeingView, personal_context_evidence, validate_attention_view,
-    validate_people_view, validate_wellbeing_view,
+    AttentionState, AttentionView, CapacityState, PeopleIdentity, PeopleView, RecoveryState,
+    WellbeingView, personal_context_evidence, validate_attention_view, validate_people_view,
+    validate_wellbeing_view,
 };
-use floe_context_contract::{FeasibilityItem, WeatherImpact, validate_feasibility_view};
 
 const NOW: i64 = 1_789_000_000_000;
 
@@ -90,22 +89,6 @@ fn apple_screen_time_fixture_crosses_the_strict_attention_boundary() {
 fn bounded_personal_views_expose_derived_context_without_raw_source_data() {
     let people = people();
     validate_people_view(&people, NOW).unwrap();
-    let feasibility = FeasibilityView {
-        schema_version: AGENT_VERSION,
-        view_id: "schedule.feasibility".into(),
-        source_handle: "feasibility:fixture".into(),
-        observed_at_unix_ms: NOW,
-        expires_at_unix_ms: NOW + 300_000,
-        items: vec![FeasibilityItem {
-            event_handle: "calendar:event".into(),
-            evidence_handles: vec!["eta:route".into(), "weather:window".into()],
-            travel_duration_seconds: 1800,
-            leave_by_unix_ms: NOW + 900_000,
-            weather_impact: WeatherImpact::Minor,
-            confidence_millis: 900,
-        }],
-    };
-    validate_feasibility_view(&feasibility, NOW).unwrap();
     let attention = AttentionView {
         schema_version: AGENT_VERSION,
         view_id: "attention.coarse".into(),
@@ -132,7 +115,6 @@ fn bounded_personal_views_expose_derived_context_without_raw_source_data() {
 
     for evidence in [
         personal_context_evidence(&people).unwrap(),
-        personal_context_evidence(&feasibility).unwrap(),
         personal_context_evidence(&attention).unwrap(),
         personal_context_evidence(&wellbeing).unwrap(),
     ] {

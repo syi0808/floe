@@ -11,7 +11,6 @@ import 'package:floe_client/infrastructure/native/macos_context_gateway.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
 
 const _peopleViewId = 'people.identity';
-const _feasibilityViewId = 'schedule.feasibility';
 const _attentionViewId = 'attention.coarse';
 const _wellbeingViewId = 'wellbeing.derived';
 
@@ -37,11 +36,7 @@ final class LocalDeviceIdentity {
 }
 
 final class PublishingAppleContextGateway
-    implements
-        AppleContextApi,
-        AppleContextSubjectApi,
-        AppleFeasibilitySubjectApi,
-        AppleHealthSubjectApi {
+    implements AppleContextApi, AppleContextSubjectApi, AppleHealthSubjectApi {
   factory PublishingAppleContextGateway({
     required AppleContextApi gateway,
     required LocalContextTransport transport,
@@ -128,27 +123,6 @@ final class PublishingAppleContextGateway
   }
 
   @override
-  Future<Map<String, dynamic>> inspectFeasibilitySubject() {
-    final gateway = _gateway;
-    if (gateway is! AppleFeasibilitySubjectApi) {
-      throw UnsupportedError('Feasibility subject inspection is unavailable.');
-    }
-    return (gateway as AppleFeasibilitySubjectApi).inspectFeasibilitySubject();
-  }
-
-  @override
-  Future<bool> requestFeasibilityPermission() async {
-    final gateway = _gateway;
-    if (gateway is! AppleFeasibilitySubjectApi) {
-      throw UnsupportedError('Feasibility permission is unavailable.');
-    }
-    final granted = await (gateway as AppleFeasibilitySubjectApi)
-        .requestFeasibilityPermission();
-    if (!granted) await _revoke(_feasibilityViewId);
-    return granted;
-  }
-
-  @override
   Future<Map<String, dynamic>> inspectWellbeingSubject() {
     final gateway = _gateway;
     if (gateway is! AppleHealthSubjectApi) {
@@ -167,25 +141,6 @@ final class PublishingAppleContextGateway
         .requestWellbeingPermission();
     if (!granted) await _revoke(_wellbeingViewId);
     return granted;
-  }
-
-  @override
-  Future<Map<String, dynamic>> readFeasibility(
-    AppleFeasibilityQuery query,
-  ) async {
-    final result = await _readNative(
-      _feasibilityViewId,
-      () => _gateway.readFeasibility(query),
-    );
-    try {
-      validateAppleFeasibilityResult(result);
-      final view = _map(result['view']);
-      await _publishFresh(view, _feasibilityViewId);
-      return result;
-    } on Object {
-      await _revoke(_feasibilityViewId);
-      rethrow;
-    }
   }
 
   @override
@@ -594,11 +549,6 @@ final class PublishingMacOSContextGateway {
       viewId: _attentionViewId,
     );
   }
-}
-
-Map<String, dynamic> _map(Object? value) {
-  if (value is! Map) throw const FormatException('Expected a View map.');
-  return Map<String, dynamic>.from(value);
 }
 
 bool _validIdentifier(String value) =>

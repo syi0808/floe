@@ -4,7 +4,6 @@ pub mod dependency;
 pub mod grants;
 pub mod model_dispatch;
 pub mod native_calendar;
-pub mod personal_grants;
 pub mod personal_read;
 pub mod personal_sources;
 pub mod recipient_consent;
@@ -27,18 +26,13 @@ pub use native_calendar::{
     native_calendar_connector, native_calendar_provider, native_calendar_source_current,
     reviewed_native_subject,
 };
-pub use personal_grants::{
-    FeasibilityAccessChange, FeasibilityAccessConfiguration, FeasibilityAccessOverview,
-    FeasibilityAccessState, attention_consumer,
-};
 pub use personal_read::{
-    FeasibilityGrantQuery, PersonalReadRequirement, active_read_grant, grant_unchanged,
+    PersonalReadRequirement, active_read_grant, attention_consumer, grant_unchanged,
     subject_unchanged, valid_subject_fingerprint,
 };
 pub use personal_sources::{
-    ATTENTION_CONNECTOR, ATTENTION_RESOURCE, FEASIBILITY_CONNECTION, FEASIBILITY_CONNECTOR,
-    FEASIBILITY_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTOR, WELLBEING_RESOURCE,
-    apple_execution_owner, feasibility_source, is_device_local_source,
+    ATTENTION_CONNECTOR, ATTENTION_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTOR,
+    WELLBEING_RESOURCE, apple_execution_owner, is_device_local_source,
 };
 pub use release::{ReleasePermit, ReleaseRecipient, admit_release, consume_release};
 pub use remote_authority::{

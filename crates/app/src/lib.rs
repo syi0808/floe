@@ -28,12 +28,10 @@ mod first_party_observe;
 mod host;
 #[cfg(unix)]
 mod knowledge_services;
-#[cfg(unix)]
-mod local_access_services;
 mod local_context;
-mod personal_source_spec;
 #[cfg(unix)]
 mod local_operations;
+mod personal_source_spec;
 mod prompts;
 mod remote_services;
 mod services;
@@ -67,10 +65,8 @@ pub use floe_diagnostics::{PanicRecord, TraceContext, instrument, panic_record};
 /// The binding reads and writes these against its wire; it never reaches into
 /// the owner that decided them.
 pub use floe_access::{
-    DataAccessGrant, FeasibilityGrantQuery,
-    GrantAuthority, GrantId, GrantState, FeasibilityAccessChange, FeasibilityAccessConfiguration,
-    FeasibilityAccessOverview, FeasibilityAccessState, ProcessingRestriction, RemoteEnrollmentStatus,
-    RemoteOwnerPublicKey, RemoteProducerIdentity,
+    DataAccessGrant, GrantAuthority, GrantId, GrantState, ProcessingRestriction,
+    RemoteEnrollmentStatus, RemoteOwnerPublicKey, RemoteProducerIdentity,
 };
 pub use floe_actions::{ActionAuthorityMode, CalendarAction, CalendarActionState};
 pub use floe_agent_contract::UserInteractionKind;
@@ -96,12 +92,12 @@ pub use action_services::{ActionCommands, ActionInspection, ActionOperationResul
 pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};
 #[cfg(unix)]
 pub use composition::{AppComposition, AppOpenError, open};
+#[cfg(unix)]
+pub use connection_observe::{ConnectionObserveCommands, ConnectionObserveResult};
 pub use connection_observe::{
     ConnectionObserveExpectation, ConnectionObserveMember, ConnectionObserveOperation,
     ConnectionObserveOverview, ConnectionObserveReviewedMember, ConnectionObserveStatus,
 };
-#[cfg(unix)]
-pub use connection_observe::{ConnectionObserveCommands, ConnectionObserveResult};
 #[cfg(unix)]
 pub use connection_services::{
     ConnectionsQueries, ConnectionsResult, NativeCalendarSourceCommands,
@@ -139,11 +135,6 @@ pub use host::{AppHost, HostRequest};
 pub use knowledge_services::{
     KnowledgeCommands, KnowledgeInspection, KnowledgeOperationResult, KnowledgeQueries,
 };
-#[cfg(unix)]
-pub use local_access_services::{
-    LocalAccessCommand, LocalAccessCommands, LocalAccessInspection, LocalAccessQueries,
-    LocalAccessResult,
-};
 pub use local_context::{
     CalendarObservationPublication, LocalContextCommand, LocalContextHost, LocalContextOutcome,
 };
@@ -151,7 +142,9 @@ pub use remote_services::{
     PairingTarget, RemoteAccessCommand, RemoteAccessCommands, RemoteAccessResult,
     RemotePairingCommand, RemotePairingCommands, RemotePairingResult,
 };
-pub(crate) use remote_services::{RemoteConnectionObserveExpectation, RemoteObserveMemberExpectation};
+pub(crate) use remote_services::{
+    RemoteConnectionObserveExpectation, RemoteObserveMemberExpectation,
+};
 pub use services::CalendarActionsResult;
 pub use services::{
     CancelRun, CancelRunOutcome, CancelRunReceipt, CommandReceipt, ContinuationRef,
@@ -175,7 +168,7 @@ pub use vault_services::{
 pub(crate) use worker::WorkerOperation;
 pub use worker::{
     CalendarActionOperation, CalendarActionProposal, CalendarProposalInspection,
-    ConversationSessionOperation,
-    MemoryReviewDecision, MemoryReviewResult, RemotePairingChallenge, VaultState,
+    ConversationSessionOperation, MemoryReviewDecision, MemoryReviewResult, RemotePairingChallenge,
+    VaultState,
 };
 pub(crate) use worker::{WorkerAction, WorkerResult};

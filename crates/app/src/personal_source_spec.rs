@@ -144,6 +144,6 @@ mod tests {
         assert!(contacts.resources(vec!["a".into(), "a".into()]).is_err());
         assert!(contacts.resources(vec!["a".repeat(257)]).is_err());
         assert!(contacts.resources(vec!["a".into(); 65]).is_err());
-        assert!(PersonalSourceSpec::for_connector("feasibility.apple").is_err());
+        assert!(PersonalSourceSpec::for_connector("unknown.connector").is_err());
     }
 }

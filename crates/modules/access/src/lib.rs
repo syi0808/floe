@@ -2,12 +2,10 @@ mod application;
 mod data_access_grant;
 mod ports;
 
+pub use application::attention_consumer;
 pub use application::model_dispatch::{
     ModelDispatchFence, ModelDispatchPermit, admit_model_dispatch, consume_model_dispatch,
     revalidate_model_dispatch,
-};
-pub use application::personal_grants::{
-    apply_feasibility_access, validate_request as validate_feasibility_access_request,
 };
 pub use application::recipient_consent::{
     ContextualRecipientAuthority, RECIPIENT_CONSENT_NAMESPACE, RECIPIENT_CONSENT_TTL,
@@ -15,28 +13,22 @@ pub use application::recipient_consent::{
     revoke_recipient_consent,
 };
 pub use application::{
-    FeasibilityAccessChange, FeasibilityAccessConfiguration,
-    FeasibilityAccessOverview, FeasibilityAccessState, attention_consumer,
+    ATTENTION_CONNECTOR, ATTENTION_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTOR,
+    WELLBEING_RESOURCE, apple_execution_owner, is_device_local_source,
 };
 pub use application::{
-    ATTENTION_CONNECTOR, ATTENTION_RESOURCE, FEASIBILITY_CONNECTION, FEASIBILITY_CONNECTOR,
-    FEASIBILITY_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTOR, WELLBEING_RESOURCE,
-    apple_execution_owner, feasibility_source, is_device_local_source,
-};
-pub use application::{
-    AccessGrantMutation, FeasibilityGrantQuery, GrantPolicyError, PersonalReadRequirement,
-    ReadAuthorityEvidence, ReadAuthorityIdentity, ReleasePermit, ReleaseRecipient,
-    RemoteProducerIdentity, RemoteViewApproval, RemoteViewGrantActivation,
-    RemoteViewGrantExpectation, RemoteViewGrantPreparation, RemoteViewGrantPreview,
-    RemoteViewGrantRequest, RemoteViewSourceReference, active_read_grant,
-    admit_release, admit_remote_view_binding, admit_remote_view_source, apply_grant_mutation,
-    authorize_grant, consume_release, create_grant, grant_unchanged, matches_review,
-    prepare_remote_view_grant_activation, preview_remote_view_grant, producer_is_pinned,
-    remote_dependency_live, remote_dependency_resource, remote_dependency_source_admits,
-    remote_view_scope, remote_view_source, review_and_activate_remote_view_grant,
-    source_matches_producer, subject_unchanged,
-    valid_subject_fingerprint, validate_grant_dependency, validate_grant_expectation,
-    validate_read_authority, validate_read_continuity,
+    AccessGrantMutation, GrantPolicyError, PersonalReadRequirement, ReadAuthorityEvidence,
+    ReadAuthorityIdentity, ReleasePermit, ReleaseRecipient, RemoteProducerIdentity,
+    RemoteViewApproval, RemoteViewGrantActivation, RemoteViewGrantExpectation,
+    RemoteViewGrantPreparation, RemoteViewGrantPreview, RemoteViewGrantRequest,
+    RemoteViewSourceReference, active_read_grant, admit_release, admit_remote_view_binding,
+    admit_remote_view_source, apply_grant_mutation, authorize_grant, consume_release, create_grant,
+    grant_unchanged, matches_review, prepare_remote_view_grant_activation,
+    preview_remote_view_grant, producer_is_pinned, remote_dependency_live,
+    remote_dependency_resource, remote_dependency_source_admits, remote_view_scope,
+    remote_view_source, review_and_activate_remote_view_grant, source_matches_producer,
+    subject_unchanged, valid_subject_fingerprint, validate_grant_dependency,
+    validate_grant_expectation, validate_read_authority, validate_read_continuity,
 };
 pub use application::{
     NativeCalendarConnection, NativeCalendarReview, admit_native_calendar_setup,
@@ -67,9 +59,8 @@ pub use ports::model_dispatch::{
     ModelDispatchDenial, ModelDispatchRecipientAuthority, ModelDispatchRequest,
     ModelDispatchTarget, RecipientCheckOutcome,
 };
-pub use ports::personal_grants::{
-    FeasibilityReviewRecord, PersonalGrantStore, PersonalSubjectEvidence, PersonalSubjectInspector,
-    PersonalSubjectProbe,
+pub use ports::personal_subject::{
+    PersonalSubjectEvidence, PersonalSubjectInspector, PersonalSubjectProbe,
 };
 pub use ports::recipient_consent::{
     AdmittedModelConnection, ModelConnectionAdmission, RecipientConsentClock,

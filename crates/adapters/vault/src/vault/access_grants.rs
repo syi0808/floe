@@ -1,5 +1,5 @@
-pub(super) use floe_access::AccessGrantMutation;
 use chrono::Utc;
+pub(super) use floe_access::AccessGrantMutation;
 use floe_access::{
     ConnectionId, ConnectorId, DataAccessGrant, ExecutionOwnerId, GrantAuthority, GrantId,
     GrantPolicyError, GrantScope, GrantSourceBinding, GrantState, GrantTransitionError,
@@ -37,7 +37,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         source: &GrantSourceBinding,
         resource: &floe_access::ResourceHandle,
     ) -> Result<Option<DataAccessGrant>, AgentFailure> {
-        let grants = self.data_access_grants_for_source(source, MAX_ACCESS_GRANTS).await?;
+        let grants = self
+            .data_access_grants_for_source(source, MAX_ACCESS_GRANTS)
+            .await?;
         exact_source_resource_grant(grants, resource)
     }
 
@@ -65,7 +67,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if source.person_id() != self.person_id {
             return Err(AgentFailure::NotFound);
         }
-        self.ensure_access_grant_schema_transaction(transaction).await?;
+        self.ensure_access_grant_schema_transaction(transaction)
+            .await?;
         let mut rows = transaction
             .query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? AND connection_id = ? AND connector = ? AND execution_owner = ? ORDER BY access_epoch DESC, grant_id LIMIT ?", (self.person_id.to_string(), self.vault_id.to_string(), source.connection_id().as_str().to_owned(), source.connector().as_str().to_owned(), source.execution_owner().as_str().to_owned(), i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?))
             .await
@@ -136,8 +139,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         );
                     }
                     (Some(grant), Some(expected))
-                        if grant.id() == activation.grant_id
-                            && grant.authority() == expected =>
+                        if grant.id() == activation.grant_id && grant.authority() == expected =>
                     {
                         grants.push(
                             self.mutate_data_access_grant_in_transaction(
@@ -158,7 +160,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             Ok(grants)
         }
         .await;
-        self.finish_access_grant_transaction(transaction, result).await
+        self.finish_access_grant_transaction(transaction, result)
+            .await
     }
 
     pub(super) async fn validate_current_grant_in_transaction(
@@ -383,40 +386,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(grant)
     }
 
-    pub(super) async fn find_data_access_grant_by_source_in_transaction(
-        &self,
-        transaction: &turso::transaction::Transaction<'_>,
-        source: &GrantSourceBinding,
-    ) -> Result<Option<DataAccessGrant>, AgentFailure> {
-        self.ensure_access_grant_schema_transaction(transaction)
-            .await?;
-        let mut rows = transaction
-            .query(
-                "SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? AND connection_id = ? AND connector = ? AND execution_owner = ? ORDER BY grant_id",
-                (
-                    self.person_id.to_string(),
-                    self.vault_id.to_string(),
-                    source.connection_id().as_str().to_owned(),
-                    source.connector().as_str().to_owned(),
-                    source.execution_owner().as_str().to_owned(),
-                ),
-            )
-            .await
-            .map_err(storage)?;
-        let mut found = None;
-        while let Some(row) = rows.next().await.map_err(storage)? {
-            if found.is_some() {
-                return Err(AgentFailure::VaultUnavailable);
-            }
-            let grant = decode_grant(&row)?;
-            if grant.source() != source {
-                return Err(AgentFailure::VaultUnavailable);
-            }
-            found = Some(grant);
-        }
-        Ok(found)
-    }
-
     pub async fn get_data_access_grant(
         &self,
         id: GrantId,
@@ -489,12 +458,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         expected: GrantAuthority,
         scope: GrantScope,
     ) -> Result<DataAccessGrant, AgentFailure> {
-        self.mutate_data_access_grant(
-            id,
-            expected,
-            AccessGrantMutation::Activate { scope },
-        )
-        .await
+        self.mutate_data_access_grant(id, expected, AccessGrantMutation::Activate { scope })
+            .await
     }
 
     pub async fn pause_data_access_grant(
@@ -998,9 +963,7 @@ fn access_transaction_start_error(error: turso::Error) -> AgentFailure {
 fn grant_transition(error: GrantTransitionError) -> AgentFailure {
     match error {
         GrantTransitionError::Conflict => AgentFailure::Conflict,
-        GrantTransitionError::Terminal => {
-            AgentFailure::PolicyDenied
-        }
+        GrantTransitionError::Terminal => AgentFailure::PolicyDenied,
         GrantTransitionError::Overflow => AgentFailure::Conflict,
         GrantTransitionError::Invalid(_) => AgentFailure::InvalidInput,
     }
@@ -1228,7 +1191,10 @@ mod tests {
         .await
         .unwrap();
         let connection = vault.database.connect().unwrap();
-        let mut rows = connection.query("PRAGMA table_info(data_access_grants)", ()).await.unwrap();
+        let mut rows = connection
+            .query("PRAGMA table_info(data_access_grants)", ())
+            .await
+            .unwrap();
         let mut columns = Vec::new();
         while let Some(row) = rows.next().await.unwrap() {
             columns.push(row.get::<String>(1).unwrap());
@@ -1236,8 +1202,16 @@ mod tests {
         assert_eq!(
             columns,
             [
-                "grant_id", "person_id", "authority_owner", "connection_id", "connector",
-                "execution_owner", "grant_incarnation", "access_epoch", "state", "payload",
+                "grant_id",
+                "person_id",
+                "authority_owner",
+                "connection_id",
+                "connector",
+                "execution_owner",
+                "grant_incarnation",
+                "access_epoch",
+                "state",
+                "payload",
             ]
         );
     }
@@ -1261,7 +1235,8 @@ mod tests {
             .unwrap()
             .remove(0);
         assert_eq!(
-            vault.data_access_grant_for_source_resource(&source, &scope.resources()[0])
+            vault
+                .data_access_grant_for_source_resource(&source, &scope.resources()[0])
                 .await
                 .unwrap()
                 .unwrap()
@@ -1273,15 +1248,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            vault.data_access_grant_for_source_resource(&source, &scope.resources()[0])
+            vault
+                .data_access_grant_for_source_resource(&source, &scope.resources()[0])
                 .await
                 .unwrap_err(),
             AgentFailure::Conflict
         );
-        vault.revoke_data_access_grant(duplicate.id(), duplicate.authority())
+        vault
+            .revoke_data_access_grant(duplicate.id(), duplicate.authority())
             .await
             .unwrap();
-        vault.revoke_data_access_grant(first.id(), first.authority())
+        vault
+            .revoke_data_access_grant(first.id(), first.authority())
             .await
             .unwrap();
         let fresh = vault
@@ -1345,12 +1323,17 @@ mod tests {
                 .unwrap_err(),
             AgentFailure::Conflict
         );
-        assert!(vault
-            .data_access_grant_for_source_resource(&source, &missing_scope.resources()[0])
-            .await
-            .unwrap()
-            .is_none());
-        assert_eq!(vault.get_data_access_grant(existing.id()).await.unwrap(), existing);
+        assert!(
+            vault
+                .data_access_grant_for_source_resource(&source, &missing_scope.resources()[0])
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            vault.get_data_access_grant(existing.id()).await.unwrap(),
+            existing
+        );
     }
 
     #[tokio::test]

@@ -60,7 +60,6 @@ mod tests {
         );
         for tool_id in [
             "people.identity.read",
-            "schedule.feasibility.read",
             "attention.coarse.read",
             "wellbeing.derived.read",
             "mail.communication.read",

@@ -1,8 +1,7 @@
 use floe_app::{
     AgentFailure, CalendarActionOperation, CalendarActionProposal, CalendarActionState,
-    CalendarProposalInspection, FeasibilityAccessChange, FeasibilityGrantQuery, MemoryReviewResult,
-    PairingIssuer, RemoteEnrollmentStatus, RemoteOwnerPublicKey, RemoteProducerIdentity,
-    VaultState,
+    CalendarProposalInspection, MemoryReviewResult, PairingIssuer, RemoteEnrollmentStatus,
+    RemoteOwnerPublicKey, RemoteProducerIdentity, VaultState,
 };
 use floe_protocol::wire::{WireResult, invalid};
 use floe_protocol::*;
@@ -84,7 +83,6 @@ fn classify_failure(failure: &AgentFailure, stage: &str) -> FailureClassificatio
     let source_stage = matches!(
         stage,
         "calendar_action"
-            | "feasibility_access"
             | "remote_authority_inspect_producer"
             | "remote_authority_review_and_enroll"
             | "remote_authority_enrollment_status"
@@ -342,10 +340,7 @@ fn recovery_action(failure: &AgentFailure, stage: &str) -> AgentVaultRecoveryAct
         | AgentFailure::LocalModelInvalidOutput
         | AgentFailure::ServerModelInvalidOutput => AgentVaultRecoveryActionDto::RetryRead,
         AgentFailure::AccessReviewRequired
-            if matches!(
-                stage,
-                "calendar_action" | "feasibility_access" | "conversation_turn"
-            ) =>
+            if matches!(stage, "calendar_action" | "conversation_turn") =>
         {
             AgentVaultRecoveryActionDto::ReviewSource
         }
@@ -353,42 +348,6 @@ fn recovery_action(failure: &AgentFailure, stage: &str) -> AgentVaultRecoveryAct
             AgentVaultRecoveryActionDto::ReopenVault
         }
         _ => AgentVaultRecoveryActionDto::None,
-    }
-}
-
-fn feasibility_query(query: &FeasibilityGrantQueryDto) -> FeasibilityGrantQuery {
-    let mut evidence_handles = query.evidence_handles.clone();
-    evidence_handles.sort();
-    FeasibilityGrantQuery {
-        event_handle: query.event_handle.clone(),
-        evidence_handles,
-        destination_latitude: query.destination_latitude,
-        destination_longitude: query.destination_longitude,
-        event_start_unix_ms: query.event_start_unix_ms,
-        event_end_unix_ms: query.event_end_unix_ms,
-        travel_mode: query.travel_mode.clone(),
-    }
-}
-
-pub(crate) fn feasibility_access_change(
-    change: &FeasibilityAccessChangeDto,
-) -> FeasibilityAccessChange {
-    match change {
-        FeasibilityAccessChangeDto::Inspect {} => FeasibilityAccessChange::Inspect,
-        FeasibilityAccessChangeDto::Review {
-            expected_native_subject_fingerprint,
-            feasibility_query: query,
-            expected_grant_id,
-            expected_grant_authority,
-        } => FeasibilityAccessChange::Review {
-            expected_native_subject_fingerprint: expected_native_subject_fingerprint.clone(),
-            feasibility_query: feasibility_query(query),
-            expected_grant_id: *expected_grant_id,
-            expected_grant_authority: *expected_grant_authority,
-        },
-        FeasibilityAccessChangeDto::SetEnabled { enabled } => {
-            FeasibilityAccessChange::SetEnabled { enabled: *enabled }
-        }
     }
 }
 
@@ -513,32 +472,6 @@ pub(crate) fn memory_dto(
             })
             .collect::<Result<Vec<_>, _>>()?,
     })
-}
-
-pub(crate) fn feasibility_access_dto(
-    overview: floe_app::FeasibilityAccessOverview,
-) -> FeasibilityAccessOverviewDto {
-    FeasibilityAccessOverviewDto {
-        schema_version: 1,
-        person_id: overview.person_id.to_string(),
-        connector: overview.connector,
-        device_id: overview.device_id,
-        connection_id: overview.connection_id,
-        source_authority: overview.source_authority,
-        grant_id: overview.grant_id,
-        grant_authority: overview.grant_authority,
-        state: match overview.state {
-            floe_app::FeasibilityAccessState::NeedsReview => "needs_review".into(),
-            floe_app::FeasibilityAccessState::Paused => "paused".into(),
-            floe_app::FeasibilityAccessState::Active => "active".into(),
-            floe_app::FeasibilityAccessState::Revoked => "revoked".into(),
-        },
-        review_required: overview.review_required,
-        presence_available: overview.presence_available,
-        consumers: overview.consumers,
-        native_subject_fingerprint: overview.native_subject_fingerprint,
-        process_incarnation: overview.process_incarnation,
-    }
 }
 
 fn proposal(

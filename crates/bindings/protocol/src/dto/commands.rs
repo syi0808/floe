@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{AppWireErrorDto, APP_WIRE_VERSION};
+use super::{APP_WIRE_VERSION, AppWireErrorDto};
 
 const MAX_TURN_TEXT_BYTES: usize = 8 * 1024;
 const MAX_TURN_PAYLOAD_BYTES: usize = 64 * 1024;
@@ -64,10 +64,6 @@ pub enum AppCommandDto {
     KnowledgeMemoryDecide {
         candidate_id: Uuid,
         decision: super::AgentMemoryReviewDecisionKindDto,
-    },
-    #[serde(rename = "access.feasibility.configure")]
-    AccessFeasibilityConfigure {
-        change: super::FeasibilityAccessChangeDto,
     },
     #[serde(rename = "experts.registry.configure")]
     ExpertsRegistryConfigure {
@@ -147,7 +143,6 @@ impl AppCommandDto {
                     Ok(())
                 }
             }
-            Self::AccessFeasibilityConfigure { change } => change.validate(),
             Self::ExpertsRegistryConfigure { change } => {
                 let target_id = match &change.target {
                     super::RegistryConfigurationTargetDto::Installation { id, .. }
@@ -400,10 +395,6 @@ pub enum AppCommandResultDto {
     KnowledgeOperation {
         #[serde(flatten)]
         result: super::KnowledgeOperationResultDto,
-    },
-    LocalAccessOperation {
-        #[serde(flatten)]
-        result: super::LocalAccessResultDto,
     },
     ExpertOperation {
         #[serde(flatten)]

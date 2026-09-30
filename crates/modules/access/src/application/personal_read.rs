@@ -13,7 +13,6 @@ use floe_context_contract::{
     ProcessingRestriction,
 };
 use floe_kernel::AgentFailure;
-use serde::{Deserialize, Serialize};
 
 use crate::{DataAccessGrant, GrantState};
 
@@ -98,6 +97,19 @@ pub fn subject_unchanged(reviewed: &str, before: &str, after: &str) -> Result<()
     Ok(())
 }
 
+pub fn attention_consumer(value: &str) -> Result<GrantConsumer, AgentFailure> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+        || GrantConsumer::builtin(value).is_err()
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    GrantConsumer::builtin(value).map_err(|_| AgentFailure::InvalidInput)
+}
+
 #[cfg(test)]
 mod tests {
     use floe_context_contract::{
@@ -107,6 +119,26 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+
+    #[test]
+    fn attention_consumer_preserves_policy_denial_for_invalid_names() {
+        assert_eq!(
+            attention_consumer("floe.builtin.focus-attention")
+                .unwrap()
+                .identifier(),
+            "floe.builtin.focus-attention"
+        );
+        for value in [
+            "",
+            " leading",
+            "has space",
+            "bad/name",
+            "한글",
+            &"a".repeat(129),
+        ] {
+            assert_eq!(attention_consumer(value), Err(AgentFailure::PolicyDenied));
+        }
+    }
 
     fn consumer() -> GrantConsumer {
         GrantConsumer::builtin("assistant").unwrap()
@@ -247,53 +279,5 @@ mod tests {
         assert!(valid_subject_fingerprint(&reviewed));
         assert!(!valid_subject_fingerprint(&"A".repeat(64)));
         assert!(!valid_subject_fingerprint(&"a".repeat(63)));
-    }
-}
-
-/// The query one feasibility grant admits.
-///
-/// The Person reviewed a specific event, at a specific destination, in a
-/// specific window. A read that asks for anything else is not the one they
-/// granted.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct FeasibilityGrantQuery {
-    pub event_handle: String,
-    pub evidence_handles: Vec<String>,
-    pub destination_latitude: f64,
-    pub destination_longitude: f64,
-    pub event_start_unix_ms: i64,
-    pub event_end_unix_ms: i64,
-    pub travel_mode: String,
-}
-
-impl FeasibilityGrantQuery {
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.event_handle.is_empty()
-            || self.event_handle.len() > 128
-            || self.event_handle.chars().any(char::is_whitespace)
-            || self.evidence_handles.is_empty()
-            || self.evidence_handles.len() > 8
-            || self
-                .evidence_handles
-                .windows(2)
-                .any(|pair| pair[0] >= pair[1])
-            || self.evidence_handles.iter().any(|handle| {
-                handle.is_empty() || handle.len() > 128 || handle.chars().any(char::is_whitespace)
-            })
-            || !self.destination_latitude.is_finite()
-            || !(-90.0..=90.0).contains(&self.destination_latitude)
-            || !self.destination_longitude.is_finite()
-            || !(-180.0..=180.0).contains(&self.destination_longitude)
-            || self.event_start_unix_ms < 0
-            || self.event_end_unix_ms <= self.event_start_unix_ms
-            || self.event_end_unix_ms - self.event_start_unix_ms > 86_400_000
-            || !matches!(
-                self.travel_mode.as_str(),
-                "automobile" | "transit" | "walking"
-            )
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        Ok(())
     }
 }

@@ -23,22 +23,10 @@ void main() {
     );
 
     await gateway.readContacts();
-    await gateway.readFeasibility(
-      AppleFeasibilityQuery(
-        eventHandle: 'event:one',
-        evidenceHandles: const ['calendar:event:one'],
-        latitude: 37.0,
-        longitude: 127.0,
-        eventStart: now,
-        eventEnd: now.add(const Duration(hours: 1)),
-        travelMode: AppleTravelMode.transit,
-      ),
-    );
     await gateway.readWellbeing();
 
     expect(transport.published.map((entry) => entry.view['view_id']), [
       'people.identity',
-      'schedule.feasibility',
       'wellbeing.derived',
     ]);
     expect(
@@ -48,10 +36,6 @@ void main() {
     expect(
       transport.published.every((entry) => entry.deviceId == device),
       true,
-    );
-    expect(
-      transport.published[1].view.keys,
-      isNot(contains('weather_attribution')),
     );
   });
 
@@ -296,34 +280,6 @@ final class _FakeAppleContext implements AppleContextApi {
     int limit = 64,
     List<String>? selectedHandles,
   }) async => people;
-
-  @override
-  Future<Map<String, dynamic>> readFeasibility(
-    AppleFeasibilityQuery query,
-  ) async => {
-    'view': {
-      'schema_version': 1,
-      'view_id': 'schedule.feasibility',
-      'source_handle': 'feasibility:apple',
-      'observed_at_unix_ms': 1000,
-      'expires_at_unix_ms': 301000,
-      'items': [
-        {
-          'event_handle': query.eventHandle,
-          'evidence_handles': query.evidenceHandles,
-          'travel_duration_seconds': 900,
-          'leave_by_unix_ms': 2000,
-          'weather_impact': 'minor',
-          'confidence_millis': 800,
-        },
-      ],
-    },
-    'weather_attribution': {
-      'legal_page_url': 'https://weather.example/legal',
-      'combined_mark_light_url': 'https://weather.example/light.svg',
-      'combined_mark_dark_url': 'https://weather.example/dark.svg',
-    },
-  };
 
   @override
   Future<Map<String, dynamic>> readWellbeing() async => wellbeing;

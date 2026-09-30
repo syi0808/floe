@@ -7,7 +7,6 @@ import 'package:floe_client/features/conversation/application/agent_interaction_
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/knowledge/presentation/agent_memory_review.dart';
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
-import 'package:floe_client/features/settings/domain/feasibility_access.dart';
 import 'package:floe_client/features/actions/domain/agent_proposal.dart';
 import 'package:floe_client/features/experts/domain/agent_registry.dart';
 
@@ -324,87 +323,6 @@ final class NativeProposalGateway implements AgentProposalGateway {
       decode: decode,
     );
   }
-}
-
-final class NativeFeasibilityAccessGateway implements FeasibilityAccessGateway {
-  NativeFeasibilityAccessGateway(this._transport, {required this.deviceId});
-
-  final AppWireTransport _transport;
-  final OwnerOperationObserver _operations = OwnerOperationObserver();
-  final String deviceId;
-
-  @override
-  Future<FeasibilityAccessOverview> inspectFeasibility(String personId) =>
-      _feasibilityAccess(personId, {'kind': 'inspect'});
-
-  @override
-  Future<FeasibilityAccessOverview> reviewFeasibility(
-    String personId, {
-    required FeasibilityQuery query,
-    required FeasibilityAccessOverview reviewedPreview,
-  }) {
-    final fingerprint = reviewedPreview.nativeSubjectFingerprint;
-    if (fingerprint == null ||
-        reviewedPreview.personId != personId ||
-        reviewedPreview.deviceId != deviceId) {
-      throw const FormatException('Feasibility review scope changed');
-    }
-    return _feasibilityAccess(personId, {
-      'kind': 'review',
-      'expected_native_subject_fingerprint': fingerprint,
-      'expected_grant_id': reviewedPreview.grantId,
-      'expected_grant_authority': reviewedPreview.grantAuthority,
-      'feasibility_query': query.toJson(),
-    });
-  }
-
-  @override
-  Future<FeasibilityAccessOverview> setFeasibilityEnabled(
-    String personId,
-    bool enabled,
-  ) =>
-      _feasibilityAccess(personId, {'kind': 'set_enabled', 'enabled': enabled});
-
-  Future<FeasibilityAccessOverview> _feasibilityAccess(
-    String personId,
-    Map<String, Object?> change,
-  ) => _operations.observe(
-    scope: personId,
-    intent: ownerIntent({
-      'kind': change['kind'] == 'inspect'
-          ? 'access.feasibility.inspect'
-          : 'access.feasibility.configure',
-      if (change['kind'] != 'inspect') 'change': change,
-    }),
-    stage: 'feasibility_access',
-    resultKind: 'local_access_operation',
-    start: (operationId) => change['kind'] == 'inspect'
-        ? ownerQuery(_transport, operationId, {
-            'kind': 'access.feasibility.inspect',
-          })
-        : ownerCommand(_transport, operationId, {
-            'kind': 'access.feasibility.configure',
-            'change': change,
-          }),
-    read: (operationId, release) => ownerResult(
-      _transport,
-      'access.local.read_result',
-      operationId,
-      release,
-    ),
-    decode: (result) {
-      if (result['state'] != 'ready' || result['feasibility_access'] is! Map) {
-        throw const FormatException('Missing Feasibility access overview');
-      }
-      final overview = FeasibilityAccessOverview.fromJson(
-        result['feasibility_access'],
-      );
-      if (overview.personId != personId || overview.deviceId != deviceId) {
-        throw const FormatException('Feasibility access scope mismatch');
-      }
-      return overview;
-    },
-  );
 }
 
 final class NativeRegistryGateway implements AgentRegistryGateway {
