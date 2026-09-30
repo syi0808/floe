@@ -268,10 +268,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
         )
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !entered.load(Ordering::Acquire) {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    entered.wait_until(deadline);
     let root_cancellation = worker
         .jobs
         .lock()
@@ -346,7 +343,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
             .done
     );
 
-    release.store(true, Ordering::Release);
+    release.set(true);
     let conversation = wait(&worker, person, conversation_id);
     assert_eq!(conversation.failure, None, "conversation: {conversation:?}");
     assert!(!root_cancellation.is_cancelled());
@@ -448,10 +445,7 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
         Err(AgentFailure::Conflict)
     );
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !entered.load(Ordering::Acquire) {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    entered.wait_until(deadline);
 
     assert_eq!(
         worker.cancel_conversation(
@@ -518,7 +512,7 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
     worker
         .request(person, request_id, WorkerOperation::Release)
         .unwrap();
-    release.store(true, Ordering::Release);
+    release.set(true);
     server.join().unwrap();
 }
 
@@ -795,10 +789,7 @@ fn inflight_connection_refresh_replays_without_redispatch() {
         .start_conversation(person, command_id, request())
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !entered.load(Ordering::Acquire) {
-        assert!(Instant::now() < deadline);
-        std::thread::yield_now();
-    }
+    entered.wait_until(deadline);
     assert_eq!(
         worker
             .conversation_query(person, ConversationQuery::Run(admitted.run_id))
@@ -819,7 +810,7 @@ fn inflight_connection_refresh_replays_without_redispatch() {
             .unwrap(),
         admitted
     );
-    release.store(true, Ordering::Release);
+    release.set(true);
     let finished = wait(&worker, person, request_id);
     assert_eq!(finished.failure, None, "first: {finished:?}");
     worker
@@ -1410,16 +1401,7 @@ fn commitments_denial_server(rounds: usize) -> (MockServer, std::thread::JoinHan
         let mut model_index = 0;
         while requests.len() < rounds * 2 {
             let deadline = Instant::now() + Duration::from_secs(10);
-            let mut socket = loop {
-                match listener.accept() {
-                    Ok((socket, _)) => break socket,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(Instant::now() < deadline, "requests: {requests:?}");
-                        std::thread::sleep(Duration::from_millis(2));
-                    }
-                    Err(error) => panic!("accept: {error}"),
-                }
-            };
+            let mut socket = accept_before(&listener, deadline);
             socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
@@ -1535,6 +1517,13 @@ struct MockServer {
     token: String,
 }
 
+impl MockServer {
+    fn stop(&self, done: &AtomicBool) {
+        done.store(true, Ordering::Release);
+        let _ = TcpStream::connect(self.base_url.strip_prefix("http://").unwrap());
+    }
+}
+
 /// Saved server connection matching a mock server. The canonical owners admit
 /// it against the verified caller after admission.
 fn saved_server_connection(
@@ -1580,16 +1569,7 @@ fn answer_server(steps: Vec<WireStep>) -> (MockServer, std::thread::JoinHandle<V
                 return requests;
             }
             let deadline = Instant::now() + Duration::from_secs(10);
-            let mut socket = loop {
-                match listener.accept() {
-                    Ok((socket, _)) => break socket,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(Instant::now() < deadline, "requests: {requests:?}");
-                        std::thread::sleep(Duration::from_millis(2));
-                    }
-                    Err(error) => panic!("accept: {error}"),
-                }
-            };
+            let mut socket = accept_before(&listener, deadline);
             socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
@@ -1675,15 +1655,15 @@ fn answer_server(steps: Vec<WireStep>) -> (MockServer, std::thread::JoinHandle<V
 
 fn blocking_answer_server() -> (
     MockServer,
-    Arc<AtomicBool>,
-    Arc<AtomicBool>,
+    Arc<TestSignal>,
+    Arc<TestSignal>,
     std::thread::JoinHandle<()>,
 ) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
-    let entered = Arc::new(AtomicBool::new(false));
-    let release = Arc::new(AtomicBool::new(false));
+    let entered = Arc::new(TestSignal::default());
+    let release = Arc::new(TestSignal::default());
     let server_entered = Arc::clone(&entered);
     let server_release = Arc::clone(&release);
     let server = std::thread::spawn(move || {
@@ -1738,12 +1718,9 @@ fn blocking_answer_server() -> (
             assert_eq!(path, "/v1/agent");
             break socket;
         };
-        server_entered.store(true, Ordering::Release);
+        server_entered.set(true);
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !server_release.load(Ordering::Acquire) {
-            assert!(Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        server_release.wait_until(deadline);
         let output = serde_json::json!({
             "output": [{"type": "answer", "text": "The model resumed."}],
             "used_tokens": 10,
@@ -1844,14 +1821,10 @@ fn observing_server_with_inventories(
             if server_done.load(Ordering::Acquire) {
                 return;
             }
-            let mut socket = match listener.accept() {
-                Ok((socket, _)) => socket,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(10));
-                    continue;
-                }
-                Err(error) => panic!("accept: {error}"),
-            };
+            let mut socket = accept_before(&listener, Instant::now() + Duration::from_secs(10));
+            if server_done.load(Ordering::Acquire) {
+                return;
+            }
             socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
@@ -2026,7 +1999,7 @@ fn canonical_root_turn_discovers_profiles_before_posting_to_transport() {
         message,
         AgentMessage::Assistant { text, .. } if text == "Canonical hello."
     )));
-    done.store(true, Ordering::Release);
+    mock.stop(&done);
     server.join().unwrap();
     // The legacy root path never fetched purposes: discovery-then-transport
     // proves the turn ran through InferenceService, not LegacyModelPort.
@@ -2091,7 +2064,7 @@ fn canonical_root_explicit_unknown_profile_fails_without_agent_post() {
             reason: AgentFailure::ModelUnavailable
         })
     );
-    done.store(true, Ordering::Release);
+    mock.stop(&done);
     server.join().unwrap();
     assert!(purposes.load(Ordering::SeqCst) >= 1);
     assert_eq!(agent_posts.load(Ordering::SeqCst), 0);
@@ -2180,7 +2153,7 @@ fn canonical_root_unconsented_external_recipient_blocks_with_card_without_agent_
         })
         .collect();
     assert_eq!(interactions.len(), 1, "session: {session:?}");
-    done.store(true, Ordering::Release);
+    mock.stop(&done);
     server.join().unwrap();
     assert!(purposes.load(Ordering::SeqCst) >= 1);
     assert_eq!(agent_posts.load(Ordering::SeqCst), 0);
@@ -2333,7 +2306,7 @@ fn delegated_model_dispatch_uses_the_same_owner_checks_as_root() {
         cancellation: floe_execution::Cancellation::default(),
     };
     let outcome = fixture.runtime.block_on(ExpertModel::answer(&host, call));
-    done.store(true, Ordering::Release);
+    mock.stop(&done);
     server.join().unwrap();
     let floe_agent_contract::ExpertModelOutcome::Blocked(requirement) = outcome.unwrap() else {
         panic!("unconsented delegated dispatch must block");
@@ -2364,16 +2337,7 @@ fn recording_answer_server(
                 return;
             }
             let deadline = Instant::now() + Duration::from_secs(10);
-            let mut socket = loop {
-                match listener.accept() {
-                    Ok((socket, _)) => break socket,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(Instant::now() < deadline);
-                        std::thread::sleep(Duration::from_millis(2));
-                    }
-                    Err(error) => panic!("accept: {error}"),
-                }
-            };
+            let mut socket = accept_before(&listener, deadline);
             socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
@@ -3453,6 +3417,7 @@ struct ResumeHarness {
     session_id: Uuid,
     agent_posts: Arc<std::sync::atomic::AtomicUsize>,
     done: Arc<AtomicBool>,
+    mock: MockServer,
     server: Option<std::thread::JoinHandle<()>>,
     caller: crate::CallerContext,
     calendar: StubCalendarSubject,
@@ -3539,6 +3504,7 @@ impl ResumeHarness {
             session_id: session.id,
             agent_posts,
             done,
+            mock,
             server: Some(server),
             caller,
             calendar: StubCalendarSubject,
@@ -3731,7 +3697,7 @@ impl ResumeHarness {
     }
 
     async fn finish(mut self) {
-        self.done.store(true, Ordering::Release);
+        self.mock.stop(&self.done);
         self.server.take().unwrap().join().unwrap();
     }
 }
@@ -4522,7 +4488,7 @@ fn worker_resolve_drives_auto_child_and_rejoins_retry() {
         listed[0].state,
         floe_conversation::InteractionState::Resolved { .. }
     ));
-    done.store(true, Ordering::Release);
+    mock.stop(&done);
     server.join().unwrap();
 }
 
@@ -4624,6 +4590,6 @@ fn worker_explicit_resume_claims_slot_at_current_revision() {
         Err(floe_agent_contract::AgentFailure::Conflict)
     );
     assert_eq!(agent_posts.load(Ordering::SeqCst), 0);
-    done.store(true, Ordering::Release);
+    mock.stop(&done);
     server.join().unwrap();
 }

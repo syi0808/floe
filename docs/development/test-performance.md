@@ -199,8 +199,59 @@ Input changes create a new entry; ordinary validation does not delete old caches
 
 Pure Tokio lease-expiry tests use paused time. HTTP cancellation waits for an
 explicit request-received signal rather than guessing readiness with a sleep.
+App unit-test fixtures wait for job completion and blocked mock/key-store signals
+with bounded condition variables. Mock TCP listeners use bounded OS readiness
+waiting; stopping an observing server wakes its listener explicitly. Job completion
+notification exists only under `cfg(test)`; product APIs and cancellation semantics
+are unchanged. Tests still obtain results through the admitted query/poll paths.
 Real external-process readiness polling remains bounded; synchronous deadline-
 crossing serialization tests still exercise real elapsed time.
+
+### Polling fixture comparison (2026-09-30)
+
+The follow-up removed ten Rust test `sleep()` call sites and two busy `yield_now()`
+loops. Six sleep sites remain intentionally: real deadline-crossing serialization
+and publication, external server startup, FFI observation, worker teardown/reopen,
+and the simulated attention-host polling boundary. Removing those would require
+changing what is exercised or adding otherwise unnecessary runtime/FFI hooks.
+
+Before and after App test binaries were rebuilt with the same
+`CARGO_INCREMENTAL=0 cargo test --workspace --no-run --message-format=json`
+command, in the same `target/`, with Rust 1.93.1 and the existing line-table test
+profile on the M2 Pro host described above. Cargo's artifact JSON confirmed matching
+App profiles/features. Both executables were preserved beside the Cargo binaries,
+warmed, and run alternately three times without competing builds. These are direct
+executable measurements, excluding compilation and Cargo/doctest startup, not
+complete-gate measurements.
+
+| Identical test scope | Before seconds | After seconds | Median before → after |
+| --- | --- | --- | --- |
+| 292 existing App unit tests | 15.451, 17.811, 15.205 | 15.541, 15.131, 15.124 | 15.451 → 15.131 |
+| 34 conversation-flow tests | 4.515, 4.729, 4.422 | 4.601, 4.981, 4.547 | 4.515 → 4.601 |
+
+A further three alternating conversation-flow runs measured child-process user
+plus system CPU time: before 28.898, 28.934, 28.563 seconds versus after 28.917,
+28.807, 28.730 seconds (medians 28.898 → 28.807). Aggregate CPU time includes all
+test threads and is not wall time. Neither this nor the wall results demonstrates
+a material speedup: App wall time improved about 2%, while conversation wall time
+in the main comparison increased about 2%, within the observed variation.
+
+The 292-test comparison excluded native-action tests, two existing extension-runner
+tests sharing one global counter, and the three new synchronization-helper tests
+from both binaries. A preliminary before run failed in the native subprocess;
+the shared-counter failure was reproduced in the rebuilt before binary in five
+independent trials. No assertions, ignored-test policy or final gates were weakened
+to make measurements pass. The three new helper tests passed; the affected-crate
+run encountered the counter failure; the complete
+`CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast --timings` gate included
+all those tests and passed, as did architecture boundary validation and diff checks.
+
+Only the `compare-verified-*` measurements under `target/validation/polling-study/`
+are used in the table. Preliminary comparisons using a stale executable were
+discarded; compiler-reported artifact paths and test listings were checked before
+the verified comparison. Raw logs and one-off benchmark scripts remain ignored
+local artifacts. This change replaces timing guesses with explicit fixture events;
+it is not evidence that polling was the dominant test-runtime bottleneck.
 
 For before/after measurements, record toolchain, test count, command, cache state
 and concurrency. Separate compilation (`--no-run --timings`), initial discovery,

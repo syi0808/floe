@@ -24,8 +24,7 @@ pub(super) fn finish_owner(
         if result.done {
             return result;
         }
-        assert!(Instant::now() < deadline);
-        thread::yield_now();
+        wait_for_job(worker, operation_id, deadline);
     }
 }
 

@@ -465,7 +465,7 @@ fn stopped_proposal_inspection_retains_the_owned_job_until_key_access_finishes()
     let person = PersonId::new();
     let worker = Worker::new(directory.path().join("vaults"), keys.clone()).unwrap();
     perform(&worker, person, WorkerAction::Create);
-    keys.0.entered.store(false, Ordering::Release);
+    keys.0.entered.set(false);
     *keys.0.paused.lock().unwrap() = true;
     let id = Uuid::new_v4();
     let inspect = || WorkerAction::InspectProposal {
@@ -482,10 +482,7 @@ fn stopped_proposal_inspection_retains_the_owned_job_until_key_access_finishes()
         )
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !keys.0.entered.load(Ordering::Acquire) {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    keys.0.entered.wait_until(deadline);
     assert!(
         !worker
             .request(person, id, WorkerOperation::Stop)

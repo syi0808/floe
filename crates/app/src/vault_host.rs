@@ -395,6 +395,8 @@ struct Job {
     admission: Mutex<Option<Result<floe_conversation::RunReceipt, AgentFailure>>>,
     admission_ready: Condvar,
     progress: Mutex<Progress>,
+    #[cfg(test)]
+    finished: Condvar,
     app_events: Arc<crate::events::AppEventBuffer>,
 }
 
@@ -1451,6 +1453,8 @@ impl Worker {
             admission: Mutex::new(None),
             admission_ready: Condvar::new(),
             progress: Mutex::new(Progress::default()),
+            #[cfg(test)]
+            finished: Condvar::new(),
             app_events: Arc::clone(&self.app_events),
         });
         self.learner_scheduling.foreground_submitted()?;
@@ -1882,6 +1886,8 @@ fn finish_job(
         }
         let _ = learner_scheduling.foreground_finished();
         progress.done = true;
+        #[cfg(test)]
+        job.finished.notify_all();
     }
 }
 
@@ -3109,7 +3115,10 @@ mod tests {
     mod proposals;
     mod registered_runner;
     mod remote_product;
+    mod synchronization;
     mod vault_registry;
+
+    use synchronization::{TestSignal, accept_before, wait_for_job};
 
     use super::conversation_turn::expert_dispatch::RegisteredExpertEndpoint;
     use floe_provider_adapters::control::CurrentSavedConnectionStore;
@@ -3178,13 +3187,13 @@ mod tests {
         values: Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>,
         paused: Mutex<bool>,
         wake: Condvar,
-        entered: AtomicBool,
+        entered: TestSignal,
         unavailable: AtomicBool,
     }
     impl VaultKeyProvider for Keys {
         fn load(&self, person: PersonId, vault: Uuid) -> Result<VaultKey, AgentFailure> {
             let mut paused = self.0.paused.lock().unwrap();
-            self.0.entered.store(true, Ordering::Release);
+            self.0.entered.set(true);
             while *paused {
                 paused = self.0.wake.wait(paused).unwrap();
             }
@@ -3235,8 +3244,7 @@ mod tests {
             if result.done {
                 return result;
             }
-            assert!(Instant::now() < deadline, "Vault job did not finish");
-            std::thread::sleep(Duration::from_millis(2));
+            wait_for_job(worker, id, deadline);
         }
     }
 
@@ -3985,7 +3993,7 @@ mod tests {
         let person = PersonId::new();
         let worker = Worker::new(root.clone(), keys.clone()).unwrap();
         perform(&worker, person, WorkerAction::Create {});
-        keys.0.entered.store(false, Ordering::Release);
+        keys.0.entered.set(false);
         *keys.0.paused.lock().unwrap() = true;
         let id = Uuid::new_v4();
         worker
@@ -3998,10 +4006,7 @@ mod tests {
             )
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
-        while !keys.0.entered.load(Ordering::Acquire) {
-            assert!(Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        keys.0.entered.wait_until(deadline);
         let start = Instant::now();
         assert!(
             !worker
