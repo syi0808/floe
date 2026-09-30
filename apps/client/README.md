@@ -31,6 +31,22 @@ The desktop shell includes icon-only navigation. On macOS, content extends into 
 
 ## Run on macOS
 
+Apple builds run separate Rust and Swift-library phases. Cargo remains responsible for
+Rust input discovery (including newly added files and build-script inputs); it still runs
+on each Xcode build, but unchanged crates are not compiled. Swift compilation and dylib
+copy/install-name/signing use content fingerprints under Xcode's `DERIVED_FILE_DIR`.
+Unchanged native artifacts are not rewritten on Dart-only or no-change builds. Each
+fingerprint includes source content, build scripts, compiler/SDK identity, target/compiler
+arguments and signing identity, and verifies the existing output content. Missing or
+modified outputs rebuild; failed compilation/signing never commits a fresh fingerprint.
+The lightweight phases deliberately retain `alwaysOutOfDate` rather than an incomplete
+Rust source list that could silently skip required builds. All bundled dylibs are declared
+as Xcode phase outputs. Deleting Xcode derived data simply forces a native rebuild.
+
+Run `python3 tools/validation/test_native_build.py` from the repository root for isolated
+native cache invalidation/failure tests. These use fake tools and do not replace an Apple
+product build or native host tests.
+
 ```sh
 flutter pub get
 flutter run -d macos

@@ -25,11 +25,21 @@ members = [
 ]
 resolver = "3"
 
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.dev.package."*"]
 debug = 0
 
 [profile.test]
-debug = 1
+debug = "line-tables-only"
+
+[profile.test.package."*"]
+debug = 0
+
+[profile.debugging]
+inherits = "dev"
+debug = "full"
 
 [workspace.package]
 edition = "2024"

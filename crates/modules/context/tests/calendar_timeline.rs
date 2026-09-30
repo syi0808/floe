@@ -34,7 +34,7 @@ use floe_execution::Cancellation;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-mod support;
+use crate::support;
 use support::TestTimelineRepository;
 
 /// The payload bound the mirror port promises its readers, which the Vault

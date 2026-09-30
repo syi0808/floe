@@ -29,18 +29,32 @@ Use the nearest package/component tests first when they can identify failures qu
 
 Keep assertions intact. A failing safety/recovery test is not a reason to weaken the test.
 
+Iteration and final gates are separate:
+
+- Rust: use `cargo check -p <affected-crate>` when fast type feedback is useful, then `cargo test -p <affected-crate>` with normal incremental compilation. Check is not a prerequisite for tests.
+- Flutter: from `apps/client/`, use `flutter test test/<affected-directory-or-file>` during iteration; retain `flutter analyze`, full `flutter test` and the affected Apple build at the final application boundary.
+- Go: from `server/`, use `go test ./internal/<affected-package>` during iteration; retain `go test -race ./...` and `go vet ./...` at the final server gate.
+
+Keep Cargo profiles, features, target triples, `RUSTFLAGS` and `CARGO_TARGET_DIR` consistent across routine runs. Do not add separate target directories or clean the cache for ordinary verification. Dev/test workspace code uses line-table debug info; use `cargo test --profile debugging -p <affected-crate>` only when full debugger information is needed, not for routine gates.
+
 ## 3. Rust and architecture gate
 
 For Rust workspace or shared-contract/runtime changes, the default broad gate is:
 
 ~~~sh
-cargo check --workspace --lib
-cargo test --workspace --no-fail-fast
+CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast
 python3 tools/architecture/check_boundaries.py
 git diff --check
 ~~~
 
 Use targeted cargo tests before the full workspace gate when useful.
+
+`floe-experts-builtin`, `floe-context`, `floe-protocol` and `floe-day` each declare one
+`integration` test target. Run a module with `cargo test -p <crate> --test integration <module>::`;
+add new module files to `tests/integration.rs` because automatic standalone targets are disabled.
+Provider live-server/native tests and FFI subprocess tests remain separate executables for isolation.
+
+The final workspace test already compiles the covered library targets; do not precede it with a duplicate workspace-wide `cargo check`. Explicit task requirements for distinct targets/features still apply. For build-performance measurements, add `--timings` to the same gate, record cache/toolchain conditions, and compare compile/link and warm execution separately. Do not infer speedups from differently warmed caches.
 
 Repository-wide cargo fmt --check has historically contained unrelated baseline drift; do not introduce formatting churn merely to make an unrelated whole-repo format gate clean. Format changed Rust code appropriately and follow any stronger current plan requirement.
 

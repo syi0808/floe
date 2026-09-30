@@ -6,7 +6,7 @@ use floe_day::{
     TimelineItem, TimelineRepository,
 };
 
-mod support;
+use crate::support;
 use support::TestTimelineRepository;
 
 fn now() -> chrono::DateTime<Utc> {

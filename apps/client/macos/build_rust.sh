@@ -2,6 +2,7 @@
 set -euo pipefail
 
 REPOSITORY_ROOT="${SRCROOT}/../../.."
+source "${SRCROOT}/../apple/native_build.sh"
 PROFILE="debug"
 CARGO_FLAGS=()
 if [[ "${CONFIGURATION}" != "Debug" ]]; then
@@ -17,29 +18,4 @@ export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
 
 SOURCE_LIBRARY="${REPOSITORY_ROOT}/target/${PROFILE}/libfloe_ffi.dylib"
 FRAMEWORKS_DIRECTORY="${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}"
-DESTINATION_LIBRARY="${FRAMEWORKS_DIRECTORY}/libfloe_ffi.dylib"
-mkdir -p "${FRAMEWORKS_DIRECTORY}"
-cp "${SOURCE_LIBRARY}" "${DESTINATION_LIBRARY}"
-install_name_tool -id "@rpath/libfloe_ffi.dylib" "${DESTINATION_LIBRARY}"
-
-SIGNING_IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:--}"
-if [[ -z "${SIGNING_IDENTITY}" ]]; then
-  SIGNING_IDENTITY="-"
-fi
-codesign --force --sign "${SIGNING_IDENTITY}" "${DESTINATION_LIBRARY}"
-
-NATIVE_LIBRARY="${FRAMEWORKS_DIRECTORY}/libfloe_eventkit.dylib"
-xcrun swiftc -emit-library -warnings-as-errors \
-  -target "$(uname -m)-apple-macosx${MACOSX_DEPLOYMENT_TARGET}" \
-  "${SRCROOT}/CalendarActions/EventKitActions.swift" \
-  -o "${NATIVE_LIBRARY}"
-install_name_tool -id "@rpath/libfloe_eventkit.dylib" "${NATIVE_LIBRARY}"
-codesign --force --sign "${SIGNING_IDENTITY}" "${NATIVE_LIBRARY}"
-
-MODEL_LIBRARY="${FRAMEWORKS_DIRECTORY}/libfloe_local_model.dylib"
-xcrun swiftc -emit-library -swift-version 6 -warnings-as-errors \
-  -target "$(uname -m)-apple-macosx${MACOSX_DEPLOYMENT_TARGET}" \
-  "${SRCROOT}/LocalModel/LocalModel.swift" \
-  -o "${MODEL_LIBRARY}"
-install_name_tool -id "@rpath/libfloe_local_model.dylib" "${MODEL_LIBRARY}"
-codesign --force --sign "${SIGNING_IDENTITY}" "${MODEL_LIBRARY}"
+floe_native_artifact "${FRAMEWORKS_DIRECTORY}/libfloe_ffi.dylib" embed "${SOURCE_LIBRARY}"

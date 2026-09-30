@@ -216,6 +216,7 @@
 				33CC10EB2044A3C60003C045 /* Resources */,
 				33CC110E2044A8840003C045 /* Bundle Framework */,
 				F10E00012026090300000001 /* Build Rust Core */,
+				F10E00022026093000000001 /* Build Swift Libraries */,
 				3399D490228B24CF009A79C7 /* ShellScript */,
 			);
 			buildRules = (
@@ -305,6 +306,26 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		F10E00022026093000000001 /* Build Swift Libraries */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = (
+				"$(SRCROOT)/build_native.sh",
+				"$(SRCROOT)/../apple/native_build.sh",
+				"$(SRCROOT)/LocalModel/LocalModel.swift",
+				"$(SRCROOT)/CalendarActions/EventKitActions.swift",
+			);
+			name = "Build Swift Libraries";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libfloe_local_model.dylib",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libfloe_eventkit.dylib",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/zsh;
+			shellScript = "zsh \"$SRCROOT/build_native.sh\"\n";
+		};
 		F10E00012026090300000001 /* Build Rust Core */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;

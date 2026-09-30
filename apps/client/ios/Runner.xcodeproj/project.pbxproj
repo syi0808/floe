@@ -167,6 +167,7 @@
 			buildConfigurationList = 97C147051CF9000F007C117D /* Build configuration list for PBXNativeTarget "Runner" */;
 			buildPhases = (
 				A10000300000000000000001 /* Build Rust Core */,
+				A10000310000000000000001 /* Build Swift Libraries */,
 				9740EEB61CF901F6004384FC /* Run Script */,
 				97C146EA1CF9000F007C117D /* Sources */,
 				97C146EB1CF9000F007C117D /* Frameworks */,
@@ -256,6 +257,24 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		A10000310000000000000001 /* Build Swift Libraries */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = (
+				"$(SRCROOT)/build_native.sh",
+				"$(SRCROOT)/../apple/native_build.sh",
+				"$(SRCROOT)/../macos/LocalModel/LocalModel.swift",
+			);
+			name = "Build Swift Libraries";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libfloe_local_model.dylib",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/zsh;
+			shellScript = "zsh \"$SRCROOT/build_native.sh\"\n";
+		};
 		A10000300000000000000001 /* Build Rust Core */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -264,12 +283,11 @@
 			);
 			inputPaths = (
 				"${SRCROOT}/build_rust.sh",
-				"${SRCROOT}/../macos/LocalModel/LocalModel.swift",
+				"${SRCROOT}/../apple/native_build.sh",
 			);
 			name = "Build Rust Core";
 			outputPaths = (
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libfloe_ffi.dylib",
-				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libfloe_local_model.dylib",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/zsh;

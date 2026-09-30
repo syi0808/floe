@@ -9,7 +9,7 @@ use floe_day::{DayService, Priority};
 use floe_kernel::{AgentFailure, PersonId};
 use uuid::Uuid;
 
-mod support;
+use crate::support;
 use support::TestTimelineRepository;
 
 #[tokio::test]

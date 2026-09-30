@@ -5,7 +5,7 @@ use floe_day::{
     EventSchedule, PersonId, TimedSchedule,
 };
 
-mod support;
+use crate::support;
 use support::TestTimelineRepository;
 
 #[tokio::test]
