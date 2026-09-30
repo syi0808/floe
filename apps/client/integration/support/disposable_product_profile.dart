@@ -15,13 +15,13 @@ final class DisposableProductProfile {
   String get databasePath => '${root.path}/people/$personId/floe.db';
   String get _vaultDirectory => '$databasePath.agent-vaults/$personId';
 
-  static Future<DisposableProductProfile> create() async {
+  static Future<DisposableProductProfile> create({String? personId}) async {
     final root = await Directory.systemTemp.createTemp(
       'floe-product-validation-',
     );
     final profile = DisposableProductProfile._(
       root,
-      newAgentRequestId(),
+      personId ?? newAgentRequestId(),
       'validation-${newAgentRequestId()}',
     );
     await _checkedProcess('/bin/chmod', ['700', root.path]);
