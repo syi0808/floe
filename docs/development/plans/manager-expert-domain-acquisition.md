@@ -1,6 +1,6 @@
 # Manager–Expert domain acquisition boundary convergence
 
-- **Status:** active; ready for implementation, not an implementation-completion report
+- **Status:** implemented; execution evidence below, awaiting operator acceptance and plan retirement
 - **Execution shape:** one atomic architecture task; no checkpoints
 - **Planning baseline:** main at 430fd3530549c5fee94cbb13e3d698d940852bfd
 - **Baseline date:** 2026-09-30
@@ -654,4 +654,116 @@ Record the execution report in section 10 of this document, not a second progres
 
 ## 10. Execution evidence
 
-Not started. Planning and document consolidation do not constitute implementation or Rust/Flutter test execution. Replace this paragraph with observed implementation and verification evidence when the single task is executed.
+### 10.1 Revision and scope
+
+Executed on 2026-09-30 as one architecture convergence change. Start HEAD and fetched origin/main were both `ac66a3fbd6fe4252eca5d5e51c7062d75fca0728`; the worktree was clean. The plan's production baseline `430fd3530549c5fee94cbb13e3d698d940852bfd` differed only in this plan and its docs/README pointer. Current source locators were re-established before editing. Final HEAD is the local commit containing this report; its literal SHA is supplied in the completion response. No branch, push, deployment or external-account configuration change was made.
+
+### 10.2 Actual Manager boundary
+
+The production root composition obtains Directory Expert definitions/revisions and passes them unchanged to the app-private `manager_catalog`; its Tools are empty and its catalogue revision retains the existing minimum-one rule. `NoManagerTools` is an app-private, stateless `ToolPort` rejecting any invocation with `CapabilityDenied`, without source I/O, grant mutation or publication. Generic `ToolPort`, `ToolDescriptor` and `ModelStep::CallTool` remain unchanged.
+
+Three distinct tests cover all seven removed IDs: catalogue/port tests reject direct invocation, the real model gateway rejects unadvertised calls before dispatch, and the encrypted-Vault root-composition test records durable InvalidModelOutput Tool intent/result corrections before an honest limitation answer. The latter verifies two model calls, no delegation, no interaction and no grants. Correction records are not source dispatch. Expert cards and definition revisions are explicitly asserted intact.
+
+### 10.3 Deletion gate
+
+Deleted `crates/modules/context/src/application/tools.rs`, its module and direct-Tool re-exports, `ContextToolService`, descriptor builders, Manager View/connector policy helpers, revision/ID constants, and the root source-service construction. Removed `ToolOutcomePort`, `PublishingToolPort`, `blocked_tool_result` and their direct-only fixtures. Removed the unused Access Attention assistant alias. The shared Expert/model/source publication seam, safe artifact helpers and generic labels/text remain. Useful provenance/revocation tests now acquire selected Attention evidence as the admitted Expert, not through the deleted Manager service.
+
+### 10.4 Standing readers and policy contraction
+
+All supported standing policies derive only trusted shipped manifest consumers:
+
+| Logical View | Exact consumer identifiers |
+| --- | --- |
+| People | `floe.builtin.relationships` |
+| Attention | `floe.builtin.focus-attention` |
+| Wellbeing | `floe.builtin.wellbeing` |
+| Mail | `floe.builtin.commitments`, `floe.builtin.communication` |
+| Work Context | `floe.builtin.focus-attention`, `floe.builtin.work-context` |
+| Life Logistics | `floe.builtin.life-logistics` |
+| Calendar | `floe.builtin.commitments`, `floe.builtin.focus-attention`, `floe.builtin.schedule`, `floe.builtin.wellbeing` |
+
+Exact-set regressions, extension exclusions and Registry-independence tests pass. Unsupported `contacts.android` is CapabilityUnavailable rather than an empty successful policy. Digest canonicalization is unchanged; its input consumer set contracts. `manager_inclusive_review_requires_explicit_fresh_policy_cas` computes genuine prior assistant-inclusive digests, rejects stale review without mutation, confirms inspection does not silently rewrite existing grants, contracts grants only after explicit fresh approval, preserves grant IDs/source resources, advances authority, rejects stale CAS and accepts an exact fresh no-op. Native/remote interaction review tests also use genuine old policy digests. Existing source-only edits preserve logical grant authority.
+
+### 10.5 Feasibility
+
+The separate contextual Feasibility Access/native implementation, subject/query authority, permission management, wire contract and assistant contextual identity are unchanged. The root Feasibility Tool is removed. No Expert-selected Feasibility source, new permission API/UI or conversational Expert-backed Feasibility capability is provided. Existing Feasibility Access, native admission and contextual review tests pass in the full workspace gate.
+
+### 10.6 Delegation and source evidence
+
+The Manager prompt permits sufficient already-admitted context answers and delegates fresh domain acquisition/judgment through A2A. No source prefetch was added to context assembly. Existing selected People, Attention, Wellbeing, Mail, Work Context, Life Logistics and Calendar source/dependency tests pass; Mail review verifies the communication Expert's exact consumer/read/resources and denies an arbitrary extension. Built-in multi-view provenance and bounded-evidence tests pass. Registered-runner tests retain no fallback for missing/duplicate implementations and disabled assignments, and selected missing source A does not adopt live B. Ordinary greeting tests and the actual Foundation integration produce no Task; removing tools does not mandate delegation.
+
+### 10.7 Safety, publication and recovery
+
+`shared_publication_replays_the_same_safe_ref` now pins a genuine DelegationIntent and Task origin, verifies the selected Expert consumer and deterministic safe ref, and preserves Independent safe artifacts. Origin/capture tests retain separate source blockers, cross-account rejection, exact Conflict for unadmitted origin and NotFound for a missing Run. Existing Expert binding/source/model blocker tests, root/delegated model-recipient consent, B2 source/grant revocation and history/final-release fences pass. Generic replay, cursor acknowledgement/response loss, cancellation, uncertain native write lookup and durable pre-dispatch intent remain covered. The generic pinned-revision resume regression now checks both stale and removed descriptors with zero model/Tool calls and no journal change. No authorization or provenance assertion was relaxed.
+
+### 10.8 Conformance and residual audit
+
+The existing Expert checker rejects restored Manager catalogue/service/wrapper symbols and all seven production Tool ID literals. The Observe checker rejects restored Manager policy helpers and assistant injection specifically in first_party_observe, without banning message/model/purpose identities or contextual Feasibility. Positive generic Tool/shipped policy/contextual fixtures and all existing rules remain.
+
+All four Step 8 rg commands and the seven-ID literal search were rerun after final edits. There is no production Rust Manager direct route, no direct publication wrapper and no current architecture/product claim of that route. Remaining matches are classified as follows:
+
+- Removed names/IDs: negative all-seven runtime/App/checker fixtures and this temporary plan. ADR history is explicitly amended, not an active route.
+- Tool runtime/projection/dependency fixtures: role-neutral behavior; renamed domain examples use explicit `test.*` IDs. Historical assistant-granted evidence fixtures test denial/coverage, not standing policy construction.
+- Expert source Views/capabilities: retained bounded acquisition owners, not root Tools.
+- `ASSISTANT_CONSUMER` in Context personal-dependency authorization and the separate Feasibility owner: contextual Feasibility; no standing policy injection. Other assistant matches in the scoped audit are cfg(test) old-review/denial/coverage fixtures.
+- Apple/Flutter Attention and Feasibility capability ID strings: unchanged native capability inventory and product permission/Connections management plus their UI fixtures; they neither populate the root catalogue nor dispatch Manager Tools.
+- `GrantPurpose::Assistant`, model consumer and assistant message role: purpose/recipient/presentation contracts, not standing source reader authority.
+
+No new crate, public/FFI contract, schema version, migration state, provider-specific root service or compatibility path was introduced.
+
+### 10.9 Observed verification
+
+Targeted commands from the repository root, all PASS with matched tests:
+
+```sh
+cargo test -p floe-context
+cargo test -p floe-app first_party_observe
+cargo test -p floe-app conversation
+cargo test -p floe-app manager_inclusive_review
+cargo test -p floe-agent-runtime
+cargo test -p floe-conversation
+cargo test -p floe-experts
+cargo test -p floe-experts-builtin
+python3 tools/architecture/test_check_connection_observe_conformance.py
+python3 tools/architecture/test_check_expert_extensibility.py
+```
+
+Broad commands from the repository root, all PASS (the final workspace test includes Access and Vault):
+
+```sh
+cargo check --workspace --lib
+CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast -- --test-threads=1
+python3 tools/architecture/test_check_boundaries.py
+python3 tools/architecture/check_boundaries.py
+python3 tools/architecture/test_check_expert_extensibility.py
+python3 tools/architecture/check_expert_extensibility.py
+python3 tools/architecture/test_check_connection_observe_conformance.py
+python3 tools/architecture/check_connection_observe_conformance.py
+cargo build -p floe-ffi
+git diff --check
+```
+
+Changed Rust code was formatted without unrelated whole-repository churn. Routine targeted builds used incremental compilation and the existing target directory; only the required broad test disabled incrementality. No cargo clean was performed. The externally configured Codex model test remains ignored by the existing workspace suite; no external model/account setup was attempted.
+
+Product commands from `apps/client`:
+
+| Exact command | Observed result |
+| --- | --- |
+| `flutter analyze` | PASS, no issues |
+| `flutter test` | FAIL: 366 pass, one existing registry-dialog golden failure |
+| `flutter build macos` | PASS, Release product built |
+| `flutter test integration/product_conversation_test.dart` | MIXED PASS/FAIL: the final uninstrumented production snapshot passed Auto/explicit Foundation (one attempt, zero Tasks) and durable reopen, but other repetitions, including the last execution, failed as detailed below. This is not a consistently green gate. |
+
+Baseline golden evidence: an isolated `git archive ac66a3fbd6fe4252eca5d5e51c7062d75fca0728` client, using the existing Flutter dependency resolution, ran `flutter test --no-pub test/features/experts/agent_registry_dialog_test.dart --plain-name 'registry management remains readable and operates real controller at width 520.0'`. It reproduced the same `agent_registry.png` difference: 0.02%, 29 pixels. No golden or safety assertion was updated. Generated failure images were preserved outside the worktree.
+
+Native integration qualification: repeated executions also failed closed at Vault key revalidation (`VaultUnavailable`; temporary error-only diagnostics identified native Keyring `NoEntry` after successful Vault/session creation). The same final uninstrumented binary subsequently passed; a start-baseline FFI comparison also passed. The last final-snapshot execution failed again. This is an observed intermittent Keychain lookup issue, not a reproduced baseline failure or proof of a task-induced cause; root cause and repeatability remain unresolved validation caveats. All diagnostics were removed, and no retry/bypass/key replacement was added to product code. Every test used its own fresh profile and confirmed exact validation-owned key absence and profile removal. Shared keys/credentials were not reset. Local raw evidence is in `/tmp/floe-clean-retry-3.log` (final uninstrumented PASS), `/tmp/floe-diag3-1.log` (NoEntry), `/tmp/floe-final-snapshot-product.log` (last execution FAIL), `/tmp/floe-baseline-product-integration.log` and `/tmp/floe-final-workspace-test.log`.
+
+iOS/device suites were not run (not required for this bounded macOS-led change); Android is out of scope. No Go/shared server/native implementation changed, so unrelated server/Swift suites were not run. No real source acquisition, mail send, Calendar write, OAuth setup or user-data reset was performed.
+
+### 10.10 Canonical documentation
+
+Updated Manager role, product intelligence/privacy and current architecture modules/runtime/authority-recovery. Added dated amendments to accepted ADR 0018 and ADR 0031: the former strengthens domain acquisition to A2A, and the latter explicitly removes its original Manager standing-reader exception. ADR indexes/current architecture entry point required no conflicting-description change. This section is the sole execution report. The active-plan pointer remains until operator acceptance; retirement is not silently performed by the implementation task.
+
+### 10.11 Completion state
+
+The code/deletion/conformance/Rust gates are complete, with the reproduced baseline golden failure and intermittent native integration caveat reported rather than hidden. No architecture implementation blocker or competing runtime/policy path remains. This report and all intended changes are committed together locally; post-commit clean worktree and the literal final SHA are checked and reported in the completion response. Remaining follow-up is operator acceptance/temporary-plan retirement, plus separate investigation of golden portability and native Keychain lookup repeatability; neither was worked around or expanded into this change.

@@ -4,48 +4,20 @@
 //! outcomes, and the delegated model host reports a blocked dispatch the same
 //! way. This boundary converts each owner-produced requirement into the
 //! reviewed descriptor the person's decision binds, publishes it under the
-//! admitted origin through Conversation, and settles the blocked Tool result
+//! admitted origin through Conversation, and returns safe interaction artifacts
 //! with safe references only. Model-produced JSON — even with a matching
 //! media type — never enters this path: only outcomes the trusted inner port
 //! returned are published.
 
 use floe_agent_contract::{
-    AgentFailure, Artifact, ArtifactPart, BoxFuture, DependencyCoverage, OutcomeIssue, ToolCall,
-    ToolPort, ToolResult, USER_INTERACTION_MEDIA_TYPE, UserInteractionKind, UserInteractionRef,
-    UserInteractionStatus,
+    AgentFailure, Artifact, ArtifactPart, DependencyCoverage, USER_INTERACTION_MEDIA_TYPE,
+    UserInteractionKind, UserInteractionRef, UserInteractionStatus,
 };
 use floe_context_contract::{
-    SourceAccessBlockers, SourceAccessRequirement, SourceAccessRequirementKind, SourceReadOutcome,
+    SourceAccessBlockers, SourceAccessRequirement, SourceAccessRequirementKind,
 };
 use floe_kernel::{PersonId, RunId};
 use uuid::Uuid;
-
-/// A direct-tool port that preserves recoverable source blockers as typed
-/// outcomes instead of raising them.
-pub(crate) trait ToolOutcomePort: Sync {
-    fn invoke_outcome<'a>(
-        &'a self,
-        call: &'a ToolCall,
-        scope: &'a floe_execution::ExecutionScope,
-    ) -> BoxFuture<'a, Result<SourceReadOutcome<ToolResult>, AgentFailure>>;
-}
-
-impl<Connections, Records, Driver, Remote> ToolOutcomePort
-    for floe_context::ContextToolService<Connections, Records, Driver, Remote>
-where
-    Connections: floe_context::PersonalConnectionReader,
-    Records: floe_context::PersonalGrantRecords,
-    Driver: floe_context::PersonalSourceDriver,
-    Remote: floe_context::SourceReader,
-{
-    fn invoke_outcome<'a>(
-        &'a self,
-        call: &'a ToolCall,
-        scope: &'a floe_execution::ExecutionScope,
-    ) -> BoxFuture<'a, Result<SourceReadOutcome<ToolResult>, AgentFailure>> {
-        Box::pin(async move { self.invoke_outcome(call, scope).await })
-    }
-}
 
 /// The generic source label a blocked result may name to the model.
 ///
@@ -525,119 +497,14 @@ pub(crate) fn interaction_ref_artifacts(
     Ok(artifacts)
 }
 
-/// Settle a blocked call: no source evidence, safe refs only, and a
-/// non-retryable blocked signal the Manager loop explains and continues past.
-pub(crate) fn blocked_tool_result(
-    call_id: Uuid,
-    refs: &[UserInteractionRef],
-    text: String,
-) -> Result<ToolResult, AgentFailure> {
-    if call_id.is_nil() {
-        return Err(AgentFailure::InvalidInput);
-    }
-    let result = ToolResult {
-        call_id,
-        text,
-        artifacts: interaction_ref_artifacts(refs)?,
-        coverage: DependencyCoverage::Independent,
-        issue: Some(OutcomeIssue {
-            failure: AgentFailure::CapabilityUnavailable,
-            retryable: false,
-        }),
-    };
-    result.validate(call_id, floe_agent_contract::MAX_OUTPUT_BYTES)?;
-    Ok(result)
-}
-
-/// The product direct-tool boundary: trusted outcomes become settled results.
-///
-/// Ready results and hard failures pass through untouched. A blocked outcome
-/// publishes each requirement under the admitted Tool origin and settles one
-/// blocked result carrying the durable refs. The origin Run comes from the
-/// execution scope; the Session, person and device are the turn's validated
-/// bindings.
-pub(crate) struct PublishingToolPort<'a, Runs, Interactions> {
-    inner: &'a dyn ToolOutcomePort,
-    runs: &'a Runs,
-    interactions: &'a Interactions,
-    snapshots: &'a dyn crate::vault_host::review_snapshot::ReviewSnapshotSource,
-    person_id: PersonId,
-    session_id: Uuid,
-    device_id: String,
-}
-
-impl<'a, Runs, Interactions> PublishingToolPort<'a, Runs, Interactions> {
-    pub(crate) fn new(
-        inner: &'a dyn ToolOutcomePort,
-        runs: &'a Runs,
-        interactions: &'a Interactions,
-        snapshots: &'a dyn crate::vault_host::review_snapshot::ReviewSnapshotSource,
-        person_id: PersonId,
-        session_id: Uuid,
-        device_id: String,
-    ) -> Result<Self, AgentFailure> {
-        if person_id.0.is_nil() || session_id.is_nil() || device_id.trim().is_empty() {
-            return Err(AgentFailure::InvalidInput);
-        }
-        Ok(Self {
-            inner,
-            runs,
-            interactions,
-            snapshots,
-            person_id,
-            session_id,
-            device_id,
-        })
-    }
-}
-
-impl<Runs, Interactions> ToolPort for PublishingToolPort<'_, Runs, Interactions>
-where
-    Runs: floe_conversation::ConversationRepository,
-    Interactions: floe_conversation::InteractionRepository,
-{
-    fn invoke<'a>(
-        &'a self,
-        call: ToolCall,
-        scope: &'a floe_execution::ExecutionScope,
-    ) -> BoxFuture<'a, Result<ToolResult, AgentFailure>> {
-        Box::pin(async move {
-            let outcome = self.inner.invoke_outcome(&call, scope).await?;
-            match outcome {
-                SourceReadOutcome::Ready(result) => Ok(result),
-                SourceReadOutcome::Unavailable(_) => Err(AgentFailure::CapabilityUnavailable),
-                SourceReadOutcome::NeedsUserAction(blockers) => {
-                    let origin_run_id = scope.root_run_id().ok_or(AgentFailure::InvalidInput)?;
-                    let refs = publish_requirements(
-                        self.runs,
-                        self.interactions,
-                        self.snapshots,
-                        &self.person_id.to_string(),
-                        self.session_id,
-                        origin_run_id,
-                        floe_conversation::InteractionOrigin::Tool {
-                            call_id: call.call_id,
-                        },
-                        self.person_id,
-                        &self.device_id,
-                        &blockers,
-                        scope.cancellation(),
-                        chrono::Utc::now().timestamp_millis(),
-                    )
-                    .await?;
-                    blocked_tool_result(call.call_id, refs.as_slice(), blocked_text(&blockers)?)
-                }
-            }
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
-    use floe_agent_contract::{DependencyCoverage, InvocationKey, JournalEvent};
+    use floe_agent_contract::{
+        BoxFuture, DependencyCoverage, InvocationKey, JournalEvent, ToolCall,
+    };
     use floe_context_contract::{
         ConnectionId, ConnectorId, GrantConsumer, GrantOperation, GrantPurpose, ResourceHandle,
     };
@@ -668,7 +535,7 @@ mod tests {
             connector,
             connection,
             GrantOperation::Read,
-            GrantConsumer::builtin("assistant").unwrap(),
+            GrantConsumer::builtin("floe.builtin.focus-attention").unwrap(),
             GrantPurpose::Assistant,
             resources,
             None,
@@ -772,7 +639,7 @@ mod tests {
             None,
             None,
             GrantOperation::Read,
-            GrantConsumer::builtin("assistant").unwrap(),
+            GrantConsumer::builtin("floe.builtin.focus-attention").unwrap(),
             GrantPurpose::Assistant,
             vec![],
             Some("model.example".into()),
@@ -793,7 +660,7 @@ mod tests {
         let person_id = PersonId::new();
         let session_id = Uuid::new_v4();
         let run_id = RunId::new();
-        let call = tool_call("attention.coarse.read");
+        let call = tool_call("test.source-blocker");
         let runs = FakeRuns {
             receipt: receipt_fixture(person_id, session_id, run_id),
             journal: vec![JournalEntry {
@@ -1084,21 +951,6 @@ mod tests {
         }
     }
 
-    struct ScriptedOutcome {
-        outcome: Mutex<Option<SourceReadOutcome<ToolResult>>>,
-    }
-
-    impl ToolOutcomePort for ScriptedOutcome {
-        fn invoke_outcome<'a>(
-            &'a self,
-            _: &'a ToolCall,
-            _: &'a floe_execution::ExecutionScope,
-        ) -> BoxFuture<'a, Result<SourceReadOutcome<ToolResult>, AgentFailure>> {
-            let outcome = self.outcome.lock().unwrap().take().unwrap();
-            Box::pin(async move { Ok(outcome) })
-        }
-    }
-
     fn receipt_fixture(person_id: PersonId, session_id: Uuid, run_id: RunId) -> RunReceipt {
         RunReceipt {
             run_id,
@@ -1125,19 +977,6 @@ mod tests {
         }
     }
 
-    fn tool_scope(run_id: RunId) -> floe_execution::ExecutionScope {
-        let ledger = floe_execution::budget::BudgetLedger::new(
-            floe_execution::budget::BudgetConfig::new(100, 100),
-            Default::default(),
-        );
-        floe_execution::ExecutionScope::root(
-            floe_execution::Cancellation::default(),
-            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
-            ledger.work_lease(),
-            floe_agent_contract::TraceContext::new(Uuid::new_v4()).with_run_id(run_id),
-        )
-    }
-
     fn tool_call(tool_id: &str) -> ToolCall {
         ToolCall {
             call_id: Uuid::new_v4(),
@@ -1149,11 +988,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn blocked_tool_call_publishes_and_replays_the_same_ref() {
+    async fn shared_publication_replays_the_same_safe_ref() {
         let person_id = PersonId::new();
         let session_id = Uuid::new_v4();
         let run_id = RunId::new();
-        let call = tool_call("attention.coarse.read");
+        let task_id = floe_agent_contract::TaskId::new();
+        let request = floe_agent_contract::DelegationRequest {
+            task_id,
+            parent_run_id: Some(run_id.as_uuid()),
+            principal: person_id.to_string(),
+            invocation_key: InvocationKey::new(),
+            selected_agent_id: "floe.builtin.focus-attention".into(),
+            selected_definition_revision: 1,
+            message: "Assess current attention".into(),
+            context_refs: vec![],
+            execution_context: floe_agent_contract::DelegationExecutionContext {
+                session_id,
+                device_id: "device".into(),
+                agent_context: floe_agent_contract::AgentContext {
+                    projection_version: 1,
+                    persona: None,
+                    memories: vec![],
+                    optional_context_issues: vec![],
+                    evidence: vec![],
+                },
+                max_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
+            },
+        };
         let blockers = SourceAccessBlockers::try_new(vec![requirement(
             "floe.source.attention",
             SourceAccessRequirementKind::EnableObserve,
@@ -1164,54 +1025,74 @@ mod tests {
             receipt: receipt_fixture(person_id, session_id, run_id),
             journal: vec![JournalEntry {
                 revision: 1,
-                event: JournalEvent::ToolIntent { call: call.clone() },
+                event: JournalEvent::DelegationIntent { request },
             }],
         };
         let interactions = FakeInteractions::default();
-        let scripted = ScriptedOutcome {
-            outcome: Mutex::new(Some(SourceReadOutcome::NeedsUserAction(blockers.clone()))),
-        };
         let snapshots = crate::vault_host::review_snapshot::NoCaptureSnapshots;
-        let port = PublishingToolPort::new(
-            &scripted,
+        let cancellation = floe_execution::Cancellation::default();
+        let origin = floe_conversation::InteractionOrigin::Task {
+            task_id: task_id.as_uuid(),
+            capability_call_id: None,
+        };
+        let first = publish_requirements(
             &runs,
             &interactions,
             &snapshots,
-            person_id,
+            &person_id.to_string(),
             session_id,
-            "device".into(),
+            run_id,
+            origin.clone(),
+            person_id,
+            "device",
+            &blockers,
+            &cancellation,
+            1_000,
         )
+        .await
         .unwrap();
-        let scope = tool_scope(run_id);
-        let first = ToolPort::invoke(&port, call.clone(), &scope).await.unwrap();
-        assert_eq!(first.call_id, call.call_id);
-        assert_eq!(first.coverage, DependencyCoverage::Independent);
-        assert_eq!(first.artifacts.len(), 1);
-        let data = match &first.artifacts[0].parts[0] {
-            floe_agent_contract::ArtifactPart::Data { media_type, data } => {
-                assert_eq!(media_type, USER_INTERACTION_MEDIA_TYPE);
-                data.clone()
+        let second = publish_requirements(
+            &runs,
+            &interactions,
+            &snapshots,
+            &person_id.to_string(),
+            session_id,
+            run_id,
+            origin,
+            person_id,
+            "device",
+            &blockers,
+            &cancellation,
+            1_000,
+        )
+        .await
+        .unwrap();
+        assert_eq!(first, second);
+        let records = interactions.records.lock().unwrap();
+        let stored = records.get(&first[0].interaction_id).unwrap();
+        assert_eq!(
+            stored.origin,
+            floe_conversation::InteractionOrigin::Task {
+                task_id: task_id.as_uuid(),
+                capability_call_id: None,
             }
-            _ => panic!("blocked result must carry a ref part"),
+        );
+        assert_eq!(stored.requirement.consumer, "floe.builtin.focus-attention");
+        drop(records);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].kind, UserInteractionKind::SourceAccess);
+        assert_eq!(first[0].status, UserInteractionStatus::Pending);
+        let artifacts = interaction_ref_artifacts(&first).unwrap();
+        assert_eq!(artifacts[0].coverage, DependencyCoverage::Independent);
+        let ArtifactPart::Data { media_type, data } = &artifacts[0].parts[0] else {
+            panic!("safe reference");
         };
-        let reference: UserInteractionRef = serde_json::from_str(&data).unwrap();
-        assert_eq!(reference.kind, UserInteractionKind::SourceAccess);
-        assert_eq!(reference.status, UserInteractionStatus::Pending);
-        assert!(first.text.contains("Attention"));
-        assert_eq!(interactions.records.lock().unwrap().len(), 1);
-
-        // Replaying the same blocked call replays the same interaction: no
-        // duplicate card, same id and message.
-        *scripted.outcome.lock().unwrap() = Some(SourceReadOutcome::NeedsUserAction(blockers));
-        let second = ToolPort::invoke(&port, call.clone(), &scope).await.unwrap();
-        let again = match &second.artifacts[0].parts[0] {
-            floe_agent_contract::ArtifactPart::Data { data, .. } => {
-                serde_json::from_str::<UserInteractionRef>(data).unwrap()
-            }
-            _ => panic!("blocked result must carry a ref part"),
-        };
-        assert_eq!(again.interaction_id, reference.interaction_id);
-        assert_eq!(second.text, first.text);
+        assert_eq!(media_type, USER_INTERACTION_MEDIA_TYPE);
+        assert_eq!(
+            serde_json::from_str::<UserInteractionRef>(data).unwrap(),
+            first[0]
+        );
+        assert!(!data.contains("fingerprint"));
         assert_eq!(interactions.records.lock().unwrap().len(), 1);
     }
 
@@ -1220,14 +1101,14 @@ mod tests {
         let person_id = PersonId::new();
         let session_id = Uuid::new_v4();
         let run_id = RunId::new();
-        let call = tool_call("mail.communication.read");
+        let call = tool_call("test.source-blocker");
         let blocker_for = |connection: &str| {
             SourceAccessRequirement::try_new(
                 "floe.source.mail",
                 Some(ConnectorId::try_new("gmail").unwrap()),
                 Some(ConnectionId::try_new(connection).unwrap()),
                 GrantOperation::Read,
-                GrantConsumer::builtin("assistant").unwrap(),
+                GrantConsumer::builtin("floe.builtin.focus-attention").unwrap(),
                 GrantPurpose::Assistant,
                 vec![ResourceHandle::try_new(format!("mail.communication:{connection}")).unwrap()],
                 None,
@@ -1295,56 +1176,45 @@ mod tests {
         let person_id = PersonId::new();
         let session_id = Uuid::new_v4();
         let run_id = RunId::new();
-        let call = tool_call("attention.coarse.read");
+        let runs = FakeRuns {
+            receipt: receipt_fixture(person_id, session_id, run_id),
+            journal: vec![],
+        };
+        let interactions = FakeInteractions::default();
+        let snapshots = crate::vault_host::review_snapshot::NoCaptureSnapshots;
         let blockers = SourceAccessBlockers::try_new(vec![requirement(
             "floe.source.attention",
             SourceAccessRequirementKind::EnableObserve,
             true,
         )])
         .unwrap();
-        // The journal never admitted this call: publication conflicts and the
-        // tool reports a hard failure with no card.
-        let runs = FakeRuns {
-            receipt: receipt_fixture(person_id, session_id, run_id),
-            journal: vec![],
-        };
-        let interactions = FakeInteractions::default();
-        let scripted = ScriptedOutcome {
-            outcome: Mutex::new(Some(SourceReadOutcome::NeedsUserAction(blockers.clone()))),
-        };
-        let snapshots = crate::vault_host::review_snapshot::NoCaptureSnapshots;
-        let port = PublishingToolPort::new(
-            &scripted,
-            &runs,
-            &interactions,
-            &snapshots,
-            person_id,
-            session_id,
-            "device".into(),
-        )
-        .unwrap();
-        let scope = tool_scope(run_id);
-        assert_eq!(
-            ToolPort::invoke(&port, call.clone(), &scope).await.err(),
-            Some(AgentFailure::Conflict)
-        );
+        for (requested_run, expected) in [
+            (run_id, AgentFailure::Conflict),
+            (RunId::new(), AgentFailure::NotFound),
+        ] {
+            assert_eq!(
+                publish_requirements(
+                    &runs,
+                    &interactions,
+                    &snapshots,
+                    &person_id.to_string(),
+                    session_id,
+                    requested_run,
+                    floe_conversation::InteractionOrigin::Task {
+                        task_id: Uuid::new_v4(),
+                        capability_call_id: None
+                    },
+                    person_id,
+                    "device",
+                    &blockers,
+                    &floe_execution::Cancellation::default(),
+                    1_000
+                )
+                .await
+                .unwrap_err(),
+                expected
+            );
+        }
         assert!(interactions.records.lock().unwrap().is_empty());
-
-        // A scope without a run cannot name an origin at all.
-        *scripted.outcome.lock().unwrap() = Some(SourceReadOutcome::NeedsUserAction(blockers));
-        let ledger = floe_execution::budget::BudgetLedger::new(
-            floe_execution::budget::BudgetConfig::new(100, 100),
-            Default::default(),
-        );
-        let root = floe_execution::ExecutionScope::root(
-            floe_execution::Cancellation::default(),
-            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
-            ledger.work_lease(),
-            floe_agent_contract::TraceContext::new(Uuid::new_v4()),
-        );
-        assert_eq!(
-            ToolPort::invoke(&port, call, &root).await.err(),
-            Some(AgentFailure::InvalidInput)
-        );
     }
 }

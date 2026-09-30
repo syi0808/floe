@@ -411,8 +411,8 @@ mod tests {
                 definition_revision: 2,
             }],
             tools: vec![
-                tool_descriptor("people.identity.read"),
-                tool_descriptor("mail.communication.read"),
+                tool_descriptor("test.identity-evidence"),
+                tool_descriptor("test.communication-evidence"),
             ],
             revision: 7,
         }
@@ -453,7 +453,7 @@ mod tests {
             call: ToolCall {
                 call_id,
                 invocation_key: InvocationKey::new(),
-                tool_id: "people.identity.read".into(),
+                tool_id: "test.identity-evidence".into(),
                 definition_revision: 3,
                 input: "{}".into(),
             },
@@ -638,7 +638,7 @@ mod tests {
                     call: ToolCall {
                         call_id: tool_call_id,
                         invocation_key: InvocationKey::new(),
-                        tool_id: "people.identity.read".into(),
+                        tool_id: "test.identity-evidence".into(),
                         definition_revision: 3,
                         input: "{}".into(),
                     },
@@ -840,7 +840,7 @@ mod tests {
         .unwrap();
         let capabilities = &projection.envelope.scoped_instructions.available_capabilities;
         assert_eq!(capabilities.len(), 2);
-        assert_eq!(capabilities[0].id, "people.identity.read");
+        assert_eq!(capabilities[0].id, "test.identity-evidence");
         assert_eq!(capabilities[0].version, "3");
         assert!(capabilities[0].read_only);
         assert_eq!(
@@ -853,7 +853,7 @@ mod tests {
         );
         // The catalog is stable regardless of model route: remote tools are
         // listed even though no route was consulted.
-        assert_eq!(capabilities[1].id, "mail.communication.read");
+        assert_eq!(capabilities[1].id, "test.communication-evidence");
     }
 
     #[test]

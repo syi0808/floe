@@ -3730,88 +3730,94 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resume_with_stale_pinned_revision_dispatches_nothing() {
-        // 2-B.5 C1: a resumed batch pinned `lookup` at revision 1, but the
-        // resuming catalog carries revision 2: resume must fail closed before
-        // any Tool/Task dispatch, and must not fall back to fresh planning.
-        let execution_id = Uuid::new_v4();
-        let batch = ValidatedModelBatch {
-            execution_id,
-            attempt_id: Uuid::new_v4(),
-            projection_ref: ProjectionRef::new(),
-            batch_id: Uuid::new_v4(),
-            steps: vec![ModelStep::CallTool {
-                tool_id: "lookup".into(),
-                definition_revision: 1,
-                input: "{}".into(),
-            }],
-            catalog_revision: 1,
-            tool_revisions: vec![PinnedToolRevision {
-                tool_id: "lookup".into(),
-                definition_revision: 1,
-            }],
-            agent_revisions: vec![],
-            projection_coverage: DependencyCoverage::Independent,
-            delegation_context: None,
-        };
-        batch.validate(1024).unwrap();
-        let tools = Tools {
-            calls: Arc::new(AtomicUsize::new(0)),
-        };
-        struct CountingModel {
-            calls: Arc<AtomicUsize>,
-        }
-        impl ModelPort for CountingModel {
-            fn generate<'a>(
-                &'a self,
-                request: ModelRequest,
-                _: &'a ExecutionScope,
-            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>>
-            {
-                self.calls.fetch_add(1, Ordering::SeqCst);
-                Box::pin(async move {
-                    Ok(ModelCallOutcome::Ready(ModelResponse {
-                        attempt_id: request.attempt_id,
-                        steps: vec![ModelStep::Answer {
-                            text: "fresh".into(),
-                            artifacts: vec![],
-                        }],
-                        usage: ModelUsage {
-                            tokens: 1,
-                            cost_micros: 1,
-                        },
-                    }))
-                })
+    async fn resume_with_stale_or_removed_pinned_revision_dispatches_nothing() {
+        for descriptor_removed in [false, true] {
+            // 2-B.5 C1: a resumed batch pinned `lookup` at revision 1, but the
+            // resuming catalog carries revision 2: resume must fail closed before
+            // any Tool/Task dispatch, and must not fall back to fresh planning.
+            let execution_id = Uuid::new_v4();
+            let batch = ValidatedModelBatch {
+                execution_id,
+                attempt_id: Uuid::new_v4(),
+                projection_ref: ProjectionRef::new(),
+                batch_id: Uuid::new_v4(),
+                steps: vec![ModelStep::CallTool {
+                    tool_id: "lookup".into(),
+                    definition_revision: 1,
+                    input: "{}".into(),
+                }],
+                catalog_revision: 1,
+                tool_revisions: vec![PinnedToolRevision {
+                    tool_id: "lookup".into(),
+                    definition_revision: 1,
+                }],
+                agent_revisions: vec![],
+                projection_coverage: DependencyCoverage::Independent,
+                delegation_context: None,
+            };
+            batch.validate(1024).unwrap();
+            let tools = Tools {
+                calls: Arc::new(AtomicUsize::new(0)),
+            };
+            struct CountingModel {
+                calls: Arc<AtomicUsize>,
             }
+            impl ModelPort for CountingModel {
+                fn generate<'a>(
+                    &'a self,
+                    request: ModelRequest,
+                    _: &'a ExecutionScope,
+                ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>>
+                {
+                    self.calls.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async move {
+                        Ok(ModelCallOutcome::Ready(ModelResponse {
+                            attempt_id: request.attempt_id,
+                            steps: vec![ModelStep::Answer {
+                                text: "fresh".into(),
+                                artifacts: vec![],
+                            }],
+                            usage: ModelUsage {
+                                tokens: 1,
+                                cost_micros: 1,
+                            },
+                        }))
+                    })
+                }
+            }
+            let model = CountingModel {
+                calls: Arc::new(AtomicUsize::new(0)),
+            };
+            let (journal, events) = RecordingJournal::new();
+            let (projection, _) = Projector::new();
+            let mut engine_request = request(scope());
+            if descriptor_removed {
+                engine_request.allowed_catalog.tools.clear();
+            } else {
+                engine_request.allowed_catalog.tools[0].definition_revision = 2;
+            }
+            let batch_id = batch.batch_id;
+            engine_request.resume = Some(EngineResumeState {
+                validated_batch: batch,
+                cursor: BatchCursor {
+                    batch_id,
+                    next_step_index: 0,
+                },
+            });
+            let result = Engine::default()
+                .drive(
+                    engine_request,
+                    ports(&projection, &model, &tools, &journal, &Validator),
+                )
+                .await;
+            assert_eq!(result.err(), Some(AgentFailure::Conflict));
+            assert_eq!(tools.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+            assert!(
+                events.lock().unwrap().is_empty(),
+                "stale resume journals nothing"
+            );
         }
-        let model = CountingModel {
-            calls: Arc::new(AtomicUsize::new(0)),
-        };
-        let (journal, events) = RecordingJournal::new();
-        let (projection, _) = Projector::new();
-        let mut engine_request = request(scope());
-        engine_request.allowed_catalog.tools[0].definition_revision = 2;
-        let batch_id = batch.batch_id;
-        engine_request.resume = Some(EngineResumeState {
-            validated_batch: batch,
-            cursor: BatchCursor {
-                batch_id,
-                next_step_index: 0,
-            },
-        });
-        let result = Engine::default()
-            .drive(
-                engine_request,
-                ports(&projection, &model, &tools, &journal, &Validator),
-            )
-            .await;
-        assert_eq!(result.err(), Some(AgentFailure::Conflict));
-        assert_eq!(tools.calls.load(Ordering::SeqCst), 0);
-        assert_eq!(model.calls.load(Ordering::SeqCst), 0);
-        assert!(
-            events.lock().unwrap().is_empty(),
-            "stale resume journals nothing"
-        );
     }
 
     struct DeniedTools {

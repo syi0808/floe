@@ -15,7 +15,7 @@ pub use application::recipient_consent::{
     revoke_recipient_consent,
 };
 pub use application::{
-    ATTENTION_ASSISTANT_CONSUMER, FeasibilityAccessChange, FeasibilityAccessConfiguration,
+    FeasibilityAccessChange, FeasibilityAccessConfiguration,
     FeasibilityAccessOverview, FeasibilityAccessState, attention_consumer,
 };
 pub use application::{

@@ -31,6 +31,8 @@ LEGACY = re.compile(
     r"ContactsAccessChange|PersonalAccessOverview|remote_calendar_grant(?:_\w+)?|"
     r"consumer_policy|policy_authority|policy_incarnation|policy_epoch)\b"
 )
+MANAGER_SOURCE_POLICY = re.compile(r"\b(?:manager_direct_remote_view|manager_direct_native_connector)\b")
+ASSISTANT_STANDING = re.compile(r'\bASSISTANT_CONSUMER\b|[\"\']assistant[\"\']')
 FORBIDDEN_POLICY = re.compile(
     r"\b(?:AgentRegistry|registry|assignments?|binding|installations?|"
     r"selected_resources|source_resources|connection_id|person_id|vault|"
@@ -74,6 +76,10 @@ def check_tree(root: Path) -> list[Violation]:
             relative = path.relative_to(root).as_posix()
             lines = _production_lines(path)
             for number, line in lines:
+                if MANAGER_SOURCE_POLICY.search(line):
+                    violations.append(Violation("manager-source-policy", relative, number))
+                if relative == "crates/app/src/first_party_observe.rs" and ASSISTANT_STANDING.search(line):
+                    violations.append(Violation("assistant-standing-consumer", relative, number))
                 if LEGACY.search(line):
                     violations.append(Violation("legacy-observe-authority", relative, number))
                 if relative == "crates/app/src/first_party_observe.rs" and FORBIDDEN_POLICY.search(line):

@@ -902,6 +902,111 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manager_inclusive_review_requires_explicit_fresh_policy_cas() {
+        let fixture = Fixture::open().await;
+        let cancellation = floe_execution::Cancellation::default();
+        let window = window(&cancellation);
+        let person = fixture.person_id.to_string();
+        let ctx = fixture.ctx(&window, fixture.pairing(&person));
+        let mut absent = review_bundle(&ctx, &fixture.transport).await.unwrap();
+        let policies = crate::first_party_observe::remote_policies("gmail").unwrap();
+        for member in &mut absent.members {
+            let mut old = policies
+                .iter()
+                .find(|policy| policy.view_id == member.view_id)
+                .unwrap()
+                .clone();
+            old.consumers
+                .push(floe_access::GrantConsumer::builtin("assistant").unwrap());
+            member.policy_digest = crate::first_party_observe::policy_digest(&old).unwrap();
+        }
+        assert_eq!(
+            enable_bundle(&ctx, &fixture.transport, &absent).await,
+            Err(AgentFailure::AccessReviewRequired)
+        );
+        assert!(fixture.live_grants().await.is_empty());
+        let initial = review_bundle(&ctx, &fixture.transport).await.unwrap();
+        enable_bundle(&ctx, &fixture.transport, &initial)
+            .await
+            .unwrap();
+        for grant in fixture.live_grants().await {
+            let scope = grant.scope();
+            let mut consumers = scope.consumers().to_vec();
+            consumers.push(floe_access::GrantConsumer::builtin("assistant").unwrap());
+            let old_scope = floe_context_contract::GrantScope::try_new(
+                scope.resources().to_vec(),
+                scope.categories().to_vec(),
+                scope.operations().to_vec(),
+                scope.purposes().to_vec(),
+                consumers,
+                scope.processing().clone(),
+            )
+            .unwrap();
+            fixture
+                .vault
+                .activate_data_access_grant(grant.id(), grant.authority(), old_scope)
+                .await
+                .unwrap();
+        }
+        let before = fixture.live_grants().await;
+        let source_authority = *fixture.transport.authority.lock().unwrap();
+        let source_resources = fixture.transport.source_resources.lock().unwrap().clone();
+        let mut stale = review_bundle(&ctx, &fixture.transport).await.unwrap();
+        assert_eq!(fixture.live_grants().await, before);
+        for member in &mut stale.members {
+            member.policy_digest = absent
+                .members
+                .iter()
+                .find(|old| old.view_id == member.view_id)
+                .unwrap()
+                .policy_digest
+                .clone();
+        }
+        assert_eq!(
+            enable_bundle(&ctx, &fixture.transport, &stale).await,
+            Err(AgentFailure::AccessReviewRequired)
+        );
+        assert_eq!(fixture.live_grants().await, before);
+        let fresh = review_bundle(&ctx, &fixture.transport).await.unwrap();
+        enable_bundle(&ctx, &fixture.transport, &fresh)
+            .await
+            .unwrap();
+        let after = fixture.live_grants().await;
+        assert_eq!(after.len(), before.len());
+        for grant in &after {
+            let old = before.iter().find(|old| old.id() == grant.id()).unwrap();
+            assert_ne!(grant.authority(), old.authority());
+            assert_eq!(grant.source(), old.source());
+            assert_eq!(grant.scope().resources(), old.scope().resources());
+            assert!(
+                !grant
+                    .scope()
+                    .consumers()
+                    .iter()
+                    .any(|consumer| consumer.identifier() == "assistant")
+            );
+        }
+        assert_eq!(
+            *fixture.transport.authority.lock().unwrap(),
+            source_authority
+        );
+        assert_eq!(
+            *fixture.transport.source_resources.lock().unwrap(),
+            source_resources
+        );
+        assert!(
+            enable_bundle(&ctx, &fixture.transport, &fresh)
+                .await
+                .is_err()
+        );
+        let noop = review_bundle(&ctx, &fixture.transport).await.unwrap();
+        enable_bundle(&ctx, &fixture.transport, &noop)
+            .await
+            .unwrap();
+        assert_eq!(fixture.live_grants().await, after);
+    }
+
+    #[tokio::test]
     async fn product_review_uses_common_connection_expectation_without_routing_fields() {
         let fixture = Fixture::open().await;
         let cancellation = floe_execution::Cancellation::default();

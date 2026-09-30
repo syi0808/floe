@@ -41,16 +41,10 @@ fn policy(
     view_id: &'static str,
     categories: Vec<GrantDataCategory>,
 ) -> Result<FirstPartyObservePolicy, AgentFailure> {
-    let mut consumers = Vec::new();
-    if floe_context::manager_direct_remote_view(view_id) {
-        consumers.push(
-            GrantConsumer::builtin(floe_context::ASSISTANT_CONSUMER)
-                .map_err(|_| AgentFailure::InvalidInput)?,
-        );
+    let consumers = trusted_shipped_consumers(view_id)?;
+    if consumers.is_empty() {
+        return Err(AgentFailure::CapabilityUnavailable);
     }
-    consumers.extend(trusted_shipped_consumers(view_id)?);
-    consumers.sort();
-    consumers.dedup();
     Ok(FirstPartyObservePolicy {
         view_id,
         consumers,
@@ -118,26 +112,10 @@ pub(crate) fn member_policy_digest(
 pub(crate) fn personal_policy(connector_id: &str) -> Result<FirstPartyObservePolicy, AgentFailure> {
     let view_id =
         crate::personal_source_spec::PersonalSourceSpec::for_connector(connector_id)?.view;
-    let mut consumers = Vec::new();
-    if floe_context::manager_direct_native_connector(connector_id) {
-        consumers.push(
-            GrantConsumer::builtin(floe_context::ASSISTANT_CONSUMER)
-                .map_err(|_| AgentFailure::InvalidInput)?,
-        );
+    if connector_id == "contacts.android" {
+        return Err(AgentFailure::CapabilityUnavailable);
     }
-    if connector_id != "contacts.android" {
-        consumers.extend(trusted_shipped_consumers(view_id)?);
-    }
-    consumers.sort();
-    consumers.dedup();
-    Ok(FirstPartyObservePolicy {
-        view_id,
-        consumers,
-        categories: vec![GrantDataCategory::Derived],
-        operation: GrantOperation::Read,
-        purpose: GrantPurpose::Assistant,
-        processing: ProcessingRestriction::LocalOnly,
-    })
+    policy(view_id, vec![GrantDataCategory::Derived])
 }
 
 pub(crate) fn calendar_policy() -> Result<FirstPartyObservePolicy, AgentFailure> {
@@ -188,14 +166,48 @@ mod tests {
     }
 
     #[test]
+    fn supported_views_have_exact_shipped_readers_and_android_is_unavailable() {
+        for (view, expected) in [
+            ("people.identity", vec!["floe.builtin.relationships"]),
+            ("attention.coarse", vec!["floe.builtin.focus-attention"]),
+            ("wellbeing.derived", vec!["floe.builtin.wellbeing"]),
+            (
+                "mail.communication",
+                vec!["floe.builtin.commitments", "floe.builtin.communication"],
+            ),
+            (
+                "work.context",
+                vec!["floe.builtin.focus-attention", "floe.builtin.work-context"],
+            ),
+            ("life.logistics", vec!["floe.builtin.life-logistics"]),
+            (
+                "calendar.timeline",
+                vec![
+                    "floe.builtin.commitments",
+                    "floe.builtin.focus-attention",
+                    "floe.builtin.schedule",
+                    "floe.builtin.wellbeing",
+                ],
+            ),
+        ] {
+            let policy = policy(view, vec![GrantDataCategory::Derived]).unwrap();
+            assert_eq!(ids(&policy), expected);
+        }
+        assert_eq!(
+            personal_policy("contacts.android"),
+            Err(AgentFailure::CapabilityUnavailable)
+        );
+        assert!(policy("unsupported.view", vec![GrantDataCategory::Derived]).is_err());
+    }
+
+    #[test]
     fn personal_policy_uses_canonical_view_and_trusted_consumers() {
         for connector in ["contacts.apple", "attention.macos", "health.apple"] {
             let policy = personal_policy(connector).unwrap();
             assert!(policy.consumers.iter().all(|consumer| {
-                consumer.identifier() == "assistant"
-                    || trusted_shipped_consumers(policy.view_id)
-                        .unwrap()
-                        .contains(consumer)
+                trusted_shipped_consumers(policy.view_id)
+                    .unwrap()
+                    .contains(consumer)
             }));
             assert_eq!(
                 member_policy_digest(connector, policy.view_id).unwrap(),
@@ -218,10 +230,14 @@ mod tests {
     }
 
     #[test]
-    fn personal_consumers_are_only_manager_and_trusted_shipped_experts() {
+    fn personal_consumers_are_only_trusted_shipped_experts() {
         for connector in ["attention.macos", "contacts.apple", "health.apple"] {
             let policy = personal_policy(connector).unwrap();
-            assert!(ids(&policy).contains(&"assistant"));
+            assert!(!ids(&policy).contains(&"assistant"));
+            assert_eq!(
+                policy.consumers,
+                trusted_shipped_consumers(policy.view_id).unwrap()
+            );
             assert!(!ids(&policy).contains(&"example.test.expert"));
         }
     }
@@ -239,7 +255,6 @@ mod tests {
             &remote_policies("github.issues").unwrap()[0],
         ] {
             let mut expected = trusted_shipped_consumers(remote.view_id).unwrap();
-            expected.push(GrantConsumer::builtin("assistant").unwrap());
             expected.sort();
             expected.dedup();
             assert_eq!(remote.consumers, expected);
@@ -296,17 +311,16 @@ mod tests {
         ] {
             for policy in remote_policies(connector).unwrap() {
                 assert!(policy.consumers.iter().all(|consumer| {
-                    consumer.identifier() == "assistant"
-                        || trusted_shipped_consumers(policy.view_id)
-                            .unwrap()
-                            .contains(consumer)
+                    trusted_shipped_consumers(policy.view_id)
+                        .unwrap()
+                        .contains(consumer)
                 }));
                 assert_eq!(
                     policy
                         .consumers
                         .iter()
                         .any(|consumer| consumer.identifier() == "assistant"),
-                    floe_context::manager_direct_remote_view(policy.view_id)
+                    false
                 );
             }
         }

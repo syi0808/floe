@@ -253,7 +253,7 @@ mod tests {
         AllowedCatalog {
             cards: vec![],
             tools: vec![ToolDescriptor {
-                id: "people.identity.read".into(),
+                id: "test.identity-evidence".into(),
                 definition_revision: 3,
                 description: "read people".into(),
                 input_schema: "{}".into(),

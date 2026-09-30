@@ -25,7 +25,6 @@ mod application {
     pub mod service;
     pub mod source_candidates;
     pub mod source_view;
-    pub mod tools;
 }
 
 mod ports {
@@ -36,7 +35,7 @@ mod ports {
     pub mod source_reader;
 }
 
-/// The consumer identity a general assistant read is made under.
+/// The consumer identity retained by contextual Feasibility authority.
 pub const ASSISTANT_CONSUMER: &str = "assistant";
 
 pub use application::archive::read_authorized_archive;
@@ -107,12 +106,6 @@ pub use application::source_candidates::{
     source_candidate_id, validate_local_source_selection,
 };
 pub use application::source_view::SourceView;
-pub use application::tools::{
-    ATTENTION_COARSE_READ, ContextToolService, LIFE_LOGISTICS_READ, MAIL_COMMUNICATION_READ,
-    MANAGER_TOOL_DEFINITION_REVISION, PEOPLE_IDENTITY_READ, SCHEDULE_FEASIBILITY_READ,
-    WELLBEING_DERIVED_READ, WORK_CONTEXT_READ, manager_direct_native_connector,
-    manager_direct_remote_view, manager_tool_descriptors,
-};
 /// The authorization input Context's own coverage entry points take.
 pub use floe_access::{
     DependencyAuthorization, DependencyLiveness, DependencyResolver, RemoteCallWindow,

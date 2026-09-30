@@ -199,6 +199,16 @@ policy explicitly permits further delegation.
    evidence and proposal Data Parts.
 5. Remove Manager-visible `expert.*` Tool descriptors after compatibility tests pass.
 
+## Amendment — 2026-09-30: source-backed domain acquisition
+
+The original decision separated Experts from Tools but did not prohibit direct Manager source Tools. This amendment makes A2A delegation the sole Manager boundary for fresh source-backed domain acquisition and delegated domain judgment. Admitted Experts acquire their manifest-declared Views under their own exact consumer identity and Task selection; the root Manager advertises no current domain Tools.
+
+The Manager may answer from sufficient already-admitted context and owns synthesis. Context assembly is not a live-source acquisition loophole. Existing evidence/history reauthorization and exact model-recipient consent remain separate authority concerns. An unavailable, disabled or unbound Expert is a limitation, never permission for root fallback.
+
+Future Manager orchestration, presentation or product-shell capabilities remain possible through role-neutral Tool contracts, but must not become backdoors for domain source reads or domain actions. External mutations remain typed proposals behind host review and policy. Feasibility's separate contextual Access/native substrate is retained without a callable Manager Tool or newly implemented Expert acquisition. Standing Observe consumers derive only from trusted shipped Expert declarations; see the corresponding amendment to [ADR 0031](0031-connection-owned-source-scope-and-logical-observe.md).
+
+The original role guidance and migration discussion above are historical where they permit direct Manager source acquisition; this amendment governs the current boundary.
+
 ## References
 
 - [A2A Protocol 1.0 specification](https://a2a-protocol.org/v1.0.0/specification/)

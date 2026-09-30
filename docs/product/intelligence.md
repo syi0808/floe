@@ -2,9 +2,9 @@
 
 ## One Manager
 
-The Manager owns the continuous user relationship, final synthesis and intervention timing. It chooses evidence and domain expertise relevant to the request, but deterministic host policy owns permissions, budgets and external effects.
+The Manager owns the continuous user relationship, final synthesis and intervention timing. It chooses domain expertise relevant to the request, but deterministic host policy owns permissions, budgets and external effects.
 
-The Manager may decide to answer directly, delegate, ask for evidence, defer or remain silent.
+The Manager may answer directly from sufficient already-admitted Conversation, Persona, Memory or product context, delegate, ask for clarification, defer or remain silent. Fresh source-backed domain acquisition and bounded domain judgment belong inside an admitted Expert Task reached through A2A delegation. An unavailable, disabled or unbound Expert is a limitation, not permission for a direct-source fallback. Retained contextual Feasibility infrastructure does not currently provide conversational Expert-backed acquisition.
 
 ## Experts are domain judgment agents
 

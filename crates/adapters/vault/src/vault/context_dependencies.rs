@@ -651,7 +651,7 @@ mod tests {
             AgentMessage::Capability {
                 turn_id: turn,
                 call_id: call,
-                capability_id: "people.identity.read".into(),
+                capability_id: "test.identity-evidence".into(),
                 input: "{}".into(),
                 result: Err(AgentFailure::CapabilityUnavailable),
             },

@@ -311,21 +311,13 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         calendar: Some(&calendar_resolver),
     };
     {
-        // Canonical root catalog: Expert cards come from the Experts-owned
-        // Directory admitted for this principal, with the registered
-        // definition revisions; Manager tools come straight from Context's
-        // descriptor definitions. Model placement never filters either.
         let directory_catalog = inputs.task_coordinator.catalog(&person_id.to_string())?;
         let expert_cards = directory_catalog.cards;
         let active_experts: Vec<floe_agent_contract::AgentCard> = expert_cards
             .iter()
             .map(|entry| entry.card.clone())
             .collect();
-        let catalog = floe_agent_contract::AllowedCatalog {
-            cards: expert_cards,
-            tools: floe_context::manager_tool_descriptors(),
-            revision: directory_catalog.revision.max(1),
-        };
+        let catalog = engine_ports::manager_catalog(expert_cards, directory_catalog.revision);
         let budget = AgentBudget::default();
         let duration = std::time::Duration::from_millis(budget.deadline_ms);
         let deadline = tokio::time::Instant::now() + duration;
@@ -384,39 +376,6 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             inputs.session_data_classes.clone(),
             active_experts,
         )?;
-        // Canonical root tools: Context owns the descriptors and the reads;
-        // each successful result returns its dependency coverage directly, and
-        // each recoverable blocker publishes under the admitted Tool origin.
-        let tool_service = floe_context::ContextToolService::new(
-            person_id,
-            request.device_id.clone(),
-            personal_grants::CorePersonalConnections { core: inputs.core },
-            floe_vault::VaultGrantRecords::new(vault),
-            personal_grants::native_driver(local_context),
-            remote_reader.as_ref(),
-        )?;
-        let calendar_subject =
-            crate::vault_host::calendar_access::DeviceCalendarSubject { local_context };
-        let personal_subject = personal_grants::native_driver(local_context);
-        let review_snapshots = crate::vault_host::review_snapshot::HostReviewSnapshots {
-            core: inputs.core,
-            vault,
-            remote_source_client: source_client.as_ref(),
-            calendar_subject: &calendar_subject,
-            personal_subject: &personal_subject,
-            capture_deadline: deadline
-                .min(tokio::time::Instant::now() + std::time::Duration::from_secs(5)),
-        };
-        let publishing_tools = interaction_publication::PublishingToolPort::new(
-            &tool_service,
-            inputs.conversation_repository.as_ref(),
-            inputs.conversation_repository.as_ref(),
-            &review_snapshots,
-            person_id,
-            session_id,
-            request.device_id.clone(),
-        )?;
-        let tool_port = &publishing_tools;
         // Canonical root delegation: TaskCoordinator serves as the
         // DelegationPort directly. The Directory resolves the endpoint, and
         // the invocation carries the explicit execution context; App holds
@@ -456,7 +415,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                     projection: &projection_port,
                     coverage_resolver: projection_port.coverage_resolver(),
                     model: &model_service,
-                    tools: tool_port,
+                    tools: &engine_ports::NoManagerTools,
                     delegation: delegation_port,
                     validator: &engine_ports::ManagerPayloadValidator,
                 },
@@ -741,12 +700,10 @@ mod tests {
         CalendarContextReaderApi, PersonalAttentionReader, PersonalAttentionReaderApi,
         ResultRecorder, StoreResultRecorder, expert_policy,
     };
-    use super::interaction_publication::PublishingToolPort;
     use floe_agent_contract::ModelPlacement;
     use floe_agent_contract::{ModelCallOutcome, ModelRequest, ModelResponse};
     use floe_context::AttentionView;
     use floe_conversation::AgentMessage;
-    use floe_conversation::{ConversationRepository, InteractionRepository};
     use floe_execution::Cancellation;
     use floe_provider_adapters::sources::native_acquisition::{
         AttentionAcquisitionMode, AttentionAcquisitionResult,
@@ -1239,6 +1196,122 @@ mod tests {
 
     struct NoDispatch;
 
+    struct CorrectingDomainModel {
+        tool_id: String,
+        calls: AtomicUsize,
+    }
+
+    impl floe_agent_contract::ModelPort for CorrectingDomainModel {
+        fn generate<'a>(
+            &'a self,
+            request: ModelRequest,
+            _: &'a floe_execution::ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
+            Box::pin(async move {
+                assert!(
+                    request
+                        .projection
+                        .envelope
+                        .scoped_instructions
+                        .available_capabilities
+                        .is_empty()
+                );
+                let step = if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    floe_agent_contract::ModelStep::CallTool {
+                        tool_id: self.tool_id.clone(),
+                        definition_revision: 1,
+                        input: "{}".into(),
+                    }
+                } else {
+                    assert!(request.projection.envelope.conversation.current_turn.iter().any(|entry| {
+                        matches!(entry, floe_agent_contract::ModelConversationEntry::ToolExchange { result, .. }
+                            if result.issue.as_ref().is_some_and(|issue| issue.failure == AgentFailure::InvalidModelOutput))
+                    }));
+                    floe_agent_contract::ModelStep::Answer {
+                        text: "No Expert is available to acquire that evidence; I cannot make a domain conclusion.".into(),
+                        artifacts: vec![],
+                    }
+                };
+                Ok(ModelCallOutcome::Ready(ModelResponse {
+                    attempt_id: request.attempt_id,
+                    steps: vec![step],
+                    usage: floe_agent_contract::ModelUsage {
+                        tokens: 1,
+                        cost_micros: 0,
+                    },
+                }))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn root_domain_tool_corrections_are_durable_without_dispatch_or_fallback() {
+        for tool_id in [
+            "people.identity.read",
+            "schedule.feasibility.read",
+            "attention.coarse.read",
+            "wellbeing.derived.read",
+            "mail.communication.read",
+            "work.context.read",
+            "life.logistics.read",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            let person_id = PersonId::new();
+            let vault = Arc::new(
+                EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
+                    .await
+                    .unwrap(),
+            );
+            vault.activate_conversation_executor().await.unwrap();
+            let session = vault.create_session().await.unwrap();
+            let model = CorrectingDomainModel {
+                tool_id: tool_id.into(),
+                calls: AtomicUsize::new(0),
+            };
+            let completed = run_optional_source_turn(
+                &vault,
+                &session,
+                AgentContext {
+                    projection_version: 1,
+                    persona: None,
+                    memories: vec![],
+                    optional_context_issues: vec![],
+                    evidence: vec![],
+                },
+                &model,
+                "Acquire fresh domain evidence",
+            )
+            .await;
+            assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+            assert!(completed.delegation_executions.is_empty());
+            assert!(
+                !completed
+                    .messages
+                    .iter()
+                    .any(|entry| matches!(entry, AgentMessage::Interaction { .. }))
+            );
+            let run_id = completed
+                .messages
+                .iter()
+                .find_map(|entry| match entry {
+                    AgentMessage::Assistant { turn_id, .. } => {
+                        floe_kernel::RunId::from_uuid(*turn_id)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let repository = floe_vault::VaultConversationRepository::new(Arc::clone(&vault));
+            let journal =
+                floe_conversation::ConversationRepository::load_journal(&repository, run_id)
+                    .await
+                    .unwrap();
+            assert_eq!(journal.iter().filter(|entry| matches!(&entry.event, floe_agent_contract::JournalEvent::ToolIntent { call } if call.tool_id == tool_id)).count(), 1);
+            assert_eq!(journal.iter().filter(|entry| matches!(&entry.event, floe_agent_contract::JournalEvent::ToolResult { result } if result.issue.as_ref().is_some_and(|issue| issue.failure == AgentFailure::InvalidModelOutput) && result.coverage == floe_agent_contract::DependencyCoverage::Independent && result.artifacts.is_empty())).count(), 1);
+            assert!(vault.list_data_access_grants(128).await.unwrap().is_empty());
+        }
+    }
+
     impl floe_agent_contract::ToolPort for NoDispatch {
         fn invoke<'a>(
             &'a self,
@@ -1267,7 +1340,7 @@ mod tests {
         vault: &Arc<EncryptedAgentVault<AttentionTestKeys>>,
         session: &floe_conversation::AgentSession,
         context: AgentContext,
-        model: &OptionalSourceModel,
+        model: &dyn floe_agent_contract::ModelPort,
         text: &str,
     ) -> floe_conversation::AgentSession {
         let person_id = session.person_id;
@@ -1321,7 +1394,7 @@ mod tests {
                     mode: floe_conversation::TurnMode::New,
                     retry_of: None,
                     profile: floe_conversation::ProfileSelection::Auto,
-                    allowed_catalog: Default::default(),
+                    allowed_catalog: engine_ports::manager_catalog(vec![], 1),
                     replay: vec![],
                     deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
                     cancellation: Cancellation::default(),
@@ -1331,7 +1404,7 @@ mod tests {
                     projection: &projection,
                     coverage_resolver: projection.coverage_resolver(),
                     model,
-                    tools: &NoDispatch,
+                    tools: &engine_ports::NoManagerTools,
                     delegation: &NoDispatch,
                     validator: &engine_ports::ManagerPayloadValidator,
                 },
@@ -1757,7 +1830,7 @@ mod tests {
                 .scope()
                 .consumers()
                 .iter()
-                .any(|consumer| consumer.identifier() == floe_access::ATTENTION_ASSISTANT_CONSUMER)
+                .any(|consumer| consumer.identifier() == "floe.builtin.focus-attention")
         );
 
         let store = vault.governed_general_store(session.id);
@@ -1795,7 +1868,7 @@ mod tests {
         let outcome = reader
             .read(
                 person_id,
-                floe_access::ATTENTION_ASSISTANT_CONSUMER,
+                "floe.builtin.focus-attention",
                 &selected,
                 call_id,
                 turn_id,
@@ -1825,7 +1898,7 @@ mod tests {
             floe_conversation::AgentMessage::Capability {
                 turn_id,
                 call_id,
-                capability_id: "attention.coarse.read".into(),
+                capability_id: "test.expert-attention-evidence".into(),
                 input: "{}".into(),
                 result: Ok(capability_output),
             },
@@ -1991,38 +2064,6 @@ mod tests {
         let executor = CannedExpertExecutor::answering(vec![]);
         let scope = expert_scope();
         let policy = expert_policy();
-        // Canonical Manager tools come from Context, identically for the
-        // device and server model choices: availability never depends on
-        // model route or host consent.
-        let device_catalog = floe_context::manager_tool_descriptors();
-        let server_catalog = floe_context::manager_tool_descriptors();
-        assert_eq!(device_catalog, server_catalog);
-        assert_eq!(device_catalog.len(), 7);
-        assert_eq!(
-            device_catalog
-                .iter()
-                .map(|descriptor| descriptor.id.as_str())
-                .collect::<Vec<_>>(),
-            [
-                "people.identity.read",
-                "schedule.feasibility.read",
-                "attention.coarse.read",
-                "wellbeing.derived.read",
-                "mail.communication.read",
-                "work.context.read",
-                "life.logistics.read"
-            ]
-        );
-        for descriptor in &device_catalog {
-            descriptor.validate().unwrap();
-            assert_eq!(
-                descriptor.definition_revision,
-                floe_context::MANAGER_TOOL_DEFINITION_REVISION
-            );
-            let schema: serde_json::Value = serde_json::from_str(&descriptor.input_schema).unwrap();
-            assert_eq!(schema["additionalProperties"], false);
-            assert!(descriptor.input_schema.len() < 1024);
-        }
         let context = AgentContext {
             projection_version: 1,
             persona: None,
@@ -2131,468 +2172,6 @@ mod tests {
             })
             .await;
         assert_eq!(result, Err(AgentFailure::CapabilityDenied));
-    }
-
-    #[tokio::test]
-    async fn mail_capability_rejects_authority_escalation_before_io() {
-        let root = tempfile::tempdir().unwrap();
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let person_id = PersonId::new();
-        let vault =
-            EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
-                .await
-                .unwrap();
-        let local_context = LocalContextHost::default();
-        // No remote reader: IO is impossible, so an unknown `authority` field
-        // must fail input validation rather than reach any transport.
-        let core = FloeCore::open(":memory:").await.unwrap();
-        let tools = floe_context::ContextToolService::new(
-            person_id,
-            "test-device",
-            personal_grants::CorePersonalConnections { core: &core },
-            floe_vault::VaultGrantRecords::new(&vault),
-            personal_grants::native_driver(&local_context),
-            None::<&remote_views::RemoteViewReader<AttentionTestKeys>>,
-        )
-        .unwrap();
-        let result = tools
-            .invoke_outcome(
-                &floe_agent_contract::ToolCall {
-                    call_id: uuid::Uuid::new_v4(),
-                    invocation_key: floe_agent_contract::InvocationKey::new(),
-                    tool_id: "mail.communication.read".into(),
-                    definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
-                    input: r#"{"query":"reply","authority":"send"}"#.into(),
-                },
-                &tool_scope(),
-            )
-            .await;
-        assert_eq!(result.err(), Some(AgentFailure::InvalidInput));
-    }
-
-    #[tokio::test]
-    async fn context_tool_service_requires_reviewed_personal_grants() {
-        let root = tempfile::tempdir().unwrap();
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let person_id = PersonId::new();
-        let vault =
-            EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
-                .await
-                .unwrap();
-        let local_context = LocalContextHost::default();
-        // A fresh vault holds no reviewed grants: every personal tool fails
-        // closed without consulting any model route.
-        let core = FloeCore::open(":memory:").await.unwrap();
-        let tools = floe_context::ContextToolService::new(
-            person_id,
-            "test-device",
-            personal_grants::CorePersonalConnections { core: &core },
-            floe_vault::VaultGrantRecords::new(&vault),
-            personal_grants::native_driver(&local_context),
-            None::<&remote_views::RemoteViewReader<AttentionTestKeys>>,
-        )
-        .unwrap();
-        let scope = tool_scope();
-        for tool_id in [
-            "people.identity.read",
-            "schedule.feasibility.read",
-            "attention.coarse.read",
-            "wellbeing.derived.read",
-        ] {
-            let outcome = tools
-                .invoke_outcome(
-                    &floe_agent_contract::ToolCall {
-                        call_id: uuid::Uuid::new_v4(),
-                        invocation_key: floe_agent_contract::InvocationKey::new(),
-                        tool_id: tool_id.into(),
-                        definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
-                        input: "{}".into(),
-                    },
-                    &scope,
-                )
-                .await
-                .unwrap();
-            let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = outcome
-            else {
-                panic!("{tool_id} without grants must block, not fail");
-            };
-            assert_eq!(blockers.blockers().len(), 1, "{tool_id}");
-            assert_eq!(
-                blockers.blockers()[0].reason(),
-                if tool_id == "schedule.feasibility.read" {
-                    floe_context_contract::SourceAccessRequirementKind::EnableObserve
-                } else {
-                    floe_context_contract::SourceAccessRequirementKind::SelectResource
-                },
-                "{tool_id}"
-            );
-        }
-        for (tool_id, input) in [
-            ("mail.communication.read", r#"{"query":"x"}"#),
-            ("work.context.read", "{}"),
-            ("life.logistics.read", "{}"),
-        ] {
-            let outcome = tools
-                .invoke_outcome(
-                    &floe_agent_contract::ToolCall {
-                        call_id: uuid::Uuid::new_v4(),
-                        invocation_key: floe_agent_contract::InvocationKey::new(),
-                        tool_id: tool_id.into(),
-                        definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
-                        input: input.into(),
-                    },
-                    &scope,
-                )
-                .await
-                .unwrap();
-            let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = outcome
-            else {
-                panic!("{tool_id} without a reader must block, not fail");
-            };
-            assert_eq!(blockers.blockers().len(), 1, "{tool_id}");
-            assert_eq!(
-                blockers.blockers()[0].reason(),
-                floe_context_contract::SourceAccessRequirementKind::SelectResource,
-                "{tool_id}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn composed_blocked_tool_publishes_a_durable_interaction() {
-        let root = tempfile::tempdir().unwrap();
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let person_id = PersonId::new();
-        let vault = std::sync::Arc::new(
-            EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
-                .await
-                .unwrap(),
-        );
-        vault.activate_conversation_executor().await.unwrap();
-        let repository = std::sync::Arc::new(floe_vault::VaultConversationRepository::new(
-            std::sync::Arc::clone(&vault),
-        ));
-        let started = floe_conversation::start_session(
-            repository.as_ref(),
-            floe_conversation::SessionRequest {
-                principal: person_id.to_string(),
-            },
-        )
-        .await
-        .unwrap();
-        let run_id = floe_kernel::RunId::new();
-        let command_id = floe_agent_contract::CommandId::new();
-        repository
-            .admit_turn(floe_conversation::TurnAdmissionRequest {
-                run_id,
-                command_id,
-                session_id: started.session_id,
-                expected_session_revision: 0,
-                principal: person_id.to_string(),
-                request_digest: [7; 32],
-                mode: floe_conversation::TurnMode::New,
-                retry_of: None,
-                profile: floe_conversation::ProfileSelection::Auto,
-                user_message: floe_agent_contract::AgentMessage {
-                    message_id: command_id.as_uuid(),
-                    role: floe_agent_contract::MessageRole::User,
-                    text: "summarize my day".into(),
-                    call_id: None,
-                    coverage: floe_agent_contract::DependencyCoverage::Independent,
-                },
-            })
-            .await
-            .unwrap();
-
-        let call = floe_agent_contract::ToolCall {
-            call_id: Uuid::new_v4(),
-            invocation_key: floe_agent_contract::InvocationKey::new(),
-            tool_id: "attention.coarse.read".into(),
-            definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
-            input: "{}".into(),
-        };
-        repository
-            .journal(run_id)
-            .unwrap()
-            .record_intent(floe_agent_contract::JournalEvent::ToolIntent { call: call.clone() })
-            .await
-            .unwrap();
-
-        let local_context = LocalContextHost::default();
-        let core = FloeCore::open(":memory:").await.unwrap();
-        core.source_service()
-            .establish_reviewed_native(
-                person_id,
-                floe_context_contract::ConnectorId::try_new("attention.macos").unwrap(),
-                floe_context_contract::ConnectionId::try_new("attention.macos.local").unwrap(),
-                floe_context_contract::ExecutionOwnerId::try_new("macos:test-device").unwrap(),
-                floe_connections::ResourceMode::AllAvailable,
-                vec![
-                    floe_connections::ConnectionResource::new(
-                        floe_context_contract::ResourceHandle::try_new("attention.coarse").unwrap(),
-                        "Attention".into(),
-                    )
-                    .unwrap(),
-                ],
-                "b".repeat(64),
-            )
-            .await
-            .unwrap();
-        let tools = floe_context::ContextToolService::new(
-            person_id,
-            "test-device".to_owned(),
-            personal_grants::CorePersonalConnections { core: &core },
-            floe_vault::VaultGrantRecords::new(vault.as_ref()),
-            personal_grants::native_driver(&local_context),
-            None::<&remote_views::RemoteViewReader<'_, AttentionTestKeys>>,
-        )
-        .unwrap();
-        let calendar_subject =
-            crate::vault_host::review_snapshot::fixtures::FixtureCalendarSubject {
-                fingerprint: "a".repeat(64),
-            };
-        let personal_subject =
-            crate::vault_host::review_snapshot::fixtures::FixturePersonalInspector {
-                fingerprint: "b".repeat(64),
-            };
-        let snapshots = crate::vault_host::review_snapshot::HostReviewSnapshots {
-            core: &core,
-            vault: vault.as_ref(),
-            remote_source_client: None,
-            calendar_subject: &calendar_subject,
-            personal_subject: &personal_subject,
-            capture_deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
-        };
-        let port = PublishingToolPort::new(
-            &tools,
-            repository.as_ref(),
-            repository.as_ref(),
-            &snapshots,
-            person_id,
-            started.session_id,
-            "test-device".into(),
-        )
-        .unwrap();
-        let ledger = floe_execution::budget::BudgetLedger::new(
-            floe_execution::budget::BudgetConfig::new(100, 100),
-            Default::default(),
-        );
-        let scope = floe_execution::ExecutionScope::root(
-            Cancellation::default(),
-            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
-            ledger.work_lease(),
-            floe_agent_contract::TraceContext::new(Uuid::new_v4()).with_run_id(run_id),
-        );
-        // A fresh vault holds no grants: the real read blocks, the boundary
-        // publishes, and the settled result carries the durable ref.
-        let result = floe_agent_contract::ToolPort::invoke(&port, call.clone(), &scope)
-            .await
-            .unwrap();
-        assert_eq!(result.artifacts.len(), 1);
-        let data = match &result.artifacts[0].parts[0] {
-            floe_agent_contract::ArtifactPart::Data { data, .. } => data.clone(),
-            _ => panic!("blocked result must carry a ref part"),
-        };
-        let reference: floe_agent_contract::UserInteractionRef =
-            serde_json::from_str(&data).unwrap();
-        let stored = repository
-            .get_interaction(person_id, reference.interaction_id)
-            .await
-            .unwrap()
-            .expect("blocked call must publish a durable interaction");
-        assert_eq!(stored.state, floe_conversation::InteractionState::Pending);
-        assert_eq!(
-            stored.origin,
-            floe_conversation::InteractionOrigin::Tool {
-                call_id: call.call_id
-            }
-        );
-        assert!(matches!(
-            stored.target,
-            floe_conversation::ReviewedTarget::InlineObserve(_)
-        ));
-
-        // Replaying the blocked call replays the same durable interaction.
-        let again = floe_agent_contract::ToolPort::invoke(&port, call.clone(), &scope)
-            .await
-            .unwrap();
-        let again_data = match &again.artifacts[0].parts[0] {
-            floe_agent_contract::ArtifactPart::Data { data, .. } => data.clone(),
-            _ => panic!("blocked result must carry a ref part"),
-        };
-        let again_ref: floe_agent_contract::UserInteractionRef =
-            serde_json::from_str(&again_data).unwrap();
-        assert_eq!(again_ref.interaction_id, reference.interaction_id);
-
-        // Finishing the run projects the durable ref as an Interaction
-        // message in a usable completed turn.
-        let finished = repository
-            .finish_run(
-                run_id,
-                1,
-                floe_conversation::RunTerminal {
-                    state: floe_conversation::RunState::Completed,
-                    output: Some("Attention access needs your review.".into()),
-                    steps: vec![
-                        floe_agent_contract::EngineStep::Tool(result),
-                        floe_agent_contract::EngineStep::Answer {
-                            text: "Attention access needs your review.".into(),
-                            artifacts: vec![],
-                        },
-                    ],
-                    coverage: floe_agent_contract::DependencyCoverage::Independent,
-                    issue: None,
-                    interactions: vec![],
-                },
-            )
-            .await
-            .unwrap();
-        assert_eq!(finished.state, floe_conversation::RunState::Completed);
-        let session = vault.load(person_id, started.session_id).await.unwrap();
-        assert!(
-            session.messages.iter().any(|message| matches!(
-                message,
-                AgentMessage::Interaction {
-                    interaction_id,
-                    ..
-                } if *interaction_id == reference.interaction_id
-            )),
-            "completed turn must carry the Interaction message"
-        );
-    }
-
-    struct StaticSourceReader {
-        payload: serde_json::Value,
-    }
-
-    impl floe_context::SourceReader for StaticSourceReader {
-        fn read<'a>(
-            &'a self,
-            request: &'a floe_context::SourceReadRequest,
-        ) -> Pin<
-            Box<
-                dyn Future<
-                        Output = Result<
-                            floe_context_contract::SourceReadOutcome<floe_context::SourceRead>,
-                            AgentFailure,
-                        >,
-                    > + Send
-                    + 'a,
-            >,
-        > {
-            Box::pin(async move {
-                let person_id = request.person_id();
-                let source = floe_context_contract::GrantSourceBinding::try_new(
-                    person_id,
-                    floe_context_contract::ConnectionId::try_new("connection").unwrap(),
-                    floe_context_contract::ConnectorId::try_new("connector").unwrap(),
-                    floe_context_contract::ExecutionOwnerId::try_new("owner").unwrap(),
-                )
-                .unwrap();
-                let now = chrono::Utc::now();
-                let consumer = request.consumer().clone();
-                let processing = floe_context_contract::ProcessingRestriction::ApprovedRecipient {
-                    recipient: "gateway-local".into(),
-                    categories: vec![floe_context_contract::GrantDataCategory::Metadata],
-                };
-                let dependency = floe_context_contract::ContextDependency::try_new(
-                    person_id,
-                    floe_context_contract::GrantId::new(),
-                    floe_context_contract::GrantAuthority::new(),
-                    source,
-                    vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
-                    floe_context_contract::SourceAuthority::new(),
-                    vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
-                    vec![floe_context_contract::GrantDataCategory::Metadata],
-                    floe_context_contract::GrantOperation::Read,
-                    request.purpose(),
-                    consumer.clone(),
-                    processing.clone(),
-                    uuid::Uuid::new_v4(),
-                    request.query_fingerprint().to_vec(),
-                    uuid::Uuid::new_v4(),
-                    request.process_incarnation_id(),
-                    now - chrono::Duration::minutes(1),
-                    now + chrono::Duration::minutes(5),
-                )
-                .unwrap();
-                let scope = floe_access::GrantScope::try_new(
-                    vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
-                    vec![floe_context_contract::GrantDataCategory::Metadata],
-                    vec![floe_context_contract::GrantOperation::Read],
-                    vec![request.purpose()],
-                    vec![consumer],
-                    processing,
-                )
-                .unwrap();
-                Ok(floe_context_contract::SourceReadOutcome::Ready(
-                    floe_context::SourceRead::new(
-                        request.source().clone(),
-                        self.payload.clone(),
-                        dependency,
-                        scope,
-                    ),
-                ))
-            })
-        }
-    }
-
-    #[tokio::test]
-    async fn context_tool_service_admits_remote_observations_with_direct_coverage() {
-        let root = tempfile::tempdir().unwrap();
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let person_id = PersonId::new();
-        let vault =
-            EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
-                .await
-                .unwrap();
-        let local_context = LocalContextHost::default();
-        let remote = StaticSourceReader {
-            payload: serde_json::json!({"hits": ["m1"]}),
-        };
-        let core = FloeCore::open(":memory:").await.unwrap();
-        let tools = floe_context::ContextToolService::new(
-            person_id,
-            "test-device",
-            personal_grants::CorePersonalConnections { core: &core },
-            floe_vault::VaultGrantRecords::new(&vault),
-            personal_grants::native_driver(&local_context),
-            Some(remote),
-        )
-        .unwrap();
-        let scope = tool_scope();
-        for (tool_id, input) in [
-            ("mail.communication.read", r#"{"query":"invoice"}"#),
-            ("work.context.read", "{}"),
-            ("life.logistics.read", "{}"),
-        ] {
-            let call = floe_agent_contract::ToolCall {
-                call_id: uuid::Uuid::new_v4(),
-                invocation_key: floe_agent_contract::InvocationKey::new(),
-                tool_id: tool_id.into(),
-                definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
-                input: input.into(),
-            };
-            let outcome = tools.invoke_outcome(&call, &scope).await.unwrap();
-            let floe_context_contract::SourceReadOutcome::Ready(result) = outcome else {
-                panic!("{tool_id} must stay ready");
-            };
-            assert_eq!(result.call_id, call.call_id);
-            assert!(result.text.contains("m1"), "{tool_id}: {}", result.text);
-            assert!(result.artifacts.is_empty());
-            // Direct coverage from the service: no recorder side channel.
-            match &result.coverage {
-                floe_agent_contract::DependencyCoverage::Dependent { dependencies } => {
-                    assert_eq!(dependencies.len(), 1);
-                    assert_eq!(dependencies[0].person_id(), person_id);
-                    assert!(matches!(
-                        dependencies[0].processing(),
-                        floe_context_contract::ProcessingRestriction::ApprovedRecipient { .. }
-                    ));
-                }
-                coverage => panic!("{tool_id} must return dependent coverage: {coverage:?}"),
-            }
-        }
     }
 
     #[tokio::test]
@@ -2714,7 +2293,7 @@ mod tests {
                 },
                 catalog: floe_agent_contract::AllowedCatalog {
                     cards: vec![],
-                    tools: floe_context::manager_tool_descriptors(),
+                    tools: vec![],
                     revision: 1,
                 },
                 max_output_bytes: 4096,
@@ -2739,7 +2318,7 @@ mod tests {
                 .scoped_instructions
                 .available_capabilities
                 .len(),
-            7
+            0
         );
     }
 
@@ -3507,42 +3086,68 @@ mod tests {
                 .await;
         }
 
-        /// The canonical attention read through vault grants and the device
-        /// driver: the dependency it returns is currently authorized.
+        /// Selected Expert evidence used in role-neutral projection fixtures.
         async fn attention_exchange(
             &self,
         ) -> (
             floe_agent_contract::ToolCall,
             floe_agent_contract::ToolResult,
         ) {
-            let tools = floe_context::ContextToolService::new(
-                self.person_id,
-                "test-device",
-                personal_grants::CorePersonalConnections { core: &self.core },
-                floe_vault::VaultGrantRecords::new(&self.vault),
-                personal_grants::native_driver(&self.local_context),
-                None::<&remote_views::RemoteViewReader<AttentionTestKeys>>,
-            )
-            .unwrap();
+            let source = self
+                .core
+                .source_service()
+                .load(
+                    self.person_id,
+                    &floe_context_contract::ConnectionId::try_new("attention.macos.local").unwrap(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let selected =
+                floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+                    person_id: self.person_id,
+                    device_id: "test-device",
+                    capability: "attention.coarse",
+                    contract_version: 1,
+                    remote_connections: &[],
+                    remote_execution_owner: None,
+                    source_connections: std::slice::from_ref(&source),
+                })
+                .unwrap()
+                .remove(0)
+                .reference;
             let call = floe_agent_contract::ToolCall {
                 call_id: Uuid::new_v4(),
                 invocation_key: floe_agent_contract::InvocationKey::new(),
-                tool_id: "attention.coarse.read".into(),
-                definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
+                tool_id: "test.covered-evidence".into(),
+                definition_revision: 1,
                 input: "{}".into(),
             };
-            let outcome = tools.invoke_outcome(&call, &tool_scope()).await.unwrap();
-            let floe_context_contract::SourceReadOutcome::Ready(result) = outcome else {
-                panic!("attention read must stay ready");
+            let outcome = floe_context::admit_selected_attention_outcome(
+                &personal_grants::CorePersonalConnections { core: &self.core },
+                &floe_vault::VaultGrantRecords::new(&self.vault),
+                &personal_grants::native_driver(&self.local_context),
+                self.person_id,
+                "test-device",
+                &selected,
+                floe_access::attention_consumer("floe.builtin.focus-attention").unwrap(),
+                call.call_id,
+                tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+                &Cancellation::default(),
+            )
+            .await
+            .unwrap();
+            let floe_context_contract::SourceReadOutcome::Ready((view, dependency)) = outcome
+            else {
+                panic!("selected Expert attention read must stay ready");
             };
-            assert!(
-                matches!(
-                    result.coverage,
-                    floe_agent_contract::DependencyCoverage::Dependent { .. }
-                ),
-                "attention read must carry direct coverage: {:?}",
-                result.coverage
-            );
+            let result = floe_agent_contract::ToolResult {
+                call_id: call.call_id,
+                text: serde_json::to_string(&view).unwrap(),
+                artifacts: vec![],
+                coverage: floe_agent_contract::DependencyCoverage::dependent(dependency).unwrap(),
+                issue: None,
+            };
             (call, result)
         }
 
@@ -3616,7 +3221,7 @@ mod tests {
                 },
                 catalog: floe_agent_contract::AllowedCatalog {
                     cards: vec![],
-                    tools: floe_context::manager_tool_descriptors(),
+                    tools: vec![],
                     revision: 1,
                 },
                 max_output_bytes: 4096,

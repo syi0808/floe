@@ -59,6 +59,12 @@ the client/producer relationship but creates no connector data permission. Nativ
 and hosted sources preserve exact evidence, release fences and provider-drift denial.
 No global Vault transaction spans provider or model I/O.
 
+## Amendment — 2026-09-30: shipped Expert-only standing readers
+
+Decision 10's explicit Manager direct-read exception is superseded by the source-backed domain acquisition amendment to [ADR 0018](0018-manager-expert-a2a-delegation.md). First-party standing Observe consumers derive exclusively from trusted shipped Expert capability declarations, with no additional `assistant` reader. Registry installation, assignment and binding cannot widen this policy or its digest. Removing that reader intentionally changes affected policy digests; stale reviews fail before mutation and explicit fresh review uses normal grant CAS, without startup migration or history relabeling.
+
+All other Connection-owned source, logical Observe, source/grant epoch and contextual authority decisions remain unchanged. In particular, Feasibility management/query authority and native substrate remain separate, not a standing consumer or callable Manager source path.
+
 ## Amendments
 
 ### ADR 0027 — authority namespaces

@@ -27,6 +27,14 @@ DELETED_READS = re.compile(
     r"read_logistics_view|read_people_view|read_attention_view|"
     r"read_wellbeing_view|read_personal_view)\s*\("
 )
+REMOVED_MANAGER_TOOLS = re.compile(
+    r"\b(?:ContextToolService|manager_tool_descriptors|MANAGER_TOOL_DEFINITION_REVISION|"
+    r"PublishingToolPort|ToolOutcomePort|blocked_tool_result|PEOPLE_IDENTITY_READ|"
+    r"SCHEDULE_FEASIBILITY_READ|ATTENTION_COARSE_READ|WELLBEING_DERIVED_READ|"
+    r"MAIL_COMMUNICATION_READ|WORK_CONTEXT_READ|LIFE_LOGISTICS_READ)\b|"
+    r"[\"\'](?:people\.identity|schedule\.feasibility|attention\.coarse|wellbeing\.derived|"
+    r"mail\.communication|work\.context|life\.logistics)\.read[\"\']"
+)
 REMOVED_RESULT = re.compile(
     r"\b(?:ExpertBudget|MAX_EXPERT_VIEW_BYTES|ExpertInput|ExpertInsight|"
     r"ExpertFocusProposal|StatefulFocusProposal|FindFocusWindow|"
@@ -132,6 +140,8 @@ def check_tree(root: Path) -> list[Violation]:
                 violations.append(Violation("common-depends-on-builtin", relative, number))
             if is_rust and re.search(r"\bPackageKind::Tool\b", line):
                 violations.append(Violation("tool-shaped-registry", relative, number))
+            if is_rust and REMOVED_MANAGER_TOOLS.search(line):
+                violations.append(Violation("manager-domain-tools", relative, number))
             if REMOVED_RESULT.search(line):
                 violations.append(Violation("removed-shared-result", relative, number))
             if REMOVED_WIRE.search(line):

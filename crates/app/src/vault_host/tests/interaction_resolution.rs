@@ -2642,70 +2642,6 @@ impl floe_context::RemoteViewTransport for ScriptedRemoteTransport {
     }
 }
 
-struct ProductMailReader<'a> {
-    vault: &'a EncryptedAgentVault<Keys>,
-    transport: &'a ScriptedRemoteTransport,
-    person_id: PersonId,
-}
-
-impl floe_context::SourceReader for ProductMailReader<'_> {
-    fn read<'a>(
-        &'a self,
-        request: &'a floe_context::SourceReadRequest,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<
-                        floe_context_contract::SourceReadOutcome<floe_context::SourceRead>,
-                        AgentFailure,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move {
-            let person_text = self.person_id.to_string();
-            match floe_context::read_remote_view(
-                self.vault,
-                self.transport,
-                self.person_id,
-                floe_access::RemotePairingIdentity {
-                    person_id: &person_text,
-                    client_id: REMOTE_CLIENT_ID,
-                    device_id: DEVICE,
-                },
-                request.source().as_str(),
-                request.consumer().identifier(),
-                request.query().clone(),
-                &floe_access::RemoteCallWindow {
-                    deadline: request.deadline(),
-                    cancellation: request.cancellation().clone(),
-                },
-                request.process_incarnation_id(),
-                request.query_fingerprint(),
-            )
-            .await?
-            {
-                floe_context_contract::SourceReadOutcome::Ready((payload, bindings)) => {
-                    Ok(floe_context_contract::SourceReadOutcome::Ready(
-                        floe_context::SourceRead::with_bindings(
-                            request.source().clone(),
-                            payload,
-                            bindings,
-                        ),
-                    ))
-                }
-                floe_context_contract::SourceReadOutcome::Unavailable(reason) => Ok(
-                    floe_context_contract::SourceReadOutcome::Unavailable(reason),
-                ),
-                floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => Ok(
-                    floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers),
-                ),
-            }
-        })
-    }
-}
-
 struct RemoteFixture {
     base: Fixture,
     core: crate::FloeCore,
@@ -3018,7 +2954,16 @@ async fn gmail_views_allow_enables_bundle_atomically_and_resolves() {
 async fn gmail_reviewed_absence_policy_digest_drift_supersedes() {
     let host = RemoteFixture::open().await;
     let mut target = host.gmail_target().await;
-    target.members[0].policy_digest = "b".repeat(64);
+    let mut old_policy = crate::first_party_observe::remote_policies("gmail")
+        .unwrap()
+        .into_iter()
+        .find(|policy| policy.view_id == target.members[0].member_id)
+        .unwrap();
+    old_policy
+        .consumers
+        .push(floe_access::GrantConsumer::builtin("assistant").unwrap());
+    target.members[0].policy_digest =
+        crate::first_party_observe::policy_digest(&old_policy).unwrap();
     let current = host
         .base
         .seed_inline(target, "floe.source.gmail", host.connection_id.as_str())
@@ -3089,7 +3034,16 @@ async fn gmail_connection_review_rejects_changed_policy_before_enable() {
     let mut review = super::super::remote_observe::review_bundle(&ctx, &host.transport)
         .await
         .unwrap();
-    review.members[0].policy_digest = "b".repeat(64);
+    let mut old_policy = crate::first_party_observe::remote_policies("gmail")
+        .unwrap()
+        .into_iter()
+        .find(|policy| policy.view_id == review.members[0].view_id)
+        .unwrap();
+    old_policy
+        .consumers
+        .push(floe_access::GrantConsumer::builtin("assistant").unwrap());
+    review.members[0].policy_digest =
+        crate::first_party_observe::policy_digest(&old_policy).unwrap();
     assert!(matches!(
         super::super::remote_observe::enable_bundle(&ctx, &host.transport, &review).await,
         Err(AgentFailure::AccessReviewRequired)
@@ -3105,7 +3059,7 @@ async fn gmail_connection_review_rejects_changed_policy_before_enable() {
 }
 
 #[tokio::test]
-async fn manager_mail_read_requires_assistant_in_reviewed_product_policy() {
+async fn mail_review_authorizes_only_trusted_shipped_experts() {
     let host = RemoteFixture::open().await;
     let person_text = host.base.person.to_string();
     let window = floe_access::RemoteCallWindow {
@@ -3134,27 +3088,39 @@ async fn manager_mail_read_requires_assistant_in_reviewed_product_policy() {
     let grants = host.base.vault.list_data_access_grants(128).await.unwrap();
     assert_eq!(grants.len(), 1);
     assert!(
-        grants[0]
+        !grants[0]
             .scope()
             .consumers()
             .iter()
             .any(|consumer| consumer.identifier() == "assistant")
     );
-    let direct = floe_context::read_remote_view(
+    let expert_read = floe_context::read_remote_view(
         host.base.vault.as_ref(),
         &host.transport,
         host.base.person,
         floe_access::RemotePairingIdentity { person_id: &person_text, client_id: REMOTE_CLIENT_ID, device_id: DEVICE },
         floe_context::MAIL_VIEW,
-        "assistant",
+        "floe.builtin.communication",
         serde_json::json!({"schema_version": floe_agent_contract::AGENT_VERSION, "query": "", "cursor": 0, "limit": 25}),
         &window,
         Uuid::new_v4(),
         &[7; 32],
     ).await.unwrap();
-    assert!(
-        matches!(direct, floe_context_contract::SourceReadOutcome::Ready(_)),
-        "{direct:?}"
+    let floe_context_contract::SourceReadOutcome::Ready((_, bindings)) = expert_read else {
+        panic!("trusted Mail Expert must read admitted evidence");
+    };
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(
+        bindings[0].dependency.consumer().identifier(),
+        "floe.builtin.communication"
+    );
+    assert_eq!(
+        bindings[0].dependency.operation(),
+        floe_context_contract::GrantOperation::Read
+    );
+    assert_eq!(
+        bindings[0].dependency.resources(),
+        grants[0].scope().resources()
     );
     let extension = floe_context::read_remote_view(
         host.base.vault.as_ref(),
@@ -3173,68 +3139,11 @@ async fn manager_mail_read_requires_assistant_in_reviewed_product_policy() {
             extension,
             floe_context_contract::SourceReadOutcome::NeedsUserAction(_)
         ),
-        "Manager assistant grant must not authorize the extension: {extension:?}"
-    );
-    let local_context = crate::local_context::LocalContextHost::default();
-    let core = crate::FloeCore::open(":memory:").await.unwrap();
-    let tools = floe_context::ContextToolService::new(
-        host.base.person,
-        DEVICE,
-        crate::vault_host::personal_grants::CorePersonalConnections { core: &core },
-        floe_vault::VaultGrantRecords::new(&host.base.vault),
-        crate::vault_host::personal_grants::native_driver(&local_context),
-        Some(ProductMailReader {
-            vault: &host.base.vault,
-            transport: &host.transport,
-            person_id: host.base.person,
-        }),
-    )
-    .unwrap();
-    let ledger = floe_execution::budget::BudgetLedger::new(
-        floe_execution::budget::BudgetConfig::new(100, 100),
-        Default::default(),
-    );
-    let scope = floe_execution::ExecutionScope::root(
-        floe_execution::Cancellation::default(),
-        tokio::time::Instant::now() + std::time::Duration::from_secs(30),
-        ledger.work_lease(),
-        floe_agent_contract::TraceContext::new(Uuid::new_v4()),
-    );
-    let outcome = tools
-        .invoke_outcome(
-            &floe_agent_contract::ToolCall {
-                call_id: Uuid::new_v4(),
-                invocation_key: floe_agent_contract::InvocationKey::new(),
-                tool_id: floe_context::MAIL_COMMUNICATION_READ.into(),
-                definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
-                input: r#"{"query":""}"#.into(),
-            },
-            &scope,
-        )
-        .await
-        .unwrap();
-    let floe_context_contract::SourceReadOutcome::Ready(result) = outcome else {
-        panic!("manager mail read must be Ready");
-    };
-    let floe_agent_contract::DependencyCoverage::Dependent { dependencies } = result.coverage
-    else {
-        panic!("mail read must retain coverage");
-    };
-    assert_eq!(dependencies.len(), 1);
-    assert_eq!(dependencies[0].consumer().identifier(), "assistant");
-    assert_eq!(
-        dependencies[0].operation(),
-        floe_context_contract::GrantOperation::Read
+        "Shipped Expert grant must not authorize the extension: {extension:?}"
     );
     assert_eq!(
-        dependencies[0].resources()[0].as_str(),
-        floe_context_contract::connection_view_resource(
-            floe_context::MAIL_VIEW,
-            &floe_context_contract::ConnectionId::try_new(&host.connection_id).unwrap(),
-        )
-        .unwrap()
-        .as_str()
-        .to_owned()
+        grants[0].scope().consumers(),
+        crate::first_party_observe::trusted_shipped_consumers("mail.communication").unwrap()
     );
 }
 

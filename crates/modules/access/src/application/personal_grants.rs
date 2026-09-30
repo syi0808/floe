@@ -20,8 +20,6 @@ use crate::ports::personal_grants::{
     PersonalGrantStore, PersonalSubjectInspector, PersonalSubjectProbe,
 };
 
-pub const ATTENTION_ASSISTANT_CONSUMER: &str = "assistant";
-
 /// What the Person asks to change about one contextual Feasibility query.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FeasibilityAccessChange {

@@ -28,8 +28,8 @@ pub use native_calendar::{
     reviewed_native_subject,
 };
 pub use personal_grants::{
-    ATTENTION_ASSISTANT_CONSUMER, FeasibilityAccessChange, FeasibilityAccessConfiguration,
-    FeasibilityAccessOverview, FeasibilityAccessState, attention_consumer,
+    FeasibilityAccessChange, FeasibilityAccessConfiguration, FeasibilityAccessOverview,
+    FeasibilityAccessState, attention_consumer,
 };
 pub use personal_read::{
     FeasibilityGrantQuery, PersonalReadRequirement, active_read_grant, grant_unchanged,

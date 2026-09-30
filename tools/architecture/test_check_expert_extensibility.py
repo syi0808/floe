@@ -24,6 +24,10 @@ class SourceSemanticTests(unittest.TestCase):
 
     def test_each_forbidden_semantic_has_a_negative_fixture(self):
         examples = [
+            ("manager-domain-tools", "crates/modules/context/src/lib.rs", "struct ContextToolService;\n"),
+            ("manager-domain-tools", "crates/app/src/vault_host/conversation_turn.rs", "tools: manager_tool_descriptors(),\n"),
+            ("manager-domain-tools", "crates/app/src/vault_host/conversation_turn.rs", 'tool_id: "mail.communication.read",\n'),
+            ("manager-domain-tools", "crates/app/src/vault_host/publication.rs", "struct PublishingToolPort;\n"),
             (
                 "deleted-source-read",
                 "crates/adapters/providers/src/sources/server.rs",

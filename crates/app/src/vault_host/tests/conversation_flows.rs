@@ -2974,99 +2974,91 @@ fn common_schedule_review_requirement_completes_root_run() {
 }
 
 #[test]
-fn direct_attention_tool_blocked_completes_turn_with_one_durable_ref() {
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path().join("vaults");
-    let keys = Keys::default();
-    let person = PersonId::new();
-    // The Manager calls the direct tool first, then explains the blocked
-    // state it observed: two model iterations, one durable interaction.
-    let (mock, server) = answer_server(vec![
-        WireStep::Call {
-            capability_id: "attention.coarse.read".into(),
+fn manager_rejects_all_domain_tools_without_source_dispatch() {
+    for tool_id in [
+        "people.identity.read",
+        "schedule.feasibility.read",
+        "attention.coarse.read",
+        "wellbeing.derived.read",
+        "mail.communication.read",
+        "work.context.read",
+        "life.logistics.read",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("vaults");
+        let keys = Keys::default();
+        let person = PersonId::new();
+        let (mock, server) = answer_server(vec![WireStep::Call {
+            capability_id: tool_id.into(),
             input: "{}".into(),
-        },
-        WireStep::Answer {
-            text: "Attention access needs your review before I can read it.".into(),
-        },
-    ]);
-    let worker = Worker::new_with_connection_store(
-        root.clone(),
-        keys.clone(),
-        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
-            saved_server_connection(&mock, person, "mac-local"),
-        )),
-    )
-    .unwrap();
-    assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
-    let session = perform(
-        &worker,
-        person,
-        WorkerAction::ConversationSession {
-            operation: ConversationSessionOperation::Start,
-        },
-    )
-    .session
-    .unwrap();
-    let result = perform(
-        &worker,
-        person,
-        WorkerAction::ConversationTurn {
-            request: Box::new(ConversationTurnRequest::new(
-                session.id,
-                session.revision,
-                "Am I focused right now?".into(),
-                "mac-local".into(),
-                ProfileSelection::Explicit("server-model".into()),
-                false,
-                None,
+        }]);
+        let worker = Worker::new_with_connection_store(
+            root.clone(),
+            keys.clone(),
+            floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
+                saved_server_connection(&mock, person, "mac-local"),
             )),
-        },
-    );
-    assert_eq!(result.failure, None, "result: {result:?}");
-    let session = result.session.unwrap();
-    assert_eq!(
-        session.last_outcome,
-        Some(floe_conversation::AgentOutcome::Completed),
-        "session: {session:?}"
-    );
-    let interactions: Vec<_> = session
-        .messages
-        .iter()
-        .filter_map(|message| match message {
-            AgentMessage::Interaction { interaction_id, .. } => Some(*interaction_id),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(interactions.len(), 1, "session: {session:?}");
-    assert_eq!(server.join().unwrap().len(), 2);
-    // The single ref resolves to a durable pending Tool-origin interaction.
-    assert_eq!(perform(&worker, person, WorkerAction::Lock).failure, None);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
+        )
         .unwrap();
-    let reopened = runtime
-        .block_on(EncryptedAgentVault::open(&root, person, keys))
-        .unwrap();
-    let repository = floe_vault::VaultConversationRepository::new(std::sync::Arc::new(reopened));
-    let stored = runtime
-        .block_on(floe_conversation::InteractionRepository::get_interaction(
-            &repository,
+        assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
+        let session = perform(
+            &worker,
             person,
-            interactions[0],
-        ))
-        .unwrap()
-        .expect("blocked tool must publish a durable interaction");
-    assert_eq!(stored.state, floe_conversation::InteractionState::Pending);
-    assert!(
-        matches!(
-            stored.origin,
-            floe_conversation::InteractionOrigin::Tool { .. }
-        ),
-        "direct blocker publishes under the Tool origin: {:?}",
-        stored.origin
-    );
+            WorkerAction::ConversationSession {
+                operation: ConversationSessionOperation::Start,
+            },
+        )
+        .session
+        .unwrap();
+        let result = perform(
+            &worker,
+            person,
+            WorkerAction::ConversationTurn {
+                request: Box::new(ConversationTurnRequest::new(
+                    session.id,
+                    session.revision,
+                    "Am I focused right now?".into(),
+                    "mac-local".into(),
+                    ProfileSelection::Explicit("server-model".into()),
+                    false,
+                    None,
+                )),
+            },
+        );
+        assert_eq!(result.failure, None, "result: {result:?}");
+        let session = result.session.unwrap();
+        assert_eq!(
+            session.last_outcome,
+            Some(floe_conversation::AgentOutcome::Halted {
+                reason: AgentFailure::CapabilityDenied
+            }),
+            "session: {session:?}"
+        );
+        let interactions: Vec<_> = session
+            .messages
+            .iter()
+            .filter_map(|message| match message {
+                AgentMessage::Interaction { interaction_id, .. } => Some(*interaction_id),
+                _ => None,
+            })
+            .collect();
+        assert!(interactions.is_empty(), "session: {session:?}");
+        assert_eq!(server.join().unwrap().len(), 1);
+        assert_eq!(perform(&worker, person, WorkerAction::Lock).failure, None);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let reopened = runtime
+            .block_on(EncryptedAgentVault::open(&root, person, keys))
+            .unwrap();
+        assert!(
+            runtime
+                .block_on(reopened.list_data_access_grants(128))
+                .unwrap()
+                .is_empty()
+        );
+    }
 }
 
 fn direct_invocation(
