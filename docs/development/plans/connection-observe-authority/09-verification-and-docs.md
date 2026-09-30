@@ -951,3 +951,442 @@ under `/tmp/floe09/`. They are diagnostics, not a second repository progress doc
 - Parent README records **09 Incomplete**, not Complete; 00–08 remain Complete.
 - Plan bundle and `docs/README.md` active-plan pointer are retained.
 - Plan retirement was **not performed**. No work beyond Checkpoint 09 was started.
+
+
+## 17. Residual closure plan — 2026-09-30
+
+This section is the authoritative continuation after the failed full Flutter gate recorded
+in section 16. It supersedes the earlier Flutter/golden completion wording only where
+stated below. All already-passing architecture/Rust/Go/FFI evidence remains valid but
+must be re-run at the final same-source closure snapshot as specified in §17.8.
+
+### 17.1 Operator decision: golden tests do not gate Checkpoint 09
+
+The Registry golden mismatch is explicitly out of scope for this residual closure.
+
+Do not:
+- update `apps/client/goldens/agent_registry.png`;
+- change `AgentRegistrySettings` UI merely to satisfy the image;
+- change golden tolerances;
+- treat a golden mismatch as a Checkpoint 09 blocker.
+
+The existing behavioral assertions in
+`apps/client/test/features/experts/agent_registry_dialog_test.dart` remain valuable.
+Only image-comparison assertions are excluded from acceptance. If an unfiltered
+`flutter test` reports golden failures, classify them separately and require **zero
+non-golden failures**.
+
+For the current width-520 test, the image assertion is at
+`apps/client/test/features/experts/agent_registry_dialog_test.dart:76-81`.
+Do not touch it unless moving/tagging the assertion is strictly necessary to run a
+clean non-golden test command; if touched, preserve the behavioral assertions and do
+not update the image.
+
+### 17.2 Residual blocker and no-bypass rule
+
+The four non-golden failures are test-environment mismatches, not permission-policy
+failures.
+
+Current path:
+- `apps/client/test/support/app_host.dart:8-53` loads the same-source FFI dylib and
+  injects `CalendarAdapter` only into `NativeDayGateway`;
+- `apps/client/test/features/day/calendar_gateway_test.dart:13-73` supplies a Dart
+  `FixtureCalendarAdapter` and calls the real Connections source gateway;
+- source establishment/reconciliation reaches
+  `crates/app/src/connection_services.rs:404-447 probe_calendar_source`;
+- on macOS, `crates/app/src/vault_host/calendar_access.rs:176-224
+  DeviceCalendarSubject::subject` deliberately uses
+  `NativeCalendarReadAccess`, not the Flutter Day adapter;
+- `crates/adapters/providers/src/sources/native_calendar.rs:586-623` resolves the
+  EventKit call through `GatedStringCall`;
+- the expected native library is
+  `Frameworks/libfloe_eventkit.dylib` at
+  `native_calendar.rs:608+`, relative to the running executable's bundle.
+
+A normal `flutter test` process is not the product app bundle and therefore does not
+carry that native library. The resulting `native Calendar unavailable` is correct
+production behavior for that process.
+
+Do **not** fix the tests by:
+- skipping `probe_calendar_source`;
+- establishing a Ready source without reviewed native subject evidence;
+- adding a production “test/fixture” Calendar connector;
+- falling back from the macOS native provider to another internal runtime path;
+- adding a legacy source constructor;
+- writing beside or modifying the Flutter SDK's own `flutter_tester`;
+- adding a release/runtime environment override that lets arbitrary paths replace the
+  bundled EventKit dylib.
+
+The test environment must satisfy the existing native boundary instead.
+
+### 17.3 09-R1 — Re-home bundle-dependent Calendar tests to a bundle fixture
+
+Use the same controlled-bundle pattern already established by:
+- `crates/adapters/providers/tests/native_calendar.rs:71-111
+  run_read_fixture_child`;
+- `apps/client/integration/product_conversation_test.dart:22-91`.
+
+Reuse the existing deterministic provider fixture:
+`crates/adapters/providers/tests/fixtures/NativeCalendarFixture.swift`.
+
+It implements `view_access` for arbitrary canonical `calendar_ids`, returns stable
+subject fingerprint/generation by default, and does not access a personal Calendar.
+
+#### Add parent integration test
+
+Create:
+
+`apps/client/integration/native_calendar_fixture_test.dart`
+
+The parent test must:
+
+1. require macOS and the same-source `target/debug/libfloe_ffi.dylib`;
+2. create a private temporary `.app` bundle;
+3. copy `Platform.resolvedExecutable` to
+   `Contents/MacOS/flutter_tester`;
+4. build Flutter assets for the child target in §17.4 with `flutter build bundle`;
+5. compile
+   `../../crates/adapters/providers/tests/fixtures/NativeCalendarFixture.swift`
+   as `Contents/Frameworks/libfloe_eventkit.dylib` using
+   `xcrun swiftc -emit-library -warnings-as-errors`;
+6. give the dylib the normal `@rpath/libfloe_eventkit.dylib` install name;
+7. ad-hoc sign the dylib and temporary bundle;
+8. launch the copied `flutter_tester` exactly from that bundle so Rust
+   `current_exe()` resolves the fixture through the production
+   `NativeLibrary { relative_path: "Frameworks/libfloe_eventkit.dylib" }`;
+9. pass only the same-source FFI path and private validation paths through environment;
+10. assert a zero child exit and all scenario sentinels;
+11. delete only the temporary validation bundle/profile.
+
+Add a validation-specific plist if needed rather than reusing a misleading product
+identifier, for example:
+
+`tools/validation/native-calendar-fixture-Info.plist`
+
+Follow the existing product-conversation bundle launch arguments and codesign pattern.
+Do not introduce a general native-loader override.
+
+#### Suggested commit
+
+~~~text
+test: run calendar ffi scenarios in native fixture bundle
+~~~
+
+### 17.4 09-R2 — Child validation host and exact scenario migration
+
+Create:
+
+`apps/client/integration/support/native_calendar_fixture_host.dart`
+
+The child host should use production:
+- `AppRuntime`;
+- `AppWireCalendarSourceGateway`;
+- `NativeDayGateway`;
+- `CalendarActionFacade`;
+
+and a Dart-only fixture adapter for Calendar inventory/event contents.
+
+Do not import `flutter_test` or depend on `test/support/app_host.dart` from the child.
+Use an explicit `require(bool, label)` helper and exit non-zero on failure, following
+`integration/support/product_conversation_host.dart`.
+
+Re-home the exact four bundle-dependent scenarios.
+
+#### A. Day mirror/source continuity
+
+Move the semantics of
+`apps/client/test/features/day/calendar_gateway_test.dart:83-143`:
+
+- establish reviewed EventKit source through the real AppWire source gateway;
+- fixture `view_access` supplies the native subject;
+- sync Day through the Dart Calendar fixture;
+- assert mirror revision changes on sync;
+- assert Connections source revision and `SourceAuthority` do not change merely
+  because the Day mirror changes;
+- close/reopen private profile and verify the source/mirror state remains coherent.
+
+#### B. AllAvailable inventory reconciliation
+
+Move
+`calendar_gateway_test.dart:145-197`:
+
+- establish `all_available` source with one Calendar;
+- sync once;
+- grow fixture inventory to two Calendars;
+- let production `reconcileNativeInventory` perform reviewed source
+  reconfiguration against the native fixture subject;
+- assert source revision increments and `SourceAuthority` advances;
+- inject a Dart read permission failure for one Calendar;
+- assert mirror/source status records the read failure without a second source
+  authority change.
+
+#### C. Wide source / bounded observation publication
+
+Move
+`calendar_gateway_test.dart:200-234`:
+
+- configure more than `CalendarObservationPublisher.maxCalendarCount` source
+  resources;
+- reviewed native subject establishment must still succeed for the full set;
+- Day import must retain all fixture events;
+- bounded observation publication must not turn the successful Day import into a
+  source/permission failure.
+
+Do not reintroduce a fixed source-resource count to make this pass.
+
+#### D. Action proposal source/evidence fence
+
+Move
+`apps/client/test/features/actions/calendar_action_gateway_test.dart:96-149`.
+
+Rename the scenario to current semantics. “Pending native source” is no longer a
+public product lifecycle: reviewed-native creation starts Ready.
+
+Use wording such as:
+
+`reviewed native source without current evidence cannot authorize an action proposal`
+
+Required assertions:
+- source establishment succeeds through reviewed native subject fixture;
+- no authorized current Calendar evidence/proposal exists;
+- proposal attempt fails closed with the current typed conflict/fence;
+- no Action row/event is created;
+- no Calendar write is performed.
+
+This test is about the Action/evidence fence, not inventing a pre-06 Pending source.
+
+### 17.5 09-R3 — Remove obsolete standard-test placement, not coverage
+
+After the bundle scenarios pass:
+
+- `apps/client/test/features/day/calendar_gateway_test.dart` contains only the three
+  bundle-dependent FFI scenarios at the planning base. Delete the file after their
+  assertions are re-homed; do not leave skipped duplicates.
+- In
+  `apps/client/test/features/actions/calendar_action_gateway_test.dart`, keep the
+  pure AppWire action gateway tests and delete only the re-homed native-source
+  scenario.
+- Remove its import of `FixtureCalendarAdapter, query` from the deleted Day test.
+- Keep `apps/client/test/support/app_host.dart` if other current tests still call it.
+  Do not add a compatibility subject bypass to it merely to preserve the old test
+  placement.
+
+Run caller search before deleting:
+
+~~~sh
+rg -n "FixtureCalendarAdapter|calendar_gateway_test\.dart|TestAppHost" apps/client/test apps/client/integration
+~~~
+
+Every moved assertion must have an equivalent child-host assertion or the deletion is
+a blocker.
+
+### 17.6 09-R4 — Golden exclusion and Flutter acceptance
+
+Per operator instruction, image goldens do not gate 09.
+
+Required focused checks after R1-R3:
+
+~~~sh
+cargo build -p floe-ffi
+
+cd apps/client
+flutter analyze
+flutter test test/features/actions/calendar_action_gateway_test.dart
+flutter test integration/native_calendar_fixture_test.dart
+flutter test test/features/experts/agent_registry_dialog_test.dart
+~~~
+
+For the Registry file:
+- all non-image behavioral assertions must pass;
+- any `matchesGoldenFile` failure is recorded as **IGNORED — operator excluded
+  golden tests**;
+- do not update the golden.
+
+Then run the complete normal suite:
+
+~~~sh
+flutter test
+~~~
+
+Acceptance:
+- zero non-golden failures;
+- golden-only failures are reported but do not block 09;
+- do not relabel a non-golden failure as golden.
+
+If a clean command is preferred, a narrowly scoped test-only split/tag may isolate the
+existing image assertion so `flutter test --exclude-tags=golden` can be used. This is
+optional; do not churn the Registry test if exact failure classification is simpler.
+
+### 17.7 09-R5 — Resume the gates that were never run
+
+Only after the four Calendar scenarios pass and there are zero non-golden Flutter
+failures, continue the previously stopped gates:
+
+~~~sh
+cd apps/client
+flutter build macos
+flutter test integration/local_server_pairing_test.dart
+cd ../..
+
+swift test --package-path apps/client/apple/FloeAppleContacts
+swift test --package-path apps/client/apple/FloeAppleHealth
+swift test --package-path apps/client/apple/FeasibilityProvider
+swift test --package-path apps/client/ios/ScreenTimeGate
+
+bash tools/s3-validation/check-native.sh
+~~~
+
+Rules:
+- the pairing integration uses its documented disposable temporary profile;
+- do not clear shared credentials/Keychain state to make it run;
+- deterministic Apple/native package failures are blockers;
+- real EventKit response-loss/live source smoke remains SKIPPED without the explicit
+  disposable authorization described by the native validation runbook.
+
+### 17.8 09-R6 — Same-snapshot final re-verification
+
+Because R1-R3 change test/integration support, close 09 from one final committed
+snapshot.
+
+Run:
+
+~~~sh
+python3 tools/architecture/test_check_boundaries.py
+python3 tools/architecture/check_boundaries.py
+python3 tools/architecture/test_check_expert_extensibility.py
+python3 tools/architecture/check_expert_extensibility.py
+python3 tools/architecture/test_check_connection_observe_conformance.py
+python3 tools/architecture/check_connection_observe_conformance.py
+
+cargo metadata --no-deps --format-version 1
+cargo check --workspace --lib
+CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast -- --test-threads=1
+cargo build -p floe-ffi
+
+(
+  cd server
+  go test ./...
+  go test -race ./...
+  go vet ./...
+)
+
+cargo test -p floe-provider-adapters --test live_server_access
+
+git diff --check
+~~~
+
+Then repeat the Flutter/Apple gates in §§17.6-17.7 against that exact snapshot if any
+source/test-support commit landed after their previous run.
+
+No OAuth/model ignored test becomes required.
+
+### 17.9 09-R7 — Residual audit and closure evidence
+
+Run:
+
+~~~sh
+rg -n "native Calendar unavailable" apps/client/test apps/client/integration
+rg -n "pending native source" apps/client/test apps/client/integration
+rg -n "FixtureCalendarAdapter|calendar_gateway_test\.dart" apps/client/test apps/client/integration
+rg -n "libfloe_eventkit\.dylib|NativeCalendarFixture" apps/client tools crates/adapters/providers/tests
+git diff --check
+git status --short --branch
+~~~
+
+Required final classification:
+- no standard Flutter unit test depends on a missing bundle-native dylib;
+- native fixture dylib use is bounded to validation/integration support and existing
+  provider tests;
+- no production source/permission bypass exists;
+- the stale “pending native source” test concept is gone;
+- golden image remains untouched and explicitly non-gating.
+
+Append a **Residual closure** subsection under execution evidence with:
+1. residual-start HEAD and fetched `origin/main`;
+2. implementation/test-harness commit SHA(s);
+3. exact files moved/deleted/added;
+4. proof production Rust/App permission code was unchanged, or exact defect fix if one
+   was genuinely required;
+5. four migrated scenario results;
+6. non-golden Flutter result/count;
+7. golden result classified IGNORED;
+8. macOS build;
+9. local server pairing integration;
+10. four Swift package results;
+11. `check-native.sh`;
+12. three architecture checker suites;
+13. broad Rust;
+14. Go test/race/vet;
+15. loopback server;
+16. live smoke SKIPPED reason;
+17. final clean worktree.
+
+When and only when all deterministic **non-golden** gates pass:
+- change parent README 09 status to `Complete`;
+- mark this plan Complete;
+- commit closure;
+- stop before plan retirement.
+
+Suggested closure commit:
+
+~~~text
+docs: complete connection observe checkpoint 09
+~~~
+
+### 17.10 Residual acceptance matrix
+
+Checkpoint 09 may close when:
+
+1. the four Calendar failures have been re-homed to a bundle-native deterministic
+   fixture and pass;
+2. source establishment still executes `probe_calendar_source`;
+3. no production native-loader/source/grant bypass was introduced;
+4. all non-golden Flutter tests pass;
+5. Registry golden mismatch, if still present, is reported and ignored per operator
+   instruction;
+6. `flutter build macos` passes;
+7. local server pairing integration passes or has a concrete environment blocker that
+   did not require destructive credential changes;
+8. Contacts/Health/Feasibility/ScreenTime Swift tests pass;
+9. `check-native.sh` passes;
+10. three architecture checker suites pass;
+11. broad serialized Rust passes;
+12. Go test/race/vet pass;
+13. disposable `live_server_access` passes;
+14. no newly unexplained production residual exists;
+15. README marks 09 Complete;
+16. worktree is clean;
+17. plan retirement is still not performed.
+
+### 17.11 Residual agent report format
+
+Report only:
+
+1. residual start HEAD / first and final fetched origin-main / final HEAD;
+2. residual implementation and closure SHAs;
+3. exact Calendar test-harness design;
+4. production code changed or unchanged;
+5. files added/moved/deleted;
+6. Day mirror/source continuity result;
+7. AllAvailable 1→2 source-authority result;
+8. wide-source bounded-publication result;
+9. Action evidence-fence result;
+10. non-golden Flutter full-suite result/count;
+11. golden result as IGNORED;
+12. Flutter analyze result;
+13. macOS build result;
+14. local server pairing integration result;
+15. Apple Contacts result;
+16. Apple Health result;
+17. FeasibilityProvider result;
+18. ScreenTimeGate result;
+19. `check-native.sh` result;
+20. architecture checker/test-suite result;
+21. broad Rust/check result;
+22. Go test/race/vet result;
+23. disposable loopback result;
+24. live smoke SKIPPED reason;
+25. residual search result;
+26. README 09 Complete confirmation;
+27. clean worktree;
+28. confirmation plan bundle/active-plan pointer were not retired.
