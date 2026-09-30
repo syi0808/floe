@@ -78,10 +78,12 @@ Cards never grow to fit text. [Timeline density rules](calendar-event-layout.md)
 five-minute duration bands, available content, keyboard/touch access and zoom behavior.
 Only hour and half-hour guides are drawn, never five-minute grid lines.
 
-The native implementation still selects one calendar. This design does not deliver
-native multi-calendar migration, per-source partial-failure
-reconciliation, discovery, persistent storage, robust DST handling, or live acceptance.
-Those remain required by ADR 0008. Native integration evidence is unchanged.
+The current native implementation supports multiple calendars in a Connections-owned
+resource set. Context reads the current set under one logical standing Observe permission;
+source edits stale evidence without changing the grant or Expert binding. See the
+[client runbook](../../apps/client/README.md#connected-calendar) and
+[current runtime](../architecture/runtime.md) for implementation boundaries.
+This dated design reference is not evidence of live native acceptance.
 
 ## Validation
 

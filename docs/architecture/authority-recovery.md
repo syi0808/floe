@@ -100,4 +100,5 @@ Do not hold a global Vault transaction across model or provider I/O.
 - [ADR 0018 — Manager–Expert A2A delegation](../decisions/0018-manager-expert-a2a-delegation.md)
 - [ADR 0024 — Device context collection and convergence](../decisions/0024-device-context-collection-and-convergence.md)
 - [ADR 0025 — Person-owned connections](../decisions/0025-person-owned-connections.md)
-- [ADR 0027 — Connection authority and observation](../decisions/0027-connection-authority-and-observation.md) (proposed; use current Access/Context ownership above for implemented architecture)
+- [ADR 0027 — Connection authority and observation](../decisions/0027-connection-authority-and-observation.md) (accepted; standing Observe semantics amended by ADR 0031)
+- [ADR 0031 — Connection-owned source scope and logical standing Observe](../decisions/0031-connection-owned-source-scope-and-logical-observe.md)

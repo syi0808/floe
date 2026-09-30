@@ -174,32 +174,38 @@ dedicated FFI isolate. `NativeDayGateway` exchanges admitted Day command/query e
 the Rust core, which owns all Turso reads and writes. Local data is stored under
 the app's Application Support directory.
 
-## Connected Calendar (S1)
+## Connected Calendar
 
 Connect → macOS Calendar offers **Connect Calendar**, calendar selection, and manual refresh of
 the selected date. Permission is requested only after the connection disclosure.
 EventKit requires full OS access even for reads; the approved exception does not
 enable external writes in Floe. Use **권한 설정** after denial or revocation.
 
-Rust persists the selection, imported provenance, last successful range/time, and
-typed failures. Relaunch displays cached data; refresh explicitly to recollect it.
-Switching calendars replaces the previous mirror without touching local items.
-This path is macOS-only. Fixture integration tests do not access personal calendars.
+Connections owns one EventKit `SourceConnection` with a bounded current resource set;
+multiple selected/current calendars are supported. **Use with Floe** manages one Access-owned
+standing Observe grant for the logical `calendar.timeline:<connection>` View. Context reloads
+the connection and reads its current resource set, retaining exact source provenance.
+Resource edits advance `SourceAuthority` and stale old review/evidence without inherently
+changing `GrantId`, `GrantAuthority` or the Expert connection/View binding. Expert selection
+is configuration, not permission; Observe never authorizes Calendar Actions.
 
-The native gateway still supports one selected calendar. All-calendar inventory,
-disconnect/cache deletion, recurrence metadata and original-zone formatting require domain/API
-work and are not falsely exposed as implemented. The existing task collection and capture
-classification flows remain functional rather than being replaced by static demo content.
+Day persists the imported mirror, provenance, last successful range/time and typed failures
+separately from Connections source authority. Relaunch displays cached data; refresh explicitly
+to recollect it. Source edits do not touch local tasks/notes or external calendars.
+This path is macOS-only. Fixture and deterministic native validation do not read a personal
+Calendar; live procedures require an explicitly approved disposable source.
 
 Historical acceptance snapshots are not part of the active documentation tree. Use the commands below plus the repository validation tools for current Apple product-boundary checks.
 
 ## Validation commands
 
 In a connected, unlocked conversation, `/focus` requests a 60-minute focus proposal for today.
-It requires exactly one reviewed EventKit calendar. Open the resulting proposal to review it;
+It requires current authorized Calendar evidence and an exact reviewed destination calendar;
+the connection may expose multiple calendars. Open the resulting proposal to review it;
 the command never dispatches a calendar write. Approval and execution use the unlocked encrypted
 vault, and an expired source observation requires a fresh proposal rather than replaying an old one.
-Other platforms and ambiguous calendar selections return an explicit source/capability error.
+Calendar Actions remain fenced to the exact destination and current source evidence.
+Unavailable sources or ambiguous action destinations return an explicit source/capability error.
 
 ```sh
 flutter analyze
