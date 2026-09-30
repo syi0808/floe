@@ -39,10 +39,6 @@ Use the smallest relevant context:
 - Do not treat old slice numbers, historical validation counts, or an implementation path mentioned in an ADR as current code.
 - If documentation conflicts with source, determine whether the document is stale. Current code plus accepted architecture policy define implementation reality; product/ADR documents define intent and rationale within their stated scope.
 
-## Active execution plan
-
-The current architecture-changing task is [Dedicated Feasibility vertical retirement](development/plans/feasibility-vertical-retirement.md). The plan removes the event/location/ETA/weather Feasibility vertical as one atomic cutover; current architecture documents describe the resulting owner boundaries. Execution evidence remains in the plan until operator acceptance, after which the temporary plan and this pointer retire.
-
 ## Maintenance rules
 
 - One fact should have one authoritative home. Other documents link to it instead of copying status tables.
