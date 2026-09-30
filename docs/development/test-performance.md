@@ -208,3 +208,116 @@ warm test execution and fixture preparation. Alternate multiple before/after run
 without competing builds. Preserved test binaries can measure pre-change execution
 without changing Cargo's cache configuration, but label these as direct execution,
 not Cargo CLI timing. A single cold-to-warm comparison is not a code-only speedup.
+
+## Third-stage dependency measurements (2026-09-30)
+
+The dependency-graph experiment compares baseline `64f771c7` with the manifest
+cleanup in this change set, on the same M2 Pro / 10 logical CPU / 16 GiB host,
+macOS 26.5.2 and Rust 1.93.1. No Rust implementation, test assertion, test-group,
+profile, linker, feature, target or fixture-isolation changes were made.
+
+### Changes and retained dependencies
+
+Source and Cargo metadata audits identified 13 unused direct dependency
+declarations. Removed dependencies include Builtin's direct Agent Runtime and
+unused Conversation/Inference/Kernel/tempfile test wiring, Access's unused Context
+test wiring, App's unused Protocol test wiring, Conversation's unused jsonschema,
+Day's unused serde_json, Experts' unused chrono/tempfile and FFI's unused
+base64/Tokio. Fifteen redundant dev-dependency declarations already supplied by
+normal dependencies were also removed.
+
+Five test-only dependencies moved to dev-dependencies: App's base64,
+Conversation's chrono, Day's Tokio and Vault's Inference/Tokio. Real heavy
+regressions remain: Experts' delegation tests still drive Agent Runtime; provider
+authorization tests still use Vault; App's durable/native tests retain their
+storage, signing and private fixtures. No new test crate or compatibility path
+was introduced. Current ownership is documented in the architecture module map.
+
+The shared Tokio runtime/sync/time/macros, UUID serde/v4/v5, chrono clock/serde,
+serde_json raw_value and reqwest JSON/Rustls features have real callers and remain
+enabled. Upstream Turso also enables chrono and tracing-subscriber defaults;
+removing only Floe's defaults would not remove those workspace features. No
+speculative per-crate feature fragmentation was added.
+
+The Apple graph has 11 names with multiple versions: allocator-api2, getrandom,
+itertools, rand, rand_core, rustc-hash, rustix, shlex, strum, strum_macros and syn.
+These come from still-needed external dependency families, including Turso,
+jsonschema, crypto, bindgen and tempfile. They were audited but not forcibly
+unified, patched or upgraded as part of an unused-dependency cleanup. Both the
+workspace's resolved package set and its duplicate versions remain unchanged.
+
+| Apple package scope, including normal/build/dev edges | Before | After |
+| --- | ---: | ---: |
+| Entire workspace | 304 | 304 |
+| floe-experts-builtin | 104 | 46 |
+| floe-access | 44 | 39 |
+| Internal production dependency edges | 105 | 103 |
+
+Package counts are unique package/version pairs from `cargo tree --target
+aarch64-apple-darwin --edges normal,build,dev`, including workspace packages.
+They are not counts of compiler invocations. The default tree's repeated entries
+and same-version host/target feature variants are deduplicated for these counts.
+
+### Measurements
+
+All timed Rust commands used `CARGO_INCREMENTAL=0`, the existing `target/`,
+unchanged profiles/flags/features and serial execution. External dependency and
+Go/Swift fixture caches were reused. No cache cleaning or separate target
+directory was used. These are **dependency-warm workspace-source rebuilds**, not
+clean/cold builds: immediately before each compile measurement, only the
+modification times of all workspace `src/lib.rs` files were touched. File contents
+were unchanged; Cargo rebuilt the workspace packages reachable from the command.
+
+Compile commands were `cargo test --workspace --no-run --timings` and
+`cargo test -p floe-experts-builtin --no-run --timings`. Execution commands were
+the matching `cargo test --workspace --no-fail-fast` and
+`cargo test -p floe-experts-builtin --no-fail-fast`, including doctests.
+`/usr/bin/time -p` measured whole-command wall time with output redirected to logs.
+
+| Command/scenario | Before wall seconds | After wall seconds | Median before → after |
+| --- | --- | --- | --- |
+| Workspace source rebuild | 35.01, 34.35, 32.92 | 34.01, 33.40, 33.54 | 34.35 → 33.54 |
+| Workspace tests, existing binaries | 79.12, 67.09, 67.18 | 66.05, 66.56, 68.25 | 67.18 → 66.56 |
+| Builtin reachable-source rebuild | 9.45, 9.46, 9.35 | 7.44, 7.41, 7.50 | 9.45 → 7.44 |
+| Builtin warmed tests | 0.96, 0.97, 0.97 | 0.93, 0.93, 0.96 | 0.97 → 0.93 |
+
+Builtin trials alternated exact baseline/optimized manifest and lockfile snapshots
+three times. Each phase first prepared its package-specific dependency feature
+set, then timed the source rebuild, exercised the test binaries untimed and timed
+the warmed test command. The final optimized manifests/lockfile were restored.
+Its compile logs show 15 reachable workspace package compilations before versus
+11 after. All six measured test runs passed the same 56 tests across two binaries.
+
+Workspace trials used three consecutive baseline runs followed by three
+consecutive optimized runs, not an interleaved comparison. The baseline binaries
+were already present and previously exercised; newly fingerprinted optimized
+binaries were exercised in a separate 148.73-second preparation run, excluded
+from warm results. The first baseline observation was 79.12 seconds and remains
+visible rather than silently discarded. Desktop/security load was uncontrolled.
+Do not compare these initial/preparation observations as cold-build results.
+
+The reproducible narrow rebuild improvement is about **21%** on this host.
+Workspace compile and execution median differences are only about 2.4% and 0.9%,
+respectively, with overlapping ranges; they do **not** establish a meaningful
+workspace-wide speedup. The full workspace still needs the removed dependency
+families through other owners, and the test runtime code is unchanged. The narrow
+test difference of 40 ms is also too small to claim a runtime improvement.
+
+Every measured workspace run passed the same 1,233 runnable tests across 38
+binaries, with two existing ignored tests, and passed the separate Cargo doctest
+phases with zero runnable doctests. Native child-process result lines were not
+double-counted. Normal-incremental affected-package tests also passed (971 tests,
+two ignored), and the architecture checker passed with 22 nodes, 103 production
+edges and no errors/warnings. Existing App dead-code and Vault test-field warnings
+remained; assertions, retries and ignored status were not changed.
+
+`flutter build macos --debug` also passed with the optimized manifests and bundled
+the same-source Rust core. Xcode reported stale DerivedData file warnings; no
+DerivedData cleanup or signing-account change was made. iOS/device execution and
+Flutter analyze/full widget tests were not run: this change removes unused Rust
+dependency declarations without changing the app wire or runtime implementation.
+
+Raw logs, before/after Cargo timing HTML, dependency-tree snapshots and metadata
+are local ignored artifacts under `target/validation/dependency-study/`, not new
+permanent validation tooling. Source rebuilds do not establish the size of a
+clean-build improvement; cold dependency compilation was not measured.

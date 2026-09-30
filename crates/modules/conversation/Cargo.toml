@@ -6,7 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-chrono.workspace = true
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-agent-runtime = { path = "../../runtime/agent" }
 floe-context = { path = "../context" }
@@ -15,7 +14,6 @@ floe-experts = { path = "../experts" }
 floe-inference = { path = "../inference" }
 floe-kernel = { path = "../../contracts/kernel" }
 floe-knowledge = { path = "../knowledge" }
-jsonschema = { version = "0.55.1", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -23,7 +21,5 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-floe-agent-contract = { path = "../../contracts/agent" }
+chrono.workspace = true
 floe-context-contract = { path = "../../contracts/context" }
-floe-execution = { path = "../../runtime/execution" }
-floe-inference = { path = "../inference" }

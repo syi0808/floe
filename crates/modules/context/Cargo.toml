@@ -27,6 +27,4 @@ uuid.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
-floe-agent-contract = { path = "../../contracts/agent" }
-floe-context-contract = { path = "../../contracts/context" }
 floe-kernel = { path = "../../contracts/kernel" }

@@ -17,8 +17,3 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
-
-[dev-dependencies]
-# The lease registry is Context's; the regressions here check that an
-# admission and a real lease agree.
-floe-context = { path = "../context" }

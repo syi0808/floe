@@ -31,6 +31,13 @@ This is the stable semantic ownership map for the Rust workspace. Package paths 
 
 A stateful concept has one semantic owner. Storage location, call-site convenience or composition does not create a second owner.
 
+Built-in Expert implementations depend on owner contracts and dispatch APIs, not
+directly on the generic Agent Runtime or Conversation implementation. Conversation
+uses the Agent Runtime's schema validation rather than declaring a second direct
+schema-validator dependency. Test-only wiring stays in dev-dependencies: Day's
+Tokio harness, Conversation's clock fixtures, App's base64 fixtures and Vault's
+Inference records/Tokio harness are not production dependencies of those packages.
+
 - **App** constructs and injects services and owns bounded first-party product policy composition. Each supported connector/View has one final policy derived from trusted shipped Expert capability declarations; its digest is the digest of the same policy used at activation, independent of Registry, binding, connection identity and source resources. It chooses the product-supported connector Views and actual built-in readers. Connections receives source setup/resources as product intent; one App `ConnectionObserve` product contract receives connection-level inspect, review and enable/disable intent for native Calendar, hosted Views, Contacts, Attention and Wellbeing. Access remains the grant authority. The client never supplies leaf resources as standing permission scope, and echoes only a backend-produced compare-only review expectation on enable.
 - **Protocol/FFI** convert product intent and results. They do not decide execution topology.
 - **Adapters** implement owner-defined ports. A provider may hold credentials or perform transport without inheriting Access or Context policy.

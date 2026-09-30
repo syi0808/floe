@@ -6,7 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-chrono.workspace = true
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-context-contract = { path = "../../contracts/context" }
 floe-execution = { path = "../../runtime/execution" }
@@ -21,4 +20,3 @@ uuid.workspace = true
 # The delegation regressions drive the real engine; the Task owner itself
 # does not.
 floe-agent-runtime = { path = "../../runtime/agent" }
-tempfile = "3.23.0"

@@ -6,7 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-base64 = "0.22.1"
 chrono.workspace = true
 floe-access = { path = "../modules/access" }
 floe-actions = { path = "../modules/actions" }
@@ -34,9 +33,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-# The regressions here drive this host the way the binding does, so they
-# speak the wire the binding parses. No production path names it.
-floe-protocol = { path = "../bindings/protocol" }
+base64 = "0.22.1"
 ring = "0.17.14"
 tempfile = "3.23.0"
 # The registry regressions count the vault's durable expert receipts, which

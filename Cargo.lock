@@ -623,7 +623,6 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "chrono",
- "floe-context",
  "floe-context-contract",
  "floe-execution",
  "floe-kernel",
@@ -704,7 +703,6 @@ dependencies = [
  "floe-inference",
  "floe-kernel",
  "floe-knowledge",
- "floe-protocol",
  "floe-provider-adapters",
  "floe-vault",
  "keyring-core",
@@ -787,7 +785,6 @@ dependencies = [
  "floe-inference",
  "floe-kernel",
  "floe-knowledge",
- "jsonschema",
  "serde",
  "serde_json",
  "sha2",
@@ -803,7 +800,6 @@ dependencies = [
  "floe-context-contract",
  "floe-kernel",
  "serde",
- "serde_json",
  "thiserror",
  "tokio",
  "uuid",
@@ -833,7 +829,6 @@ dependencies = [
 name = "floe-experts"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "floe-agent-contract",
  "floe-agent-runtime",
  "floe-context-contract",
@@ -842,7 +837,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "tempfile",
  "tokio",
  "uuid",
 ]
@@ -854,17 +848,12 @@ dependencies = [
  "chrono",
  "floe-actions",
  "floe-agent-contract",
- "floe-agent-runtime",
  "floe-context-contract",
- "floe-conversation",
  "floe-day",
  "floe-execution",
  "floe-experts",
- "floe-inference",
- "floe-kernel",
  "serde",
  "serde_json",
- "tempfile",
  "tokio",
  "uuid",
 ]
@@ -873,14 +862,12 @@ dependencies = [
 name = "floe-ffi"
 version = "0.1.0"
 dependencies = [
- "base64",
  "chrono",
  "floe-app",
  "floe-protocol",
  "serde",
  "serde_json",
  "tempfile",
- "tokio",
  "tracing",
  "tracing-subscriber",
  "uuid",

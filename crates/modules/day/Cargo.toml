@@ -15,10 +15,8 @@ chrono.workspace = true
 floe-context-contract = { path = "../../contracts/context" }
 floe-kernel = { path = "../../contracts/kernel" }
 serde.workspace = true
-serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-floe-context-contract = { path = "../../contracts/context" }
+tokio.workspace = true

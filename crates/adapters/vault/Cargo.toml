@@ -18,7 +18,6 @@ floe-conversation = { path = "../../modules/conversation" }
 floe-day = { path = "../../modules/day" }
 floe-execution = { path = "../../runtime/execution" }
 floe-experts = { path = "../../modules/experts" }
-floe-inference = { path = "../../modules/inference" }
 floe-kernel = { path = "../../contracts/kernel" }
 floe-knowledge = { path = "../../modules/knowledge" }
 getrandom = "0.3.4"
@@ -29,7 +28,6 @@ serde_json.workspace = true
 sha2.workspace = true
 subtle = "2.6.1"
 thiserror.workspace = true
-tokio.workspace = true
 turso.workspace = true
 uuid.workspace = true
 zeroize = "1.9.0"
@@ -44,12 +42,7 @@ apple-native-keyring-store = { version = "1.0.2", default-features = false, feat
 apple-native-keyring-store = { version = "1.0.2", default-features = false, features = ["protected"] }
 
 [dev-dependencies]
-floe-agent-contract = { path = "../../contracts/agent" }
 floe-agent-runtime = { path = "../../runtime/agent" }
-floe-conversation = { path = "../../modules/conversation" }
-floe-day = { path = "../../modules/day" }
-floe-execution = { path = "../../runtime/execution" }
-floe-experts = { path = "../../modules/experts" }
-floe-kernel = { path = "../../contracts/kernel" }
-floe-knowledge = { path = "../../modules/knowledge" }
+floe-inference = { path = "../../modules/inference" }
 tempfile = "3.23.0"
+tokio.workspace = true
