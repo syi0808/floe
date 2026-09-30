@@ -121,6 +121,10 @@ Search as applicable for:
 
 Every remaining match must be either unrelated, deliberately historical, or explicitly justified by the task's authoritative plan.
 
+Residual searches are task-local completion evidence by default. Do not turn a deleted-symbol/path grep or an exact source-code shape into a permanent checker just to remember a completed migration.
+
+Create durable repository tooling only when the procedure is repeated, meaningfully complex or high-risk, and its inputs are stable enough that ordinary implementation refactors do not require rewriting the checker. Prefer, in order: type/visibility/dependency constraints, owner API regression tests, structured-data checks, and only then source-level semantic checks when no more durable representation exists.
+
 ## 9. Documentation convergence
 
 In the same change set:

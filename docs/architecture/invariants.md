@@ -102,11 +102,13 @@ The final state must converge back to:
 
 Temporary complexity without an explicit deletion step is permanent complexity in practice.
 
-## 8. Prefer machine-enforced invariants
+## 8. Prefer durable enforcement at the right layer
 
-When a rule can be checked mechanically, repository tooling or CI should enforce it.
+Prefer the lowest-maintenance enforcement that directly represents the invariant. Make invalid states impossible through types, visibility and dependency direction where practical; otherwise exercise the owning API with regression tests. Repository tooling is appropriate when it automates a repeated, complex or high-risk procedure against stable structured inputs.
 
-Current examples include dependency policy via tools/architecture/check_boundaries.py, Expert extensibility via tools/architecture/check_expert_extensibility.py, and Connection-owned Observe authority via tools/architecture/check_connection_observe_conformance.py. Future checks may cover public/FFI surface and architectural exception registries.
+The current dependency-policy example is `tools/architecture/check_boundaries.py`, which derives the Cargo graph from manifests and compares it with `module-dependencies.json`. Ordinary source refactors do not require changing that checker; the policy changes only when the architecture changes.
+
+Do not promote a migration's deleted-symbol list, exact source-text shape or one-off residual `rg` into permanent infrastructure. Those checks are useful completion evidence inside the bounded migration and should retire with it. A source-level semantic checker is a last resort when the invariant cannot be represented by types, dependency structure, owner tests or other stable structured data.
 
 Documentation explains semantics and intent. It should not become a second manually maintained representation of facts that can be derived from the repository.
 

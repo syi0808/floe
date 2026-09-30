@@ -39,10 +39,6 @@ Use the smallest relevant context:
 - Do not treat old slice numbers, historical validation counts, or an implementation path mentioned in an ADR as current code.
 - If documentation conflicts with source, determine whether the document is stale. Current code plus accepted architecture policy define implementation reality; product/ADR documents define intent and rationale within their stated scope.
 
-## Active execution plan
-
-The current architecture-changing task is [Manager–Expert domain acquisition boundary convergence](development/plans/manager-expert-domain-acquisition.md). It is one atomic work item, not a checkpoint series. The plan is authoritative for the temporary cutover sequence; current source and architecture remain authoritative for implementation reality.
-
 ## Maintenance rules
 
 - One fact should have one authoritative home. Other documents link to it instead of copying status tables.
@@ -51,5 +47,5 @@ The current architecture-changing task is [Manager–Expert domain acquisition b
 - When an architecture change lands, update its current architecture description in the same change set.
 - When a decision changes, add/amend/supersede an ADR; do not use an ADR as an implementation checklist.
 - Git history is the archive for removed planning and validation documents.
-- If an architectural invariant can be checked mechanically, prefer a repository tool/CI rule as the enforcement mechanism and keep prose as the semantic explanation rather than a second hand-maintained truth.
+- Prefer permanent repository tooling only when it automates a repeated, complex or high-risk procedure against stable inputs. One-off migration residuals and source-shape greps belong in the bounded execution plan or owner tests and should retire with the migration.
 
