@@ -1263,26 +1263,77 @@ Move
 
 Do not reintroduce a fixed source-resource count to make this pass.
 
-#### D. Action proposal source/evidence fence
+#### D. Action contract correction — delete the stale proposal-fence scenario
 
-Move
-`apps/client/test/features/actions/calendar_action_gateway_test.dart:96-149`.
+Do **not** re-home the old
+`apps/client/test/features/actions/calendar_action_gateway_test.dart:96-149`
+scenario into the native fixture bundle.
 
-Rename the scenario to current semantics. “Pending native source” is no longer a
-public product lifecycle: reviewed-native creation starts Ready.
+The earlier residual plan incorrectly assumed that a user-facing
+`proposeCalendarAction` requires current Context evidence and must create no Action
+row when that evidence is absent. The current Actions contract intentionally does not
+work that way.
 
-Use wording such as:
+Current source of truth on the execution baseline:
 
-`reviewed native source without current evidence cannot authorize an action proposal`
+- `crates/modules/actions/src/application/service.rs:72
+  ActionService::propose_calendar_action` drafts and persists a user proposal;
+- `service.rs:88 draft_calendar_action` requires a serving current
+  `SourceConnection` and exact destination Calendar membership, then creates a
+  `Pending` proposal with the current connection revision;
+- it does **not** require a `ContextDependency` or observation receipt before the
+  person can review the proposal;
+- execution-time source/policy continuity is enforced later by
+  `service.rs:370 action_block_reason`;
+- Expert-originated proposals have the stronger evidence-bound path at
+  `crates/modules/actions/src/application/expert.rs:141
+  prepare_expert_calendar_action`.
 
-Required assertions:
-- source establishment succeeds through reviewed native subject fixture;
-- no authorized current Calendar evidence/proposal exists;
-- proposal attempt fails closed with the current typed conflict/fence;
-- no Action row/event is created;
-- no Calendar write is performed.
+Therefore the observed residual result:
 
-This test is about the Action/evidence fence, not inventing a pre-06 Pending source.
+~~~text
+rejected=false rows=1
+~~~
+
+is the expected user-proposal contract, not a production defect.
+
+The exact source/evidence and uncertain-write invariants are already protected by the
+current Rust regressions, including:
+
+- `crates/app/src/vault_host/tests/proposals.rs:205
+  source_resource_change_blocks_old_calendar_receipt_without_mirror_revision_change`;
+- `crates/app/src/vault_host/tests/native_actions.rs:177
+  native_executor_uses_rust_ledger_and_lookup_only_after_response_loss`;
+- the Expert Action tests around `prepare_expert_calendar_action`, which require
+  recorded dependency evidence before an Expert-origin proposal can advance.
+
+Required residual actions:
+
+1. delete the stale
+   `pending native source cannot authorize an action proposal` Flutter test;
+2. remove `actionEvidenceFence` and its invocation from
+   `apps/client/integration/support/native_calendar_fixture_host.dart`;
+3. do not replace it with a test that expects user proposal creation to fail;
+4. preserve the two pure AppWire Action gateway tests in
+   `calendar_action_gateway_test.dart`;
+5. do not change production Actions, Connections, Context, native subject or
+   permission code to make the stale expectation pass.
+
+Optional coverage, only if it makes the child fixture clearer rather than larger:
+the bundle host may assert that a user proposal creates exactly one Pending row while
+performing no native write. That is a proposal-versus-execution assertion, **not** an
+evidence-fence assertion and is not required for 09 closure.
+
+### 17.4-D correction evidence — 2026-09-30
+
+The first residual fixture run reached the previously planned Action scenario and
+reported `rejected=false rows=1`. Source inspection confirmed that this is the intended
+user proposal contract, not a missing source/evidence fence: proposal creation persists
+one reviewable Pending Action after validating the serving connection and destination;
+the stronger Context/evidence fence belongs to execution and Expert-origin paths.
+
+Accordingly, §17.4 D above replaces the stale assertion. No production contract change
+is authorized by this correction.
 
 ### 17.5 09-R3 — Remove obsolete standard-test placement, not coverage
 
@@ -1293,9 +1344,12 @@ After the bundle scenarios pass:
   assertions are re-homed; do not leave skipped duplicates.
 - In
   `apps/client/test/features/actions/calendar_action_gateway_test.dart`, keep the
-  pure AppWire action gateway tests and delete only the re-homed native-source
-  scenario.
+  two pure AppWire action gateway tests and delete the stale native-source proposal
+  scenario; it is **not** re-homed because its assertion contradicts the current
+  user proposal contract.
 - Remove its import of `FixtureCalendarAdapter, query` from the deleted Day test.
+- In the integration child host, delete `actionEvidenceFence` and its call; A/B/C
+  are the three bundle-native scenarios that remain in scope.
 - Keep `apps/client/test/support/app_host.dart` if other current tests still call it.
   Do not add a compatibility subject bypass to it merely to preserve the old test
   placement.
@@ -1348,8 +1402,9 @@ optional; do not churn the Registry test if exact failure classification is simp
 
 ### 17.7 09-R5 — Resume the gates that were never run
 
-Only after the four Calendar scenarios pass and there are zero non-golden Flutter
-failures, continue the previously stopped gates:
+Only after the three bundle-native Calendar scenarios pass, the stale Action proposal
+scenario is removed, and there are zero non-golden Flutter failures, continue the
+previously stopped gates:
 
 ~~~sh
 cd apps/client
@@ -1436,19 +1491,20 @@ Append a **Residual closure** subsection under execution evidence with:
 3. exact files moved/deleted/added;
 4. proof production Rust/App permission code was unchanged, or exact defect fix if one
    was genuinely required;
-5. four migrated scenario results;
-6. non-golden Flutter result/count;
-7. golden result classified IGNORED;
-8. macOS build;
-9. local server pairing integration;
-10. four Swift package results;
-11. `check-native.sh`;
-12. three architecture checker suites;
-13. broad Rust;
-14. Go test/race/vet;
-15. loopback server;
-16. live smoke SKIPPED reason;
-17. final clean worktree.
+5. three migrated bundle-native scenario results;
+6. Action contract reconciliation: stale proposal-fence test/child scenario removed and existing Rust fence regressions retained;
+7. non-golden Flutter result/count;
+8. golden result classified IGNORED;
+9. macOS build;
+10. local server pairing integration;
+11. four Swift package results;
+12. `check-native.sh`;
+13. three architecture checker suites;
+14. broad Rust;
+15. Go test/race/vet;
+16. loopback server;
+17. live smoke SKIPPED reason;
+18. final clean worktree.
 
 When and only when all deterministic **non-golden** gates pass:
 - change parent README 09 status to `Complete`;
@@ -1466,26 +1522,30 @@ docs: complete connection observe checkpoint 09
 
 Checkpoint 09 may close when:
 
-1. the four Calendar failures have been re-homed to a bundle-native deterministic
-   fixture and pass;
-2. source establishment still executes `probe_calendar_source`;
-3. no production native-loader/source/grant bypass was introduced;
-4. all non-golden Flutter tests pass;
-5. Registry golden mismatch, if still present, is reported and ignored per operator
+1. the three real bundle-dependent Calendar scenarios have been re-homed to a
+   deterministic native fixture and pass;
+2. the stale user-proposal evidence-fence scenario is deleted from both the standard
+   Flutter test and child fixture because current contract intentionally permits a
+   Pending user proposal without Context evidence;
+3. the existing Rust execution/Expert evidence-fence regressions pass;
+4. source establishment still executes `probe_calendar_source`;
+5. no production native-loader/source/grant bypass was introduced;
+6. all non-golden Flutter tests pass;
+7. Registry golden mismatch, if still present, is reported and ignored per operator
    instruction;
-6. `flutter build macos` passes;
-7. local server pairing integration passes or has a concrete environment blocker that
+8. `flutter build macos` passes;
+9. local server pairing integration passes or has a concrete environment blocker that
    did not require destructive credential changes;
-8. Contacts/Health/Feasibility/ScreenTime Swift tests pass;
-9. `check-native.sh` passes;
-10. three architecture checker suites pass;
-11. broad serialized Rust passes;
-12. Go test/race/vet pass;
-13. disposable `live_server_access` passes;
-14. no newly unexplained production residual exists;
-15. README marks 09 Complete;
-16. worktree is clean;
-17. plan retirement is still not performed.
+10. Contacts/Health/Feasibility/ScreenTime Swift tests pass;
+11. `check-native.sh` passes;
+12. three architecture checker suites pass;
+13. broad serialized Rust passes;
+14. Go test/race/vet pass;
+15. disposable `live_server_access` passes;
+16. no newly unexplained production residual exists;
+17. README marks 09 Complete;
+18. worktree is clean;
+19. plan retirement is still not performed.
 
 ### 17.11 Residual agent report format
 
@@ -1499,23 +1559,24 @@ Report only:
 6. Day mirror/source continuity result;
 7. AllAvailable 1→2 source-authority result;
 8. wide-source bounded-publication result;
-9. Action evidence-fence result;
-10. non-golden Flutter full-suite result/count;
-11. golden result as IGNORED;
-12. Flutter analyze result;
-13. macOS build result;
-14. local server pairing integration result;
-15. Apple Contacts result;
-16. Apple Health result;
-17. FeasibilityProvider result;
-18. ScreenTimeGate result;
-19. `check-native.sh` result;
-20. architecture checker/test-suite result;
-21. broad Rust/check result;
-22. Go test/race/vet result;
-23. disposable loopback result;
-24. live smoke SKIPPED reason;
-25. residual search result;
-26. README 09 Complete confirmation;
-27. clean worktree;
-28. confirmation plan bundle/active-plan pointer were not retired.
+9. Action contract reconciliation: stale Flutter/child proposal-fence scenario removed;
+10. existing Rust Action execution/Expert evidence-fence regressions result;
+11. non-golden Flutter full-suite result/count;
+12. golden result as IGNORED;
+13. Flutter analyze result;
+14. macOS build result;
+15. local server pairing integration result;
+16. Apple Contacts result;
+17. Apple Health result;
+18. FeasibilityProvider result;
+19. ScreenTimeGate result;
+20. `check-native.sh` result;
+21. architecture checker/test-suite result;
+22. broad Rust/check result;
+23. Go test/race/vet result;
+24. disposable loopback result;
+25. live smoke SKIPPED reason;
+26. residual search result;
+27. README 09 Complete confirmation;
+28. clean worktree;
+29. confirmation plan bundle/active-plan pointer were not retired.
