@@ -72,6 +72,9 @@ silently cancels work. EOF does not cancel an admitted Run. Use `/cancel` for
 controlled cancellation rather than killing the process.
 Run observation uses the host's event cursor and runtime epoch, then reads the
 settled receipt; it does not poll encrypted output during model/provider work.
+An unavailable admission acknowledgement is not a definite rejection: the CLI
+checks the original command ID and, only if no receipt exists, retries the exact
+same command. It stays in admission observation rather than inviting another turn.
 One-shot exit status is 0 for a successful Run, 2 for a failed/blocked Run, and 1
 for a CLI/profile/observation error. A failure is not a synthetic answer.
 

@@ -12,7 +12,7 @@ use floe_app::{
     ConversationSessionCommands, ConversationSessionQueries, ConversationSessionResult,
     EventPayload, EventRead, InteractionDecision, ProfileSelection, ReadConversation,
     ReadConversationEvents, RefreshInteraction, ResolveInteraction, ResumeInteraction, RunReceipt,
-    RunState, StartTurn, TurnMode, VaultLifecycleCommand, VaultLifecycleCommands,
+    RunState, ServiceError, StartTurn, TurnMode, VaultLifecycleCommand, VaultLifecycleCommands,
     VaultLifecycleQueries, VaultLifecycleResult, VaultState,
 };
 use floe_conversation::{AgentMessage, AgentSession};
@@ -281,6 +281,36 @@ struct Cli {
     reviewed: HashMap<Uuid, ConversationInteraction>,
 }
 
+fn admit_turn(
+    command: StartTurn,
+    mut submit: impl FnMut(StartTurn) -> std::result::Result<CommandReceipt, ServiceError>,
+    mut lookup: impl FnMut(Uuid) -> std::result::Result<Option<CommandReceipt>, ServiceError>,
+    mut pending: impl FnMut(),
+) -> std::result::Result<CommandReceipt, ServiceError> {
+    let mut uncertain = false;
+    loop {
+        if uncertain {
+            match lookup(command.command_id) {
+                Ok(Some(receipt)) => return Ok(receipt),
+                Ok(None) => {}
+                Err(ServiceError::Unavailable | ServiceError::Conflict) => {
+                    pending();
+                    continue;
+                }
+                Err(failure) => return Err(failure),
+            }
+        }
+        match submit(command.clone()) {
+            Ok(receipt) => return Ok(receipt),
+            Err(ServiceError::Unavailable) => {
+                uncertain = true;
+                pending();
+            }
+            Err(failure) => return Err(failure),
+        }
+    }
+}
+
 impl Cli {
     fn interactions(&mut self) -> Result<()> {
         let request = self
@@ -308,22 +338,51 @@ impl Cli {
             .host
             .request(Uuid::new_v4())
             .map_err(|failure| format!("Host: {failure:?}"))?;
-        let receipt = request
-            .services()
-            .start_turn(
-                request.caller(),
-                StartTurn {
-                    command_id: Uuid::new_v4(),
-                    session_id: self.current.id,
-                    expected_revision: self.current.revision,
-                    text,
-                    mode: TurnMode::New,
-                    retry_of: None,
-                    profile: self.options.profile_selection(),
-                },
-            )
-            .map_err(|failure| format!("Turn admission: {failure:?}"))?;
+        let command = StartTurn {
+            command_id: Uuid::new_v4(),
+            session_id: self.current.id,
+            expected_revision: self.current.revision,
+            text,
+            mode: TurnMode::New,
+            retry_of: None,
+            profile: self.options.profile_selection(),
+        };
+        let command_id = command.command_id;
+        let mut reported = false;
+        let receipt = admit_turn(
+            command,
+            |command| request.services().start_turn(request.caller(), command),
+            |command_id| {
+                request
+                    .services()
+                    .read_conversation(request.caller(), ReadConversation::Command { command_id })
+                    .map(|receipt| {
+                        receipt.map(|receipt| CommandReceipt {
+                            command_id: receipt.command_id.as_uuid(),
+                            run_id: receipt.run_id.as_uuid(),
+                            session_revision: receipt.session_revision,
+                        })
+                    })
+            },
+            || {
+                if !reported {
+                    let _ = self.output.emit("admission_pending", json!({"command_id": command_id,
+                        "message": "Admission acknowledgement is uncertain; checking the same command, not starting another turn"}));
+                    reported = true;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            },
+        );
         drop(request);
+        let receipt = match receipt {
+            Ok(receipt) => receipt,
+            Err(failure) => {
+                if failure == ServiceError::Conflict {
+                    self.current = session(&self.host, Some(self.current.id))?;
+                }
+                return Err(format!("Turn admission: {failure:?}"));
+            }
+        };
         self.observe(receipt, input)
     }
 
@@ -668,6 +727,88 @@ fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn turn_command() -> StartTurn {
+        StartTurn {
+            command_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            expected_revision: 0,
+            text: "오늘 일정 요약해줘".into(),
+            mode: TurnMode::New,
+            retry_of: None,
+            profile: ProfileSelection::Auto,
+        }
+    }
+
+    #[test]
+    fn lost_admission_acknowledgement_rejoins_without_resubmitting() {
+        let command = turn_command();
+        let expected = CommandReceipt {
+            command_id: command.command_id,
+            run_id: Uuid::new_v4(),
+            session_revision: 1,
+        };
+        let mut submitted = Vec::new();
+        let mut reads = 0;
+        let result = admit_turn(
+            command.clone(),
+            |command| {
+                submitted.push(command);
+                Err(ServiceError::Unavailable)
+            },
+            |command_id| {
+                assert_eq!(command_id, expected.command_id);
+                reads += 1;
+                if reads == 1 {
+                    Err(ServiceError::Unavailable)
+                } else {
+                    Ok(Some(expected.clone()))
+                }
+            },
+            || {},
+        )
+        .unwrap();
+        assert_eq!(result, expected);
+        assert_eq!(submitted, [command]);
+    }
+
+    #[test]
+    fn retry_before_admission_preserves_the_entire_command() {
+        let command = turn_command();
+        let expected = CommandReceipt {
+            command_id: command.command_id,
+            run_id: Uuid::new_v4(),
+            session_revision: 1,
+        };
+        let mut submitted = Vec::new();
+        let result = admit_turn(
+            command.clone(),
+            |command| {
+                submitted.push(command);
+                if submitted.len() == 1 {
+                    Err(ServiceError::Unavailable)
+                } else {
+                    Ok(expected.clone())
+                }
+            },
+            |_| Ok(None),
+            || {},
+        )
+        .unwrap();
+        assert_eq!(result, expected);
+        assert_eq!(submitted, [command.clone(), command]);
+    }
+
+    #[test]
+    fn definite_admission_rejections_are_not_retried() {
+        let result = admit_turn(
+            turn_command(),
+            |_| Err(ServiceError::Conflict),
+            |_| panic!("A definite rejection is not an uncertain acknowledgement"),
+            || panic!("A definite rejection must not be retried"),
+        );
+        assert_eq!(result, Err(ServiceError::Conflict));
+    }
 
     fn parse(arguments: &[&str]) -> Result<Option<Options>> {
         Options::parse(arguments.iter().map(|argument| (*argument).to_owned()))
