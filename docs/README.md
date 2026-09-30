@@ -39,10 +39,6 @@ Use the smallest relevant context:
 - Do not treat old slice numbers, historical validation counts, or an implementation path mentioned in an ADR as current code.
 - If documentation conflicts with source, determine whether the document is stale. Current code plus accepted architecture policy define implementation reality; product/ADR documents define intent and rationale within their stated scope.
 
-## Active execution plan
-
-The current architecture-changing task is [Connection-owned Observe authority simplification](development/plans/connection-observe-authority/README.md). It is temporary sequencing context, not current architecture. Read it only when executing that task; remove the plan and this pointer after completion and explicit acceptance.
-
 ## Maintenance rules
 
 - One fact should have one authoritative home. Other documents link to it instead of copying status tables.
