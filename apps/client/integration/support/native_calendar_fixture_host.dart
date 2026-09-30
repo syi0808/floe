@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/app/runtime/app_runtime.dart';
 import 'package:floe_client/features/connections/domain/source_connection.dart';
 import 'package:floe_client/features/day/application/calendar_gateway.dart';
