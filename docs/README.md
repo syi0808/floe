@@ -39,6 +39,10 @@ Use the smallest relevant context:
 - Do not treat old slice numbers, historical validation counts, or an implementation path mentioned in an ADR as current code.
 - If documentation conflicts with source, determine whether the document is stale. Current code plus accepted architecture policy define implementation reality; product/ADR documents define intent and rationale within their stated scope.
 
+## Active execution plan
+
+The current architecture-changing task is [Manager–Expert domain acquisition boundary convergence](development/plans/manager-expert-domain-acquisition.md). It is one atomic work item, not a checkpoint series. The plan is authoritative for the temporary cutover sequence; current source and architecture remain authoritative for implementation reality.
+
 ## Maintenance rules
 
 - One fact should have one authoritative home. Other documents link to it instead of copying status tables.
