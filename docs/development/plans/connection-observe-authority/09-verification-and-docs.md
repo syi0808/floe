@@ -742,8 +742,9 @@ production/test assertion or golden was changed to force a pass.
 - Final verification snapshot: `102eec86faa76dea339f2216ae3998666a26eef4`.
 - 09-B documentation commit: `5cd1f937021af010a41f9595767a1994ca821fcb`.
 - 09-C ADR commit: `102eec86faa76dea339f2216ae3998666a26eef4`.
-- Final HEAD / evidence commit: the commit containing this section, titled
-  `docs: record checkpoint 09 verification blockers`; resolve its SHA with
+- Failed-gate evidence commit: `025feccaa70ac4e6a2aa5ae4c1dc276c53c3bc91`.
+- Final HEAD / evidence finalization commit: the commit containing this update, titled
+  `docs: finalize checkpoint 09 failure evidence`; resolve its SHA with
   `git log -1 --format=%H -- docs/development/plans/connection-observe-authority/09-verification-and-docs.md`.
   Its only additional changes are checkpoint status/evidence, not verification inputs.
 - Execution order: fetched baseline/metadata/checkers → all focused regressions →
@@ -869,7 +870,7 @@ The six structural commands passed both at baseline and final snapshot. Final re
 
 | Exact command | Result |
 |---|---|
-| `cargo metadata --no-deps --format-version 1` | PASS; manifest graph captured at baseline; no manifest/dependency changes |
+| `cargo metadata --no-deps --format-version 1` | PASS at baseline and final snapshot; outputs compare identical; no manifest/dependency changes |
 | `python3 tools/architecture/test_check_boundaries.py` | PASS — 10 tests |
 | `python3 tools/architecture/check_boundaries.py` | PASS — dependency policy |
 | `python3 tools/architecture/test_check_expert_extensibility.py` | PASS — 7 tests |
@@ -896,7 +897,8 @@ The six structural commands passed both at baseline and final snapshot. Final re
 | Live Calendar/Contacts/Health/ScreenTime/provider/account smoke | SKIPPED — no explicitly approved disposable live source/device/account |
 
 Rust's existing dead-code warnings (`Supplied`, `RefreshOutcome.reason`, Vault test
-`unused_mut`) appeared without production changes; they were not suppressed.
+`admit_agent_action_dispatch` / `admit_agent_action_dispatch_with_cancellation`)
+appeared without production changes; they were not suppressed.
 Flutter version: stable 3.47.2, Dart 3.13.2.
 
 ### Required failed-gate disposition
@@ -939,8 +941,9 @@ under `/tmp/floe09/`. They are diagnostics, not a second repository progress doc
 - Final architecture checkers: **3**, with **3 test suites / 20 checker tests**.
 - Focused named Rust regressions: **29 PASS**; full Rust/Go/FFI gates above pass.
 - Flutter full gate: **366 passed / 5 failed**; later gates remain **NOT RUN**.
-- Worktree was clean before execution and after the two documentation commits.
-  Evidence commit stages only this plan and parent status; final clean state is checked
+- Worktree was clean before execution, after the two documentation commits and after
+  failed-gate evidence commit `025feccaa70ac4e6a2aa5ae4c1dc276c53c3bc91`.
+  Evidence finalization changes only this plan; final clean state is checked
   with `git status --porcelain` after committing.
 - No TCC, signing, account, shared Keychain or personal Calendar state was changed.
   Only the documented disposable loopback boundary test was run; ignored live tests
