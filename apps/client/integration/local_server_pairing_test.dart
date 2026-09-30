@@ -35,16 +35,14 @@ void main() {
     final port = socket.port;
     await socket.close();
     final address = 'http://127.0.0.1:$port';
-    final binary = '${temporary.path}/floe-server';
     final environmentFile = File('${temporary.path}/server.env');
     await environmentFile.writeAsString('');
-    final build = await Process.run('go', [
-      'build',
-      '-o',
-      binary,
-      './cmd/floe-server',
-    ], workingDirectory: '../../server');
+    final build = await Process.run('python3', [
+      '../../tools/validation/build_test_fixtures.py',
+      'server',
+    ]);
     expect(build.exitCode, 0, reason: build.stderr.toString());
+    final binary = build.stdout.toString().trim();
     final process = await Process.start(
       binary,
       [],

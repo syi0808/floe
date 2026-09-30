@@ -186,7 +186,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn retained_observation_expires_without_reopen_repair() {
         let registry = SourceLeaseRegistry::new();
         let dependency = sample_dependency(registry.process_incarnation());
@@ -197,7 +197,7 @@ mod tests {
                 Instant::now() + std::time::Duration::from_millis(10),
             )
             .unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        tokio::time::advance(std::time::Duration::from_millis(20)).await;
         assert_eq!(
             registry.observation(&dependency),
             Err(AgentFailure::StaleContext)

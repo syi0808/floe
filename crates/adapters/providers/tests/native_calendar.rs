@@ -79,19 +79,24 @@ fn run_read_fixture_child(test_name: &str, mode: &str) -> bool {
     std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
     std::fs::create_dir_all(&frameworks).unwrap();
     std::fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
+    let fixture = Command::new("python3")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../tools/validation/build_test_fixtures.py"
+        ))
+        .arg("calendar")
+        .output()
+        .unwrap();
     assert!(
-        Command::new("xcrun")
-            .args(["swiftc", "-emit-library", "-warnings-as-errors"])
-            .arg(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/NativeCalendarFixture.swift"
-            ))
-            .arg("-o")
-            .arg(frameworks.join("libfloe_eventkit.dylib"))
-            .status()
-            .unwrap()
-            .success()
+        fixture.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fixture.stderr)
     );
+    std::fs::copy(
+        String::from_utf8(fixture.stdout).unwrap().trim(),
+        frameworks.join("libfloe_eventkit.dylib"),
+    )
+    .unwrap();
     assert!(
         Command::new(executable)
             .args(["--exact", test_name, "--nocapture"])

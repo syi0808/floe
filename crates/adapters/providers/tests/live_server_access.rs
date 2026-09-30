@@ -86,16 +86,20 @@ async fn live_codex_model_uses_canonical_inference_and_exact_recipient() {
 async fn exercise_live_server(model: Option<String>) {
     let temporary = tempfile::tempdir().unwrap();
     std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    let server_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../server");
-    let binary = temporary.path().join("floe-server");
-    let build = Command::new("go")
-        .current_dir(&server_directory)
-        .args(["build", "-o"])
-        .arg(&binary)
-        .arg("./cmd/floe-server")
+    let build = Command::new("python3")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../tools/validation/build_test_fixtures.py"
+        ))
+        .arg("server")
         .output()
-        .expect("Go is required for the live local-server integration");
-    assert!(build.status.success(), "Go server build failed");
+        .expect("Python and Go are required for the live local-server integration");
+    assert!(
+        build.status.success(),
+        "Go server fixture build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let binary = PathBuf::from(String::from_utf8(build.stdout).unwrap().trim());
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);

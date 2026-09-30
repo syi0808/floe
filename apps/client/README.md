@@ -93,6 +93,11 @@ requires a buildable Go server and the debug FFI dylib. It uses a fresh temporar
 profile, final Rust pairing envelopes and memory-only credential persistence,
 then checks direct server authorization/revocation. It does not write the shared
 server Keychain slot or claim a live protected Access success through that slot.
+
+Go server and calendar fixture compilation is shared with the Rust tests through
+the [test fixture builder](../../docs/development/test-performance.md); mutable
+profiles and copied native host bundles remain private to each test.
+
 The separate `cargo test -p floe-provider-adapters --test live_server_access`
 test (repository root, macOS with Go) starts another disposable real server,
 strictly pairs it using test-owned vault keys, and loads the exact approved

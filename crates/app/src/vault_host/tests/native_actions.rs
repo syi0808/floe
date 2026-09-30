@@ -183,19 +183,24 @@ fn native_executor_uses_rust_ledger_and_lookup_only_after_response_loss() {
         std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
         std::fs::create_dir_all(&frameworks).unwrap();
         std::fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
+        let fixture = Command::new("python3")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tools/validation/build_test_fixtures.py"
+            ))
+            .arg("calendar")
+            .output()
+            .unwrap();
         assert!(
-            Command::new("xcrun")
-                .args(["swiftc", "-emit-library", "-warnings-as-errors"])
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../adapters/providers/tests/fixtures/NativeCalendarFixture.swift"
-                ))
-                .arg("-o")
-                .arg(frameworks.join("libfloe_eventkit.dylib"))
-                .status()
-                .unwrap()
-                .success()
+            fixture.status.success(),
+            "{}",
+            String::from_utf8_lossy(&fixture.stderr)
         );
+        std::fs::copy(
+            String::from_utf8(fixture.stdout).unwrap().trim(),
+            frameworks.join("libfloe_eventkit.dylib"),
+        )
+        .unwrap();
         assert!(
             Command::new(executable)
                 .args([

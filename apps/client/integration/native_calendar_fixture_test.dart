@@ -40,26 +40,13 @@ void main() {
       '--target=integration/support/native_calendar_fixture_host.dart',
       '--asset-dir=$assets',
     ]);
-    final architecture = (await Process.run('uname', [
-      '-m',
-    ])).stdout.toString().trim();
     final nativeLibrary = '$frameworks/libfloe_eventkit.dylib';
-    await checked('xcrun', [
-      'swiftc',
-      '-emit-library',
-      '-warnings-as-errors',
-      '-target',
-      '$architecture-apple-macosx12.0',
-      '../../crates/adapters/providers/tests/fixtures/NativeCalendarFixture.swift',
-      '-o',
-      nativeLibrary,
+    final fixture = await Process.run('python3', [
+      '../../tools/validation/build_test_fixtures.py',
+      'calendar',
     ]);
-    await checked('install_name_tool', [
-      '-id',
-      '@rpath/libfloe_eventkit.dylib',
-      nativeLibrary,
-    ]);
-    await checked('codesign', ['--force', '--sign', '-', nativeLibrary]);
+    expect(fixture.exitCode, 0, reason: fixture.stderr.toString());
+    await File(fixture.stdout.toString().trim()).copy(nativeLibrary);
     await checked('codesign', ['--force', '--sign', '-', bundle]);
     await checked('codesign', ['--verify', '--deep', '--strict', bundle]);
     final process = await Process.start(

@@ -484,7 +484,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn observation_expires_monotonically() {
         let registry = SourceLeaseRegistry::new();
         let dependency = dependency(registry.process_incarnation());
@@ -495,7 +495,7 @@ mod tests {
                 Instant::now() + std::time::Duration::from_millis(10),
             )
             .unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        tokio::time::advance(std::time::Duration::from_millis(20)).await;
         assert_eq!(
             registry.observation(&dependency),
             Err(AgentFailure::StaleContext)

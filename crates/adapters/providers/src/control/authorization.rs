@@ -1114,11 +1114,16 @@ mod tests {
     async fn stalled_response_honors_cancellation() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let (request_seen, request_received) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = [0u8; 512];
-            let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut request).await;
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            let count = tokio::io::AsyncReadExt::read(&mut socket, &mut request)
+                .await
+                .unwrap();
+            assert!(count > 0);
+            request_seen.send(()).unwrap();
+            std::future::pending::<()>().await;
         });
         let client = authorization_client(address);
         let cancellation = floe_execution::Cancellation::default();
@@ -1132,7 +1137,10 @@ mod tests {
                 )
                 .await
         });
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::timeout(Duration::from_secs(5), request_received)
+            .await
+            .unwrap()
+            .unwrap();
         cancellation.cancel();
         assert_eq!(task.await.unwrap(), Err(AgentFailure::Cancelled));
         server.abort();

@@ -54,6 +54,12 @@ Use targeted cargo tests before the full workspace gate when useful.
 add new module files to `tests/integration.rs` because automatic standalone targets are disabled.
 Provider live-server/native tests and FFI subprocess tests remain separate executables for isolation.
 
+The optional nextest pilot and shared Go/Swift fixture builder are documented in
+`docs/development/test-performance.md`. Nextest requires a separate workspace doctest
+gate and does not replace the default final Cargo gate. When fixture tooling changes,
+run `python3 tools/validation/test_test_fixtures.py -v` and the affected real Rust/Flutter
+fixture tests, preserving private server data and native host bundles.
+
 The final workspace test already compiles the covered library targets; do not precede it with a duplicate workspace-wide `cargo check`. Explicit task requirements for distinct targets/features still apply. For build-performance measurements, add `--timings` to the same gate, record cache/toolchain conditions, and compare compile/link and warm execution separately. Do not infer speedups from differently warmed caches.
 
 Repository-wide cargo fmt --check has historically contained unrelated baseline drift; do not introduce formatting churn merely to make an unrelated whole-repo format gate clean. Format changed Rust code appropriately and follow any stronger current plan requirement.
