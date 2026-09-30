@@ -1,4 +1,10 @@
-# S3 controlled validation
+# Calendar native/action validation
+
+This directory contains repeatable deterministic native checks and the opt-in
+real EventKit response-loss procedure for the current macOS Calendar action
+boundary. Historical `Floe S3 — disposable` marker strings are retained as exact
+external-operation identity for recovery and cleanup; do not rename them as a
+directory cleanup.
 
 `ResponseLoss.swift` is a **test-only** native response-loss shim. It forwards to
 the actual built EventKit adapter, then replaces a successful create response with
@@ -27,7 +33,7 @@ both libraries and the copied app. Launch only the copied app for fault injectio
 Do not modify the original build. Persist the exact proposal/execution/time/external IDs in a private evidence record and
 remove only the exact disposable event after collection is verified.
 
-Canonical automated uncertainty coverage (Tier B, no real Calendar access) is
+Canonical automated uncertainty coverage (no real Calendar access) is
 `cargo test -p floe-app native_executor_uses_rust_ledger_and_lookup_only_after_response_loss`.
 The test uses the admitted Actions owner and a test-only native adapter; it does
 not replace the separately authorized real EventKit procedure above.

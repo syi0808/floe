@@ -52,6 +52,17 @@ host suite plus current provider-adapter and Inference tests.
 FoundationModels transport; supported hosts can also run `--exercise` and
 `--exercise-learner`. The smoke example belongs to `floe-app`.
 
+`tools/validation/run-vault-keyring-smoke.sh --probe` checks access to the macOS
+login Keychain without creating a key; `--exercise` uses only a fresh disposable
+Vault root and exact validation-owned key cleanup.
+
+`tools/validation/calendar/check-native.sh` compiles the production EventKit action
+adapter with deterministic payload, conflict and authority assertions and does not
+read a personal Calendar. The opt-in real Calendar response-loss and exact cleanup
+procedure is documented in `tools/validation/calendar/README.md`; it requires
+explicit approval for the dedicated disposable calendar and never authorizes TCC
+reset or unrelated Calendar edits.
+
 `flutter test integration/product_conversation_test.dart` runs the real product
 gateways and debug FFI in a private, signed copy of Flutter's test host containing
 the same-source Foundation dylib. It requires macOS with Foundation Available
