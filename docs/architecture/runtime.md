@@ -122,6 +122,13 @@ See [Authority and recovery](authority-recovery.md).
 
 ## Product boundary
 
+The macOS debug CLI is another caller of the same admitted `AppHost` services.
+It reuses an explicitly selected client profile, existing identity, Keychain
+credentials and Expert/source configuration, and never owns model/source policy.
+It bundles the existing Apple model and EventKit drivers without launching Flutter.
+It does not supply Flutter-only live personal/Attention host publication or execute
+Actions. See [Debug conversation CLI](../development/debug-cli.md).
+
 The final outer path is:
 
 ```text
