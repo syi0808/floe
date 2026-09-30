@@ -2,7 +2,7 @@
 
 Prerequisite: 08 complete.
 
-Status: Incomplete — residual native-fixture closure continues. The stale Action proposal-fence assertion has been corrected to the current user-proposal contract; golden tests remain excluded from the 09 completion gate.
+Status: Complete — deterministic non-golden residual gates pass on the final test-support snapshot. Golden tests remain excluded; plan retirement awaits explicit user acceptance.
 
 Planning base: main at `a4f292cb77bf3dc6a3593c035fc80a5245c79645` on 2026-09-30.
 
@@ -1118,6 +1118,101 @@ IGNORED — operator excluded golden tests. Live smoke: SKIPPED — no explicitl
 approved disposable live source/device/account. Parent 09 remains Incomplete;
 plan bundle and active-plan pointer remain intact. This evidence-only change is
 committed separately; final cleanliness is checked after that commit.
+
+### Residual closure — 2026-09-30 (complete)
+
+The resumed residual baseline was clean `main` at
+`c7c76fd7270c86345ec0d78cbfaae0c2e60a31a1`. Initial and final
+`git fetch origin` both resolved `origin/main` to that same SHA. Its §17.4 D
+correction resolved the previous blocker without changing production contracts.
+
+Implementation commits:
+- `232d2aa1`: remove stale Action scenario from the standard test and integration
+  child; update the parent to three sentinels/profiles; delete the duplicate Day
+  test after the three bundle scenarios passed.
+- `e6c82c150f4a32a9abec30ab91daf659b72d7331`: remove the now-unused Action error
+  import. This is the final source/test-support snapshot for every gate below.
+- Existing bundle harness/validation plist were added by `10b8a243` and retained.
+
+Changed paths in this continuation:
+- modified `apps/client/integration/native_calendar_fixture_test.dart`;
+- modified `apps/client/integration/support/native_calendar_fixture_host.dart`;
+- modified `apps/client/test/features/actions/calendar_action_gateway_test.dart`;
+- deleted `apps/client/test/features/day/calendar_gateway_test.dart`.
+
+The original Day assertions were compared with the child before deletion: mirror
+identity/provider/content/revisions, unchanged source authority, reopen coherence,
+AllAvailable 1→2 revision/authority advancement, read failure without authority
+change, and wide-source import with bounded publication are retained. There are
+no skipped duplicate scenarios. The two pure AppWire Action tests remain.
+The incorrect user-proposal evidence-fence scenario and child invocation are gone
+under the explicit §17.4 D correction, not replaced with a weaker fence assertion.
+
+`git diff c7c76fd7..e6c82c15 -- crates apps/client/lib apps/client/goldens tools`
+is empty: production Rust/App/native permission code, loaders, Registry UI and
+golden image are unchanged. The private signed `.app` runs a copied tester with
+the existing Swift fixture at the production bundle-relative EventKit path;
+source establishment still executes the real probe/native subject boundary.
+
+Final-snapshot evidence (commands run from repo root unless noted):
+- `cargo build -p floe-ffi`: PASS before Flutter and again after broad Rust.
+- In `apps/client`, `flutter analyze`: PASS, no issues.
+- `flutter test test/features/actions/calendar_action_gateway_test.dart`: PASS,
+  2 tests.
+- `flutter test integration/native_calendar_fixture_test.dart`: PASS, 1 parent
+  test; Day continuity, AllAvailable authority and wide-source publication all
+  emitted PASS sentinels; all three private profiles emitted removal sentinels;
+  no native Calendar writes occurred.
+- `flutter test test/features/experts/agent_registry_dialog_test.dart`: 4 PASS,
+  one image comparison failure. Both width-specific behavioral assertions passed
+  before the image assertion. Golden: **IGNORED — operator excluded golden tests**.
+- `flutter test`: 366 PASS, one failure, exclusively that Registry image assertion
+  (29px / 0.02% difference); **zero non-golden failures**. Generated failure images
+  were removed by their four exact paths; the tracked golden was untouched.
+- `flutter build macos`: PASS; release product bundle built with same-source FFI
+  and native libraries. Existing Rust dead-code warnings remain non-blocking.
+- `flutter test integration/local_server_pairing_test.dart`: PASS, 1 test;
+  disposable profile and exact Vault key cleanup sentinels confirmed.
+- `swift test --package-path apps/client/apple/FloeAppleContacts`: PASS, 11 tests.
+- `swift test --package-path apps/client/apple/FloeAppleHealth`: PASS, 8 tests.
+- `swift test --package-path apps/client/apple/FeasibilityProvider`: PASS, 5 tests.
+- `swift test --package-path apps/client/ios/ScreenTimeGate`: PASS, 5 tests.
+- `bash tools/s3-validation/check-native.sh`: PASS, 32 assertions, no OS permission
+  or event access invoked.
+- `python3 tools/architecture/test_check_boundaries.py` and
+  `python3 tools/architecture/check_boundaries.py`: PASS, 10 checker tests;
+  final graph 22 nodes/105 edges, no errors/warnings.
+- `python3 tools/architecture/test_check_expert_extensibility.py` and
+  `python3 tools/architecture/check_expert_extensibility.py`: PASS, 7 tests.
+- `python3 tools/architecture/test_check_connection_observe_conformance.py` and
+  `python3 tools/architecture/check_connection_observe_conformance.py`: PASS,
+  3 tests.
+- `cargo metadata --no-deps --format-version 1`: PASS.
+- `cargo check --workspace --lib`: PASS.
+- `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast -- --test-threads=1`:
+  PASS, all test binaries/doc tests succeeded. Existing ignored model/OAuth tests
+  remain ignored. Source-resource stale receipt, native response-loss ledger/
+  lookup, Expert forged/ambiguous artifact rejection and evidence-bound
+  settlement regressions explicitly passed; no fence assertions were removed.
+- In `server`, `go test ./...`, `go test -race ./...`, `go vet ./...`: all PASS.
+- `cargo test -p floe-provider-adapters --test live_server_access`: PASS, 1
+  disposable loopback test; 1 approved-OAuth/model test ignored as intended.
+
+The four §17.9 residual searches were run. No literal `native Calendar unavailable`
+or `pending native source` remains in Flutter tests/integration. No deleted Day
+test import remains; `FixtureCalendarAdapter` exists only in the bounded child.
+Native dylib/Swift fixture matches are the existing provider test, integration
+parent, real macOS build bundling and explicit native validation runbook.
+Remaining `TestAppHost` callers do not establish bundle-native Calendar sources.
+No production source/permission bypass or new loader override exists.
+
+Live EventKit/response-loss smoke: **SKIPPED — no explicitly approved disposable
+live source/device/account**. No external account changes or shared credential
+reset occurred. `git diff --check` passes; the worktree was clean before this
+documentation-only closure and is checked again after its commit. Parent 09 and
+this plan now mark Complete. The plan bundle and `docs/README.md` active-plan
+pointer remain intact; retirement was not performed. No source/test-support
+change followed the final gate runs.
 
 ## 17. Residual closure plan — 2026-09-30
 
