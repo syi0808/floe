@@ -360,7 +360,7 @@ mod tests {
                 crate::prompts::manager_role_spec().instructions.trim()
             );
             assert_eq!(role_entry.source, "manager-role");
-            assert_eq!(role_entry.revision, 7);
+            assert_eq!(role_entry.revision, 8);
             assert_eq!(role_entry.content_sha256, role.content_sha256());
             assert_eq!(
                 envelope.manifest.stable_prompt_sha256,

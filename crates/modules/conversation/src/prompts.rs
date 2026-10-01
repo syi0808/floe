@@ -10,7 +10,7 @@ use floe_knowledge::prompts::{
 use crate::MANAGER_OUTPUT_CONTRACT;
 
 const MANAGER_ROLE: &str = include_str!("../prompts/manager_role.txt");
-const MANAGER_ROLE_REVISION: u64 = 7;
+const MANAGER_ROLE_REVISION: u64 = 8;
 
 /// The Manager role as role-only instructions: no behavior kernel, persona, or
 /// capability protocol rendering. Canonical callers build their RoleSpec from
@@ -94,7 +94,7 @@ mod tests {
                         BEHAVIOR_KERNEL_REVISION,
                         BEHAVIOR_KERNEL,
                     ),
-                    product_component(PromptComponentKind::Role, "manager-role", 7, MANAGER_ROLE),
+                    product_component(PromptComponentKind::Role, "manager-role", 8, MANAGER_ROLE),
                     PromptComponent {
                         kind: PromptComponentKind::Persona,
                         source: persona.source,
