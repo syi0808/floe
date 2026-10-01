@@ -1,6 +1,6 @@
 # Agent execution environment and grounded Manager convergence
 
-- Status: in progress — Checkpoints 01–02 complete
+- Status: in progress — Checkpoints 01–03 complete
 - Baseline: main at 04386367221c66587a1f5001c13d89a0cbbda0d0
 - Classification: architectural change
 - Primary owners: App composition/lifecycle, Experts, Conversation, Context, Agent Runtime, Inference/provider adapters
@@ -1298,102 +1298,599 @@ After verification, update only this plan's `Execution report / Checkpoint 03`, 
 
 # Checkpoint 04 — Configuration/authority separation through Task execution
 
+## Planning refresh and status
+
+- Status: not started — Checkpoints 01–03 are complete; no Checkpoint 04 implementation has landed.
+- Planning refresh baseline: `main` at `4928430ff860277c6f035fa87b2808ceabc989d6`.
+- The original Checkpoint 04 semantic direction remains correct, but its file-level list is no longer sufficient after the Checkpoint 03 Run-environment cutover.
+- This refreshed plan classifies every remaining current-Registry execution fence by owner and freezes its replacement so implementation does not have to decide whether a check represents configuration or authority.
+
+The refreshed source review fixes the following decisions:
+
+1. **The admitted Task record is the configuration identity after delegation.** `TaskRecord.admission` and `TaskRecord.selection` came from the immutable `RunExpertEnvironment`; execution must never reconstruct their validity from the current Registry.
+2. **Registry assignment enablement and binding are configuration, not revocation.** Disabling an assignment/installation or rebinding it after Run admission affects later Run snapshots. It does not cancel, reinterpret, reroute, suppress or invalidate an already admitted Task.
+3. **Pinned source references remain exact configuration.** A rebind from source A to B never moves an active Task to B. The active Task keeps A. If A itself is gone, unauthorized, stale, disconnected or otherwise unusable, the source/Access owner denies A under its live authority rules.
+4. **Current Registry is still used where it is the actual mutation store, not as execution authority.** Stateful Expert settlement may load the current Registry to atomically advance the exact assignment's private state while preserving a concurrently updated binding. It must not require the current binding or enabled flag to equal the Task snapshot.
+5. **Historical Task/artifact evidence does not require the assignment to remain active.** A completed Task and its exact artifact/dependency remain historical evidence after disable/rebind. Downstream Actions validate that evidence against the durable Task, current source/grant/Action authority and provider preconditions.
+6. **No delayed action may use Registry equality as a proxy for live authority.** Rebinding/disabling alone must not block proposal publication or dispatch. Stale grant/source authority, changed physical resources/subject, Action policy, provider preflight and external target drift still block.
+7. **The generic Inference execution-fence abstraction is obsolete in current architecture.** Its only production use is the Expert current-binding fence. Access already owns admit/consume/post-response revalidation. Remove `InferenceExecutionFence`, `with_execution_fence`, the Expert wrapper/fence types and their tests rather than leaving a no-op compatibility hook.
+8. **The Expert host no longer has a binding-fence port.** `ExpertBindingFence`, `ConversationExperts.binding_fence`, pre/post requirement binding checks and `BoundRemoteViewReader` exist only to re-read current Registry configuration. Delete them. The admitted selection remains required and continues to drive exact source reads.
+9. **Current-Registry historical helpers are not needed to prove completed evidence.** `validate_settled_invocation`, `validate_active_assignment`, and `validate_current_execution_selection` are removed once callers are converted. Historical evidence is checked against the exact completed Task/admission/artifact; current Registry remains the owner only of current configuration/private-state mutation.
+10. **No persistence or wire schema change is required.** Task schema 4 already persists admission/selection; Conversation schema 9 already persists the Run environment identity. Checkpoint 04 changes validation ownership, not stored shape.
+11. **Checkpoint 04 must not weaken live authority.** Keep Context/Access source reads, `SourceAuthority`, `GrantAuthority`, exact recipient consent, current saved-connection/provider admission, OS/native permission, coverage reauthorization, cancellation/deadline, Action authority, durable pre-dispatch intent and uncertain-write recovery exactly on their canonical paths.
+
 ## Goal
 
-Remove live Registry binding drift as a hidden authority check for work that already belongs to a pinned Run, while preserving all real source, model-recipient, connection and action authority checks.
+Complete the semantic split introduced by Checkpoint 03:
 
-This checkpoint is intentionally repository-wide. Do not mechanically delete every Registry check. Classify each use by whether it protects configuration identity or real authority.
+```text
+configuration
+  RunExpertEnvironment
+    -> pinned Expert admission
+    -> pinned Expert selection
+    -> pinned endpoint
+    -> durable Task record
+  lifetime: one Run / Task history
 
-## Current high-risk checks
+authority
+  Connections / Context / Access / Inference / Actions / provider / OS
+    -> source exists now
+    -> SourceAuthority is current
+    -> grant is current and allowed
+    -> exact model recipient is still allowed
+    -> current provider/credential admission
+    -> OS/native permission
+    -> dependency coverage is still live
+    -> Action policy/target/provider preconditions
+  lifetime: checked at every protected operation
+```
 
-Search all uses of AgentRegistry::validate_current_execution_selection. At baseline this includes:
+After this checkpoint, a pure Registry configuration mutation cannot change the outcome of already admitted work except by changing what a later Run sees.
 
-- crates/adapters/vault/src/vault/tasks.rs:273-280 — Task admission compares against current Registry.
-- crates/app/src/vault_host/conversation_turn/expert_dispatch.rs — endpoint execution/reads compare against current Registry.
-- crates/app/src/vault_host/conversation_turn/expert_dispatch/stateful_settlement.rs — settlement compares current selection.
-- crates/app/src/vault_host/remote_views.rs — Expert remote reads compare current selection.
-- crates/adapters/vault/src/vault/registry.rs — Task/Registry checks.
-- crates/adapters/vault/src/vault/expert_actions.rs and agent_actions.rs — downstream Action evidence checks.
-- crates/app/src/vault_host/interaction_owners.rs — interaction refresh/resolution checks.
+Canonical active-Task behavior:
 
-## Required semantic classification
+```text
+Run E1 selects source A
+  -> Task persists E1 admission/selection
 
-### Remove/replace as live configuration fences
+Registry rebinds assignment to source B / disables assignment
+  -> current Task still owns E1/source A
+  -> source read asks Context/Access to read A
+       -> A live + authorized       => read A
+       -> A stale/revoked/missing   => deny/needs-user-action
+  -> delegated model dispatch uses normal Access recipient fences
+  -> result release uses normal source/model provenance checks
+  -> settlement commits Task result and assignment-private state
+       while preserving the Registry's current B/disabled configuration
 
-For an active Task admitted from a RunExpertEnvironment, do not require the current Registry to still equal the pinned admission/selection at:
-- Task creation after the model has already selected a pinned entry;
-- Expert endpoint start;
-- requirement acquisition;
-- delegated model dispatch;
-- delegated model response release;
-- Task report release/settlement.
+next Run
+  -> samples current Registry/Directory
+  -> sees B or no Expert
+```
 
-Instead validate against the immutable Run/Task-pinned admission and selection. The Task record already persists exact admission and selection; make that record the configuration identity for the Task.
+There is never a fallback from A to B inside the old Task.
 
-### Preserve live authority
+## Current code anchors at the planning refresh baseline
 
-At the same operations continue to re-check, as applicable:
-- selected Connection/source still exists and is the pinned exact source;
-- SourceAuthority and observed physical resources;
-- DataAccessGrant and GrantAuthority;
-- recipient consent and exact model recipient;
-- provider/current credential admission;
-- OS/native permission;
-- cancellation/deadline;
-- source/model dependency coverage.
+### Experts Registry configuration helpers
 
-A pinned source reference is configuration, not permission.
+- `crates/modules/experts/src/registry.rs:687` — `validate_settled_invocation`, currently used only by downstream Action evidence and still consults current Registry history.
+- `crates/modules/experts/src/registry.rs:713` — `validate_active_assignment`, current enabled-state configuration fence.
+- `crates/modules/experts/src/registry.rs:792` — `validate_current_execution_selection`, recomputes current binding and optionally enabled state.
+- `crates/modules/experts/src/registry.rs:908` — `complete`, assignment-private-state transition builder; this remains useful and does not itself authorize current binding.
 
-### Consequential Actions and delayed user decisions
+Repository search at this baseline finds no legitimate non-execution owner for `validate_active_assignment` or `validate_current_execution_selection`. After callers are cut over, delete both methods. `validate_settled_invocation` also has only Action callers and is replaced by durable Task/artifact identity below.
 
-Review every current-selection check in Actions and durable interaction resolution individually.
+### Vault Task admission and terminal writes
 
-The target rule is:
-- a completed Task/proposal is historical work from its originating pinned environment;
-- changing Expert assignment/binding alone does not rewrite or erase that historical evidence;
-- any new external effect must still validate the exact proposal target, Task/artifact identity, current source/connection/grant/Action authority and provider preconditions;
-- if a binding change changes the actual target/source state or invalidates source provenance, those real checks deny;
-- do not keep a Registry-equality check solely as a surrogate for current source or action authority.
+- `crates/adapters/vault/src/vault/tasks.rs:247` — `admit_task`; new Task creation re-opens current Registry and validates current selection/enabled state.
+- `crates/adapters/vault/src/vault/tasks.rs:321` — `compare_and_swap_task`; a transition to `Completed` calls the same current-Registry fence.
+- `crates/adapters/vault/src/vault/registry.rs:12` — `validate_current_task_execution_on`, shared Registry-equality helper.
+- `crates/adapters/vault/src/vault/registry.rs:296` — `settle_expert_task_checked`; it currently calls that helper before its real atomic private-state/Task/provenance checks.
 
-If one delayed operation genuinely requires current Expert configuration rather than current authority, ADR 0033 must name that exception explicitly before retaining it.
+### Expert endpoint, source read and model dispatch
 
-## Vault Task admission change
+- `crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:56` — `BindingFencedInferenceExecutor`.
+- `crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:63` — `CurrentBindingExecutionFence`.
+- `crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:69` — `validate_current_binding`.
+- `crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:92` — `ExpertBindingFence`.
+- `crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:215` — `RegisteredExpertEndpoint::execute`.
+- `crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:365` — construction of `BoundRemoteViewReader`.
+- `crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:388` — `InferenceService::with_execution_fence(CurrentBindingExecutionFence)`.
+- `crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:443` — second `BindingFencedInferenceExecutor` wrapper.
+- `crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:588` — `ConversationExperts.binding_fence`.
+- `crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:845` — requirement read checks binding before and after Context acquisition.
+- `crates/app/src/vault_host/conversation_turn/expert_dispatch/stateful_settlement.rs:52` — current-selection fence before stateful settlement.
+- `crates/app/src/vault_host/remote_views.rs:65` — `BoundRemoteViewReader`; its only extra meaning over `RemoteViewReader` is pre/post Registry validation.
 
-At crates/adapters/vault/src/vault/tasks.rs:247-319:
+### Generic Inference fence
 
-- preserve executor-generation/CAS/duplicate-task exact-admission checks;
-- remove the transaction-time reconstruction of current Registry solely to validate the already pinned admission/selection;
-- validate proposed admission/selection structurally and against the RunExpertEnvironment before entering the repository;
-- keep exact_admission comparison on replay.
+- `crates/modules/inference/src/application/service.rs:57` — `InferenceService.execution_fence`.
+- `crates/modules/inference/src/application/service.rs:64` — `InferenceExecutionFence`.
+- `crates/modules/inference/src/application/service.rs:68` — `CandidateFailure::ExecutionFence`.
+- `crates/modules/inference/src/application/service.rs:89` — `with_execution_fence`.
+- `crates/modules/inference/src/application/service.rs:301,352` — pre-provider and post-response execution-fence calls.
+- The canonical Access sequence remains separately present in this same service: model dispatch admission, `consume_model_dispatch` immediately before handoff, and `revalidate_model_dispatch` before response release.
 
-Do not move source/grant validation into the Vault Task transaction.
+### Downstream Action evidence and dispatch
 
-## Required tests
+- `crates/adapters/vault/src/vault/expert_actions.rs:14` — `expert_proposal_dependency`; already validates Completed Task coverage and current grant dependency without Registry equality.
+- `crates/adapters/vault/src/vault/expert_actions.rs:88` — `with_proposal_evidence`; after exact session/Task/artifact checks it currently consults current Registry and conditionally requires active/current selection.
+- `crates/adapters/vault/src/vault/expert_actions.rs:231` — `validate_settled_invocation`.
+- `crates/adapters/vault/src/vault/expert_actions.rs:239` — `require_active` branch with active/current-selection checks.
+- `crates/adapters/vault/src/vault/agent_actions.rs:317` — durable Action-envelope storage; current `validate_settled_invocation` + `validate_active_assignment`.
+- `crates/adapters/vault/src/vault/agent_actions.rs:417` — durable pre-dispatch admission.
+- `crates/adapters/vault/src/vault/agent_actions.rs:475` — current-selection fence during dispatch.
+- The same dispatch transaction already checks exact Completed Task identity, Task dependency coverage, pinned selection-to-source correspondence and `validate_dependency_transaction`; Actions then retains policy, current source/subject/provider preflight and uncertain-write recovery.
 
-- mutate binding after Run snapshot but before Task admission: active Run admits the pinned Task;
-- mutate binding while Task is Working: Task continues on pinned configuration;
-- delete/revoke the pinned underlying source while Task is Working: live source/authority check denies;
-- revoke grant while Task is Working: denies;
-- change model recipient consent while Task is Working: existing exact-recipient fence still denies when required;
-- next Run observes the new binding;
-- completed Task replay is unchanged by later binding changes;
-- action publication/dispatch tests prove Registry drift alone is not authority, while actual target/source/grant/action drift still blocks;
-- no test is weakened from exact identity/provenance/CAS assertions.
+### Durable interaction resolution
 
-## Residual gate
+- `crates/app/src/vault_host/interaction_owners.rs:124` — Host `expert_review_current`.
+- `crates/app/src/vault_host/interaction_owners.rs:155` — current Registry equality currently turns a binding change into `ExpertAssignmentChanged`.
+- The same function already has the correct stable check: reviewed target must match the originating `task.selection`. Live source/grant review follows through the existing inline owner path.
 
-Run concept searches for:
+### Current architecture text that must change with implementation
 
-    validate_current_execution_selection
-    validate_active_assignment
-    binding_revision
-    current binding
-    registry drift
-    rebind
+- `docs/architecture/runtime.md:54` — says an Expert supplies an Inference execution fence.
+- `docs/architecture/runtime.md:93` — says current Registry-selection fences remain.
+- `docs/architecture/runtime.md:95` — says successful terminal Task writes check current Registry selection.
+- `docs/architecture/authority-recovery.md:10` — says current binding drift blocks later Task execution.
+- `docs/architecture/authority-recovery.md:68` — says binding-drift execution fences remain.
 
-Every remaining live Registry comparison on execution/release must be justified in the checkpoint report as either:
-1. explicit current-configuration behavior named by ADR 0033; or
-2. settings/inspection logic, not execution authority.
+ADR 0033 already defines the target semantics; no ADR change is required unless implementation discovers a genuine current-configuration exception that the ADR does not name.
+
+## 04-A — Remove Registry configuration from Task admission and terminal state
+
+### `crates/adapters/vault/src/vault/tasks.rs:247+`
+
+In `admit_task`:
+
+1. keep `proposed.validate_initial(self.person_id)`;
+2. keep duplicate Task exact-admission rejoin;
+3. keep active executor-generation equality;
+4. **delete** current Registry load/restore and `validate_current_execution_selection`;
+5. persist the exact proposed `admission` and `selection` from the Run environment unchanged;
+6. keep row bounds, unique Task/InvocationKey constraints and access/key checks.
+
+The Task repository must not rediscover whether that selection is current. `RunExpertEnvironment::delegate` already resolved the pinned entry and `TaskCoordinator::execute` already compares a replayed Task's admission/selection with that pinned entry.
+
+### `crates/adapters/vault/src/vault/tasks.rs:321+`
+
+In `compare_and_swap_task`:
+
+- delete the special `Completed` branch that calls `validate_current_task_execution_on`;
+- preserve transition validation, aggregate-revision CAS, executor generation, storage/access checks and all failure-state semantics.
+
+A stateless Task may therefore commit a Completed snapshot after pure Registry rebind/disable.
+
+### `crates/adapters/vault/src/vault/registry.rs`
+
+Delete `validate_current_task_execution_on` entirely.
+
+This is a direct removal; do not replace it with another Registry-equality helper under a different name.
+
+Task schema remains 4.
+
+## 04-B — Delete the Expert current-binding execution fences
+
+### `crates/app/src/vault_host/conversation_turn/expert_dispatch.rs`
+
+Delete:
+
+- `BindingFencedInferenceExecutor`;
+- `CurrentBindingExecutionFence`;
+- `validate_current_binding`;
+- `ExpertBindingFence`;
+- every pre/post binding-fence call;
+- `ConversationExperts.binding_fence`;
+- test-only `TestBindingFence` / observed binding-fence fixtures that exist only for this behavior.
+
+In `RegisteredExpertEndpoint::execute` remove each current Registry selection/eabled check:
+
+1. endpoint-start `validate_current_execution_selection`;
+2. post-blocker-publication revalidation;
+3. final pre-`ExpertReport` release revalidation.
+
+Keep the endpoint's pinned/exact checks:
+
+- invocation principal matches Vault Person;
+- selected agent ID and definition revision match the pinned admission;
+- retained registration manifest matches pinned package/definition;
+- saved connection, when present, matches principal/device;
+- output/artifact validation and bounded result semantics.
+
+### Requirement acquisition
+
+In `DelegatedMessageExperts::read_requirement`:
+
+- continue to read the exact `admitted_selection`;
+- continue matching package requirement key/capability/contract version;
+- continue passing only the selected references from the Task into Context;
+- remove binding-fence acquisition and both pre/post read checks.
+
+`read_declared_source` and its concrete readers remain the authority boundary. A rebind does not alter the `selected_refs` passed by this Task.
+
+### Remote selected read
+
+In `crates/app/src/vault_host/remote_views.rs`:
+
+- delete `BoundRemoteViewReader` and its `validate_current`;
+- implement/use `SelectedSourceReader` directly on the existing `RemoteViewReader` (or an equivalent thin wrapper containing no Registry state);
+- preserve selected capability/version validation;
+- preserve `read_selected_remote_view`, exact pairing/producer/source/grant checks, RemoteCallWindow deadline/cancellation and returned dependency bindings.
+
+In `expert_dispatch.rs`, pass the ordinary remote reader as the selected reader; do not carry Expert admission/selection into the remote authority adapter.
+
+## 04-C — Remove the generic Inference configuration fence; preserve Access revalidation
+
+### `crates/modules/inference/src/application/service.rs`
+
+Delete the now-unused abstraction:
+
+- `InferenceService.execution_fence`;
+- `InferenceExecutionFence`;
+- `InferenceService::with_execution_fence`;
+- `CandidateFailure::ExecutionFence`;
+- pre-provider execution-fence callback;
+- post-response execution-fence callback.
+
+Simplify candidate errors back to ordinary `AgentFailure` handling without creating another owner-neutral extension hook solely to preserve this deleted behavior.
+
+Update exports in:
+
+- `crates/modules/inference/src/application/mod.rs`;
+- `crates/modules/inference/src/lib.rs`.
+
+Delete/update the fence-specific unit test `execution_fence_rejects_handoff_without_transport_or_fallback`.
+
+Do **not** remove or weaken the real live model-authority path:
+
+```text
+admit_model_dispatch
+  -> consume_model_dispatch immediately before provider handoff
+  -> provider generate
+  -> revalidate_model_dispatch before response release
+```
+
+Retain existing regressions such as:
+
+- Access denial => zero provider calls/zero charge;
+- consent missing between admit and handoff;
+- hard revoke between admit and handoff;
+- post-response revoke suppresses result while keeping charge;
+- missing consent never silently falls back to another recipient.
+
+Expert dispatch now uses the ordinary `InferenceService` / `InferenceExecutor` directly.
+
+## 04-D — Let stateful settlement update private state without asserting current configuration
+
+### `crates/app/src/vault_host/conversation_turn/expert_dispatch/stateful_settlement.rs`
+
+Remove the call to `registry.validate_current_execution_selection`.
+
+Keep:
+
+- Person/cancellation/deadline;
+- pinned admission Registry-instance/package/definition checks;
+- `resolve_admitted` exact assignment/installation/package identity;
+- pinned `self.selection` checks tying proposal dependency to the source selected by the Task;
+- dependency/result bounds;
+- `registry.complete` to derive the next assignment-private state;
+- exact proposal artifact and settlement generation.
+
+Do not use assignment enabled state as a settlement gate.
+
+### `crates/adapters/vault/src/vault/registry.rs:296+` — atomic settlement
+
+Inside `settle_expert_task_checked`:
+
+1. delete `validate_current_task_execution_on(&current)`;
+2. keep settlement shape/result/coverage/private-state transition checks;
+3. keep exact Registry instance / assignment ID / installation ID / package / definition identity;
+4. keep exact Task admission and invocation key equality;
+5. keep expected private-state revision and duplicate invocation protection;
+6. keep Task CAS and executor generation;
+7. keep `validate_context_dependency_coverage_in_transaction`;
+8. load the **current** Registry only as the mutation base, replace only the exact assignment's `private_state`, advance Registry revision, and persist it atomically with the Task.
+
+This must preserve a binding/enable change that committed before settlement. Do not reconstruct a stale Registry snapshot from the Run.
+
+The existing concurrency regression that private-state settlement and binding mutation preserve both fields is a required invariant, not incidental behavior.
+
+## 04-E — Make Actions depend on completed Task evidence and live Action/source authority, not active Expert configuration
+
+### `crates/adapters/vault/src/vault/expert_actions.rs`
+
+`expert_proposal_dependency` is already close to the target. Keep its:
+
+- Completed Task requirement;
+- exact observation ID lookup;
+- dependency Person/consumer/operation/purpose/resource/expiry checks;
+- current DataAccessGrant load and `validate_grant_dependency`.
+
+Refactor `with_proposal_evidence`:
+
+1. remove `require_active`;
+2. remove current Registry `validate_active_assignment` and `validate_current_execution_selection`;
+3. stop using current Registry to prove proposal configuration;
+4. validate the historical proposal directly against the recorded Task:
+   - Task is Completed and bound to the requested session/turn;
+   - `recorded.admission.registry_instance_id == evidence.instance_id`;
+   - `recorded.admission.assignment_id == evidence.assignment_id`;
+   - `recorded.admission.package == evidence.package`;
+   - Task agent ID/definition and invocation key agree with the artifact;
+   - exact artifact bytes and coverage match the durable Task;
+   - proposal dependency is present in Task coverage and is compatible with the Task's pinned `selection`.
+5. preserve `state_revision` as historical artifact identity, but do not compare it to current Registry enablement/binding.
+
+`with_expert_proposal` and `with_recorded_expert_proposal` may remain distinct public store operations, but both use the same historical evidence validation; there is no “active Registry” variant.
+
+### `crates/adapters/vault/src/vault/agent_actions.rs:317+`
+
+For `store_agent_action_envelope`:
+
+- remove `validate_active_assignment`;
+- remove reliance on current Registry as configuration proof;
+- load the exact Task named by `origin.invocation_id` inside the durable transaction and bind the envelope to that completed Task's exact admission/agent/provenance;
+- require the envelope dependency to be part of the Task's coverage and compatible with the Task's pinned selection;
+- keep durable digest/unique execution identity and action-policy semantics.
+
+For `admit_agent_action_dispatch_with_cancellation_and_fence`:
+
+- delete current Registry `validate_current_execution_selection`;
+- keep exact Completed Task/origin/admission identity;
+- keep Task coverage contains the exact envelope dependency;
+- keep pinned Task selection contains the dependency's selected source;
+- keep `validate_dependency_transaction` for current grant/dependency authority;
+- keep automatic Action policy;
+- keep approval/expiry/state/digest checks;
+- keep cancellation and the caller-supplied provider/native subject fence;
+- keep durable transition to Executing before external write.
+
+A binding or assignment-enabled change alone therefore cannot block a reviewed historical Action.
+
+### Preserve real downstream authority
+
+Do not weaken existing tests/paths for:
+
+- stale `GrantAuthority`;
+- paused/revoked grant;
+- replaced/disconnected source;
+- changed native subject;
+- physical resource drift / `SourceAuthority`;
+- Action authority policy;
+- destination/calendar mismatch;
+- provider permission/preflight/conflict;
+- response-loss/uncertain-write recovery.
+
+## 04-F — Stop treating current Registry configuration as durable-interaction authority
+
+### `crates/app/src/vault_host/interaction_owners.rs:124+`
+
+In `HostInteractionOwners::expert_review_current`:
+
+- keep Task existence, principal and target consumer checks;
+- remove the current Registry load and `validate_current_execution_selection`;
+- determine Expert-side continuity only from the originating durable Task's pinned selection via `reviewed_target_matches_selection`.
+
+Live inline source/grant state is checked by the existing `read_live_inline` / owner-specific source/Access path. Do not duplicate it here.
+
+The generic Conversation interaction state machine may retain `DriftReason::ExpertAssignmentChanged` for a genuinely invalid/missing Task-to-reviewed-target relationship. A simple Registry rebind/disable must no longer cause the concrete Host owner to report that drift.
+
+Add/update a real Host regression proving:
+
+- rebind/disable after a Task-origin SourceAccess review does not supersede the review by itself;
+- if the reviewed target no longer matches the Task's own pinned selection, it still fails closed;
+- if source/grant live state drifts, the appropriate source/authority path supersedes/denies as before.
+
+## 04-G — Delete obsolete Experts Registry current-configuration validation APIs
+
+### `crates/modules/experts/src/registry.rs`
+
+After all callers above are converted, delete:
+
+- `validate_current_execution_selection`;
+- `validate_active_assignment`;
+- `validate_settled_invocation` if repository residual search confirms no legitimate caller remains.
+
+The refreshed baseline shows only the Action paths use `validate_settled_invocation`; those are replaced by direct durable Task/artifact checks in 04-E, so the expected final state is zero callers and deletion.
+
+Keep:
+
+- Registry mutation/configuration APIs;
+- `resolve_admitted` where current Registry is actually being mutated or inspected;
+- `execution_selection` for building future Run configuration;
+- `complete` / settlement helpers for assignment-private-state transitions;
+- binding CAS and Registry configuration CAS.
+
+Do not add renamed helpers that recompute Task configuration from current Registry.
+
+## Required regression rewrites and additions
+
+### Expert execution / source / model
+
+In `crates/app/src/vault_host/tests/registered_runner.rs`:
+
+- rewrite `read_a_then_rebind_b_fences_expert_model_dispatch` to prove rebind A→B during execution does **not** block or reroute the pinned Task; model execution completes from A's Task configuration when all live authority remains valid, Task selection stays A, and a later environment sees B;
+- rewrite `rebound_selection_discards_runner_result_before_final_release` so pure rebind does not discard the runner result;
+- keep `completed_task_replays_historical_result_after_rebinding_and_disable`;
+- rewrite `admitted_source_a_rebound_before_read_never_uses_b` to prove the active Task reads A (or is denied because A itself is no longer live/authorized), never B.
+
+In `expert_dispatch.rs` tests:
+
+- delete binding-fence-only regressions such as `model_response_after_rebinding_is_not_released` and `rebind_during_inference_preparation_blocks_provider_handoff_and_fallback`;
+- rely on canonical Inference/Access revocation tests for model authority, and add an App-level Expert model regression only if needed to prove the delegated caller still uses that canonical authority path after wrapper removal.
+
+### Vault Task / settlement
+
+In `crates/app/src/vault_host/tests/vault_registry.rs`:
+
+- change stale-selection Task admission from “reject” to “admit exact pinned selection without reroute”;
+- change installation/assignment disable after Task admission from settlement denial to successful pinned settlement;
+- change rebound-selection recovered Task settlement from Conflict to successful settlement of the exact Task;
+- change stateless Completed CAS after rebind from rejection to success;
+- retain same-assignment private-state CAS conflict;
+- retain and strengthen `concurrent_private_state_settlement_and_binding_preserve_both_fields`;
+- assert the current Registry binding/enable value remains exactly the post-configuration value after settlement.
+
+Add a regression where source/grant coverage is stale at settlement and prove `validate_context_dependency_coverage_in_transaction` still denies even though binding drift no longer does.
+
+### Inference authority
+
+In `floe-inference`:
+
+- remove the obsolete execution-fence test;
+- retain/re-run the Access handoff/post-response authority tests listed in 04-C;
+- no new “configuration fence” abstraction is allowed.
+
+### Actions
+
+In `crates/app/src/vault_host/tests/expert_actions.rs`:
+
+- invert `rebinding_after_proposal_fences_new_dispatch_without_erasing_intent`: rebind alone must allow the already approved historical Action to enter canonical dispatch and complete when all real authority/preconditions hold;
+- invert the assignment-disabled portion of `only_explicit_committed_proposals_with_current_grants_can_be_published`: disabled assignment alone does not erase a committed proposal;
+- retain the grant/source/subject/resource drift tests unchanged and require them to continue denying;
+- verify provider create count remains zero for real authority denial and exactly one for the binding-only case;
+- retain one-shot/durable intent/response-loss recovery semantics.
+
+### Interaction review
+
+Update/add Host interaction tests so pure Registry binding/enable drift no longer produces `ExpertAssignmentChanged`; task-selection mismatch and live source/grant drift continue to fail closed.
+
+## Documentation convergence in this checkpoint
+
+### `docs/architecture/runtime.md`
+
+Replace the Checkpoint 03 transitional text with current semantics:
+
+- remove the Expert-provided `InferenceExecutionFence` description;
+- state that delegated Expert model dispatch uses the same canonical Inference/Access admit-consume-revalidate sequence without a Registry configuration fence;
+- state that an active Task uses its persisted Run-pinned admission/selection through endpoint, source read, model and report release;
+- state that Registry rebind/disable affects future Runs only;
+- state that Task settlement may update assignment-private state on the current Registry while preserving current binding/enable configuration;
+- state that completed Task/proposal history remains usable subject to live provenance/Action authority.
+
+### `docs/architecture/authority-recovery.md`
+
+Replace:
+
+```text
+current binding drift blocks later execution
+```
+
+with:
+
+```text
+current binding/enable drift does not revoke an admitted Task;
+the Task continues with its pinned source references, while source/grant/recipient/provider/OS
+authority remains live and may deny.
+```
+
+Also remove the Checkpoint 03 transitional “binding-drift execution fences remain” sentence.
+
+Keep all current provenance, Access, external-write intent and uncertainty guarantees.
+
+### ADRs
+
+ADR 0033 already names this final configuration-vs-authority split. Do not amend it merely to restate implementation. If implementation finds any operation that genuinely must remain dependent on current Expert configuration, stop and amend ADR 0033 before retaining that exception.
+
+## Residual/deletion gate
+
+Run repository searches and classify every remaining production match for:
+
+```text
+validate_current_execution_selection
+validate_active_assignment
+validate_settled_invocation
+validate_current_task_execution_on
+CurrentBindingExecutionFence
+BindingFencedInferenceExecutor
+ExpertBindingFence
+binding_fence
+BoundRemoteViewReader
+InferenceExecutionFence
+with_execution_fence
+current binding
+binding drift
+Registry-selection
+```
+
+Expected production result after Checkpoint 04:
+
+- zero `validate_current_execution_selection`;
+- zero `validate_active_assignment`;
+- zero `validate_settled_invocation`;
+- zero `validate_current_task_execution_on`;
+- zero Expert binding-fence types/fields/callbacks;
+- zero generic Inference execution-fence API;
+- no Task admission, read, model, response release, report release, settlement, proposal or Action dispatch path reloads Registry merely to ask whether the Task's selection is still current.
+
+Remaining `binding_revision`, Registry reads and “binding” text are allowed only when they belong to:
+
+- settings/configuration mutation;
+- future Run environment construction;
+- binding CAS/idempotent save;
+- current Registry private-state mutation base;
+- documentation of configuration identity, not execution authority.
+
+Also search for old tests/comments whose names assert that rebind/disable fences active execution; rename or replace them rather than leaving contradictory semantics.
+
+Do not add a permanent migration checker.
+
+## Verification required before marking Checkpoint 04 complete
+
+Fast/targeted iteration:
+
+```sh
+cargo test -p floe-experts --tests
+cargo test -p floe-inference --tests
+cargo test -p floe-access --tests
+cargo test -p floe-context --tests
+cargo test -p floe-actions --tests
+cargo test -p floe-vault --tests
+cargo test -p floe-app --lib
+```
+
+Use narrower module/test filters first while iterating on the specific race/fence regressions.
+
+Final gate:
+
+```sh
+CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast
+python3 tools/architecture/check_boundaries.py
+cargo build -p floe-ffi
+git diff --check
+```
+
+No Flutter/Go/native-provider/device gate is required solely because the wire/FFI/product contract does not change. If implementation unexpectedly crosses those surfaces, expand verification according to `.agents/skills/code-change-verification/SKILL.md`.
+
+Use only isolated temporary Vault/source/provider fixtures. Do not mutate real accounts, credentials, permissions or user profiles.
+
+## Checkpoint 04 acceptance
+
+Checkpoint 04 is complete only when all are true:
+
+- Task admission trusts the exact Run-pinned admission/selection and does not compare them with current Registry;
+- active Task execution never reloads Registry for binding/enable equality at endpoint start, requirement read, delegated model handoff/response, report release or terminal Task write;
+- pure Registry rebind or assignment/installation disable cannot cancel, reroute or suppress an already admitted Task;
+- an active Task never falls through from its pinned source A to newly configured source B;
+- live source/grant/recipient/provider/OS authority still denies immediately when the pinned source/dispatch is no longer authorized;
+- stateful settlement advances only assignment-private state on the current Registry and preserves any newer binding/enable configuration;
+- completed Task/proposal evidence remains historical after rebind/disable;
+- Action publication/dispatch is blocked by real dependency/source/Action/provider drift, not Registry equality;
+- durable interaction review compares the reviewed target to the originating Task's pinned selection, not current Registry;
+- `validate_current_execution_selection`, `validate_active_assignment`, `validate_settled_invocation`, binding-fence wrappers and the generic Inference execution-fence API are deleted;
+- no persistence schema or product wire surface grows for this cutover;
+- current architecture docs describe configuration as pinned and authority as live;
+- residual searches satisfy the gate;
+- execution report records start HEAD, fetched origin/main, commit SHA(s), changed files/owners, deleted fences, preserved authority checks, tests, residuals, docs, worktree state, and explicitly states Checkpoint 05 was not started.
+
+## Checkpoint commit discipline
+
+Implement Checkpoint 04 as one logical configuration/authority cutover when practical. Multiple local commits are acceptable only to keep the broad owner cleanup buildable; list every SHA in the execution report.
+
+After all verification and residual gates pass, update only this plan's `Execution report / Checkpoint 04`, commit that report, and stop. Do not begin Checkpoint 05 in the same implementation pass.
+
 
 # Checkpoint 05 — Context contract and prompt-cache cutover
 
