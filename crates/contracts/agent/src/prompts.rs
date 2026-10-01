@@ -16,7 +16,7 @@ pub const MODEL_CORRECTION: &str = include_str!("../prompts/model_correction.txt
 const DEFAULT_PERSONA: &str = include_str!("../prompts/default_persona.txt");
 pub const BEHAVIOR_KERNEL_REVISION: u64 = 3;
 pub const CAPABILITY_PROTOCOL_REVISION: u64 = 3;
-pub const MAX_STABLE_INSTRUCTIONS_BYTES: usize = 8192;
+pub const MAX_STABLE_INSTRUCTIONS_BYTES: usize = 9216;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -192,9 +192,11 @@ mod tests {
 
     #[test]
     fn stable_instructions_use_utf8_byte_limits_with_bounded_components() {
-        for bytes in [4097, 8192, 8193] {
+        for bytes in [4097, 8192, 8613, 9216, 9217] {
             let first_bytes = (bytes - 6).min(4096);
-            let sizes = [first_bytes, bytes - first_bytes - 5, 1];
+            let remaining = bytes - first_bytes - 4;
+            let second_bytes = (remaining - 1).min(4096);
+            let sizes = [first_bytes, second_bytes, remaining - second_bytes];
             let mut prompt = expert_prompt("fixture-role", 1, "fixture");
             for (component, size) in prompt.components.iter_mut().zip(sizes) {
                 component.content = "가".repeat(size / 3) + &"x".repeat(size % 3);

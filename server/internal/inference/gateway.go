@@ -284,9 +284,11 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	})
 }
 
+const maxAgentStableInstructionsBytes = 9216
+
 func validRequest(request Request) bool {
 	if request.Agent {
-		return request.SchemaVersion == 1 && ValidPurpose(request.Purpose) && validDataClasses(request.DataClasses) && request.ReplayOf == "" && len(request.OutputSchema) == 0 && len(request.Instructions) > 0 && len(request.Instructions) <= 8192 && len(request.Input) <= 32768 && validAgentInput(request.Input)
+		return request.SchemaVersion == 1 && ValidPurpose(request.Purpose) && validDataClasses(request.DataClasses) && request.ReplayOf == "" && len(request.OutputSchema) == 0 && len(request.Instructions) > 0 && len(request.Instructions) <= maxAgentStableInstructionsBytes && len(request.Input) <= 32768 && validAgentInput(request.Input)
 	}
 	var schema map[string]any
 	validRoute := request.SchemaVersion == 1 && ValidPurpose(request.Purpose) && validDataClasses(request.DataClasses)

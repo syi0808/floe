@@ -285,7 +285,7 @@ mod tests {
             digest: [7; 32],
         };
         let context = agent_context();
-        let projector = ConversationModelProjection::new(
+        let mut projector = ConversationModelProjection::new(
             MapReader {
                 coverage: Mutex::new(HashMap::new()),
             },
@@ -305,6 +305,15 @@ mod tests {
         };
         let request = manager_request(conversation);
         let first = projector.project(request.clone(), &scope()).await.unwrap();
+        projector
+            .agent_context
+            .evidence
+            .push(floe_agent_contract::ContextEvidence {
+                source_handle: "test:admitted-evidence".into(),
+                data_class: DataClass::Personal,
+                untrusted_text: "A newly admitted observation.".into(),
+                expires_at_unix_ms: u64::MAX,
+            });
         let mut retry = request.clone();
         retry.correction = Some(floe_agent_contract::ModelCorrection {
             text: "retry".into(),
@@ -317,6 +326,8 @@ mod tests {
                 text: "earlier".into(),
             });
         let second = projector.project(retry, &scope()).await.unwrap();
+        assert!(first.envelope.contextual_data.evidence.is_empty());
+        assert_eq!(second.envelope.contextual_data.evidence.len(), 1);
         assert_eq!(first.envelope.stable_instructions, projector.manager_prompt);
         assert_eq!(
             first.envelope.stable_instructions.render(),
@@ -331,6 +342,44 @@ mod tests {
             second.envelope.manifest.run_frame_sha256
         );
         for projection in [&first, &second] {
+            let envelope = &projection.envelope;
+            let role = envelope
+                .stable_instructions
+                .components
+                .iter()
+                .find(|component| component.kind == PromptComponentKind::Role)
+                .unwrap();
+            let role_entry = envelope
+                .manifest
+                .prompt_components
+                .iter()
+                .find(|component| component.kind == PromptComponentKind::Role)
+                .unwrap();
+            assert_eq!(
+                role.content,
+                crate::prompts::manager_role_spec().instructions.trim()
+            );
+            assert_eq!(role_entry.source, "manager-role");
+            assert_eq!(role_entry.revision, 7);
+            assert_eq!(role_entry.content_sha256, role.content_sha256());
+            assert_eq!(
+                envelope.manifest.stable_prompt_sha256,
+                envelope.stable_instructions.stable_prompt_sha256()
+            );
+            assert_eq!(
+                envelope.manifest.run_frame_sha256,
+                envelope.run_frame_sha256().unwrap()
+            );
+            assert_eq!(
+                envelope.run_instructions.response_contract,
+                MANAGER_OUTPUT_CONTRACT
+            );
+            assert!(
+                !envelope
+                    .stable_instructions
+                    .render()
+                    .contains(MANAGER_OUTPUT_CONTRACT)
+            );
             assert_eq!(
                 projection.envelope.manifest.expert_environment,
                 Some(floe_agent_contract::ExpertEnvironmentManifestEntry {
@@ -339,6 +388,32 @@ mod tests {
                 })
             );
         }
+        let mut output_change = first.envelope.clone();
+        output_change.run_instructions.response_contract = "Return a supported answer.".into();
+        assert_eq!(
+            output_change.stable_instructions.stable_prompt_sha256(),
+            first.envelope.manifest.stable_prompt_sha256
+        );
+        assert_ne!(
+            output_change.run_frame_sha256().unwrap(),
+            first.envelope.manifest.run_frame_sha256
+        );
+        let mut role_change = first.envelope.clone();
+        let role = role_change
+            .stable_instructions
+            .components
+            .iter_mut()
+            .find(|component| component.kind == PromptComponentKind::Role)
+            .unwrap();
+        role.content = "Answer only from supplied information.".into();
+        assert_ne!(
+            role_change.stable_instructions.stable_prompt_sha256(),
+            first.envelope.manifest.stable_prompt_sha256
+        );
+        assert_eq!(
+            role_change.run_frame_sha256().unwrap(),
+            first.envelope.manifest.run_frame_sha256
+        );
         let next_projector = ConversationModelProjection::new(
             MapReader {
                 coverage: Mutex::new(HashMap::new()),
@@ -414,11 +489,7 @@ mod tests {
     fn manager_request(conversation: ModelConversation) -> ModelProjectionRequest {
         ModelProjectionRequest {
             principal: "person:test".into(),
-            role: RoleSpec {
-                role_id: "manager".into(),
-                instructions: "Answer.".into(),
-                output_contract: MANAGER_OUTPUT_CONTRACT.into(),
-            },
+            role: crate::prompts::manager_role_spec(),
             conversation,
             catalog: catalog(),
             max_output_bytes: 4096,

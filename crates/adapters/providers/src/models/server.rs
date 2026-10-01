@@ -1212,7 +1212,7 @@ mod tests {
 
     #[tokio::test]
     async fn canonical_generate_posts_agent_wire_and_maps_answer() {
-        for bytes in [4097, 8192] {
+        for bytes in [4097, 8192, 8613, 9216] {
             generate_posts_instructions_of_size(bytes).await;
         }
     }
@@ -1361,7 +1361,7 @@ mod tests {
             model_calls: provider_call_limit(),
         };
         let mut request = canonical_request();
-        super::super::resize_test_instructions(&mut request.envelope.stable_instructions, 8193);
+        super::super::resize_test_instructions(&mut request.envelope.stable_instructions, 9217);
         let result = floe_inference::PreparedModelTransport::generate(
             &transport,
             request,

@@ -56,21 +56,21 @@ struct LocalModelHostTests {
   }
 
   static func main() async throws {
-    for bytes in [4097, 8192, 8193] {
+    for bytes in [4097, 8192, 8613, 9216, 9217] {
       let instructions = String(repeating: "가", count: bytes / 3) +
         String(repeating: "x", count: bytes % 3)
       precondition(instructions.utf8.count == bytes)
       let boundaryInput = LocalModelInput(
         instructions: instructions, prompt: "Synthetic question", maxResponseTokens: 64,
         maxOutputBytes: 16384, deadlineMilliseconds: 1000)
-      precondition(boundaryInput.valid == (bytes <= 8192))
+      precondition(boundaryInput.valid == (bytes <= localModelMaxStableInstructionsBytes))
       let boundaryHost = LocalModelHost(availability: { "available" }, generate: { received in
-        precondition(bytes <= 8192 && received.instructions == instructions)
+        precondition(bytes <= localModelMaxStableInstructionsBytes && received.instructions == instructions)
         return answer()
       })
       let boundaryID = UUID()
       let started = boundaryHost.invoke(command("start", boundaryID, boundaryInput))
-      if bytes <= 8192 {
+      if bytes <= localModelMaxStableInstructionsBytes {
         precondition(started.status == "pending")
         let completed = try await terminal(boundaryHost, boundaryID)
         precondition(completed.status == "done")

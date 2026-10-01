@@ -1,7 +1,7 @@
 import Foundation
 import FoundationModels
 
-let localModelMaxStableInstructionsBytes = 8192
+let localModelMaxStableInstructionsBytes = 9216
 
 struct LocalModelInput: Codable, Equatable, Sendable {
   let instructions: String

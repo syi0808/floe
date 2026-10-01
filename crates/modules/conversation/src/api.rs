@@ -14,8 +14,7 @@ use crate::{CanonicalTurnIntent, ProfileSelection, TurnMode};
 pub const FINALIZATION_ROLE_ID: &str = "manager.finalization";
 pub const FINALIZATION_ROLE_PROMPT: &str = "Produce one final answer using only the supplied settled observations. Do not call tools or delegate.";
 pub const FINALIZATION_OUTPUT_CONTRACT: &str = "Return one concise user-facing answer. State that the requested execution did not complete; do not claim that a failed action succeeded.";
-pub const MANAGER_OUTPUT_CONTRACT: &str =
-    "Return one user-facing answer or one registered delegation.";
+pub const MANAGER_OUTPUT_CONTRACT: &str = "Return exactly one supported user-facing answer or one registered delegation. A factual answer about private, current, or changing external state requires admissible support from the user's relevant supplied information, admitted current context, or a settled Expert result. When that support is required but unavailable, return a limitation answer rather than inventing the missing state.";
 pub const CONVERSATION_MODEL_CONSUMER: &str = "conversation.root";
 /// Deterministic source-independent limitation for a blocked model dispatch.
 ///

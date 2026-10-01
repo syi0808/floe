@@ -747,7 +747,7 @@ mod tests {
 
     #[tokio::test]
     async fn stable_instruction_byte_boundaries_are_checked_before_native_io() {
-        for bytes in [4097, 8192, 8193] {
+        for bytes in [4097, 8192, 8613, 9216, 9217] {
             let mut request = canonical_request();
             super::super::resize_test_instructions(
                 &mut request.envelope.stable_instructions,
