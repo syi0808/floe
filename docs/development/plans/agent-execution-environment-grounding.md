@@ -157,68 +157,415 @@ Use a dedicated architecture-decision commit. Record its SHA in this plan before
 
 # Checkpoint 02 — Root Agent-environment lifecycle cutover
 
+## Planning refresh and status
+
+- Status: not started — implementation has not begun.
+- Planning refresh baseline: `main` at `4dd5ec2c2de03b834218b0eaf8429b1e6dc4f929`.
+- Checkpoint 01 is the only completed checkpoint; the latest `main` contains no production change after the original plan baseline.
+- The original Checkpoint 02 direction remains valid, but this section is deliberately refined to code-line level so implementation does not have to reopen lifecycle or cleanup decisions.
+
+The latest source review freezes four details that were only implicit in the original plan:
+
+1. `ExpertInstallRefresh` and `ExpertRefreshOutcome` exist only to support the current Start/turn refresh split. No independent owner uses them. Checkpoint 02 deletes those transition concepts instead of moving them to Vault activation.
+2. Product Vault Create/Unlock already arrives through `AppComposition::vault_command -> Worker::local_request` with a verified `CallerContext`. Root-environment preparation must consume that admitted device identity from `Job::local_admission`; do not add a device field to `WorkerAction`, `VaultLifecycleCommand`, AppWire, or FFI.
+3. `bind_initial_defaults` currently republishes the Directory itself. Root activation must own the exact `install -> first-install binding -> publish` ordering, so the initial-binding helper must stop publishing as a side effect. Explicit user binding changes keep their own publication.
+4. `publish_expert_directory` currently maps an absent Registry to an empty Directory. That violates ADR 0033's distinction between uninitialized and intentionally empty. After this checkpoint, absent Registry at publication is a fail-closed invariant violation; only an existing Registry with zero enabled assignments may publish an empty Directory.
+
 ## Goal
 
 Make Expert Registry/package readiness a Vault-open/root-Agent invariant instead of a Conversation Start side effect or turn-time repair.
 
-## Current code anchors
+The completed Checkpoint 02 path is exactly:
 
-- crates/app/src/vault_host.rs:227-239 — OpenVault fields.
-- crates/app/src/vault_host.rs:280-315 — OpenVault::activate.
-- crates/app/src/vault_host.rs:317+ — publish_expert_directory.
-- crates/app/src/vault_host.rs:2113+ — execute_conversation_turn_action currently performs ExistingOnly refresh.
-- crates/app/src/vault_host.rs:2206+ — execute_conversation_resume_action currently performs ExistingOnly refresh.
-- crates/app/src/vault_host.rs:2601-2640 — ConversationSessionOperation Start/Resume split; Start owns InstallIfAbsent today.
-- crates/app/src/vault_host.rs:3058+ — ensure_expert_bundle wrapper.
-- crates/app/src/vault_host/expert_setup.rs:12-48 — VaultExpertBundle / ExpertInstallStore.
-- crates/app/src/vault_host/expert_binding_settings.rs:272-382 — bind_initial_defaults.
-- crates/modules/experts/src/bundle_install.rs — InstallIfAbsent vs ExistingOnly semantics.
+```text
+verified local Vault Create/Unlock
+  -> Worker::local_request admission
+  -> execute_action(Create|Unlock)
+       -> require matching Job::local_admission
+       -> derive verified device_id + operation_id + cancellation
+       -> EncryptedAgentVault::create/open
+       -> OpenVault::activate
+            -> construct repositories / TaskCoordinator / Directory
+            -> prepare_root_agent_environment
+                 -> sample whether Registry is genuinely absent
+                 -> ensure shipped Expert bundle
+                 -> if genuinely absent: bind_initial_defaults once
+                 -> publish Expert Directory once
+            -> return usable OpenVault
+       -> install OpenVault into current
+  -> VaultState::Ready
 
-## Required implementation
+Conversation Start / Resume / Get / Recover
+  -> Session semantics only
 
-1. Introduce one App-private root-environment preparation operation invoked inside OpenVault activation before the OpenVault becomes externally usable. A suitable private name is prepare_root_agent_environment; do not create a public/FFI command.
-2. Extend OpenVault::activate inputs with the verified local device ID and one trusted operation ID from the admitted create/unlock job. Do not obtain either from a product payload that the caller can forge.
-3. Inside OpenVault::activate:
-   - construct the Vault/repositories/TaskCoordinator as needed;
-   - read whether the Expert Registry is genuinely absent before reconciliation;
-   - call ensure_expert_bundle with InstallIfAbsent;
-   - only when the Registry was genuinely absent, run first-install default binding with the verified device;
-   - publish the Expert Directory from the resulting Registry;
-   - return OpenVault only after this succeeds.
-4. Refactor bind_initial_defaults so first-install source selection remains idempotent and deterministic but is no longer semantically attached to Conversation Start.
-5. Preserve the current rule that an existing Registry is never silently rebound on startup. Disabled assignments remain disabled. Existing explicit source selections remain unchanged.
-6. Treat an existing valid Registry with zero enabled assignments as Ready, not uninitialized.
-7. Delete the Start-only setup from ConversationSessionOperation::Start.
-8. Delete the ExistingOnly refresh calls from execute_conversation_turn_action and execute_conversation_resume_action. A turn must not repair an uninitialized environment.
-9. Keep ConversationSessionOperation::Start and Resume concerned only with Session semantics. Resume may continue to restore-or-create the root Session unless a separate product decision changes that behavior.
-10. Do not add an EnvironmentReady wire state. OpenVault activation either produces a usable root environment or returns an existing typed failure.
+Conversation Turn / Conversation Resume
+  -> consume already-prepared Directory
+  -> never install, refresh, repair, or republish the root Expert environment
+```
 
-## Required tests
+No externally observable `EnvironmentReady` state is added. `VaultState::Ready` means activation, including root Agent-environment preparation, succeeded.
 
-Add/replace tests covering:
+## Current code anchors at the planning refresh baseline
 
-- create -> OpenVault activation creates Registry/package environment before any Session command;
-- unlock of a valid existing profile republishes Directory without changing explicit Registry configuration;
-- Resume on a fresh profile can create a Session, and Registry is already present before that Resume;
-- Start and Resume produce equivalent Expert readiness;
-- all Expert assignments disabled -> activation succeeds and Manager catalog is intentionally empty;
-- existing source binding is not auto-rebound on unlock;
-- first-install default binding runs only for genuinely absent Registry;
-- repeated activation/reopen is idempotent with respect to install receipt, Registry revision, enabled/disabled state, and binding revision;
-- storage/cancellation failures during environment preparation do not fall through into a runnable Conversation with an absent Registry.
+### App lifecycle / root composition
 
-Update tests around crates/app/src/vault_host.rs:3730+ and crates/app/src/vault_host/tests/registered_runner.rs rather than preserving assertions that setup is Start-only.
+- `crates/app/src/vault_host.rs:227` — `OpenVault<Keys>`.
+- `crates/app/src/vault_host.rs:281` — `OpenVault::activate`.
+- `crates/app/src/vault_host.rs:317` — `OpenVault::publish_expert_directory`.
+- `crates/app/src/vault_host.rs:2308` — `execute_action`.
+- `crates/app/src/vault_host.rs:2326` — `WorkerAction::Create`.
+- `crates/app/src/vault_host.rs:2346` — `WorkerAction::Unlock`.
+- `crates/app/src/vault_services.rs:46` — production `VaultLifecycleCommands for AppComposition`, which already calls `Worker::local_request`.
+- `crates/app/src/local_operations.rs:47` — `LocalOperationIntent::action`, mapping admitted Vault commands to private `WorkerAction::{Create,Unlock,Lock}`.
 
-## Residual gate
+### Obsolete Conversation-owned readiness paths
 
-Search and classify all matches for:
+- `crates/app/src/vault_host.rs:2113` — `execute_conversation_turn_action`: `ExistingOnly` refresh + Directory republish before every turn.
+- `crates/app/src/vault_host.rs:2206` — `execute_conversation_resume_action`: the same refresh + republish before continuation.
+- `crates/app/src/vault_host.rs:2601` — `WorkerAction::ConversationSession`.
+- `crates/app/src/vault_host.rs:2604` — `ConversationSessionOperation::Start`: current first-install detection, `InstallIfAbsent`, and initial binding.
+- `crates/app/src/vault_host.rs:3058` — App-private `ensure_expert_bundle` wrapper.
 
-    ExpertInstallRefresh::ExistingOnly
-    ConversationSessionOperation::Start
-    ensure_expert_bundle
-    bind_initial_defaults
+### Experts install contract
 
-Acceptance requires no turn-time or Start-only environment repair path. ExistingOnly may remain for a genuinely different non-Conversation use only if the plan report identifies that owner and reason.
+- `crates/modules/experts/src/bundle_install.rs:9` — `ExpertInstallRefresh`.
+- `crates/modules/experts/src/bundle_install.rs:23` — `ensure_expert_bundle`.
+- `crates/modules/experts/src/bundle_install.rs:48` — `ExpertRefreshOutcome`.
+- `crates/modules/experts/src/bundle_install.rs:54` — `expert_refresh_outcome`.
+- `crates/modules/experts/src/lib.rs:23` — exports for the refresh/outcome transition API.
+- Repository search at this baseline finds `ExpertInstallRefresh` only in the Experts module, its export, the two turn/resume `ExistingOnly` call sites, and the Start `InstallIfAbsent` call site. There is no independent runtime owner that justifies retaining the mode enum after the lifecycle cutover.
+
+### First-install binding
+
+- `crates/app/src/vault_host/expert_binding_settings.rs:272` — `bind_initial_defaults`.
+- `crates/app/src/vault_host/expert_binding_settings.rs:385` — explicit `replace`; its post-mutation Directory publication remains valid.
+- `bind_initial_defaults` currently ends by calling `open.publish_expert_directory`; that publication moves to root activation.
+- The deterministic per-assignment operation identity derived with UUID v5 from `setup_operation_id` remains unchanged.
+
+### Tests that encode the old lifecycle
+
+- `crates/app/src/vault_host.rs:3801+` — `registry_jobs_are_read_only_until_explicit_change_and_reconcile_duplicate_submits` currently expects Create to leave Registry absent and Start to install it; this expectation must be inverted.
+- `crates/app/src/vault_host/tests/conversation_flows.rs:824+` — `production_general_turn_does_not_require_or_install_builtin_setup` explicitly asserts that Unlock/Resume/Turn leave the shipped install absent; this test becomes invalid and must be replaced, not preserved.
+- `crates/app/src/vault_host/tests/conversation_flows.rs:1355+` — `production_builtin_setup_installs_through_vault_without_sources` is a useful install-count/product-path regression but its setup must no longer rely on Session Start.
+- `crates/app/src/vault_host/tests/registered_runner.rs:217+` and `:260+` — `installed_open` / `installed_open_without_provider` directly call `OpenVault::activate` and then manually install a manifest. These fixtures must be adapted to the new activation contract rather than bypassing or duplicating root preparation.
+- `crates/app/src/vault_host/tests/registered_runner.rs:2175+` — `initial_shipped_setup_selects_single_native_source_only_once` currently calls `bind_initial_defaults` manually; preserve its idempotency assertion while moving the product invocation to activation.
+- Many Vault-host tests call private `Worker::request(... WorkerAction::Create/Unlock ...)`. Production does not: Vault lifecycle uses the admitted local owner service. Test lifecycle setup must migrate to an admitted local helper rather than causing production code to accept an unverified fallback device.
+
+## 02-A — Carry verified lifecycle admission into OpenVault activation
+
+### `crates/app/src/vault_host.rs`
+
+1. Adjacent to `OpenVault<Keys>`, introduce an App-private value named `RootAgentEnvironmentAdmission` with exactly the state activation needs:
+   - verified `device_id: String`;
+   - trusted `operation_id: Uuid`;
+   - `Cancellation`.
+   It is not public, not serialized, not persisted, and not exposed through FFI.
+
+2. Change `OpenVault::activate` to accept one `RootAgentEnvironmentAdmission` in addition to its current runtime dependencies and registrations.
+
+3. In `execute_action`'s `WorkerAction::Create` and `WorkerAction::Unlock` arms:
+   - require `job.local_admission.as_ref()`; missing admission fails closed with `AgentFailure::PolicyDenied`;
+   - require that the admitted intent is the exact matching `LocalOperationIntent::VaultCommand(VaultLifecycleCommand::Create|Unlock)`; do not infer trust merely from the private `WorkerAction` variant;
+   - copy `admission.caller.device_id()` into `RootAgentEnvironmentAdmission.device_id`;
+   - use `job.id` as the trusted setup operation ID;
+   - pass `job.cancellation.clone()`;
+   - only assign `*current = Some(...)` after `OpenVault::activate` has completed root-environment preparation.
+
+4. Do not change `VaultLifecycleCommand`, `LocalOperationIntent`, `WorkerAction`, AppWire DTOs, FFI schemas, or Flutter commands to carry device/setup data. The verified `CallerContext` already owns device identity.
+
+5. Do not add a fallback such as `"mac-local"` in production. Tests that previously injected `WorkerAction::Create/Unlock` directly must use an admitted local caller.
+
+### Acceptance for 02-A
+
+- Product Create/Unlock still enter through `AppComposition::vault_command -> Worker::local_request`.
+- A test-only/unadmitted direct Create/Unlock job cannot become the source of first-install binding identity.
+- No new public or wire surface exists.
+
+## 02-B — Make root Agent-environment preparation a single OpenVault operation
+
+### `crates/app/src/vault_host.rs`
+
+1. Build `OpenVault` in `OpenVault::activate` exactly as today through:
+   - registration validation;
+   - Vault Arc;
+   - Conversation executor activation/recovery;
+   - Conversation repository;
+   - Directory;
+   - Task repository / `TaskCoordinator::activate`;
+   - recovered Task/Run state.
+
+2. Before returning that `OpenVault`, call one private method:
+   `OpenVault::prepare_root_agent_environment(&RootAgentEnvironmentAdmission)`.
+
+3. `prepare_root_agent_environment` owns this exact sequence:
+   - `let first_install = self.vault.expert_registry().await?.is_none();`
+   - `ensure_expert_bundle(self, admission.cancellation.clone()).await?;`
+   - if and only if `first_install`, call `expert_binding_settings::bind_initial_defaults(self, self.vault.person_id(), &admission.device_id, admission.operation_id, &admission.cancellation).await?;`
+   - call `self.publish_expert_directory(&self.registrations).await?;`
+   - return success only after all required stages succeed.
+
+4. `first_install` is defined by Registry absence **before** shipped-bundle reconciliation. It is not defined by a missing install receipt or manifest-digest mismatch. Therefore an existing Registry that needs shipped-bundle reconciliation must not receive first-install default bindings.
+
+5. Root preparation is fail-closed. There is no degraded-ready outcome in this path:
+   - cancellation, Vault/storage failure, install conflict that cannot reconcile, binding failure, Registry restore failure, and Directory publication failure all prevent `OpenVault::activate` from returning;
+   - `execute_action` therefore never places a partially prepared OpenVault into `current`.
+
+6. Do not hold a global Vault transaction while source/provider I/O may occur in `bind_initial_defaults`; preserve its current bounded per-operation access behavior.
+
+### `OpenVault::publish_expert_directory`
+
+Replace the current branch:
+
+```rust
+let Some(snapshot) = self.vault.expert_registry().await? else {
+    self.directory.publish("product.experts", Vec::new())?;
+    return Ok(());
+};
+```
+
+with a fail-closed Registry requirement. Reuse the existing `AgentFailure::NotFound` meaning already used by `bind_initial_defaults` for absent Registry. The valid empty-catalog case is an existing Registry whose `enabled_expert_admissions` result is empty; that path still publishes `Vec::new()`.
+
+Do not add a second readiness flag. Successful activation plus an existing Registry is the readiness invariant.
+
+## 02-C — Delete the install-refresh transition API
+
+### `crates/modules/experts/src/bundle_install.rs`
+
+1. Delete `ExpertInstallRefresh` entirely.
+2. Change `ensure_expert_bundle(store, when)` to `ensure_expert_bundle(store)`.
+3. Preserve the existing install/reconcile algorithm:
+   - read `overview()`;
+   - if present, validate its manifest digest;
+   - if absent, install with the store's instance ID, current registry revision, and deterministic operation ID;
+   - on CAS conflict, re-read the overview and require it to exist;
+   - require the resulting receipt digest to equal the current manifest digest.
+4. There is no longer an `ExistingOnly` early return. Calling `ensure_expert_bundle` semantically means “make this bundle ready”.
+5. Delete `ExpertRefreshOutcome` and `expert_refresh_outcome`. Their only purpose is to downgrade the obsolete per-turn refresh. Root readiness propagates the typed failure directly.
+
+### `crates/modules/experts/src/lib.rs`
+
+Remove the deleted `ExpertInstallRefresh`, `ExpertRefreshOutcome`, and `expert_refresh_outcome` exports. Keep `ExpertInstallStore`, `ensure_expert_bundle`, and any still-used `BoxFuture` export.
+
+### `crates/app/src/vault_host.rs:3058+`
+
+Simplify the App-private wrapper to:
+
+```text
+ensure_expert_bundle(vault, cancellation)
+  -> floe_experts::ensure_expert_bundle(&VaultExpertBundle { ... })
+```
+
+with no refresh/mode argument and no degraded-outcome translation.
+
+This is a direct replacement. Do not leave a deprecated enum, compatibility overload, or “ExistingOnly” alias.
+
+## 02-D — Make first-install binding a mutation step, not a publication owner
+
+### `crates/app/src/vault_host/expert_binding_settings.rs:272+`
+
+1. Keep `bind_initial_defaults`'s current candidate selection rules, bounds, source checks, deterministic UUID-v5 operation IDs, CAS behavior, and “already selected => no-op” behavior.
+2. Remove only its final `open.publish_expert_directory(&open.registrations).await` side effect; return `Ok(())` after binding mutations complete.
+3. Root activation publishes once after all first-install bindings settle.
+4. Keep `replace`'s Directory publication after explicit user binding mutation. Explicit Settings changes still need the current Directory to converge immediately for the next Run.
+5. Do not call `bind_initial_defaults` when Registry already existed, even if:
+   - a new connection/source appeared;
+   - a shipped package was reconciled;
+   - an assignment is disabled;
+   - an explicit binding is empty;
+   - a previous binding points to a currently unavailable source.
+
+The result is first-install convenience only, never startup auto-rebinding.
+
+## 02-E — Remove Expert-environment setup from Conversation
+
+### `crates/app/src/vault_host.rs:2113+` — `execute_conversation_turn_action`
+
+Delete all of the following before `conversation_turn::run`:
+
+- `ensure_expert_bundle(... ExistingOnly)`;
+- `expert_refresh_outcome` classification and degraded warning;
+- `vault.publish_expert_directory(...)`.
+
+The function begins the Conversation Run using the already-prepared `vault.task_coordinator` and Directory. If activation could not prepare them, there must be no current OpenVault to reach this function.
+
+### `crates/app/src/vault_host.rs:2206+` — `execute_conversation_resume_action`
+
+Delete the equivalent refresh/outcome/publication block. Continuation does not refresh root configuration.
+
+### `crates/app/src/vault_host.rs:2601+` — `WorkerAction::ConversationSession`
+
+For `ConversationSessionOperation::Start`, delete:
+
+- `first_install` Registry probe;
+- `ensure_expert_bundle(... InstallIfAbsent)`;
+- `job.local_admission`-based initial binding;
+- every Expert-environment side effect.
+
+After the cutover:
+- Start only calls `start_session -> admitted_session`;
+- Resume only calls `resume_session -> admitted_session`;
+- Get stays read-only;
+- Recover stays Conversation recovery.
+
+Do not move the old code into Resume or a shared Session helper.
+
+## 02-F — Test-fixture migration and regressions
+
+### Canonical Vault lifecycle fixture
+
+Current test helper `perform(worker, person, WorkerAction)` submits non-remote actions through the cfg(test) raw worker path. Do not make production activation accept a missing admission merely to keep that helper unchanged.
+
+Add/reuse a test helper that:
+- constructs a verified `CallerContext` for the Person and chosen device;
+- submits `LocalOperationIntent::VaultCommand(Create|Unlock|Lock)` with `LocalOperationOwner::Vault`;
+- polls/releases through `Worker::local_request`.
+
+Migrate Create/Unlock setup in affected App tests to that helper. Tests specifically about raw worker scheduling may continue using `Worker::request` for actions that do not require Vault lifecycle identity.
+
+### Required lifecycle regressions
+
+1. **Create prepares before Session**
+   - issue canonical Vault Create;
+   - before any Conversation Session command, read Registry through the Experts owner and assert it exists;
+   - assert shipped install receipt/digest exists;
+   - assert Directory/catalog reflects enabled Registry entries that have matching runtime registrations.
+
+2. **Fresh normal Resume**
+   - create a fresh Vault through the canonical owner;
+   - do **not** call Conversation Start;
+   - issue normal Conversation Resume;
+   - assert Resume creates/restores the root Session;
+   - prove Registry/install existed before Resume and Registry revision is unchanged by Resume.
+
+3. **Unlock upgrades an absent environment**
+   - create an encrypted Vault directly as a storage fixture without installing Experts, close it, then unlock through the canonical App Vault owner;
+   - assert activation installs Registry/package and publishes Directory before any Session command;
+   - this is the direct regression for profiles produced by the old lifecycle.
+
+4. **Existing Registry is not silently rebound**
+   - prepare a Registry with an explicit binding;
+   - record Registry revision, assignment enabled state, and binding revision/selection;
+   - lock/unlock;
+   - assert activation preserves those values except for a separately justified shipped-bundle reconciliation;
+   - add a source/connection before unlock and prove it does not trigger automatic rebinding.
+
+5. **Disabled-all is Ready, not uninitialized**
+   - explicitly disable every assignment in an existing Registry;
+   - lock/unlock;
+   - activation succeeds;
+   - Registry still exists;
+   - Directory/catalog is intentionally empty;
+   - no assignment is re-enabled.
+
+6. **First-install binding criterion is Registry absence**
+   - absent Registry + eligible unambiguous native source => initial default selection may occur once;
+   - second activation does not advance the binding revision;
+   - existing Registry with a missing/outdated shipped install receipt may reconcile the bundle but must not rerun first-install binding.
+
+7. **Idempotent reopen**
+   - lock/unlock a prepared profile repeatedly;
+   - unchanged shipped bundle does not advance install receipt, Registry revision, assignment enabled state, or binding revision;
+   - Directory publication may advance its internal publication revision only if that is existing Directory semantics, but the effective catalog must be identical.
+
+8. **Preparation failure never exposes Ready**
+   - cancellation or injected Vault/storage failure during bundle ensure/binding/publication returns a failure from Create/Unlock;
+   - `current` remains `None`;
+   - a following Conversation Session/Turn request observes `VaultUnavailable`, not a runnable Vault with absent Registry.
+
+### Existing tests to replace/update
+
+- Rewrite `registry_jobs_are_read_only_until_explicit_change_and_reconcile_duplicate_submits` so Create already has Registry. Preserve the separate assertion that Registry **inspection** is read-only and explicit configuration changes reconcile duplicate submissions.
+- Replace `production_general_turn_does_not_require_or_install_builtin_setup`; its asserted behavior is the defect. New test meaning: unlock/root activation prepares Experts independently of whether the next Conversation is general knowledge.
+- Keep `production_builtin_setup_installs_through_vault_without_sources`, but assert installation is a Vault activation effect and Session Start is unnecessary.
+- Refactor `installed_open` / `installed_open_without_provider` so they do not manually repeat the same bundle installation that activation now owns. Where a test needs a synthetic/custom manifest, install that synthetic package deliberately **after** canonical root activation using the current Registry revision, then publish for the test; do not weaken production root preparation.
+- Keep `initial_shipped_setup_selects_single_native_source_only_once` as a helper-level idempotency test, and add product-level activation coverage so its only production caller is root preparation.
+- Update any tests that expected Start/Turn to change Registry or Directory revision. Start/Resume/Turn must be neutral with respect to root-environment readiness after this checkpoint.
+
+## Documentation convergence in this checkpoint
+
+Update `docs/architecture/runtime.md` in the same implementation commit(s) once code matches:
+
+- Vault Create/Unlock prepares the root Expert Registry/package and publishes Directory before `VaultState::Ready`;
+- first-install default binding belongs to root activation, not Conversation;
+- Conversation Start/Resume and turn/resume execution consume an already-ready environment and do not repair it;
+- absent Registry is not equivalent to an empty enabled catalog.
+
+Do **not** document Checkpoint 03's future Run-pinned discovery/dispatch semantics yet. At the end of Checkpoint 02 the root lifecycle is corrected, but root turns still use the current TaskCoordinator/Directory semantics until Checkpoint 03.
+
+`docs/architecture/authority-recovery.md` does not need its Checkpoint 03/04 configuration-vs-authority rewrite in Checkpoint 02 unless implementation reveals a directly changed recovery fact. Do not prestate future pinning behavior.
+
+## Residual/deletion gate
+
+Run repository searches and classify every remaining match.
+
+Required zero-match production concepts after Checkpoint 02:
+
+```text
+ExpertInstallRefresh
+ExpertRefreshOutcome
+expert_refresh_outcome
+ExistingOnly
+InstallIfAbsent
+```
+
+Required ownership for remaining symbols:
+
+- `ensure_expert_bundle` — Experts implementation/export plus exactly the App root-environment preparation path; no Conversation Session/turn/resume caller.
+- `bind_initial_defaults` — definition, root-environment preparation caller, and focused tests only; no Session caller.
+- `publish_expert_directory` — root preparation and explicit Registry/binding mutation paths only; no per-turn/per-resume refresh.
+- `ConversationSessionOperation::Start` — Session semantics and tests only; no Expert install/binding logic.
+
+Also search conceptually for:
+- “general turn without expert setup” assumptions;
+- tests asserting Registry is absent after successful Create/Unlock;
+- startup/unlock code that silently changes existing binding or enabled state;
+- any path that maps absent Registry to a Ready empty Directory.
+
+Do not create a permanent grep/checker for this migration.
+
+## Verification required before marking Checkpoint 02 complete
+
+Fast iteration:
+
+```sh
+cargo test -p floe-experts --tests
+cargo test -p floe-app --lib
+```
+
+Checkpoint Rust/application gate:
+
+```sh
+CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast
+python3 tools/architecture/check_boundaries.py
+cargo build -p floe-ffi
+git diff --check
+```
+
+No Flutter, Go, native-provider, or external-account mutation is required solely by this checkpoint because it changes App-private lifecycle ownership without changing the wire/FFI contract. If implementation unexpectedly changes those surfaces, expand verification according to `.agents/skills/code-change-verification/SKILL.md`.
+
+Use isolated temporary Vault roots for lifecycle regressions. Do not reset or migrate real user data. If a required gate fails for a pre-existing reason, reproduce it at the checkpoint start revision when practical and record the evidence; do not weaken assertions.
+
+## Checkpoint 02 acceptance
+
+Checkpoint 02 is complete only when all are true:
+
+- a successful canonical Create or Unlock cannot return `VaultState::Ready` without an existing Expert Registry and published Directory;
+- a Ready Registry with zero enabled Experts remains valid and publishes an empty catalog;
+- verified device/setup identity comes from admitted Vault lifecycle context, not product payload or a production fallback;
+- first-install default binding runs only when Registry was absent before reconciliation;
+- existing binding/enable configuration survives reopen unchanged;
+- Conversation Start/Resume/Turn/Resume-turn contain no install, refresh, initial-binding, or readiness-repair behavior;
+- the refresh-mode/outcome transition API is deleted;
+- absent Registry is never converted to a Ready empty Directory;
+- tests cover fresh Resume without Start, legacy absent-Registry unlock, disabled-all, no-auto-rebind, idempotent reopen, and preparation failure;
+- `docs/architecture/runtime.md` matches the implemented lifecycle and does not claim Checkpoint 03 behavior;
+- residual searches satisfy the gate above;
+- the plan execution report records start HEAD, fetched origin/main, checkpoint commit SHA(s), tests, residuals, documentation, worktree state, and explicitly states Checkpoint 03 was not started.
+
+## Checkpoint commit discipline
+
+Implement Checkpoint 02 as one logical lifecycle-cutover commit when practical. Multiple local commits are acceptable only to keep the replacement buildable; if used, the execution report must list every SHA. Update this plan's Checkpoint 02 execution report after verification and stop. Do not start Checkpoint 03 in the same implementation pass.
+
 
 # Checkpoint 03 — Run-pinned Expert discovery and delegation
 
