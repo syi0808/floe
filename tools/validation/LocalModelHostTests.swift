@@ -157,12 +157,20 @@ struct LocalModelHostTests {
 
     precondition(decodeLocalCommand(Data(#"{"schemaVersion":1,"operation":"availability","secret":"must not echo"}"#.utf8)) == nil)
     precondition(decodeLocalCommand(Data(#"{"schemaVersion":1,"operation":"availability"}"#.utf8)) != nil)
-    let capabilityTools = try nativeActionTools(#"{"scoped_instructions":{"available_capabilities":[{"id":"fixture.read","input_schema":{"type":"object"}}],"active_experts":[]},"conversation":{"current_turn":[]}}"#)
+    let capabilityTools = try nativeActionTools(#"{"run_frame":{"run_instructions":{"purpose":"fixture"},"discovery":{"available_capabilities":[{"id":"fixture.read","input_schema":{"type":"object"}}],"active_experts":[]}},"current_turn":[]}"#)
     precondition(capabilityTools.count == 1)
-    let delegationTools = try nativeActionTools(#"{"scoped_instructions":{"available_capabilities":[],"active_experts":[{"id":"fixture"}]},"conversation":{"current_turn":[]}}"#)
+    let delegationTools = try nativeActionTools(#"{"run_frame":{"run_instructions":{"purpose":"fixture"},"discovery":{"available_capabilities":[],"active_experts":[{"card":{"id":"fixture"},"definition_revision":1}]}},"current_turn":[]}"#)
     precondition(delegationTools.count == 1)
-    precondition(currentUserRequest(#"{"conversation":{"current_turn":[{"role":"user","content":"Exact request"},{"role":"tool","content":"Observation"}]}}"#) == "Exact request")
-    let emptyTools = try nativeActionTools(#"{"scoped_instructions":{"available_capabilities":[],"active_experts":[]},"conversation":{"current_turn":[]}}"#)
+    precondition(currentUserRequest(#"{"current_turn":[{"role":"user","content":"Exact request"},{"role":"tool","content":"Observation"}]}"#) == "Exact request")
+    precondition(currentUserRequest(#"{"conversation":{"current_turn":[{"role":"user","content":"Old request"}]}}"#) == nil)
+    precondition(learnerPromptClassification(#"{"scoped_instructions":{"purpose":"governed-memory-review","available_capabilities":[],"active_experts":[]}}"#) == .general)
+    do {
+      _ = try nativeActionTools(#"{"scoped_instructions":{"available_capabilities":[],"active_experts":[]}}"#)
+      preconditionFailure("Legacy tool discovery was accepted")
+    } catch let failure as LocalModelFailure {
+      precondition(failure.reason == "invalid_model_output")
+    }
+    let emptyTools = try nativeActionTools(#"{"run_frame":{"run_instructions":{"purpose":"fixture"},"discovery":{"available_capabilities":[],"active_experts":[]}},"current_turn":[]}"#)
     precondition(emptyTools.isEmpty)
     precondition((try? nativeActionTools("not JSON")) == nil)
     precondition((try? nativeActionTools("{}")) == nil)
@@ -174,11 +182,14 @@ struct LocalModelHostTests {
       "Translate the phrase \"do not delegate\" into Korean.",
     ] {
       let prompt: [String: Any] = [
-        "scoped_instructions": [
-          "available_capabilities": [["id": "fixture.read", "input_schema": ["type": "object"]]],
-          "active_experts": [["id": "fixture"]],
+        "run_frame": [
+          "run_instructions": ["purpose": "fixture"],
+          "discovery": [
+            "available_capabilities": [["id": "fixture.read", "input_schema": ["type": "object"]]],
+            "active_experts": [["card": ["id": "fixture"], "definition_revision": 1]],
+          ],
         ],
-        "conversation": ["current_turn": [["role": "user", "content": request]]],
+        "current_turn": [["role": "user", "content": request]],
       ]
       let promptData = try JSONSerialization.data(withJSONObject: prompt, options: [.sortedKeys])
       let tools = try nativeActionTools(String(decoding: promptData, as: UTF8.self))
@@ -190,12 +201,12 @@ struct LocalModelHostTests {
         advertisedSchemas = schemas
       }
     }
-    precondition(isLearnerRequest(#"{"scoped_instructions":{"purpose":"governed-memory-review","available_capabilities":[],"active_experts":[]},"conversation":{"current_turn":[{"content":"governed-memory-review"}]}}"#))
-    precondition(!isLearnerRequest(#"{"scoped_instructions":{"purpose":"governed-memory-review","available_capabilities":[{"id":"fixture.read"}],"active_experts":[]}}"#))
-    precondition(!isLearnerRequest(#"{"scoped_instructions":{"purpose":"everyday-assistance","available_capabilities":[],"active_experts":[]},"conversation":{"current_turn":[{"content":"governed-memory-review"}]}}"#))
-    precondition(learnerPromptClassification(#"{"scoped_instructions":{"purpose":"governed-memory-review","available_capabilities":[{"id":"fixture.read"}],"active_experts":[]}}"#) == .denied)
-    precondition(learnerPromptClassification(#"{"scoped_instructions":{"purpose":"governed-memory-review","available_capabilities":[],"active_experts":[{"id":"fixture"}]}}"#) == .denied)
-    precondition(learnerPromptClassification(#"{"scoped_instructions":{"purpose":"unknown-role","available_capabilities":[],"active_experts":[]}}"#) == .general)
+    precondition(isLearnerRequest(#"{"run_frame":{"run_instructions":{"purpose":"governed-memory-review"},"discovery":{"available_capabilities":[],"active_experts":[]}},"current_turn":[{"content":"governed-memory-review"}]}"#))
+    precondition(!isLearnerRequest(#"{"run_frame":{"run_instructions":{"purpose":"governed-memory-review"},"discovery":{"available_capabilities":[{"id":"fixture.read"}],"active_experts":[]}}}"#))
+    precondition(!isLearnerRequest(#"{"run_frame":{"run_instructions":{"purpose":"everyday-assistance"},"discovery":{"available_capabilities":[],"active_experts":[]}},"current_turn":[{"content":"governed-memory-review"}]}"#))
+    precondition(learnerPromptClassification(#"{"run_frame":{"run_instructions":{"purpose":"governed-memory-review"},"discovery":{"available_capabilities":[{"id":"fixture.read"}],"active_experts":[]}}}"#) == .denied)
+    precondition(learnerPromptClassification(#"{"run_frame":{"run_instructions":{"purpose":"governed-memory-review"},"discovery":{"available_capabilities":[],"active_experts":[{"card":{"id":"fixture"},"definition_revision":1}]}}}"#) == .denied)
+    precondition(learnerPromptClassification(#"{"run_frame":{"run_instructions":{"purpose":"unknown-role"},"discovery":{"available_capabilities":[],"active_experts":[]}}}"#) == .general)
     let emptyLearner = try learnerOutputText(GeneratedLearnerAnswer(proposal: nil))
     let emptyObject = try JSONSerialization.jsonObject(with: Data(emptyLearner.utf8)) as! [String: Any]
     precondition(emptyObject["schema_version"] as? Int == 1 && emptyObject["proposal"] is NSNull)

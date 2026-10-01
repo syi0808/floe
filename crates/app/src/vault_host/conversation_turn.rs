@@ -315,11 +315,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             .task_coordinator
             .environment(&person_id.to_string())?;
         let catalog = expert_environment.catalog();
-        let active_experts: Vec<floe_agent_contract::AgentCard> = catalog
-            .cards
-            .iter()
-            .map(|entry| entry.card.clone())
-            .collect();
+        let environment_identity = expert_environment.identity();
         let budget = AgentBudget::default();
         let duration = std::time::Duration::from_millis(budget.deadline_ms);
         let deadline = tokio::time::Instant::now() + duration;
@@ -369,7 +365,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             session_id,
             context.clone(),
             inputs.session_data_classes.clone(),
-            active_experts,
+            environment_identity,
         )?;
         let delegation_port = &expert_environment;
         let retry_of = request.retry_of;
@@ -386,7 +382,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         let receipt = service
             .run_turn_observed(
                 floe_conversation::TurnRequest {
-                    expert_environment: expert_environment.identity(),
+                    expert_environment: environment_identity,
                     command_id: inputs.command_id,
                     session_id,
                     expected_session_revision: request.expected_revision,
@@ -1195,7 +1191,7 @@ mod tests {
                     request
                         .projection
                         .envelope
-                        .scoped_instructions
+                        .discovery
                         .available_capabilities
                         .is_empty()
                 );
@@ -1341,7 +1337,10 @@ mod tests {
             session.id,
             context,
             session.data_classes.clone(),
-            vec![],
+            floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
         )
         .unwrap();
         let repository = Arc::new(floe_vault::VaultConversationRepository::new(Arc::clone(
@@ -2257,7 +2256,10 @@ mod tests {
                 evidence: vec![],
             },
             vec![DataClass::Personal],
-            vec![],
+            floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
         )
         .unwrap();
         let projection = floe_agent_contract::ModelProjectionPort::project(
@@ -2289,7 +2291,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            projection.envelope.scoped_instructions.purpose,
+            projection.envelope.run_instructions.purpose,
             floe_inference::CANONICAL_MODEL_PURPOSE
         );
         assert_eq!(projection.input_data_classes, vec![DataClass::Personal]);
@@ -2298,11 +2300,7 @@ mod tests {
             floe_agent_contract::DependencyCoverage::Independent
         );
         assert_eq!(
-            projection
-                .envelope
-                .scoped_instructions
-                .available_capabilities
-                .len(),
+            projection.envelope.discovery.available_capabilities.len(),
             0
         );
     }
@@ -3184,7 +3182,10 @@ mod tests {
                 evidence: vec![],
             },
             vec![DataClass::Personal],
-            vec![],
+            floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
         )
         .unwrap();
         floe_agent_contract::ModelProjectionPort::project(

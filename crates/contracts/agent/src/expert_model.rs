@@ -108,6 +108,22 @@ pub struct CapabilityDescriptor {
     pub input_schema: Option<serde_json::Value>,
 }
 
+impl CapabilityDescriptor {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.schema_version != crate::AGENT_SCHEMA_VERSION
+            || self.id.trim().is_empty()
+            || self.version.trim().is_empty()
+            || self
+                .input_schema
+                .as_ref()
+                .is_some_and(|schema| !schema.is_object())
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
 /// What one reasoning step produced.
 ///
 /// There is no delegation here. An Expert answers its own assignment; handing

@@ -115,7 +115,7 @@ async fn main() -> std::process::ExitCode {
                 tools: vec![],
                 revision: 1,
             },
-            active_experts: &[],
+            expert_environment: None,
             authorized_history_dependencies: &[],
             input_data_classes: vec![DataClass::Synthetic],
             max_output_bytes: 16384,

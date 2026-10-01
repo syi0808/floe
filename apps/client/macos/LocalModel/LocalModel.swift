@@ -390,10 +390,12 @@ enum LearnerPromptClassification: Equatable {
 func learnerPromptClassification(_ prompt: String) -> LearnerPromptClassification {
   guard let data = prompt.data(using: .utf8),
         let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-        let scoped = root["scoped_instructions"] as? [String: Any] else { return .general }
-  guard scoped["purpose"] as? String == "governed-memory-review" else { return .general }
-  guard let capabilities = scoped["available_capabilities"] as? [Any],
-        let experts = scoped["active_experts"] as? [Any] else { return .denied }
+        let runFrame = root["run_frame"] as? [String: Any],
+        let instructions = runFrame["run_instructions"] as? [String: Any] else { return .general }
+  guard instructions["purpose"] as? String == "governed-memory-review" else { return .general }
+  guard let discovery = runFrame["discovery"] as? [String: Any],
+        let capabilities = discovery["available_capabilities"] as? [Any],
+        let experts = discovery["active_experts"] as? [Any] else { return .denied }
   return capabilities.isEmpty && experts.isEmpty ? .learner : .denied
 }
 
@@ -549,8 +551,7 @@ private func learnerEpistemicStatusName(_ value: GeneratedLearnerEpistemicStatus
 func currentUserRequest(_ prompt: String) -> String? {
   guard let data = prompt.data(using: .utf8),
         let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-        let conversation = root["conversation"] as? [String: Any],
-        let currentTurn = conversation["current_turn"] as? [[String: Any]],
+        let currentTurn = root["current_turn"] as? [[String: Any]],
         let content = currentTurn.last(where: { $0["role"] as? String == "user" })?["content"]
           as? String, !content.isEmpty else { return nil }
   return content
@@ -590,10 +591,13 @@ private struct NativeActionTool: Tool {
 func nativeActionTools(_ prompt: String) throws -> [any Tool] {
   guard let data = prompt.data(using: .utf8),
         let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-        let scoped = root["scoped_instructions"] as? [String: Any] else {
+        let runFrame = root["run_frame"] as? [String: Any],
+        let discovery = runFrame["discovery"] as? [String: Any] else {
     throw LocalModelFailure("invalid_model_output")
   }
-  let capabilities = scoped["available_capabilities"] as? [[String: Any]] ?? []
+  let capabilities = (discovery["available_capabilities"] as? [[String: Any]] ?? []).sorted {
+    ($0["id"] as? String ?? "") < ($1["id"] as? String ?? "")
+  }
   var tools: [any Tool] = []
   for (index, capability) in capabilities.enumerated() {
     guard let capabilityID = capability["id"] as? String, !capabilityID.isEmpty else {
@@ -608,8 +612,8 @@ func nativeActionTools(_ prompt: String) throws -> [any Tool] {
       capabilityID: capabilityID
     ))
   }
-  let experts = scoped["active_experts"] as? [[String: Any]] ?? []
-  let expertIDs = experts.compactMap { $0["id"] as? String }.filter { !$0.isEmpty }.sorted()
+  let experts = discovery["active_experts"] as? [[String: Any]] ?? []
+  let expertIDs = experts.compactMap { ($0["card"] as? [String: Any])?["id"] as? String }.filter { !$0.isEmpty }.sorted()
   if !expertIDs.isEmpty {
     let schema: [String: Any] = [
       "type": "object",

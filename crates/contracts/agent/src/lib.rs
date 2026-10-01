@@ -40,15 +40,17 @@ pub use endpoint::{
     MAX_ENDPOINT_SETTLEMENT_BYTES,
 };
 pub use envelope::{
-    AgentCardManifestEntry, ContextEnvelope, ContextManifest, ContextualData,
-    EvidenceManifestEntry, MAX_RESPONSE_CONTRACT_BYTES, MAX_SCOPED_PURPOSE_BYTES,
-    MemoryManifestEntry, PromptManifestEntry, RuntimeContext, ScopedInstructions,
+    AgentCardManifestEntry, AttemptContext, CONTEXT_ENVELOPE_SCHEMA_VERSION, ContextEnvelope,
+    ContextManifest, ContextualData, DiscoveryContext, EvidenceManifestEntry,
+    ExpertEnvironmentManifestEntry, MAX_RESPONSE_CONTRACT_BYTES, MAX_SCOPED_PURPOSE_BYTES,
+    MemoryManifestEntry, PromptManifestEntry, RunInstructions, content_sha256,
 };
 pub use expert::{PackageKind, PackageRef};
 pub use expert_model::{
-    CapabilityDescriptor, DELEGATED_EXPERT_INFERENCE_CONSUMER, ExpertCapabilityObservation, ExpertModel,
-    ExpertModelAnswer, ExpertModelCall, ExpertModelOutcome, ExpertModelRequirement, ExpertReasoner,
-    ExpertReasoningStep, ExpertStep, ExpertStepOutcome, ExpertStepResult, ExpertTranscriptEntry,
+    CapabilityDescriptor, DELEGATED_EXPERT_INFERENCE_CONSUMER, ExpertCapabilityObservation,
+    ExpertModel, ExpertModelAnswer, ExpertModelCall, ExpertModelOutcome, ExpertModelRequirement,
+    ExpertReasoner, ExpertReasoningStep, ExpertStep, ExpertStepOutcome, ExpertStepResult,
+    ExpertTranscriptEntry,
 };
 pub use floe_context_contract::{
     CalendarProvider, CalendarReadAccessStamp, CalendarScope, ContextDependency, ContextEvidence,

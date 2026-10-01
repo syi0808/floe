@@ -32,6 +32,11 @@ fn every_placement() -> Vec<ModelPlacement> {
 }
 
 impl AgentCard {
+    pub fn card_sha256(&self) -> Result<String, AgentFailure> {
+        Ok(crate::content_sha256(
+            &serde_json::to_vec(self).map_err(|_| AgentFailure::InvalidInput)?,
+        ))
+    }
     /// Whether this agent can answer on a caller running at `placement`.
     pub fn runs_at(&self, placement: ModelPlacement) -> bool {
         self.supported_placements.contains(&placement)

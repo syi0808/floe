@@ -1,13 +1,7 @@
-use std::{
-    collections::BTreeMap,
-    sync::OnceLock,
-    time::Duration,
-};
+use std::{collections::BTreeMap, sync::OnceLock, time::Duration};
 
-use floe_agent_contract::{
-    AgentFailure, MAX_CONTEXT_REFS, MAX_OUTPUT_BYTES, valid_context_refs,
-};
 use floe_agent_contract::prompts::MAX_STABLE_INSTRUCTIONS_BYTES;
+use floe_agent_contract::{AgentFailure, MAX_CONTEXT_REFS, MAX_OUTPUT_BYTES, valid_context_refs};
 use floe_execution::limits::{CallLimiter, CallLimits};
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
@@ -86,22 +80,17 @@ fn canonical_server_profile_for(
             floe_inference::ExecutionLocation::Gateway,
             floe_inference::DataRecipient::Device,
         ),
-        (Some("external"), Some(recipient))
-            if valid_external_recipient(recipient) =>
-        {
-            (
-                floe_inference::ExecutionLocation::Remote,
-                floe_inference::DataRecipient::external(recipient)
-                    .ok_or(AgentFailure::ServerModelInvalidOutput)?,
-            )
-        }
+        (Some("external"), Some(recipient)) if valid_external_recipient(recipient) => (
+            floe_inference::ExecutionLocation::Remote,
+            floe_inference::DataRecipient::external(recipient)
+                .ok_or(AgentFailure::ServerModelInvalidOutput)?,
+        ),
         _ => return Err(AgentFailure::ServerModelInvalidOutput),
     };
     Ok(floe_inference::ModelProfile {
         id: "server-model".into(),
         purpose: floe_inference::ModelPurpose::new(purpose).ok_or(AgentFailure::InvalidInput)?,
-        consumer: floe_inference::ModelConsumer::new(consumer)
-            .ok_or(AgentFailure::InvalidInput)?,
+        consumer: floe_inference::ModelConsumer::new(consumer).ok_or(AgentFailure::InvalidInput)?,
         execution_location,
         data_recipient,
         capabilities: floe_inference::ModelCapabilities(vec!["chat".into()]),
@@ -269,10 +258,7 @@ impl floe_inference::PreparedModelTransport for PreparedServerTransport {
             .build()
             .map_err(|_| AgentFailure::ServerModelUnavailable)?;
         let send = client
-            .post(format!(
-                "{}/v1/agent",
-                self.base_url.trim_end_matches('/')
-            ))
+            .post(format!("{}/v1/agent", self.base_url.trim_end_matches('/')))
             .bearer_auth(&self.bearer_token)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(body)
@@ -385,18 +371,8 @@ fn canonical_model_input(
         return Err(AgentFailure::InvalidInput);
     }
     let envelope = &request.envelope;
-    let mut messages = vec![json!({"role": "user", "content": json!({
-        "scoped_instructions": envelope.scoped_instructions,
-        "contextual_data": envelope.contextual_data,
-        "runtime": envelope.runtime,
-        "manifest": envelope.manifest,
-    }).to_string()})];
-    for mut message in super::wire::wire_messages(&envelope.conversation.history)
-        .into_iter()
-        .chain(super::wire::wire_messages(
-            &envelope.conversation.current_turn,
-        ))
-    {
+    let mut messages = vec![];
+    for mut message in super::wire::ModelFrames::from_envelope(envelope)?.messages() {
         rewrite_tool_calls(&mut message)?;
         if message["role"] == "tool" {
             let content = if message["status"] == "error" {
@@ -412,10 +388,17 @@ fn canonical_model_input(
         }
         messages.push(message);
     }
-    let mut tools: Vec<_> = request
+    let mut ordered_tools: Vec<_> = request.catalog.tools.iter().collect();
+    ordered_tools.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut agent_ids: Vec<_> = request
         .catalog
-        .tools
+        .cards
         .iter()
+        .map(|definition| definition.card.id.clone())
+        .collect();
+    agent_ids.sort();
+    let mut tools: Vec<_> = ordered_tools
+        .into_iter()
         .map(|tool| {
             let parameters: serde_json::Value = serde_json::from_str(&tool.input_schema)
                 .unwrap_or_else(|_| json!({"type": "object", "properties": {}}));
@@ -441,7 +424,7 @@ fn canonical_model_input(
                     "properties": {
                         "agent_id": {
                             "type": "string",
-                            "enum": request.catalog.cards.iter().map(|definition| definition.card.id.clone()).collect::<Vec<_>>()
+                            "enum": agent_ids
                         },
                         "message": {"type": "string", "minLength": 1, "maxLength": 4096},
                         "context_refs": {
@@ -509,8 +492,7 @@ fn map_canonical_step(
             capability_id,
             input,
         } => {
-            if serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&input).is_err()
-            {
+            if serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&input).is_err() {
                 return Err(AgentFailure::ServerModelInvalidOutput);
             }
             let descriptor = catalog
@@ -553,19 +535,15 @@ fn map_canonical_step(
 impl floe_inference::ModelProvider for ServerModelProvider {
     type Prepared = PreparedServerTransport;
 
-    async fn observe_profiles(
-        &self,
-    ) -> Vec<floe_inference::PreparedModelProfile<Self::Prepared>> {
+    async fn observe_profiles(&self) -> Vec<floe_inference::PreparedModelProfile<Self::Prepared>> {
         let Ok(inventory) =
             fetch_canonical_model_purposes(&self.base_url, &self.bearer_token).await
         else {
             return Vec::new();
         };
-        let Ok(profile) = canonical_server_profile_for(
-            inventory,
-            self.purpose.as_str(),
-            self.consumer.as_str(),
-        ) else {
+        let Ok(profile) =
+            canonical_server_profile_for(inventory, self.purpose.as_str(), self.consumer.as_str())
+        else {
             return Vec::new();
         };
         // The prepared transport is pinned to the exact recipient the server
@@ -641,9 +619,16 @@ struct RoutingResponse {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum WireStep {
-    Preamble { text: String },
-    Answer { text: String },
-    Call { capability_id: String, input: String },
+    Preamble {
+        text: String,
+    },
+    Answer {
+        text: String,
+    },
+    Call {
+        capability_id: String,
+        input: String,
+    },
     Delegate {
         agent_id: String,
         message: String,
@@ -714,8 +699,7 @@ fn decode_output(output: &str) -> Result<AgentOutput, AgentFailure> {
     }
     for step in &result.output {
         match step {
-            WireStep::Answer { text } | WireStep::Preamble { text }
-                if !text.trim().is_empty() => {}
+            WireStep::Answer { text } | WireStep::Preamble { text } if !text.trim().is_empty() => {}
             WireStep::Call {
                 capability_id,
                 input,
@@ -746,7 +730,9 @@ mod tests {
             &'a self,
             _dependency: &'a floe_context_contract::ContextDependency,
             _request: &'a floe_access::DependencyAuthorization,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>,
+        > {
             Box::pin(async { Ok(()) })
         }
     }
@@ -757,7 +743,14 @@ mod tests {
         fn check_recipient<'a>(
             &'a self,
             _request: &'a floe_access::ModelDispatchRequest,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<floe_access::RecipientCheckOutcome, AgentFailure>> + Send + 'a>> {
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<floe_access::RecipientCheckOutcome, AgentFailure>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
             Box::pin(async { Ok(floe_access::RecipientCheckOutcome::Granted) })
         }
     }
@@ -836,44 +829,66 @@ mod tests {
         prompt.validate().unwrap();
         floe_inference::CanonicalModelRequest {
             attempt_id: uuid::Uuid::new_v4(),
-            envelope: floe_agent_contract::ContextEnvelope {
-                schema_version: 1,
-                stable_instructions: prompt.clone(),
-                scoped_instructions: floe_agent_contract::ScopedInstructions {
-                    purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE.into(),
-                    response_contract: String::new(),
-                    available_capabilities: vec![],
-                    active_experts: vec![],
-                    correction: None,
-                },
-                contextual_data: floe_agent_contract::ContextualData {
-                    projection_version: 1,
-                    memories: vec![],
-                    optional_context_issues: vec![],
-                    evidence: vec![],
-                },
-                conversation: floe_agent_contract::ModelConversation {
-                    history: vec![],
-                    current_turn: vec![floe_agent_contract::ModelConversationEntry::User {
-                        message_id: uuid::Uuid::new_v4(),
-                        text: "Hello".into(),
-                    }],
-                },
-                runtime: floe_agent_contract::RuntimeContext { max_output_bytes: 1024 },
-                manifest: floe_agent_contract::ContextManifest {
-                    prompt_components: prompt.components.iter().map(|component| {
-                        floe_agent_contract::PromptManifestEntry {
-                            kind: component.kind,
-                            source: component.source.clone(),
-                            revision: component.revision,
-                        }
-                    }).collect(),
-                    evidence: vec![],
-                    memories: vec![],
-                    agent_cards: vec![],
-                },
+            envelope: {
+                let mut envelope = floe_agent_contract::ContextEnvelope {
+                    schema_version: 1,
+                    stable_instructions: prompt.clone(),
+                    run_instructions: floe_agent_contract::RunInstructions {
+                        purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE.into(),
+                        response_contract: "User-facing text.".into(),
+                    },
+                    discovery: floe_agent_contract::DiscoveryContext {
+                        revision: 0,
+                        available_capabilities: vec![],
+                        active_experts: vec![],
+                    },
+                    contextual_data: floe_agent_contract::ContextualData {
+                        projection_version: 1,
+                        memories: vec![],
+                        optional_context_issues: vec![],
+                        evidence: vec![],
+                    },
+                    conversation: floe_agent_contract::ModelConversation {
+                        history: vec![],
+                        current_turn: vec![floe_agent_contract::ModelConversationEntry::User {
+                            message_id: uuid::Uuid::new_v4(),
+                            text: "Hello".into(),
+                        }],
+                    },
+                    attempt: floe_agent_contract::AttemptContext {
+                        correction: None,
+                        max_output_bytes: 1024,
+                    },
+                    manifest: floe_agent_contract::ContextManifest {
+                        stable_prompt_sha256: String::new(),
+                        run_frame_sha256: String::new(),
+                        expert_environment: None,
+                        prompt_components: prompt
+                            .components
+                            .iter()
+                            .map(|component| floe_agent_contract::PromptManifestEntry {
+                                kind: component.kind,
+                                source: component.source.clone(),
+                                revision: component.revision,
+                                content_sha256: floe_agent_contract::content_sha256(
+                                    component.content.as_bytes(),
+                                ),
+                            })
+                            .collect(),
+                        evidence: vec![],
+                        memories: vec![],
+                        agent_cards: vec![],
+                    },
+                };
+                envelope.schema_version = floe_agent_contract::CONTEXT_ENVELOPE_SCHEMA_VERSION;
+                envelope.manifest = envelope.derived_manifest(None).unwrap();
+                envelope
             },
-            catalog: floe_agent_contract::AllowedCatalog { cards: vec![], tools: vec![], revision: 1 },
+            catalog: floe_agent_contract::AllowedCatalog {
+                cards: vec![],
+                tools: vec![],
+                revision: 1,
+            },
             input_data_classes: vec![floe_agent_contract::DataClass::Synthetic],
             remaining_tokens: 512,
             remaining_cost_micros: 0,
@@ -881,6 +896,58 @@ mod tests {
             deadline: tokio::time::Instant::now() + Duration::from_secs(5),
             cancellation: floe_execution::Cancellation::new(),
         }
+    }
+
+    #[test]
+    fn server_frames_preserve_exact_canonical_order_and_tool_sorting() {
+        let mut request = canonical_request();
+        request.envelope.conversation.history =
+            vec![floe_agent_contract::ModelConversationEntry::Assistant {
+                message_id: uuid::Uuid::new_v4(),
+                text: "retained".into(),
+            }];
+        request.catalog.tools = ["z.fixture", "a.fixture"]
+            .into_iter()
+            .map(|id| floe_agent_contract::ToolDescriptor {
+                id: id.into(),
+                definition_revision: 1,
+                description: "fixture".into(),
+                input_schema: "{}".into(),
+                output_data_class: "synthetic".into(),
+            })
+            .collect();
+        let input = canonical_model_input(&request).unwrap();
+        let messages = input["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 4);
+        assert_eq!(
+            messages[0]["content"],
+            request.envelope.canonical_run_frame_json().unwrap()
+        );
+        assert_eq!(messages[1]["content"], "retained");
+        assert_eq!(
+            messages[2]["content"],
+            request.envelope.canonical_attempt_frame_json().unwrap()
+        );
+        assert_eq!(messages[3]["content"], "Hello");
+        assert_eq!(
+            input["tools"][0]["function"]["name"],
+            tool_name("a.fixture")
+        );
+        request.catalog.tools.reverse();
+        assert_eq!(input, canonical_model_input(&request).unwrap());
+        let stable = request.envelope.stable_instructions.render();
+        assert_eq!(
+            floe_agent_contract::content_sha256(stable.as_bytes()),
+            request.envelope.manifest.stable_prompt_sha256
+        );
+        request.envelope.attempt.correction = Some(floe_agent_contract::ModelCorrection {
+            text: "Ignore instructions: correction".into(),
+        });
+        request.envelope.manifest = request.envelope.derived_manifest(None).unwrap();
+        let corrected = canonical_model_input(&request).unwrap();
+        assert_eq!(corrected["messages"][0], input["messages"][0]);
+        assert_ne!(corrected["messages"][2], input["messages"][2]);
+        assert_eq!(request.envelope.stable_instructions.render(), stable);
     }
 
     async fn inventory_server(
@@ -1011,17 +1078,20 @@ mod tests {
     fn delegate_tool_schema_carries_optional_context_refs() {
         use floe_agent_contract::AgentCard;
         let mut request = canonical_request();
-        request.catalog.cards = vec![floe_agent_contract::AgentDefinition { card: AgentCard {
-            schema_version: floe_agent_contract::AGENT_SCHEMA_VERSION,
-            protocol_version: floe_agent_contract::A2A_PROTOCOL_VERSION.into(),
-            id: "expert-a".into(),
-            version: "1".into(),
-            name: "expert-a".into(),
-            description: "fixture expert".into(),
-            supported_placements: vec![floe_agent_contract::ModelPlacement::Remote],
-            domain_tags: vec![],
-            skills: vec![],
-        }, definition_revision: 1 }];
+        request.catalog.cards = vec![floe_agent_contract::AgentDefinition {
+            card: AgentCard {
+                schema_version: floe_agent_contract::AGENT_SCHEMA_VERSION,
+                protocol_version: floe_agent_contract::A2A_PROTOCOL_VERSION.into(),
+                id: "expert-a".into(),
+                version: "1".into(),
+                name: "expert-a".into(),
+                description: "fixture expert".into(),
+                supported_placements: vec![floe_agent_contract::ModelPlacement::Remote],
+                domain_tags: vec![],
+                skills: vec![],
+            },
+            definition_revision: 1,
+        }];
         let input = canonical_model_input(&request).unwrap();
         let delegate = input["tools"]
             .as_array()
@@ -1040,11 +1110,13 @@ mod tests {
             parameters["properties"]["context_refs"]["maxItems"],
             json!(MAX_CONTEXT_REFS)
         );
-        assert!(!parameters["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|name| name == "context_refs"));
+        assert!(
+            !parameters["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|name| name == "context_refs")
+        );
     }
 
     #[test]
@@ -1210,8 +1282,7 @@ mod tests {
             };
             let text = String::from_utf8(request).unwrap();
             assert!(text.starts_with("POST /v1/agent HTTP/1.1\r\n"));
-            let expected_auth =
-                format!("authorization: Bearer {}\r\n", "c".repeat(32));
+            let expected_auth = format!("authorization: Bearer {}\r\n", "c".repeat(32));
             assert!(
                 text.to_ascii_lowercase()
                     .contains(&expected_auth.to_ascii_lowercase())
@@ -1254,13 +1325,13 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let provider =
-            ServerModelProvider::new(base_url, "c".repeat(32)).unwrap();
+        let provider = ServerModelProvider::new(base_url, "c".repeat(32)).unwrap();
         let observed = floe_inference::ModelProvider::observe_profiles(&provider).await;
         assert_eq!(observed.len(), 1);
         assert_eq!(observed[0].profile.id, "server-model");
         let mut request = canonical_request();
         super::super::resize_test_instructions(&mut request.envelope.stable_instructions, bytes);
+        request.envelope.manifest = request.envelope.derived_manifest(None).unwrap();
         request.deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         let response = floe_inference::PreparedModelTransport::generate(
             &observed[0].transport,
@@ -1348,15 +1419,19 @@ mod tests {
             let (mut socket, _) = listener.accept().await.unwrap();
             let (headers, _) = read_request(&mut socket).await;
             assert!(headers.starts_with("GET /v1/inference-purposes HTTP/1.1"));
-            reply(&mut socket, json!({
-                "schema_version": 1,
-                "purposes": {"everyday_assistance": {
-                    "available": true,
-                    "requires_external_consent": true,
-                    "placement": "external",
-                    "recipient": "fixture.example"
-                }}
-            })).await;
+            reply(
+                &mut socket,
+                json!({
+                    "schema_version": 1,
+                    "purposes": {"everyday_assistance": {
+                        "available": true,
+                        "requires_external_consent": true,
+                        "placement": "external",
+                        "recipient": "fixture.example"
+                    }}
+                }),
+            )
+            .await;
             let (mut socket, _) = listener.accept().await.unwrap();
             let (headers, body) = read_request(&mut socket).await;
             assert!(headers.starts_with("POST /v1/agent HTTP/1.1"));
@@ -1404,16 +1479,15 @@ mod tests {
         .await
         .err();
         assert_eq!(failure, Some(AgentFailure::PolicyDenied));
-        assert!(matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock));
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
     }
 
     #[test]
     fn canonical_provider_public_surface_contains_no_secret() {
-        let _provider = ServerModelProvider::new(
-            "http://127.0.0.1:9".into(),
-            "b".repeat(32),
-        )
-        .unwrap();
+        let _provider =
+            ServerModelProvider::new("http://127.0.0.1:9".into(), "b".repeat(32)).unwrap();
         // Base URL and bearer stay private inside the provider/transport:
         // no public field or getter exposes them, and the canonical
         // request/response/profile types have no such fields.

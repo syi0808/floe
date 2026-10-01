@@ -10,13 +10,13 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    AgentFailure, AllowedCatalog, ContextEnvelope, DataClass, DependencyCoverage,
-    ModelConversation, RoleSpec, MAX_OUTPUT_BYTES,
+    AgentFailure, AllowedCatalog, ContextEnvelope, DataClass, DependencyCoverage, MAX_OUTPUT_BYTES,
+    ModelConversation, RoleSpec,
 };
 
 /// Canonical host correction for one invalid structured model output.
 ///
-/// The Engine attaches this to the next projection as a scoped instruction; it
+/// The Engine attaches this to the next projection's Attempt context; it
 /// is never forged into a user message.
 pub const MODEL_CORRECTION_TEXT: &str = "The previous model response failed output validation and was not executed. Return a complete answer or registered tool calls with valid JSON object arguments matching their schemas. Optional explanatory text accompanying calls is a preamble, not a final answer. Do not mix a final answer with tool calls. Preserve all observed tool results; do not repeat completed work. This correction is protocol feedback, not a new user task; answer the original user request.";
 
@@ -40,7 +40,7 @@ impl ProjectionRef {
     }
 }
 
-/// Host-generated correction attached to a projection as a scoped instruction.
+/// Host-generated correction attached to a projection's Attempt context.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelCorrection {

@@ -303,11 +303,10 @@ async fn project_case(
         session_id,
         context(),
         vec![DataClass::Synthetic],
-        catalog
-            .cards
-            .iter()
-            .map(|definition| definition.card.clone())
-            .collect(),
+        floe_experts::RunExpertEnvironmentIdentity {
+            revision: catalog.revision,
+            digest: [1; 32],
+        },
     )?;
     let projection = projector
         .project(
@@ -439,7 +438,7 @@ fn report_case(
     repetition: usize,
     metadata: &ReportMetadata,
     projection: &AuthorizedModelProjection,
-    catalog: &AllowedCatalog,
+    _catalog: &AllowedCatalog,
     steps: &[ModelStep],
     follow_up: bool,
     failure: Option<AgentFailure>,
@@ -460,9 +459,11 @@ fn report_case(
         "corpus_sha256": digest(CORPUS), "provider": if metadata.profile == "foundation-device" { "foundation" } else { "server" },
         "profile": metadata.profile, "model_id": metadata.model_id, "model_id_origin": metadata.model_id_origin,
         "configuration_sha256": metadata.configuration_hash,
-        "prompt_components": projection.envelope.stable_instructions.components.iter().map(|component| json!({"kind":component.kind,"source":component.source,"revision":component.revision,"sha256":digest(&component.content)})).collect::<Vec<_>>(),
-        "stable_instructions_sha256": digest(projection.envelope.stable_instructions.render()),
-        "ordered_cards": catalog.cards.iter().map(|definition| json!({"id":definition.card.id,"definition_revision":definition.definition_revision,"description_sha256":digest(&definition.card.description)})).collect::<Vec<_>>(),
+        "prompt_components": projection.envelope.manifest.prompt_components,
+        "stable_instructions_sha256": projection.envelope.manifest.stable_prompt_sha256,
+        "run_frame_sha256": projection.envelope.manifest.run_frame_sha256,
+        "expert_environment": projection.envelope.manifest.expert_environment,
+        "ordered_cards": projection.envelope.manifest.agent_cards,
         "phase": if follow_up { "synthesis" } else { "selection" }, "batch_steps": steps, "choice_accepted": accepted,
         "status": if failure.is_some() { "EXECUTION_FAILURE" } else if accepted { "REVIEW_REQUIRED" } else { "BEHAVIOR_FAILURE" },
         "failure": failure, "behavior_review": "pending", "rubric": case.rubric, "personal_data": false,
@@ -793,7 +794,7 @@ mod tests {
                 floe_conversation::prompts::manager_prompt(None).unwrap()
             );
             assert_eq!(
-                projection.envelope.scoped_instructions.response_contract,
+                projection.envelope.run_instructions.response_contract,
                 floe_conversation::MANAGER_OUTPUT_CONTRACT
             );
         }

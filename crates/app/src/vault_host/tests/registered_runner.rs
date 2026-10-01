@@ -2454,11 +2454,6 @@ async fn shipped_descriptions_reach_context_projection_after_fresh_install() {
             .unwrap();
         let catalog = environment.catalog();
         assert_eq!(catalog.cards, vec![expected.clone()]);
-        let active_experts = catalog
-            .cards
-            .iter()
-            .map(|definition| definition.card.clone())
-            .collect::<Vec<_>>();
         let started = floe_conversation::start_session(
             open.conversation_repository.as_ref(),
             floe_conversation::SessionRequest {
@@ -2524,18 +2519,15 @@ async fn shipped_descriptions_reach_context_projection_after_fresh_install() {
                 },
                 agent_context: &context,
                 catalog: &catalog,
-                active_experts: &active_experts,
+                expert_environment: None,
                 authorized_history_dependencies: &[],
                 input_data_classes: vec![floe_agent_contract::DataClass::Personal],
                 max_output_bytes: 4096,
             })
             .unwrap();
+        assert_eq!(projection.envelope.discovery.active_experts, catalog.cards);
         assert_eq!(
-            projection.envelope.scoped_instructions.active_experts,
-            active_experts
-        );
-        assert_eq!(
-            projection.envelope.scoped_instructions.active_experts[0].version,
+            projection.envelope.discovery.active_experts[0].card.version,
             "1.0.1"
         );
         assert_eq!(catalog.cards[0].definition_revision, 2);

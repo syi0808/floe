@@ -9,15 +9,12 @@
 //! happens later, at Access model dispatch.
 
 use floe_agent_contract::{
-    AGENT_SCHEMA_VERSION, AgentCard, AgentContext, AgentFailure, AllowedCatalog,
-    AuthorizedModelProjection, CapabilityDescriptor, ContextDependency, ContextEnvelope,
-    ContextManifest, ContextualData, DataClass, DependencyCoverage, ModelConversation,
-    ModelConversationEntry, ModelCorrection, ProjectionRef, RuntimeContext, ScopedInstructions,
-    ToolDescriptor,
+    AGENT_SCHEMA_VERSION, AgentContext, AgentFailure, AllowedCatalog, AttemptContext,
+    AuthorizedModelProjection, CONTEXT_ENVELOPE_SCHEMA_VERSION, CapabilityDescriptor,
+    ContextDependency, ContextEnvelope, ContextManifest, ContextualData, DataClass,
+    DependencyCoverage, DiscoveryContext, ExpertEnvironmentManifestEntry, ModelConversation,
+    ModelConversationEntry, ModelCorrection, ProjectionRef, RunInstructions, ToolDescriptor,
     prompts::PromptAssembly,
-};
-use floe_agent_contract::{
-    AgentCardManifestEntry, EvidenceManifestEntry, MemoryManifestEntry, PromptManifestEntry,
 };
 
 /// Upper bound the projection advertises for one model response, matching the
@@ -57,7 +54,7 @@ pub struct ContextProjectionInput<'a> {
     pub conversation: ModelConversation,
     pub agent_context: &'a AgentContext,
     pub catalog: &'a AllowedCatalog,
-    pub active_experts: &'a [AgentCard],
+    pub expert_environment: Option<ExpertEnvironmentManifestEntry>,
     pub authorized_history_dependencies: &'a [ContextDependency],
     /// Data classes of the admitted Session, never App policy.
     pub input_data_classes: Vec<DataClass>,
@@ -70,17 +67,21 @@ pub fn assemble_context_projection(
 ) -> Result<AuthorizedModelProjection, AgentFailure> {
     validate_input(&input)?;
     let live = live_context(input.role, input.agent_context);
-    let available_capabilities = capability_summaries(input.catalog)?;
-    let active_experts = filter_experts(input.active_experts, input.catalog);
-    let envelope = ContextEnvelope {
-        schema_version: AGENT_SCHEMA_VERSION,
+    let mut available_capabilities = capability_summaries(input.catalog)?;
+    available_capabilities.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut active_experts = input.catalog.cards.clone();
+    active_experts.sort_by(|left, right| left.card.id.cmp(&right.card.id));
+    let mut envelope = ContextEnvelope {
+        schema_version: CONTEXT_ENVELOPE_SCHEMA_VERSION,
         stable_instructions: input.prompt.clone(),
-        scoped_instructions: ScopedInstructions {
+        run_instructions: RunInstructions {
             purpose: input.purpose.to_owned(),
             response_contract: input.response_contract.to_owned(),
+        },
+        discovery: DiscoveryContext {
+            revision: input.catalog.revision,
             available_capabilities,
-            active_experts: active_experts.clone(),
-            correction: input.correction.clone(),
+            active_experts,
         },
         contextual_data: ContextualData {
             projection_version: live.projection_version,
@@ -89,15 +90,22 @@ pub fn assemble_context_projection(
             evidence: live.evidence.clone(),
         },
         conversation: input.conversation.clone(),
-        runtime: RuntimeContext {
+        attempt: AttemptContext {
+            correction: input.correction.clone(),
             max_output_bytes: input.max_output_bytes.min(MAX_PROJECTED_OUTPUT_BYTES),
         },
-        manifest: context_manifest(&input.prompt, &live, &active_experts),
+        manifest: ContextManifest {
+            stable_prompt_sha256: String::new(),
+            run_frame_sha256: String::new(),
+            expert_environment: None,
+            prompt_components: vec![],
+            evidence: vec![],
+            memories: vec![],
+            agent_cards: vec![],
+        },
     };
-    let coverage = fold_coverage(
-        input.authorized_history_dependencies,
-        &input.conversation,
-    )?;
+    envelope.manifest = envelope.derived_manifest(input.expert_environment)?;
+    let coverage = fold_coverage(input.authorized_history_dependencies, &input.conversation)?;
     let projection = AuthorizedModelProjection {
         projection_ref: ProjectionRef::new(),
         projection_revision: 1,
@@ -114,8 +122,7 @@ fn validate_input(input: &ContextProjectionInput<'_>) -> Result<(), AgentFailure
         || input.purpose.len() > floe_agent_contract::MAX_SCOPED_PURPOSE_BYTES
         || input.response_contract.len() > floe_agent_contract::MAX_RESPONSE_CONTRACT_BYTES
         || input.input_data_classes.is_empty()
-        || input.input_data_classes.len()
-            > floe_agent_contract::MAX_INPUT_DATA_CLASSES
+        || input.input_data_classes.len() > floe_agent_contract::MAX_INPUT_DATA_CLASSES
         || input.max_output_bytes == 0
         || input.max_output_bytes > floe_agent_contract::MAX_OUTPUT_BYTES
     {
@@ -162,7 +169,9 @@ fn live_context(role: ContextProjectionRole, context: &AgentContext) -> AgentCon
 /// The non-authoritative envelope summary of the canonical tool catalog: one
 /// read-only capability entry per catalog tool. The catalog itself — owned by
 /// Context — is what the Engine validates batches against.
-fn capability_summaries(catalog: &AllowedCatalog) -> Result<Vec<CapabilityDescriptor>, AgentFailure> {
+fn capability_summaries(
+    catalog: &AllowedCatalog,
+) -> Result<Vec<CapabilityDescriptor>, AgentFailure> {
     catalog
         .tools
         .iter()
@@ -194,66 +203,6 @@ fn parse_data_class(name: &str) -> Result<DataClass, AgentFailure> {
         "deviceonlyraw" => Ok(DataClass::DeviceOnlyRaw),
         "credential" => Ok(DataClass::Credential),
         _ => Err(AgentFailure::InvalidInput),
-    }
-}
-
-/// Active experts the current catalog still carries, by card id. Catalog
-/// membership is the only filter: no App policy participates.
-fn filter_experts(experts: &[AgentCard], catalog: &AllowedCatalog) -> Vec<AgentCard> {
-    experts
-        .iter()
-        .filter(|card| {
-            catalog
-                .cards
-                .iter()
-                .any(|definition| definition.card.id == card.id)
-        })
-        .cloned()
-        .collect()
-}
-
-/// Canonical manifest: what went into this projection. Same shape as the
-/// historical helper, owned by Context for the canonical path.
-pub fn context_manifest(
-    prompt: &PromptAssembly,
-    context: &AgentContext,
-    active_experts: &[AgentCard],
-) -> ContextManifest {
-    ContextManifest {
-        prompt_components: prompt
-            .components
-            .iter()
-            .map(|component| PromptManifestEntry {
-                kind: component.kind,
-                source: component.source.clone(),
-                revision: component.revision,
-            })
-            .collect(),
-        evidence: context
-            .evidence
-            .iter()
-            .map(|evidence| EvidenceManifestEntry {
-                source_handle: evidence.source_handle.clone(),
-                data_class: evidence.data_class,
-                expires_at_unix_ms: evidence.expires_at_unix_ms,
-            })
-            .collect(),
-        memories: context
-            .memories
-            .iter()
-            .map(|memory| MemoryManifestEntry {
-                target_id: memory.target_id,
-                revision: memory.revision,
-                source_refs: memory.source_refs.clone(),
-            })
-            .collect(),
-        agent_cards: active_experts
-            .iter()
-            .map(|card| AgentCardManifestEntry {
-                id: card.id.clone(),
-                version: card.version.clone(),
-            })
-            .collect(),
     }
 }
 
@@ -301,19 +250,17 @@ fn fold_coverage(
 #[cfg(test)]
 mod tests {
     use chrono::{Duration, Utc};
-    use floe_agent_contract::prompts::{
-        PromptComponent, PromptComponentKind, PromptRole,
-    };
+    use floe_agent_contract::prompts::{PromptComponent, PromptComponentKind, PromptRole};
     use floe_agent_contract::{
         A2A_PROTOCOL_VERSION, AgentDefinition, AllowedCatalog, Artifact, ArtifactPart,
         ContextEvidence, ContextMemory, DelegationRequest, EpistemicStatus, InvocationKey,
-        ModelPlacement, PersonalMemoryKind, TaskId, TaskReceipt, TaskSnapshot, TaskState,
-        ToolCall, ToolResult,
+        ModelPlacement, PersonalMemoryKind, TaskId, TaskReceipt, TaskSnapshot, TaskState, ToolCall,
+        ToolResult,
     };
     use floe_context_contract::{
-        ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority,
-        GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-        GrantSourceBinding, LearningEvidenceRef, ProcessingRestriction, ResourceHandle,
+        ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority, GrantConsumer,
+        GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding,
+        LearningEvidenceRef, ProcessingRestriction, ResourceHandle,
     };
     use uuid::Uuid;
 
@@ -380,8 +327,8 @@ mod tests {
         assembly
     }
 
-    fn agent_card(id: &str) -> AgentCard {
-        AgentCard {
+    fn agent_card(id: &str) -> floe_agent_contract::AgentCard {
+        floe_agent_contract::AgentCard {
             schema_version: AGENT_SCHEMA_VERSION,
             protocol_version: A2A_PROTOCOL_VERSION.into(),
             id: id.into(),
@@ -473,7 +420,6 @@ mod tests {
         conversation: ModelConversation,
         context: &'a AgentContext,
         catalog_value: &'a AllowedCatalog,
-        experts: &'a [AgentCard],
         history: &'a [ContextDependency],
     ) -> ContextProjectionInput<'a> {
         ContextProjectionInput {
@@ -485,7 +431,7 @@ mod tests {
             conversation,
             agent_context: context,
             catalog: catalog_value,
-            active_experts: experts,
+            expert_environment: None,
             authorized_history_dependencies: history,
             input_data_classes: vec![DataClass::Personal],
             max_output_bytes: 4096,
@@ -509,7 +455,6 @@ mod tests {
     fn manager_projection_carries_purpose_contract_and_correction() {
         let context = agent_context();
         let catalog_value = catalog();
-        let experts = vec![agent_card("schedule")];
         let history = vec![dependency(floe_agent_contract::PersonId::new())];
         let mut projection_input = input(
             ContextProjectionRole::Manager,
@@ -517,7 +462,6 @@ mod tests {
             conversation(),
             &context,
             &catalog_value,
-            &experts,
             &history,
         );
         projection_input.correction = Some(ModelCorrection {
@@ -525,22 +469,22 @@ mod tests {
         });
         let projection = assemble_context_projection(projection_input).unwrap();
         assert_eq!(
-            projection.envelope.scoped_instructions.purpose,
+            projection.envelope.run_instructions.purpose,
             "everyday_assistance"
         );
         assert_eq!(
-            projection.envelope.scoped_instructions.response_contract,
+            projection.envelope.run_instructions.response_contract,
             "User-facing text."
         );
         assert_eq!(
-            projection.envelope.scoped_instructions.correction,
+            projection.envelope.attempt.correction,
             Some(ModelCorrection {
                 text: "try again".into()
             })
         );
         assert_eq!(projection.envelope.contextual_data.memories.len(), 1);
         assert_eq!(projection.envelope.contextual_data.evidence.len(), 1);
-        assert_eq!(projection.envelope.runtime.max_output_bytes, 4096);
+        assert_eq!(projection.envelope.attempt.max_output_bytes, 4096);
         assert_eq!(projection.input_data_classes, vec![DataClass::Personal]);
         assert_eq!(projection.projection_revision, 1);
     }
@@ -549,7 +493,6 @@ mod tests {
     fn expert_projection_carries_full_live_context() {
         let context = agent_context();
         let catalog_value = catalog();
-        let experts = vec![agent_card("schedule")];
         let history = vec![];
         let projection = assemble_context_projection(input(
             ContextProjectionRole::Expert,
@@ -557,7 +500,6 @@ mod tests {
             conversation(),
             &context,
             &catalog_value,
-            &experts,
             &history,
         ))
         .unwrap();
@@ -570,7 +512,6 @@ mod tests {
     fn learner_projection_carries_memories_under_review() {
         let context = agent_context();
         let catalog_value = catalog();
-        let experts = vec![agent_card("schedule")];
         let history = vec![];
         let projection = assemble_context_projection(input(
             ContextProjectionRole::Learner,
@@ -578,7 +519,6 @@ mod tests {
             conversation(),
             &context,
             &catalog_value,
-            &experts,
             &history,
         ))
         .unwrap();
@@ -591,17 +531,17 @@ mod tests {
     fn finalization_empties_live_context_but_keeps_settled_observations() {
         let context = agent_context();
         let catalog_value = catalog();
-        let experts = vec![agent_card("schedule")];
         let history = vec![];
         let mut settled = conversation();
-        settled.current_turn.push(tool_exchange(DependencyCoverage::Independent));
+        settled
+            .current_turn
+            .push(tool_exchange(DependencyCoverage::Independent));
         let projection = assemble_context_projection(input(
             ContextProjectionRole::Finalization,
             prompt(),
             settled,
             &context,
             &catalog_value,
-            &experts,
             &history,
         ))
         .unwrap();
@@ -623,7 +563,6 @@ mod tests {
         let delegation_dep = dependency(person);
         let context = agent_context();
         let catalog_value = catalog();
-        let experts = vec![];
         let history = vec![history_dep.clone()];
         let tool_call_id = Uuid::new_v4();
         let task_id = TaskId::new();
@@ -667,19 +606,18 @@ mod tests {
                         selected_definition_revision: 2,
                         message: "summarize".into(),
                         context_refs: vec![],
-                        execution_context:
-                            floe_agent_contract::DelegationExecutionContext {
-                                session_id: Uuid::new_v4(),
-                                device_id: "test-device".into(),
-                                agent_context: floe_agent_contract::AgentContext {
-                                    projection_version: 1,
-                                    persona: None,
-                                    memories: vec![],
-                                    optional_context_issues: vec![],
-                                    evidence: vec![],
-                                },
-                                max_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
+                        execution_context: floe_agent_contract::DelegationExecutionContext {
+                            session_id: Uuid::new_v4(),
+                            device_id: "test-device".into(),
+                            agent_context: floe_agent_contract::AgentContext {
+                                projection_version: 1,
+                                persona: None,
+                                memories: vec![],
+                                optional_context_issues: vec![],
+                                evidence: vec![],
                             },
+                            max_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
+                        },
                     },
                     receipt: TaskReceipt {
                         task_id,
@@ -707,7 +645,6 @@ mod tests {
             conversation,
             &context,
             &catalog_value,
-            &experts,
             &history,
         ))
         .unwrap();
@@ -724,7 +661,6 @@ mod tests {
     fn identical_authorized_input_projects_identically() {
         let context = agent_context();
         let catalog_value = catalog();
-        let experts = vec![agent_card("schedule")];
         let history = vec![dependency(floe_agent_contract::PersonId::new())];
         let conversation_value = conversation();
         let first = assemble_context_projection(input(
@@ -733,7 +669,6 @@ mod tests {
             conversation_value.clone(),
             &context,
             &catalog_value,
-            &experts,
             &history,
         ))
         .unwrap();
@@ -743,7 +678,6 @@ mod tests {
             conversation_value,
             &context,
             &catalog_value,
-            &experts,
             &history,
         ))
         .unwrap();
@@ -780,7 +714,6 @@ mod tests {
     fn forbidden_route_and_secret_fields_are_absent() {
         let context = agent_context();
         let catalog_value = catalog();
-        let experts = vec![agent_card("schedule")];
         let history = vec![dependency(floe_agent_contract::PersonId::new())];
         let projection = assemble_context_projection(input(
             ContextProjectionRole::Manager,
@@ -788,7 +721,6 @@ mod tests {
             conversation(),
             &context,
             &catalog_value,
-            &experts,
             &history,
         ))
         .unwrap();
@@ -826,7 +758,6 @@ mod tests {
     fn capability_summary_derives_from_catalog_tools() {
         let context = agent_context();
         let catalog_value = catalog();
-        let experts = vec![];
         let history = vec![];
         let projection = assemble_context_projection(input(
             ContextProjectionRole::Manager,
@@ -834,26 +765,19 @@ mod tests {
             conversation(),
             &context,
             &catalog_value,
-            &experts,
             &history,
         ))
         .unwrap();
-        let capabilities = &projection.envelope.scoped_instructions.available_capabilities;
+        let capabilities = &projection.envelope.discovery.available_capabilities;
         assert_eq!(capabilities.len(), 2);
-        assert_eq!(capabilities[0].id, "test.identity-evidence");
-        assert_eq!(capabilities[0].version, "3");
-        assert!(capabilities[0].read_only);
-        assert_eq!(
-            capabilities[0].output_data_class,
-            DataClass::Personal
-        );
-        assert_eq!(
-            capabilities[0].input_schema,
-            Some(serde_json::json!({}))
-        );
+        assert_eq!(capabilities[1].id, "test.identity-evidence");
+        assert_eq!(capabilities[1].version, "3");
+        assert!(capabilities[1].read_only);
+        assert_eq!(capabilities[1].output_data_class, DataClass::Personal);
+        assert_eq!(capabilities[1].input_schema, Some(serde_json::json!({})));
         // The catalog is stable regardless of model route: remote tools are
         // listed even though no route was consulted.
-        assert_eq!(capabilities[1].id, "test.communication-evidence");
+        assert_eq!(capabilities[0].id, "test.communication-evidence");
     }
 
     #[test]
@@ -861,7 +785,6 @@ mod tests {
         let context = agent_context();
         let mut catalog_value = catalog();
         catalog_value.tools[0].output_data_class = "mystery".into();
-        let experts = vec![];
         let history = vec![];
         assert_eq!(
             assemble_context_projection(input(
@@ -870,7 +793,6 @@ mod tests {
                 conversation(),
                 &context,
                 &catalog_value,
-                &experts,
                 &history,
             ))
             .err(),
@@ -879,10 +801,53 @@ mod tests {
     }
 
     #[test]
-    fn experts_are_filtered_by_catalog_membership_only() {
+    fn catalog_discovery_sorting_is_deterministic_and_duplicates_fail_closed() {
+        let context = agent_context();
+        let mut catalog = catalog();
+        let first = assemble_context_projection(input(
+            ContextProjectionRole::Manager,
+            prompt(),
+            conversation(),
+            &context,
+            &catalog,
+            &[],
+        ))
+        .unwrap();
+        catalog.tools.reverse();
+        catalog.cards.reverse();
+        let second = assemble_context_projection(input(
+            ContextProjectionRole::Manager,
+            prompt(),
+            conversation(),
+            &context,
+            &catalog,
+            &[],
+        ))
+        .unwrap();
+        assert_eq!(first.envelope.discovery, second.envelope.discovery);
+        assert_eq!(
+            first.envelope.manifest.run_frame_sha256,
+            second.envelope.manifest.run_frame_sha256
+        );
+        catalog.tools.push(catalog.tools[0].clone());
+        assert_eq!(
+            assemble_context_projection(input(
+                ContextProjectionRole::Manager,
+                prompt(),
+                conversation(),
+                &context,
+                &catalog,
+                &[],
+            ))
+            .err(),
+            Some(AgentFailure::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn experts_are_derived_only_from_catalog() {
         let context = agent_context();
         let catalog_value = catalog();
-        let experts = vec![agent_card("schedule"), agent_card("retired")];
         let history = vec![];
         let projection = assemble_context_projection(input(
             ContextProjectionRole::Manager,
@@ -890,13 +855,12 @@ mod tests {
             conversation(),
             &context,
             &catalog_value,
-            &experts,
             &history,
         ))
         .unwrap();
-        let active = &projection.envelope.scoped_instructions.active_experts;
+        let active = &projection.envelope.discovery.active_experts;
         assert_eq!(active.len(), 1);
-        assert_eq!(active[0].id, "schedule");
+        assert_eq!(active[0].card.id, "schedule");
         assert_eq!(projection.envelope.manifest.agent_cards.len(), 1);
         assert_eq!(projection.envelope.manifest.agent_cards[0].id, "schedule");
     }
@@ -905,7 +869,6 @@ mod tests {
     fn output_bytes_are_bounded_and_manifest_mirrors_inputs() {
         let context = agent_context();
         let catalog_value = catalog();
-        let experts = vec![agent_card("schedule")];
         let history = vec![];
         let mut projection_input = input(
             ContextProjectionRole::Manager,
@@ -913,7 +876,6 @@ mod tests {
             conversation(),
             &context,
             &catalog_value,
-            &experts,
             &history,
         );
         projection_input.max_output_bytes = usize::MAX;
@@ -927,12 +889,11 @@ mod tests {
             conversation(),
             &context,
             &catalog_value,
-            &experts,
             &history,
         );
         projection_input.max_output_bytes = 32 * 1024;
         let projection = assemble_context_projection(projection_input).unwrap();
-        assert_eq!(projection.envelope.runtime.max_output_bytes, 16384);
+        assert_eq!(projection.envelope.attempt.max_output_bytes, 16384);
         assert_eq!(projection.envelope.manifest.prompt_components.len(), 3);
         assert_eq!(projection.envelope.manifest.evidence.len(), 1);
         assert_eq!(projection.envelope.manifest.memories.len(), 1);
@@ -942,7 +903,6 @@ mod tests {
     fn empty_session_data_classes_are_rejected() {
         let context = agent_context();
         let catalog_value = catalog();
-        let experts = vec![];
         let history = vec![];
         let mut projection_input = input(
             ContextProjectionRole::Manager,
@@ -950,7 +910,6 @@ mod tests {
             conversation(),
             &context,
             &catalog_value,
-            &experts,
             &history,
         );
         projection_input.input_data_classes.clear();

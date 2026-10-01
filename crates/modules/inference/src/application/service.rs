@@ -156,7 +156,7 @@ where
         }
         // The envelope purpose must agree with the request purpose on every
         // path, root or domain; only the root pins which pair it must be.
-        if request.projection.envelope.scoped_instructions.purpose != request.purpose {
+        if request.projection.envelope.run_instructions.purpose != request.purpose {
             return Err(AgentFailure::InvalidInput);
         }
         let person_id = parse_person(&request.principal)?;
@@ -267,7 +267,7 @@ where
             max_output_bytes: request
                 .projection
                 .envelope
-                .runtime
+                .attempt
                 .max_output_bytes
                 .min(floe_agent_contract::MAX_OUTPUT_BYTES),
             deadline: scope.deadline(),
@@ -545,9 +545,9 @@ mod tests {
     use floe_access::{DependencyResolver, ModelDispatchRecipientAuthority};
     use floe_agent_contract::prompts::{PromptAssembly, PromptComponentKind, PromptRole};
     use floe_agent_contract::{
-        AgentFailure, AllowedCatalog, AuthorizedModelProjection, ContextEnvelope, ContextManifest,
-        ContextualData, DataClass, DependencyCoverage, ModelRequest, ModelResponse, ModelStep,
-        ProjectionRef, RuntimeContext, ScopedInstructions,
+        AgentFailure, AllowedCatalog, AttemptContext, AuthorizedModelProjection, ContextEnvelope,
+        ContextManifest, ContextualData, DataClass, DependencyCoverage, ModelRequest,
+        ModelResponse, ModelStep, ProjectionRef,
     };
     use floe_context_contract::{
         ConnectionId, ConnectorId, ContextDependency, ExecutionOwnerId, GrantAuthority,
@@ -921,38 +921,49 @@ mod tests {
                 ),
             ],
         };
-        ContextEnvelope {
-            schema_version: floe_agent_contract::AGENT_VERSION,
-            stable_instructions: assembly.clone(),
-            scoped_instructions: ScopedInstructions {
-                purpose: CANONICAL_MODEL_PURPOSE.into(),
-                response_contract: "c".into(),
-                available_capabilities: vec![],
-                active_experts: vec![],
-                correction: None,
-            },
-            contextual_data: ContextualData {
-                projection_version: 1,
-                memories: vec![],
-                optional_context_issues: vec![],
-                evidence: vec![],
-            },
-            conversation: floe_agent_contract::ModelConversation {
-                history: vec![],
-                current_turn: vec![floe_agent_contract::ModelConversationEntry::User {
-                    message_id: Uuid::new_v4(),
-                    text: "hi".into(),
-                }],
-            },
-            runtime: RuntimeContext {
-                max_output_bytes: 1024,
-            },
-            manifest: ContextManifest {
-                prompt_components: vec![],
-                evidence: vec![],
-                memories: vec![],
-                agent_cards: vec![],
-            },
+        {
+            let mut envelope = ContextEnvelope {
+                schema_version: floe_agent_contract::AGENT_VERSION,
+                stable_instructions: assembly.clone(),
+                run_instructions: floe_agent_contract::RunInstructions {
+                    purpose: CANONICAL_MODEL_PURPOSE.into(),
+                    response_contract: "c".into(),
+                },
+                discovery: floe_agent_contract::DiscoveryContext {
+                    revision: 0,
+                    available_capabilities: vec![],
+                    active_experts: vec![],
+                },
+                contextual_data: ContextualData {
+                    projection_version: 1,
+                    memories: vec![],
+                    optional_context_issues: vec![],
+                    evidence: vec![],
+                },
+                conversation: floe_agent_contract::ModelConversation {
+                    history: vec![],
+                    current_turn: vec![floe_agent_contract::ModelConversationEntry::User {
+                        message_id: Uuid::new_v4(),
+                        text: "hi".into(),
+                    }],
+                },
+                attempt: AttemptContext {
+                    correction: None,
+                    max_output_bytes: 1024,
+                },
+                manifest: ContextManifest {
+                    stable_prompt_sha256: String::new(),
+                    run_frame_sha256: String::new(),
+                    expert_environment: None,
+                    prompt_components: vec![],
+                    evidence: vec![],
+                    memories: vec![],
+                    agent_cards: vec![],
+                },
+            };
+            envelope.schema_version = floe_agent_contract::CONTEXT_ENVELOPE_SCHEMA_VERSION;
+            envelope.manifest = envelope.derived_manifest(None).unwrap();
+            envelope
         }
     }
 
@@ -1428,7 +1439,8 @@ mod tests {
         mut projection: AuthorizedModelProjection,
         preferred: Option<String>,
     ) -> ModelRequest {
-        projection.envelope.scoped_instructions.purpose = purpose.into();
+        projection.envelope.run_instructions.purpose = purpose.into();
+        projection.envelope.manifest = projection.envelope.derived_manifest(None).unwrap();
         ModelRequest {
             attempt_id: RunId::new().as_uuid(),
             principal: PersonId::new().to_string(),
@@ -1533,7 +1545,8 @@ mod tests {
         };
         let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
         let mut proj = projection(DependencyCoverage::Independent, vec![DataClass::Personal]);
-        proj.envelope.scoped_instructions.purpose = "other-purpose".into();
+        proj.envelope.run_instructions.purpose = "other-purpose".into();
+        proj.envelope.manifest = proj.envelope.derived_manifest(None).unwrap();
         let request = model_request(
             RunId::new().as_uuid(),
             &PersonId::new().to_string(),

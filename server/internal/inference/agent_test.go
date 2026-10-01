@@ -91,6 +91,25 @@ func TestBatchTranscriptRequiresEveryUniqueResult(test *testing.T) {
 	}
 }
 
+func TestRunHistoryAttemptCurrentTurnOrdering(test *testing.T) {
+	raw := json.RawMessage(`{"messages":[
+		{"role":"user","content":"{\"run_instructions\":{\"purpose\":\"everyday-assistance\",\"response_contract\":\"text\"},\"discovery\":{\"revision\":0,\"available_capabilities\":[],\"active_experts\":[]}}"},
+		{"role":"user","content":"Earlier question"},
+		{"role":"assistant","content":"Earlier answer"},
+		{"role":"user","content":"{\"contextual_data\":{},\"attempt\":{\"correction\":null,\"max_output_bytes\":1024},\"manifest\":{}}"},
+		{"role":"user","content":"Current question"},
+		{"role":"assistant","tool_calls":[{"id":"current","type":"function","function":{"name":"read","arguments":"{}"}}]},
+		{"role":"tool","tool_call_id":"current","content":"Observation"}
+	],"tools":[]}`)
+	if !validAgentInput(raw) {
+		test.Fatal("Run/history/Attempt/current-turn transcript rejected")
+	}
+	invalid := strings.Replace(string(raw), `"tool_call_id":"current"`, `"tool_call_id":"foreign"`, 1)
+	if validAgentInput(json.RawMessage(invalid)) {
+		test.Fatal("foreign result accepted in framed transcript")
+	}
+}
+
 func TestConditionalToolSchemaKeepsObjectEnvelope(test *testing.T) {
 	raw := json.RawMessage(`{"messages":[{"role":"user","content":"Inspect the calendar"}],"tools":[{"type":"function","function":{"name":"expert_schedule","parameters":{"type":"object","properties":{"kind":{"type":"string"},"focus_minutes":{"type":"integer"},"request":{"type":"string"}},"required":["kind"],"oneOf":[{"properties":{"kind":{"enum":["briefing","propose_focus"]}},"required":["focus_minutes"]},{"properties":{"kind":{"const":"analyze"}},"required":["request"]}],"additionalProperties":false}}}]}`)
 	if failure := agentInputFailure(raw); failure != "" {

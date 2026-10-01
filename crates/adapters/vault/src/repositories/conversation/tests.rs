@@ -10,12 +10,11 @@ use floe_agent_contract::prompts::{
     PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
 };
 use floe_agent_contract::{
-    AllowedCatalog, AuthorizedModelProjection, BatchCursor, BoxFuture, ContextEnvelope,
-    ContextManifest, ContextualData, DataClass, DelegationPort, DelegationRequest,
+    AllowedCatalog, AttemptContext, AuthorizedModelProjection, BatchCursor, BoxFuture,
+    ContextEnvelope, ContextManifest, ContextualData, DataClass, DelegationPort, DelegationRequest,
     DependencyCoverage, ModelCallOutcome, ModelPort, ModelProjectionPort, ModelProjectionRequest,
     ModelRequest, ModelResponse, ModelStep, ModelUsage, PinnedToolRevision, ProjectionRef,
-    RoleSpec, RuntimeContext, ScopedInstructions, ToolCall, ToolDescriptor, ToolPort, ToolResult,
-    ValidatedModelBatch,
+    RoleSpec, ToolCall, ToolDescriptor, ToolPort, ToolResult, ValidatedModelBatch,
 };
 use floe_conversation::SessionStore;
 use floe_conversation::{
@@ -80,55 +79,66 @@ impl ModelProjectionPort for TestProjector {
         _: &'a floe_execution::ExecutionScope,
     ) -> BoxFuture<'a, Result<AuthorizedModelProjection, AgentFailure>> {
         request.validate().unwrap();
-        let envelope = ContextEnvelope {
-            schema_version: floe_agent_contract::AGENT_VERSION,
-            stable_instructions: PromptAssembly {
+        let envelope = {
+            let mut envelope = ContextEnvelope {
                 schema_version: floe_agent_contract::AGENT_VERSION,
-                role: PromptRole::Manager,
-                components: vec![
-                    PromptComponent {
-                        kind: PromptComponentKind::BehaviorKernel,
-                        source: "test-kernel".into(),
-                        revision: 1,
-                        content: "kernel".into(),
-                    },
-                    PromptComponent {
-                        kind: PromptComponentKind::Role,
-                        source: "test-role".into(),
-                        revision: 1,
-                        content: "role".into(),
-                    },
-                    PromptComponent {
-                        kind: PromptComponentKind::CapabilityProtocol,
-                        source: "test-protocol".into(),
-                        revision: 1,
-                        content: "protocol".into(),
-                    },
-                ],
-            },
-            scoped_instructions: ScopedInstructions {
-                purpose: "test-purpose".into(),
-                response_contract: request.role.output_contract.clone(),
-                available_capabilities: vec![],
-                active_experts: vec![],
-                correction: request.correction.clone(),
-            },
-            contextual_data: ContextualData {
-                projection_version: 1,
-                memories: vec![],
-                optional_context_issues: vec![],
-                evidence: vec![],
-            },
-            conversation: request.conversation.clone(),
-            runtime: RuntimeContext {
-                max_output_bytes: request.max_output_bytes,
-            },
-            manifest: ContextManifest {
-                prompt_components: vec![],
-                evidence: vec![],
-                memories: vec![],
-                agent_cards: vec![],
-            },
+                stable_instructions: PromptAssembly {
+                    schema_version: floe_agent_contract::AGENT_VERSION,
+                    role: PromptRole::Manager,
+                    components: vec![
+                        PromptComponent {
+                            kind: PromptComponentKind::BehaviorKernel,
+                            source: "test-kernel".into(),
+                            revision: 1,
+                            content: "kernel".into(),
+                        },
+                        PromptComponent {
+                            kind: PromptComponentKind::Role,
+                            source: "test-role".into(),
+                            revision: 1,
+                            content: "role".into(),
+                        },
+                        PromptComponent {
+                            kind: PromptComponentKind::CapabilityProtocol,
+                            source: "test-protocol".into(),
+                            revision: 1,
+                            content: "protocol".into(),
+                        },
+                    ],
+                },
+                run_instructions: floe_agent_contract::RunInstructions {
+                    purpose: "test-purpose".into(),
+                    response_contract: request.role.output_contract.clone(),
+                },
+                discovery: floe_agent_contract::DiscoveryContext {
+                    revision: 0,
+                    available_capabilities: vec![],
+                    active_experts: vec![],
+                },
+                contextual_data: ContextualData {
+                    projection_version: 1,
+                    memories: vec![],
+                    optional_context_issues: vec![],
+                    evidence: vec![],
+                },
+                conversation: request.conversation.clone(),
+                attempt: AttemptContext {
+                    correction: None,
+                    max_output_bytes: request.max_output_bytes,
+                },
+                manifest: ContextManifest {
+                    stable_prompt_sha256: String::new(),
+                    run_frame_sha256: String::new(),
+                    expert_environment: None,
+                    prompt_components: vec![],
+                    evidence: vec![],
+                    memories: vec![],
+                    agent_cards: vec![],
+                },
+            };
+            envelope.schema_version = floe_agent_contract::CONTEXT_ENVELOPE_SCHEMA_VERSION;
+            envelope.manifest = envelope.derived_manifest(None).unwrap();
+            envelope
         };
         Box::pin(async move {
             Ok(AuthorizedModelProjection {

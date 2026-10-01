@@ -1489,11 +1489,10 @@ fn validate_model_steps(
 #[cfg(test)]
 mod tests {
     use floe_agent_contract::{
-        AgentCard, AgentDefinition, AllowedCatalog, AuthorizedModelProjection, ContextEnvelope,
-        ContextManifest, ContextualData, DataClass, DependencyCoverage, EngineRequest,
-        EngineResumeState, ModelConversation, ModelConversationEntry, ModelProjectionRequest,
-        ModelResponse, ModelUsage, ProjectionRef, RoleSpec, RuntimeContext, ScopedInstructions,
-        ToolDescriptor,
+        AgentCard, AgentDefinition, AllowedCatalog, AttemptContext, AuthorizedModelProjection,
+        ContextEnvelope, ContextManifest, ContextualData, DataClass, DependencyCoverage,
+        EngineRequest, EngineResumeState, ModelConversation, ModelConversationEntry,
+        ModelProjectionRequest, ModelResponse, ModelUsage, ProjectionRef, RoleSpec, ToolDescriptor,
         prompts::{PromptAssembly, PromptComponent, PromptComponentKind, PromptRole},
     };
     use floe_execution::budget::{BudgetConfig, BudgetLedger};
@@ -1512,53 +1511,66 @@ mod tests {
         correction: Option<ModelCorrection>,
         max_output_bytes: usize,
     ) -> ContextEnvelope {
-        ContextEnvelope {
-            schema_version: floe_agent_contract::AGENT_VERSION,
-            stable_instructions: PromptAssembly {
+        {
+            let mut envelope = ContextEnvelope {
                 schema_version: floe_agent_contract::AGENT_VERSION,
-                role: PromptRole::Manager,
-                components: vec![
-                    PromptComponent {
-                        kind: PromptComponentKind::BehaviorKernel,
-                        source: "test-kernel".into(),
-                        revision: 1,
-                        content: "kernel".into(),
-                    },
-                    PromptComponent {
-                        kind: PromptComponentKind::Role,
-                        source: "test-role".into(),
-                        revision: 1,
-                        content: "role".into(),
-                    },
-                    PromptComponent {
-                        kind: PromptComponentKind::CapabilityProtocol,
-                        source: "test-protocol".into(),
-                        revision: 1,
-                        content: "protocol".into(),
-                    },
-                ],
-            },
-            scoped_instructions: ScopedInstructions {
-                purpose: "test-purpose".into(),
-                response_contract: "text".into(),
-                available_capabilities: vec![],
-                active_experts: vec![],
-                correction,
-            },
-            contextual_data: ContextualData {
-                projection_version: 1,
-                memories: vec![],
-                optional_context_issues: vec![],
-                evidence: vec![],
-            },
-            conversation,
-            runtime: RuntimeContext { max_output_bytes },
-            manifest: ContextManifest {
-                prompt_components: vec![],
-                evidence: vec![],
-                memories: vec![],
-                agent_cards: vec![],
-            },
+                stable_instructions: PromptAssembly {
+                    schema_version: floe_agent_contract::AGENT_VERSION,
+                    role: PromptRole::Manager,
+                    components: vec![
+                        PromptComponent {
+                            kind: PromptComponentKind::BehaviorKernel,
+                            source: "test-kernel".into(),
+                            revision: 1,
+                            content: "kernel".into(),
+                        },
+                        PromptComponent {
+                            kind: PromptComponentKind::Role,
+                            source: "test-role".into(),
+                            revision: 1,
+                            content: "role".into(),
+                        },
+                        PromptComponent {
+                            kind: PromptComponentKind::CapabilityProtocol,
+                            source: "test-protocol".into(),
+                            revision: 1,
+                            content: "protocol".into(),
+                        },
+                    ],
+                },
+                run_instructions: floe_agent_contract::RunInstructions {
+                    purpose: "test-purpose".into(),
+                    response_contract: "text".into(),
+                },
+                discovery: floe_agent_contract::DiscoveryContext {
+                    revision: 0,
+                    available_capabilities: vec![],
+                    active_experts: vec![],
+                },
+                contextual_data: ContextualData {
+                    projection_version: 1,
+                    memories: vec![],
+                    optional_context_issues: vec![],
+                    evidence: vec![],
+                },
+                conversation,
+                attempt: AttemptContext {
+                    correction,
+                    max_output_bytes,
+                },
+                manifest: ContextManifest {
+                    stable_prompt_sha256: String::new(),
+                    run_frame_sha256: String::new(),
+                    expert_environment: None,
+                    prompt_components: vec![],
+                    evidence: vec![],
+                    memories: vec![],
+                    agent_cards: vec![],
+                },
+            };
+            envelope.schema_version = floe_agent_contract::CONTEXT_ENVELOPE_SCHEMA_VERSION;
+            envelope.manifest = envelope.derived_manifest(None).unwrap();
+            envelope
         }
     }
 
@@ -2354,9 +2366,9 @@ mod tests {
 
     fn history_dependency() -> floe_context_contract::ContextDependency {
         use floe_context_contract::{
-            ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority,
-            GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-            GrantSourceBinding, ProcessingRestriction, ResourceHandle,
+            ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority, GrantConsumer,
+            GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding,
+            ProcessingRestriction, ResourceHandle,
         };
         let person = floe_context_contract::PersonId::new();
         let source = GrantSourceBinding::try_new(

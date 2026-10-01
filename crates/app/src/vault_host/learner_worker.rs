@@ -108,7 +108,7 @@ impl LearnerModel for LearnerModelHost<'_> {
                 conversation,
                 agent_context: &agent_context,
                 catalog: &catalog,
-                active_experts: &[],
+                expert_environment: None,
                 authorized_history_dependencies: &[],
                 input_data_classes: vec![DataClass::Personal],
                 max_output_bytes: request.max_output_bytes,
@@ -365,7 +365,7 @@ mod tests {
         assert!(dispatched.catalog.tools.is_empty());
         assert!(dispatched.catalog.cards.is_empty());
         assert_eq!(
-            dispatched.projection.envelope.scoped_instructions.purpose,
+            dispatched.projection.envelope.run_instructions.purpose,
             LEARNER_INFERENCE_PURPOSE
         );
         assert!(
@@ -523,10 +523,9 @@ mod tests {
     async fn background_dispatch_ports_fail_closed_when_consulted() {
         use floe_access::{DependencyResolver, ModelDispatchRecipientAuthority};
         use floe_context_contract::{
-            ConnectionId, ConnectorId, ContextDependency,
-            ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
-            GrantOperation, GrantPurpose, GrantSourceBinding, ProcessingRestriction,
-            ResourceHandle,
+            ConnectionId, ConnectorId, ContextDependency, ExecutionOwnerId, GrantAuthority,
+            GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+            GrantSourceBinding, ProcessingRestriction, ResourceHandle,
         };
 
         let person_id = PersonId::new();

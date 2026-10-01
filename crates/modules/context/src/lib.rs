@@ -60,7 +60,7 @@ pub use application::model_coverage::{
     TurnCoverageDecision, project_history, revalidate_turn_coverage,
 };
 pub use application::model_projection::{
-    ContextProjectionInput, ContextProjectionRole, assemble_context_projection, context_manifest,
+    ContextProjectionInput, ContextProjectionRole, assemble_context_projection,
 };
 pub use application::native_calendar::{
     AdmittedNativeCalendarRead, AdmittedNativeCalendarSource, CalendarConnectionReader,

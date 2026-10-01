@@ -10,6 +10,45 @@ use floe_agent_contract::{
 };
 use serde_json::{Value, json};
 
+pub struct ModelFrames {
+    run_frame: String,
+    history: Vec<Value>,
+    attempt_context: String,
+    current_turn: Vec<Value>,
+}
+
+impl ModelFrames {
+    pub fn from_envelope(
+        envelope: &floe_agent_contract::ContextEnvelope,
+    ) -> Result<Self, floe_agent_contract::AgentFailure> {
+        Ok(Self {
+            run_frame: envelope.canonical_run_frame_json()?,
+            history: wire_messages(&envelope.conversation.history),
+            attempt_context: envelope.canonical_attempt_frame_json()?,
+            current_turn: wire_messages(&envelope.conversation.current_turn),
+        })
+    }
+
+    pub fn messages(self) -> Vec<Value> {
+        let mut messages = vec![json!({"role": "user", "content": self.run_frame})];
+        messages.extend(self.history);
+        messages.push(json!({"role": "user", "content": self.attempt_context}));
+        messages.extend(self.current_turn);
+        messages
+    }
+
+    pub fn foundation_prompt(self) -> Result<String, floe_agent_contract::AgentFailure> {
+        let history = serde_json::to_string(&self.history)
+            .map_err(|_| floe_agent_contract::AgentFailure::InvalidInput)?;
+        let current_turn = serde_json::to_string(&self.current_turn)
+            .map_err(|_| floe_agent_contract::AgentFailure::InvalidInput)?;
+        Ok(format!(
+            "{{\"run_frame\":{},\"history\":{},\"attempt_context\":{},\"current_turn\":{}}}",
+            self.run_frame, history, self.attempt_context, current_turn
+        ))
+    }
+}
+
 pub fn embedded_json(value: &str) -> Value {
     serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.into()))
 }

@@ -2,6 +2,8 @@
 
 These are durable architectural safety properties, not a progress checklist.
 
+Prompt, card, Run-frame and environment manifest hashes are diagnostic content identities only. They never establish source freshness, grants, exact-recipient consent or execution permission, and never replace the durable Experts-owned Run environment identity or live Context/Access checks.
+
 ## Authority is explicit and owner-scoped
 
 - A Connection describes source/account/execution-owner lifecycle; it does not itself authorize AI use.

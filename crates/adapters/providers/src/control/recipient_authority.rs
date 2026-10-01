@@ -126,9 +126,9 @@ mod tests {
     };
     use floe_agent_contract::prompts::{PromptAssembly, PromptComponentKind, PromptRole};
     use floe_agent_contract::{
-        AgentFailure, AllowedCatalog, AuthorizedModelProjection, BoxFuture, ContextEnvelope,
-        ContextManifest, ContextualData, DataClass, DependencyCoverage, ModelPort, ModelRequest,
-        ModelStep, ProjectionRef, RuntimeContext, ScopedInstructions,
+        AgentFailure, AllowedCatalog, AttemptContext, AuthorizedModelProjection, BoxFuture,
+        ContextEnvelope, ContextManifest, ContextualData, DataClass, DependencyCoverage, ModelPort,
+        ModelRequest, ModelStep, ProjectionRef,
     };
     use floe_context_contract::{ContextDependency, RecipientLineage};
     use floe_execution::{
@@ -533,38 +533,49 @@ mod tests {
                 ),
             ],
         };
-        ContextEnvelope {
-            schema_version: floe_agent_contract::AGENT_VERSION,
-            stable_instructions: assembly.clone(),
-            scoped_instructions: ScopedInstructions {
-                purpose: CANONICAL_MODEL_PURPOSE.into(),
-                response_contract: "c".into(),
-                available_capabilities: vec![],
-                active_experts: vec![],
-                correction: None,
-            },
-            contextual_data: ContextualData {
-                projection_version: 1,
-                memories: vec![],
-                optional_context_issues: vec![],
-                evidence: vec![],
-            },
-            conversation: floe_agent_contract::ModelConversation {
-                history: vec![],
-                current_turn: vec![floe_agent_contract::ModelConversationEntry::User {
-                    message_id: Uuid::new_v4(),
-                    text: "hi".into(),
-                }],
-            },
-            runtime: RuntimeContext {
-                max_output_bytes: 1024,
-            },
-            manifest: ContextManifest {
-                prompt_components: vec![],
-                evidence: vec![],
-                memories: vec![],
-                agent_cards: vec![],
-            },
+        {
+            let mut envelope = ContextEnvelope {
+                schema_version: floe_agent_contract::AGENT_VERSION,
+                stable_instructions: assembly.clone(),
+                run_instructions: floe_agent_contract::RunInstructions {
+                    purpose: CANONICAL_MODEL_PURPOSE.into(),
+                    response_contract: "c".into(),
+                },
+                discovery: floe_agent_contract::DiscoveryContext {
+                    revision: 0,
+                    available_capabilities: vec![],
+                    active_experts: vec![],
+                },
+                contextual_data: ContextualData {
+                    projection_version: 1,
+                    memories: vec![],
+                    optional_context_issues: vec![],
+                    evidence: vec![],
+                },
+                conversation: floe_agent_contract::ModelConversation {
+                    history: vec![],
+                    current_turn: vec![floe_agent_contract::ModelConversationEntry::User {
+                        message_id: Uuid::new_v4(),
+                        text: "hi".into(),
+                    }],
+                },
+                attempt: AttemptContext {
+                    correction: None,
+                    max_output_bytes: 1024,
+                },
+                manifest: ContextManifest {
+                    stable_prompt_sha256: String::new(),
+                    run_frame_sha256: String::new(),
+                    expert_environment: None,
+                    prompt_components: vec![],
+                    evidence: vec![],
+                    memories: vec![],
+                    agent_cards: vec![],
+                },
+            };
+            envelope.schema_version = floe_agent_contract::CONTEXT_ENVELOPE_SCHEMA_VERSION;
+            envelope.manifest = envelope.derived_manifest(None).unwrap();
+            envelope
         }
     }
 
@@ -680,7 +691,10 @@ mod tests {
             floe_agent_contract::ModelCallOutcome::Ready(_)
         ));
         assert_eq!(transport.calls(), 1);
-        assert_eq!(transport.seen_targets.lock().unwrap().as_slice(), [Some(RECIPIENT.into())]);
+        assert_eq!(
+            transport.seen_targets.lock().unwrap().as_slice(),
+            [Some(RECIPIENT.into())]
+        );
     }
 
     #[tokio::test]

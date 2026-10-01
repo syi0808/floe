@@ -212,7 +212,7 @@ async fn attempt_inner(saved: &SavedServerConnection, grant_consent: bool) -> Ou
             },
             agent_context: &context,
             catalog: &catalog,
-            active_experts: &[],
+            expert_environment: None,
             authorized_history_dependencies: &[],
             input_data_classes: vec![DataClass::Synthetic],
             max_output_bytes: 4096,

@@ -84,7 +84,7 @@ impl LearnerModel for SmokeLearnerModel<'_> {
                 conversation,
                 agent_context: &agent_context,
                 catalog: &catalog,
-                active_experts: &[],
+                expert_environment: None,
                 authorized_history_dependencies: &[],
                 input_data_classes: vec![DataClass::Personal],
                 max_output_bytes: request.max_output_bytes,

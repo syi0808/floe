@@ -7,7 +7,7 @@
 //! placement, route, recipient, or credential state.
 
 use floe_agent_contract::{
-    AgentCard, AgentContext, AgentFailure, AuthorizedModelProjection, BoxFuture, DataClass,
+    AgentContext, AgentFailure, AuthorizedModelProjection, BoxFuture, DataClass,
     ModelProjectionPort, ModelProjectionRequest,
     prompts::{PromptAssembly, PromptComponentKind},
 };
@@ -15,10 +15,7 @@ use floe_context::{DependencyResolver, EvidenceReader};
 use uuid::Uuid;
 
 use super::history_projection::project_model_conversation_history;
-use crate::{
-    FINALIZATION_OUTPUT_CONTRACT, FINALIZATION_ROLE_ID, FINALIZATION_ROLE_PROMPT,
-    prompts::manager_prompt,
-};
+use crate::{FINALIZATION_ROLE_ID, FINALIZATION_ROLE_PROMPT, prompts::manager_prompt};
 
 /// Canonical root projector: Conversation filtering plus Context assembly.
 pub struct ConversationModelProjection<Evidence, Resolver> {
@@ -27,12 +24,14 @@ pub struct ConversationModelProjection<Evidence, Resolver> {
     session_id: Uuid,
     agent_context: AgentContext,
     session_data_classes: Vec<DataClass>,
-    active_experts: Vec<AgentCard>,
+    manager_prompt: PromptAssembly,
+    finalization_prompt: PromptAssembly,
+    expert_environment: floe_agent_contract::ExpertEnvironmentManifestEntry,
 }
 
 impl<Evidence, Resolver> ConversationModelProjection<Evidence, Resolver> {
     /// Bind the projector to one Session's evidence, authority, live context,
-    /// admitted data classes, and active experts. Composition injects the
+    /// admitted data classes, and exact Run environment. Composition injects the
     /// concrete values; no policy is decided here.
     pub fn new(
         evidence: Evidence,
@@ -40,7 +39,7 @@ impl<Evidence, Resolver> ConversationModelProjection<Evidence, Resolver> {
         session_id: Uuid,
         agent_context: AgentContext,
         session_data_classes: Vec<DataClass>,
-        active_experts: Vec<AgentCard>,
+        environment: floe_experts::RunExpertEnvironmentIdentity,
     ) -> Result<Self, AgentFailure> {
         if session_id.is_nil()
             || session_data_classes.is_empty()
@@ -49,16 +48,30 @@ impl<Evidence, Resolver> ConversationModelProjection<Evidence, Resolver> {
             return Err(AgentFailure::InvalidInput);
         }
         agent_context.validate()?;
-        active_experts
-            .iter()
-            .try_for_each(AgentCard::validate)?;
+        environment.validate()?;
+        let manager_prompt = manager_prompt(agent_context.persona.as_ref())?;
+        let mut finalization_prompt = manager_prompt.clone();
+        let component = finalization_prompt
+            .components
+            .iter_mut()
+            .find(|component| component.kind == PromptComponentKind::Role)
+            .ok_or(AgentFailure::InvalidInput)?;
+        component.content = FINALIZATION_ROLE_PROMPT.into();
+        manager_prompt.validate()?;
+        finalization_prompt.validate()?;
+        let expert_environment = floe_agent_contract::ExpertEnvironmentManifestEntry {
+            revision: environment.revision,
+            digest: environment.digest,
+        };
         Ok(Self {
             evidence,
             resolver,
             session_id,
             agent_context,
             session_data_classes,
-            active_experts,
+            manager_prompt,
+            finalization_prompt,
+            expert_environment,
         })
     }
 }
@@ -88,7 +101,13 @@ where
                 }
                 _ => return Err(AgentFailure::InvalidInput),
             };
-            let prompt = role_prompt(role, self.agent_context.persona.as_ref())?;
+            if request.catalog.revision != self.expert_environment.revision {
+                return Err(AgentFailure::InvalidInput);
+            }
+            let prompt = match role {
+                floe_context::ContextProjectionRole::Manager => self.manager_prompt.clone(),
+                _ => self.finalization_prompt.clone(),
+            };
             let authorization = floe_context::DependencyAuthorization {
                 deadline: scope.deadline(),
                 cancellation: scope.cancellation().clone(),
@@ -110,7 +129,7 @@ where
                 conversation: projected.conversation,
                 agent_context: &self.agent_context,
                 catalog: &request.catalog,
-                active_experts: &self.active_experts,
+                expert_environment: Some(self.expert_environment.clone()),
                 authorized_history_dependencies: &projected.authorized_history_dependencies,
                 input_data_classes: self.session_data_classes.clone(),
                 max_output_bytes: request.max_output_bytes,
@@ -119,44 +138,25 @@ where
     }
 }
 
-/// The stable prompt assembly for one projection role. Finalization keeps the
-/// Manager prompt shape with its role component replaced, exactly as the
-/// historical root projector did.
-fn role_prompt(
-    role: floe_context::ContextProjectionRole,
-    persona: Option<&floe_knowledge::prompts::PersonaProfile>,
-) -> Result<PromptAssembly, AgentFailure> {
-    let mut prompt = manager_prompt(persona)?;
-    if role == floe_context::ContextProjectionRole::Finalization {
-        let component = prompt
-            .components
-            .iter_mut()
-            .find(|component| component.kind == PromptComponentKind::Role)
-            .ok_or(AgentFailure::InvalidInput)?;
-        component.content = format!("{FINALIZATION_ROLE_PROMPT}\n{FINALIZATION_OUTPUT_CONTRACT}");
-    }
-    prompt.validate()?;
-    Ok(prompt)
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
     use floe_agent_contract::{
-        AllowedCatalog, ContextDependency, DataClass, DependencyCoverage, ModelConversation,
-        ModelConversationEntry, ModelProjectionRequest, RoleSpec, ToolDescriptor,
+        AgentCard, AllowedCatalog, ContextDependency, DataClass, DependencyCoverage,
+        ModelConversation, ModelConversationEntry, ModelProjectionRequest, RoleSpec,
+        ToolDescriptor,
     };
     use floe_context::{DependencyAuthorization, DependencyResolver, EvidenceReader};
     use floe_context_contract::{
-        ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority,
-        GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-        GrantSourceBinding, ProcessingRestriction, ResourceHandle,
+        ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority, GrantConsumer,
+        GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding,
+        ProcessingRestriction, ResourceHandle,
     };
 
     use super::*;
-    use crate::{FINALIZATION_ROLE_ID, MANAGER_OUTPUT_CONTRACT};
+    use crate::{FINALIZATION_OUTPUT_CONTRACT, FINALIZATION_ROLE_ID, MANAGER_OUTPUT_CONTRACT};
 
     fn dependency() -> ContextDependency {
         let person = floe_kernel::PersonId::new();
@@ -220,8 +220,9 @@ mod tests {
             &'a self,
             _dependency: &'a ContextDependency,
             _request: &'a DependencyAuthorization,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>>
-        {
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>,
+        > {
             Box::pin(async move { Ok(()) })
         }
     }
@@ -233,8 +234,9 @@ mod tests {
             &'a self,
             _dependency: &'a ContextDependency,
             _request: &'a DependencyAuthorization,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>>
-        {
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>,
+        > {
             Box::pin(async move { Err(AgentFailure::PolicyDenied) })
         }
     }
@@ -276,6 +278,139 @@ mod tests {
         )
     }
 
+    #[tokio::test]
+    async fn run_projector_reuses_stable_program_and_exact_environment() {
+        let environment = floe_experts::RunExpertEnvironmentIdentity {
+            revision: 1,
+            digest: [7; 32],
+        };
+        let context = agent_context();
+        let projector = ConversationModelProjection::new(
+            MapReader {
+                coverage: Mutex::new(HashMap::new()),
+            },
+            AcceptAll,
+            Uuid::new_v4(),
+            context.clone(),
+            vec![DataClass::Personal],
+            environment,
+        )
+        .unwrap();
+        let conversation = ModelConversation {
+            history: vec![],
+            current_turn: vec![ModelConversationEntry::User {
+                message_id: Uuid::new_v4(),
+                text: "question".into(),
+            }],
+        };
+        let request = manager_request(conversation);
+        let first = projector.project(request.clone(), &scope()).await.unwrap();
+        let mut retry = request.clone();
+        retry.correction = Some(floe_agent_contract::ModelCorrection {
+            text: "retry".into(),
+        });
+        retry
+            .conversation
+            .history
+            .push(ModelConversationEntry::User {
+                message_id: Uuid::new_v4(),
+                text: "earlier".into(),
+            });
+        let second = projector.project(retry, &scope()).await.unwrap();
+        assert_eq!(first.envelope.stable_instructions, projector.manager_prompt);
+        assert_eq!(
+            first.envelope.stable_instructions.render(),
+            second.envelope.stable_instructions.render()
+        );
+        assert_eq!(
+            first.envelope.manifest.stable_prompt_sha256,
+            second.envelope.manifest.stable_prompt_sha256
+        );
+        assert_eq!(
+            first.envelope.manifest.run_frame_sha256,
+            second.envelope.manifest.run_frame_sha256
+        );
+        for projection in [&first, &second] {
+            assert_eq!(
+                projection.envelope.manifest.expert_environment,
+                Some(floe_agent_contract::ExpertEnvironmentManifestEntry {
+                    revision: environment.revision,
+                    digest: environment.digest
+                })
+            );
+        }
+        let next_projector = ConversationModelProjection::new(
+            MapReader {
+                coverage: Mutex::new(HashMap::new()),
+            },
+            AcceptAll,
+            Uuid::new_v4(),
+            context,
+            vec![DataClass::Personal],
+            floe_experts::RunExpertEnvironmentIdentity {
+                revision: 2,
+                digest: [8; 32],
+            },
+        )
+        .unwrap();
+        let mut next_request = request.clone();
+        next_request.catalog.revision = 2;
+        let next = next_projector
+            .project(next_request, &scope())
+            .await
+            .unwrap();
+        assert_eq!(
+            first.envelope.manifest.stable_prompt_sha256,
+            next.envelope.manifest.stable_prompt_sha256
+        );
+        assert_ne!(
+            first.envelope.manifest.run_frame_sha256,
+            next.envelope.manifest.run_frame_sha256
+        );
+        assert_ne!(
+            first.envelope.manifest.expert_environment,
+            next.envelope.manifest.expert_environment
+        );
+        assert_eq!(
+            next_projector
+                .project(request.clone(), &scope())
+                .await
+                .err(),
+            Some(AgentFailure::InvalidInput)
+        );
+        let mut finalization = request;
+        finalization.role.role_id = FINALIZATION_ROLE_ID.into();
+        finalization.role.output_contract = FINALIZATION_OUTPUT_CONTRACT.into();
+        let final_projection = projector.project(finalization, &scope()).await.unwrap();
+        let role = final_projection
+            .envelope
+            .stable_instructions
+            .components
+            .iter()
+            .find(|component| component.kind == PromptComponentKind::Role)
+            .unwrap();
+        assert_eq!(role.content, FINALIZATION_ROLE_PROMPT);
+        assert_eq!(
+            final_projection.envelope.run_instructions.response_contract,
+            FINALIZATION_OUTPUT_CONTRACT
+        );
+        assert_ne!(
+            first.envelope.manifest.stable_prompt_sha256,
+            final_projection.envelope.manifest.stable_prompt_sha256
+        );
+        let mut persona_prompt = projector.manager_prompt.clone();
+        let persona = persona_prompt
+            .components
+            .iter_mut()
+            .find(|component| component.kind == PromptComponentKind::Persona)
+            .unwrap();
+        persona.content.push_str(" Short answers.");
+        assert_ne!(
+            persona_prompt.stable_prompt_sha256(),
+            first.envelope.manifest.stable_prompt_sha256
+        );
+    }
+
     fn manager_request(conversation: ModelConversation) -> ModelProjectionRequest {
         ModelProjectionRequest {
             principal: "person:test".into(),
@@ -291,12 +426,7 @@ mod tests {
         }
     }
 
-    fn history_pair() -> (
-        ModelConversation,
-        Uuid,
-        Uuid,
-        ContextDependency,
-    ) {
+    fn history_pair() -> (ModelConversation, Uuid, Uuid, ContextDependency) {
         let user_id = Uuid::new_v4();
         let assistant_id = Uuid::new_v4();
         let held = dependency();
@@ -359,7 +489,10 @@ mod tests {
                 Uuid::new_v4(),
                 agent_context(),
                 vec![DataClass::Personal],
-                cards.clone(),
+                floe_experts::RunExpertEnvironmentIdentity {
+                    revision: 1,
+                    digest: [1; 32],
+                },
             )
             .unwrap();
             let mut request = manager_request(conversation.clone());
@@ -378,8 +511,18 @@ mod tests {
                 manager_prompt(None).unwrap()
             );
             assert_eq!(
-                projection.envelope.scoped_instructions.active_experts,
-                cards
+                projection
+                    .envelope
+                    .discovery
+                    .active_experts
+                    .iter()
+                    .map(|definition| definition.card.clone())
+                    .collect::<Vec<_>>(),
+                {
+                    let mut sorted = cards;
+                    sorted.sort_by(|left, right| left.id.cmp(&right.id));
+                    sorted
+                }
             );
         }
     }
@@ -406,17 +549,17 @@ mod tests {
                 MapReader {
                     coverage: Mutex::new(HashMap::from([
                         (user_id, DependencyCoverage::Independent),
-                        (
-                            assistant_id,
-                            DependencyCoverage::dependent(held).unwrap(),
-                        ),
+                        (assistant_id, DependencyCoverage::dependent(held).unwrap()),
                     ])),
                 },
                 AcceptAll,
                 Uuid::new_v4(),
                 context,
                 vec![DataClass::Personal],
-                vec![],
+                floe_experts::RunExpertEnvironmentIdentity {
+                    revision: 1,
+                    digest: [1; 32],
+                },
             )
             .unwrap();
             let mut previous_request = manager_request(conversation);
@@ -463,16 +606,12 @@ mod tests {
                 Uuid::new_v4(),
                 context,
                 vec![DataClass::Personal],
-                vec![],
-            )
-            .unwrap();
-            let (conversation, _, _, _) = history_pair();
-            let mut request = manager_request(conversation);
-            request.role = crate::prompts::manager_role_spec();
-            assert_eq!(
-                projector.project(request, &scope()).await.err(),
-                Some(AgentFailure::InvalidInput)
+                floe_experts::RunExpertEnvironmentIdentity {
+                    revision: 1,
+                    digest: [1; 32],
+                },
             );
+            assert_eq!(projector.err().unwrap(), AgentFailure::InvalidInput);
         }
     }
 
@@ -493,7 +632,10 @@ mod tests {
             Uuid::new_v4(),
             agent_context(),
             vec![DataClass::Personal],
-            vec![],
+            floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
         )
         .unwrap();
         let projection = projector
@@ -501,7 +643,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            projection.envelope.scoped_instructions.purpose,
+            projection.envelope.run_instructions.purpose,
             floe_inference::CANONICAL_MODEL_PURPOSE
         );
         assert_eq!(projection.input_data_classes, vec![DataClass::Personal]);
@@ -527,17 +669,17 @@ mod tests {
             MapReader {
                 coverage: Mutex::new(HashMap::from([
                     (user_id, DependencyCoverage::Independent),
-                    (
-                        assistant_id,
-                        DependencyCoverage::dependent(held).unwrap(),
-                    ),
+                    (assistant_id, DependencyCoverage::dependent(held).unwrap()),
                 ])),
             },
             DenyAll,
             Uuid::new_v4(),
             agent_context(),
             vec![DataClass::Personal],
-            vec![],
+            floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
         )
         .unwrap();
         let projection = projector
@@ -566,17 +708,17 @@ mod tests {
             MapReader {
                 coverage: Mutex::new(HashMap::from([
                     (user_id, DependencyCoverage::Independent),
-                    (
-                        assistant_id,
-                        DependencyCoverage::dependent(held).unwrap(),
-                    ),
+                    (assistant_id, DependencyCoverage::dependent(held).unwrap()),
                 ])),
             },
             AcceptAll,
             Uuid::new_v4(),
             context,
             vec![DataClass::Personal],
-            vec![],
+            floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
         )
         .unwrap();
         let mut request = manager_request(conversation);
@@ -608,7 +750,10 @@ mod tests {
             Uuid::new_v4(),
             agent_context(),
             vec![DataClass::Personal],
-            vec![],
+            floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
         )
         .unwrap();
         let mut request = manager_request(conversation);
@@ -630,7 +775,10 @@ mod tests {
                 Uuid::nil(),
                 agent_context(),
                 vec![DataClass::Personal],
-                vec![],
+                floe_experts::RunExpertEnvironmentIdentity {
+                    revision: 1,
+                    digest: [1; 32]
+                },
             )
             .err(),
             Some(AgentFailure::InvalidInput)
@@ -644,7 +792,10 @@ mod tests {
                 Uuid::new_v4(),
                 agent_context(),
                 vec![],
-                vec![],
+                floe_experts::RunExpertEnvironmentIdentity {
+                    revision: 1,
+                    digest: [1; 32]
+                },
             )
             .err(),
             Some(AgentFailure::InvalidInput)
@@ -675,17 +826,17 @@ mod tests {
             MapReader {
                 coverage: Mutex::new(HashMap::from([
                     (user_id, DependencyCoverage::Independent),
-                    (
-                        assistant_id,
-                        DependencyCoverage::dependent(held).unwrap(),
-                    ),
+                    (assistant_id, DependencyCoverage::dependent(held).unwrap()),
                 ])),
             },
             AcceptAll,
             Uuid::new_v4(),
             agent_context(),
             vec![DataClass::Personal],
-            vec![],
+            floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
         )
         .unwrap();
         let projection = projector

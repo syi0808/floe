@@ -68,6 +68,12 @@ pub struct PromptComponent {
     pub content: String,
 }
 
+impl PromptComponent {
+    pub fn content_sha256(&self) -> String {
+        crate::content_sha256(self.content.as_bytes())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PromptAssembly {
@@ -77,6 +83,10 @@ pub struct PromptAssembly {
 }
 
 impl PromptAssembly {
+    pub fn stable_prompt_sha256(&self) -> String {
+        crate::content_sha256(self.render().as_bytes())
+    }
+
     pub fn render(&self) -> String {
         self.components
             .iter()
@@ -129,11 +139,7 @@ impl PromptAssembly {
 }
 
 /// Assemble a role prompt from the shared kernel, the role text and the protocol.
-pub fn expert_prompt(
-    source: &str,
-    revision: u64,
-    content: &str,
-) -> PromptAssembly {
+pub fn expert_prompt(source: &str, revision: u64, content: &str) -> PromptAssembly {
     PromptAssembly {
         schema_version: AGENT_VERSION,
         role: PromptRole::Expert,
