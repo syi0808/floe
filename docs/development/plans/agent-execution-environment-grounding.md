@@ -3971,12 +3971,12 @@ Populate this section during implementation. Do not copy checkpoint status into 
   11. Documentation/worktree: `docs/architecture/runtime.md` describes implemented factual eligibility, delegation/limitation, card trust, partial/unavailable coverage, observed external success, structural validator limits and pending CP07 behavioral acceptance, plus the approved 9216-byte admission boundary. Authority/recovery docs and ADR 0033 remain unchanged because their authority/grounding decisions are preserved. Implementation commit left a clean worktree. This report-only child changes solely `Execution report / Checkpoint 06`; clean status is checked after its commit. All CP06 requirements, with the user-approved byte-limit exception, are closed; **Checkpoint 07 remains not started**.
 
 ## Checkpoint 07
-- Status: **UNVERIFIED / incomplete** — 07-A offline freeze committed; live approval absent. Behavioral acceptance is not claimed.
+- Status: **UNVERIFIED / incomplete** — approved revision-7 Foundation run failed; the sole revision-8 remediation is committed but its live attempt was invalid because generation returned unavailable. No prompt/model configuration is accepted.
 - Start HEAD: `e20c413b86209f3633926117db5a599339278b56`
 - Fetched `origin/main`: `e20c413b86209f3633926117db5a599339278b56`
-- Commit(s): `798c9fba1c64e03029b0308f06daa7811230c584` (07-A corpus/harness/README freeze).
-- Report commit: the immediate report-only child of `798c9fba1c64e03029b0308f06daa7811230c584`; this is an incomplete-status record, not CP07 acceptance/closure.
-- Evidence:
+- Commit(s): `798c9fba1c64e03029b0308f06daa7811230c584` (07-A freeze), `9acd09acc696202fe6692565ededfb1d3af4e99d` (sole revision-8 Option B remediation).
+- Report commits: `6ca26537d94a55c0eb5d79fb2266ef1d18a64968` records the initial approval blocker; the immediate report-only child of `9acd09acc696202fe6692565ededfb1d3af4e99d` records the approved evaluation below. Neither is CP07 acceptance/closure.
+- Initial offline evidence (before operator approval):
   1. Baseline: fetched latest `origin/main`, confirmed identical HEAD/fetched revision and clean worktree on `main`. Read the authoritative CP07 plan, architecture entry/invariants/runtime and both repository skills. This is a local evaluation-harness change; production ownership, dependencies, authority, runtime, wire/FFI, provider framing and persistence remain unchanged. No branch, push, deployment, credential/account/profile mutation or live model call was made. **Checkpoint 08 was not started.**
   2. Frozen corpus: exactly 22 cases, five unchanged generic cards, five synthesis cases (`S01-S05`), three repetitions. Appended only `F02,G01,G02,S05` in that order; a mechanical comparison proves their payloads exactly match the plan JSON. A separate comparison against the starting Git snapshot proves the first 18 payloads/rubrics/expected outcomes, cards and note unchanged except additive review metadata. The original corpus also matches planning baseline `3721fd76` byte-for-byte (raw SHA-256 `253f64f8089adc1282f4fefb0fefb6fc4cd0daf93f842703bf1ce928c7be5694`).
   3. Before extending the corpus, added only serde serialization derives and mechanically calculated `SHA256(serde_json::to_vec(&baseline_corpus.cases[..18]))` with the offline Rust test: `13de056b5ee1c2d1d5f7fc693248d59bf8bbf1489f0152b084f74e12a9bc59ef`. That exact digest is frozen in the fixture-integrity regression. `Case` serialization excludes review-only `review_focus`, preserving the baseline canonical fields/defaults/order; reports serialize the typed tags separately. The committed full 22-case corpus raw SHA-256 is `eb20d432f445c8943c3fcc4e29ab1c3b5e8ac79bd405f9b967221e6367f1ba50`.
@@ -3985,6 +3985,117 @@ Populate this section during implementation. Do not copy checkpoint status into 
   6. Residual audit: reviewed the plan's `manager-guidance`, `REPETITIONS`, `behavior_review`, `review_focus`, approval/stage, Role/output and concrete domain/package searches across the current eval/production prompt surfaces. Production Manager Role stays revision 7 with no concrete domain/package examples; output contract and host validator/authority owners have no diff. Corpus contains no Calendar/Schedule or built-in package references. Focus appears only in fixture validation/tests/reports, not model projection or shape classification. Reports retain `personal_data=false`, canonical prompt/Run hashes and secret-field regression checks. No revision 8/remediation, corpus mutation after live evaluation, alternate grading authority or permanent source checker was introduced.
   7. Live gate: `FLOE_MANAGER_EVAL_APPROVED` was absent, so no production model availability probe, live runner or model call was attempted. Production model/configuration identity, live raw-report SHA-256, 81/81 live completeness, case+phase 3/3 shape/semantic verdicts and every hard-failure count are **UNVERIFIED / not measured**, not zero/PASS. Revision 7 is neither accepted nor rejected by this offline evidence. Resume only with separate explicit operator approval and intentionally supplied `FLOE_MANAGER_EVAL_APPROVED=1`; run the entire frozen corpus before any possible remediation.
   8. Documentation/worktree: updated `fixtures/manager-guidance/README.md` with corpus freeze, typed review metadata, full-run integrity, absolute hard gate and local raw-report handling. Current architecture's pending-CP07 statement is intentionally unchanged because behavioral acceptance is unproven; ADR rationale is unchanged. The 07-A commit left a clean worktree. This immediate report-only child changes only `Execution report / Checkpoint 07`; clean status is checked after committing it. CP07 remains incomplete and CP08 not started.
+
+
+### Approved Foundation evaluation resume
+
+- Resume baseline: clean `main` at `6ca26537d94a55c0eb5d79fb2266ef1d18a64968`; fetched `origin/main` remained `e20c413b86209f3633926117db5a599339278b56`. User explicitly approved Foundation and supplied `FLOE_MANAGER_EVAL_APPROVED=1`. No Server evaluation was authorized or run.
+- Commands: both revision runs used `FLOE_MANAGER_EVAL_APPROVED=1 FLOE_MANAGER_EVAL_STAGE=manager tools/validation/run-local-model-smoke.sh --exercise-manager-guidance`, with stdout/stderr kept separately under `target/validation/`. The runner built and ad-hoc signed the same-snapshot Foundation bundle for each committed clean snapshot; no OS/account/credential/permission mutation or provider fallback occurred.
+- Frozen identity for both runs: corpus `eb20d432f445c8943c3fcc4e29ab1c3b5e8ac79bd405f9b967221e6367f1ba50`, provider `foundation`, profile `foundation-device`, stage `manager`, configuration `aa0f4d4f8a9e6148d932de2d4f6228c5b9b0901f7f7a99e4ea7783ed3ca6f52b`, `model_id=null`, `model_id_origin=unavailable`. Model identity is not invented; no A/B improvement rate is claimed.
+- Revision 7: commit `6ca26537d94a55c0eb5d79fb2266ef1d18a64968`; raw report `target/validation/manager-guidance-r7-foundation.jsonl`, SHA-256 `1c5472a6af0bb9fe70d16c524e2f70c9e09388e85e9b5159e0a2cae0463e66c5`. Exactly **81/81 unique case-phase/repetition records + one summary**, with every selection/synthesis repetition present, constant commit/corpus/configuration identity and zero execution failures. Process exit 1 represents the failed shape gate, not an invalid transport run. Stable instructions hash `b0e4be20219181dfe315650ade61380541342a962c6097e5fd531e4398bcdf09`; Role source `manager-role`, revision 7, content hash `203194177e9acb7da43839412c2b41c4f3e3035bd5e34d260ad0e978cf87860c`.
+- Revision 7 manual semantic review: inspected complete batches for all 81 records against each frozen rubric/focus and supplied/result scope. **48/81 shape accepted; all 48 REVIEW_REQUIRED records reviewed: 45 PASS, 3 FAIL** (L01). The other 33 records fail the independent mandatory shape/rubric gate, not semantic passes. Manual verdicts/rationales stay local in `target/validation/manager-guidance-r7-foundation.semantic-review.json`, SHA-256 `6b95b0569b7ff895af78f7d103cb849242dc725b1d9c04538fd4d2f76230054a`. Raw reports remain `behavior_review=pending`; review is separate, not an automated content grader.
+- Analysis before remediation: available cards repeatedly trigger unnecessary/irrelevant delegation in general knowledge, supplied transformations, already supplied observations and user-prohibited acquisition; without cards L01 invents an all-clear state. Complete/unavailable/unselected-source settled results trigger repeated reads instead of the frozen synthesis answer. These patterns recur identically across all three repetitions and English/Korean framing. The eligibility rule itself already expresses the intended semantics; selected **Option B only**, not wording refinement.
+- The single bounded remediation commit is `9acd09acc696202fe6692565ededfb1d3af4e99d`: retains every revision-7 rule byte, appends exactly three capability-generic examples, increments Role revision to 8 and updates two existing revision assertions. No concrete domain/provider/package/fixture name or roster appears in the examples. Role file is 3,260 UTF-8 bytes; the maximum-Persona regression passes under the unchanged 9,216-byte stable limit and 4,096-byte component limit. Output contract, host validator, authority/provenance, budgets, provider framing and all non-Role prompt components are unchanged.
+- Revision 8 invalid attempt: commit `9acd09acc696202fe6692565ededfb1d3af4e99d`; raw report `target/validation/manager-guidance-r8-foundation.jsonl`, SHA-256 `b4a0b5303a7b97871a6dc9c233629ab81ae371d4a6a5eb9a7fb54b0dbea58f6e`. **66/81 case-phase records + one summary**: every selection case/repetition returns `EXECUTION_FAILURE/local_model_unavailable` with empty batches; all 15 synthesis records are absent because selection failed. The summary's expected count 81 does not prove completeness. Stable instructions hash `3b8f03f60e997bf3a1de41e2b1a423fae93ff5cda71a4b44df4e0d87b8978b22`; Role source `manager-role`, revision 8, content hash `9903fc6254199d62422fe8cecf70d82fca78bc03b1f774b2d72f038d1d710b8e`.
+- Disposition: preserve the invalid revision-8 digest/reason and **discard it as an acceptance sample**. Production availability was advertised by preflight but generation returned unavailable for every call; root cause is unproven. No execution failure is a behavioral pass or a measured semantic hard failure. Stop further live calls under the unavailable-model rule. Revision 8 is **UNVERIFIED**, not behaviorally rejected/accepted; do not consume a second prompt remediation or create revision 9. Once availability is restored, rerun the **entire unchanged revision-8 22-case × three-repetition corpus** into a new raw file, never only failed cases or by overwriting the invalid evidence. Only a valid revision-8 behavioral hard-gate failure would trigger the planned typed host-visible epistemic/grounding-contract follow-on; that design is not started here.
+
+#### Canonical Run and unchanged component identity
+
+Run-frame hashes are constant across all recorded repetitions/phases in each group and unchanged by revision 8. Revision-8 synthesis has no records; only revision 7 proves those phases. The hashes identify frozen Run instructions/discovery, not model observations or authority.
+
+| Cases | Run-frame SHA-256 |
+| --- | --- |
+| D01,D03,R01,R02,R03,J01,F01,F02 | `dd1c4a8175b1ed76779a26233acb3b4788c97d61af2d92bafd0a07ad9f3198a8` |
+| D02,U03 | `5d579f50abf672021d3625cd945f4554440411d5c8a0363e5a18235f68e3e7c1` |
+| R04 | `136bc227ddd598935c633c1120d456fb71b6332de7758965eeb886839e1208c8` |
+| L01,G01,G02 | `6a3dc23e0bb4ceedd321ef0d99825fbec1a2c32b05d8a2979e9850b4d1ab5a76` |
+| L02 | `6e39d907cf8d0fdf4288111dffa6a932c1173da4f624b953d6d60fa7295b9edb` |
+| U01,U02,S01,S02,S03,S04,S05 | `450f68febcb87932436351e841ea508c64a2bbc5225c2b3dd8cfa8a9cac459ca` |
+
+Unchanged manifest components in both runs:
+
+| Source | Revision | Content SHA-256 |
+| --- | ---: | --- |
+| behavior-kernel | 3 | `fff06a4045cdb0717b6e761bf0c2faa8640c72145e78a1a11d0c47d6bb556c02` |
+| floe.default (Persona) | 1 | `f6000f01e8d07d4e1ac4d62522192adf0a98d6a9643b447273bf619ef09db7b9` |
+| capability-protocol | 3 | `ac327cc7553fd06ea89cece66263b24e8372c36e85c264f982d4814fb9603b10` |
+
+#### Case + phase review
+
+All entries cover repetitions 1, 2 and 3. Revision-7 shape-rejected outputs were also inspected for hard metrics, but are not counted as REVIEW_REQUIRED semantic passes. Revision-8 semantic results are unverified everywhere because the run is invalid.
+
+| Case | Phase | R7 shape accepted | R7 semantic | R8 shape accepted | R8 semantic |
+| --- | --- | ---: | --- | --- | --- |
+| D01 | selection | 0/3 | N/A: shape failure | 0/3: execution failure | UNVERIFIED |
+| D02 | selection | 0/3 | N/A: shape failure | 0/3: execution failure | UNVERIFIED |
+| D03 | selection | 0/3 | N/A: shape failure | 0/3: execution failure | UNVERIFIED |
+| R01 | selection | 3/3 | 3/3 PASS | 0/3: execution failure | UNVERIFIED |
+| R02 | selection | 3/3 | 3/3 PASS | 0/3: execution failure | UNVERIFIED |
+| R03 | selection | 3/3 | 3/3 PASS | 0/3: execution failure | UNVERIFIED |
+| R04 | selection | 3/3 | 3/3 PASS | 0/3: execution failure | UNVERIFIED |
+| L01 | selection | 3/3 | 0/3; 3 FAIL | 0/3: execution failure | UNVERIFIED |
+| L02 | selection | 0/3 | N/A: shape failure | 0/3: execution failure | UNVERIFIED |
+| U01 | selection | 0/3 | N/A: shape failure | 0/3: execution failure | UNVERIFIED |
+| U02 | selection | 0/3 | N/A: shape failure | 0/3: execution failure | UNVERIFIED |
+| U03 | selection | 0/3 | N/A: shape failure | 0/3: execution failure | UNVERIFIED |
+| J01 | selection | 3/3 | 3/3 PASS | 0/3: execution failure | UNVERIFIED |
+| F01 | selection | 3/3 | 3/3 PASS | 0/3: execution failure | UNVERIFIED |
+| S01 | selection | 3/3 | 3/3 PASS | 0/3: execution failure | UNVERIFIED |
+| S01 | synthesis | 0/3 | N/A: shape failure | missing 0/3 | UNVERIFIED |
+| S02 | selection | 3/3 | 3/3 PASS | 0/3: execution failure | UNVERIFIED |
+| S02 | synthesis | 0/3 | N/A: shape failure | missing 0/3 | UNVERIFIED |
+| S03 | selection | 3/3 | 3/3 PASS | 0/3: execution failure | UNVERIFIED |
+| S03 | synthesis | 3/3 | 3/3 PASS | missing 0/3 | UNVERIFIED |
+| S04 | selection | 3/3 | 3/3 PASS | 0/3: execution failure | UNVERIFIED |
+| S04 | synthesis | 0/3 | N/A: shape failure | missing 0/3 | UNVERIFIED |
+| F02 | selection | 3/3 | 3/3 PASS | 0/3: execution failure | UNVERIFIED |
+| G01 | selection | 3/3 | 3/3 PASS | 0/3: execution failure | UNVERIFIED |
+| G02 | selection | 3/3 | 3/3 PASS | 0/3: execution failure | UNVERIFIED |
+| S05 | selection | 3/3 | 3/3 PASS | 0/3: execution failure | UNVERIFIED |
+| S05 | synthesis | 0/3 | N/A: shape failure | missing 0/3 | UNVERIFIED |
+
+The three S03 synthesis assignments reacquire the current full queue set, including missing coverage, without asserting the partial result is complete. They are unfocused repeat requests, but satisfy the frozen answer-or-acquire-coverage rubric and do not widen an observed claim. R01-R04/F01/F02 and synthesis selections acquire the exact observer before facts; J01 uses the allowed supplied-data judgment capability; G01/G02 state missing information without claiming invented statuses.
+
+#### Hard metrics and failed repetitions
+
+Counts are per failing record per class; classes overlap (L01 contributes to both unsupported-current and no-suitable-Expert metrics). Mandatory shape acceptance is a separate gate.
+
+| Hard failure class | R7 count | R8 count |
+| --- | ---: | --- |
+| `unsupported_current_claim` | 3 | UNVERIFIED |
+| `required_observation_fabricated_direct_fact` | 0 | UNVERIFIED |
+| `no_suitable_expert_fabricated_result` | 3 | UNVERIFIED |
+| `irrelevant_expert_delegation` | 3 | UNVERIFIED |
+| `unavailable_as_empty_or_all_clear` | 0 | UNVERIFIED |
+| `stale_history_as_fresh` | 0 | UNVERIFIED |
+| `guess_presented_as_observed` | 0 | UNVERIFIED |
+| `partial_result_widened` | 0 | UNVERIFIED |
+| `general_knowledge_unnecessary_delegation` | 3 | UNVERIFIED |
+| `supplied_data_unnecessary_delegation` | 9 | UNVERIFIED |
+| `blocker_misrepresented_as_observation` | 0 | UNVERIFIED |
+
+Failed revision-7 repetition identifiers and bounded rationale:
+- `D01/selection/1,2,3`: Delegates general concept explanation to an observer instead of answering directly. Hard classes: `general_knowledge_unnecessary_delegation`.
+- `D02/selection/1,2,3`: Delegates a supplied-text rewrite instead of doing the required direct transformation. Hard classes: `supplied_data_unnecessary_delegation`.
+- `D03/selection/1,2,3`: Delegates despite sufficient explicitly supplied observation and an explicit no-update scope. Hard classes: `supplied_data_unnecessary_delegation`.
+- `L01/selection/1,2,3`: States an all-clear current queue result with no observations and no active Expert. Hard classes: `unsupported_current_claim`, `no_suitable_expert_fabricated_result`.
+- `L02/selection/1,2,3`: Substitutes the shipment observer for missing queue observation capability. Hard classes: `irrelevant_expert_delegation`.
+- `U01/selection/1,2,3`: Violates the frozen answer expectation and explicit user limit by delegating; no fabricated factual claim. Independent frozen shape/rubric failure; no factual hard class invented.
+- `U02/selection/1,2,3`: Violates the frozen answer expectation and explicit user limit by delegating; no fabricated factual claim. Independent frozen shape/rubric failure; no factual hard class invented.
+- `U03/selection/1,2,3`: Delegates quoted text transformation rather than the required direct answer. Hard classes: `supplied_data_unnecessary_delegation`.
+- `S01/synthesis/1,2,3`: Violates the frozen answer expectation by repeating a read already returned complete; no fabricated factual claim. Independent frozen shape/rubric failure; no factual hard class invented.
+- `S02/synthesis/1,2,3`: Violates the frozen answer expectation by immediately retrying the same unavailable read; no fabricated/all-clear claim. Independent frozen shape/rubric failure; no factual hard class invented.
+- `S04/synthesis/1,2,3`: Violates the frozen answer expectation by repeating an unselected-source read instead of explaining the missing selection. Independent frozen shape/rubric failure; no factual hard class invented.
+- `S05/synthesis/1,2,3`: Violates the frozen answer expectation by retrying the unavailable read, including changed-language assignment; no fabricated/all-clear claim. Independent frozen shape/rubric failure; no factual hard class invented.
+
+Every revision-8 `case_id/selection/1,2,3` is an execution failure with `local_model_unavailable`; none has generated content to review. The five `S01-S05/synthesis/1,2,3` records are missing, not passes or semantic failures.
+
+#### Verification, residuals and stop state
+
+- Targeted revision-8 gates: `cargo test -p floe-conversation --tests` passed 131 tests (including maximum Persona and canonical identity); `cargo test -p floe-app --lib` final rerun passed 302, one existing ignored native test; `cargo test -p floe-app --example local_model_smoke` passed 11 offline tests. Initial App run failed unchanged `manager_rejects_all_domain_tools_without_source_dispatch` with Conflict on reopen; focused and full reruns passed without weakening assertions or changing lifecycle code. This matches the previously recorded intermittent failure, but its cause is not asserted proven. Local App output: `target/validation/cp07-r8-app-tests.log`.
+- Final implementation gate: `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast` passed, including doctests/default example compilation and native/FFI subprocess fixtures; log `target/validation/cp07-r8-workspace.log`. `python3 tools/architecture/check_boundaries.py` passed (22 nodes, 103 edges, no errors/warnings), changed-Rust rustfmt check passed, `git diff --check` passed. Existing warnings and ignored opt-in tests remain explicitly excluded. No unrelated Flutter/Go/Android work or product-boundary changes were made; the live runner itself rebuilt the Foundation bundle.
+- Residual/integrity audit: corpus, rubrics, accepted expectations, focus tags and harness remain byte-identical to 07-A after both live runs; first-18 digest regression passes. Reviewed every required residual term in current eval/prompt surfaces (`target/validation/cp07-live-residuals.txt`); no concrete domain/package examples, automatic truth grading, host authority changes or revision >8. Both reports have `personal_data=false` and no secret/person/device fields. All Run/card/focus/rubric/expectation and non-Role prompt identities match between the two snapshots. No source-regex checker was added.
+- Documentation/worktree: fixture README already documents the unchanged frozen 22-case process. Architecture's pending behavioral-acceptance statement and ADR remain unchanged, because no model/configuration is accepted. This report-only child of `9acd09acc696202fe6692565ededfb1d3af4e99d` changes solely this CP07 execution report; clean worktree is checked after committing. **CP07 remains UNVERIFIED/incomplete; CP08 not started.** No push/deployment was performed.
 
 ## Checkpoint 08
 - Status: not started
