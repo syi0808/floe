@@ -5,7 +5,9 @@
 - **Scope:** S4 prompt simplification and S5 Memory/Playbook foundation
 
 > Manager–Expert discovery and delegation are amended by
-> [ADR 0018](0018-manager-expert-a2a-delegation.md).
+> [ADR 0018](0018-manager-expert-a2a-delegation.md). Run-scoped Agent-environment,
+> Context-lifetime and grounding semantics are further amended by
+> [ADR 0033](0033-run-scoped-agent-environment-and-grounded-manager.md).
 
 ## Context
 
@@ -292,6 +294,28 @@ summaries and compaction artifacts; tombstones prevent replay from resurrecting 
   and make discovery quality part of acceptance testing.
 - Typed records and manifests cost more implementation work than Markdown injection,
   but preserve Floe's provenance, deletion and Review requirements.
+
+## Amendment — 2026-10-01: Run environment versus attempt Context
+
+[ADR 0033](0033-run-scoped-agent-environment-and-grounded-manager.md) separates
+configuration lifetime from model-attempt Context lifetime.
+
+The earlier assembly pipeline's `freeze policy/grant/registry revisions` step must
+not be read as one common snapshot. Expert definition/admission/selection
+configuration is sampled once for the Conversation Run and is shared by Manager
+discovery and delegation. Grants, source authority, provider/recipient authority and
+other permission-bearing state remain live and are revalidated by their owners.
+Evidence/history projection remains model-attempt scoped and may be rebuilt between
+iterations of the same Run.
+
+Likewise, the earlier `scoped_instructions` diagram is historical where it places
+the Active Expert Index and capability descriptors in instruction text. ADR 0033
+moves discovery metadata to a typed data section while keeping purpose/response
+contract as Run instructions and correction/runtime bounds as attempt context.
+
+The statement that Context is frozen for one model call remains true for one
+`AuthorizedModelProjection`, but it is no longer the complete lifecycle model: the
+Run environment persists across those per-attempt projections.
 
 ## References
 

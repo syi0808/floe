@@ -42,6 +42,7 @@ ADR status should describe the **decision**, not whether code, tests or live acc
 - [0022 — Generalizable Agent guidance](0022-generalizable-agent-guidance.md)
 - [0023 — Page-independent assistant conversation](0023-page-independent-assistant-conversation.md)
 - [0030 — Conversation-owned durable interactions and origin-linked resume](0030-durable-interaction-and-linked-resume.md) — Observe reviewed-target semantics amended by ADR 0031.
+- [0033 — Run-scoped Agent environment and grounded Manager](0033-run-scoped-agent-environment-and-grounded-manager.md) — amends 0017/0018 for root Agent readiness, Run-pinned Expert configuration, attempt Context and Manager grounding.
 
 ### Device context, connections and authority
 

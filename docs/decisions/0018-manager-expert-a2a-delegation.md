@@ -4,6 +4,9 @@
 - **Date:** 2026-09-09
 - **Amends:** ADR 0016 Expert invocation semantics and ADR 0017 context assembly
 
+> Run-scoped discovery and delegation configuration are further amended by
+> [ADR 0033](0033-run-scoped-agent-environment-and-grounded-manager.md).
+
 ## Context
 
 The S4 implementation advertises each Expert to the Manager as a provider-native
@@ -208,6 +211,28 @@ The Manager may answer from sufficient already-admitted context and owns synthes
 Future Manager orchestration, presentation or product-shell capabilities remain possible through role-neutral Tool contracts, but must not become backdoors for domain source reads or domain actions. External mutations remain typed proposals behind host review and policy. Feasibility's separate contextual Access/native substrate is retained without a callable Manager Tool or newly implemented Expert acquisition. Standing Observe consumers derive only from trusted shipped Expert declarations; see the corresponding amendment to [ADR 0031](0031-connection-owned-source-scope-and-logical-observe.md).
 
 The original role guidance and migration discussion above are historical where they permit direct Manager source acquisition; this amendment governs the current boundary.
+
+## Amendment — 2026-10-01: one Run snapshot for discovery and dispatch
+
+[ADR 0033](0033-run-scoped-agent-environment-and-grounded-manager.md) changes the
+configuration lifetime behind Manager–Expert delegation.
+
+The earlier text saying that Core resolves enabled assignments at each Manager model
+call is historical. Root Conversation now targets one Run-scoped Expert environment:
+the exact definitions shown in discovery, their admission identities, source
+selection configuration and executable endpoints are sampled once for the Run.
+Subsequent model attempts in that Run reuse that environment even though their
+evidence Context may be reassembled.
+
+Actual delegation must resolve against that same pinned environment rather than
+reading a newer live Directory entry. Registry/configuration mutations become visible
+to the next Run. This does not freeze authority: source/grant/recipient/provider
+checks continue at the protected operation, and can deny a currently executing Task.
+
+Agent Card text remains bounded discovery metadata, not instruction or permission.
+ADR 0033 also moves the Active Expert Index out of the instruction layer; this does
+not change the A2A identity, natural-language delegation or isolated Expert-context
+decisions in this ADR.
 
 ## References
 
