@@ -95,12 +95,13 @@ impl NativeActions {
             .build()
             .unwrap();
         let core = Arc::new(runtime.block_on(FloeCore::open(path)).unwrap());
-        let worker = Worker::with_core(
+        let worker = Worker::with_core_and_connection_store(
             path.with_extension("vaults"),
             keys,
             core.clone(),
             Arc::default(),
             Arc::default(),
+            CurrentSavedConnectionStore::fixed(None),
         )
         .unwrap();
         let person = PersonId(Uuid::parse_str(PERSON).unwrap());

@@ -379,7 +379,7 @@ pub(super) async fn bind_initial_defaults<Keys: floe_vault::VaultKeyProvider + '
             }
         }
     }
-    open.publish_expert_directory(&open.registrations).await
+    Ok(())
 }
 
 pub(super) async fn replace<Keys: floe_vault::VaultKeyProvider + 'static>(

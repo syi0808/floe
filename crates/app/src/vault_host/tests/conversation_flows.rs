@@ -235,7 +235,6 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
     )
     .unwrap();
     perform(&worker, person, WorkerAction::Create);
-    install_builtin_calendar_setup(&worker, &directory.path().join("vaults"), person, &keys);
     let started = perform(
         &worker,
         person,
@@ -821,7 +820,7 @@ fn inflight_connection_refresh_replays_without_redispatch() {
 }
 
 #[test]
-fn production_general_turn_does_not_require_or_install_builtin_setup() {
+fn production_unlock_prepares_experts_before_general_turn() {
     let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("vaults");
@@ -850,6 +849,9 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
     let worker =
         Worker::new_with_connection_store(root.clone(), keys.clone(), connections.store()).unwrap();
     perform(&worker, person, WorkerAction::Unlock);
+    let prepared = perform(&worker, person, WorkerAction::Registry { change: None })
+        .registry
+        .unwrap();
     let fetched = perform(
         &worker,
         person,
@@ -870,8 +872,14 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
     );
     assert_eq!(resumed.failure, None);
     assert_eq!(resumed.session.unwrap().id, session.id);
+    assert_eq!(
+        perform(&worker, person, WorkerAction::Registry { change: None })
+            .registry
+            .unwrap(),
+        prepared
+    );
     let (mock, server) = answer_server(vec![WireStep::Answer {
-        text: "General answer without experts".into(),
+        text: "General answer".into(),
     }]);
     connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
     let result = perform(
@@ -881,7 +889,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
             request: Box::new(ConversationTurnRequest::new(
                 session.id,
                 session.revision,
-                "Answer without expert setup".into(),
+                "Answer a general question".into(),
                 "mac-local".into(),
                 ProfileSelection::Explicit("server-model".into()),
                 false,
@@ -892,8 +900,14 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
     assert_eq!(result.failure, None, "general turn: {result:?}");
     assert!(matches!(
         result.session.unwrap().messages.last(),
-        Some(AgentMessage::Assistant { text, .. }) if text == "General answer without experts"
+        Some(AgentMessage::Assistant { text, .. }) if text == "General answer"
     ));
+    assert_eq!(
+        perform(&worker, person, WorkerAction::Registry { change: None })
+            .registry
+            .unwrap(),
+        prepared
+    );
     assert_eq!(server.join().unwrap().len(), 1);
     perform(&worker, person, WorkerAction::Lock);
     drop(worker);
@@ -907,7 +921,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
                 &floe_experts::manifest_set_digest(&floe_experts_builtin::manifests()).unwrap()
             ))
             .unwrap()
-            .is_none()
+            .is_some()
     );
 }
 
@@ -1059,7 +1073,6 @@ fn production_builtin_expert_binding_refresh_links_fresh_selected_task() {
     )
     .unwrap();
     assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
-    install_builtin_mail_setup(&worker, &root, person, &keys);
     let session = perform(
         &worker,
         person,
@@ -1283,74 +1296,6 @@ fn production_builtin_expert_binding_refresh_links_fresh_selected_task() {
     assert_ne!(fresh_task.snapshot.task_id.as_uuid(), task_id);
 }
 
-fn install_builtin_mail_setup(
-    worker: &Worker,
-    root: &std::path::Path,
-    person: PersonId,
-    keys: &Keys,
-) {
-    assert_eq!(perform(worker, person, WorkerAction::Lock).failure, None);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let vault = runtime
-        .block_on(EncryptedAgentVault::open(root, person, keys.clone()))
-        .unwrap();
-    let setup = floe_experts::ExpertInstallOperation {
-        instance_id: vault.registry_instance_id(),
-        expected_revision: 0,
-        operation_id: Uuid::new_v4(),
-    };
-    runtime
-        .block_on(vault.install_expert_bundle(
-            setup,
-            &floe_experts_builtin::manifests(),
-            floe_execution::Cancellation::default(),
-        ))
-        .unwrap();
-    drop(vault);
-    assert_eq!(perform(worker, person, WorkerAction::Unlock).failure, None);
-}
-
-fn install_builtin_calendar_setup(
-    worker: &Worker,
-    root: &std::path::Path,
-    person: PersonId,
-    keys: &Keys,
-) {
-    assert_eq!(perform(worker, person, WorkerAction::Lock).failure, None);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let vault = runtime
-        .block_on(EncryptedAgentVault::open(root, person, keys.clone()))
-        .unwrap();
-    runtime
-        .block_on(vault.install_expert_bundle(
-            floe_experts::ExpertInstallOperation {
-                instance_id: vault.registry_instance_id(),
-                expected_revision: 0,
-                operation_id: Uuid::new_v4(),
-            },
-            &floe_experts_builtin::manifests(),
-            floe_execution::Cancellation::default(),
-        ))
-        .unwrap();
-    assert!(
-        runtime
-            .block_on(vault.enabled_expert_cards())
-            .unwrap()
-            .iter()
-            .any(|card| {
-                card.id == floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()
-            })
-    );
-    drop(vault);
-    assert_eq!(perform(worker, person, WorkerAction::Unlock).failure, None);
-}
-
 #[test]
 fn production_builtin_setup_installs_through_vault_without_sources() {
     let directory = tempfile::tempdir().unwrap();
@@ -1359,7 +1304,6 @@ fn production_builtin_setup_installs_through_vault_without_sources() {
     let person = PersonId::new();
     let worker = Worker::new(root.clone(), keys.clone()).unwrap();
     assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
-    install_builtin_mail_setup(&worker, &root, person, &keys);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -2884,7 +2828,6 @@ fn common_schedule_review_requirement_completes_root_run() {
     )
     .unwrap();
     assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
-    install_builtin_calendar_setup(&worker, &root, person, &keys);
     let session = perform(
         &worker,
         person,

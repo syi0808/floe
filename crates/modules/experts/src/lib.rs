@@ -21,8 +21,7 @@ pub use a2a::{
     InProcessAgent, NoA2AHost,
 };
 pub use bundle_install::{
-    BoxFuture, ExpertInstallRefresh, ExpertInstallStore, ExpertRefreshOutcome,
-    ensure_expert_bundle, expert_refresh_outcome,
+    BoxFuture, ExpertInstallStore, ensure_expert_bundle,
 };
 pub use directory::{
     Directory, DirectoryEntry, DirectoryQuery, ExpertAdmissionIdentity, ResolvedDirectoryEntry,

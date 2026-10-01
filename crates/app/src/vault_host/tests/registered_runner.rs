@@ -214,6 +214,64 @@ fn extension_chain_runner<'turn, 'model, 'msg, 'call>(
     })
 }
 
+fn root_environment_admission() -> RootAgentEnvironmentAdmission {
+    RootAgentEnvironmentAdmission {
+        device_id: "mac-local".into(),
+        operation_id: Uuid::new_v4(),
+        cancellation: Cancellation::default(),
+    }
+}
+
+fn registered_installation<'a>(
+    snapshot: &'a floe_experts::RegistrySnapshot,
+    open: &OpenVault<Keys>,
+) -> &'a floe_experts::PackageInstallation {
+    snapshot
+        .installations
+        .iter()
+        .find(|installation| installation.package == open.registrations[0].manifest.package)
+        .unwrap()
+}
+
+fn registered_assignment<'a>(
+    snapshot: &'a floe_experts::RegistrySnapshot,
+    open: &OpenVault<Keys>,
+) -> &'a floe_experts::PackageAssignment {
+    let installation = registered_installation(snapshot, open);
+    snapshot
+        .assignments
+        .iter()
+        .find(|assignment| assignment.installation_id == installation.id)
+        .unwrap()
+}
+
+async fn install_test_manifest(open: &OpenVault<Keys>, manifest: floe_experts::ExpertManifest) {
+    if floe_experts_builtin::manifests().contains(&manifest) {
+        return;
+    }
+    open.vault
+        .install_expert_bundle(
+            floe_experts::ExpertInstallOperation {
+                instance_id: open.vault.registry_instance_id(),
+                expected_revision: open
+                    .vault
+                    .expert_registry()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .revision,
+                operation_id: Uuid::new_v4(),
+            },
+            &[manifest],
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    open.publish_expert_directory(&open.registrations)
+        .await
+        .unwrap();
+}
+
 async fn installed_open(
     person: PersonId,
     registration: BoundExpertRegistration,
@@ -236,24 +294,11 @@ async fn installed_open(
         Arc::new(LocalContextHost::default()),
         connections,
         vec![registration],
+        root_environment_admission(),
     )
     .await
     .unwrap();
-    open.vault
-        .install_expert_bundle(
-            floe_experts::ExpertInstallOperation {
-                instance_id: open.vault.registry_instance_id(),
-                expected_revision: 0,
-                operation_id: Uuid::new_v4(),
-            },
-            &[manifest],
-            Cancellation::default(),
-        )
-        .await
-        .unwrap();
-    open.publish_expert_directory(&open.registrations)
-        .await
-        .unwrap();
+    install_test_manifest(&open, manifest).await;
     (root, open, server)
 }
 
@@ -274,24 +319,11 @@ async fn installed_open_without_provider(
         Arc::new(LocalContextHost::default()),
         CurrentSavedConnectionStore::fixed(None),
         registrations,
+        root_environment_admission(),
     )
     .await
     .unwrap();
-    open.vault
-        .install_expert_bundle(
-            floe_experts::ExpertInstallOperation {
-                instance_id: open.vault.registry_instance_id(),
-                expected_revision: 0,
-                operation_id: Uuid::new_v4(),
-            },
-            &[manifest],
-            Cancellation::default(),
-        )
-        .await
-        .unwrap();
-    open.publish_expert_directory(&open.registrations)
-        .await
-        .unwrap();
+    install_test_manifest(&open, manifest).await;
     (root, open)
 }
 
@@ -453,7 +485,7 @@ async fn read_a_then_rebind_b_fences_expert_model_dispatch() {
     let person = PersonId::new();
     let (_root, open, server) = installed_open(person, tasks_requirement_registration()).await;
     let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
-    let assignment = &snapshot.assignments[0];
+    let assignment = &registered_assignment(&snapshot, &open);
     let selected = |device_id| {
         floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
             person_id: person,
@@ -470,7 +502,7 @@ async fn read_a_then_rebind_b_fences_expert_model_dispatch() {
     };
     let source_a = selected("mac-local");
     let source_b = selected("other-device");
-    let package = snapshot.installations[0].package.clone();
+    let package = registered_installation(&snapshot, &open).package.clone();
     open.vault
         .replace_expert_binding(
             Uuid::new_v4(),
@@ -542,7 +574,7 @@ async fn rebound_selection_discards_runner_result_before_final_release() {
     let (_root, open, server) =
         installed_open(person, required_source_registration(paused_output_runner)).await;
     let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
-    let assignment = &snapshot.assignments[0];
+    let assignment = &registered_assignment(&snapshot, &open);
     let source_a = floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
         person_id: person,
         device_id: "mac-local",
@@ -555,7 +587,7 @@ async fn rebound_selection_discards_runner_result_before_final_release() {
     .unwrap()
     .remove(0)
     .reference;
-    let package = snapshot.installations[0].package.clone();
+    let package = registered_installation(&snapshot, &open).package.clone();
     open.vault
         .replace_expert_binding(
             Uuid::new_v4(),
@@ -616,7 +648,7 @@ async fn completed_task_replays_historical_result_after_rebinding_and_disable() 
     let (_root, open, server) =
         installed_open(person, required_source_registration(example_runner)).await;
     let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
-    let assignment = &snapshot.assignments[0];
+    let assignment = &registered_assignment(&snapshot, &open);
     let source = floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
         person_id: person,
         device_id: "mac-local",
@@ -634,7 +666,7 @@ async fn completed_task_replays_historical_result_after_rebinding_and_disable() 
             Uuid::new_v4(),
             floe_experts::ExpertBindingCommand {
                 assignment_id: assignment.id,
-                package: snapshot.installations[0].package.clone(),
+                package: registered_installation(&snapshot, &open).package.clone(),
                 definition_revision: 1,
                 requirement_key: "required_attention".into(),
                 expected_binding_revision: assignment.binding.revision,
@@ -662,10 +694,10 @@ async fn completed_task_replays_historical_result_after_rebinding_and_disable() 
             Uuid::new_v4(),
             floe_experts::ExpertBindingCommand {
                 assignment_id: assignment.id,
-                package: snapshot.installations[0].package.clone(),
+                package: registered_installation(&snapshot, &open).package.clone(),
                 definition_revision: 1,
                 requirement_key: "required_attention".into(),
-                expected_binding_revision: current.assignments[0].binding.revision,
+                expected_binding_revision: registered_assignment(&current, &open).binding.revision,
                 selected: vec![],
             },
         )
@@ -716,7 +748,7 @@ async fn admitted_source_a_rebound_before_read_never_uses_b() {
     )
     .await;
     let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
-    let assignment = &snapshot.assignments[0];
+    let assignment = &registered_assignment(&snapshot, &open);
     let source_a = floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
         person_id: person,
         device_id: "mac-local",
@@ -734,7 +766,7 @@ async fn admitted_source_a_rebound_before_read_never_uses_b() {
             Uuid::new_v4(),
             floe_experts::ExpertBindingCommand {
                 assignment_id: assignment.id,
-                package: snapshot.installations[0].package.clone(),
+                package: registered_installation(&snapshot, &open).package.clone(),
                 definition_revision: 1,
                 requirement_key: "required_attention".into(),
                 expected_binding_revision: assignment.binding.revision,
@@ -765,7 +797,7 @@ async fn admitted_source_a_rebound_before_read_never_uses_b() {
                 Uuid::new_v4(),
                 floe_experts::ExpertBindingCommand {
                     assignment_id: assignment.id,
-                    package: snapshot.installations[0].package.clone(),
+                    package: registered_installation(&snapshot, &open).package.clone(),
                     definition_revision: 1,
                     requirement_key: "required_attention".into(),
                     expected_binding_revision: assignment.binding.revision + 1,
@@ -919,25 +951,12 @@ async fn registered_runner_nonbuiltin_uses_product_endpoint_and_durable_task() {
         Arc::new(LocalContextHost::default()),
         connections,
         vec![example_registration()],
+        root_environment_admission(),
     )
     .await
     .unwrap();
     let manifest = example_manifest();
-    open.vault
-        .install_expert_bundle(
-            floe_experts::ExpertInstallOperation {
-                instance_id: open.vault.registry_instance_id(),
-                expected_revision: 0,
-                operation_id: Uuid::new_v4(),
-            },
-            &[manifest],
-            Cancellation::default(),
-        )
-        .await
-        .unwrap();
-    open.publish_expert_directory(&open.registrations)
-        .await
-        .unwrap();
+    install_test_manifest(&open, manifest).await;
     assert_eq!(
         open.task_coordinator
             .catalog(&person.to_string())
@@ -989,14 +1008,22 @@ async fn registered_runner_nonbuiltin_extension_chain_reads_only_its_exact_selec
     let person = PersonId::new();
     let (_root, open, server) = installed_open(person, extension_chain_registration()).await;
     let overview = open.vault.registry_overview().await.unwrap().unwrap();
-    assert_eq!(overview.definitions.len(), 1);
-    assert_eq!(overview.definitions[0].package.id, "example.test.expert");
-    assert_eq!(overview.assignments.len(), 1);
-    assert_eq!(
-        overview.assignments[0].requirements[0].key,
-        "required_tasks"
+    assert_eq!(overview.definitions.len(), 9);
+    assert!(
+        overview
+            .definitions
+            .iter()
+            .any(|definition| definition.package.id == "example.test.expert")
     );
-    let assignment_id = overview.assignments[0].id;
+    assert_eq!(overview.assignments.len(), 9);
+    let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
+    let assignment_id = registered_assignment(&snapshot, &open).id;
+    let assignment = overview
+        .assignments
+        .iter()
+        .find(|assignment| assignment.id == assignment_id)
+        .unwrap();
+    assert_eq!(assignment.requirements[0].key, "required_tasks");
     let inspected = crate::vault_host::expert_binding_settings::inspect(
         &open,
         person,
@@ -1029,7 +1056,7 @@ async fn registered_runner_nonbuiltin_extension_chain_reads_only_its_exact_selec
     .unwrap();
     assert!(saved.candidates[0].selected);
     let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
-    let selected = &snapshot.assignments[0].binding.entries[0].selected[0];
+    let selected = &registered_assignment(&snapshot, &open).binding.entries[0].selected[0];
     assert_eq!(selected.capability_id, "floe.tasks");
     assert!(
         !crate::first_party_observe::trusted_shipped_consumers("floe.tasks")
@@ -1096,11 +1123,11 @@ async fn registered_runner_builtin_prefix_does_not_grant_first_party_observe() {
         .replace_expert_binding(
             Uuid::new_v4(),
             floe_experts::ExpertBindingCommand {
-                assignment_id: snapshot.assignments[0].id,
-                package: snapshot.installations[0].package.clone(),
+                assignment_id: registered_assignment(&snapshot, &open).id,
+                package: registered_installation(&snapshot, &open).package.clone(),
                 definition_revision: 1,
                 requirement_key: "required_tasks".into(),
-                expected_binding_revision: snapshot.assignments[0].binding.revision,
+                expected_binding_revision: registered_assignment(&snapshot, &open).binding.revision,
                 selected: vec![candidate.reference.clone()],
             },
         )
@@ -1227,6 +1254,7 @@ async fn registered_runner_product_endpoint_fences_disabled_a_without_rerouting_
             manifest: example_manifest(),
             runner: BoundExpertRunner::Supplied(runner_a),
         }],
+        root_environment_admission(),
     )
     .await
     .unwrap();
@@ -1235,7 +1263,13 @@ async fn registered_runner_product_endpoint_fences_disabled_a_without_rerouting_
         .install_expert_bundle(
             floe_experts::ExpertInstallOperation {
                 instance_id: open.vault.registry_instance_id(),
-                expected_revision: 0,
+                expected_revision: open
+                    .vault
+                    .expert_registry()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .revision,
                 operation_id: Uuid::new_v4(),
             },
             &[example_manifest()],
@@ -1243,9 +1277,15 @@ async fn registered_runner_product_endpoint_fences_disabled_a_without_rerouting_
         )
         .await
         .unwrap();
-    let first_admission = open.vault.enabled_expert_admissions().await.unwrap()[0]
-        .1
-        .clone();
+    let first_admission = open
+        .vault
+        .enabled_expert_admissions()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|(_, admission)| admission.package.id == "example.test.expert")
+        .unwrap()
+        .1;
     open.publish_expert_directory(&open.registrations)
         .await
         .unwrap();
@@ -1293,9 +1333,17 @@ async fn registered_runner_product_endpoint_fences_disabled_a_without_rerouting_
             )
             .await
             .unwrap();
-        let second_admission = open.vault.enabled_expert_admissions().await.unwrap()[0]
-            .1
-            .clone();
+        let second_admission = open
+            .vault
+            .enabled_expert_admissions()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|(_, admission)| {
+                admission.package.id == "example.test.expert" && admission.definition_revision == 2
+            })
+            .unwrap()
+            .1;
         assert_ne!(first_admission.package, second_admission.package);
         assert_eq!(second_admission.definition_revision, 2);
         let second_set = validated_expert_registrations(vec![BoundExpertRegistration {
@@ -1463,7 +1511,7 @@ async fn registered_runner_required_unconfigured_source_returns_typed_outcome() 
         crate::vault_host::interaction_resolution::RefreshOutcome::StillPending { .. }
     ));
     let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
-    let assignment = &snapshot.assignments[0];
+    let assignment = &registered_assignment(&snapshot, &open);
     let source = floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
         person_id: person,
         device_id: "mac-local",
@@ -1481,7 +1529,7 @@ async fn registered_runner_required_unconfigured_source_returns_typed_outcome() 
             Uuid::new_v4(),
             floe_experts::ExpertBindingCommand {
                 assignment_id: assignment.id,
-                package: snapshot.installations[0].package.clone(),
+                package: registered_installation(&snapshot, &open).package.clone(),
                 definition_revision: 1,
                 requirement_key: "required_attention".into(),
                 expected_binding_revision: assignment.binding.revision,
@@ -1529,11 +1577,11 @@ async fn registered_runner_undeclared_requirement_is_denied_before_source_io() {
         .replace_expert_binding(
             Uuid::new_v4(),
             floe_experts::ExpertBindingCommand {
-                assignment_id: snapshot.assignments[0].id,
-                package: snapshot.installations[0].package.clone(),
+                assignment_id: registered_assignment(&snapshot, &open).id,
+                package: registered_installation(&snapshot, &open).package.clone(),
                 definition_revision: 1,
                 requirement_key: "required_attention".into(),
-                expected_binding_revision: snapshot.assignments[0].binding.revision,
+                expected_binding_revision: registered_assignment(&snapshot, &open).binding.revision,
                 selected: vec![source],
             },
         )
@@ -1567,14 +1615,8 @@ async fn expert_settings_resolve_only_current_candidate_ids_and_rejoin_exact_sav
     let registration = required_source_registration(required_source_runner);
     let manifest = registration.manifest.clone();
     let (_root, open) = installed_open_without_provider(person, vec![registration], manifest).await;
-    let assignment_id = open
-        .vault
-        .expert_registry()
-        .await
-        .unwrap()
-        .unwrap()
-        .assignments[0]
-        .id;
+    let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
+    let assignment_id = registered_assignment(&snapshot, &open).id;
     let absent = crate::vault_host::expert_binding_settings::inspect(
         &open,
         person,
@@ -1588,7 +1630,7 @@ async fn expert_settings_resolve_only_current_candidate_ids_and_rejoin_exact_sav
     assert!(absent.candidates.is_empty());
     establish_attention_source(&open, person).await;
     let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
-    let assignment_id = snapshot.assignments[0].id;
+    let assignment_id = registered_assignment(&snapshot, &open).id;
     let first = crate::vault_host::expert_binding_settings::inspect(
         &open,
         person,
@@ -1623,12 +1665,7 @@ async fn expert_settings_resolve_only_current_candidate_ids_and_rejoin_exact_sav
         Err(AgentFailure::Conflict),
     );
     assert_eq!(
-        open.vault
-            .expert_registry()
-            .await
-            .unwrap()
-            .unwrap()
-            .assignments[0]
+        registered_assignment(&open.vault.expert_registry().await.unwrap().unwrap(), &open)
             .binding
             .revision,
         first.binding_revision,
@@ -1814,14 +1851,8 @@ async fn contacts_source_edit_keeps_saved_expert_binding_and_logical_grant() {
         .unwrap()
         .remove(0);
     assert_eq!(grant.scope().resources(), [logical]);
-    let assignment_id = open
-        .vault
-        .expert_registry()
-        .await
-        .unwrap()
-        .unwrap()
-        .assignments[0]
-        .id;
+    let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
+    let assignment_id = registered_assignment(&snapshot, &open).id;
     let first = crate::vault_host::expert_binding_settings::inspect(
         &open,
         person,
@@ -1975,29 +2006,13 @@ async fn hosted_calendar_settings_use_product_connection_and_pinned_producer() {
             device_id: "mac-local".into(),
         })),
         vec![registration],
+        root_environment_admission(),
     )
     .await
     .unwrap();
-    open.vault
-        .install_expert_bundle(
-            floe_experts::ExpertInstallOperation {
-                instance_id: open.vault.registry_instance_id(),
-                expected_revision: 0,
-                operation_id: Uuid::new_v4(),
-            },
-            &[manifest],
-            Cancellation::default(),
-        )
-        .await
-        .unwrap();
-    let assignment_id = open
-        .vault
-        .expert_registry()
-        .await
-        .unwrap()
-        .unwrap()
-        .assignments[0]
-        .id;
+    install_test_manifest(&open, manifest).await;
+    let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
+    let assignment_id = registered_assignment(&snapshot, &open).id;
     let catalog = crate::vault_host::expert_binding_settings::inspect(
         &open,
         person,
@@ -2082,8 +2097,8 @@ async fn hosted_calendar_settings_use_product_connection_and_pinned_producer() {
     assert_eq!(expanded_catalog.candidates, catalog.candidates);
 
     let registry = open.vault.expert_registry().await.unwrap().unwrap();
-    let assignment = &registry.assignments[0];
-    let package = registry.installations[0].package.clone();
+    let assignment = &registered_assignment(&registry, &open);
+    let package = registered_installation(&registry, &open).package.clone();
     let saved_mail = floe_context_contract::SourceSelectionReference {
         connector_id: floe_context_contract::ConnectorId::try_new("mail.google").unwrap(),
         connection_id: floe_context_contract::ConnectionId::try_new("mail-account").unwrap(),
@@ -2182,8 +2197,8 @@ async fn initial_shipped_setup_selects_single_native_source_only_once() {
     let (_root, open) = installed_open_without_provider(person, vec![registration], manifest).await;
     establish_attention_source(&open, person).await;
     let before = open.vault.expert_registry().await.unwrap().unwrap();
-    let assignment_id = before.assignments[0].id;
-    assert_eq!(before.assignments[0].binding.revision, 1);
+    let assignment_id = registered_assignment(&before, &open).id;
+    assert_eq!(registered_assignment(&before, &open).binding.revision, 1);
     crate::vault_host::expert_binding_settings::bind_initial_defaults(
         &open,
         person,
@@ -2217,7 +2232,10 @@ async fn initial_shipped_setup_selects_single_native_source_only_once() {
     .await
     .unwrap();
     let after = open.vault.expert_registry().await.unwrap().unwrap();
-    assert_eq!(after.assignments[0].binding.revision, revision);
+    assert_eq!(
+        registered_assignment(&after, &open).binding.revision,
+        revision
+    );
 }
 
 #[tokio::test]
@@ -2278,54 +2296,46 @@ async fn shipped_descriptions_reach_context_projection_after_fresh_install() {
 }
 
 #[tokio::test]
-async fn stale_shipped_manifest_cannot_publish_current_registration_or_be_overwritten() {
+async fn stale_shipped_manifest_blocks_activation_without_overwriting_configuration() {
     let person = PersonId::new();
     let registration = super::conversation_turn::expert_dispatch::shipped_registrations().remove(0);
     let mut stale = registration.manifest.clone();
-    stale.package.version = "1.0.0".into();
-    stale.definition.card.version = stale.package.version.clone();
-    stale.definition.definition_revision = 1;
-    stale.definition.card.description =
-        "Reviews calendars, availability, conflicts, and the realism of plans from a scheduling perspective.".into();
-    let (_root, open) =
-        installed_open_without_provider(person, vec![registration], stale.clone()).await;
-    assert!(
-        open.task_coordinator
-            .catalog(&person.to_string())
-            .unwrap()
-            .cards
-            .is_empty()
-    );
-    let before = open.vault.expert_registry().await.unwrap().unwrap();
-    let mut changed = stale;
-    changed.definition.card.description = open.registrations[0]
-        .manifest
-        .definition
-        .card
-        .description
-        .clone();
-    assert_eq!(
-        open.vault
-            .install_expert_bundle(
-                floe_experts::ExpertInstallOperation {
-                    instance_id: before.instance_id,
-                    expected_revision: before.revision,
-                    operation_id: Uuid::new_v4(),
-                },
-                &[changed],
-                Cancellation::default(),
-            )
-            .await,
-        Err(AgentFailure::Conflict),
-    );
-    assert_eq!(open.vault.expert_registry().await.unwrap().unwrap(), before);
-    assert!(
-        open.task_coordinator
-            .catalog(&person.to_string())
-            .unwrap()
-            .cards
-            .is_empty()
-    );
+    stale.definition.card.description = "Obsolete shipped description".into();
+    let root = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let keys = Keys::default();
+    let vault = EncryptedAgentVault::create(root.path(), person, keys.clone())
+        .await
+        .unwrap();
+    vault
+        .install_expert_bundle(
+            floe_experts::ExpertInstallOperation {
+                instance_id: vault.registry_instance_id(),
+                expected_revision: 0,
+                operation_id: Uuid::new_v4(),
+            },
+            &[stale],
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    let before = vault.expert_registry().await.unwrap().unwrap();
+    assert!(matches!(
+        OpenVault::activate(
+            vault,
+            Arc::new(FloeCore::open(":memory:").await.unwrap()),
+            Arc::new(LocalContextHost::default()),
+            CurrentSavedConnectionStore::fixed(None),
+            vec![registration],
+            root_environment_admission()
+        )
+        .await,
+        Err(AgentFailure::Conflict)
+    ));
+    let vault = EncryptedAgentVault::open(root.path(), person, keys)
+        .await
+        .unwrap();
+    assert_eq!(vault.expert_registry().await.unwrap().unwrap(), before);
 }
 
 #[tokio::test]
@@ -2395,7 +2405,8 @@ async fn registered_runner_missing_and_duplicate_supplied_implementations_do_not
             .catalog(&person.to_string())
             .unwrap()
             .cards
-            .is_empty()
+            .iter()
+            .all(|definition| definition.card.id != "example.test.expert")
     );
     let run_id = RunId::new();
     let task_id = TaskId::new();
@@ -2439,7 +2450,8 @@ async fn registered_runner_missing_and_duplicate_supplied_implementations_do_not
             .catalog(&person.to_string())
             .unwrap()
             .cards
-            .is_empty()
+            .iter()
+            .all(|definition| definition.card.id != "example.test.expert")
     );
     let mut wrong_version = example_manifest();
     wrong_version.package.version = "2.0.0".into();

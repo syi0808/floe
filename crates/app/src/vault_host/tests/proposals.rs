@@ -342,12 +342,13 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         session_id: session.id,
         invocation_id: evidence.task_id,
     };
-    let worker = Worker::with_core(
+    let worker = Worker::with_core_and_connection_store(
         root.clone(),
         keys.clone(),
         core.clone(),
         Arc::new(LocalContextHost::default()),
         Arc::new(crate::events::AppEventBuffer::default()),
+        CurrentSavedConnectionStore::fixed(None),
     )
     .unwrap();
     assert_eq!(

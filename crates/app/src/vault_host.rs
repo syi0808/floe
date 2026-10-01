@@ -224,6 +224,12 @@ struct Worker {
     app_events: Arc<crate::events::AppEventBuffer>,
 }
 
+struct RootAgentEnvironmentAdmission {
+    device_id: String,
+    operation_id: Uuid,
+    cancellation: Cancellation,
+}
+
 struct OpenVault<Keys> {
     vault: Arc<EncryptedAgentVault<Keys>>,
     core: Arc<FloeCore>,
@@ -284,6 +290,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
         local_context: Arc<LocalContextHost>,
         connections: floe_provider_adapters::control::CurrentSavedConnectionStore,
         registrations: Vec<conversation_turn::expert_dispatch::BoundExpertRegistration>,
+        admission: RootAgentEnvironmentAdmission,
     ) -> Result<Self, AgentFailure> {
         let registrations = validated_expert_registrations(registrations)?;
         let vault = Arc::new(vault);
@@ -299,7 +306,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
             floe_agent_contract::MAX_OUTPUT_BYTES,
         )
         .await?;
-        Ok(Self {
+        let open = Self {
             vault,
             core,
             local_context,
@@ -311,7 +318,38 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
             directory,
             registrations,
             _recovered_tasks: recovered_tasks,
-        })
+        };
+        open.prepare_root_agent_environment(&admission).await?;
+        Ok(open)
+    }
+
+    async fn prepare_root_agent_environment(
+        &self,
+        admission: &RootAgentEnvironmentAdmission,
+    ) -> Result<(), AgentFailure> {
+        if admission.cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        let first_install = self.vault.expert_registry().await?.is_none();
+        ensure_expert_bundle(self, admission.cancellation.clone()).await?;
+        if first_install {
+            expert_binding_settings::bind_initial_defaults(
+                self,
+                self.vault.person_id(),
+                &admission.device_id,
+                admission.operation_id,
+                &admission.cancellation,
+            )
+            .await?;
+        }
+        if admission.cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        self.publish_expert_directory(&self.registrations).await?;
+        if admission.cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        Ok(())
     }
 
     async fn publish_expert_directory(
@@ -320,10 +358,11 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
     ) -> Result<(), AgentFailure> {
         validate_expert_registration_set(registrations.iter().map(Arc::as_ref))?;
         let mut entries = Vec::new();
-        let Some(snapshot) = self.vault.expert_registry().await? else {
-            self.directory.publish("product.experts", entries)?;
-            return Ok(());
-        };
+        let snapshot = self
+            .vault
+            .expert_registry()
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
         let registry =
             floe_experts::AgentRegistry::restore(snapshot, self.vault.registry_instance_id())?;
         for (card, admission) in registry.enabled_expert_admissions(self.vault.person_id())? {
@@ -2117,23 +2156,6 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
     job: &Job,
     request: &ConversationTurnRequest,
 ) -> Result<VaultExecutionResult, AgentFailure> {
-    let _ = (core, local_context, request);
-    let refreshed = Box::pin(ensure_expert_bundle(
-        vault,
-        job.cancellation.clone(),
-        floe_experts::ExpertInstallRefresh::ExistingOnly,
-    ))
-    .await;
-    match floe_experts::expert_refresh_outcome(refreshed) {
-        floe_experts::ExpertRefreshOutcome::Ready => {}
-        floe_experts::ExpertRefreshOutcome::Degraded(failure) => tracing::warn!(
-            failure = ?failure,
-            stage = "ensure_expert_bundle",
-            "conversation_turn_degraded"
-        ),
-        floe_experts::ExpertRefreshOutcome::Fatal(failure) => return Err(failure),
-    }
-    vault.publish_expert_directory(&vault.registrations).await?;
     let session = match Box::pin(conversation_turn::run(
         core,
         vault,
@@ -2210,22 +2232,6 @@ async fn execute_conversation_resume_action<Keys: VaultKeyProvider + 'static>(
     job: &Job,
     request: &ConversationResumeRequest,
 ) -> Result<VaultExecutionResult, AgentFailure> {
-    let refreshed = Box::pin(ensure_expert_bundle(
-        vault,
-        job.cancellation.clone(),
-        floe_experts::ExpertInstallRefresh::ExistingOnly,
-    ))
-    .await;
-    match floe_experts::expert_refresh_outcome(refreshed) {
-        floe_experts::ExpertRefreshOutcome::Ready => {}
-        floe_experts::ExpertRefreshOutcome::Degraded(failure) => tracing::warn!(
-            failure = ?failure,
-            stage = "ensure_expert_bundle",
-            "conversation_resume_degraded"
-        ),
-        floe_experts::ExpertRefreshOutcome::Fatal(failure) => return Err(failure),
-    }
-    vault.publish_expert_directory(&vault.registrations).await?;
     let origin_run_id = request.origin_run_id;
     let link = floe_conversation::InteractionResumeRef {
         origin_run_id,
@@ -2324,6 +2330,20 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             Ok(VaultExecutionResult::new(state))
         }
         WorkerAction::Create => {
+            let admission = job
+                .local_admission
+                .as_ref()
+                .ok_or(AgentFailure::PolicyDenied)?;
+            if admission.intent
+                != LocalOperationIntent::VaultCommand(crate::VaultLifecycleCommand::Create)
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let environment_admission = RootAgentEnvironmentAdmission {
+                device_id: admission.caller.device_id().to_owned(),
+                operation_id: job.id,
+                cancellation: job.cancellation.clone(),
+            };
             if current.is_some() {
                 return Err(AgentFailure::Conflict);
             }
@@ -2338,12 +2358,27 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 Arc::clone(local_context),
                 connections.clone(),
                 conversation_turn::expert_dispatch::shipped_registrations(),
+                environment_admission,
             )
             .await?;
             *current = Some((job.person, Arc::new(vault)));
             Ok(VaultExecutionResult::ready())
         }
         WorkerAction::Unlock => {
+            let admission = job
+                .local_admission
+                .as_ref()
+                .ok_or(AgentFailure::PolicyDenied)?;
+            if admission.intent
+                != LocalOperationIntent::VaultCommand(crate::VaultLifecycleCommand::Unlock)
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let environment_admission = RootAgentEnvironmentAdmission {
+                device_id: admission.caller.device_id().to_owned(),
+                operation_id: job.id,
+                cancellation: job.cancellation.clone(),
+            };
             if current.is_some() {
                 return Err(AgentFailure::Conflict);
             }
@@ -2353,6 +2388,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 Arc::clone(local_context),
                 connections.clone(),
                 conversation_turn::expert_dispatch::shipped_registrations(),
+                environment_admission,
             )
             .await?;
             *current = Some((job.person, Arc::new(vault)));
@@ -2365,11 +2401,13 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
         WorkerAction::Registry { change } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let registry = match change {
-                Some(configuration) => Some(
-                    vault
+                Some(configuration) => {
+                    let registry = vault
                         .configure_registry(configuration.clone(), job.cancellation.clone())
-                        .await?,
-                ),
+                        .await?;
+                    vault.publish_expert_directory(&vault.registrations).await?;
+                    Some(registry)
+                }
                 None => vault.registry_overview().await?,
             };
             if job.cancellation.is_cancelled() {
@@ -2602,23 +2640,6 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let session = match operation {
                 ConversationSessionOperation::Start => {
-                    let first_install = vault.vault.expert_registry().await?.is_none();
-                    ensure_expert_bundle(
-                        vault,
-                        job.cancellation.clone(),
-                        floe_experts::ExpertInstallRefresh::InstallIfAbsent,
-                    )
-                    .await?;
-                    if first_install && let Some(admission) = job.local_admission.as_ref() {
-                        expert_binding_settings::bind_initial_defaults(
-                            vault,
-                            job.person,
-                            admission.caller.device_id(),
-                            job.id,
-                            &job.cancellation,
-                        )
-                        .await?;
-                    }
                     let receipt = floe_conversation::start_session(
                         vault.conversation_repository.as_ref(),
                         floe_conversation::SessionRequest {
@@ -3058,19 +3079,15 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
 async fn ensure_expert_bundle<Keys: VaultKeyProvider>(
     vault: &EncryptedAgentVault<Keys>,
     cancellation: Cancellation,
-    when: floe_experts::ExpertInstallRefresh,
 ) -> Result<(), AgentFailure> {
-    floe_experts::ensure_expert_bundle(
-        &expert_setup::VaultExpertBundle {
-            vault,
-            manifests: floe_experts_builtin::registrations()
-                .into_iter()
-                .map(|registration| registration.manifest)
-                .collect(),
-            cancellation,
-        },
-        when,
-    )
+    floe_experts::ensure_expert_bundle(&expert_setup::VaultExpertBundle {
+        vault,
+        manifests: floe_experts_builtin::registrations()
+            .into_iter()
+            .map(|registration| registration.manifest)
+            .collect(),
+        cancellation,
+    })
     .await
 }
 
@@ -3115,6 +3132,7 @@ mod tests {
     mod proposals;
     mod registered_runner;
     mod remote_product;
+    mod root_environment;
     mod synchronization;
     mod vault_registry;
 
@@ -3248,8 +3266,49 @@ mod tests {
         }
     }
 
+    fn perform_vault_lifecycle(
+        worker: &Worker,
+        person: PersonId,
+        device: &str,
+        command: crate::VaultLifecycleCommand,
+    ) -> WorkerResult {
+        let caller = remote_caller(person, device);
+        let id = Uuid::new_v4();
+        worker
+            .local_request(
+                &caller,
+                id,
+                Some(LocalOperationIntent::VaultCommand(command)),
+                LocalOperationOwner::Vault,
+                false,
+            )
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let result = worker
+                .local_request(&caller, id, None, LocalOperationOwner::Vault, false)
+                .unwrap();
+            if result.done {
+                worker
+                    .local_request(&caller, id, None, LocalOperationOwner::Vault, true)
+                    .unwrap();
+                return result;
+            }
+            wait_for_job(worker, id, deadline);
+        }
+    }
+
     fn perform(worker: &Worker, person: PersonId, action: WorkerAction) -> WorkerResult {
         let id = Uuid::new_v4();
+        let lifecycle = match &action {
+            WorkerAction::Create => Some(crate::VaultLifecycleCommand::Create),
+            WorkerAction::Unlock => Some(crate::VaultLifecycleCommand::Unlock),
+            WorkerAction::Lock => Some(crate::VaultLifecycleCommand::Lock),
+            _ => None,
+        };
+        if let Some(command) = lifecycle {
+            return perform_vault_lifecycle(worker, person, "mac-local", command);
+        }
         if let Some(caller) = action.remote_caller().cloned() {
             let pairing = matches!(action, WorkerAction::RemotePairing { .. });
             worker
@@ -3810,9 +3869,9 @@ mod tests {
         );
         assert!(!root.exists());
         perform(&worker, person, WorkerAction::Create {});
-        let empty = perform(&worker, person, WorkerAction::Registry { change: None });
-        assert_eq!(empty.state, Some(VaultState::Ready));
-        assert!(empty.registry.is_none());
+        let prepared = perform(&worker, person, WorkerAction::Registry { change: None });
+        assert_eq!(prepared.state, Some(VaultState::Ready));
+        assert!(prepared.registry.is_some());
         perform(
             &worker,
             person,
@@ -3823,6 +3882,7 @@ mod tests {
         let before = perform(&worker, person, WorkerAction::Registry { change: None })
             .registry
             .unwrap();
+        assert_eq!(Some(&before), prepared.registry.as_ref());
         let assignment = before
             .assignments
             .iter()
