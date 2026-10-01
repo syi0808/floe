@@ -1,20 +1,55 @@
 # Test performance
 
-The default Rust final gate remains `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast`.
-Use normal incremental `cargo test -p <affected-crate>` during iteration. Do not change
-profiles, flags, targets or target directories just to run a different test runner.
+## Rust validation phases
+
+Select doctests by command, not by Cargo's dev/test/release build profile. Doctests
+verify documentation examples independently of whether a package is published.
+Keep them enabled in library manifests; do not set `doctest = false` to speed up
+development. The absence of runnable doctests today does not waive the final gate.
+
+| Phase | Command | Scope |
+| --- | --- | --- |
+| Affected-crate iteration | `cargo test -p <affected-crate> --tests` | Unit/integration tests, normal incremental compilation, no doctests |
+| Intermediate workspace check | `CARGO_INCREMENTAL=0 cargo test --workspace --tests --no-fail-fast` | Workspace unit/integration tests, no doctests |
+| Completed Rust change / final verification | `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast` | Default Cargo coverage, including doctests and example compilation checks |
+
+Run the final gate once after completing the covered Rust changes, rather than
+after every edit or only at deployment time. A successful final result can be
+reused before a production build when the covered Rust sources, tests, manifests,
+lockfile, generated inputs and validation configuration (toolchain, features,
+target, profiles and flags) are unchanged. Relevant changes invalidate that
+result. A build does not run tests automatically; ensure a matching successful
+final result exists. Required Apple/FFI/release-build checks and stronger
+task-specific validation plans still apply.
+
+`--tests` does not retain default example compilation checks. Validate an affected
+example explicitly during iteration, and keep the unfiltered final command for
+the complete gate. Explicit `--lib`, `--test` and `--example` selections already
+exclude doctests. Run `cargo test -p <affected-crate> --doc` during iteration only
+when editing documentation examples that need immediate verification.
+
+Do not change profiles, flags, targets or target directories just to run a
+different test runner. Add `--timings` to the selected phase when profiling, and
+label unit/integration-only and doctest-inclusive measurements separately. The
+dated experiments below retain their original commands and scope; they are
+historical measurements, not instructions to run doctests after every edit.
 
 ## Optional nextest pilot
 
 Install a compatible stable `cargo-nextest` using its [official installation guide](https://nexte.st/docs/installation/).
 The pilot was validated with nextest 0.9.146 and Rust 1.93.1 on Apple silicon.
 
+For an intermediate workspace check:
+
 ```sh
 CARGO_INCREMENTAL=0 cargo nextest run --workspace --no-fail-fast
-CARGO_INCREMENTAL=0 cargo test --workspace --doc
 ```
 
-Nextest does not replace the separate doctest gate. `.config/nextest.toml` limits
+Nextest does not run doctests. Add `CARGO_INCREMENTAL=0 cargo test --workspace --doc`
+only when measuring the pilot's complete final coverage, or when directly checking
+documentation examples. Do not add that phase to every intermediate run or after
+the default final Cargo gate, which already includes doctests. The pilot does not
+replace the default final gate. `.config/nextest.toml` limits
 native and live-server groups to one test process each and database-heavy tests to
 four, within eight overall threads. Retries are disabled; existing ignored tests
 remain ignored. Native tests retain their child-process and private-bundle isolation.

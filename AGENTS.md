@@ -6,8 +6,9 @@
 
 # Rust build and test footprint
 
-- During iteration, test the affected Rust crates first with normal incremental compilation (`cargo test -p <crate>`). Do not disable incremental compilation globally; it speeds up repeated local builds.
-- For the broad Rust test gate, use `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast` to avoid multi-GiB incremental caches across workspace crates. Expect slower rebuilds. Follow any task-specific validation plan that requires different exact commands.
+- During iteration, test the affected Rust crates first with normal incremental compilation (`cargo test -p <crate> --tests`), excluding doctests. Do not disable incremental compilation globally; it speeds up repeated local builds.
+- For an intermediate workspace unit/integration check, use `CARGO_INCREMENTAL=0 cargo test --workspace --tests --no-fail-fast`. For completed Rust changes, run the final gate once with `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast`, including doctests and default example compilation checks. These workspace commands avoid multi-GiB incremental caches; expect slower rebuilds. Follow any task-specific validation plan that requires different exact commands.
+- Select doctests by test command, not Cargo build profile; do not disable them in library manifests. A successful final gate need not be repeated solely before a production build when its covered Rust inputs and validation configuration are unchanged. Required Apple/FFI/release-build checks still apply. See [test validation phases](docs/development/test-performance.md#rust-validation-phases).
 - Keep `RUSTFLAGS`, Cargo profiles, features, target triples, and `CARGO_TARGET_DIR` consistent across routine runs. Changing them creates additional build variants rather than reusing the same cache. Do not create separate target directories solely for routine validation.
 - If disk pressure requires `cargo clean`, first confirm which target directory it will remove and account for the full rebuild afterward; do not clean automatically after every test run.
 

@@ -31,15 +31,15 @@ Keep assertions intact. A failing safety/recovery test is not a reason to weaken
 
 Iteration and final gates are separate:
 
-- Rust: use `cargo check -p <affected-crate>` when fast type feedback is useful, then `cargo test -p <affected-crate>` with normal incremental compilation. Check is not a prerequisite for tests.
+- Rust: use `cargo check -p <affected-crate>` when fast type feedback is useful, then `cargo test -p <affected-crate> --tests` with normal incremental compilation. Iteration excludes doctests; an intermediate workspace check uses `CARGO_INCREMENTAL=0 cargo test --workspace --tests --no-fail-fast`. Check is not a prerequisite for tests.
 - Flutter: from `apps/client/`, use `flutter test test/<affected-directory-or-file>` during iteration; retain `flutter analyze`, full `flutter test` and the affected Apple build at the final application boundary.
 - Go: from `server/`, use `go test ./internal/<affected-package>` during iteration; retain `go test -race ./...` and `go vet ./...` at the final server gate.
 
-Keep Cargo profiles, features, target triples, `RUSTFLAGS` and `CARGO_TARGET_DIR` consistent across routine runs. Do not add separate target directories or clean the cache for ordinary verification. Dev/test workspace code uses line-table debug info; non-workspace test dependencies use `opt-level = 1` after the measured fourth-stage experiment. Keep normal dev dependencies unoptimized, and do not force a linker, codegen-unit count or compiler wrapper for routine gates. Use `cargo test --profile debugging -p <affected-crate>` only when full debugger information is needed, not for routine gates.
+Keep Cargo profiles, features, target triples, `RUSTFLAGS` and `CARGO_TARGET_DIR` consistent across routine runs. Do not add separate target directories or clean the cache for ordinary verification. Dev/test workspace code uses line-table debug info; non-workspace test dependencies use `opt-level = 1` after the measured fourth-stage experiment. Keep normal dev dependencies unoptimized, and do not force a linker, codegen-unit count or compiler wrapper for routine gates. Use `cargo test --profile debugging -p <affected-crate> --tests` only when full debugger information is needed, not for routine gates.
 
 ## 3. Rust and architecture gate
 
-For Rust workspace or shared-contract/runtime changes, the default broad gate is:
+For completed Rust workspace or shared-contract/runtime changes, run the default final gate once, including doctests and default example compilation checks:
 
 ~~~sh
 CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast
@@ -47,7 +47,7 @@ python3 tools/architecture/check_boundaries.py
 git diff --check
 ~~~
 
-Use targeted cargo tests before the full workspace gate when useful.
+Use targeted cargo tests before the full workspace gate when useful. Do not add `--tests` to the final gate. Doctest selection is command-level policy, not a dev/test/release profile setting; retain doctests in library manifests. Reuse a successful final result before a production build only when its covered Rust inputs and validation configuration are unchanged; required Apple/FFI/release-build gates still apply. See `docs/development/test-performance.md` for the phase and reuse rules.
 
 `floe-experts-builtin`, `floe-context`, `floe-protocol` and `floe-day` each declare one
 `integration` test target. Run a module with `cargo test -p <crate> --test integration <module>::`;
@@ -55,8 +55,10 @@ add new module files to `tests/integration.rs` because automatic standalone targ
 Provider live-server/native tests and FFI subprocess tests remain separate executables for isolation.
 
 The optional nextest pilot and shared Go/Swift fixture builder are documented in
-`docs/development/test-performance.md`. Nextest requires a separate workspace doctest
-gate and does not replace the default final Cargo gate. When fixture tooling changes,
+`docs/development/test-performance.md`. Nextest iteration does not need a doctest
+phase; complete-gate pilot measurements require one. Do not add a separate doctest
+phase after the default final Cargo gate, which already includes it. The pilot does
+not replace that default gate. When fixture tooling changes,
 run `python3 tools/validation/test_test_fixtures.py -v` and the affected real Rust/Flutter
 fixture tests, preserving private server data and native host bundles.
 

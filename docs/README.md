@@ -15,7 +15,7 @@ This file is the entry point for repository documentation. Do not recursively re
 | How should the product look and behave? | [Design system](../DESIGN.md) and [design specifications](design/README.md) |
 | How do I build/debug a surface? | The nearest component README, plus [development docs](development/) where applicable |
 | How do I debug a real Agent conversation without Flutter UI? | [Debug conversation CLI](development/debug-cli.md) |
-| How do I measure tests or reuse cross-language fixtures? | [Test performance](development/test-performance.md) |
+| How do I select test gates, measure tests or reuse cross-language fixtures? | [Test performance](development/test-performance.md) |
 | How do I configure deployment/runtime infrastructure? | [Deployment docs](deployment/) and the relevant service README |
 
 ## Document classes

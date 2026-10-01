@@ -34,7 +34,7 @@ Do not modify the original build. Persist the exact proposal/execution/time/exte
 remove only the exact disposable event after collection is verified.
 
 Canonical automated uncertainty coverage (no real Calendar access) is
-`cargo test -p floe-app native_executor_uses_rust_ledger_and_lookup_only_after_response_loss`.
+`cargo test -p floe-app --lib native_executor_uses_rust_ledger_and_lookup_only_after_response_loss`.
 The test uses the admitted Actions owner and a test-only native adapter; it does
 not replace the separately authorized real EventKit procedure above.
 

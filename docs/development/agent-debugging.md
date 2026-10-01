@@ -49,7 +49,7 @@ Expected Rust stages are `agent_job_started`, optional `model_attempt_*` and
 ## Regression checks
 
 ```sh
-cargo test -p floe-ffi diagnostics
+cargo test -p floe-ffi --tests diagnostics
 cd apps/client
 flutter test test/infrastructure/diagnostics test/app/runtime/native_transport_error_test.dart
 flutter test test/app/runtime/agent_vault_gateway_test.dart
