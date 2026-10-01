@@ -569,91 +569,732 @@ Implement Checkpoint 02 as one logical lifecycle-cutover commit when practical. 
 
 # Checkpoint 03 — Run-pinned Expert discovery and delegation
 
+## Planning refresh and status
+
+- Status: not started — Checkpoint 02 is complete; no Checkpoint 03 implementation has landed.
+- Planning refresh baseline: `main` at `bb454f07383485ae85affdb23e5ae8f1ec81db97`.
+- The original Checkpoint 03 direction remains correct: Manager discovery and actual delegation must come from one immutable Run snapshot.
+- This section is refined to code-line level because Checkpoint 02 changed App lifecycle ownership and because the current recovery/continuation code exposes several decisions that must be frozen before implementation.
+
+The refreshed source review freezes these additional decisions:
+
+1. **Experts owns both the runtime snapshot and its identity.** Add `RunExpertEnvironment` and `RunExpertEnvironmentIdentity` in `floe-experts`; Conversation/Vault persist and compare the identity but do not reconstruct Expert selection themselves.
+2. **Directory revision zero is valid.** An intentionally empty first publication can leave `DirectoryState.revision == 0`. Do not force `max(1)`. The environment digest, not the revision, must be nonzero.
+3. **The digest binds configuration, not runtime pointers or authority.** Hash the Directory revision plus the sorted eligible entries' exact `AgentDefinition`, `ExpertAdmissionIdentity`, and `ExpertExecutionSelection`. Never hash `Arc` pointer identity, provider credentials, grants, SourceAuthority, recipient consent, OS permission, or current connection liveness.
+4. **The old live read APIs are transition surface.** At this baseline, production discovery uses `Directory::list_cards` only through `TaskCoordinator::catalog`, and production dispatch uses `Directory::resolve` only through `TaskCoordinator::execute`. After the snapshot cutover, delete those live read methods if no non-test owner remains; do not keep snapshot and live resolution as two equivalent runtime paths.
+5. **A Run identity is execution admission, not user intent.** It is required on `TurnRequest`/Run admission and persisted on `RunReceipt`, but remains excluded from `CanonicalTurnIntent` and `request_digest`.
+6. **Duplicate/lost-ack commands return the winner's stored environment identity.** A second caller with the same canonical command does not re-execute through its current environment. Do not reject a safe read/rejoin solely because current configuration changed after the original admission.
+7. **Budget Continue is a new Run, but an unfinished validated batch cannot be reinterpreted under a different Expert environment.** If a continuation would take over a pending `ValidatedModelBatch`, require the source Run environment identity to equal the new Run environment identity; otherwise fail closed before executing the batch. A continuation with no pending batch may start a fresh model attempt under the new Run's current environment.
+8. **Crash/reopen currently does not restart a Working Run.** `activate_conversation_executor` marks it `Interrupted`. Preserve the stored environment identity on that interrupted historical Run; do not invent persisted endpoint serialization or a same-Run executor reconstruction mechanism in this checkpoint.
+9. **Checkpoint 03 removes rerouting, not every Registry-drift fence.** Vault Task admission and endpoint/source/model/settlement paths still contain current-Registry equality checks. Those remain until Checkpoint 04. Checkpoint 03 must prove an old Run can never be silently rerouted to the new Directory entry; a current Registry fence may still deny that old pinned selection until Checkpoint 04 removes the configuration-as-authority checks.
+10. **Conversation storage changes meaning.** Adding a required Run environment identity is a direct stored-format cutover. Bump Conversation storage schema `8 -> 9`; do not add a migration, optional field, default decoder, or compatibility branch for old local profiles.
+11. **Finalization remains in the same Run identity.** Its empty catalog must retain the Run's exact catalog revision, including zero; remove the current `.max(1)` revision rewriting.
+
 ## Goal
 
-Ensure the Manager-visible Expert catalog and actual executable Expert selection are two projections of one immutable Run snapshot.
+Ensure the Manager-visible Expert catalog, the executable delegation endpoint/admission/selection, every model batch catalog revision, and the durable Conversation Run identity all refer to one immutable Expert configuration sampled once for that Run.
 
-## Current code anchors
+The completed Checkpoint 03 path is:
 
-- crates/modules/experts/src/directory.rs:68+ — DirectoryEntry.
-- crates/modules/experts/src/directory.rs:113+ — ResolvedDirectoryEntry.
-- crates/modules/experts/src/directory.rs:286-301 — list_cards reads live Directory state.
-- crates/modules/experts/src/directory.rs:304+ — resolve reads live Directory state again.
-- crates/modules/experts/src/task.rs:196+ — TaskCoordinator.
-- crates/modules/experts/src/task.rs:256-268 — TaskCoordinator::catalog.
-- crates/modules/experts/src/task.rs:357+ — execute performs live Directory::resolve.
-- crates/modules/experts/src/task.rs:615+ — DelegationPort implemented directly by TaskCoordinator.
-- crates/app/src/vault_host/conversation_turn.rs:314-320 — root catalog sampled from TaskCoordinator.
-- crates/app/src/vault_host/conversation_turn.rs:364-371 — active cards copied separately into ConversationModelProjection.
-- crates/app/src/vault_host/conversation_turn.rs:390-413 — catalog and global TaskCoordinator passed independently into Conversation/Engine.
+```text
+App begins one Conversation Run
+  -> TaskCoordinator::environment(principal)
+       -> Directory::snapshot(query) under one read lock
+            -> exact Directory revision
+            -> sorted eligible AgentDefinition
+            -> exact ExpertAdmissionIdentity
+            -> exact ExpertExecutionSelection
+            -> exact Arc<dyn AgentEndpoint>
+            -> deterministic configuration digest
+       -> RunExpertEnvironment { principal, snapshot, coordinator }
 
-## Target Experts-owned runtime contract
+  -> environment.catalog()
+       -> Manager AllowedCatalog
+       -> ConversationModelProjection active Experts
 
-Introduce an immutable per-Run runtime snapshot. Exact public/private naming may follow crate conventions, but the contract must have these semantics:
+  -> Conversation TurnRequest
+       -> allowed_catalog.revision == environment.identity.revision
+       -> expert_environment identity carried as execution admission
+       -> canonical user request digest unchanged
 
-    RunExpertEnvironment
-      revision: u64
-      digest: [u8; 32]
-      entries sorted by agent_id
+  -> durable Run admission
+       -> persist expert_environment { revision, digest }
 
-    each entry pins:
-      AgentDefinition
-      ExpertAdmissionIdentity
-      ExpertExecutionSelection
-      Arc<dyn AgentEndpoint>
+  -> model attempts
+       -> every ValidatedModelBatch.catalog_revision == admitted Run revision
 
-The digest is over canonical serialized configuration identity only:
-- Directory revision;
-- AgentDefinition including definition revision and card;
-- ExpertAdmissionIdentity;
-- ExpertExecutionSelection.
+  -> Delegate
+       -> RunExpertEnvironment::resolve(...)
+       -> pinned admission/selection/endpoint from the same snapshot
+       -> TaskCoordinator executes exactly that resolved entry
+       -> never Directory::resolve again
 
-Do not hash pointer addresses or provider credentials. Sort by stable agent ID before digesting.
+Directory / Registry configuration mutation
+  -> current Run environment object is unchanged
+  -> no reroute to new endpoint/selection
+  -> next independently admitted Run samples a new environment
+  -> current Registry equality fences may still deny the old Task until Checkpoint 04
 
-## Required implementation
+Crash / reopen
+  -> current architecture interrupts Working Run
+  -> persisted interrupted Run retains original environment identity
+  -> no same-Run execution is resumed under current Directory
+```
 
-1. Add Directory::snapshot(query) that takes the Directory read lock once, filters eligible entries once, clones each complete entry including the endpoint, and returns the immutable snapshot.
-2. The snapshot itself exposes:
-   - catalog() -> AllowedCatalog derived from its pinned definitions;
-   - resolve(agent_id, definition_revision) against its own entries, never live Directory;
-   - revision/digest identity.
-3. Replace TaskCoordinator::catalog on the canonical root path with TaskCoordinator::environment(principal) (or equivalent) that returns a Run-scoped delegation object backed by one Directory snapshot.
-4. Implement DelegationPort on the Run-scoped environment, not on the global TaskCoordinator for root Conversation.
-5. Refactor TaskCoordinator::execute so the selected endpoint/admission/selection are supplied by the pinned environment. It must not call self.directory.resolve during execution.
-6. In crates/app/src/vault_host/conversation_turn.rs:
-   - create one RunExpertEnvironment before constructing ConversationModelProjection;
-   - derive active Expert cards and AllowedCatalog from that environment;
-   - pass the same environment as ConversationPorts.delegation;
-   - never independently call the Directory a second time for the same Run.
-7. Add one neutral durable Run environment identity to Conversation admission/receipt. It must contain at least:
-   - catalog revision;
-   - nonzero Expert environment digest.
-   Conversation treats the digest as opaque configuration identity, not authority.
-8. Persist that identity in the Vault Conversation Run record. This is a same-snapshot cutover; no old local decoder is required.
-9. Do not add the environment to CanonicalTurnIntent/request_digest as if it were user intent. The admitted Run stores the environment under which it actually executes.
-10. Exact lost-ack/duplicate-command handling must return the already admitted environment identity. If a still-working Run is ever re-entered with a different runtime environment, it may not execute under the replacement environment; either rejoin the original in-memory environment or fail closed.
-11. Keep ValidatedModelBatch agent/tool revision pinning. Do not create a second competing catalog authority. If catalog_revision remains, it must equal the admitted Run environment revision and tests must assert the equality.
+## Current code anchors at the planning refresh baseline
 
-## Required tests
+### Experts Directory and Task runtime
 
-- model projection active_experts exactly equals RunExpertEnvironment catalog cards;
-- model chooses agent A, Directory is mutated after model attempt but before delegate step, and the live Run still dispatches the pinned A endpoint/selection;
-- next Run after the same mutation sees the new configuration;
-- disabled-all next Run sees no Expert but the previous already-running Run remains on its snapshot;
-- catalog order is deterministic regardless of registration insertion order;
-- digest is stable for identical entries and changes on definition/admission/selection changes;
-- crash/reopen or same-Run recovery cannot silently substitute a different environment identity;
-- invalid agent ID/definition revision still fails closed;
-- task replay still requires exact admitted Task identity.
+- `crates/modules/experts/src/directory.rs:68` — `DirectoryEntry`.
+- `crates/modules/experts/src/directory.rs:113` — `ResolvedDirectoryEntry`.
+- `crates/modules/experts/src/directory.rs:286` — `Directory::list_cards`, current live discovery read.
+- `crates/modules/experts/src/directory.rs:304` — `Directory::resolve`, current live dispatch read.
+- `crates/modules/experts/src/task.rs:196` — `TaskCoordinator<Repository>`.
+- `crates/modules/experts/src/task.rs:261` — `TaskCoordinator::catalog`, currently wraps live `list_cards`.
+- `crates/modules/experts/src/task.rs:358` — `TaskCoordinator::execute`, currently calls live `self.directory.resolve`.
+- `crates/modules/experts/src/task.rs:615` — global `DelegationPort for TaskCoordinator`.
 
-## Deletion gate
+### Root Conversation wiring
 
-The root Conversation path must have no sequence equivalent to:
+- `crates/app/src/vault_host/conversation_turn.rs:314` — one catalog is sampled from `TaskCoordinator::catalog`.
+- `crates/app/src/vault_host/conversation_turn.rs:316` — `active_experts` is separately copied from those cards.
+- `crates/app/src/vault_host/conversation_turn.rs:376` — the global `TaskCoordinator` is separately assigned as `delegation_port`.
+- `crates/app/src/vault_host/conversation_turn.rs:389` — `run_turn_observed` receives the catalog and global delegation port as independent values.
+- `crates/app/src/vault_host/conversation_turn/engine_ports.rs:3` — `manager_catalog` rewrites revision with `.max(1)`; this helper becomes obsolete when the environment owns the catalog.
 
-    catalog from Directory at model time
-    then Directory::resolve again at delegation time
+### Conversation admission and continuation
 
-The global TaskCoordinator DelegationPort implementation should be removed if no non-root owner legitimately needs live resolution. If retained for another owner, document that owner and prove root Conversation cannot use it.
+- `crates/modules/conversation/src/api.rs:62` — `TurnRequest`; `allowed_catalog` is runtime-only and excluded by `canonical_intent()`.
+- `crates/modules/conversation/src/domain/mod.rs:164` — `RunReceipt`, currently lacks environment identity.
+- `crates/modules/conversation/src/domain/mod.rs:307` — `TurnAdmissionRequest`, currently lacks environment identity.
+- `crates/modules/conversation/src/domain/mod.rs:426+` — `ContinuationSnapshot`, currently carries pending batch/cursor but not the source Run environment identity.
+- `crates/modules/conversation/src/application/coordinator.rs:64` — `run_turn_observed`.
+- `crates/modules/conversation/src/application/coordinator.rs:125` — durable `TurnAdmissionRequest` construction.
+- `crates/modules/conversation/src/application/coordinator.rs:922` — `verify_existing`.
+- `crates/modules/conversation/src/application/coordinator.rs:991` — `verify_resumed`.
+- `crates/modules/conversation/src/application/recovery.rs:196` — journal projection currently infers one `fresh_catalog_revision` from batches instead of validating against the admitted Run.
+- `crates/modules/conversation/src/application/recovery.rs:556` — fresh batches are compared only with the first fresh batch revision.
+- `crates/modules/conversation/src/application/finalization.rs:110+` — finalization empties the catalog but currently rewrites revision with `.max(1)`.
+
+### Engine batch identity
+
+- `crates/contracts/agent/src/ports.rs:29` — `ValidatedModelBatch.catalog_revision` plus exact pinned agent/tool definition revisions.
+- `crates/runtime/agent/src/engine.rs:585` — fresh batches stamp `self.request.allowed_catalog.revision`.
+- Engine resume already calls `ValidatedModelBatch::pinned_revisions_hold`; retain this as defense in depth, but the durable Run environment identity becomes the configuration source of truth.
+
+### Vault Conversation persistence
+
+- `crates/adapters/vault/src/vault/conversations.rs:12` — Conversation storage `SCHEMA_VERSION = 8`.
+- `crates/adapters/vault/src/vault/conversations.rs:38` — `VaultConversationRunRecord`.
+- `crates/adapters/vault/src/vault/conversations.rs:155` — `VaultConversationRunRecord::exact_admission`.
+- `crates/adapters/vault/src/vault/conversations.rs:190` — `VaultConversationAdmissionRequest`.
+- `crates/adapters/vault/src/vault/conversations.rs:361` — executor activation interrupts Working Runs and clones their durable record.
+- `crates/adapters/vault/src/vault/conversations.rs:482` — `admit_conversation_turn`.
+- `crates/adapters/vault/src/vault/conversations.rs:1292` — schema table currently enforces version 8.
+- `crates/adapters/vault/src/repositories/conversation.rs:210` — repository `admit_turn`.
+- `crates/adapters/vault/src/repositories/conversation.rs:247` — Vault admission request conversion.
+- `crates/adapters/vault/src/repositories/conversation.rs:636` — `run_receipt` projection.
+
+## 03-A — Introduce the Experts-owned immutable Directory snapshot
+
+### `crates/modules/experts/src/directory.rs`
+
+Add these exact concepts.
+
+### `RunExpertEnvironmentIdentity`
+
+Define an Experts-owned persisted-safe identity:
+
+```rust
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunExpertEnvironmentIdentity {
+    pub revision: u64,
+    pub digest: [u8; 32],
+}
+```
+
+Add `validate()` with these semantics:
+
+- revision may be zero;
+- `digest != [0; 32]`;
+- no authority or provider state is represented.
+
+Do not put principal, device, grants, source epochs, recipient consent, provider credential identity, or OS permission in this type.
+
+### Directory snapshot
+
+Add one crate-internal immutable snapshot type, e.g. `DirectorySnapshot`, whose entries are ordered by agent/card ID and each retain exactly:
+
+- `AgentDefinition`;
+- `ExpertAdmissionIdentity`;
+- `ExpertExecutionSelection`;
+- `Arc<dyn AgentEndpoint>`.
+
+The snapshot also stores the exact Directory revision and its `RunExpertEnvironmentIdentity`.
+
+Add `Directory::snapshot(query)` with this implementation contract:
+
+1. validate `DirectoryQuery`;
+2. acquire the Directory read lock exactly once;
+3. capture `state.revision`;
+4. iterate the existing `BTreeMap` in stable agent-ID order;
+5. filter `DirectoryEntry::eligible(query)` while holding that same read snapshot;
+6. clone the complete admitted configuration and endpoint;
+7. compute the digest from a canonical serializable value with domain separator:
+   `"floe.run-expert-environment.sha256.v1"`;
+8. hash exactly:
+   - captured Directory revision;
+   - ordered `AgentDefinition`;
+   - ordered `ExpertAdmissionIdentity`;
+   - ordered `ExpertExecutionSelection`;
+9. use SHA-256 and store the 32-byte digest;
+10. release the lock and return the immutable snapshot.
+
+Do not hash:
+- endpoint pointer address;
+- owner bookkeeping;
+- current credentials;
+- connection/source/grant/recipient/OS authority;
+- cancellation/deadline;
+- evidence payloads.
+
+The endpoint is pinned by being retained in the immutable snapshot, not by being serialized into the digest.
+
+### Snapshot projections
+
+The snapshot provides:
+
+- `identity() -> RunExpertEnvironmentIdentity`;
+- `catalog() -> AllowedCatalog` using the pinned definitions, no Tools, and the **exact** captured revision;
+- crate-internal `resolve(agent_id, definition_revision)` using only its own entries.
+
+`catalog().revision` must equal `identity().revision`, including revision zero.
+
+### Delete live read paths
+
+After `TaskCoordinator` and tests migrate:
+
+- delete `Directory::list_cards`;
+- delete `Directory::resolve`;
+
+unless a repository search finds a real non-test owner not represented in the refreshed baseline. If one appears, stop and record it rather than keeping a generic live fallback silently.
+
+Mutation APIs such as `register`, `publish`, `set_enabled`, and `unregister` remain.
+
+## 03-B — Make `RunExpertEnvironment` the only root DelegationPort
+
+### `crates/modules/experts/src/task.rs`
+
+Add:
+
+```text
+RunExpertEnvironment<'a, Repository>
+  coordinator: &'a TaskCoordinator<Repository>
+  principal: String
+  snapshot: DirectorySnapshot
+```
+
+Keep fields private.
+
+Expose:
+
+- `identity()`;
+- `catalog()`.
+
+Add `TaskCoordinator::environment(principal)`:
+
+1. reject empty/invalid principal as current catalog/query logic does;
+2. build `DirectoryQuery { principal, purpose: &self.purpose }`;
+3. call `Directory::snapshot` exactly once;
+4. return a `RunExpertEnvironment` borrowing this coordinator and owning that snapshot.
+
+Do not create separate catalog and delegation snapshots.
+
+### Delegation
+
+Implement `DelegationPort` on `RunExpertEnvironment`, not on global `TaskCoordinator`.
+
+For every delegate call:
+
+1. require `request.principal == environment.principal`;
+2. validate the request/scope as today;
+3. resolve `selected_agent_id + selected_definition_revision` against the immutable snapshot;
+4. pass the pinned `ResolvedDirectoryEntry` into the coordinator's Task execution path.
+
+Refactor the private coordinator execution method to receive the pinned resolved entry as an argument. It must never read `self.directory` after the environment was created.
+
+For both newly admitted and already-existing Task records, compare the stored `admission` and `selection` with the pinned resolved entry before returning/executing. A replay must not bypass the Run environment identity.
+
+Preserve:
+
+- TaskId / InvocationKey / request-digest exactness;
+- executor generation;
+- CAS transitions;
+- Task cancellation;
+- settlement validation;
+- endpoint report validation;
+- deadline/cancellation behavior.
+
+### Delete global live-resolution surface
+
+After callers migrate:
+
+- delete `TaskCoordinator::catalog`;
+- delete `impl DelegationPort for TaskCoordinator`;
+- delete the old `execute` shape that performs `self.directory.resolve`.
+
+`TaskCoordinator::get_task`, cancellation, activation, repository ownership and Task lifecycle stay coordinator-owned.
+
+## 03-C — Wire one environment through the root Conversation Run
+
+### `crates/app/src/vault_host/conversation_turn.rs:314+`
+
+Replace the current independent catalog/delegation construction with:
+
+```text
+let expert_environment = inputs.task_coordinator.environment(principal)?;
+let environment_identity = expert_environment.identity();
+let catalog = expert_environment.catalog();
+let active_experts = catalog.cards -> card projection;
+```
+
+Use that exact `catalog` to build the Manager request/projection.
+
+Pass:
+
+- `expert_environment: environment_identity` on the Conversation `TurnRequest`;
+- `delegation: &expert_environment` in `ConversationPorts`.
+
+The local `RunExpertEnvironment` value must remain alive for the complete `run_turn_observed` call, including every model iteration, delegation and bounded finalization of that Run.
+
+There must be no second Directory read for the same Run.
+
+### `crates/app/src/vault_host/conversation_turn/engine_ports.rs`
+
+Delete `manager_catalog` and its revision-`max(1)` behavior. The Experts environment now owns the root AllowedCatalog projection.
+
+Retain `NoManagerTools` and `ManagerPayloadValidator`.
+
+### Settings / Registry mutation during the Run
+
+Explicit settings mutation may continue to publish a new live Directory immediately for **future Runs**.
+
+It must not mutate an existing `RunExpertEnvironment`.
+
+Checkpoint 03 does not yet remove current Registry-selection fences in Vault/endpoint execution. Therefore the transitional allowed outcome after a real Registry mutation is:
+
+```text
+old Run
+  -> still resolves only E1 from its pinned environment
+  -> may be denied later by an existing current-Registry fence
+  -> must never silently execute E2
+
+new Run
+  -> samples current Directory
+  -> sees E2
+```
+
+Checkpoint 04 changes the old-Run denial into continued execution on E1 where only configuration drift occurred.
+
+## 03-D — Persist one opaque Expert environment identity on every Conversation Run
+
+### `crates/modules/conversation/src/api.rs:62+`
+
+Add to `TurnRequest`:
+
+```rust
+pub expert_environment: floe_experts::RunExpertEnvironmentIdentity
+```
+
+Validation must require:
+
+- `expert_environment.validate()`;
+- `allowed_catalog.revision == expert_environment.revision`.
+
+Do not try to recompute the environment digest from `AllowedCatalog`: the catalog deliberately lacks admission/selection identity.
+
+`canonical_intent()` must continue to ignore this field. Do not add it to `StartTurn`, `CanonicalTurnIntent`, or request digest.
+
+### `crates/modules/conversation/src/domain/mod.rs`
+
+Add the same required identity to:
+
+- `RunReceipt`;
+- `TurnAdmissionRequest`;
+- `ContinuationSnapshot`.
+
+Validation rules:
+
+- every Run receipt/admission identity must validate;
+- revision zero remains valid;
+- no optional/default/migration form exists.
+
+`ContinuationSnapshot.expert_environment` is copied from the source Run receipt.
+
+### `crates/modules/conversation/src/application/coordinator.rs`
+
+At Run admission:
+
+- forward `request.expert_environment` into `TurnAdmissionRequest`;
+- after `TurnAdmission::Created`, require `admitted.receipt.expert_environment == request.expert_environment`;
+- the admitted receipt is the durable source of truth thereafter.
+
+#### Duplicate/lost-ack semantics
+
+Keep `verify_existing` and `verify_resumed` as non-executing rejoin checks.
+
+Do **not** require the current caller's newly sampled environment identity to equal the already-admitted winner merely to return that winner's receipt. The environment is not user intent.
+
+Required behavior:
+
+```text
+same command already admitted under E1
+current Directory now produces E2
+duplicate/lost-ack lookup
+  -> return stored RunReceipt(E1)
+  -> do not invoke Engine
+  -> do not invoke current delegation port
+```
+
+For a genuinely new Created Run, identity equality is mandatory.
+
+### Budget Continue / pending batch
+
+A Continue is a new Run and normally samples the current environment.
+
+However, before constructing `EngineResumeState`:
+
+- if `ContinuationSnapshot.pending_batch.is_some()`, require
+  `snapshot.expert_environment == request.expert_environment`;
+- require the pending batch's `catalog_revision == request.expert_environment.revision`;
+- on mismatch return `AgentFailure::Conflict` before any pending step is executed.
+
+If the continuation has no pending batch, it may proceed under the new Run environment and call the model freshly.
+
+Linked Resume and explicit retry are also new Runs and use their newly sampled current environment; they do not inherit the origin's environment identity.
+
+This avoids executing a stored Delegate step validated under E1 with E2's source selection.
+
+## 03-E — Make admitted Run identity authoritative for model batches and finalization
+
+### `crates/modules/conversation/src/application/recovery.rs`
+
+`project_entries(source, entries)` already receives the durable source `RunReceipt`.
+
+Replace the inferred `fresh_catalog_revision` authority with the admitted Run identity:
+
+- every `JournalEvent::ValidatedBatch.batch.catalog_revision` recorded in that Run must equal `source.expert_environment.revision`;
+- this applies to fresh batches and a resumed re-record;
+- remove the independent `fresh_catalog_revision` accumulator once redundant.
+
+Keep:
+
+- exact pinned agent/tool definition revisions;
+- execution ID continuity;
+- batch/cursor/replay integrity;
+- projection coverage binding.
+
+Do not add environment digest to `ValidatedModelBatch` in this checkpoint. The full digest is already persisted on the Run, and pending-batch takeover compares the source and destination Run identities. Adding another digest copy would create a second configuration-identity authority.
+
+### `crates/runtime/agent/src/engine.rs`
+
+Keep stamping:
+
+```rust
+catalog_revision: self.request.allowed_catalog.revision
+```
+
+With the new TurnRequest invariant, that revision is the admitted environment revision.
+
+Keep `pinned_revisions_hold` during Engine resume as defense in depth.
+
+### `crates/modules/conversation/src/application/finalization.rs`
+
+Change finalization's empty AllowedCatalog revision from:
+
+```rust
+work_request.allowed_catalog.revision.max(1)
+```
+
+to the exact:
+
+```rust
+work_request.allowed_catalog.revision
+```
+
+Finalization changes role/catalog contents but not the Run environment identity.
+
+## 03-F — Persist the identity in Vault Conversation storage
+
+### `crates/adapters/vault/src/vault/conversations.rs`
+
+Add required:
+
+```rust
+pub expert_environment: floe_experts::RunExpertEnvironmentIdentity
+```
+
+to both:
+
+- `VaultConversationRunRecord`;
+- `VaultConversationAdmissionRequest`.
+
+Validate the identity in both contracts.
+
+When creating a Run record, copy the request environment identity exactly.
+
+Terminal transitions and executor activation use `..current.clone()`, so they must preserve this identity unchanged.
+
+### Duplicate admission
+
+Do not make current environment equality part of canonical command identity.
+
+`VaultConversationRunRecord::exact_admission` should continue to decide whether the same command/user admission is rejoining the same canonical Run without treating a later environment sample as new user intent. An Existing/Resumed result returns the stored winner's identity and performs no execution through the loser's environment.
+
+The newly Created record must contain the submitted identity, and Conversation verifies that Created receipt against its request.
+
+### Storage schema cutover
+
+This required persisted field changes Conversation storage meaning.
+
+- bump `SCHEMA_VERSION: 8 -> 9`;
+- update the `agent_conversation_schema` create constraint from version 8 to 9;
+- update storage tests/fixtures to version 9;
+- no old-row decoder;
+- no `#[serde(default)]`;
+- no optional identity;
+- no migration chain.
+
+An old local development profile fails the schema gate and must be explicitly recreated, consistent with repository policy.
+
+The SQL run table does not need a separate environment column: the exact typed `VaultConversationRunRecord` remains the canonical encrypted payload. Do not duplicate revision/digest into independent SQL columns unless a demonstrated query/CAS invariant requires it.
+
+### `crates/adapters/vault/src/repositories/conversation.rs`
+
+- forward `TurnAdmissionRequest.expert_environment` into Vault admission;
+- project `VaultConversationRunRecord.expert_environment` into every `RunReceipt`;
+- preserve it through find/load/continuation/recovery paths.
+
+No AppWire/FFI field is required for Checkpoint 03. The identity is an internal runtime/persistence invariant; safe diagnostics exposure belongs to the later manifest/debug work unless needed for tests.
+
+## 03-G — Tests: prove pinning, durable identity, and no reroute
+
+### Experts integration tests — `crates/modules/experts/tests/delegation.rs`
+
+Migrate direct global-coordinator use to `coordinator.environment(principal)`.
+
+Required tests:
+
+1. **Snapshot catalog and dispatch are one object**
+   - create E1;
+   - call `environment = coordinator.environment("person-a")`;
+   - obtain `environment.catalog()`;
+   - mutate Directory to E2 before any Task admission;
+   - delegate a new Task through the old environment;
+   - it resolves/executes E1, never E2;
+   - a newly created environment sees/executes E2.
+
+   Rewrite/replace the current `admitted_task_keeps_endpoint_across_publication_refresh` regression: its current mutation happens after Task admission and therefore proves only endpoint pinning inside one Task, not Run pinning before Task admission.
+
+2. **Disabled next environment does not mutate old environment**
+   - create old environment with agent A;
+   - disable/publish away A;
+   - old environment still advertises/resolves A;
+   - fresh environment is empty.
+
+3. **Principal binding**
+   - an environment built for person A rejects a delegation request for person B even if the pinned entry otherwise exists.
+
+4. **Deterministic identity**
+   - identical revision + identical sorted configuration -> identical digest;
+   - insertion/publication ordering cannot alter digest for equivalent state;
+   - definition change -> digest changes;
+   - admission identity change -> digest changes;
+   - selection/binding change -> digest changes;
+   - Directory revision change -> digest changes;
+   - endpoint pointer is not serialized as digest input.
+
+5. **Empty environment**
+   - eligible set empty at revision 0 is valid;
+   - catalog revision is 0;
+   - digest is nonzero and stable.
+
+6. **Replay**
+   - existing Task replay must match the pinned environment's admission/selection;
+   - invalid agent ID or definition revision fails closed.
+
+Update `registered_ninth_endpoint_executes_without_dispatch_changes_and_replays_task`, extension registration tests, cancellation and settlement tests to acquire a Run environment instead of using global `TaskCoordinator: DelegationPort`.
+
+### Conversation tests
+
+Update constructors/fixtures for the required environment identity.
+
+Add regressions for:
+
+- `TurnRequest.allowed_catalog.revision != expert_environment.revision` -> invalid;
+- Created Run receipt identity equals submitted identity;
+- find-command duplicate after caller environment changes returns stored winner identity and executes no model/delegation;
+- linked-resume winner rejoin returns the winner's stored identity;
+- Continue with pending batch + same environment identity replays;
+- Continue with pending batch + different digest/revision fails before executing a pending Tool/Delegate/Answer step;
+- Continue with no pending batch may use a new environment;
+- every journal ValidatedBatch revision must equal source Run environment revision;
+- revision-zero Run/finalization remains valid without `max(1)`.
+
+### Vault persistence tests
+
+Update all `VaultConversationRunRecord` / `VaultConversationAdmissionRequest` fixtures.
+
+Add/assert:
+
+- environment identity round-trips create -> find -> load -> finish;
+- duplicate command returns the original stored identity;
+- interrupt-on-reopen retains the original identity while changing only the normal interrupted state/generation fields;
+- malformed zero digest is rejected;
+- schema 9 is required; schema-8 local store is rejected rather than decoded with a default.
+
+### App integration tests
+
+Update `crates/app/src/vault_host/tests/registered_runner.rs` and other `task_coordinator.catalog` uses to `environment(...).catalog()`.
+
+Add an App-level wiring regression that proves:
+
+- Manager projection active Expert cards equal the cards from the one environment;
+- admitted `RunReceipt.expert_environment.revision == AllowedCatalog.revision`;
+- admitted identity digest is nonzero;
+- a Directory publication after environment creation cannot cause that Run's delegation to execute a newly published endpoint.
+
+A real Registry mutation may still be denied by the current selection fences. In Checkpoint 03 tests, assert **no reroute**; do not weaken those fences or claim old-Run continuation through Registry drift until Checkpoint 04.
+
+## Documentation convergence in this checkpoint
+
+### `docs/architecture/runtime.md`
+
+Update the current delegation path from:
+
+```text
+TaskCoordinator : DelegationPort
+-> Directory endpoint resolution
+```
+
+to the implemented path:
+
+```text
+TaskCoordinator::environment
+-> one Directory snapshot
+-> RunExpertEnvironment
+   -> Manager catalog/discovery
+   -> DelegationPort
+   -> pinned endpoint/admission/selection
+```
+
+Document:
+
+- one immutable Expert environment per Run;
+- durable Run environment revision/digest;
+- duplicate command returns the already-admitted identity;
+- Directory/config edits are sampled by later Runs and cannot reroute the active environment;
+- crash/reopen interrupts Working Runs while preserving their environment identity;
+- pending-batch Continue fails closed if it cannot use the same environment identity;
+- current Registry-drift execution fences still remain until Checkpoint 04.
+
+Correct the stale Conversation storage version statement to the implemented schema version 9.
+
+### `docs/architecture/authority-recovery.md`
+
+Do **not** yet replace the statement that current Expert binding drift fences active Task execution; that remains implementation reality until Checkpoint 04.
+
+Only add/update Run recovery wording if needed to state that Conversation persists the admitted environment identity and reopen preserves it on the interrupted historical Run. Do not prestate Checkpoint 04's configuration-vs-authority cutover.
+
+## Residual/deletion gate
+
+Search and classify every production match for:
+
+```text
+TaskCoordinator::catalog
+DelegationPort for TaskCoordinator
+Directory::list_cards
+Directory::resolve
+self.directory.resolve
+manager_catalog
+.max(1)
+catalog_revision
+RunExpertEnvironment
+RunExpertEnvironmentIdentity
+```
+
+Acceptance:
+
+- no root Conversation path reads Directory twice;
+- no root/global TaskCoordinator DelegationPort remains;
+- no Task execution performs live Directory resolution;
+- `Directory::list_cards` / `Directory::resolve` are deleted unless a newly discovered real owner is explicitly justified;
+- `manager_catalog` and revision coercion are gone;
+- every production `ValidatedModelBatch.catalog_revision` is either stamped from or checked against the admitted Run environment revision;
+- the only full environment digest authority is `RunExpertEnvironmentIdentity` persisted on the Run;
+- no compatibility/default environment field exists;
+- no endpoint pointer/credential/authority material is serialized into the digest.
+
+Also search for comments/docs claiming the global TaskCoordinator directly serves root delegation or that a Task is resolved live at delegation time.
+
+Do not create a permanent source-regex checker for this cutover.
+
+## Verification required before marking Checkpoint 03 complete
+
+Fast iteration:
+
+```sh
+cargo test -p floe-experts --tests
+cargo test -p floe-conversation --tests
+cargo test -p floe-vault --tests
+cargo test -p floe-app --lib
+```
+
+Run the focused continuation/recovery and App delegation tests during iteration where useful.
+
+Final checkpoint gate:
+
+```sh
+CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast
+python3 tools/architecture/check_boundaries.py
+cargo build -p floe-ffi
+git diff --check
+```
+
+This checkpoint changes internal Rust runtime and Conversation persistence meaning but does not require a new AppWire/FFI DTO. Flutter/Go/native-provider/device gates are not required unless implementation unexpectedly changes those surfaces. If it does, expand verification per `.agents/skills/code-change-verification/SKILL.md`.
+
+Use isolated temporary Vault roots. Do not reset real user data or credentials.
+
+## Checkpoint 03 acceptance
+
+Checkpoint 03 is complete only when all are true:
+
+- one `RunExpertEnvironment` is sampled exactly once per newly executing Conversation Run;
+- Manager discovery and delegation are derived from that exact object;
+- a Directory edit after snapshot creation cannot reroute the active Run to a different endpoint/admission/selection;
+- the next Run sees the changed Directory;
+- intentionally empty revision-zero environments remain valid with nonzero digest;
+- `TaskCoordinator` is no longer the root/global `DelegationPort`;
+- live `Directory::resolve` is absent from Task execution;
+- every durable Run stores one valid environment identity;
+- environment identity is not part of canonical user intent/request digest;
+- duplicate/lost-ack/rejoin returns the stored winner's identity without executing against a new environment;
+- pending-batch Continue cannot execute under a different environment identity;
+- crash/reopen preserves the identity on the interrupted Run and never resumes it under current Directory;
+- every model batch catalog revision is consistent with the admitted Run revision, including finalization and revision zero;
+- Conversation storage schema is 9 with no compatibility decoder;
+- Checkpoint 04 Registry-drift fences remain intact and are explicitly reported as the next boundary;
+- current architecture docs match the implemented Checkpoint 03 state;
+- residual searches satisfy the deletion gate;
+- execution report records start HEAD, fetched origin/main, commit SHA(s), changed files/owners, tests, residuals, docs, worktree state, and explicitly states Checkpoint 04 was not started.
+
+## Checkpoint commit discipline
+
+Implement Checkpoint 03 as one logical Run-environment cutover when practical. Multiple local commits are acceptable only to keep the direct contract/storage replacement buildable; list every SHA in the execution report.
+
+After verification, update only this plan's `Execution report / Checkpoint 03`, commit that evidence, and stop. Do not begin Checkpoint 04 in the same implementation pass.
+
 
 # Checkpoint 04 — Configuration/authority separation through Task execution
 
