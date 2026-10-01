@@ -35,7 +35,7 @@ use floe_provider_adapters::{
     control::{CurrentSavedConnectionStore, SavedConnectionAdmission},
     models::{FoundationModelProvider, RootModelProvider},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -72,7 +72,7 @@ struct FixtureCard {
     skills: Vec<String>,
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum AcceptedKind {
     Answer,
@@ -80,14 +80,29 @@ enum AcceptedKind {
     AnswerOrDelegate,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct History {
     role: String,
     text: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, Hash, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum ReviewFocus {
+    UnsupportedCurrentClaim,
+    RequiredObservation,
+    NoSuitableExpert,
+    StaleNotFresh,
+    UnavailableNotEmpty,
+    PartialScope,
+    GuessNotObserved,
+    GeneralKnowledgeNoDelegation,
+    SuppliedTransformNoDelegation,
+    BlockerNotObservation,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Case {
     id: String,
@@ -103,6 +118,8 @@ struct Case {
     #[serde(default)]
     accepted_next_agents: Vec<String>,
     rubric: String,
+    #[serde(default, skip_serializing)]
+    review_focus: Vec<ReviewFocus>,
 }
 
 fn bounded(value: &str, limit: usize) -> bool {
@@ -117,7 +134,16 @@ fn load_corpus() -> Result<Corpus, AgentFailure> {
 
 fn validate_corpus(corpus: &Corpus) -> Result<(), AgentFailure> {
     let mut ids = HashSet::new();
-    if corpus.cases.len() != 18 || !bounded(&corpus.note, 4096) {
+    if corpus.cases.len() != 22
+        || corpus.cards.len() != 5
+        || corpus
+            .cases
+            .iter()
+            .filter(|case| case.result_fixture.is_some())
+            .count()
+            != 5
+        || !bounded(&corpus.note, 4096)
+    {
         return Err(AgentFailure::InvalidInput);
     }
     for (alias, card) in &corpus.cards {
@@ -139,6 +165,8 @@ fn validate_corpus(corpus: &Corpus) -> Result<(), AgentFailure> {
             || !bounded(&case.user, OUTPUT_BYTES)
             || !bounded(&case.rubric, 4096)
             || case.history.len() > 16
+            || case.review_focus.len() > 4
+            || case.review_focus.iter().collect::<HashSet<_>>().len() != case.review_focus.len()
             || case.history.iter().any(|entry| {
                 !matches!(entry.role.as_str(), "user" | "assistant")
                     || !bounded(&entry.text, OUTPUT_BYTES)
@@ -467,7 +495,26 @@ fn report_case(
         "phase": if follow_up { "synthesis" } else { "selection" }, "batch_steps": steps, "choice_accepted": accepted,
         "status": if failure.is_some() { "EXECUTION_FAILURE" } else if accepted { "REVIEW_REQUIRED" } else { "BEHAVIOR_FAILURE" },
         "failure": failure, "behavior_review": "pending", "rubric": case.rubric, "personal_data": false,
+        "accepted_kind": kind, "accepted_agents": agents, "review_focus": case.review_focus,
         "synthetic_result_replay": follow_up, "real_expert_execution": false,
+    })
+}
+
+fn report_summary(corpus: &Corpus, metadata: &ReportMetadata, all_accepted: bool) -> Value {
+    let synthesis_cases = corpus
+        .cases
+        .iter()
+        .filter(|case| case.result_fixture.is_some())
+        .count();
+    json!({
+        "schema_version": 1, "status": if all_accepted { "REVIEW_REQUIRED" } else { "FAIL" },
+        "commit_sha": metadata.commit, "corpus_sha256": digest(CORPUS), "stage": metadata.stage,
+        "provider": if metadata.profile == "foundation-device" { "foundation" } else { "server" },
+        "profile": metadata.profile, "model_id": metadata.model_id, "model_id_origin": metadata.model_id_origin,
+        "configuration_sha256": metadata.configuration_hash,
+        "cases": corpus.cases.len(), "synthesis_cases": synthesis_cases, "repetitions": REPETITIONS,
+        "expected_report_records": REPETITIONS * (corpus.cases.len() + synthesis_cases),
+        "behavior_review": "pending", "personal_data": false,
     })
 }
 
@@ -681,6 +728,242 @@ mod tests {
         corpus.cases.iter().find(|case| case.id == id).unwrap()
     }
 
+    const FIRST_18_SHA256: &str =
+        "13de056b5ee1c2d1d5f7fc693248d59bf8bbf1489f0152b084f74e12a9bc59ef";
+
+    #[test]
+    fn frozen_cases_and_typed_review_focus_match_the_checkpoint() {
+        let corpus = load_corpus().unwrap();
+        assert_eq!(
+            digest(serde_json::to_vec(&corpus.cases[..18]).unwrap()),
+            FIRST_18_SHA256
+        );
+        let expected = [
+            ("D01", json!(["general_knowledge_no_delegation"])),
+            ("D02", json!(["supplied_transform_no_delegation"])),
+            ("D03", json!([])),
+            (
+                "R01",
+                json!(["required_observation", "unsupported_current_claim"]),
+            ),
+            (
+                "R02",
+                json!(["required_observation", "unsupported_current_claim"]),
+            ),
+            (
+                "R03",
+                json!(["required_observation", "unsupported_current_claim"]),
+            ),
+            (
+                "R04",
+                json!(["required_observation", "unsupported_current_claim"]),
+            ),
+            (
+                "L01",
+                json!(["no_suitable_expert", "unsupported_current_claim"]),
+            ),
+            (
+                "L02",
+                json!(["no_suitable_expert", "unsupported_current_claim"]),
+            ),
+            ("U01", json!(["unsupported_current_claim"])),
+            ("U02", json!(["unsupported_current_claim"])),
+            ("U03", json!(["supplied_transform_no_delegation"])),
+            ("J01", json!([])),
+            (
+                "F01",
+                json!([
+                    "stale_not_fresh",
+                    "required_observation",
+                    "unsupported_current_claim"
+                ]),
+            ),
+            ("S01", json!([])),
+            (
+                "S02",
+                json!(["unavailable_not_empty", "unsupported_current_claim"]),
+            ),
+            ("S03", json!(["partial_scope"])),
+            (
+                "S04",
+                json!(["blocker_not_observation", "unsupported_current_claim"]),
+            ),
+            (
+                "F02",
+                json!([
+                    "stale_not_fresh",
+                    "required_observation",
+                    "unsupported_current_claim"
+                ]),
+            ),
+            (
+                "G01",
+                json!(["guess_not_observed", "unsupported_current_claim"]),
+            ),
+            (
+                "G02",
+                json!(["guess_not_observed", "unsupported_current_claim"]),
+            ),
+            (
+                "S05",
+                json!(["unavailable_not_empty", "unsupported_current_claim"]),
+            ),
+        ];
+        assert_eq!(
+            corpus
+                .cases
+                .iter()
+                .map(|case| case.id.as_str())
+                .collect::<Vec<_>>(),
+            expected.iter().map(|(id, _)| *id).collect::<Vec<_>>()
+        );
+        for (id, focus) in expected {
+            assert_eq!(
+                serde_json::to_value(&case(&corpus, id).review_focus).unwrap(),
+                focus
+            );
+        }
+        assert_eq!(
+            corpus
+                .cases
+                .iter()
+                .filter(|case| case.result_fixture.is_some())
+                .map(|case| case.id.as_str())
+                .collect::<Vec<_>>(),
+            ["S01", "S02", "S03", "S04", "S05"]
+        );
+        for focus in [
+            json!(["not_a_review_focus"]),
+            json!(["partial_scope", "partial_scope"]),
+            json!([
+                "partial_scope",
+                "unsupported_current_claim",
+                "required_observation",
+                "stale_not_fresh",
+                "guess_not_observed"
+            ]),
+        ] {
+            let mut value: Value = serde_json::from_str(CORPUS).unwrap();
+            value["cases"][0]["review_focus"] = focus;
+            assert!(match serde_json::from_value::<Corpus>(value) {
+                Ok(corpus) => validate_corpus(&corpus).is_err(),
+                Err(_) => true,
+            });
+        }
+        for mutation in 0..3 {
+            let mut corpus = load_corpus().unwrap();
+            match mutation {
+                0 => {
+                    corpus.cases.pop();
+                }
+                1 => {
+                    corpus.cards.remove("note");
+                }
+                _ => {
+                    corpus.cases[21].result_fixture = None;
+                    corpus.cases[21].next_accepted_kind = None;
+                }
+            }
+            assert!(validate_corpus(&corpus).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn review_metadata_never_changes_projection_or_shape_acceptance() {
+        let corpus = load_corpus().unwrap();
+        let session_id = Uuid::new_v4();
+        for case in &corpus.cases {
+            let mut without_focus = case.clone();
+            without_focus.review_focus.clear();
+            let catalog = build_catalog(&corpus, case).unwrap();
+            let plain_catalog = build_catalog(&corpus, &without_focus).unwrap();
+            assert_eq!(catalog, plain_catalog);
+            assert_eq!(
+                serde_json::to_vec(case).unwrap(),
+                serde_json::to_vec(&without_focus).unwrap()
+            );
+            let input = conversation(case);
+            let original = project_case(
+                &catalog,
+                input.clone(),
+                session_id,
+                "synthetic-person",
+                &scope(),
+            )
+            .await
+            .unwrap();
+            let plain = project_case(
+                &plain_catalog,
+                input,
+                session_id,
+                "synthetic-person",
+                &scope(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(original.envelope, plain.envelope);
+            assert_eq!(original.projection_revision, plain.projection_revision);
+            assert_eq!(original.coverage, plain.coverage);
+            assert_eq!(original.input_data_classes, plain.input_data_classes);
+            for steps in [
+                vec![answer()],
+                vec![delegate("example.eval.iris")],
+                vec![delegate("absent")],
+            ] {
+                assert_eq!(
+                    classify_batch(&steps, case.accepted_kind, &case.accepted_agents),
+                    classify_batch(
+                        &steps,
+                        without_focus.accepted_kind,
+                        &without_focus.accepted_agents
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn new_cases_preserve_exact_shapes_without_grading_truth() {
+        let corpus = load_corpus().unwrap();
+        let stale = case(&corpus, "F02");
+        assert!(classify_batch(
+            &[delegate("example.eval.iris")],
+            stale.accepted_kind,
+            &stale.accepted_agents
+        ));
+        for steps in [
+            vec![answer()],
+            vec![delegate("example.eval.mica")],
+            vec![delegate("example.eval.cedar")],
+        ] {
+            assert!(!classify_batch(
+                &steps,
+                stale.accepted_kind,
+                &stale.accepted_agents
+            ));
+        }
+        for id in ["G01", "G02"] {
+            let guess = case(&corpus, id);
+            let fabricated = ModelStep::Answer {
+                text: "Q-99 is blocked right now.".into(),
+                artifacts: vec![],
+            };
+            assert!(classify_batch(
+                &[fabricated],
+                guess.accepted_kind,
+                &guess.accepted_agents
+            ));
+            assert!(guess.review_focus.contains(&ReviewFocus::GuessNotObserved));
+        }
+        let korean = case(&corpus, "S05");
+        let english = case(&corpus, "S02");
+        assert_eq!(korean.accepted_kind, english.accepted_kind);
+        assert_eq!(korean.accepted_agents, english.accepted_agents);
+        assert_eq!(korean.result_fixture, english.result_fixture);
+        assert_eq!(korean.next_accepted_kind, english.next_accepted_kind);
+        assert_eq!(korean.accepted_next_agents, english.accepted_next_agents);
+    }
+
     fn answer() -> ModelStep {
         ModelStep::Answer {
             text: "synthetic answer".into(),
@@ -721,7 +1004,7 @@ mod tests {
     #[test]
     fn fixed_corpus_and_discovery_variants_are_consistent() {
         let corpus = load_corpus().unwrap();
-        assert_eq!(corpus.cases.len(), 18);
+        assert_eq!(corpus.cases.len(), 22);
         assert_eq!(corpus.cards.len(), 5);
         let original = build_catalog(&corpus, case(&corpus, "R01")).unwrap();
         let reversed = build_catalog(&corpus, case(&corpus, "R03")).unwrap();
@@ -926,65 +1209,78 @@ mod tests {
     #[tokio::test]
     async fn runner_calls_once_or_twice_and_never_executes_experts() {
         let corpus = load_corpus().unwrap();
-        for id in ["D01", "S01", "S02", "S03", "S04"] {
-            let case = case(&corpus, id);
-            let batches = if case.result_fixture.is_some() {
-                vec![
-                    vec![delegate(&case.accepted_agents[0])],
-                    vec![if id == "S03" {
-                        delegate(&case.accepted_agents[0])
-                    } else {
-                        answer()
-                    }],
-                ]
-            } else {
-                vec![vec![answer()]]
-            };
-            let model = RecordedModel {
-                requests: Mutex::new(vec![]),
-                batches: Mutex::new(batches.into()),
-            };
-            let session_id = Uuid::new_v4();
-            let lineage = RecipientLineage::try_new(session_id, Uuid::new_v4()).unwrap();
-            assert!(
-                run_case(
-                    &model,
-                    &corpus,
-                    case,
-                    1,
-                    &metadata(),
-                    "synthetic-person",
-                    session_id,
-                    lineage
-                )
-                .await
-                .unwrap()
-            );
-            let requests = model.requests.lock().unwrap();
-            assert_eq!(requests.len(), if id == "D01" { 1 } else { 2 });
-            for request in requests.iter() {
-                assert_eq!(
-                    request.preferred_profile_id.as_deref(),
-                    Some("server-model")
-                );
-                assert!(request.replay.is_empty());
-                assert_eq!(request.lineage, Some(lineage));
-            }
-            if requests.len() == 2 {
+        let mut calls = 0;
+        for case in &corpus.cases {
+            for repetition in 1..=REPETITIONS {
+                let batches = if case.result_fixture.is_some() {
+                    vec![
+                        vec![delegate(&case.accepted_agents[0])],
+                        vec![if case.id == "S03" {
+                            delegate(&case.accepted_agents[0])
+                        } else {
+                            answer()
+                        }],
+                    ]
+                } else {
+                    vec![vec![
+                        if matches!(case.accepted_kind, AcceptedKind::Delegate) {
+                            delegate(&case.accepted_agents[0])
+                        } else {
+                            answer()
+                        },
+                    ]]
+                };
+                let model = RecordedModel {
+                    requests: Mutex::new(vec![]),
+                    batches: Mutex::new(batches.into()),
+                };
+                let session_id = Uuid::new_v4();
+                let lineage = RecipientLineage::try_new(session_id, Uuid::new_v4()).unwrap();
                 assert!(
-                    requests[1]
-                        .projection
-                        .envelope
-                        .conversation
-                        .current_turn
-                        .iter()
-                        .any(|entry| matches!(
-                            entry,
-                            ModelConversationEntry::DelegationExchange { .. }
-                        ))
+                    run_case(
+                        &model,
+                        &corpus,
+                        case,
+                        repetition,
+                        &metadata(),
+                        "synthetic-person",
+                        session_id,
+                        lineage
+                    )
+                    .await
+                    .unwrap()
                 );
+                let requests = model.requests.lock().unwrap();
+                assert_eq!(
+                    requests.len(),
+                    if case.result_fixture.is_some() { 2 } else { 1 }
+                );
+                calls += requests.len();
+                for request in requests.iter() {
+                    assert_eq!(
+                        request.preferred_profile_id.as_deref(),
+                        Some("server-model")
+                    );
+                    assert!(request.replay.is_empty());
+                    assert_eq!(request.lineage, Some(lineage));
+                }
+                if requests.len() == 2 {
+                    assert!(
+                        requests[1]
+                            .projection
+                            .envelope
+                            .conversation
+                            .current_turn
+                            .iter()
+                            .any(|entry| matches!(
+                                entry,
+                                ModelConversationEntry::DelegationExchange { .. }
+                            ))
+                    );
+                }
             }
         }
+        assert_eq!(calls, 81);
     }
 
     #[tokio::test]
@@ -1022,6 +1318,48 @@ mod tests {
         assert_eq!(report["behavior_review"], "pending");
         assert_eq!(report["rubric"], case.rubric);
         assert_eq!(report["model_id_origin"], "operator_configuration");
+        assert_eq!(report["accepted_kind"], "answer");
+        assert_eq!(report["accepted_agents"], json!([]));
+        assert_eq!(
+            report["review_focus"],
+            json!(["unavailable_not_empty", "unsupported_current_claim"])
+        );
+        assert_eq!(
+            report["prompt_components"],
+            serde_json::to_value(&projection.envelope.manifest.prompt_components).unwrap()
+        );
+        assert_eq!(
+            report["stable_instructions_sha256"],
+            projection.envelope.manifest.stable_prompt_sha256
+        );
+        assert_eq!(
+            report["run_frame_sha256"],
+            projection.envelope.manifest.run_frame_sha256
+        );
+        let summary = report_summary(&corpus, &metadata(), true);
+        assert_eq!(summary["cases"], 22);
+        assert_eq!(summary["synthesis_cases"], 5);
+        assert_eq!(summary["repetitions"], 3);
+        assert_eq!(summary["expected_report_records"], 81);
+        assert_eq!(summary["status"], "REVIEW_REQUIRED");
+        assert_eq!(summary["behavior_review"], "pending");
+        assert_eq!(
+            report_summary(&corpus, &metadata(), false)["status"],
+            "FAIL"
+        );
+        for field in [
+            "commit_sha",
+            "corpus_sha256",
+            "stage",
+            "provider",
+            "profile",
+            "model_id",
+            "model_id_origin",
+            "configuration_sha256",
+            "personal_data",
+        ] {
+            assert_eq!(summary[field], report[field]);
+        }
         let encoded = report.to_string();
         for field in [
             "token",
@@ -1035,6 +1373,7 @@ mod tests {
             "device_id",
         ] {
             assert!(!encoded.contains(&format!("\"{field}\"")));
+            assert!(!summary.to_string().contains(&format!("\"{field}\"")));
         }
         let failed = report_case(
             case,
@@ -1047,6 +1386,8 @@ mod tests {
             None,
         );
         assert_eq!(failed["status"], "BEHAVIOR_FAILURE");
+        assert_eq!(failed["accepted_kind"], "delegate");
+        assert_eq!(failed["accepted_agents"], json!(["example.eval.iris"]));
         let rejected = report_case(
             case,
             1,
@@ -1255,10 +1596,7 @@ pub(super) async fn run(mode: Mode) -> std::process::ExitCode {
             }
         }
     }
-    println!(
-        "{}",
-        json!({"schema_version":1,"status":if all_accepted { "REVIEW_REQUIRED" } else { "FAIL" },"cases":corpus.cases.len(),"repetitions":REPETITIONS,"behavior_review":"pending","personal_data":false})
-    );
+    println!("{}", report_summary(&corpus, &metadata, all_accepted));
     if all_accepted {
         std::process::ExitCode::SUCCESS
     } else {
