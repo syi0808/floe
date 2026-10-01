@@ -1,16 +1,5 @@
 use floe_agent_contract::{AgentFailure, Artifact};
 
-pub(super) fn manager_catalog(
-    cards: Vec<floe_agent_contract::AgentDefinition>,
-    revision: u64,
-) -> floe_agent_contract::AllowedCatalog {
-    floe_agent_contract::AllowedCatalog {
-        cards,
-        tools: vec![],
-        revision: revision.max(1),
-    }
-}
-
 pub(super) struct NoManagerTools;
 
 impl floe_agent_contract::ToolPort for NoManagerTools {
@@ -30,21 +19,6 @@ pub(super) struct ManagerPayloadValidator;
 mod tests {
     use super::*;
     use floe_agent_contract::ToolPort;
-
-    #[test]
-    fn root_catalog_preserves_expert_cards_and_revisions_without_tools() {
-        let cards = floe_experts_builtin::manifests()
-            .into_iter()
-            .map(|manifest| floe_agent_contract::AgentDefinition {
-                card: manifest.definition.card,
-                definition_revision: 17,
-            })
-            .collect::<Vec<_>>();
-        let catalog = manager_catalog(cards.clone(), 23);
-        assert_eq!(catalog.cards, cards);
-        assert_eq!(catalog.revision, 23);
-        assert!(catalog.tools.is_empty());
-    }
 
     #[tokio::test]
     async fn unexpected_manager_tool_invocations_fail_closed() {

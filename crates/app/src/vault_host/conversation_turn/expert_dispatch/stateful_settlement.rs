@@ -603,6 +603,8 @@ mod tests {
             TraceContext::new(Uuid::new_v4()).with_task_id(task_id),
         );
         let receipt = coordinator
+            .environment(&person_id.to_string())
+            .unwrap()
             .delegate(
                 DelegationRequest {
                     task_id,

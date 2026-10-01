@@ -1,15 +1,14 @@
-use floe_agent_contract::{CommandId, DependencyCoverage, RunId};
 use floe_agent_contract::DataClass;
+use floe_agent_contract::{CommandId, DependencyCoverage, RunId};
 use floe_conversation::{
-    AgentContinuation, AgentMessage, AgentOutcome, AgentUsage, MAX_RESUME_LINEAGE,
-    ProfileSelection,
+    AgentContinuation, AgentMessage, AgentOutcome, AgentUsage, MAX_RESUME_LINEAGE, ProfileSelection,
 };
 use serde::{Deserialize, Serialize};
 use turso::transaction::{Transaction, TransactionBehavior};
 
 use super::*;
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 const MAX_RUN_RECORD_BYTES: usize = 128 * 1024;
 const MAX_JOURNAL_ENTRY_BYTES: usize = 128 * 1024;
 const MAX_RUN_ROWS: i64 = 4_096;
@@ -36,6 +35,7 @@ impl VaultConversationRunState {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct VaultConversationRunRecord {
+    pub expert_environment: floe_experts::RunExpertEnvironmentIdentity,
     pub run_id: RunId,
     pub command_id: CommandId,
     pub session_id: Uuid,
@@ -61,6 +61,9 @@ pub struct VaultConversationRunRecord {
 
 impl VaultConversationRunRecord {
     fn validate(&self, person_id: PersonId) -> Result<(), AgentFailure> {
+        self.expert_environment
+            .validate()
+            .map_err(|_| AgentFailure::VaultUnavailable)?;
         self.profile
             .validate()
             .map_err(|_| AgentFailure::VaultUnavailable)?;
@@ -188,6 +191,7 @@ pub struct VaultConversationResumeRef {
 
 #[derive(Clone, Debug)]
 pub struct VaultConversationAdmissionRequest {
+    pub expert_environment: floe_experts::RunExpertEnvironmentIdentity,
     pub run_id: RunId,
     pub command_id: CommandId,
     pub session_id: Uuid,
@@ -203,6 +207,7 @@ pub struct VaultConversationAdmissionRequest {
 
 impl VaultConversationAdmissionRequest {
     fn validate(&self) -> Result<(), AgentFailure> {
+        self.expert_environment.validate()?;
         self.profile
             .validate()
             .map_err(|_| AgentFailure::InvalidInput)?;
@@ -661,6 +666,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             )
             .await?;
             let record = VaultConversationRunRecord {
+                expert_environment: request.expert_environment,
                 run_id: request.run_id,
                 command_id: request.command_id,
                 session_id: request.session_id,
@@ -1289,7 +1295,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     if found.is_empty() {
         transaction
             .execute(
-                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 8))",
+                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 9))",
                 (),
             )
             .await
@@ -1338,7 +1344,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             .map_err(storage)?;
         transaction
             .execute(
-                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 8)",
+                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 9)",
                 (),
             )
             .await

@@ -115,7 +115,7 @@ pub(super) async fn finalize_exhausted_run<
         allowed_catalog: AllowedCatalog {
             cards: vec![],
             tools: vec![],
-            revision: work_request.allowed_catalog.revision.max(1),
+            revision: work_request.allowed_catalog.revision,
         },
         purpose: work_request.purpose.clone(),
         consumer: work_request.consumer.clone(),

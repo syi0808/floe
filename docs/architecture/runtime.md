@@ -43,7 +43,7 @@ Inference and Experts retain ownership of attempt and Task semantics.
 
 Vault Create/Unlock owns root Agent-environment readiness, independently of Conversation Session lifetime. The admitted local Vault operation supplies the verified device identity, trusted operation ID and cancellation to App-private `OpenVault::activate`. Activation constructs and recovers the Conversation and Task repositories, reconciles the shipped Expert bundle, applies initial default bindings only if the Registry was absent before reconciliation, and publishes the Expert Directory before exposing `VaultState::Ready`. Preparation failures leave no usable OpenVault. An absent Registry is a readiness failure, not an empty catalog; an existing Registry with every assignment disabled is Ready with an intentionally empty Directory.
 
-First-install binding is a bounded convenience mutation, not a publication owner or startup repair. Existing binding and enable configuration survive reopen, including empty or unavailable selections; later sources and bundle reconciliation do not auto-rebind. Root activation publishes after initial binding completes, while explicit Experts settings mutations retain their own Directory publication. Conversation Start/Resume/Get/Recover own only Session semantics; turn and resume-turn execution consume the prepared Directory without installing, refreshing, binding or republishing the root environment. Discovery and delegation still use the current TaskCoordinator/Directory contracts.
+First-install binding is a bounded convenience mutation, not a publication owner or startup repair. Existing binding and enable configuration survive reopen, including empty or unavailable selections; later sources and bundle reconciliation do not auto-rebind. Root activation publishes after initial binding completes, while explicit Experts settings mutations retain their own Directory publication. Conversation Start/Resume/Get/Recover own only Session semantics; turn and resume-turn execution consume the prepared Directory without installing, refreshing, binding or republishing the root environment. Each Run samples one Experts-owned immutable environment for both Manager discovery and delegation.
 
 `ConversationTurnRequest` carries only session/revision, text, profile intent, continuation/retry intent and the verified device identity. It has no credential source or lookup semantics.
 
@@ -71,21 +71,26 @@ Canonical ownership:
 
 ```text
 App run_general_turn
+  -> TaskCoordinator::environment(principal)
+  -> one Directory snapshot / RunExpertEnvironment
+       -> Manager catalog and discovery
+       -> RunExpertEnvironment : DelegationPort
   -> DelegationExecutionContext (secret-free host context)
-  -> Conversation TurnRequest (runtime field, never identity)
+  -> Conversation TurnRequest (required environment admission identity)
   -> Manager Engine
   -> Delegate step + batch-bound exact context
-  -> TaskCoordinator : DelegationPort (direct; no bridge)
-  -> Directory endpoint resolution
+  -> pinned endpoint / admission / selection
   -> EndpointInvocation { DelegationRequest, canonical request digest }
   -> isolated Expert runtime
   -> Task terminal result / Artifact
   -> Manager synthesis
 ```
 
-Experts are agents with identity and Task lifecycle, not provider-native Tools. Stable Task identity, assignment/eligibility, cancellation and A2A semantics belong to Experts. App holds no run-id endpoint authority: the root turn serves `TaskCoordinator` as its `DelegationPort` directly, and every endpoint invocation is self-sufficient — session, device, AgentContext, and output bound arrive in the explicit execution context, and the Manager delegation message is the Expert assignment. One canonical delegation request digest covers principal/parent linkage, selected agent + revision, message, context refs, and execution context; TaskId and InvocationKey stay stable identity fields checked exactly alongside it. Endpoint composition shares the host-scoped current store described above; provider adapters admit it per execution against the invocation principal and context device id. Model execution uses `ExpertModelHost` and the shared `InferenceExecutor` under the Task's bounded child `ExecutionScope`; Experts express execution constraints, not provider routes.
+Experts are agents with identity and Task lifecycle, not provider-native Tools. Stable Task identity, assignment/eligibility, cancellation and A2A semantics belong to Experts. App holds no run-id endpoint authority: `RunExpertEnvironment` binds one principal and immutable snapshot for the whole Run, while `TaskCoordinator` owns Task persistence, activation and cancellation. Every endpoint invocation is self-sufficient — session, device, AgentContext, and output bound arrive in the explicit execution context, and the Manager delegation message is the Expert assignment. One canonical delegation request digest covers principal/parent linkage, selected agent + revision, message, context refs, and execution context; TaskId and InvocationKey stay stable identity fields checked exactly alongside it. Endpoint composition shares the host-scoped current store described above; provider adapters admit it per execution against the invocation principal and context device id. Model execution uses `ExpertModelHost` and the shared `InferenceExecutor` under the Task's bounded child `ExecutionScope`; Experts express execution constraints, not provider routes.
 
-Directory publication replaces one owner's complete endpoint set under one write lock, preserving unrelated registrations and rejecting cross-owner collisions before mutation. A Task executes the endpoint resolved before admission rather than resolving it again after the Working transition, so a later publication refresh cannot reroute that execution.
+Directory publication replaces one owner's complete endpoint set under one write lock, preserving unrelated registrations and rejecting cross-owner collisions before mutation. Run admission samples the exact Directory revision, sorted eligible definitions, admission identities, execution selections and endpoints under one read lock. The environment's SHA-256 digest binds configuration only, never endpoint pointers or live authority. Its catalog preserves revision zero for an intentionally empty initial environment. Delegation resolves only this snapshot, including before Task admission; a later publication cannot reroute the active Run, and the next Run samples the changed Directory. Task replay must match the pinned admission and selection.
+
+Every Conversation Run durably stores the required `RunExpertEnvironmentIdentity` revision/digest as execution admission, separate from canonical user intent and request digest. A duplicate/lost-ack command or linked-resume winner returns the stored identity without redriving against current configuration. Every validated model batch, including finalization and resumed re-records, must retain the admitted Run's catalog revision. Continue starts a new Run; takeover of pending validated work requires the source and destination environment identities to match exactly before execution. Without pending work, the new Run may use a new environment. Crash/reopen interrupts Working Runs and preserves their original identity rather than restarting them under current Directory state. Current Registry-selection equality fences remain at Task admission, endpoint/source/model execution and settlement: configuration drift may still deny an old pinned Run, but never reroutes it.
 
 Every new successful Expert Task terminal write, stateful or stateless, checks current Registry selection inside the writing Vault transaction. Failure terminal writes do not require current binding equality; historical Completed reads remain independent of current binding.
 
@@ -173,7 +178,7 @@ Flutter binds the two remote owner entry points through the app-lifetime `Native
 
 The local C ABI consists only of open, command/query/events v2, remote pairing/access v2, protocol version and string/handle free. Old Day/Actions/LocalContext/AgentVault/fixture entry points and their wire envelopes are deleted, not aliased. Conversation sessions use their canonical admitted owner service. Internal `WorkerAction::ConversationTurn` and other private owner machinery remain.
 
-ConversationService, Engine, Inference, prepared provider transports and Session storage form one runtime path. Live shared Expert host composition is named `expert_host`. Flutter tests use pure product-interface fakes; native smoke uses canonical Inference. App wire 2, protocol 1 and Conversation storage 7 remain unchanged; old local profiles/binaries are not implied compatible.
+ConversationService, Engine, Inference, prepared provider transports and Session storage form one runtime path. Live shared Expert host composition is named `expert_host`. Flutter tests use pure product-interface fakes; native smoke uses canonical Inference. App wire 2 and protocol 1 remain unchanged. Conversation storage schema 9 directly requires the Run environment identity, with no old-row decoder or default migration; old local profiles/binaries are not implied compatible.
 
 ## Local Go server
 

@@ -31,10 +31,10 @@ impl TaskRecord {
         if self.aggregate_revision == 0
             || self.executor_generation == 0
             || self.invocation_key.as_uuid().is_nil()
-            || self.admission.validate_task(
-                &self.snapshot.agent_id,
-                self.snapshot.definition_revision,
-            ).is_err()
+            || self
+                .admission
+                .validate_task(&self.snapshot.agent_id, self.snapshot.definition_revision)
+                .is_err()
             || self.selection.validate().is_err()
         {
             return Err(AgentFailure::StorageUnavailable);
@@ -202,6 +202,22 @@ pub struct TaskCoordinator<Repository> {
     active: Mutex<HashMap<TaskId, floe_agent_contract::Cancellation>>,
 }
 
+pub struct RunExpertEnvironment<'a, Repository> {
+    coordinator: &'a TaskCoordinator<Repository>,
+    principal: String,
+    snapshot: crate::directory::DirectorySnapshot,
+}
+
+impl<Repository> RunExpertEnvironment<'_, Repository> {
+    pub fn identity(&self) -> crate::RunExpertEnvironmentIdentity {
+        self.snapshot.identity()
+    }
+
+    pub fn catalog(&self) -> AllowedCatalog {
+        self.snapshot.catalog()
+    }
+}
+
 impl<Repository> TaskCoordinator<Repository> {
     pub async fn activate(
         directory: Directory,
@@ -254,14 +270,18 @@ impl<Repository> TaskCoordinator<Repository> {
 }
 
 impl<Repository: TaskRepository> TaskCoordinator<Repository> {
-    /// The Experts-owned catalog: cards admitted for this principal under the
-    /// coordinator's purpose, with the definition revisions the Directory
-    /// registered. Eligibility is the Directory's judgment alone; model
-    /// placement never filters it.
-    pub fn catalog(&self, principal: &str) -> Result<AllowedCatalog, AgentFailure> {
-        self.directory.list_cards(DirectoryQuery {
+    pub fn environment(
+        &self,
+        principal: &str,
+    ) -> Result<RunExpertEnvironment<'_, Repository>, AgentFailure> {
+        let snapshot = self.directory.snapshot(DirectoryQuery {
             principal,
             purpose: &self.purpose,
+        })?;
+        Ok(RunExpertEnvironment {
+            coordinator: self,
+            principal: principal.to_owned(),
+            snapshot,
         })
     }
 
@@ -359,27 +379,22 @@ impl<Repository: TaskRepository> TaskCoordinator<Repository> {
         &self,
         request: DelegationRequest,
         scope: &floe_agent_contract::ExecutionScope,
+        endpoint: crate::directory::ResolvedDirectoryEntry,
     ) -> Result<TaskReceipt, AgentFailure> {
         validate_request(&request, scope)?;
         let request_digest = delegation_request_digest(&request);
         if let Some(record) = scope.run(self.repository.get(request.task_id)).await? {
             validate_replay(&request, request_digest, &record)?;
             validate_owned_record(&record, self.maximum_output_bytes)?;
+            if record.admission != endpoint.admission || record.selection != endpoint.selection {
+                return Err(AgentFailure::Conflict);
+            }
             return Ok(TaskReceipt {
                 task_id: request.task_id,
                 snapshot: record.snapshot,
                 replay: None,
             });
         }
-        let query = DirectoryQuery {
-            principal: &request.principal,
-            purpose: &self.purpose,
-        };
-        let endpoint = self.directory.resolve(
-            &request.selected_agent_id,
-            request.selected_definition_revision,
-            query.clone(),
-        )?;
         let proposed = TaskRecord {
             snapshot: snapshot(
                 &request,
@@ -401,7 +416,8 @@ impl<Repository: TaskRepository> TaskCoordinator<Repository> {
             TaskAdmission::Created(record) => {
                 validate_replay(&request, request_digest, &record)?;
                 validate_owned_record(&record, self.maximum_output_bytes)?;
-                if record.admission != endpoint.admission || record.selection != endpoint.selection {
+                if record.admission != endpoint.admission || record.selection != endpoint.selection
+                {
                     return Err(AgentFailure::StorageUnavailable);
                 }
                 record
@@ -409,7 +425,8 @@ impl<Repository: TaskRepository> TaskCoordinator<Repository> {
             TaskAdmission::Existing(record) => {
                 validate_replay(&request, request_digest, &record)?;
                 validate_owned_record(&record, self.maximum_output_bytes)?;
-                if record.admission != endpoint.admission || record.selection != endpoint.selection {
+                if record.admission != endpoint.admission || record.selection != endpoint.selection
+                {
                     return Err(AgentFailure::Conflict);
                 }
                 return Ok(TaskReceipt {
@@ -612,13 +629,23 @@ async fn before_deadline<Value>(
         .unwrap_or(Err(AgentFailure::DeadlineExceeded))
 }
 
-impl<Repository: TaskRepository> DelegationPort for TaskCoordinator<Repository> {
+impl<Repository: TaskRepository> DelegationPort for RunExpertEnvironment<'_, Repository> {
     fn delegate<'a>(
         &'a self,
         request: DelegationRequest,
         scope: &'a floe_agent_contract::ExecutionScope,
     ) -> BoxFuture<'a, Result<TaskReceipt, AgentFailure>> {
-        Box::pin(self.execute(request, scope))
+        Box::pin(async move {
+            if request.principal != self.principal {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            validate_request(&request, scope)?;
+            let endpoint = self.snapshot.resolve(
+                &request.selected_agent_id,
+                request.selected_definition_revision,
+            )?;
+            self.coordinator.execute(request, scope, endpoint).await
+        })
     }
 }
 

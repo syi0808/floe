@@ -157,6 +157,10 @@ async fn admit_run(
     let run_id = RunId::new();
     let admission = vault
         .admit_conversation_turn(VaultConversationAdmissionRequest {
+            expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
             run_id,
             command_id: floe_agent_contract::CommandId::new(),
             session_id,

@@ -42,6 +42,10 @@ fn request(
     command_id: CommandId,
 ) -> VaultConversationAdmissionRequest {
     VaultConversationAdmissionRequest {
+        expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+            revision: 1,
+            digest: [1; 32],
+        },
         run_id,
         command_id,
         session_id,
@@ -155,6 +159,23 @@ async fn admission_journal_and_terminal_claim_commit_survive_reopen() {
         panic!("expected created admission");
     };
     assert_eq!(record.state, VaultConversationRunState::Working);
+    assert_eq!(record.expert_environment, admission.expert_environment);
+    let mut newer_environment = admission.clone();
+    newer_environment.expert_environment = floe_experts::RunExpertEnvironmentIdentity {
+        revision: 2,
+        digest: [2; 32],
+    };
+    assert_eq!(
+        vault
+            .admit_conversation_turn(newer_environment)
+            .await
+            .unwrap(),
+        VaultConversationAdmission::Existing(record.clone())
+    );
+    assert_eq!(
+        vault.conversation_run(run_id).await.unwrap(),
+        Some(record.clone())
+    );
     assert_eq!(record.session_revision, 1);
     assert_eq!(admitted_session.active_turn, Some(run_id.as_uuid()));
     assert!(matches!(
@@ -208,6 +229,7 @@ async fn admission_journal_and_terminal_claim_commit_survive_reopen() {
         .await
         .unwrap();
     assert_eq!(terminal.state, VaultConversationRunState::Completed);
+    assert_eq!(terminal.expert_environment, record.expert_environment);
     assert_eq!(terminal.aggregate_revision, 2);
     assert_eq!(terminal.journal_revision, 1);
     assert_eq!(terminal.session_revision, 2);
@@ -286,6 +308,98 @@ async fn failed_execution_can_commit_a_distinct_final_reply_without_continuation
         session.messages.as_slice(),
         [AgentMessage::User { .. }, AgentMessage::Assistant { text, .. }]
             if text == "The lookup succeeded, but the request did not complete."
+    ));
+}
+
+#[tokio::test]
+async fn interrupted_reopen_preserves_environment_and_rejects_missing_or_invalid_identity() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let keys = Keys::default();
+    let vault = EncryptedAgentVault::create(root.path(), person_id, keys.clone())
+        .await
+        .unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    let session = vault.create_session().await.unwrap();
+    let mut admission = request(person_id, session.id, RunId::new(), CommandId::new());
+    admission.expert_environment.revision = 0;
+    let mut invalid = admission.clone();
+    invalid.expert_environment.digest = [0; 32];
+    assert_eq!(
+        vault.admit_conversation_turn(invalid).await,
+        Err(AgentFailure::InvalidInput)
+    );
+    let VaultConversationAdmission::Created { record, .. } = vault
+        .admit_conversation_turn(admission.clone())
+        .await
+        .unwrap()
+    else {
+        panic!("expected Created");
+    };
+    let mut encoded = serde_json::to_value(&record).unwrap();
+    encoded
+        .as_object_mut()
+        .unwrap()
+        .remove("expert_environment");
+    assert!(serde_json::from_value::<VaultConversationRunRecord>(encoded).is_err());
+    drop(vault);
+    let vault = EncryptedAgentVault::open(root.path(), person_id, keys)
+        .await
+        .unwrap();
+    let activation = vault.activate_conversation_executor().await.unwrap();
+    assert_eq!(activation.interrupted.len(), 1);
+    let interrupted = &activation.interrupted[0];
+    assert_eq!(interrupted.state, VaultConversationRunState::Interrupted);
+    assert_eq!(interrupted.expert_environment, admission.expert_environment);
+    assert_eq!(
+        vault
+            .conversation_run(admission.run_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .expert_environment,
+        admission.expert_environment
+    );
+}
+
+#[tokio::test]
+async fn conversation_schema_nine_direct_cutover_rejects_schema_eight() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let vault = EncryptedAgentVault::create(root.path(), person_id, Keys::default())
+        .await
+        .unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    let connection = vault.connection().unwrap();
+    let mut rows = connection
+        .query(
+            "SELECT version FROM agent_conversation_schema WHERE id = 1",
+            (),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+        9
+    );
+    drop(rows);
+    connection
+        .execute("DROP TABLE agent_conversation_schema", ())
+        .await
+        .unwrap();
+    connection.execute("CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 8))", ()).await.unwrap();
+    connection
+        .execute(
+            "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 8)",
+            (),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        vault.activate_conversation_executor().await,
+        Err(AgentFailure::VaultUnavailable)
     ));
 }
 

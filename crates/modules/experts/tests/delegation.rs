@@ -32,9 +32,9 @@ use floe_execution::{
 use floe_experts::{
     AgentRegistry, ContractRef, Directory, DirectoryEntry, DirectoryQuery,
     EXPERT_MANIFEST_SCHEMA_VERSION, ExpertAdmissionIdentity, ExpertBindingCommand,
-    ExpertExecutionSelection,
-    ExpertInstallOperation, ExpertManifest, ExpertRegistration, ExpertSourceRequirement,
-    TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository,
+    ExpertExecutionSelection, ExpertInstallOperation, ExpertManifest, ExpertRegistration,
+    ExpertSourceRequirement, TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord,
+    TaskRepository,
 };
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -472,14 +472,16 @@ async fn nonbuiltin_registration_installs_publishes_and_completes_without_source
         };
         publish(&registry);
         assert_eq!(
-            directory
-                .list_cards(DirectoryQuery {
+            directory_catalog(
+                &directory,
+                DirectoryQuery {
                     principal: &person.to_string(),
                     purpose: "everyday-assistance"
-                })
-                .unwrap()
-                .cards
-                .len(),
+                }
+            )
+            .await
+            .cards
+            .len(),
             1
         );
         let repository = Arc::new(MemoryTasks::default());
@@ -495,7 +497,8 @@ async fn nonbuiltin_registration_installs_publishes_and_completes_without_source
         let task_id = TaskId::new();
         let mut request = delegation(run_id, task_id, package_id);
         request.principal = person.to_string();
-        let first = coordinator
+        let environment = coordinator.environment(&person.to_string()).unwrap();
+        let first = environment
             .delegate(request.clone(), &scope(run_id, Some(task_id)))
             .await
             .unwrap();
@@ -520,17 +523,19 @@ async fn nonbuiltin_registration_installs_publishes_and_completes_without_source
             .unwrap();
         publish(&registry);
         assert!(
-            directory
-                .list_cards(DirectoryQuery {
+            directory_catalog(
+                &directory,
+                DirectoryQuery {
                     principal: &person.to_string(),
                     purpose: "everyday-assistance"
-                })
-                .unwrap()
-                .cards
-                .is_empty()
+                }
+            )
+            .await
+            .cards
+            .is_empty()
         );
         assert_eq!(
-            coordinator
+            environment
                 .delegate(request, &scope(run_id, Some(task_id)))
                 .await
                 .unwrap()
@@ -542,6 +547,8 @@ async fn nonbuiltin_registration_installs_publishes_and_completes_without_source
         next.principal = person.to_string();
         assert_eq!(
             coordinator
+                .environment(&person.to_string())
+                .unwrap()
                 .delegate(next, &scope(run_id, Some(new_task_id)))
                 .await,
             Err(AgentFailure::CapabilityDenied)
@@ -550,20 +557,22 @@ async fn nonbuiltin_registration_installs_publishes_and_completes_without_source
     }
 }
 
-#[test]
-fn owner_publication_replaces_a_complete_set_without_losing_other_owners() {
+#[tokio::test]
+async fn owner_publication_replaces_a_complete_set_without_losing_other_owners() {
     let directory = Directory::default();
     let first = publication_entry("example.test.first");
     let second = publication_entry("example.test.second");
     let unrelated = publication_entry("example.test.unrelated");
     let first_revision = directory.publish("bundle-a", vec![first]).unwrap();
     directory.publish("bundle-b", vec![unrelated]).unwrap();
-    let before_conflict = directory
-        .list_cards(DirectoryQuery {
+    let before_conflict = directory_catalog(
+        &directory,
+        DirectoryQuery {
             principal: "person-a",
             purpose: "everyday-assistance",
-        })
-        .unwrap();
+        },
+    )
+    .await;
     assert_eq!(
         directory.publish(
             "bundle-a",
@@ -572,22 +581,26 @@ fn owner_publication_replaces_a_complete_set_without_losing_other_owners() {
         Err(AgentFailure::Conflict),
     );
     assert_eq!(
-        directory
-            .list_cards(DirectoryQuery {
+        directory_catalog(
+            &directory,
+            DirectoryQuery {
                 principal: "person-a",
                 purpose: "everyday-assistance",
-            })
-            .unwrap(),
+            }
+        )
+        .await,
         before_conflict
     );
     let revision = directory.publish("bundle-a", vec![second]).unwrap();
     assert_eq!(revision, first_revision + 2);
-    let after = directory
-        .list_cards(DirectoryQuery {
+    let after = directory_catalog(
+        &directory,
+        DirectoryQuery {
             principal: "person-a",
             purpose: "everyday-assistance",
-        })
-        .unwrap();
+        },
+    )
+    .await;
     let ids = after
         .cards
         .iter()
@@ -597,8 +610,8 @@ fn owner_publication_replaces_a_complete_set_without_losing_other_owners() {
     assert_eq!(after.revision, revision);
 }
 
-#[test]
-fn owner_publication_rejects_duplicate_candidates_and_rejoins_exact_set() {
+#[tokio::test]
+async fn owner_publication_rejects_duplicate_candidates_and_rejoins_exact_set() {
     let directory = Directory::default();
     let candidate = publication_entry("example.test.stable");
     let revision = directory
@@ -613,19 +626,21 @@ fn owner_publication_rejects_duplicate_candidates_and_rejoins_exact_set() {
         Err(AgentFailure::Conflict),
     );
     assert_eq!(
-        directory
-            .list_cards(DirectoryQuery {
+        directory_catalog(
+            &directory,
+            DirectoryQuery {
                 principal: "person-a",
                 purpose: "everyday-assistance",
-            })
-            .unwrap()
-            .revision,
+            }
+        )
+        .await
+        .revision,
         revision,
     );
 }
 
-#[test]
-fn owner_publication_rejects_duplicate_assignment_identity() {
+#[tokio::test]
+async fn owner_publication_rejects_duplicate_assignment_identity() {
     let directory = Directory::default();
     let first = publication_entry("example.test.first");
     let mut second = publication_entry("example.test.second");
@@ -641,14 +656,16 @@ fn owner_publication_rejects_duplicate_assignment_identity() {
         Err(AgentFailure::Conflict),
     );
     assert_eq!(
-        directory
-            .list_cards(DirectoryQuery {
+        directory_catalog(
+            &directory,
+            DirectoryQuery {
                 principal: "person-a",
                 purpose: "everyday-assistance",
-            })
-            .unwrap()
-            .cards
-            .len(),
+            }
+        )
+        .await
+        .cards
+        .len(),
         1,
     );
 }
@@ -664,6 +681,18 @@ fn scope(run_id: RunId, task_id: Option<TaskId>) -> ExecutionScope {
     task_id.map_or(root.clone(), |task_id| {
         root.child_scope(root.deadline(), 20_000, 50_000, Some(task_id))
     })
+}
+
+async fn directory_catalog(directory: &Directory, query: DirectoryQuery<'_>) -> AllowedCatalog {
+    let (coordinator, _) = TaskCoordinator::activate(
+        directory.clone(),
+        Arc::new(MemoryTasks::default()),
+        query.purpose,
+        16 * 1024,
+    )
+    .await
+    .unwrap();
+    coordinator.environment(query.principal).unwrap().catalog()
 }
 
 fn delegation_context() -> floe_agent_contract::DelegationExecutionContext {
@@ -696,7 +725,7 @@ fn delegation(run_id: RunId, task_id: TaskId, agent_id: &str) -> DelegationReque
 }
 
 #[tokio::test]
-async fn admitted_task_keeps_endpoint_across_publication_refresh() {
+async fn run_snapshot_keeps_endpoint_before_task_admission_across_publication_refresh() {
     let directory = Directory::default();
     let old_calls = Arc::new(AtomicUsize::new(0));
     let new_calls = Arc::new(AtomicUsize::new(0));
@@ -717,7 +746,7 @@ async fn admitted_task_keeps_endpoint_across_publication_refresh() {
     let repository = Arc::new(MemoryTasks::default());
     let refresh_directory = directory.clone();
     let refresh_calls = Arc::clone(&new_calls);
-    *repository.1.lock().unwrap() = Some(Box::new(move || {
+    let refresh = move || {
         let (entry, _) = publication_entry("example.test.pinned");
         refresh_directory
             .publish(
@@ -731,7 +760,7 @@ async fn admitted_task_keeps_endpoint_across_publication_refresh() {
                 )],
             )
             .unwrap();
-    }));
+    };
     let (coordinator, _) = TaskCoordinator::activate(
         directory,
         Arc::clone(&repository),
@@ -740,9 +769,13 @@ async fn admitted_task_keeps_endpoint_across_publication_refresh() {
     )
     .await
     .unwrap();
+    let environment = coordinator.environment("person-a").unwrap();
+    let catalog = environment.catalog();
+    refresh();
+    assert_eq!(environment.catalog(), catalog);
     let run_id = RunId::new();
     let task_id = TaskId::new();
-    let first = coordinator
+    let first = environment
         .delegate(
             delegation(run_id, task_id, "example.test.pinned"),
             &scope(run_id, Some(task_id)),
@@ -756,9 +789,29 @@ async fn admitted_task_keeps_endpoint_across_publication_refresh() {
     );
     assert_eq!(old_calls.load(Ordering::SeqCst), 1);
     assert_eq!(new_calls.load(Ordering::SeqCst), 0);
-    *repository.1.lock().unwrap() = None;
+    let mut foreign = delegation(run_id, TaskId::new(), "example.test.pinned");
+    foreign.principal = "person-b".into();
+    assert_eq!(
+        environment
+            .delegate(foreign.clone(), &scope(run_id, Some(foreign.task_id)))
+            .await,
+        Err(AgentFailure::CapabilityDenied)
+    );
+    assert_eq!(
+        coordinator
+            .environment("person-a")
+            .unwrap()
+            .delegate(
+                delegation(run_id, task_id, "example.test.pinned"),
+                &scope(run_id, Some(task_id))
+            )
+            .await,
+        Err(AgentFailure::Conflict)
+    );
     let new_task_id = TaskId::new();
     let second = coordinator
+        .environment("person-a")
+        .unwrap()
         .delegate(
             delegation(run_id, new_task_id, "example.test.pinned"),
             &scope(run_id, Some(new_task_id)),
@@ -805,19 +858,22 @@ async fn registered_ninth_endpoint_executes_without_dispatch_changes_and_replays
     let task_id = TaskId::new();
     let request = delegation(run_id, task_id, "floe.test.ninth");
     let task_scope = scope(run_id, Some(task_id));
+    let environment = coordinator.environment("person-a").unwrap();
 
     let first =
-        floe_agent_contract::DelegationPort::delegate(&coordinator, request.clone(), &task_scope)
+        floe_agent_contract::DelegationPort::delegate(&environment, request.clone(), &task_scope)
             .await
             .unwrap();
     let engine_run_id = RunId::new();
     let engine_scope = scope(engine_run_id, None);
-    let catalog = directory
-        .list_cards(DirectoryQuery {
+    let catalog = directory_catalog(
+        &directory,
+        DirectoryQuery {
             principal: "person-a",
             purpose: "everyday-assistance",
-        })
-        .unwrap();
+        },
+    )
+    .await;
     let engine_report = match Engine::default()
         .drive_with_default_validator(
             manager_request(catalog, engine_scope),
@@ -827,7 +883,7 @@ async fn registered_ninth_endpoint_executes_without_dispatch_changes_and_replays
                 observed_coverage: Arc::new(Mutex::new(vec![])),
             },
             &NoTools,
-            &coordinator,
+            &coordinator.environment("person-a").unwrap(),
             &Journal,
         )
         .await
@@ -842,7 +898,7 @@ async fn registered_ninth_endpoint_executes_without_dispatch_changes_and_replays
         }
     };
     directory.set_enabled("floe.test.ninth", 1, false).unwrap();
-    let second = floe_agent_contract::DelegationPort::delegate(&coordinator, request, &task_scope)
+    let second = floe_agent_contract::DelegationPort::delegate(&environment, request, &task_scope)
         .await
         .unwrap();
 
@@ -908,6 +964,8 @@ async fn trusted_endpoint_settlement_reaches_the_repository_once() {
     let task_id = TaskId::new();
     let request = delegation(run_id, task_id, "floe.test.settlement");
     let receipt = coordinator
+        .environment("person-a")
+        .unwrap()
         .delegate(request.clone(), &scope(run_id, Some(task_id)))
         .await
         .unwrap();
@@ -917,6 +975,8 @@ async fn trusted_endpoint_settlement_reaches_the_repository_once() {
     assert_eq!(repository.0.lock().unwrap().settlements, 1);
     assert_eq!(
         coordinator
+            .environment("person-a")
+            .unwrap()
             .delegate(request, &scope(run_id, Some(task_id)))
             .await
             .unwrap()
@@ -955,6 +1015,8 @@ async fn unsupported_endpoint_settlement_becomes_a_failed_task_before_commit() {
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let receipt = coordinator
+        .environment("person-a")
+        .unwrap()
         .delegate(
             delegation(run_id, task_id, "floe.test.unsupported-settlement"),
             &scope(run_id, Some(task_id)),
@@ -1026,7 +1088,7 @@ async fn explicit_task_cancel_is_authorized_persisted_and_does_not_cancel_parent
     let task_coordinator = Arc::clone(&coordinator);
     let delegated = tokio::spawn(async move {
         floe_agent_contract::DelegationPort::delegate(
-            task_coordinator.as_ref(),
+            &task_coordinator.environment("person-a").unwrap(),
             request,
             &task_scope,
         )
@@ -1144,7 +1206,7 @@ async fn disabled_selection_is_denied_before_task_admission() {
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let failure = floe_agent_contract::DelegationPort::delegate(
-        &coordinator,
+        &coordinator.environment("person-a").unwrap(),
         delegation(run_id, task_id, "floe.test.disabled"),
         &scope(run_id, Some(task_id)),
     )
@@ -1357,12 +1419,14 @@ async fn run_manager(
         },
     )
     .unwrap();
-    let catalog = directory
-        .list_cards(DirectoryQuery {
+    let catalog = directory_catalog(
+        &directory,
+        DirectoryQuery {
             principal: "person-a",
             purpose: "everyday-assistance",
-        })
-        .unwrap();
+        },
+    )
+    .await;
     assert_eq!(catalog.cards.len(), 2);
     let coordinator = TaskCoordinator::activate(
         directory,
@@ -1385,7 +1449,7 @@ async fn run_manager(
                 observed_coverage: Arc::clone(&observed_coverage),
             },
             &NoTools,
-            &coordinator,
+            &coordinator.environment("person-a").unwrap(),
             &Journal,
         )
         .await
@@ -1467,8 +1531,8 @@ async fn failed_task_is_scoped_and_manager_root_continues() {
     )));
 }
 
-#[test]
-fn disabled_or_stale_endpoint_is_not_dispatchable() {
+#[tokio::test]
+async fn disabled_or_stale_endpoint_is_not_dispatchable() {
     let directory = Directory::default();
     register(
         &directory,
@@ -1479,31 +1543,37 @@ fn disabled_or_stale_endpoint_is_not_dispatchable() {
         },
     )
     .unwrap();
-    assert!(matches!(
-        directory.resolve(
-            "floe.builtin.schedule",
-            2,
-            DirectoryQuery {
-                principal: "person-a",
-                purpose: "everyday-assistance"
-            },
-        ),
+    let (coordinator, _) = TaskCoordinator::activate(
+        directory.clone(),
+        Arc::new(MemoryTasks::default()),
+        "everyday-assistance",
+        16 * 1024,
+    )
+    .await
+    .unwrap();
+    let environment = coordinator.environment("person-a").unwrap();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let mut request = delegation(run_id, task_id, "floe.builtin.schedule");
+    request.selected_definition_revision = 2;
+    assert_eq!(
+        environment
+            .delegate(request.clone(), &scope(run_id, Some(task_id)))
+            .await,
         Err(AgentFailure::Conflict)
-    ));
+    );
     directory
         .set_enabled("floe.builtin.schedule", 1, false)
         .unwrap();
-    assert!(matches!(
-        directory.resolve(
-            "floe.builtin.schedule",
-            1,
-            DirectoryQuery {
-                principal: "person-a",
-                purpose: "everyday-assistance"
-            },
-        ),
+    request.selected_definition_revision = 1;
+    assert_eq!(
+        coordinator
+            .environment("person-a")
+            .unwrap()
+            .delegate(request, &scope(run_id, Some(task_id)))
+            .await,
         Err(AgentFailure::CapabilityDenied)
-    ));
+    );
 }
 
 #[tokio::test]
@@ -1598,7 +1668,7 @@ async fn coordinator_catalog_lists_directory_admitted_cards_without_model_placem
     .await
     .unwrap();
 
-    let catalog = coordinator.catalog("person-a").unwrap();
+    let catalog = coordinator.environment("person-a").unwrap().catalog();
     let listed: Vec<(&str, u64)> = catalog
         .cards
         .iter()
@@ -1611,11 +1681,20 @@ async fn coordinator_catalog_lists_directory_admitted_cards_without_model_placem
         vec![("floe.test.local", 1), ("floe.test.remote-only", 3)]
     );
     // Disabled, unreviewed and wrong-principal entries never appear.
-    assert_eq!(coordinator.catalog("person-b").unwrap().cards.len(), 1);
+    assert_eq!(
+        coordinator
+            .environment("person-b")
+            .unwrap()
+            .catalog()
+            .cards
+            .len(),
+        1
+    );
     assert!(
         coordinator
-            .catalog("person-b")
+            .environment("person-b")
             .unwrap()
+            .catalog()
             .cards
             .iter()
             .all(|entry| entry.card.id == "floe.test.other-principal")
@@ -1648,6 +1727,8 @@ async fn stale_definition_revision_is_rejected_by_task_coordinator() {
     let mut request = delegation(run_id, task_id, "floe.test.versioned");
     request.selected_definition_revision = 99;
     let failure = coordinator
+        .environment("person-a")
+        .unwrap()
         .delegate(request, &scope(run_id, Some(task_id)))
         .await
         .unwrap_err();
@@ -1684,11 +1765,18 @@ async fn exact_duplicate_request_replays_without_endpoint_redispatch() {
     let request = delegation(run_id, task_id, "floe.test.replay");
     let task_scope = scope(run_id, Some(task_id));
     let first = coordinator
+        .environment("person-a")
+        .unwrap()
         .delegate(request.clone(), &task_scope)
         .await
         .unwrap();
     assert_eq!(first.snapshot.state, TaskState::Completed);
-    let second = coordinator.delegate(request, &task_scope).await.unwrap();
+    let second = coordinator
+        .environment("person-a")
+        .unwrap()
+        .delegate(request, &task_scope)
+        .await
+        .unwrap();
     assert_eq!(second.snapshot, first.snapshot);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
@@ -1723,6 +1811,8 @@ async fn same_task_with_changed_execution_context_conflicts() {
     let request = delegation(run_id, task_id, "floe.test.context");
     let task_scope = scope(run_id, Some(task_id));
     let first = coordinator
+        .environment("person-a")
+        .unwrap()
         .delegate(request.clone(), &task_scope)
         .await
         .unwrap();
@@ -1732,12 +1822,22 @@ async fn same_task_with_changed_execution_context_conflicts() {
     changed.execution_context.device_id = "changed-device".into();
     changed.execution_context.session_id = Uuid::new_v4();
     assert_eq!(
-        coordinator.delegate(changed, &task_scope).await.err(),
+        coordinator
+            .environment("person-a")
+            .unwrap()
+            .delegate(changed, &task_scope)
+            .await
+            .err(),
         Some(AgentFailure::Conflict)
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     // The exact original still replays.
-    let replayed = coordinator.delegate(request, &task_scope).await.unwrap();
+    let replayed = coordinator
+        .environment("person-a")
+        .unwrap()
+        .delegate(request, &task_scope)
+        .await
+        .unwrap();
     assert_eq!(replayed.snapshot, first.snapshot);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
@@ -1773,6 +1873,8 @@ async fn denied_endpoint_produces_rejected_terminal_task() {
         let run_id = RunId::new();
         let task_id = TaskId::new();
         let receipt = coordinator
+            .environment("person-a")
+            .unwrap()
             .delegate(
                 delegation(run_id, task_id, "floe.test.denied"),
                 &scope(run_id, Some(task_id)),
@@ -1842,6 +1944,8 @@ async fn deadline_during_execution_produces_timed_out_terminal_task() {
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let receipt = coordinator
+        .environment("person-a")
+        .unwrap()
         .delegate(
             delegation(run_id, task_id, "floe.test.deadline"),
             &scope(run_id, Some(task_id)),

@@ -399,6 +399,10 @@ fn request(
     cancellation: floe_execution::Cancellation,
 ) -> TurnRequest {
     TurnRequest {
+        expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+            revision: 1,
+            digest: [1; 32],
+        },
         command_id,
         session_id,
         expected_session_revision: 0,
@@ -409,7 +413,10 @@ fn request(
         mode: TurnMode::New,
         retry_of: None,
         profile: floe_conversation::ProfileSelection::Auto,
-        allowed_catalog: AllowedCatalog::default(),
+        allowed_catalog: AllowedCatalog {
+            revision: 1,
+            ..Default::default()
+        },
         replay: vec![],
         deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
         cancellation,
@@ -420,9 +427,9 @@ fn request(
 fn archive_dependency(person_id: PersonId) -> floe_context::ContextDependency {
     use chrono::{Duration, Utc};
     use floe_access::{
-        ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority,
-        GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-        GrantSourceBinding, ProcessingRestriction, ResourceHandle,
+        ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority, GrantConsumer,
+        GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding,
+        ProcessingRestriction, ResourceHandle,
     };
 
     let now = Utc::now();
@@ -964,6 +971,10 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
     let run_id = RunId::new();
     vault
         .admit_conversation_turn(VaultConversationAdmissionRequest {
+            expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
             run_id,
             command_id: floe_agent_contract::CommandId::new(),
             session_id: session.id,
@@ -1101,6 +1112,10 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
     let second_run_id = RunId::new();
     vault
         .admit_conversation_turn(VaultConversationAdmissionRequest {
+            expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
             run_id: second_run_id,
             command_id: floe_agent_contract::CommandId::new(),
             session_id: session.id,
@@ -1308,6 +1323,10 @@ async fn open_vault_activation_interrupts_an_unfinished_conversation_run() {
     let command_id = floe_agent_contract::CommandId::new();
     vault
         .admit_conversation_turn(VaultConversationAdmissionRequest {
+            expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
             run_id,
             command_id,
             session_id: session.id,
@@ -1359,6 +1378,10 @@ async fn child_crash_before_resume_takeover_preserves_parent_pending() {
     let run_id = RunId::new();
     vault
         .admit_conversation_turn(VaultConversationAdmissionRequest {
+            expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
             run_id,
             command_id: floe_agent_contract::CommandId::new(),
             session_id: session.id,
@@ -1461,6 +1484,10 @@ async fn child_crash_before_resume_takeover_preserves_parent_pending() {
     let child_run_id = RunId::new();
     vault
         .admit_conversation_turn(VaultConversationAdmissionRequest {
+            expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
             run_id: child_run_id,
             command_id: floe_agent_contract::CommandId::new(),
             session_id: session.id,
@@ -1562,6 +1589,10 @@ async fn child_resume_batch_mismatch_is_storage_fault() {
     let run_id = RunId::new();
     vault
         .admit_conversation_turn(VaultConversationAdmissionRequest {
+            expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
             run_id,
             command_id: floe_agent_contract::CommandId::new(),
             session_id: session.id,
@@ -1656,6 +1687,10 @@ async fn child_resume_batch_mismatch_is_storage_fault() {
     let child_run_id = RunId::new();
     vault
         .admit_conversation_turn(VaultConversationAdmissionRequest {
+            expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
             run_id: child_run_id,
             command_id: floe_agent_contract::CommandId::new(),
             session_id: session.id,
@@ -1947,6 +1982,10 @@ async fn interaction_publishes_through_origin_journal_and_survives_compaction() 
     let run_id = floe_agent_contract::RunId::new();
     let admission = repository
         .admit_turn(TurnAdmissionRequest {
+            expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
             run_id,
             command_id,
             session_id: started.session_id,
@@ -2129,6 +2168,10 @@ fn interaction_message_projects_to_opaque_transcript_entry() {
     let run_id = floe_agent_contract::RunId::new();
     let command_id = floe_agent_contract::CommandId::new();
     let receipt = RunReceipt {
+        expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+            revision: 1,
+            digest: [1; 32],
+        },
         run_id,
         command_id,
         session_id: Uuid::new_v4(),
@@ -2628,6 +2671,10 @@ fn resume_admission(
     let canonical = floe_conversation::CanonicalTurnIntent::from_start_turn(&mut intent).unwrap();
     let request_digest = canonical.digest(principal).unwrap();
     floe_conversation::TurnAdmissionRequest {
+        expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+            revision: 1,
+            digest: [1; 32],
+        },
         run_id: floe_agent_contract::RunId::new(),
         command_id,
         session_id,

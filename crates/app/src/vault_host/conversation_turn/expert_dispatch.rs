@@ -2851,6 +2851,10 @@ mod capture_tests {
         floe_conversation::ConversationRepository::admit_turn(
             &runs,
             floe_conversation::TurnAdmissionRequest {
+                expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                    revision: 1,
+                    digest: [1; 32],
+                },
                 run_id,
                 command_id,
                 session_id,

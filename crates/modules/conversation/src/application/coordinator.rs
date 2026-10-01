@@ -97,6 +97,13 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
                 if snapshot.profile != request.profile {
                     return Err(AgentFailure::StorageUnavailable);
                 }
+                if let Some(batch) = &snapshot.pending_batch {
+                    if snapshot.expert_environment != request.expert_environment
+                        || batch.catalog_revision != request.expert_environment.revision
+                    {
+                        return Err(AgentFailure::Conflict);
+                    }
+                }
                 Some(snapshot)
             }
         };
@@ -123,6 +130,7 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
         let admission = self
             .repository
             .admit_turn(TurnAdmissionRequest {
+                expert_environment: request.expert_environment,
                 run_id,
                 command_id: request.command_id,
                 session_id: request.session_id,
@@ -158,6 +166,7 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
         };
         admitted.validate()?;
         if admitted.receipt.run_id != run_id
+            || admitted.receipt.expert_environment != request.expert_environment
             || admitted.receipt.command_id != request.command_id
             || admitted.receipt.session_id != request.session_id
             || admitted.receipt.principal != request.principal
@@ -854,6 +863,7 @@ pub async fn continuation<Repository: ConversationRepository>(
     let (pending_batch, batch_cursor) =
         carried.map_or((None, None), |(batch, cursor)| (Some(batch), Some(cursor)));
     Ok(ContinuationSnapshot {
+        expert_environment: current.expert_environment,
         reference: current.continuation().ok_or(AgentFailure::Conflict)?,
         session_id: current.session_id,
         session_revision: current.session_revision,
@@ -1135,10 +1145,9 @@ mod tests {
     #[test]
     fn child_resume_must_match_parent_projection_coverage() {
         use floe_context_contract::{
-            ConnectionId, ConnectorId, ContextDependency,
-            ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
-            GrantOperation, GrantPurpose, GrantSourceBinding, ProcessingRestriction,
-            ResourceHandle,
+            ConnectionId, ConnectorId, ContextDependency, ExecutionOwnerId, GrantAuthority,
+            GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+            GrantSourceBinding, ProcessingRestriction, ResourceHandle,
         };
         let parent_batch = tool_batch();
         let parent_cursor = cursor_at(&parent_batch, 1);

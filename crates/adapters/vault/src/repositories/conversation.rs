@@ -245,6 +245,7 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
             match self
                 .vault
                 .admit_conversation_turn(VaultConversationAdmissionRequest {
+                    expert_environment: request.expert_environment,
                     run_id: request.run_id,
                     command_id: request.command_id,
                     session_id: request.session_id,
@@ -635,6 +636,7 @@ impl<Keys: VaultKeyProvider + 'static> ExecutionJournal for VaultConversationJou
 
 fn run_receipt(record: VaultConversationRunRecord) -> Result<RunReceipt, AgentFailure> {
     let receipt = RunReceipt {
+        expert_environment: record.expert_environment,
         run_id: record.run_id,
         command_id: record.command_id,
         session_id: record.session_id,

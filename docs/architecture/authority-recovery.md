@@ -65,6 +65,8 @@ A continuation child does not supersede a parent's pending batch merely by exist
 
 This invariant is part of the stable architecture: a child may take over only after durably binding the exact validated batch and starting cursor.
 
+Conversation durably records the Experts-owned environment revision/digest on every Run, separately from canonical user intent. Pending-batch Continue requires the source and destination Run environment identities to match before any stored step executes; without pending work a new Run may sample new configuration. Journal batch revisions must match the admitted Run, including resumed re-records and finalization. Executor activation interrupts Working Runs on reopen while preserving their original environment identities; it does not reconstruct endpoints or resume the same Run under current Directory state. Current binding-drift execution fences remain in place.
+
 ## Model attempts and budgets
 
 - One attempt identity is preserved through Engine, Inference and transport.

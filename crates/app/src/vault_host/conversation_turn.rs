@@ -311,13 +311,15 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         calendar: Some(&calendar_resolver),
     };
     {
-        let directory_catalog = inputs.task_coordinator.catalog(&person_id.to_string())?;
-        let expert_cards = directory_catalog.cards;
-        let active_experts: Vec<floe_agent_contract::AgentCard> = expert_cards
+        let expert_environment = inputs
+            .task_coordinator
+            .environment(&person_id.to_string())?;
+        let catalog = expert_environment.catalog();
+        let active_experts: Vec<floe_agent_contract::AgentCard> = catalog
+            .cards
             .iter()
             .map(|entry| entry.card.clone())
             .collect();
-        let catalog = engine_ports::manager_catalog(expert_cards, directory_catalog.revision);
         let budget = AgentBudget::default();
         let duration = std::time::Duration::from_millis(budget.deadline_ms);
         let deadline = tokio::time::Instant::now() + duration;
@@ -369,11 +371,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             inputs.session_data_classes.clone(),
             active_experts,
         )?;
-        // Canonical root delegation: TaskCoordinator serves as the
-        // DelegationPort directly. The Directory resolves the endpoint, and
-        // the invocation carries the explicit execution context; App holds
-        // no run-id endpoint authority.
-        let delegation_port = inputs.task_coordinator;
+        let delegation_port = &expert_environment;
         let retry_of = request.retry_of;
         let profile = request.profile.clone();
         // The explicit delegation host context, forwarded through
@@ -388,6 +386,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         let receipt = service
             .run_turn_observed(
                 floe_conversation::TurnRequest {
+                    expert_environment: expert_environment.identity(),
                     command_id: inputs.command_id,
                     session_id,
                     expected_session_revision: request.expected_revision,
@@ -1376,6 +1375,10 @@ mod tests {
         let receipt = service
             .run_turn(
                 floe_conversation::TurnRequest {
+                    expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                        revision: 1,
+                        digest: [1; 32],
+                    },
                     command_id: floe_agent_contract::CommandId::new(),
                     session_id: session.id,
                     expected_session_revision: session.revision,
@@ -1386,7 +1389,10 @@ mod tests {
                     mode: floe_conversation::TurnMode::New,
                     retry_of: None,
                     profile: floe_conversation::ProfileSelection::Auto,
-                    allowed_catalog: engine_ports::manager_catalog(vec![], 1),
+                    allowed_catalog: floe_agent_contract::AllowedCatalog {
+                        revision: 1,
+                        ..Default::default()
+                    },
                     replay: vec![],
                     deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
                     cancellation: Cancellation::default(),
@@ -3471,6 +3477,10 @@ mod tests {
         fixture
             .vault
             .admit_conversation_turn(floe_vault::VaultConversationAdmissionRequest {
+                expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                    revision: 1,
+                    digest: [1; 32],
+                },
                 run_id,
                 command_id: floe_agent_contract::CommandId::new(),
                 session_id: session.id,

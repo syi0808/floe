@@ -66,6 +66,10 @@ mod tests {
 
     fn origin(state: RunState, lineage: u8) -> RunReceipt {
         crate::RunReceipt {
+            expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
             run_id: RunId::new(),
             command_id: floe_kernel::CommandId::new(),
             session_id: uuid::Uuid::new_v4(),

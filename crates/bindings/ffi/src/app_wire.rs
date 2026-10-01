@@ -2278,6 +2278,10 @@ mod tests {
 
     fn receipt(person_id: Uuid) -> RunReceipt {
         RunReceipt {
+            expert_environment: serde_json::from_value(
+                serde_json::json!({"revision": 1, "digest": vec![1; 32]}),
+            )
+            .unwrap(),
             run_id: floe_app::RunId::new(),
             command_id: floe_app::CommandId::new(),
             session_id: Uuid::new_v4(),

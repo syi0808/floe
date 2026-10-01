@@ -523,9 +523,11 @@ async fn read_a_then_rebind_b_fences_expert_model_dispatch() {
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let scope = task_scope(run_id, task_id);
-    let execution = open
+    let environment = open
         .task_coordinator
-        .delegate(request(person, run_id, task_id), &scope);
+        .environment(&person.to_string())
+        .unwrap();
+    let execution = environment.delegate(request(person, run_id, task_id), &scope);
     let rebind = async {
         MODEL_DISPATCH_ENTERED
             .get_or_init(tokio::sync::Notify::new)
@@ -608,9 +610,11 @@ async fn rebound_selection_discards_runner_result_before_final_release() {
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let scope = task_scope(run_id, task_id);
-    let execution = open
+    let environment = open
         .task_coordinator
-        .delegate(request(person, run_id, task_id), &scope);
+        .environment(&person.to_string())
+        .unwrap();
+    let execution = environment.delegate(request(person, run_id, task_id), &scope);
     let rebind = async {
         OUTPUT_ENTERED
             .get_or_init(tokio::sync::Notify::new)
@@ -682,8 +686,11 @@ async fn completed_task_replays_historical_result_after_rebinding_and_disable() 
     let task_id = TaskId::new();
     let original_request = request(person, run_id, task_id);
     let scope = task_scope(run_id, task_id);
-    let completed = open
+    let environment = open
         .task_coordinator
+        .environment(&person.to_string())
+        .unwrap();
+    let completed = environment
         .delegate(original_request.clone(), &scope)
         .await
         .unwrap();
@@ -721,8 +728,7 @@ async fn completed_task_replays_historical_result_after_rebinding_and_disable() 
     open.publish_expert_directory(&open.registrations)
         .await
         .unwrap();
-    let replay = open
-        .task_coordinator
+    let replay = environment
         .delegate(original_request, &scope)
         .await
         .unwrap();
@@ -781,9 +787,11 @@ async fn admitted_source_a_rebound_before_read_never_uses_b() {
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let scope = task_scope(run_id, task_id);
-    let execution = open
+    let environment = open
         .task_coordinator
-        .delegate(request(person, run_id, task_id), &scope);
+        .environment(&person.to_string())
+        .unwrap();
+    let execution = environment.delegate(request(person, run_id, task_id), &scope);
     let rebind = async {
         SOURCE_READ_ENTERED
             .get_or_init(tokio::sync::Notify::new)
@@ -900,6 +908,10 @@ async fn journal_origin(open: &OpenVault<Keys>, request: &mut DelegationRequest,
     floe_conversation::ConversationRepository::admit_turn(
         repository,
         floe_conversation::TurnAdmissionRequest {
+            expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
             run_id,
             command_id,
             session_id: started.session_id,
@@ -931,6 +943,20 @@ async fn journal_origin(open: &OpenVault<Keys>, request: &mut DelegationRequest,
 
 #[tokio::test]
 async fn registered_runner_nonbuiltin_uses_product_endpoint_and_durable_task() {
+    struct ReplacementEndpoint(Arc<AtomicUsize>);
+    impl floe_agent_contract::AgentEndpoint for ReplacementEndpoint {
+        fn execute<'a>(
+            &'a self,
+            _: floe_agent_contract::EndpointInvocation,
+            _: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<
+            'a,
+            Result<floe_agent_contract::ExpertReport, AgentFailure>,
+        > {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err(AgentFailure::CapabilityDenied) })
+        }
+    }
     RUNNER_CALLS.store(0, Ordering::SeqCst);
     assert!(
         !floe_experts_builtin::manifests()
@@ -959,8 +985,9 @@ async fn registered_runner_nonbuiltin_uses_product_endpoint_and_durable_task() {
     install_test_manifest(&open, manifest).await;
     assert_eq!(
         open.task_coordinator
-            .catalog(&person.to_string())
+            .environment(&person.to_string())
             .unwrap()
+            .catalog()
             .cards
             .len(),
         1
@@ -969,8 +996,49 @@ async fn registered_runner_nonbuiltin_uses_product_endpoint_and_durable_task() {
     let task_id = TaskId::new();
     let task_request = request(person, run_id, task_id);
     let scope = task_scope(run_id, task_id);
-    let receipt = open
+    let environment = open
         .task_coordinator
+        .environment(&person.to_string())
+        .unwrap();
+    let original_catalog = environment.catalog();
+    let registry = floe_experts::AgentRegistry::restore(
+        open.vault.expert_registry().await.unwrap().unwrap(),
+        open.vault.registry_instance_id(),
+    )
+    .unwrap();
+    let (_, admission) = registry
+        .enabled_expert_admissions(person)
+        .unwrap()
+        .into_iter()
+        .find(|(_, admission)| admission.package.id == task_request.selected_agent_id)
+        .unwrap();
+    let replacement_calls = Arc::new(AtomicUsize::new(0));
+    open.directory
+        .publish(
+            "product.experts",
+            vec![(
+                DirectoryEntry {
+                    definition: original_catalog.cards[0].clone(),
+                    selection: registry.execution_selection(person, &admission).unwrap(),
+                    admission,
+                    reviewed: true,
+                    enabled: true,
+                    admitted_principals: vec![person.to_string()],
+                    purposes: vec!["everyday-assistance".into()],
+                },
+                Arc::new(ReplacementEndpoint(Arc::clone(&replacement_calls))),
+            )],
+        )
+        .unwrap();
+    assert_eq!(environment.catalog(), original_catalog);
+    assert_ne!(
+        open.task_coordinator
+            .environment(&person.to_string())
+            .unwrap()
+            .identity(),
+        environment.identity()
+    );
+    let receipt = environment
         .delegate(task_request.clone(), &scope)
         .await
         .unwrap();
@@ -992,14 +1060,24 @@ async fn registered_runner_nonbuiltin_uses_product_endpoint_and_durable_task() {
     );
     assert!(receipt.snapshot.artifacts.iter().any(|artifact| artifact.parts.iter().any(|part| matches!(part, ArtifactPart::Data { media_type, data } if media_type == "application/vnd.example.result+json" && data.contains("example-bound-runner-marker")))));
     assert_eq!(RUNNER_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(replacement_calls.load(Ordering::SeqCst), 0);
     server.join().unwrap();
-    let replay = open
-        .task_coordinator
-        .delegate(task_request, &scope)
-        .await
-        .unwrap();
+    let replay = environment.delegate(task_request, &scope).await.unwrap();
     assert_eq!(replay.snapshot, receipt.snapshot);
     assert_eq!(RUNNER_CALLS.load(Ordering::SeqCst), 1);
+    let next_task = TaskId::new();
+    let next = open
+        .task_coordinator
+        .environment(&person.to_string())
+        .unwrap()
+        .delegate(
+            request(person, run_id, next_task),
+            &task_scope(run_id, next_task),
+        )
+        .await
+        .unwrap();
+    assert_eq!(next.snapshot.issue, Some(AgentFailure::CapabilityDenied));
+    assert_eq!(replacement_calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -1073,6 +1151,8 @@ async fn registered_runner_nonbuiltin_extension_chain_reads_only_its_exact_selec
     let scope = task_scope(run_id, task_id);
     let first = open
         .task_coordinator
+        .environment(&person.to_string())
+        .unwrap()
         .delegate(task_request.clone(), &scope)
         .await
         .unwrap();
@@ -1089,6 +1169,8 @@ async fn registered_runner_nonbuiltin_extension_chain_reads_only_its_exact_selec
     );
     let replay = open
         .task_coordinator
+        .environment(&person.to_string())
+        .unwrap()
         .delegate(task_request, &scope)
         .await
         .unwrap();
@@ -1211,6 +1293,8 @@ async fn registered_runner_extension_cannot_read_another_experts_selection() {
     journal_origin(&open, &mut task_request, run_id).await;
     let receipt = open
         .task_coordinator
+        .environment(&person.to_string())
+        .unwrap()
         .delegate(task_request, &task_scope(run_id, task_id))
         .await
         .unwrap();
@@ -1293,9 +1377,11 @@ async fn registered_runner_product_endpoint_fences_disabled_a_without_rerouting_
     let task_id = TaskId::new();
     let first_request = request(person, run_id, task_id);
     let first_scope = task_scope(run_id, task_id);
-    let first = open
+    let first_environment = open
         .task_coordinator
-        .delegate(first_request.clone(), &first_scope);
+        .environment(&person.to_string())
+        .unwrap();
+    let first = first_environment.delegate(first_request.clone(), &first_scope);
     let replacement = async {
         RUNNER_A_ENTERED
             .get_or_init(tokio::sync::Notify::new)
@@ -1356,6 +1442,8 @@ async fn registered_runner_product_endpoint_fences_disabled_a_without_rerouting_
         let blocked_task_id = TaskId::new();
         assert!(
             open.task_coordinator
+                .environment(&person.to_string())
+                .unwrap()
                 .delegate(
                     request(person, blocked_run_id, blocked_task_id),
                     &task_scope(blocked_run_id, blocked_task_id),
@@ -1370,6 +1458,8 @@ async fn registered_runner_product_endpoint_fences_disabled_a_without_rerouting_
         let second_scope = task_scope(second_run_id, second_task_id);
         let second = open
             .task_coordinator
+            .environment(&person.to_string())
+            .unwrap()
             .delegate(second_request, &second_scope)
             .await
             .unwrap();
@@ -1413,8 +1503,7 @@ async fn registered_runner_product_endpoint_fences_disabled_a_without_rerouting_
         .unwrap()
         .unwrap();
     assert_eq!(saved.snapshot, first.snapshot);
-    let replay = open
-        .task_coordinator
+    let replay = first_environment
         .delegate(first_request, &first_scope)
         .await
         .unwrap();
@@ -1432,8 +1521,9 @@ async fn registered_runner_required_unconfigured_source_returns_typed_outcome() 
     let (_root, open) = installed_open_without_provider(person, vec![registration], manifest).await;
     assert_eq!(
         open.task_coordinator
-            .catalog(&person.to_string())
+            .environment(&person.to_string())
             .unwrap()
+            .catalog()
             .cards
             .len(),
         1
@@ -1445,6 +1535,8 @@ async fn registered_runner_required_unconfigured_source_returns_typed_outcome() 
     let calls_before = REQUIRED_SOURCE_RUNNER_CALLS.load(Ordering::SeqCst);
     let receipt = open
         .task_coordinator
+        .environment(&person.to_string())
+        .unwrap()
         .delegate(task_request, &task_scope(run_id, task_id))
         .await
         .unwrap();
@@ -1594,6 +1686,8 @@ async fn registered_runner_undeclared_requirement_is_denied_before_source_io() {
     let task_id = TaskId::new();
     let receipt = open
         .task_coordinator
+        .environment(&person.to_string())
+        .unwrap()
         .delegate(
             request(person, run_id, task_id),
             &task_scope(run_id, task_id),
@@ -2246,14 +2340,59 @@ async fn shipped_descriptions_reach_context_projection_after_fresh_install() {
         let expected = manifest.definition.clone();
         let (_root, open) =
             installed_open_without_provider(person, vec![registration], manifest).await;
-        let directory = open.task_coordinator.catalog(&person.to_string()).unwrap();
-        assert_eq!(directory.cards, vec![expected.clone()]);
-        let active_experts = vec![expected.card.clone()];
-        let catalog = floe_agent_contract::AllowedCatalog {
-            cards: directory.cards,
-            tools: vec![],
-            revision: directory.revision,
+        let environment = open
+            .task_coordinator
+            .environment(&person.to_string())
+            .unwrap();
+        let catalog = environment.catalog();
+        assert_eq!(catalog.cards, vec![expected.clone()]);
+        let active_experts = catalog
+            .cards
+            .iter()
+            .map(|definition| definition.card.clone())
+            .collect::<Vec<_>>();
+        let started = floe_conversation::start_session(
+            open.conversation_repository.as_ref(),
+            floe_conversation::SessionRequest {
+                principal: person.to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        let command_id = floe_agent_contract::CommandId::new();
+        let admission = floe_conversation::ConversationRepository::admit_turn(
+            open.conversation_repository.as_ref(),
+            floe_conversation::TurnAdmissionRequest {
+                expert_environment: environment.identity(),
+                run_id: RunId::new(),
+                command_id,
+                session_id: started.session_id,
+                expected_session_revision: 0,
+                principal: person.to_string(),
+                request_digest: [7; 32],
+                mode: floe_conversation::TurnMode::New,
+                retry_of: None,
+                profile: floe_conversation::ProfileSelection::Auto,
+                user_message: floe_agent_contract::AgentMessage {
+                    message_id: command_id.as_uuid(),
+                    role: floe_agent_contract::MessageRole::User,
+                    text: "Review the supplied context.".into(),
+                    call_id: None,
+                    coverage: floe_agent_contract::DependencyCoverage::Independent,
+                },
+            },
+        )
+        .await
+        .unwrap();
+        let floe_conversation::TurnAdmission::Created(admitted) = admission else {
+            panic!("expected Created");
         };
+        assert_eq!(admitted.receipt.expert_environment, environment.identity());
+        assert_eq!(
+            admitted.receipt.expert_environment.revision,
+            catalog.revision
+        );
+        assert_ne!(admitted.receipt.expert_environment.digest, [0; 32]);
         let context = AgentContext {
             projection_version: 1,
             persona: None,
@@ -2345,7 +2484,11 @@ async fn registered_runner_admission_and_manifest_mismatches_fail_closed() {
     let (_root, open) =
         installed_open_without_provider(person, vec![example_registration()], example_manifest())
             .await;
-    let original = open.task_coordinator.catalog(&person.to_string()).unwrap();
+    let original = open
+        .task_coordinator
+        .environment(&person.to_string())
+        .unwrap()
+        .catalog();
     assert_eq!(original.cards.len(), 1);
     for mismatch in 0..4 {
         let run_id = RunId::new();
@@ -2360,6 +2503,8 @@ async fn registered_runner_admission_and_manifest_mismatches_fail_closed() {
         }
         assert!(
             open.task_coordinator
+                .environment(&person.to_string())
+                .unwrap()
                 .delegate(attempted, &task_scope(run_id, task_id))
                 .await
                 .is_err()
@@ -2385,7 +2530,10 @@ async fn registered_runner_admission_and_manifest_mismatches_fail_closed() {
         Err(AgentFailure::Conflict)
     );
     assert_eq!(
-        open.task_coordinator.catalog(&person.to_string()).unwrap(),
+        open.task_coordinator
+            .environment(&person.to_string())
+            .unwrap()
+            .catalog(),
         original
     );
     assert_eq!(RUNNER_CALLS.load(Ordering::SeqCst), 0);
@@ -2402,8 +2550,9 @@ async fn registered_runner_missing_and_duplicate_supplied_implementations_do_not
     .await;
     assert!(
         open.task_coordinator
-            .catalog(&person.to_string())
+            .environment(&person.to_string())
             .unwrap()
+            .catalog()
             .cards
             .iter()
             .all(|definition| definition.card.id != "example.test.expert")
@@ -2412,6 +2561,8 @@ async fn registered_runner_missing_and_duplicate_supplied_implementations_do_not
     let task_id = TaskId::new();
     assert!(
         open.task_coordinator
+            .environment(&person.to_string())
+            .unwrap()
             .delegate(
                 request(person, run_id, task_id),
                 &task_scope(run_id, task_id),
@@ -2447,8 +2598,9 @@ async fn registered_runner_missing_and_duplicate_supplied_implementations_do_not
     ));
     assert!(
         open.task_coordinator
-            .catalog(&person.to_string())
+            .environment(&person.to_string())
             .unwrap()
+            .catalog()
             .cards
             .iter()
             .all(|definition| definition.card.id != "example.test.expert")
@@ -2468,8 +2620,9 @@ async fn registered_runner_missing_and_duplicate_supplied_implementations_do_not
     assert!(
         version_open
             .task_coordinator
-            .catalog(&version_open.vault.person_id().to_string())
+            .environment(&version_open.vault.person_id().to_string())
             .unwrap()
+            .catalog()
             .cards
             .is_empty()
     );
@@ -2493,8 +2646,9 @@ async fn registered_runner_extension_does_not_change_first_party_observe_policy(
     let (_root, open) = installed_open_without_provider(person, vec![registration], manifest).await;
     assert_eq!(
         open.task_coordinator
-            .catalog(&person.to_string())
+            .environment(&person.to_string())
             .unwrap()
+            .catalog()
             .cards
             .len(),
         1

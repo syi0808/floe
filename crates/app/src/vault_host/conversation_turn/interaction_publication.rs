@@ -952,6 +952,10 @@ mod tests {
 
     fn receipt_fixture(person_id: PersonId, session_id: Uuid, run_id: RunId) -> RunReceipt {
         RunReceipt {
+            expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
             run_id,
             command_id: floe_agent_contract::CommandId::new(),
             session_id,

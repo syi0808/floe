@@ -961,6 +961,10 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
     runtime
         .block_on(
             vault.admit_conversation_turn(floe_vault::VaultConversationAdmissionRequest {
+                expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                    revision: 1,
+                    digest: [1; 32],
+                },
                 run_id,
                 command_id: floe_agent_contract::CommandId::new(),
                 session_id: session.id,
@@ -2647,6 +2651,10 @@ fn common_schedule_endpoint_publishes_binding_setup_before_source_review() {
         floe_conversation::ConversationRepository::admit_turn(
             &repository,
             floe_conversation::TurnAdmissionRequest {
+                expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                    revision: 1,
+                    digest: [1; 32],
+                },
                 run_id,
                 command_id,
                 session_id: started.session_id,

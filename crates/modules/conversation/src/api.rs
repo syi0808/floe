@@ -69,6 +69,7 @@ pub struct TurnRequest {
     pub retry_of: Option<RunId>,
     pub profile: ProfileSelection,
     pub allowed_catalog: AllowedCatalog,
+    pub expert_environment: floe_experts::RunExpertEnvironmentIdentity,
     pub replay: Vec<ReplayReceipt>,
     pub deadline: Instant,
     pub cancellation: Cancellation,
@@ -87,6 +88,10 @@ pub struct TurnRequest {
 
 impl TurnRequest {
     pub(crate) fn validate(&self) -> Result<(), AgentFailure> {
+        self.expert_environment.validate()?;
+        if self.allowed_catalog.revision != self.expert_environment.revision {
+            return Err(AgentFailure::InvalidInput);
+        }
         if !self.command_id.is_valid()
             || self.session_id.is_nil()
             || self.principal.trim() != self.principal

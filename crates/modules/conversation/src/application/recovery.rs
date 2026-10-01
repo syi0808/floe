@@ -86,6 +86,7 @@ pub fn project_continuation(
         return Err(AgentFailure::BudgetExceeded);
     }
     Ok(ContinuationSnapshot {
+        expert_environment: admitted.receipt.expert_environment,
         reference: admitted
             .receipt
             .continuation()
@@ -193,7 +194,6 @@ fn project_entries(
     let mut seen_batches = HashSet::new();
     let mut batches_seen: u32 = 0;
     let mut execution_id: Option<Uuid> = None;
-    let mut fresh_catalog_revision: Option<u64> = None;
     let mut pending: Option<PendingBatch> = None;
     let mut uncheckpointed_completion = false;
     let mut completed_iterations = 0;
@@ -548,18 +548,10 @@ fn project_entries(
                         return Err(AgentFailure::StorageUnavailable);
                     }
                     state.batch_bound = true;
-                    // One drive validates every fresh batch against one
-                    // catalog; only the leading resumed re-record may differ.
-                    // Whether that catalog is still current is the Engine
-                    // resume's pinned-revision check, not this projection's.
-                    match fresh_catalog_revision {
-                        Some(expected) if batch.catalog_revision != expected => {
-                            return Err(AgentFailure::StorageUnavailable);
-                        }
-                        Some(_) => {}
-                        None => fresh_catalog_revision = Some(batch.catalog_revision),
-                    }
                 } else if batches_seen != 0 {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                if batch.catalog_revision != source.expert_environment.revision {
                     return Err(AgentFailure::StorageUnavailable);
                 }
                 // Every batch in one journal — resumed re-record included —
@@ -757,6 +749,10 @@ mod tests {
         let run_id = RunId::new();
         AdmittedTurn {
             receipt: RunReceipt {
+                expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                    revision: 1,
+                    digest: [1; 32],
+                },
                 run_id,
                 command_id,
                 session_id: Uuid::new_v4(),
@@ -967,6 +963,35 @@ mod tests {
         ];
         let _ = admitted;
         (batch, prefix)
+    }
+
+    #[test]
+    fn every_batch_including_resumed_batch_must_match_admitted_environment_revision() {
+        let admitted = admitted();
+        let (batch, prefix) = pending_delegation_batch(&admitted, Uuid::new_v4(), vec![]);
+        let entries = |events: Vec<JournalEvent>| {
+            events
+                .into_iter()
+                .enumerate()
+                .map(|(index, event)| JournalEntry {
+                    revision: index as u64 + 1,
+                    event,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(project_journal(&admitted.receipt, &entries(prefix.clone())).is_ok());
+        let mut changed = admitted.receipt.clone();
+        changed.expert_environment.revision = batch.catalog_revision + 1;
+        assert!(matches!(
+            project_journal(&changed, &entries(prefix)),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+        let resumed = entries(vec![JournalEvent::ValidatedBatch { batch }]);
+        assert!(project_journal(&admitted.receipt, &resumed).is_ok());
+        assert!(matches!(
+            project_journal(&changed, &resumed),
+            Err(AgentFailure::StorageUnavailable)
+        ));
     }
 
     #[test]
@@ -1283,9 +1308,9 @@ mod tests {
 
     fn history_dependency() -> floe_agent_contract::ContextDependency {
         use floe_context_contract::{
-            ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority,
-            GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-            GrantSourceBinding, ProcessingRestriction, ResourceHandle,
+            ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority, GrantConsumer,
+            GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding,
+            ProcessingRestriction, ResourceHandle,
         };
         let person = floe_kernel::PersonId::new();
         let source = GrantSourceBinding::try_new(

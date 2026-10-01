@@ -162,6 +162,7 @@ impl RunState {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunReceipt {
+    pub expert_environment: floe_experts::RunExpertEnvironmentIdentity,
     pub run_id: RunId,
     pub command_id: CommandId,
     pub session_id: Uuid,
@@ -187,6 +188,9 @@ pub struct RunReceipt {
 
 impl RunReceipt {
     pub fn validate(&self) -> Result<(), AgentFailure> {
+        self.expert_environment
+            .validate()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
         if !self.run_id.is_valid()
             || !self.command_id.is_valid()
             || self.session_id.is_nil()
@@ -305,6 +309,7 @@ impl RunReceipt {
 
 #[derive(Clone, Debug)]
 pub struct TurnAdmissionRequest {
+    pub expert_environment: floe_experts::RunExpertEnvironmentIdentity,
     pub run_id: RunId,
     pub command_id: CommandId,
     pub session_id: Uuid,
@@ -319,6 +324,7 @@ pub struct TurnAdmissionRequest {
 
 impl TurnAdmissionRequest {
     pub fn validate(&self) -> Result<(), AgentFailure> {
+        self.expert_environment.validate()?;
         self.user_message.validate()?;
         self.profile.validate()?;
         if !self.run_id.is_valid()
@@ -428,6 +434,7 @@ pub struct JournalEntry {
 
 #[derive(Clone, Debug)]
 pub struct ContinuationSnapshot {
+    pub expert_environment: floe_experts::RunExpertEnvironmentIdentity,
     pub reference: ContinuationRef,
     pub session_id: Uuid,
     pub session_revision: u64,

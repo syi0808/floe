@@ -166,6 +166,7 @@ impl ConversationRepository for MemoryRepository {
                 session.transcript.push(request.user_message);
             }
             let receipt = RunReceipt {
+                expert_environment: request.expert_environment,
                 run_id: request.run_id,
                 command_id: request.command_id,
                 session_id: request.session_id,
@@ -1077,6 +1078,10 @@ fn request(
     prompt: &str,
 ) -> TurnRequest {
     TurnRequest {
+        expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+            revision: 1,
+            digest: [1; 32],
+        },
         command_id,
         session_id,
         expected_session_revision,
@@ -1087,7 +1092,10 @@ fn request(
         mode: crate::TurnMode::New,
         retry_of: None,
         profile: crate::ProfileSelection::Auto,
-        allowed_catalog: AllowedCatalog::default(),
+        allowed_catalog: AllowedCatalog {
+            revision: 1,
+            ..Default::default()
+        },
         replay: vec![],
         deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
         cancellation: floe_execution::Cancellation::default(),
@@ -1131,12 +1139,24 @@ async fn exact_command_replay_does_not_dispatch_again_and_release_is_not_require
     }
 
     let mut replay_request = request(command_id, session_id, 0, "hello");
+    replay_request.expert_environment = floe_experts::RunExpertEnvironmentIdentity {
+        revision: 2,
+        digest: [2; 32],
+    };
+    replay_request.allowed_catalog.revision = 2;
     replay_request.deadline = tokio::time::Instant::now() - std::time::Duration::from_secs(1);
     let replay = service
         .run_turn(replay_request, ports(&model))
         .await
         .unwrap();
     assert_eq!(replay, first);
+    assert_eq!(
+        replay.expert_environment,
+        floe_experts::RunExpertEnvironmentIdentity {
+            revision: 1,
+            digest: [1; 32]
+        }
+    );
     assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 
     let conflicting = service
@@ -1161,6 +1181,40 @@ async fn exact_command_replay_does_not_dispatch_again_and_release_is_not_require
         .unwrap();
     assert_eq!(second.state, RunState::Completed);
     assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[test]
+fn turn_requires_valid_environment_and_matching_catalog_revision() {
+    let mut turn = request(CommandId::new(), Uuid::new_v4(), 0, "hello");
+    assert!(turn.validate().is_ok());
+    turn.allowed_catalog.revision = 0;
+    assert_eq!(turn.validate(), Err(AgentFailure::InvalidInput));
+    turn.expert_environment.revision = 0;
+    assert!(turn.validate().is_ok());
+    turn.expert_environment.digest = [0; 32];
+    assert_eq!(turn.validate(), Err(AgentFailure::InvalidInput));
+}
+
+#[tokio::test]
+async fn revision_zero_environment_survives_admission_and_model_batch() {
+    let repository = Arc::new(MemoryRepository::default());
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, "person-a");
+    let service = service(Arc::clone(&repository));
+    let model = AnswerModel::default();
+    let mut turn = request(CommandId::new(), session_id, 0, "hello");
+    turn.expert_environment.revision = 0;
+    turn.allowed_catalog.revision = 0;
+    let identity = turn.expert_environment;
+    let receipt = service.run_turn(turn, ports(&model)).await.unwrap();
+    assert_eq!(receipt.expert_environment, identity);
+    assert_eq!(receipt.state, RunState::Completed);
+    let entries = repository.load_journal(receipt.run_id).await.unwrap();
+    assert!(entries.iter().any(|entry| matches!(&entry.event, JournalEvent::ValidatedBatch { batch } if batch.catalog_revision == 0)));
+    assert!(entries.iter().all(|entry| match &entry.event {
+        JournalEvent::ValidatedBatch { batch } => batch.catalog_revision == identity.revision,
+        _ => true,
+    }));
 }
 
 #[tokio::test]
@@ -1550,6 +1604,88 @@ async fn pending_answer_continuation(
         "finish this",
     );
     next.mode = crate::TurnMode::Continue(timed_out.continuation().unwrap());
+    let original_events = repository.journal.events.lock().unwrap().clone();
+    for step in [
+        ModelStep::CallTool {
+            tool_id: "lookup".into(),
+            definition_revision: 1,
+            input: "{}".into(),
+        },
+        ModelStep::Delegate {
+            agent_id: "expert-a".into(),
+            definition_revision: 1,
+            message: "summarize".into(),
+            context_refs: vec![],
+        },
+    ] {
+        let mut pending = batch.clone();
+        match &step {
+            ModelStep::CallTool {
+                tool_id,
+                definition_revision,
+                ..
+            } => {
+                pending.tool_revisions = vec![floe_agent_contract::PinnedToolRevision {
+                    tool_id: tool_id.clone(),
+                    definition_revision: *definition_revision,
+                }]
+            }
+            ModelStep::Delegate {
+                agent_id,
+                definition_revision,
+                ..
+            } => {
+                pending.agent_revisions = vec![floe_agent_contract::PinnedAgentRevision {
+                    agent_id: agent_id.clone(),
+                    definition_revision: *definition_revision,
+                }];
+                pending.delegation_context = Some(delegation_context());
+            }
+            _ => unreachable!(),
+        }
+        pending.steps = vec![step];
+        pending
+            .validate(floe_agent_contract::MAX_OUTPUT_BYTES)
+            .unwrap();
+        let mut events = original_events.clone();
+        for event in &mut events {
+            if let JournalEvent::ValidatedBatch { batch } = event {
+                *batch = pending.clone();
+            }
+        }
+        *repository.journal.events.lock().unwrap() = events;
+        let mut mismatched = next.clone();
+        mismatched.command_id = CommandId::new();
+        mismatched.expert_environment.digest = [2; 32];
+        let entries_before = repository.journal.events.lock().unwrap().len();
+        assert_eq!(
+            service.run_turn(mismatched, ports(&model)).await,
+            Err(AgentFailure::Conflict)
+        );
+        assert_eq!(
+            repository.journal.events.lock().unwrap().len(),
+            entries_before
+        );
+        assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+    *repository.journal.events.lock().unwrap() = original_events;
+    for (revision, digest) in [(1, [2; 32]), (2, [1; 32])] {
+        let mut mismatched = next.clone();
+        mismatched.command_id = CommandId::new();
+        mismatched.expert_environment =
+            floe_experts::RunExpertEnvironmentIdentity { revision, digest };
+        mismatched.allowed_catalog.revision = revision;
+        let entries_before = repository.journal.events.lock().unwrap().len();
+        assert_eq!(
+            service.run_turn(mismatched, ports(&model)).await,
+            Err(AgentFailure::Conflict)
+        );
+        assert_eq!(
+            repository.journal.events.lock().unwrap().len(),
+            entries_before
+        );
+        assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
     let result = service
         .run_turn(
             next,
@@ -1673,6 +1809,11 @@ async fn continuation_chain_preserves_ancestor_generation_and_cumulative_budget_
         "finish this",
     );
     second.mode = crate::TurnMode::Continue(first.continuation().unwrap());
+    second.expert_environment = floe_experts::RunExpertEnvironmentIdentity {
+        revision: 2,
+        digest: [2; 32],
+    };
+    second.allowed_catalog.revision = 2;
     second.deadline = tokio::time::Instant::now() - std::time::Duration::from_secs(1);
     let second = service.run_turn(second, ports(&model)).await.unwrap();
     let snapshot = service
@@ -1680,6 +1821,8 @@ async fn continuation_chain_preserves_ancestor_generation_and_cumulative_budget_
         .await
         .unwrap();
     assert_eq!(snapshot.reference.level, 2);
+    assert_eq!(snapshot.expert_environment, second.expert_environment);
+    assert_ne!(second.expert_environment, first.expert_environment);
     assert_eq!(snapshot.completed_iterations, 0);
     assert_eq!(snapshot.usage, Default::default());
 
@@ -1956,6 +2099,8 @@ async fn finalization_reserve_is_settled_once_not_double_charged() {
         }],
         revision: 1,
     };
+    turn.expert_environment.revision = 0;
+    turn.allowed_catalog.revision = 0;
 
     let receipt = service
         .run_turn(
@@ -1979,6 +2124,11 @@ async fn finalization_reserve_is_settled_once_not_double_charged() {
     assert_eq!(tools.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     // The journal records each attempt's usage exactly once.
     let events = repository.journal.events.lock().unwrap();
+    assert_eq!(receipt.expert_environment.revision, 0);
+    assert!(events.iter().all(|event| match event {
+        JournalEvent::ValidatedBatch { batch } => batch.catalog_revision == 0,
+        _ => true,
+    }));
     let usage = events
         .iter()
         .filter_map(|event| match event {
@@ -2132,9 +2282,9 @@ async fn continuation_profile_mismatch_fails_closed() {
 
 fn history_dependency() -> floe_agent_contract::ContextDependency {
     use floe_context_contract::{
-        ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority,
-        GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-        GrantSourceBinding, ProcessingRestriction, ResourceHandle,
+        ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority, GrantConsumer,
+        GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding,
+        ProcessingRestriction, ResourceHandle,
     };
     let person = floe_kernel::PersonId::new();
     let source = GrantSourceBinding::try_new(
@@ -2558,8 +2708,8 @@ fn resume_requirement() -> crate::InteractionRequirement {
         source_id: "floe.source.calendar".into(),
         connection_id: Some("calendar-connection".into()),
         consumer: "floe.builtin.schedule".into(),
-            purpose: "scheduling".into(),
-            inline: true,
+        purpose: "scheduling".into(),
+        inline: true,
     }
 }
 
@@ -2568,11 +2718,11 @@ fn resume_target() -> crate::ReviewedTarget {
         connection_id: "calendar-connection".into(),
         device_id: None,
         source_id: "floe.source.calendar".into(),
-            connector_id: Some("floe.connector.calendar".into()),
-            consumer: "floe.builtin.schedule".into(),
-            purpose: "scheduling".into(),
-            source_revision: None,
-            connection_revision: None,
+        connector_id: Some("floe.connector.calendar".into()),
+        consumer: "floe.builtin.schedule".into(),
+        purpose: "scheduling".into(),
+        source_revision: None,
+        connection_revision: None,
         reviewed_producer_fingerprint: None,
         reviewed_native_subject: None,
         members: vec![crate::ReviewedBundleMember {
@@ -2711,6 +2861,10 @@ fn resume_request(
     reference: crate::InteractionResumeRef,
 ) -> TurnRequest {
     TurnRequest {
+        expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+            revision: 1,
+            digest: [1; 32],
+        },
         command_id,
         session_id,
         expected_session_revision,
@@ -2721,7 +2875,10 @@ fn resume_request(
         mode: crate::TurnMode::Resume(reference),
         retry_of: None,
         profile: crate::ProfileSelection::Auto,
-        allowed_catalog: AllowedCatalog::default(),
+        allowed_catalog: AllowedCatalog {
+            revision: 1,
+            ..Default::default()
+        },
         replay: vec![],
         deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
         cancellation: floe_execution::Cancellation::default(),
@@ -2942,21 +3099,25 @@ async fn resume_slot_rejoins_across_commands_without_redriving() {
         .unwrap();
     // A second command for the same slot, even at the now-stale revision,
     // rejoins the canonical child instead of admitting a sibling.
+    let mut newer_environment = resume_request(
+        CommandId::new(),
+        session_id,
+        origin.session_revision,
+        &principal,
+        "plan my day",
+        link,
+    );
+    newer_environment.expert_environment = floe_experts::RunExpertEnvironmentIdentity {
+        revision: 2,
+        digest: [2; 32],
+    };
+    newer_environment.allowed_catalog.revision = 2;
     let second = service
-        .run_turn(
-            resume_request(
-                CommandId::new(),
-                session_id,
-                origin.session_revision,
-                &principal,
-                "plan my day",
-                link,
-            ),
-            ports(&resume),
-        )
+        .run_turn(newer_environment, ports(&resume))
         .await
         .unwrap();
     assert_eq!(second.run_id, first.run_id);
+    assert_eq!(second.expert_environment, first.expert_environment);
     assert_eq!(second.resume_of, Some(origin.run_id));
     assert_eq!(resume.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
@@ -3189,6 +3350,10 @@ async fn resume_rejects_unready_origins_and_groups() {
     let working_command = CommandId::new();
     let working = repository
         .admit_turn(TurnAdmissionRequest {
+            expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
             run_id: RunId::new(),
             command_id: working_command,
             session_id,

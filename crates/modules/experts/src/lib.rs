@@ -20,11 +20,10 @@ pub use a2a::{
     A2ASendMessageRequest, A2ATask, A2ATaskRequest, A2ATaskState, AgentCard, InProcessA2ATransport,
     InProcessAgent, NoA2AHost,
 };
-pub use bundle_install::{
-    BoxFuture, ExpertInstallStore, ensure_expert_bundle,
-};
+pub use bundle_install::{BoxFuture, ExpertInstallStore, ensure_expert_bundle};
 pub use directory::{
-    Directory, DirectoryEntry, DirectoryQuery, ExpertAdmissionIdentity, ResolvedDirectoryEntry,
+    Directory, DirectoryEntry, DirectoryQuery, ExpertAdmissionIdentity,
+    RunExpertEnvironmentIdentity,
 };
 pub use dispatch::{
     ExpertDispatchTable, ExpertRun, TaskCoverageRecorder, admit_expert_message,
@@ -51,4 +50,7 @@ pub use selection::{
     ExpertExecutionSelection,
 };
 pub use settlement::{ExpertSettlement, ExpertTaskCompletion};
-pub use task::{TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository};
+pub use task::{
+    RunExpertEnvironment, TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord,
+    TaskRepository,
+};

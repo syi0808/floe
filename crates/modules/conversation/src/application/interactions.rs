@@ -511,6 +511,10 @@ mod tests {
 
     fn receipt(person_id: PersonId, session_id: Uuid, run_id: RunId) -> RunReceipt {
         RunReceipt {
+            expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
             run_id,
             command_id: CommandId::new(),
             session_id,

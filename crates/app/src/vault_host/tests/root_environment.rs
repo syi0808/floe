@@ -122,8 +122,9 @@ fn create_prepares_before_fresh_resume_and_disabled_all_reopens_idempotently() {
         .unwrap();
         assert!(
             open.task_coordinator
-                .catalog(&person.to_string())
+                .environment(&person.to_string())
                 .unwrap()
+                .catalog()
                 .cards
                 .is_empty()
         );
@@ -203,8 +204,9 @@ async fn activation_binds_only_absent_registry_and_preserves_explicit_configurat
         let open = current.as_ref().unwrap().1.clone();
         assert_eq!(
             open.task_coordinator
-                .catalog(&person.to_string())
+                .environment(&person.to_string())
                 .unwrap()
+                .catalog()
                 .cards
                 .len(),
             8
@@ -291,8 +293,9 @@ async fn activation_binds_only_absent_registry_and_preserves_explicit_configurat
         .unwrap();
         assert_eq!(
             open.task_coordinator
-                .catalog(&person.to_string())
+                .environment(&person.to_string())
                 .unwrap()
+                .catalog()
                 .cards
                 .len(),
             7
