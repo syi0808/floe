@@ -11,6 +11,6 @@ pub use router::{InferenceRouter, RoutePlanError};
 pub use saved_connection::{RemoteModelConnection, SavedServerConnection, admit_saved_connection};
 pub use service::{
     CANONICAL_MODEL_CONSUMER, CANONICAL_MODEL_PURPOSE, EVERYDAY_ASSISTANCE_PURPOSE,
-    InferenceAvailability, InferenceExecutionFence, InferenceExecutor, InferenceService,
+    InferenceAvailability, InferenceExecutor, InferenceService,
 };
 pub use usage::{AttemptUpdate, UsageLedger};

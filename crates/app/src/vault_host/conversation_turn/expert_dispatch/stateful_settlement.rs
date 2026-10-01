@@ -49,12 +49,6 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
             {
                 return Err(AgentFailure::Conflict);
             }
-            registry.validate_current_execution_selection(
-                request.person_id,
-                self.admission,
-                self.selection,
-                true,
-            )?;
             let assignment_id = self.admission.assignment_id;
             let resolved = registry.resolve_admitted(request.person_id, self.admission)?;
             if resolved.manifest.package.id != request.agent_id

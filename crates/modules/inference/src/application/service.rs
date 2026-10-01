@@ -7,7 +7,6 @@ use floe_agent_contract::{
     ModelStep, ModelUsage,
 };
 use floe_execution::ExecutionScope;
-use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::api::{DataRecipient, ExecutionLocation, InferenceExecutionConstraint, ModelProfile};
@@ -58,22 +57,6 @@ pub struct InferenceService<Provider, Resolver, Authority> {
     provider: Provider,
     resolver: Resolver,
     authority: Authority,
-    execution_fence: Option<Arc<dyn InferenceExecutionFence>>,
-}
-
-pub trait InferenceExecutionFence: Send + Sync {
-    fn validate<'a>(&'a self) -> floe_agent_contract::BoxFuture<'a, Result<(), AgentFailure>>;
-}
-
-enum CandidateFailure {
-    Ordinary(AgentFailure),
-    ExecutionFence(AgentFailure),
-}
-
-impl From<AgentFailure> for CandidateFailure {
-    fn from(failure: AgentFailure) -> Self {
-        Self::Ordinary(failure)
-    }
 }
 
 impl<Provider, Resolver, Authority> InferenceService<Provider, Resolver, Authority> {
@@ -82,13 +65,7 @@ impl<Provider, Resolver, Authority> InferenceService<Provider, Resolver, Authori
             provider,
             resolver,
             authority,
-            execution_fence: None,
         }
-    }
-
-    pub fn with_execution_fence(mut self, fence: Arc<dyn InferenceExecutionFence>) -> Self {
-        self.execution_fence = Some(fence);
-        self
     }
 }
 
@@ -211,8 +188,7 @@ where
                 Ok(ModelCallOutcome::NeedsUserAction(requirement)) => {
                     return Ok(ModelCallOutcome::NeedsUserAction(requirement));
                 }
-                Err(CandidateFailure::ExecutionFence(failure)) => return Err(failure),
-                Err(CandidateFailure::Ordinary(failure)) => {
+                Err(failure) => {
                     // Explicit never falls back; Auto falls back only on
                     // transport failure, never on admission denial.
                     if request.preferred_profile_id.is_some() {
@@ -234,7 +210,7 @@ where
         scope: &ExecutionScope,
         person_id: floe_access::PersonId,
         candidate: &PreparedModelProfile<Provider::Prepared>,
-    ) -> Result<ModelCallOutcome, CandidateFailure> {
+    ) -> Result<ModelCallOutcome, AgentFailure> {
         let target = dispatch_target(&candidate.profile)?;
         let dispatch = ModelDispatchRequest {
             person_id,
@@ -255,7 +231,7 @@ where
         // candidate: zero budget reserved, zero transport calls.
         let permit = match admit_model_dispatch(dispatch, &self.resolver, &self.authority).await {
             Ok(permit) => permit,
-            Err(ModelDispatchDenial::Hard(failure)) => return Err(failure.into()),
+            Err(ModelDispatchDenial::Hard(failure)) => return Err(failure),
             Err(ModelDispatchDenial::NeedsConsent(requirement)) => {
                 return Ok(ModelCallOutcome::NeedsUserAction(requirement));
             }
@@ -275,7 +251,7 @@ where
         // without charge.
         let fence = match consume_model_dispatch(permit).await {
             Ok(fence) => fence,
-            Err(ModelDispatchDenial::Hard(failure)) => return Err(failure.into()),
+            Err(ModelDispatchDenial::Hard(failure)) => return Err(failure),
             Err(ModelDispatchDenial::NeedsConsent(requirement)) => {
                 return Ok(ModelCallOutcome::NeedsUserAction(requirement));
             }
@@ -298,12 +274,6 @@ where
             cancellation: scope.cancellation().clone(),
         };
         canonical.validate()?;
-        if let Some(execution_fence) = &self.execution_fence {
-            execution_fence
-                .validate()
-                .await
-                .map_err(CandidateFailure::ExecutionFence)?;
-        }
         attempt.mark_dispatched();
         let provider_response = candidate
             .transport
@@ -318,7 +288,7 @@ where
                 // Dropping `attempt` after mark_dispatched charges the
                 // existing unknown estimate. No zero-charge fallback.
                 drop(attempt);
-                return Err(failure.into());
+                return Err(failure);
             }
         };
         // Trustworthy usage is settled exactly once, even when the payload
@@ -336,7 +306,7 @@ where
                 attempt
                     .settle(usage.tokens, usage.cost_micros)
                     .map_err(|_| AgentFailure::BudgetExceeded)?;
-                return Err(AgentFailure::ServerModelInvalidOutput.into());
+                return Err(AgentFailure::ServerModelInvalidOutput);
             }
         };
         attempt
@@ -347,13 +317,7 @@ where
         // handoff suppresses; transmitted bytes are never recalled by a
         // re-review.
         if revalidate_model_dispatch(&fence).await.is_err() {
-            return Err(AgentFailure::PolicyDenied.into());
-        }
-        if let Some(execution_fence) = &self.execution_fence {
-            execution_fence
-                .validate()
-                .await
-                .map_err(CandidateFailure::ExecutionFence)?;
+            return Err(AgentFailure::PolicyDenied);
         }
         Ok(ModelCallOutcome::Ready(ModelResponse {
             attempt_id: request.attempt_id,
@@ -586,8 +550,8 @@ mod tests {
         ProjectionRef, RuntimeContext, ScopedInstructions,
     };
     use floe_context_contract::{
-        ConnectionId, ConnectorId, ContextDependency, ExecutionOwnerId,
-        GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+        ConnectionId, ConnectorId, ContextDependency, ExecutionOwnerId, GrantAuthority,
+        GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
         GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
     use floe_execution::{
@@ -1111,47 +1075,6 @@ mod tests {
             &[attempt_id]
         );
         assert_eq!(transport.calls(), 1);
-    }
-
-    struct RejectExecutionFence(AtomicUsize);
-
-    impl InferenceExecutionFence for RejectExecutionFence {
-        fn validate<'a>(&'a self) -> floe_agent_contract::BoxFuture<'a, Result<(), AgentFailure>> {
-            Box::pin(async move {
-                self.0.fetch_add(1, Ordering::SeqCst);
-                Err(AgentFailure::Conflict)
-            })
-        }
-    }
-
-    #[tokio::test]
-    async fn execution_fence_rejects_handoff_without_transport_or_fallback() {
-        let person = PersonId::new();
-        let first = Arc::new(TestTransport::answer());
-        let fallback = Arc::new(TestTransport::answer());
-        let provider = TestProvider {
-            profiles: vec![
-                (device_profile("device", true), Arc::clone(&first)),
-                (gateway_profile("server", true), Arc::clone(&fallback)),
-            ],
-        };
-        let execution_fence = Arc::new(RejectExecutionFence(AtomicUsize::new(0)));
-        let service = InferenceService::new(provider, AllowResolver, AllowAuthority)
-            .with_execution_fence(execution_fence.clone());
-        let request = model_request(
-            RunId::new().as_uuid(),
-            &person.to_string(),
-            projection(DependencyCoverage::Independent, vec![DataClass::Personal]),
-            None,
-        );
-        let (_ledger, scope) = scope();
-        assert_eq!(
-            service.generate(request, &scope).await,
-            Err(AgentFailure::Conflict)
-        );
-        assert_eq!(execution_fence.0.load(Ordering::SeqCst), 1);
-        assert_eq!(first.calls(), 0);
-        assert_eq!(fallback.calls(), 0);
     }
 
     #[tokio::test]

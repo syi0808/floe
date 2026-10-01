@@ -115,7 +115,7 @@ async fn inspection_recovers_original_action_after_reopen_revocation_and_connect
         .await
         .unwrap();
     let fixture = fixture.reopen().await;
-    assert_eq!(fixture.prepare().await, Err(AgentFailure::CapabilityDenied));
+    assert_eq!(fixture.prepare().await, Err(AgentFailure::Conflict));
     assert_eq!(fixture.inspect().await.unwrap(), Some(action.clone()));
     assert_eq!(
         fixture

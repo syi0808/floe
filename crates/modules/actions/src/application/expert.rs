@@ -288,7 +288,7 @@ impl<
         let mut executing = admission.envelope.action.clone();
         executing.state = CalendarActionState::Executing;
         self.repository
-            .save_calendar_action(&executing, None)
+            .save_calendar_action(&executing, Some(&action))
             .await
             .map_err(agent_error)?;
         let state = match provider.create(&executing).await {

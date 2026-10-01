@@ -33,6 +33,7 @@ use floe_actions::ExpertCalendarRequest;
 use floe_actions::{ExpertCalendarProposal, ExpertCalendarProposalDraft, ExpertProposalReference};
 use floe_agent_contract::AgentFailure;
 use floe_agent_contract::Cancellation;
+use floe_agent_contract::DependencyCoverage;
 use floe_context_contract::CalendarProvider;
 use floe_context_contract::ContextDependency;
 use floe_context_contract::DataClass;
@@ -788,7 +789,149 @@ async fn governed_action_owner_approval_dispatch_and_recovery_are_durable() {
 }
 
 #[tokio::test]
-async fn rebinding_after_proposal_fences_new_dispatch_without_erasing_intent() {
+async fn stateful_settlement_after_binding_drift_still_denies_stale_grant_coverage() {
+    let fixture = Fixture::new().await;
+    let original = fixture
+        .vault
+        .task(fixture.snapshot.task_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let DependencyCoverage::Dependent { dependencies } = &original.snapshot.coverage else {
+        panic!("fixture must carry source coverage");
+    };
+    let dependency = dependencies[0].clone();
+    let generation = fixture
+        .vault
+        .activate_task_executor()
+        .await
+        .unwrap()
+        .executor_generation;
+    let task_id = floe_agent_contract::TaskId::new();
+    let invocation_id = Uuid::new_v4();
+    let submitted = floe_agent_contract::TaskSnapshot {
+        task_id,
+        state: floe_agent_contract::TaskState::Submitted,
+        result: None,
+        artifacts: vec![],
+        coverage: DependencyCoverage::Unknown,
+        issue: None,
+        ..original.snapshot.clone()
+    };
+    fixture
+        .vault
+        .admit_task(floe_vault::VaultTaskRecord {
+            snapshot: submitted.clone(),
+            invocation_key: floe_agent_contract::InvocationKey::from_uuid(invocation_id).unwrap(),
+            request_digest: [43; 32],
+            aggregate_revision: 1,
+            executor_generation: generation,
+            ..original.clone()
+        })
+        .await
+        .unwrap();
+    fixture
+        .vault
+        .compare_and_swap_task(
+            task_id,
+            1,
+            generation,
+            floe_agent_contract::TaskSnapshot {
+                state: floe_agent_contract::TaskState::Working,
+                ..submitted.clone()
+            },
+        )
+        .await
+        .unwrap();
+    let before = fixture.vault.expert_registry().await.unwrap().unwrap();
+    let assignment = before
+        .assignments
+        .iter()
+        .find(|entry| entry.id == original.admission.assignment_id)
+        .unwrap();
+    fixture
+        .vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: assignment.id,
+                package: original.admission.package.clone(),
+                definition_revision: original.admission.definition_revision,
+                requirement_key: "selected_calendar".into(),
+                expected_binding_revision: assignment.binding.revision,
+                selected: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let snapshot = fixture.vault.expert_registry().await.unwrap().unwrap();
+    let mut registry = AgentRegistry::restore(snapshot.clone(), snapshot.instance_id).unwrap();
+    let resolved = registry
+        .resolve_admitted(fixture.person, &original.admission)
+        .unwrap();
+    registry.complete(&resolved, invocation_id).unwrap();
+    let next_private_state = registry
+        .private_state(fixture.person, assignment.id)
+        .unwrap();
+    fixture
+        .vault
+        .pause_native_calendar_grant(
+            dependency.grant_id(),
+            dependency.grant_authority(),
+            "eventkit-connection",
+            CalendarProvider::EventKit,
+            "test-device",
+            dependency.source_authority(),
+        )
+        .await
+        .unwrap();
+    let result = "Pinned settlement".to_owned();
+    let completion = floe_experts::ExpertTaskCompletion {
+        settlement: floe_experts::ExpertSettlement::new(
+            &original.snapshot.agent_id,
+            original.admission.clone(),
+            assignment.private_state.revision,
+            next_private_state,
+            invocation_id,
+            dependencies.clone(),
+            result.clone(),
+        ),
+        task_id,
+        expected_task_revision: 2,
+        executor_generation: generation,
+        task_snapshot: floe_agent_contract::TaskSnapshot {
+            state: floe_agent_contract::TaskState::Completed,
+            result: Some(result),
+            coverage: original.snapshot.coverage.clone(),
+            ..submitted
+        },
+    };
+    assert_eq!(
+        fixture
+            .vault
+            .settle_expert_task_checked(completion, || Ok(()))
+            .await,
+        Err(AgentFailure::PolicyDenied)
+    );
+    assert_eq!(
+        fixture.vault.expert_registry().await.unwrap().unwrap(),
+        snapshot
+    );
+    assert_eq!(
+        fixture
+            .vault
+            .task(task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot
+            .state,
+        floe_agent_contract::TaskState::Working
+    );
+}
+
+#[tokio::test]
+async fn rebinding_after_proposal_allows_exact_historical_dispatch() {
     let fixture = Fixture::new().await;
     let action = fixture.prepare().await.unwrap();
     fixture
@@ -836,8 +979,8 @@ async fn rebinding_after_proposal_fences_new_dispatch_without_erasing_intent() {
             Cancellation::default(),
         )
         .await;
-    assert_eq!(result, Err(AgentFailure::Conflict));
-    assert_eq!(provider.creates.load(Ordering::SeqCst), 0);
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
     assert_eq!(
         fixture
             .vault
@@ -845,7 +988,7 @@ async fn rebinding_after_proposal_fences_new_dispatch_without_erasing_intent() {
             .await
             .unwrap()
             .state,
-        CalendarActionState::Approved,
+        result.unwrap().state,
     );
 }
 
@@ -955,7 +1098,7 @@ async fn only_explicit_committed_proposals_with_current_grants_can_be_published(
         .save_expert_registry(snapshot.revision, &registry.snapshot())
         .await
         .unwrap();
-    assert_eq!(fixture.prepare().await, Err(AgentFailure::CapabilityDenied));
+    fixture.prepare().await.unwrap();
     assert!(
         fixture
             .core
@@ -963,7 +1106,8 @@ async fn only_explicit_committed_proposals_with_current_grants_can_be_published(
             .calendar_actions(fixture.person)
             .await
             .unwrap()
-            .is_empty()
+            .len()
+            == 1
     );
 }
 
@@ -1276,7 +1420,7 @@ async fn concurrent_publication_reconciles_one_stable_action_and_execution_id() 
 }
 
 #[tokio::test]
-async fn dropped_publish_scope_releases_registry_authority_without_a_state_change() {
+async fn dropped_publish_scope_releases_transaction_and_disable_preserves_evidence() {
     let fixture = Fixture::new().await;
     let baseline = fixture.vault.expert_registry().await.unwrap().unwrap();
     let reached = tokio::sync::Notify::new();
@@ -1313,7 +1457,7 @@ async fn dropped_publish_scope_releases_registry_authority_without_a_state_chang
         .save_expert_registry(baseline.revision, &registry.snapshot())
         .await
         .unwrap();
-    assert_eq!(fixture.prepare().await, Err(AgentFailure::CapabilityDenied));
+    fixture.prepare().await.unwrap();
     assert!(
         fixture
             .core
@@ -1321,7 +1465,8 @@ async fn dropped_publish_scope_releases_registry_authority_without_a_state_chang
             .calendar_actions(fixture.person)
             .await
             .unwrap()
-            .is_empty()
+            .len()
+            == 1
     );
 }
 
@@ -1421,6 +1566,39 @@ impl GovernedFocus {
             .unwrap()
             .package
             .clone();
+        let requirement_key = snapshot
+            .manifests
+            .iter()
+            .find(|entry| entry.package == package)
+            .unwrap()
+            .source_requirements
+            .iter()
+            .find(|requirement| requirement.capability == "calendar.timeline")
+            .unwrap()
+            .key
+            .clone();
+        vault
+            .replace_expert_binding(
+                Uuid::new_v4(),
+                floe_experts::ExpertBindingCommand {
+                    assignment_id,
+                    package: package.clone(),
+                    definition_revision: 2,
+                    requirement_key,
+                    expected_binding_revision: 1,
+                    selected: vec![floe_context_contract::SourceSelectionReference {
+                        connector_id: admission.source.connector().clone(),
+                        connection_id: admission.source.connection_id(),
+                        execution_owner_id: admission.source.execution_owner().clone(),
+                        capability_id: "calendar.timeline".into(),
+                        resource: floe_access::native_calendar_resource("eventkit-connection")
+                            .unwrap(),
+                        contract_version: 1,
+                    }],
+                },
+            )
+            .await
+            .unwrap();
         let mut session = vault.create_session().await.unwrap();
         session.data_classes = vec![DataClass::Personal];
         // The marker message keeps its own turn: session CAS merges Unknown

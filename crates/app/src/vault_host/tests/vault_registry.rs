@@ -8,17 +8,15 @@ use std::{
     },
 };
 
-use floe_agent_contract::{
-    DependencyCoverage, InvocationKey, TaskId, TaskSnapshot, TaskState,
+use floe_agent_contract::{DependencyCoverage, InvocationKey, TaskId, TaskSnapshot, TaskState};
+use floe_context_contract::{
+    ConnectionId, ConnectorId, ExecutionOwnerId, ResourceHandle, SourceSelectionReference,
 };
 use floe_conversation::AgentMessage;
 use floe_execution::Cancellation;
 use floe_experts::{
-    AgentRegistry, ExpertBindingCommand, ExpertSettlement, ExpertTaskCompletion, RegistryConfiguration,
-    RegistryConfigurationTarget, RegistrySnapshot,
-};
-use floe_context_contract::{
-    ConnectionId, ConnectorId, ExecutionOwnerId, ResourceHandle, SourceSelectionReference,
+    AgentRegistry, ExpertBindingCommand, ExpertSettlement, ExpertTaskCompletion,
+    RegistryConfiguration, RegistryConfigurationTarget, RegistrySnapshot,
 };
 use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider, VaultTaskRecord};
 
@@ -61,12 +59,29 @@ async fn binding_operation_rejoins_exactly_and_stale_task_admission_never_rerout
         selected: vec![calendar_selection("calendar:a")],
     };
     let operation_id = Uuid::new_v4();
-    let bound_a = fixture.vault.replace_expert_binding(operation_id, command.clone()).await.unwrap();
+    let bound_a = fixture
+        .vault
+        .replace_expert_binding(operation_id, command.clone())
+        .await
+        .unwrap();
     assert_eq!(bound_a.revision, 2);
-    assert_eq!(fixture.vault.replace_expert_binding(operation_id, command.clone()).await.unwrap(), bound_a);
+    assert_eq!(
+        fixture
+            .vault
+            .replace_expert_binding(operation_id, command.clone())
+            .await
+            .unwrap(),
+        bound_a
+    );
     let mut changed_same_id = command.clone();
     changed_same_id.selected = vec![calendar_selection("calendar:b")];
-    assert_eq!(fixture.vault.replace_expert_binding(operation_id, changed_same_id).await, Err(AgentFailure::Conflict));
+    assert_eq!(
+        fixture
+            .vault
+            .replace_expert_binding(operation_id, changed_same_id)
+            .await,
+        Err(AgentFailure::Conflict)
+    );
     let admission = floe_experts::ExpertAdmissionIdentity {
         registry_instance_id: installed.instance_id,
         assignment_id: assignment.id,
@@ -75,15 +90,32 @@ async fn binding_operation_rejoins_exactly_and_stale_task_admission_never_rerout
         definition_revision: 1,
     };
     let snapshot_a = fixture.vault.expert_registry().await.unwrap().unwrap();
-    let selection_a = AgentRegistry::restore(snapshot_a, installed.instance_id).unwrap()
-        .execution_selection(fixture.person, &admission).unwrap();
+    let selection_a = AgentRegistry::restore(snapshot_a, installed.instance_id)
+        .unwrap()
+        .execution_selection(fixture.person, &admission)
+        .unwrap();
     let replay_a = command.clone();
     let mut bind_b = command;
     bind_b.expected_binding_revision = 2;
     bind_b.selected = vec![calendar_selection("calendar:b")];
-    fixture.vault.replace_expert_binding(Uuid::new_v4(), bind_b).await.unwrap();
-    assert_eq!(fixture.vault.replace_expert_binding(operation_id, replay_a).await, Err(AgentFailure::Conflict));
-    let generation = fixture.vault.activate_task_executor().await.unwrap().executor_generation;
+    fixture
+        .vault
+        .replace_expert_binding(Uuid::new_v4(), bind_b)
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .vault
+            .replace_expert_binding(operation_id, replay_a)
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    let generation = fixture
+        .vault
+        .activate_task_executor()
+        .await
+        .unwrap()
+        .executor_generation;
     let task_id = TaskId::new();
     let proposed = VaultTaskRecord {
         snapshot: TaskSnapshot {
@@ -105,8 +137,11 @@ async fn binding_operation_rejoins_exactly_and_stale_task_admission_never_rerout
         aggregate_revision: 1,
         executor_generation: generation,
     };
-    assert_eq!(fixture.vault.admit_task(proposed).await, Err(AgentFailure::Conflict));
-    assert!(fixture.vault.task(task_id).await.unwrap().is_none());
+    fixture.vault.admit_task(proposed.clone()).await.unwrap();
+    assert_eq!(
+        fixture.vault.task(task_id).await.unwrap().unwrap(),
+        proposed
+    );
 }
 
 #[derive(Clone, Default)]
@@ -134,7 +169,11 @@ impl VaultKeyProvider for Keys {
     }
 
     fn insert(&self, person: PersonId, vault: Uuid, key: &VaultKey) -> Result<(), AgentFailure> {
-        self.0.values.lock().unwrap().insert((person, vault), *key.as_bytes());
+        self.0
+            .values
+            .lock()
+            .unwrap()
+            .insert((person, vault), *key.as_bytes());
         Ok(())
     }
 }
@@ -187,7 +226,13 @@ impl Fixture {
             .iter()
             .find(|entry| entry.person_id == self.person)
             .unwrap();
-        let package = current.installations.iter().find(|entry| entry.id == assignment.installation_id).unwrap().package.clone();
+        let package = current
+            .installations
+            .iter()
+            .find(|entry| entry.id == assignment.installation_id)
+            .unwrap()
+            .package
+            .clone();
         let resolved = registry
             .resolve_assignment(
                 registry.instance_id(),
@@ -287,7 +332,12 @@ impl Fixture {
         if self.vault.expert_registry().await.unwrap().is_none() {
             self.prepare().await;
         }
-        let generation = self.vault.activate_task_executor().await.unwrap().executor_generation;
+        let generation = self
+            .vault
+            .activate_task_executor()
+            .await
+            .unwrap()
+            .executor_generation;
         let (completion, _) = self.stage(generation, Uuid::new_v4()).await;
         let terminal = completion.task_snapshot.clone();
         self.vault
@@ -304,7 +354,9 @@ impl Fixture {
         });
         self.vault.compare_and_swap(&session, 0).await.unwrap();
         session.revision = 2;
-        session.messages.push(delegation_message(turn_id, &terminal));
+        session
+            .messages
+            .push(delegation_message(turn_id, &terminal));
         self.vault.compare_and_swap(&session, 1).await.unwrap();
         terminal
     }
@@ -324,26 +376,58 @@ async fn registry_and_private_state_survive_reopen_with_settled_tasks() {
     assert_eq!(expert.private_state.revision, 2);
     for entry in fs::read_dir(fixture.root.path().join(fixture.person.to_string())).unwrap() {
         let bytes = fs::read(entry.unwrap().path()).unwrap();
-        for marker in ["example.test.registry-expert", "completed_invocations", "Generic Expert registry result."] {
-            assert!(!bytes.windows(marker.len()).any(|window| window == marker.as_bytes()));
+        for marker in [
+            "example.test.registry-expert",
+            "completed_invocations",
+            "Generic Expert registry result.",
+        ] {
+            assert!(
+                !bytes
+                    .windows(marker.len())
+                    .any(|window| window == marker.as_bytes())
+            );
         }
     }
     fixture.vault.checkpoint().await.unwrap();
     drop(fixture.vault);
-    fixture.vault = EncryptedAgentVault::open(
-        fixture.root.path(),
-        fixture.person,
-        fixture.keys.clone(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(fixture.vault.expert_registry().await.unwrap(), Some(before.clone()));
-    assert_eq!(fixture.vault.task(first.task_id).await.unwrap().unwrap().snapshot, first);
-    assert_eq!(fixture.vault.task(second.task_id).await.unwrap().unwrap().snapshot, second);
+    fixture.vault =
+        EncryptedAgentVault::open(fixture.root.path(), fixture.person, fixture.keys.clone())
+            .await
+            .unwrap();
+    assert_eq!(
+        fixture.vault.expert_registry().await.unwrap(),
+        Some(before.clone())
+    );
+    assert_eq!(
+        fixture
+            .vault
+            .task(first.task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot,
+        first
+    );
+    assert_eq!(
+        fixture
+            .vault
+            .task(second.task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot,
+        second
+    );
     fixture.sample().await;
     let after = fixture.vault.expert_registry().await.unwrap().unwrap();
     assert_eq!(
-        after.assignments.iter().find(|entry| entry.id == expert.id).unwrap().private_state.revision,
+        after
+            .assignments
+            .iter()
+            .find(|entry| entry.id == expert.id)
+            .unwrap()
+            .private_state
+            .revision,
         3
     );
 }
@@ -376,21 +460,25 @@ async fn configuration_preserves_private_state_and_rejects_stale_authority() {
         .unwrap();
     assert_eq!(next.revision, before.revision + 1);
     let after = fixture.vault.expert_registry().await.unwrap().unwrap();
-    let updated = after.assignments.iter().find(|entry| entry.id == expert.id).unwrap();
+    let updated = after
+        .assignments
+        .iter()
+        .find(|entry| entry.id == expert.id)
+        .unwrap();
     assert!(!updated.enabled);
     assert_eq!(updated.private_state, expert.private_state);
     assert_eq!(
-        fixture.vault.save_expert_registry(before.revision, &after).await,
+        fixture
+            .vault
+            .save_expert_registry(before.revision, &after)
+            .await,
         Err(AgentFailure::Conflict)
     );
     drop(fixture.vault);
-    fixture.vault = EncryptedAgentVault::open(
-        fixture.root.path(),
-        fixture.person,
-        fixture.keys.clone(),
-    )
-    .await
-    .unwrap();
+    fixture.vault =
+        EncryptedAgentVault::open(fixture.root.path(), fixture.person, fixture.keys.clone())
+            .await
+            .unwrap();
     assert_eq!(fixture.vault.expert_registry().await.unwrap(), Some(after));
 }
 
@@ -398,7 +486,12 @@ async fn configuration_preserves_private_state_and_rejects_stale_authority() {
 async fn settlement_rolls_back_registry_and_task_on_failure_and_stale_cas() {
     let fixture = Fixture::new().await;
     let baseline = fixture.prepare().await;
-    let generation = fixture.vault.activate_task_executor().await.unwrap().executor_generation;
+    let generation = fixture
+        .vault
+        .activate_task_executor()
+        .await
+        .unwrap()
+        .executor_generation;
     let (completion, staged) = fixture.stage(generation, Uuid::new_v4()).await;
     let task_id = completion.task_id;
     assert_eq!(
@@ -408,20 +501,64 @@ async fn settlement_rolls_back_registry_and_task_on_failure_and_stale_cas() {
             .await,
         Err(AgentFailure::StorageUnavailable)
     );
-    assert_eq!(fixture.vault.expert_registry().await.unwrap(), Some(baseline.clone()));
-    assert_eq!(fixture.vault.task(task_id).await.unwrap().unwrap().snapshot.state, TaskState::Working);
+    assert_eq!(
+        fixture.vault.expert_registry().await.unwrap(),
+        Some(baseline.clone())
+    );
+    assert_eq!(
+        fixture
+            .vault
+            .task(task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot
+            .state,
+        TaskState::Working
+    );
     let (retry, _) = fixture.stage(generation, Uuid::new_v4()).await;
-    fixture.vault.settle_expert_task_checked(retry, || Ok(())).await.unwrap();
-    assert_ne!(fixture.vault.expert_registry().await.unwrap(), Some(baseline));
-    assert_eq!(fixture.vault.task(task_id).await.unwrap().unwrap().snapshot.state, TaskState::Working);
-    assert_eq!(staged.revision, fixture.vault.expert_registry().await.unwrap().unwrap().revision);
+    fixture
+        .vault
+        .settle_expert_task_checked(retry, || Ok(()))
+        .await
+        .unwrap();
+    assert_ne!(
+        fixture.vault.expert_registry().await.unwrap(),
+        Some(baseline)
+    );
+    assert_eq!(
+        fixture
+            .vault
+            .task(task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot
+            .state,
+        TaskState::Working
+    );
+    assert_eq!(
+        staged.revision,
+        fixture
+            .vault
+            .expert_registry()
+            .await
+            .unwrap()
+            .unwrap()
+            .revision
+    );
 }
 
 #[tokio::test]
 async fn key_loss_cannot_partially_settle_registry_or_task() {
     let mut fixture = Fixture::new().await;
     let baseline = fixture.prepare().await;
-    let generation = fixture.vault.activate_task_executor().await.unwrap().executor_generation;
+    let generation = fixture
+        .vault
+        .activate_task_executor()
+        .await
+        .unwrap()
+        .executor_generation;
     let (completion, _) = fixture.stage(generation, Uuid::new_v4()).await;
     let task_id = completion.task_id;
     let retry = ExpertTaskCompletion {
@@ -433,37 +570,74 @@ async fn key_loss_cannot_partially_settle_registry_or_task() {
     };
     fixture.keys.0.blocked.store(true, Ordering::Release);
     assert_eq!(
-        fixture.vault.settle_expert_task_checked(completion, || Ok(())).await,
+        fixture
+            .vault
+            .settle_expert_task_checked(completion, || Ok(()))
+            .await,
         Err(AgentFailure::VaultUnavailable)
     );
     fixture.keys.0.blocked.store(false, Ordering::Release);
     drop(fixture.vault);
-    fixture.vault = EncryptedAgentVault::open(
-        fixture.root.path(),
-        fixture.person,
-        fixture.keys.clone(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(fixture.vault.expert_registry().await.unwrap(), Some(baseline));
-    assert_eq!(fixture.vault.task(task_id).await.unwrap().unwrap().snapshot.state, TaskState::Working);
+    fixture.vault =
+        EncryptedAgentVault::open(fixture.root.path(), fixture.person, fixture.keys.clone())
+            .await
+            .unwrap();
     assert_eq!(
-        fixture.vault.settle_expert_task_checked(retry, || Ok(())).await,
+        fixture.vault.expert_registry().await.unwrap(),
+        Some(baseline)
+    );
+    assert_eq!(
+        fixture
+            .vault
+            .task(task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot
+            .state,
+        TaskState::Working
+    );
+    assert_eq!(
+        fixture
+            .vault
+            .settle_expert_task_checked(retry, || Ok(()))
+            .await,
         Err(AgentFailure::Conflict)
     );
     let activation = fixture.vault.activate_task_executor().await.unwrap();
     assert_eq!(activation.interrupted.len(), 1);
     assert_eq!(activation.interrupted[0].snapshot.task_id, task_id);
-    assert_eq!(fixture.vault.task(task_id).await.unwrap().unwrap().snapshot.state, TaskState::Interrupted);
-    let (fresh, _) = fixture.stage(activation.executor_generation, Uuid::new_v4()).await;
-    fixture.vault.settle_expert_task_checked(fresh, || Ok(())).await.unwrap();
+    assert_eq!(
+        fixture
+            .vault
+            .task(task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot
+            .state,
+        TaskState::Interrupted
+    );
+    let (fresh, _) = fixture
+        .stage(activation.executor_generation, Uuid::new_v4())
+        .await;
+    fixture
+        .vault
+        .settle_expert_task_checked(fresh, || Ok(()))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
-async fn active_task_settlement_is_fenced_by_installation_disable() {
+async fn active_task_settlement_preserves_installation_disable() {
     let fixture = Fixture::new().await;
     let baseline = fixture.prepare().await;
-    let generation = fixture.vault.activate_task_executor().await.unwrap().executor_generation;
+    let generation = fixture
+        .vault
+        .activate_task_executor()
+        .await
+        .unwrap()
+        .executor_generation;
     let (completion, _) = fixture.stage(generation, Uuid::new_v4()).await;
     let task_id = completion.task_id;
     let mut registry = AgentRegistry::restore(baseline.clone(), baseline.instance_id).unwrap();
@@ -475,40 +649,87 @@ async fn active_task_settlement_is_fenced_by_installation_disable() {
         .save_expert_registry(baseline.revision, &registry.snapshot())
         .await
         .unwrap();
-    assert_eq!(
-        fixture.vault.settle_expert_task_checked(completion, || Ok(())).await,
-        Err(AgentFailure::CapabilityDenied)
-    );
+    fixture
+        .vault
+        .settle_expert_task_checked(completion, || Ok(()))
+        .await
+        .unwrap();
     let after = fixture.vault.expert_registry().await.unwrap().unwrap();
-    assert!(!after.installations.iter().find(|entry| entry.id == baseline.installations[0].id).unwrap().enabled);
-    assert!(after.assignments.iter().all(|entry| entry.private_state.revision == 0));
-    assert_eq!(fixture.vault.task(task_id).await.unwrap().unwrap().snapshot.state, TaskState::Working);
+    assert!(
+        !after
+            .installations
+            .iter()
+            .find(|entry| entry.id == baseline.installations[0].id)
+            .unwrap()
+            .enabled
+    );
+    assert!(
+        after
+            .assignments
+            .iter()
+            .all(|entry| entry.private_state.revision == 1)
+    );
+    assert_eq!(
+        fixture
+            .vault
+            .task(task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot
+            .state,
+        TaskState::Completed
+    );
 }
 
 #[tokio::test]
 async fn concurrent_same_assignment_private_state_settlement_conflicts() {
     let fixture = Fixture::new().await;
     fixture.prepare().await;
-    let generation = fixture.vault.activate_task_executor().await.unwrap().executor_generation;
+    let generation = fixture
+        .vault
+        .activate_task_executor()
+        .await
+        .unwrap()
+        .executor_generation;
     let (first, _) = fixture.stage(generation, Uuid::new_v4()).await;
     let (raced, _) = fixture.stage(generation, Uuid::new_v4()).await;
     let raced_task_id = raced.task_id;
-    fixture.vault.settle_expert_task_checked(first, || Ok(())).await.unwrap();
+    fixture
+        .vault
+        .settle_expert_task_checked(first, || Ok(()))
+        .await
+        .unwrap();
     assert_eq!(
-        fixture.vault.settle_expert_task_checked(raced, || Ok(())).await,
+        fixture
+            .vault
+            .settle_expert_task_checked(raced, || Ok(()))
+            .await,
         Err(AgentFailure::Conflict),
     );
     assert_eq!(
-        fixture.vault.task(raced_task_id).await.unwrap().unwrap().snapshot.state,
+        fixture
+            .vault
+            .task(raced_task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot
+            .state,
         TaskState::Working,
     );
 }
 
 #[tokio::test]
-async fn admitted_task_cannot_settle_after_its_assignment_is_disabled() {
+async fn admitted_task_settles_while_preserving_assignment_disable() {
     let fixture = Fixture::new().await;
     fixture.prepare().await;
-    let generation = fixture.vault.activate_task_executor().await.unwrap().executor_generation;
+    let generation = fixture
+        .vault
+        .activate_task_executor()
+        .await
+        .unwrap()
+        .executor_generation;
     let (completion, _) = fixture.stage(generation, Uuid::new_v4()).await;
     let assignment_id = completion.settlement.admission.assignment_id;
     let before = fixture.vault.expert_registry().await.unwrap().unwrap();
@@ -527,14 +748,19 @@ async fn admitted_task_cannot_settle_after_its_assignment_is_disabled() {
         )
         .await
         .unwrap();
-    assert_eq!(
-        fixture.vault.settle_expert_task_checked(completion, || Ok(())).await,
-        Err(AgentFailure::CapabilityDenied)
-    );
+    fixture
+        .vault
+        .settle_expert_task_checked(completion, || Ok(()))
+        .await
+        .unwrap();
     let after = fixture.vault.expert_registry().await.unwrap().unwrap();
-    let assignment = after.assignments.iter().find(|entry| entry.id == assignment_id).unwrap();
+    let assignment = after
+        .assignments
+        .iter()
+        .find(|entry| entry.id == assignment_id)
+        .unwrap();
     assert!(!assignment.enabled);
-    assert_eq!(assignment.private_state.revision, 0);
+    assert_eq!(assignment.private_state.revision, 1);
 }
 
 #[tokio::test]
@@ -555,9 +781,25 @@ async fn cancelled_configuration_and_missing_registry_fail_closed() {
         Err(AgentFailure::Cancelled)
     );
     assert_eq!(fixture.vault.expert_registry().await.unwrap(), Some(before));
-    let key = fixture.keys.0.values.lock().unwrap().values().next().copied().unwrap();
-    let hexkey = key.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
-    let path = fixture.root.path().join(fixture.person.to_string()).join("sessions.db");
+    let key = fixture
+        .keys
+        .0
+        .values
+        .lock()
+        .unwrap()
+        .values()
+        .next()
+        .copied()
+        .unwrap();
+    let hexkey = key
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let path = fixture
+        .root
+        .path()
+        .join(fixture.person.to_string())
+        .join("sessions.db");
     turso::Builder::new_local(path.to_str().unwrap())
         .experimental_encryption(true)
         .with_encryption(turso::EncryptionOpts {
@@ -572,13 +814,20 @@ async fn cancelled_configuration_and_missing_registry_fail_closed() {
         .execute("DELETE FROM agent_expert_registry", ())
         .await
         .unwrap();
-    assert_eq!(fixture.vault.expert_registry().await, Err(AgentFailure::VaultUnavailable));
+    assert_eq!(
+        fixture.vault.expert_registry().await,
+        Err(AgentFailure::VaultUnavailable)
+    );
     drop(fixture.vault);
-    assert!(EncryptedAgentVault::open(fixture.root.path(), fixture.person, fixture.keys).await.is_err());
+    assert!(
+        EncryptedAgentVault::open(fixture.root.path(), fixture.person, fixture.keys)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
-async fn superseded_selection_cannot_settle_recovered_task() {
+async fn rebound_selection_settles_exact_task_without_rerouting() {
     let fixture = Fixture::new().await;
     fixture.prepare().await;
     let generation = fixture
@@ -624,15 +873,13 @@ async fn superseded_selection_cannot_settle_recovered_task() {
         )
         .await
         .unwrap();
-    assert_eq!(
-        fixture
-            .vault
-            .settle_expert_task_checked(completion, || Ok(()))
-            .await,
-        Err(AgentFailure::Conflict),
-    );
+    fixture
+        .vault
+        .settle_expert_task_checked(completion, || Ok(()))
+        .await
+        .unwrap();
     let task = fixture.vault.task(task_id).await.unwrap().unwrap();
-    assert_eq!(task.snapshot.state, TaskState::Working);
+    assert_eq!(task.snapshot.state, TaskState::Completed);
     assert_ne!(
         task.selection.digest,
         AgentRegistry::restore(
@@ -647,7 +894,7 @@ async fn superseded_selection_cannot_settle_recovered_task() {
 }
 
 #[tokio::test]
-async fn stateless_completed_cas_rejects_rebound_selection_but_records_failure() {
+async fn stateless_completed_cas_preserves_pinned_selection_after_rebind() {
     let fixture = Fixture::new().await;
     fixture.prepare().await;
     let generation = fixture
@@ -692,44 +939,26 @@ async fn stateless_completed_cas_rejects_rebound_selection_but_records_failure()
         )
         .await
         .unwrap();
-    assert_eq!(
-        fixture
-            .vault
-            .compare_and_swap_task(
-                completion.task_id,
-                completion.expected_task_revision,
-                generation,
-                completion.task_snapshot.clone(),
-            )
-            .await,
-        Err(AgentFailure::Conflict),
-    );
-    let working = fixture
+    let completed = fixture
         .vault
-        .task(completion.task_id)
+        .compare_and_swap_task(
+            completion.task_id,
+            completion.expected_task_revision,
+            generation,
+            completion.task_snapshot.clone(),
+        )
         .await
-        .unwrap()
         .unwrap();
-    assert_eq!(working.snapshot.state, TaskState::Working);
-    let failed = TaskSnapshot {
-        state: TaskState::Failed,
-        issue: Some(AgentFailure::Conflict),
-        ..working.snapshot
-    };
-    assert_eq!(
-        fixture
-            .vault
-            .compare_and_swap_task(
-                completion.task_id,
-                completion.expected_task_revision,
-                generation,
-                failed,
-            )
-            .await
-            .unwrap()
-            .snapshot
-            .state,
-        TaskState::Failed,
+    assert_eq!(completed.snapshot.state, TaskState::Completed);
+    assert_ne!(
+        completed.selection,
+        AgentRegistry::restore(
+            fixture.vault.expert_registry().await.unwrap().unwrap(),
+            before.instance_id,
+        )
+        .unwrap()
+        .execution_selection(fixture.person, &completed.admission)
+        .unwrap()
     );
 }
 
@@ -792,7 +1021,7 @@ async fn concurrent_private_state_settlement_and_binding_preserve_both_fields() 
     };
     let (settled, bound) = tokio::join!(settle, bind);
     assert!(bound.is_ok());
-    assert!(settled.is_ok() || settled == Err(AgentFailure::Conflict));
+    assert!(settled.is_ok(), "{settled:?}");
     let after = fixture.vault.expert_registry().await.unwrap().unwrap();
     let current = after
         .assignments
@@ -810,5 +1039,5 @@ async fn concurrent_private_state_settlement_and_binding_preserve_both_fields() 
             .selected,
         vec![calendar_selection("calendar:b")],
     );
-    assert_eq!(current.private_state.revision, u64::from(settled.is_ok()));
+    assert_eq!(current.private_state.revision, 1);
 }

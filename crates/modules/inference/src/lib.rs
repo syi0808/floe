@@ -14,10 +14,10 @@ pub use api::{
 };
 pub use application::{
     AttemptJournal, AttemptLifecycle, AttemptUpdate, CANONICAL_MODEL_CONSUMER,
-    CANONICAL_MODEL_PURPOSE, EVERYDAY_ASSISTANCE_PURPOSE, InferenceAvailability,
-    InferenceExecutionFence, InferenceExecutor, InferenceRouter, InferenceService,
-    ModelAttemptRecord, ModelAttemptState, RemoteModelConnection, RoutePlanError,
-    SavedConnectionStore, SavedServerConnection, UsageLedger, admit_saved_connection,
+    CANONICAL_MODEL_PURPOSE, EVERYDAY_ASSISTANCE_PURPOSE, InferenceAvailability, InferenceExecutor,
+    InferenceRouter, InferenceService, ModelAttemptRecord, ModelAttemptState,
+    RemoteModelConnection, RoutePlanError, SavedConnectionStore, SavedServerConnection,
+    UsageLedger, admit_saved_connection,
 };
 pub use ports::model_provider::{
     AdmittedDispatchTarget, CanonicalModelRequest, CanonicalModelResponse, ModelProvider,

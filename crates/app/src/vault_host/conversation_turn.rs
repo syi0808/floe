@@ -510,15 +510,6 @@ impl floe_access::DependencyResolver for CompositeDependencyResolver<'_> {
 
 #[cfg(test)]
 mod tests {
-    struct TestBindingFence;
-    static TEST_BINDING_FENCE: TestBindingFence = TestBindingFence;
-
-    impl expert_dispatch::ExpertBindingFence for TestBindingFence {
-        fn validate<'a>(&'a self) -> floe_agent_contract::BoxFuture<'a, Result<(), AgentFailure>> {
-            Box::pin(async { Ok(()) })
-        }
-    }
-
     fn test_admitted_selection() -> &'static floe_experts::ExpertExecutionSelection {
         static SELECTION: std::sync::OnceLock<floe_experts::ExpertExecutionSelection> =
             std::sync::OnceLock::new();
@@ -1626,7 +1617,6 @@ mod tests {
             device_id: Some("test-device"),
             snapshots: None,
             admitted_selection: Some(test_admitted_selection()),
-            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         let task_id = Uuid::new_v4();
         let task = experts
@@ -2030,7 +2020,6 @@ mod tests {
             device_id: Some("test-device"),
             snapshots: None,
             admitted_selection: Some(test_admitted_selection()),
-            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -2094,7 +2083,6 @@ mod tests {
             device_id: Some("test-device"),
             snapshots: None,
             admitted_selection: Some(test_admitted_selection()),
-            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         let cards = experts.agent_cards(PersonId::new());
         assert_eq!(cards.len(), 7);
@@ -2145,7 +2133,6 @@ mod tests {
             device_id: Some("test-device"),
             snapshots: None,
             admitted_selection: Some(test_admitted_selection()),
-            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -2393,7 +2380,6 @@ mod tests {
             device_id: Some("test-device"),
             snapshots: None,
             admitted_selection: Some(test_admitted_selection()),
-            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         let task_id = uuid::Uuid::new_v4();
         let task = experts
@@ -2578,7 +2564,6 @@ mod tests {
             device_id: Some("test-device"),
             snapshots: None,
             admitted_selection: Some(test_admitted_selection()),
-            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         let task = experts
             .handle_message(A2ASendMessageRequest {
@@ -2751,7 +2736,6 @@ mod tests {
             device_id: Some("test-device"),
             snapshots: None,
             admitted_selection: Some(test_admitted_selection()),
-            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         let mut results = Vec::new();
         for agent_id in [WORK_CONTEXT_AGENT_ID, LIFE_LOGISTICS_AGENT_ID] {
@@ -2844,7 +2828,6 @@ mod tests {
             device_id: Some("test-device"),
             snapshots: None,
             admitted_selection: Some(test_admitted_selection()),
-            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {

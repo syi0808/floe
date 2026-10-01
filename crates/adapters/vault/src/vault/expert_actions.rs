@@ -2,7 +2,6 @@ use std::future::Future;
 
 use floe_access::DependencyCoverage;
 use floe_conversation::AgentMessage;
-use floe_experts::AgentRegistry;
 use turso::transaction::TransactionBehavior;
 
 use super::*;
@@ -71,7 +70,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     where
         Publish: Future<Output = Result<ResultValue, AgentFailure>>,
     {
-        self.with_proposal_evidence(reference, true, publish).await
+        self.with_proposal_evidence(reference, publish).await
     }
 
     pub(crate) async fn with_recorded_expert_proposal<ResultValue, Inspect>(
@@ -82,13 +81,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     where
         Inspect: Future<Output = Result<ResultValue, AgentFailure>>,
     {
-        self.with_proposal_evidence(reference, false, inspect).await
+        self.with_proposal_evidence(reference, inspect).await
     }
 
     async fn with_proposal_evidence<ResultValue, Operation>(
         &self,
         reference: &ExpertProposalReference,
-        require_active: bool,
         operation: impl FnOnce(ExpertCalendarProposal) -> Operation,
     ) -> Result<ResultValue, AgentFailure>
     where
@@ -104,10 +102,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(storage)?;
         let result = async {
             let session = self.session_on(&transaction, reference.session_id).await?;
-            let snapshot = self
-                .registry_on(&transaction)
-                .await?
-                .ok_or(AgentFailure::NotFound)?;
             let task_id = floe_agent_contract::TaskId::from_uuid(reference.invocation_id)
                 .ok_or(AgentFailure::InvalidInput)?;
             let mut binding = transaction
@@ -180,6 +174,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 || recorded.invocation_key.as_uuid() != evidence.invocation_id
                 || evidence.person_id != reference.person_id
                 || task_snapshot.agent_id != evidence.package.id
+                || recorded.admission.registry_instance_id != evidence.instance_id
+                || recorded.admission.assignment_id != evidence.assignment_id
+                || recorded.admission.package != evidence.package
+                || recorded.admission.definition_revision != task_snapshot.definition_revision
                 || !session.data_classes.contains(&evidence.data_class)
             {
                 return Err(AgentFailure::InvalidInput);
@@ -227,23 +225,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if !report_dependencies.contains(contributor) {
                 return Err(AgentFailure::PolicyDenied);
             }
-            let registry = AgentRegistry::restore(snapshot, self.vault_id)?;
-            registry.validate_settled_invocation(
-                evidence.instance_id,
-                evidence.person_id,
-                evidence.assignment_id,
-                &evidence.package,
-                evidence.state_revision,
-                evidence.data_class,
-            )?;
-            if require_active {
-                registry.validate_active_assignment(evidence.person_id, evidence.assignment_id)?;
-                registry.validate_current_execution_selection(
-                    evidence.person_id,
-                    &recorded.admission,
-                    &recorded.selection,
-                    true,
-                )?;
+            if !recorded.selection.requirements.iter().any(|requirement| {
+                requirement.capability == "calendar.timeline"
+                    && requirement.selected.iter().any(|selected| {
+                        selected.connector_id == *contributor.source().connector()
+                            && selected.connection_id == contributor.source().connection_id()
+                            && selected.execution_owner_id
+                                == *contributor.source().execution_owner()
+                            && contributor.resources().contains(&selected.resource)
+                    })
+            }) {
+                return Err(AgentFailure::PolicyDenied);
             }
             Ok(evidence)
         }

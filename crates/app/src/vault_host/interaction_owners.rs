@@ -144,24 +144,6 @@ where
             {
                 return Ok(false);
             }
-            let snapshot = self
-                .vault
-                .expert_registry()
-                .await?
-                .ok_or(AgentFailure::NotFound)?;
-            let registry =
-                floe_experts::AgentRegistry::restore(snapshot, self.vault.registry_instance_id())?;
-            if registry
-                .validate_current_execution_selection(
-                    interaction.person_id,
-                    &task.admission,
-                    &task.selection,
-                    true,
-                )
-                .is_err()
-            {
-                return Ok(false);
-            }
             let Some(connector) = target.connector_id.as_deref() else {
                 return Ok(false);
             };

@@ -226,7 +226,7 @@ async fn task_store_rejects_foreign_principals_and_illegal_terminal_shapes() {
 }
 
 #[tokio::test]
-async fn stateless_completion_checks_current_binding_inside_transaction() {
+async fn stateless_completion_preserves_pinned_admission_after_assignment_disable() {
     let root = tempfile::tempdir().unwrap();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let person_id = PersonId::new();
@@ -309,33 +309,18 @@ async fn stateless_completion_checks_current_binding_inside_transaction() {
         coverage: DependencyCoverage::Independent,
         ..working.snapshot.clone()
     };
-    assert_eq!(
-        vault
-            .compare_and_swap_task(task_id, 2, generation, completed)
-            .await,
-        Err(AgentFailure::Conflict)
-    );
+    let terminal = vault
+        .compare_and_swap_task(task_id, 2, generation, completed)
+        .await
+        .unwrap();
+    assert_eq!(terminal.admission, admission);
+    assert_eq!(terminal.selection, working.selection);
     assert_eq!(
         vault.task(task_id).await.unwrap().unwrap().snapshot.state,
-        TaskState::Working
+        TaskState::Completed
     );
     assert_eq!(
         vault.task(historical_id).await.unwrap(),
         Some(historical_completed)
-    );
-
-    let failed = TaskSnapshot {
-        state: TaskState::Failed,
-        issue: Some(AgentFailure::Conflict),
-        ..working.snapshot
-    };
-    assert_eq!(
-        vault
-            .compare_and_swap_task(task_id, 2, generation, failed)
-            .await
-            .unwrap()
-            .snapshot
-            .state,
-        TaskState::Failed
     );
 }

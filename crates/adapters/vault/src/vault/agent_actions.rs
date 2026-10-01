@@ -314,6 +314,105 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
+    async fn validate_agent_action_task_in_transaction(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        envelope: &AgentActionEnvelope,
+    ) -> Result<(), AgentFailure> {
+        let origin = envelope
+            .action
+            .agent_origin
+            .as_ref()
+            .ok_or(AgentFailure::Conflict)?;
+        let task_id = floe_agent_contract::TaskId::from_uuid(origin.invocation_id)
+            .ok_or(AgentFailure::InvalidInput)?;
+        let task = self
+            .task_on(transaction, task_id)
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        let mut binding = transaction
+            .query(
+                "SELECT session_id FROM agent_task_delegations WHERE task_id = ?",
+                [origin.invocation_id.to_string()],
+            )
+            .await
+            .map_err(storage)?;
+        let session_id = binding
+            .next()
+            .await
+            .map_err(storage)?
+            .ok_or(AgentFailure::NotFound)?
+            .get::<String>(0)
+            .map_err(storage)?;
+        if session_id != origin.session_id.to_string()
+            || binding.next().await.map_err(storage)?.is_some()
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        drop(binding);
+        if task.snapshot.state != floe_agent_contract::TaskState::Completed
+            || task.snapshot.principal != self.person_id.to_string()
+            || task.admission.registry_instance_id != origin.instance_id
+            || task.admission.assignment_id != origin.assignment_id
+            || task.admission.package != origin.package
+            || task.snapshot.agent_id != origin.package.id
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        let floe_agent_contract::DependencyCoverage::Dependent { dependencies } =
+            &task.snapshot.coverage
+        else {
+            return Err(AgentFailure::PolicyDenied);
+        };
+        if !dependencies.contains(&envelope.dependency)
+            || envelope.dependency.observation_id() != origin.evidence_id
+            || !task.selection.requirements.iter().any(|requirement| {
+                requirement.capability == "calendar.timeline"
+                    && requirement.selected.iter().any(|selected| {
+                        selected.connector_id == *envelope.dependency.source().connector()
+                            && selected.connection_id
+                                == envelope.dependency.source().connection_id()
+                            && selected.execution_owner_id
+                                == *envelope.dependency.source().execution_owner()
+                            && envelope.dependency.resources().contains(&selected.resource)
+                    })
+            })
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        if task.admission.definition_revision != task.snapshot.definition_revision
+            || !task.snapshot.artifacts.iter().any(|artifact| {
+                let DependencyCoverage::Dependent { dependencies } = &artifact.coverage else {
+                    return false;
+                };
+                dependencies.as_slice() == [envelope.dependency.clone()]
+                    && artifact.parts.iter().any(|part| {
+                        let floe_agent_contract::ArtifactPart::Data { media_type, data } = part
+                        else {
+                            return false;
+                        };
+                        media_type == floe_actions::EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE
+                            && serde_json::from_str::<floe_actions::ExpertCalendarProposal>(data)
+                                .is_ok_and(|evidence| {
+                                    evidence.validate().is_ok()
+                                        && evidence.person_id == self.person_id
+                                        && evidence.task_id == origin.invocation_id
+                                        && evidence.invocation_id == task.invocation_key.as_uuid()
+                                        && evidence.instance_id == origin.instance_id
+                                        && evidence.assignment_id == origin.assignment_id
+                                        && evidence.package == origin.package
+                                        && evidence.evidence_id == origin.evidence_id
+                                        && evidence.state_revision == origin.state_revision
+                                        && evidence.data_class == origin.data_class
+                                })
+                    })
+            })
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(())
+    }
+
     pub(crate) async fn store_agent_action_envelope(
         &self,
         envelope: AgentActionEnvelope,
@@ -328,26 +427,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(|_| AgentFailure::StorageUnavailable)?;
         let result = async {
             self.ensure_agent_action_schema(&transaction).await?;
-            let origin = envelope
-                .action
-                .agent_origin
-                .as_ref()
-                .ok_or(AgentFailure::Conflict)?;
-            let registry = floe_experts::AgentRegistry::restore(
-                self.registry_on(&transaction)
-                    .await?
-                    .ok_or(AgentFailure::NotFound)?,
-                self.vault_id,
-            )?;
-            registry.validate_settled_invocation(
-                origin.instance_id,
-                self.person_id,
-                origin.assignment_id,
-                &origin.package,
-                origin.state_revision,
-                origin.data_class,
-            )?;
-            registry.validate_active_assignment(self.person_id, origin.assignment_id)?;
+            self.validate_agent_action_task_in_transaction(&transaction, &envelope).await?;
             let changed = transaction
                 .execute(
                     "INSERT INTO agent_action_envelopes (execution_id, person_id, grant_id, grant_incarnation, grant_epoch, state, digest, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -457,43 +537,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             {
                 return Err(AgentFailure::PolicyDenied);
             }
-            if let Some(origin) = &envelope.action.agent_origin {
-                let task_id = floe_agent_contract::TaskId::from_uuid(origin.invocation_id)
-                    .ok_or(AgentFailure::InvalidInput)?;
-                let task = self.task_on(&transaction, task_id).await?.ok_or(AgentFailure::NotFound)?;
-                if task.snapshot.state != floe_agent_contract::TaskState::Completed
-                    || task.snapshot.principal != self.person_id.to_string()
-                    || task.admission.registry_instance_id != origin.instance_id
-                    || task.admission.assignment_id != origin.assignment_id
-                    || task.admission.package != origin.package
-                    || task.snapshot.agent_id != origin.package.id
-                {
-                    return Err(AgentFailure::Conflict);
-                }
-                let registry_snapshot = self.registry_on(&transaction).await?.ok_or(AgentFailure::NotFound)?;
-                floe_experts::AgentRegistry::restore(registry_snapshot, self.vault_id)?
-                    .validate_current_execution_selection(self.person_id, &task.admission, &task.selection, true)?;
-                let floe_agent_contract::DependencyCoverage::Dependent { dependencies } = &task.snapshot.coverage else {
-                    return Err(AgentFailure::PolicyDenied);
-                };
-                if !dependencies.contains(&envelope.dependency)
-                    || envelope.dependency.observation_id() != origin.evidence_id
-                    || !task.selection.requirements.iter().any(|requirement| {
-                        requirement.capability == "calendar.timeline"
-                            && requirement.selected.iter().any(|selected| {
-                                selected.connector_id == *envelope.dependency.source().connector()
-                                    && selected.connection_id == envelope.dependency.source().connection_id()
-                                    && selected.execution_owner_id == *envelope.dependency.source().execution_owner()
-                                    && envelope
-                                        .dependency
-                                        .resources()
-                                        .contains(&selected.resource)
-                            })
-                    })
-                {
-                    return Err(AgentFailure::PolicyDenied);
-                }
-            }
+            self.validate_agent_action_task_in_transaction(&transaction, &envelope).await?;
             self.validate_dependency_transaction(&transaction, &envelope.dependency, now)
                 .await?;
             if cancellation.is_cancelled() {

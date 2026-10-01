@@ -270,14 +270,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if proposed.executor_generation != self.active_executor_generation(&transaction).await? {
                 return Err(AgentFailure::Conflict);
             }
-            let registry = self.registry_on(&transaction).await?.ok_or(AgentFailure::NotFound)?;
-            floe_experts::AgentRegistry::restore(registry, self.registry_instance_id())?
-                .validate_current_execution_selection(
-                    self.person_id,
-                    &proposed.admission,
-                    &proposed.selection,
-                    true,
-                )?;
             let mut count = transaction
                 .query("SELECT count(*) FROM agent_tasks", ())
                 .await
@@ -347,16 +339,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 snapshot,
                 self.person_id,
             )?;
-            if next.snapshot.state == TaskState::Completed {
-                self.validate_current_task_execution_on(&transaction, &current)
-                    .await
-                    .map_err(|failure| match failure {
-                        AgentFailure::CapabilityDenied | AgentFailure::NotFound => {
-                            AgentFailure::Conflict
-                        }
-                        other => other,
-                    })?;
-            }
             if write_task(
                 &transaction,
                 &next,

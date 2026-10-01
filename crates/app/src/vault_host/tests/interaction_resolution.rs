@@ -1812,6 +1812,268 @@ impl HostFixture {
 }
 
 #[tokio::test]
+async fn task_source_review_uses_pinned_selection_and_live_authority_after_registry_drift() {
+    for drift in ["configuration", "task-target", "source"] {
+        let host = HostFixture::open().await;
+        let target = host.native_target(NATIVE_FINGERPRINT).await;
+        let registry = floe_experts::AgentRegistry::restore(
+            host.base.vault.expert_registry().await.unwrap().unwrap(),
+            host.base.vault.registry_instance_id(),
+        )
+        .unwrap();
+        let assignment = registry
+            .snapshot()
+            .assignments
+            .into_iter()
+            .find(|assignment| {
+                registry
+                    .snapshot()
+                    .installations
+                    .iter()
+                    .any(|installation| {
+                        installation.id == assignment.installation_id
+                            && installation.package.id == target.consumer
+                    })
+            })
+            .unwrap();
+        let package = registry
+            .snapshot()
+            .installations
+            .into_iter()
+            .find(|installation| installation.id == assignment.installation_id)
+            .unwrap()
+            .package;
+        let definition_revision = registry
+            .snapshot()
+            .manifests
+            .iter()
+            .find(|manifest| manifest.package == package)
+            .unwrap()
+            .definition
+            .definition_revision;
+        let admission = floe_experts::ExpertAdmissionIdentity {
+            registry_instance_id: registry.instance_id(),
+            assignment_id: assignment.id,
+            installation_id: assignment.installation_id,
+            package: package.clone(),
+            definition_revision,
+        };
+        let selection = registry
+            .execution_selection(host.base.person, &admission)
+            .unwrap();
+        let generation = host
+            .base
+            .vault
+            .activate_task_executor()
+            .await
+            .unwrap()
+            .executor_generation;
+        let task_id = floe_agent_contract::TaskId::new();
+        let invocation_key = floe_agent_contract::InvocationKey::new();
+        host.base
+            .vault
+            .admit_task(floe_vault::VaultTaskRecord {
+                snapshot: floe_agent_contract::TaskSnapshot {
+                    task_id,
+                    parent_run_id: Some(host.base.run_id.as_uuid()),
+                    principal: host.base.principal(),
+                    agent_id: package.id.clone(),
+                    definition_revision,
+                    state: floe_agent_contract::TaskState::Submitted,
+                    result: None,
+                    artifacts: vec![],
+                    coverage: floe_agent_contract::DependencyCoverage::Unknown,
+                    issue: None,
+                },
+                admission,
+                selection,
+                invocation_key,
+                request_digest: [42; 32],
+                aggregate_revision: 1,
+                executor_generation: generation,
+            })
+            .await
+            .unwrap();
+        {
+            let mut journal = host.base.runs.journal.lock().unwrap();
+            let revision = journal.len() as u64 + 1;
+            journal.push(floe_conversation::JournalEntry {
+                revision,
+                event: JournalEvent::DelegationIntent {
+                    request: floe_agent_contract::DelegationRequest {
+                        task_id,
+                        parent_run_id: Some(host.base.run_id.as_uuid()),
+                        principal: host.base.principal(),
+                        invocation_key,
+                        selected_agent_id: package.id.clone(),
+                        selected_definition_revision: definition_revision,
+                        message: "Review source".into(),
+                        context_refs: vec![],
+                        execution_context: floe_agent_contract::DelegationExecutionContext {
+                            session_id: host.base.session_id,
+                            device_id: DEVICE.into(),
+                            agent_context: floe_agent_contract::AgentContext {
+                                projection_version: 1,
+                                persona: None,
+                                memories: vec![],
+                                optional_context_issues: vec![],
+                                evidence: vec![],
+                            },
+                            max_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
+                        },
+                    },
+                },
+            });
+        }
+        let mut reviewed = target;
+        if drift == "task-target" {
+            reviewed.connection_id = "other-connection".into();
+            reviewed.members[0].resource =
+                floe_access::native_calendar_resource("other-connection")
+                    .unwrap()
+                    .as_str()
+                    .into();
+        }
+        let admission = floe_conversation::publish_interaction(
+            &host.base.runs,
+            &host.base.repo,
+            floe_conversation::PublishInteractionRequest {
+                principal: host.base.principal(),
+                session_id: host.base.session_id,
+                origin_run_id: host.base.run_id,
+                origin: floe_conversation::InteractionOrigin::Task {
+                    task_id: task_id.as_uuid(),
+                    capability_call_id: None,
+                },
+                kind: floe_agent_contract::UserInteractionKind::SourceAccess,
+                requirement: floe_conversation::InteractionRequirement {
+                    kind: floe_conversation::InteractionRequirementKind::EnableObserve,
+                    source_id: "floe.source.calendar".into(),
+                    connection_id: Some("connection".into()),
+                    consumer: reviewed.consumer.clone(),
+                    purpose: "scheduling".into(),
+                    inline: true,
+                },
+                target: floe_conversation::ReviewedTarget::InlineObserve(reviewed),
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
+        let current = match admission {
+            floe_conversation::PublishAdmission::Created(record)
+            | floe_conversation::PublishAdmission::Existing(record) => record,
+        };
+        host.base
+            .vault
+            .replace_expert_binding(
+                Uuid::new_v4(),
+                floe_experts::ExpertBindingCommand {
+                    assignment_id: assignment.id,
+                    package,
+                    definition_revision,
+                    requirement_key: assignment
+                        .binding
+                        .entries
+                        .iter()
+                        .find(|entry| {
+                            entry
+                                .selected
+                                .iter()
+                                .any(|reference| reference.capability_id == "calendar.timeline")
+                        })
+                        .unwrap()
+                        .requirement_key
+                        .clone(),
+                    expected_binding_revision: assignment.binding.revision,
+                    selected: vec![],
+                },
+            )
+            .await
+            .unwrap();
+        let snapshot = host.base.vault.expert_registry().await.unwrap().unwrap();
+        host.base
+            .vault
+            .configure_registry(
+                floe_experts::RegistryConfiguration {
+                    instance_id: snapshot.instance_id,
+                    expected_revision: snapshot.revision,
+                    target: floe_experts::RegistryConfigurationTarget::Assignment {
+                        id: assignment.id,
+                        enabled: false,
+                    },
+                },
+                floe_execution::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        let calendar = FixtureCalendarSubject {
+            fingerprint: if drift == "source" {
+                ROTATED_FINGERPRINT
+            } else {
+                NATIVE_FINGERPRINT
+            }
+            .into(),
+        };
+        let personal = FixturePersonalInspector {
+            fingerprint: NATIVE_FINGERPRINT.into(),
+        };
+        let owners = host.owners(&calendar, &personal);
+        assert_eq!(
+            owners.expert_review_current(&current).await.unwrap(),
+            drift != "task-target"
+        );
+        let outcome = resolve_interaction(
+            &host.base.runs,
+            &host.base.repo,
+            &owners,
+            &owners,
+            &owners,
+            &host.base.caller,
+            host.base.resolve_command(
+                &current,
+                floe_conversation::InteractionDecisionKind::Approve,
+            ),
+            &host.base.cancellation,
+            NOW,
+        )
+        .await
+        .unwrap();
+        match (drift, outcome) {
+            ("configuration", ResolveOutcome::Resolved { .. }) => {
+                assert_eq!(
+                    host.base
+                        .vault
+                        .list_data_access_grants(128)
+                        .await
+                        .unwrap()
+                        .len(),
+                    1
+                );
+            }
+            (
+                "task-target",
+                ResolveOutcome::Superseded {
+                    reason: DriftReason::ExpertAssignmentChanged,
+                    ..
+                },
+            )
+            | ("source", ResolveOutcome::Superseded { .. }) => {
+                assert!(
+                    host.base
+                        .vault
+                        .list_data_access_grants(128)
+                        .await
+                        .unwrap()
+                        .is_empty()
+                );
+            }
+            (_, outcome) => panic!("{drift}: {outcome:?}"),
+        }
+    }
+}
+
+#[tokio::test]
 async fn native_allow_creates_exact_grant_and_resolves() {
     let host = HostFixture::open().await;
     let target = host.native_target(NATIVE_FINGERPRINT).await;

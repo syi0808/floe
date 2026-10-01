@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use floe_agent_contract::{AgentFailure, DataClass, PackageKind, PackageRef, PersonId};
+use floe_agent_contract::{AgentFailure, DataClass, PackageRef, PersonId};
 use floe_context_contract::SourceSelectionReference;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -684,46 +684,6 @@ impl AgentRegistry {
         })
     }
 
-    pub fn validate_settled_invocation(
-        &self,
-        instance_id: Uuid,
-        person_id: PersonId,
-        assignment_id: Uuid,
-        package: &PackageRef,
-        state_revision: u64,
-        data_class: DataClass,
-    ) -> Result<(), AgentFailure> {
-        if instance_id != self.instance_id() || state_revision == 0 {
-            return Err(AgentFailure::NotFound);
-        }
-        let assignment = self.assignment(person_id, assignment_id)?;
-        if state_revision > assignment.private_state.revision {
-            return Err(AgentFailure::Conflict);
-        }
-        let installation = self.installation(assignment.installation_id)?;
-        if &installation.package != package
-            || package.kind != PackageKind::Expert
-            || self.manifest(package)?.data_class != data_class
-        {
-            return Err(AgentFailure::Conflict);
-        }
-        Ok(())
-    }
-
-    pub fn validate_active_assignment(
-        &self,
-        person_id: PersonId,
-        assignment_id: Uuid,
-    ) -> Result<(), AgentFailure> {
-        let assignment = self.assignment(person_id, assignment_id)?;
-        let installation = self.installation(assignment.installation_id)?;
-        if !assignment.enabled || !installation.enabled {
-            return Err(AgentFailure::CapabilityDenied);
-        }
-        self.manifest(&installation.package)?;
-        Ok(())
-    }
-
     pub fn set_installation_enabled(
         &mut self,
         expected_revision: u64,
@@ -787,28 +747,6 @@ impl AgentRegistry {
     ) -> Result<ExpertExecutionSelection, AgentFailure> {
         let resolved = self.resolve_admitted(person_id, admission)?;
         ExpertExecutionSelection::from_binding(&resolved.manifest, &resolved.assignment.binding)
-    }
-
-    pub fn validate_current_execution_selection(
-        &self,
-        person_id: PersonId,
-        admission: &ExpertAdmissionIdentity,
-        selection: &ExpertExecutionSelection,
-        require_enabled: bool,
-    ) -> Result<(), AgentFailure> {
-        selection.validate()?;
-        let resolved = self.resolve_admitted(person_id, admission)?;
-        if require_enabled {
-            self.validate_active_assignment(person_id, admission.assignment_id)?;
-        }
-        let current = ExpertExecutionSelection::from_binding(
-            &resolved.manifest,
-            &resolved.assignment.binding,
-        )?;
-        if &current != selection {
-            return Err(AgentFailure::Conflict);
-        }
-        Ok(())
     }
 
     pub fn replace_binding(

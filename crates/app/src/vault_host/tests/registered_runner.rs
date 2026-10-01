@@ -22,30 +22,82 @@ fn inventory_connection(
     person: PersonId,
     requests: usize,
 ) -> (CurrentSavedConnectionStore, std::thread::JoinHandle<()>) {
+    inventory_connection_with_model(person, requests, false)
+}
+
+fn inventory_connection_with_model(
+    person: PersonId,
+    requests: usize,
+    answer_model: bool,
+) -> (CurrentSavedConnectionStore, std::thread::JoinHandle<()>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
+        let mut model_calls = 0;
         for _ in 0..requests {
             let (mut socket, _) = listener.accept().unwrap();
             let mut request = [0; 4096];
             let size = socket.read(&mut request).unwrap();
+            let mut bytes = request[..size].to_vec();
+            let headers_end = loop {
+                if let Some(position) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                    break position + 4;
+                }
+                let size = socket.read(&mut request).unwrap();
+                assert!(size > 0);
+                bytes.extend_from_slice(&request[..size]);
+            };
+            let headers = String::from_utf8_lossy(&bytes[..headers_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            while bytes.len() < headers_end + content_length {
+                let size = socket.read(&mut request).unwrap();
+                assert!(size > 0);
+                bytes.extend_from_slice(&request[..size]);
+            }
+            let request = String::from_utf8_lossy(&bytes);
+            let model_call = request.starts_with("POST /v1/agent ");
             assert!(
-                String::from_utf8_lossy(&request[..size]).starts_with("GET /v1/inference-purposes")
+                request.starts_with("GET /v1/inference-purposes") || (answer_model && model_call)
             );
-            let body = serde_json::json!({
-                "schema_version": 1,
-                "purposes": {"everyday_assistance": {
-                    "available": true,
-                    "requires_external_consent": false,
-                    "placement": "server_local"
-                }}
-            })
-            .to_string();
+            let body = if model_call {
+                model_calls += 1;
+                let output = serde_json::json!({"output": [{"kind": "answer", "text": "Pinned tasks observed"}], "used_tokens": 1});
+                serde_json::json!({
+                    "schema_version": 1,
+                    "purpose": "everyday_assistance",
+                    "trace_id": "a".repeat(32),
+                    "routing": {
+                        "placement": "server_local",
+                        "external_transfer": false,
+                        "replay_source": "a".repeat(64)
+                    },
+                    "output": output.to_string()
+                })
+                .to_string()
+            } else {
+                serde_json::json!({
+                    "schema_version": 1,
+                    "purposes": {"everyday_assistance": {
+                        "available": true,
+                        "requires_external_consent": false,
+                        "placement": "server_local"
+                    }}
+                })
+                .to_string()
+            };
             socket.write_all(format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             ).as_bytes()).unwrap();
         }
+        assert_eq!(model_calls, usize::from(answer_model));
     });
     let connection = floe_inference::SavedServerConnection {
         base_url: format!("http://{address}"),
@@ -280,13 +332,26 @@ async fn installed_open(
     OpenVault<Keys>,
     std::thread::JoinHandle<()>,
 ) {
+    installed_open_with_model(person, registration, false).await
+}
+
+async fn installed_open_with_model(
+    person: PersonId,
+    registration: BoundExpertRegistration,
+    answer_model: bool,
+) -> (
+    tempfile::TempDir,
+    OpenVault<Keys>,
+    std::thread::JoinHandle<()>,
+) {
     let root = tempfile::tempdir().unwrap();
     std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let vault = EncryptedAgentVault::create(root.path(), person, Keys::default())
         .await
         .unwrap();
     let core = Arc::new(FloeCore::open(":memory:").await.unwrap());
-    let (connections, server) = inventory_connection(person, 1);
+    let (connections, server) =
+        inventory_connection_with_model(person, if answer_model { 3 } else { 1 }, answer_model);
     let manifest = registration.manifest.clone();
     let open = OpenVault::activate(
         vault,
@@ -481,9 +546,10 @@ fn paused_model_after_tasks_runner<'turn, 'model, 'msg, 'call>(
 }
 
 #[tokio::test]
-async fn read_a_then_rebind_b_fences_expert_model_dispatch() {
+async fn read_a_then_rebind_b_completes_pinned_expert_model_dispatch() {
     let person = PersonId::new();
-    let (_root, open, server) = installed_open(person, tasks_requirement_registration()).await;
+    let (_root, open, server) =
+        installed_open_with_model(person, tasks_requirement_registration(), true).await;
     let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
     let assignment = &registered_assignment(&snapshot, &open);
     let selected = |device_id| {
@@ -542,7 +608,7 @@ async fn read_a_then_rebind_b_fences_expert_model_dispatch() {
                     definition_revision: 1,
                     requirement_key: "required_tasks".into(),
                     expected_binding_revision: assignment.binding.revision + 1,
-                    selected: vec![source_b],
+                    selected: vec![source_b.clone()],
                 },
             )
             .await
@@ -553,9 +619,9 @@ async fn read_a_then_rebind_b_fences_expert_model_dispatch() {
     };
     let (result, ()) = tokio::join!(execution, rebind);
     let receipt = result.unwrap();
-    assert_eq!(receipt.snapshot.state, TaskState::Failed, "{receipt:?}");
-    assert_eq!(receipt.snapshot.issue, Some(AgentFailure::Conflict));
-    assert_ne!(receipt.snapshot.result.as_deref(), Some("model-dispatched"));
+    assert_eq!(receipt.snapshot.state, TaskState::Completed, "{receipt:?}");
+    assert_eq!(receipt.snapshot.issue, None);
+    assert_eq!(receipt.snapshot.result.as_deref(), Some("model-dispatched"));
     assert_eq!(
         open.vault
             .task(task_id)
@@ -567,11 +633,31 @@ async fn read_a_then_rebind_b_fences_expert_model_dispatch() {
             .selected[0],
         source_a,
     );
+    open.publish_expert_directory(&open.registrations)
+        .await
+        .unwrap();
+    let next = open
+        .task_coordinator
+        .environment(&person.to_string())
+        .unwrap();
+    assert_ne!(environment.identity(), next.identity());
+    let current = open.vault.expert_registry().await.unwrap().unwrap();
+    let registry =
+        floe_experts::AgentRegistry::restore(current, open.vault.registry_instance_id()).unwrap();
+    let task = open.vault.task(task_id).await.unwrap().unwrap();
+    assert_eq!(
+        registry
+            .execution_selection(person, &task.admission)
+            .unwrap()
+            .requirements[0]
+            .selected,
+        vec![source_b]
+    );
     server.join().unwrap();
 }
 
 #[tokio::test]
-async fn rebound_selection_discards_runner_result_before_final_release() {
+async fn rebound_selection_preserves_runner_result_at_final_release() {
     let person = PersonId::new();
     let (_root, open, server) =
         installed_open(person, required_source_registration(paused_output_runner)).await;
@@ -640,9 +726,9 @@ async fn rebound_selection_discards_runner_result_before_final_release() {
     };
     let (result, ()) = tokio::join!(execution, rebind);
     let receipt = result.unwrap();
-    assert_eq!(receipt.snapshot.state, TaskState::Failed, "{receipt:?}");
-    assert_eq!(receipt.snapshot.issue, Some(AgentFailure::Conflict));
-    assert_ne!(receipt.snapshot.result.as_deref(), Some("stale-output"));
+    assert_eq!(receipt.snapshot.state, TaskState::Completed, "{receipt:?}");
+    assert_eq!(receipt.snapshot.issue, None);
+    assert_eq!(receipt.snapshot.result.as_deref(), Some("stale-output"));
     server.join().unwrap();
 }
 
@@ -800,6 +886,27 @@ async fn admitted_source_a_rebound_before_read_never_uses_b() {
         let mut source_b = source_a.clone();
         source_b.connection_id =
             floe_context_contract::ConnectionId::try_new("attention-b").unwrap();
+        let live_b = floe_connections::SourceConnection::establish_reviewed_native(
+            person,
+            source_b.connector_id.clone(),
+            source_b.connection_id.clone(),
+            source_b.execution_owner_id.clone(),
+            floe_connections::ResourceMode::AllAvailable,
+            attention_source(person).resources().to_vec(),
+            "a".repeat(64),
+        )
+        .unwrap();
+        floe_connections::SourceRepository::create(&open.core.store, &live_b)
+            .await
+            .unwrap();
+        assert!(
+            open.core
+                .source_service()
+                .load(person, &source_a.connection_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
         open.vault
             .replace_expert_binding(
                 Uuid::new_v4(),
@@ -821,7 +928,7 @@ async fn admitted_source_a_rebound_before_read_never_uses_b() {
     let (result, ()) = tokio::join!(execution, rebind);
     let receipt = result.unwrap();
     assert_eq!(receipt.snapshot.state, TaskState::Failed, "{receipt:?}");
-    assert_eq!(receipt.snapshot.issue, Some(AgentFailure::Conflict));
+    assert_eq!(receipt.snapshot.issue, Some(AgentFailure::StaleContext));
     assert_eq!(
         open.vault
             .task(task_id)
@@ -1318,7 +1425,7 @@ async fn registered_runner_extension_cannot_read_another_experts_selection() {
 }
 
 #[tokio::test]
-async fn registered_runner_product_endpoint_fences_disabled_a_without_rerouting_to_b() {
+async fn registered_runner_product_endpoint_keeps_disabled_a_without_rerouting_to_b() {
     RUNNER_A_CALLS.store(0, Ordering::SeqCst);
     RUNNER_B_CALLS.store(0, Ordering::SeqCst);
     let root = tempfile::tempdir().unwrap();
@@ -1478,8 +1585,9 @@ async fn registered_runner_product_endpoint_fences_disabled_a_without_rerouting_
     };
     let (first, (second_task_id, second_admission)) = tokio::join!(first, replacement);
     let first = first.unwrap();
-    assert_eq!(first.snapshot.state, TaskState::Rejected, "{first:?}");
-    assert_eq!(first.snapshot.issue, Some(AgentFailure::CapabilityDenied));
+    assert_eq!(first.snapshot.state, TaskState::Completed, "{first:?}");
+    assert_eq!(first.snapshot.issue, None);
+    assert_eq!(first.snapshot.result.as_deref(), Some("runner-A-marker"));
     let repository = VaultTaskRepository::new(Arc::clone(&open.vault));
     let first_record = floe_experts::TaskRepository::get(&repository, task_id)
         .await

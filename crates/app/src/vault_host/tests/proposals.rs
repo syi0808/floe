@@ -92,6 +92,27 @@ async fn seed(
     )
     .await
     .unwrap();
+    vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: expert_assignment_id,
+                package: seeded.manifests[0].package.clone(),
+                definition_revision: 1,
+                requirement_key: "selected_calendar".into(),
+                expected_binding_revision: 1,
+                selected: vec![floe_context_contract::SourceSelectionReference {
+                    connector_id: source.connector_id().clone(),
+                    connection_id: source.connection_id().clone(),
+                    execution_owner_id: source.execution_owner_id().clone(),
+                    capability_id: "calendar.timeline".into(),
+                    resource: floe_access::native_calendar_resource("eventkit-connection").unwrap(),
+                    contract_version: 1,
+                }],
+            },
+        )
+        .await
+        .unwrap();
     let snapshot = vault.expert_registry().await.unwrap().unwrap();
     let mut registry = AgentRegistry::restore(snapshot, vault.registry_instance_id()).unwrap();
     let package = seeded.manifests[0].package.clone();

@@ -9,24 +9,6 @@ use super::*;
 const MAX_REGISTRY_BYTES: usize = 262_144;
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    pub(super) async fn validate_current_task_execution_on(
-        &self,
-        transaction: &turso::transaction::Transaction<'_>,
-        task: &VaultTaskRecord,
-    ) -> Result<(), AgentFailure> {
-        let registry = self
-            .registry_on(transaction)
-            .await?
-            .ok_or(AgentFailure::Conflict)?;
-        AgentRegistry::restore(registry, self.registry_instance_id())?
-            .validate_current_execution_selection(
-                self.person_id,
-                &task.admission,
-                &task.selection,
-                true,
-            )
-    }
-
     pub async fn expert_install_overview(
         &self,
         manifest_digest: &str,
@@ -347,8 +329,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .task_on(&transaction, task_id)
                 .await?
                 .ok_or(AgentFailure::NotFound)?;
-            self.validate_current_task_execution_on(&transaction, &current)
-                .await?;
             if registry.instance_id != settlement.admission.registry_instance_id {
                 return Err(AgentFailure::Conflict);
             }
