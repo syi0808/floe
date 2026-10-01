@@ -320,6 +320,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manager_stable_prompt_is_independent_of_active_expert_catalog() {
+        let first = AgentCard {
+            schema_version: floe_agent_contract::AGENT_SCHEMA_VERSION,
+            protocol_version: floe_agent_contract::A2A_PROTOCOL_VERSION.into(),
+            id: "example.dynamic-advisor".into(),
+            version: "1.0.0".into(),
+            name: "Synthetic advisor".into(),
+            description: "Assesses supplied fictional constraints.".into(),
+            domain_tags: vec![],
+            skills: vec![],
+            supported_placements: vec![floe_agent_contract::ModelPlacement::DeviceLocal],
+        };
+        let second = AgentCard {
+            id: "example.other-advisor".into(),
+            name: "Other synthetic advisor".into(),
+            description: "Provides an independent perspective on supplied fictional plans.".into(),
+            ..first.clone()
+        };
+        let conversation = ModelConversation {
+            history: vec![],
+            current_turn: vec![ModelConversationEntry::User {
+                message_id: Uuid::new_v4(),
+                text: "Assess the supplied fictional plan.".into(),
+            }],
+        };
+        for cards in [
+            vec![],
+            vec![first.clone()],
+            vec![first.clone(), second.clone()],
+            vec![second, first],
+        ] {
+            let projector = ConversationModelProjection::new(
+                MapReader {
+                    coverage: Mutex::new(HashMap::new()),
+                },
+                AcceptAll,
+                Uuid::new_v4(),
+                agent_context(),
+                vec![DataClass::Personal],
+                cards.clone(),
+            )
+            .unwrap();
+            let mut request = manager_request(conversation.clone());
+            request.role = crate::prompts::manager_role_spec();
+            request.catalog.cards = cards
+                .iter()
+                .cloned()
+                .map(|card| floe_agent_contract::AgentDefinition {
+                    card,
+                    definition_revision: 1,
+                })
+                .collect();
+            let projection = projector.project(request, &scope()).await.unwrap();
+            assert_eq!(
+                projection.envelope.stable_instructions,
+                manager_prompt(None).unwrap()
+            );
+            assert_eq!(
+                projection.envelope.scoped_instructions.active_experts,
+                cards
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn manager_role_only_spec_preserves_stable_projection() {
         for persona in [
             None,
