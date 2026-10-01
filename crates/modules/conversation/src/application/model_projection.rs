@@ -320,6 +320,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manager_role_only_spec_preserves_stable_projection() {
+        for persona in [
+            None,
+            Some(floe_knowledge::prompts::PersonaProfile {
+                revision: 2,
+                source: "test.custom-persona".into(),
+                instructions: "Answer concisely in Korean.".into(),
+            }),
+        ] {
+            let (conversation, user_id, assistant_id, held) = history_pair();
+            let mut context = agent_context();
+            context.persona = persona;
+            let previous_role = RoleSpec {
+                role_id: "manager".into(),
+                instructions: manager_prompt(context.persona.as_ref()).unwrap().render(),
+                output_contract: MANAGER_OUTPUT_CONTRACT.into(),
+            };
+            let projector = ConversationModelProjection::new(
+                MapReader {
+                    coverage: Mutex::new(HashMap::from([
+                        (user_id, DependencyCoverage::Independent),
+                        (
+                            assistant_id,
+                            DependencyCoverage::dependent(held).unwrap(),
+                        ),
+                    ])),
+                },
+                AcceptAll,
+                Uuid::new_v4(),
+                context,
+                vec![DataClass::Personal],
+                vec![],
+            )
+            .unwrap();
+            let mut previous_request = manager_request(conversation);
+            previous_request.role = previous_role;
+            let mut canonical_request = previous_request.clone();
+            canonical_request.role = crate::prompts::manager_role_spec();
+            let scope = scope();
+            let previous = projector.project(previous_request, &scope).await.unwrap();
+            let canonical = projector.project(canonical_request, &scope).await.unwrap();
+            assert_eq!(previous.envelope, canonical.envelope);
+            assert_eq!(previous.coverage, canonical.coverage);
+            assert_eq!(previous.input_data_classes, canonical.input_data_classes);
+            assert_eq!(previous.projection_revision, canonical.projection_revision);
+        }
+    }
+
+    #[tokio::test]
+    async fn manager_role_only_spec_rejects_invalid_persona_before_projection_release() {
+        for persona in [
+            floe_knowledge::prompts::PersonaProfile {
+                revision: 0,
+                ..Default::default()
+            },
+            floe_knowledge::prompts::PersonaProfile {
+                source: " ".into(),
+                ..Default::default()
+            },
+            floe_knowledge::prompts::PersonaProfile {
+                instructions: " ".into(),
+                ..Default::default()
+            },
+            floe_knowledge::prompts::PersonaProfile {
+                instructions: "a".repeat(4097),
+                ..Default::default()
+            },
+        ] {
+            let mut context = agent_context();
+            context.persona = Some(persona);
+            let projector = ConversationModelProjection::new(
+                MapReader {
+                    coverage: Mutex::new(HashMap::new()),
+                },
+                AcceptAll,
+                Uuid::new_v4(),
+                context,
+                vec![DataClass::Personal],
+                vec![],
+            )
+            .unwrap();
+            let (conversation, _, _, _) = history_pair();
+            let mut request = manager_request(conversation);
+            request.role = crate::prompts::manager_role_spec();
+            assert_eq!(
+                projector.project(request, &scope()).await.err(),
+                Some(AgentFailure::InvalidInput)
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn manager_projects_filtered_history_with_canonical_purpose() {
         let (conversation, user_id, assistant_id, held) = history_pair();
         let projector = ConversationModelProjection::new(

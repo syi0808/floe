@@ -324,14 +324,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         let service = floe_conversation::ConversationService::with_run_cancellations(
             std::sync::Arc::clone(inputs.conversation_repository),
             floe_conversation::ManagerConfig {
-                role_spec: floe_agent_contract::RoleSpec {
-                    role_id: "manager".into(),
-                    instructions: floe_conversation::prompts::manager_prompt(
-                        context.persona.as_ref(),
-                    )?
-                    .render(),
-                    output_contract: floe_conversation::MANAGER_OUTPUT_CONTRACT.into(),
-                },
+                role_spec: floe_conversation::prompts::manager_role_spec(),
                 purpose: floe_inference::CANONICAL_MODEL_PURPOSE.into(),
                 max_iterations: budget.max_iterations.min(64),
                 max_output_bytes: budget.max_output_bytes,
