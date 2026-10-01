@@ -3971,7 +3971,7 @@ Populate this section during implementation. Do not copy checkpoint status into 
   11. Documentation/worktree: `docs/architecture/runtime.md` describes implemented factual eligibility, delegation/limitation, card trust, partial/unavailable coverage, observed external success, structural validator limits and pending CP07 behavioral acceptance, plus the approved 9216-byte admission boundary. Authority/recovery docs and ADR 0033 remain unchanged because their authority/grounding decisions are preserved. Implementation commit left a clean worktree. This report-only child changes solely `Execution report / Checkpoint 06`; clean status is checked after its commit. All CP06 requirements, with the user-approved byte-limit exception, are closed; **Checkpoint 07 remains not started**.
 
 ## Checkpoint 07
-- Status: **UNVERIFIED / incomplete** — approved revision-7 Foundation run failed; the sole revision-8 remediation is committed but its live attempt was invalid because generation returned unavailable. No prompt/model configuration is accepted.
+- Status: **FAILED / incomplete** — both revision 7 and the sole revision-8 remediation fail the hard gate on complete approved Foundation runs. The initial Game Mode-invalid revision-8 attempt is preserved separately. No prompt/model configuration is accepted; CP08 must not start.
 - Start HEAD: `e20c413b86209f3633926117db5a599339278b56`
 - Fetched `origin/main`: `e20c413b86209f3633926117db5a599339278b56`
 - Commit(s): `798c9fba1c64e03029b0308f06daa7811230c584` (07-A freeze), `9acd09acc696202fe6692565ededfb1d3af4e99d` (sole revision-8 Option B remediation).
@@ -4001,7 +4001,7 @@ Populate this section during implementation. Do not copy checkpoint status into 
 
 #### Canonical Run and unchanged component identity
 
-Run-frame hashes are constant across all recorded repetitions/phases in each group and unchanged by revision 8. Revision-8 synthesis has no records; only revision 7 proves those phases. The hashes identify frozen Run instructions/discovery, not model observations or authority.
+Run-frame hashes are constant across all recorded repetitions/phases in each group and unchanged by revision 8. The initial invalid revision-8 attempt has no synthesis records; revision 7 and the final valid revision-8 retry below prove those phases. The hashes identify frozen Run instructions/discovery, not model observations or authority.
 
 | Cases | Run-frame SHA-256 |
 | --- | --- |
@@ -4102,6 +4102,93 @@ Every revision-8 `case_id/selection/1,2,3` is an execution failure with `local_m
 The user subsequently asked why Foundation was unavailable. Inspection of the macOS unified log for the exact smoke process during the revision-8 attempt found **66** ModelManager execution rejections stating `Not executed due to current system state ["StandardGameMode"], try again later`, accompanied by `ModelManagerServices.ModelManagerError Code=1013`. This supersedes the initially unknown cause above: OS Game Mode state blocked these execution requests; this evidence does not establish which app activated that state. The safely filtered log remains local at `target/validation/manager-guidance-r8-foundation-system-state.log`, SHA-256 `ec8235efdf5b432e835506259613ea1f3345352898b4844cb13426fe0bec8821`.
 
 A later read-only `--availability` invocation of the existing signed smoke bundle returned `Available`; it performed no generation. Static inspection also clarifies that Manager profile preflight checks bundled-dylib resolution (`ByteCall::available`), not Apple's actual model readiness. The Swift host maps unclassified native generation errors to `model_unavailable`, explaining the broad report category. Current readiness alone neither validates generation nor repairs the invalid revision-8 sample. No prompt, corpus, harness, host contract, OS setting or account was changed; no live evaluation was rerun. CP07 remains incomplete pending a valid full revision-8 run. This diagnostic-only report follow-up changes no acceptance verdict.
+
+
+### Final revision-8 whole-corpus retry — failed hard gate
+
+- Authorization/baseline: user explicitly requested proceeding after the read-only availability check. Fetched `origin/main` remained `e20c413b86209f3633926117db5a599339278b56`; start `main` HEAD was `98e0207873005cc537fdf72dcb5eee9eec1a1370`, clean. Read-only availability returned `Available`. The existing explicit Foundation approval was supplied as `FLOE_MANAGER_EVAL_APPROVED=1`. No OS setting, credential, account or external connection was changed.
+- Full retry command: `FLOE_MANAGER_EVAL_APPROVED=1 FLOE_MANAGER_EVAL_STAGE=manager tools/validation/run-local-model-smoke.sh --exercise-manager-guidance > target/validation/manager-guidance-r8-foundation-retry1.jsonl` (stderr separately local). Built/signed the same-snapshot Foundation bundle. Preserved the earlier Game Mode-invalid report and digest; no per-case/repetition rerun occurred.
+- Raw report SHA-256: `ef28cf5af46fe86db8f5864f8ff614a944c97791036eab7f2821112a945270a3`. **81/81 unique case-phase/repetition records + exactly one final summary**, all 22 selections × three and all five syntheses × three present; **zero execution failures**. Process exit 1 is the failed behavioral/shape gate, not a transport/integrity failure.
+- Exact identity: commit `98e0207873005cc537fdf72dcb5eee9eec1a1370`; corpus `eb20d432f445c8943c3fcc4e29ab1c3b5e8ac79bd405f9b967221e6367f1ba50`; `provider=foundation`, `profile=foundation-device`, `stage=manager`; configuration `aa0f4d4f8a9e6148d932de2d4f6228c5b9b0901f7f7a99e4ea7783ed3ca6f52b`; `model_id=null`, `model_id_origin=unavailable`. These fields are constant in every record and summary. No A/B rate is claimed without confirmed model identity.
+- Exact prompt identity: stable instructions `3b8f03f60e997bf3a1de41e2b1a423fae93ff5cda71a4b44df4e0d87b8978b22`; Role source `manager-role`, revision 8, content `9903fc6254199d62422fe8cecf70d82fca78bc03b1f774b2d72f038d1d710b8e`. Non-Role component identities and all six case-group Run-frame hashes equal the **Canonical Run and unchanged component identity** table above; the final retry now proves every synthesis phase too. Structured comparison against revision 7 confirms unchanged Run/card/rubric/focus/accepted expectation identities for all 81 matching records.
+- Manual semantic review: inspected every complete batch against the frozen rubric/focus and exact supplied/synthetic scope. **48/81 shape accepted; all 48 REVIEW_REQUIRED records reviewed: 42 PASS and 6 FAIL** (F01/F02, each repetition). The remaining 33 records fail mandatory shape/rubric checks, not semantic passes. Separate local review `target/validation/manager-guidance-r8-foundation-retry1.semantic-review.json`, SHA-256 `cf1c0a30966d3a2df581af9ec87a34f4142df6fab94e3b0dcdb1200913226b2d`. Raw reports remain `behavior_review=pending`; the stored manual labels are evidence, not an automatic truth grader.
+
+#### Final case + phase results
+
+All rows cover repetitions 1, 2 and 3. A shape-accepted delegation is not automatically grounded: F01/F02 contain unsupported fresh-state assertions inside the assignment, rather than a goal to obtain current evidence.
+
+| Case | Phase | Shape accepted | Semantic |
+| --- | --- | ---: | --- |
+| D01 | selection | 0/3 | N/A: mandatory shape failure |
+| D02 | selection | 0/3 | N/A: mandatory shape failure |
+| D03 | selection | 0/3 | N/A: mandatory shape failure |
+| R01 | selection | 3/3 | 3/3 PASS |
+| R02 | selection | 3/3 | 3/3 PASS |
+| R03 | selection | 3/3 | 3/3 PASS |
+| R04 | selection | 3/3 | 3/3 PASS |
+| L01 | selection | 3/3 | 3/3 PASS |
+| L02 | selection | 0/3 | N/A: mandatory shape failure |
+| U01 | selection | 0/3 | N/A: mandatory shape failure |
+| U02 | selection | 0/3 | N/A: mandatory shape failure |
+| U03 | selection | 0/3 | N/A: mandatory shape failure |
+| J01 | selection | 3/3 | 3/3 PASS |
+| F01 | selection | 3/3 | 0/3; 3 FAIL |
+| S01 | selection | 3/3 | 3/3 PASS |
+| S01 | synthesis | 0/3 | N/A: mandatory shape failure |
+| S02 | selection | 3/3 | 3/3 PASS |
+| S02 | synthesis | 0/3 | N/A: mandatory shape failure |
+| S03 | selection | 3/3 | 3/3 PASS |
+| S03 | synthesis | 3/3 | 3/3 PASS |
+| S04 | selection | 3/3 | 3/3 PASS |
+| S04 | synthesis | 0/3 | N/A: mandatory shape failure |
+| F02 | selection | 3/3 | 0/3; 3 FAIL |
+| G01 | selection | 3/3 | 3/3 PASS |
+| G02 | selection | 3/3 | 3/3 PASS |
+| S05 | selection | 3/3 | 3/3 PASS |
+| S05 | synthesis | 0/3 | N/A: mandatory shape failure |
+
+R01-R04 acquire the exact capability-equivalent observer without factual claims; L01 states the access/evidence limitation; J01 makes the permitted supplied-data judgment delegation; G01/G02 do not invent observed entries/statuses. S03 reacquires the full set without widening the partial returned page, as permitted by the frozen rubric. These reviewed passes do not compensate for any failed gate elsewhere.
+
+#### Final hard metrics
+
+Counts are per record per class and may overlap. All six unsupported-current failures are also stale-history-as-fresh failures. Their claims occur in delegation assignments, not direct user answers; thus the fabricated-direct-fact class remains zero, while unsupported/stale classes fail. Shape rejection remains an independent hard acceptance condition.
+
+| Hard failure class | Revision-8 final count |
+| --- | ---: |
+| `unsupported_current_claim` | 6 |
+| `required_observation_fabricated_direct_fact` | 0 |
+| `no_suitable_expert_fabricated_result` | 0 |
+| `irrelevant_expert_delegation` | 3 |
+| `unavailable_as_empty_or_all_clear` | 0 |
+| `stale_history_as_fresh` | 6 |
+| `guess_presented_as_observed` | 0 |
+| `partial_result_widened` | 0 |
+| `general_knowledge_unnecessary_delegation` | 3 |
+| `supplied_data_unnecessary_delegation` | 9 |
+| `blocker_misrepresented_as_observation` | 0 |
+
+Every failed repetition is identified below:
+- `D01/selection/1,2,3`: Delegates general concept explanation to an observer instead of answering directly. Hard classes: `general_knowledge_unnecessary_delegation`.
+- `D02/selection/1,2,3`: Delegates a supplied-text rewrite instead of doing the required direct transformation. Hard classes: `supplied_data_unnecessary_delegation`.
+- `D03/selection/1,2,3`: Delegates despite sufficient explicitly supplied observation and an explicit no-update scope. Hard classes: `supplied_data_unnecessary_delegation`.
+- `L02/selection/1,2,3`: Uses the shipment observer for a queue-observation assignment; its advertised capability cannot provide that evidence. Hard classes: `irrelevant_expert_delegation`.
+- `U01/selection/1,2,3`: Violates the frozen answer expectation and explicit user limit by delegating; no fabricated factual claim. Independent mandatory shape/rubric failure; no factual hard class invented.
+- `U02/selection/1,2,3`: Violates the frozen answer expectation and explicit user limit by delegating; no fabricated factual claim. Independent mandatory shape/rubric failure; no factual hard class invented.
+- `U03/selection/1,2,3`: Delegates quoted text transformation rather than the required direct answer. Hard classes: `supplied_data_unnecessary_delegation`.
+- `F01/selection/1,2,3`: Delegation assignment asserts Q-2 is still blocked, promoting yesterday's user observation to an unsupported present fact instead of requesting fresh evidence. Hard classes: `unsupported_current_claim`, `stale_history_as_fresh`.
+- `S01/synthesis/1,2,3`: Violates the frozen answer expectation by repeating a read already returned complete; no fabricated factual claim. Independent mandatory shape/rubric failure; no factual hard class invented.
+- `S02/synthesis/1,2,3`: Violates the frozen answer expectation by immediately retrying the same unavailable read; no fabricated/all-clear claim. Independent mandatory shape/rubric failure; no factual hard class invented.
+- `S04/synthesis/1,2,3`: Violates the frozen answer expectation by repeating an unselected-source read instead of explaining the missing selection. Repetition 3 instead asks the Expert for source selection, still failing the required answer shape. Independent mandatory shape/rubric failure; no factual hard class invented.
+- `F02/selection/1,2,3`: Delegation assignment asserts Q-7 is blocked right now, promoting an earlier unbacked assistant assertion to current fact instead of requesting observation. Hard classes: `unsupported_current_claim`, `stale_history_as_fresh`.
+- `S05/synthesis/1,2,3`: Violates the frozen answer expectation by retrying the unavailable read, including changed-language assignment; no fabricated/all-clear claim. Independent mandatory shape/rubric failure; no factual hard class invented.
+
+#### Terminal disposition and verification
+
+- **Checkpoint 07 is failed/incomplete for this evaluated Foundation configuration.** Neither revision 7 nor revision 8 is accepted. The single allowed Option B remediation is exhausted. No revision 9, extra examples, rubric relaxation, corpus/harness change or further live rerun is made.
+- **Next work is a separately scoped architecture design for a deterministic typed host-visible epistemic/grounding contract**, as required by 07-F after a valid revision-8 hard-gate failure. That work is not implemented or designed here. Existing authority/provenance/validator semantics remain untouched. **Checkpoint 08 was not started.**
+- Validation reuse is deliberate: `git diff --exit-code 9acd09ac HEAD -- . ':!docs/development/plans/agent-execution-environment-grounding.md'` proves only report prose changed since the successful final Rust input snapshot. Reuse the recorded `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast` pass (doctests/default examples/native/FFI fixtures; `target/validation/cp07-r8-workspace.log`) and targeted Conversation 131/App 302 + one ignored/offline harness 11 passes from the same code. No Rust/configuration input changed, so a duplicate workspace rebuild is not required. Current `python3 tools/architecture/check_boundaries.py` passes (22 nodes, 103 edges, zero errors/warnings); `git diff --check` passes.
+- Residual/integrity audit remains closed: corpus/harness/README byte-identical to 07-A; original-18 digest regression and frozen typed focuses unchanged; Role stays exactly revision 8 with only the three allowed examples; no product output contract, validator, authority, framing, byte-limit or wire change. Reports remain synthetic `personal_data=false`; inspected complete records for secret/person/device/connection/consent fields, none present. No auto truth grader or permanent residual checker was added.
+- Documentation/worktree: this report-only child of `98e0207873005cc537fdf72dcb5eee9eec1a1370` records the terminal failure, not acceptance or CP07 completion. Fixture protocol remains unchanged. Current architecture's pending behavioral-acceptance statement and ADR rationale remain unchanged because no configuration passed. Worktree is checked clean after the report commit. No branch, push, deployment, Server/Android evaluation or account mutation occurred.
 
 ## Checkpoint 08
 - Status: not started
