@@ -100,3 +100,16 @@ cargo test -p floe-app --example floe_cli
 Use a configured local testing profile for live reads. Approve only the exact
 source and model recipient disclosed by the host. Never reset a profile after an
 open or key-access error.
+
+## Synthetic Manager guidance evaluation
+
+The separate signed local-model smoke executable can evaluate Manager choice and synthesis without opening a product profile or reading connected sources:
+
+```sh
+./tools/validation/run-local-model-smoke.sh --exercise-manager-guidance
+./tools/validation/run-local-model-smoke.sh --exercise-manager-guidance-server
+```
+
+Both modes require `FLOE_MANAGER_EVAL_APPROVED=1`. The server mode additionally requires an explicitly supplied private `FLOE_MANAGER_EVAL_CONNECTION_FILE`, the exact approved `FLOE_MANAGER_EVAL_RECIPIENT`, and a verified configuration label in `FLOE_MANAGER_EVAL_MODEL_ID`. It does not discover, export or modify credentials, pair an account, or approve product source access. Never commit the connection file or print its contents.
+
+The versioned corpus is `fixtures/manager-guidance/corpus.json`. Record the tested commit, prompt and Card hashes, provider/model configuration, all repetitions, and the fixed case rubrics. Shape checks alone are not behavioral acceptance. Synthetic result replay tests model behavior, not real Expert execution or source correctness. Missing live prerequisites remain unverified; do not retune prompts or relax expectations while implementing the execution plan.
