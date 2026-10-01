@@ -1,6 +1,6 @@
 # Agent execution environment and grounded Manager convergence
 
-- Status: planned
+- Status: in progress — Checkpoint 01 complete
 - Baseline: main at 04386367221c66587a1f5001c13d89a0cbbda0d0
 - Classification: architectural change
 - Primary owners: App composition/lifecycle, Experts, Conversation, Context, Agent Runtime, Inference/provider adapters
@@ -876,10 +876,19 @@ These decisions are already made by this plan and must not be reopened during im
 Populate this section during implementation. Do not copy checkpoint status into architecture docs.
 
 ## Checkpoint 01
-- Status: not started
-- Start HEAD:
-- Commit(s):
+- Status: complete
+- Start HEAD: `ac1f9feeb433495923b758d38d9cb562128ae7f7`
+- Fetched `origin/main`: `ac1f9feeb433495923b758d38d9cb562128ae7f7`
+- Commit(s): `ee2ca67d34483e64c617fbfcb029785680e78877`
 - Evidence:
+  - Added accepted ADR 0033, `docs/decisions/0033-run-scoped-agent-environment-and-grounded-manager.md`, defining Session/root-environment separation, one immutable Expert environment per Run, configuration-vs-live-authority semantics, attempt-scoped Context, discovery-data precedence, prompt-cache boundaries, and Manager factual eligibility.
+  - Added ADR 0033 to `docs/decisions/README.md`.
+  - Amended ADR 0017 so its historical combined `freeze policy/grant/registry revisions`, `scoped_instructions` Expert placement, and one-call freeze language defer to ADR 0033.
+  - Amended ADR 0018 so per-model-call live Expert discovery and later live Directory resolution defer to one Run-pinned discovery/dispatch environment.
+  - `docs/architecture/runtime.md` and `docs/architecture/authority-recovery.md` were intentionally not rewritten to the future state in this docs-only checkpoint. Per this plan's Checkpoint 01 acceptance rule and repository documentation policy, current architecture documents continue to describe implementation reality and must be updated with the corresponding code cutovers in Checkpoints 02–04.
+  - No production code, wire, schema, authority, or runtime behavior changed in this checkpoint.
+  - Verification: inspected commit diff and fetched all four decision files from commit `ee2ca67d34483e64c617fbfcb029785680e78877`; ADR 0033 is indexed and ADR 0017/0018 contain explicit amendment links. No build/test gate was required for documentation-only changes.
+  - Checkpoint 02 was not started.
 
 ## Checkpoint 02
 - Status: not started
