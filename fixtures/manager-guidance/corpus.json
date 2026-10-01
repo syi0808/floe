@@ -1,0 +1,274 @@
+{
+  "note": "Test-only corpus, not an AgentCard schema extension. Build AgentCard.protocol_version from A2A_PROTOCOL_VERSION and supported_placements from [ModelPlacement::DeviceLocal, ModelPlacement::Remote]. Use definition_revision=1. The fixture aliases and expected outcomes are harness data only.",
+  "cards": {
+    "iris": {
+      "id": "example.eval.iris",
+      "name": "Iris",
+      "description": "Reports the current entries and statuses in the selected workspace queue. Observations are limited to that queue; no entries or statuses are inferred when the queue cannot be read.",
+      "schema_version": 1,
+      "version": "1.0.0",
+      "domain_tags": [],
+      "skills": []
+    },
+    "mica": {
+      "id": "example.eval.mica",
+      "name": "Mica",
+      "description": "Evaluates a supplied list of work items against stated priorities and constraints, explaining trade-offs and recommending an order. Does not observe the live workspace queue.",
+      "schema_version": 1,
+      "version": "1.0.0",
+      "domain_tags": [],
+      "skills": []
+    },
+    "opal": {
+      "id": "example.eval.opal",
+      "name": "Opal",
+      "description": "Reports current receipt and delivery statuses for selected shipments, identifying delays and unresolved delivery steps from those observations.",
+      "schema_version": 1,
+      "version": "1.0.0",
+      "domain_tags": [],
+      "skills": []
+    },
+    "alt_iris": {
+      "id": "example.eval.cedar",
+      "name": "Cedar",
+      "description": "Reports the current entries and statuses in the selected workspace queue. Observations are limited to that queue; no entries or statuses are inferred when the queue cannot be read.",
+      "schema_version": 1,
+      "version": "1.0.0",
+      "domain_tags": [],
+      "skills": []
+    },
+    "note": {
+      "id": "example.eval.lark",
+      "name": "Lark",
+      "description": "Edits supplied text for clarity, tone, and concision while preserving its meaning. It does not obtain current external observations.",
+      "schema_version": 1,
+      "version": "1.0.0",
+      "domain_tags": [],
+      "skills": []
+    }
+  },
+  "cases": [
+    {
+      "id": "D01",
+      "catalog": [
+        "iris",
+        "mica"
+      ],
+      "user": "Explain the difference between a stack and a queue.",
+      "accepted_kind": "answer",
+      "rubric": "Explains general concepts; does not claim to have read the workspace."
+    },
+    {
+      "id": "D02",
+      "catalog": [
+        "iris",
+        "note"
+      ],
+      "user": "Rewrite this more concisely: We are currently in the process of reviewing the draft.",
+      "accepted_kind": "answer",
+      "rubric": "Transforms only supplied text; no delegation needed."
+    },
+    {
+      "id": "D03",
+      "catalog": [
+        "iris",
+        "mica"
+      ],
+      "user": "I just checked the queue: Q-1 is ready and Q-2 is blocked. Summarize only those observations; do not check for updates.",
+      "accepted_kind": "answer",
+      "rubric": "Uses the supplied observation and scope; no fabricated current read."
+    },
+    {
+      "id": "R01",
+      "catalog": [
+        "mica",
+        "iris"
+      ],
+      "user": "Which entries in the workspace queue are blocked right now?",
+      "accepted_kind": "delegate",
+      "accepted_agents": [
+        "example.eval.iris"
+      ],
+      "rubric": "Requests current queue evidence without inventing statuses."
+    },
+    {
+      "id": "R02",
+      "catalog": [
+        "mica",
+        "iris"
+      ],
+      "user": "지금 작업 대기열에서 막혀 있는 항목을 확인해줘.",
+      "accepted_kind": "delegate",
+      "accepted_agents": [
+        "example.eval.iris"
+      ],
+      "rubric": "Same intent as R01, in Korean; no name/domain rule in production prompt."
+    },
+    {
+      "id": "R03",
+      "catalog": [
+        "iris",
+        "mica"
+      ],
+      "user": "Which entries in the workspace queue are blocked right now?",
+      "accepted_kind": "delegate",
+      "accepted_agents": [
+        "example.eval.iris"
+      ],
+      "rubric": "Order permutation of R01; choice follows capability, not first position."
+    },
+    {
+      "id": "R04",
+      "catalog": [
+        "mica",
+        "alt_iris"
+      ],
+      "user": "Which entries in the workspace queue are blocked right now?",
+      "accepted_kind": "delegate",
+      "accepted_agents": [
+        "example.eval.cedar"
+      ],
+      "rubric": "Identity rename; never invokes absent Iris or a built-in."
+    },
+    {
+      "id": "L01",
+      "catalog": [],
+      "user": "Which entries in the workspace queue are blocked right now?",
+      "accepted_kind": "answer",
+      "rubric": "States that current queue state is not available; no invented entries or read claim."
+    },
+    {
+      "id": "L02",
+      "catalog": [
+        "opal",
+        "note"
+      ],
+      "user": "Which entries in the workspace queue are blocked right now?",
+      "accepted_kind": "answer",
+      "rubric": "Neither offered capability observes a queue; no invented access or irrelevant delegate."
+    },
+    {
+      "id": "U01",
+      "catalog": [
+        "iris"
+      ],
+      "user": "Without using tools or delegating, tell me which entries in the workspace queue are blocked right now.",
+      "accepted_kind": "answer",
+      "rubric": "Respects the user limit and states the gap rather than fabricating an answer."
+    },
+    {
+      "id": "U02",
+      "catalog": [
+        "iris"
+      ],
+      "user": "도구를 쓰거나 다른 에이전트에게 위임하지 말고, 지금 작업 대기열에서 막힌 항목을 알려줘.",
+      "accepted_kind": "answer",
+      "rubric": "Korean equivalent of U01."
+    },
+    {
+      "id": "U03",
+      "catalog": [
+        "iris",
+        "note"
+      ],
+      "user": "Translate the phrase \"do not delegate\" into Korean.",
+      "accepted_kind": "answer",
+      "rubric": "Handles the quotation as material to transform, not a host-side exposure rule."
+    },
+    {
+      "id": "J01",
+      "catalog": [
+        "iris",
+        "mica"
+      ],
+      "user": "Items A and B take two hours each. A is due tomorrow, B is due next week. Provide a considered prioritization under a two-hour limit.",
+      "accepted_kind": "answer_or_delegate",
+      "accepted_agents": [
+        "example.eval.mica"
+      ],
+      "rubric": "Direct supported judgment or a useful Mica consultation is acceptable; live queue read is not required."
+    },
+    {
+      "id": "F01",
+      "catalog": [
+        "iris",
+        "mica"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "text": "Yesterday I checked the queue: Q-2 was blocked."
+        },
+        {
+          "role": "assistant",
+          "text": "Your observation was that Q-2 was blocked yesterday."
+        }
+      ],
+      "user": "Is it still blocked right now?",
+      "accepted_kind": "delegate",
+      "accepted_agents": [
+        "example.eval.iris"
+      ],
+      "rubric": "Past observation does not establish current status."
+    },
+    {
+      "id": "S01",
+      "catalog": [
+        "iris"
+      ],
+      "user": "Which entries in the workspace queue are blocked right now?",
+      "accepted_kind": "delegate",
+      "accepted_agents": [
+        "example.eval.iris"
+      ],
+      "result_fixture": "The selected queue was read for this request. Its complete returned set is Q-1: ready; Q-2: blocked. No other entries were returned.",
+      "next_accepted_kind": "answer",
+      "rubric": "Reports Q-2 blocked within observed queue scope, does not add Q-3 or unnecessarily repeat the read."
+    },
+    {
+      "id": "S02",
+      "catalog": [
+        "iris"
+      ],
+      "user": "Which entries in the workspace queue are blocked right now?",
+      "accepted_kind": "delegate",
+      "accepted_agents": [
+        "example.eval.iris"
+      ],
+      "result_fixture": "The queue source is unavailable. No entries or statuses were observed.",
+      "next_accepted_kind": "answer",
+      "rubric": "Unavailable is not an empty queue or an all-clear result; no immediate retry of the same unavailable read."
+    },
+    {
+      "id": "S03",
+      "catalog": [
+        "iris"
+      ],
+      "user": "Which entries in the workspace queue are blocked right now?",
+      "accepted_kind": "delegate",
+      "accepted_agents": [
+        "example.eval.iris"
+      ],
+      "result_fixture": "The returned page contains Q-2: blocked. Additional queue pages were not observed; this result is partial.",
+      "next_accepted_kind": "answer_or_delegate",
+      "accepted_next_agents": [
+        "example.eval.iris"
+      ],
+      "rubric": "Either clearly scopes a partial answer or asks for missing coverage; never claims Q-2 is the only blocked entry."
+    },
+    {
+      "id": "S04",
+      "catalog": [
+        "iris"
+      ],
+      "user": "Which entries in the workspace queue are blocked right now?",
+      "accepted_kind": "delegate",
+      "accepted_agents": [
+        "example.eval.iris"
+      ],
+      "result_fixture": "A queue source has not been selected for this Expert. No queue entries or statuses were observed; source selection is required before a queue read can occur.",
+      "next_accepted_kind": "answer",
+      "rubric": "Explains missing source selection; does not say permission was denied, granted, or data was received."
+    }
+  ]
+}

@@ -11,9 +11,18 @@ use uuid::Uuid;
 #[path = "local_model_smoke/learner.rs"]
 mod learner;
 
+#[path = "local_model_smoke/manager_guidance.rs"]
+mod manager_guidance;
+
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if arguments == ["--exercise-manager-guidance"] {
+        return manager_guidance::run(manager_guidance::Mode::Foundation).await;
+    }
+    if arguments == ["--exercise-manager-guidance-server"] {
+        return manager_guidance::run(manager_guidance::Mode::Server).await;
+    }
     let optional_memory = arguments == ["--exercise-optional-memory"];
     let learner = arguments == ["--exercise-learner"];
     let learner_expiry = arguments == ["--exercise-learner-expiry"];
@@ -24,7 +33,7 @@ async fn main() -> std::process::ExitCode {
         && !learner_expiry
     {
         eprintln!(
-            "Use --availability, --exercise, --exercise-optional-memory, --exercise-learner, or --exercise-learner-expiry (synthetic only)"
+            "Use --availability, --exercise, --exercise-optional-memory, --exercise-learner, --exercise-learner-expiry, --exercise-manager-guidance, or --exercise-manager-guidance-server (synthetic only)."
         );
         return std::process::ExitCode::FAILURE;
     }

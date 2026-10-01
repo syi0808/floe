@@ -3,8 +3,15 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 [[ "$#" == 1 ]] || exit 2
 case "$1" in
-  --availability|--exercise|--exercise-optional-memory|--exercise-learner|--exercise-learner-expiry) ;;
-  *) printf '%s\n' 'Use --availability, --exercise, --exercise-optional-memory, --exercise-learner, or --exercise-learner-expiry (synthetic only).' >&2; exit 2 ;;
+  --availability|--exercise|--exercise-optional-memory|--exercise-learner|--exercise-learner-expiry|--exercise-manager-guidance|--exercise-manager-guidance-server) ;;
+  *) printf '%s\n' 'Use --availability, --exercise, --exercise-optional-memory, --exercise-learner, --exercise-learner-expiry, --exercise-manager-guidance, or --exercise-manager-guidance-server (synthetic only).' >&2; exit 2 ;;
+esac
+case "$1" in
+  --exercise-manager-guidance|--exercise-manager-guidance-server)
+    if [[ "${FLOE_MANAGER_EVAL_APPROVED:-}" != 1 ]]; then
+      printf '%s\n' '{"status":"UNVERIFIED","reason":"explicit_live_opt_in_required","personal_data":false}'
+      exit 1
+    fi ;;
 esac
 CARGO_INCREMENTAL=0 cargo build -p floe-app --example local_model_smoke
 bundle="$PWD/target/validation/FloeLocalModelSmoke.app"
