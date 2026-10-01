@@ -3157,6 +3157,8 @@ The complete post-07-A corpus is exactly:
 
 ### `crates/app/examples/local_model_smoke/manager_guidance.rs:74+`
 
+First add `Serialize` alongside the existing `Deserialize` derive for `AcceptedKind`, `History`, and `Case`. This is required only so the harness can emit the accepted expectation fields and compute the frozen canonical first-18 case digest; it does not make these values a product wire contract.
+
 Add:
 
 ```rust
