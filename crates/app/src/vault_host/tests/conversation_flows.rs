@@ -3117,7 +3117,7 @@ fn direct_invocation_in_session(
         principal: principal.into(),
         invocation_key: InvocationKey::new(),
         selected_agent_id: agent_id.into(),
-        selected_definition_revision: 1,
+        selected_definition_revision: 2,
         message: message.into(),
         context_refs: vec![],
         execution_context: DelegationExecutionContext {

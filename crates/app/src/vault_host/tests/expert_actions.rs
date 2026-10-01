@@ -1497,7 +1497,7 @@ impl GovernedFocus {
                 self.person,
                 self.assignment_id,
                 &self.package,
-                1,
+                2,
             )
             .unwrap();
         let state_revision = registry.complete(&resolved, invocation_id).unwrap();

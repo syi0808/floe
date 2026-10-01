@@ -76,7 +76,7 @@ fn manifest(kind: BuiltinExpertKind) -> ExpertManifest {
                 vec![floe_agent_contract::ModelPlacement::Remote]
             },
         },
-        definition_revision: 1,
+        definition_revision: 2,
     };
     ExpertManifest {
         schema_version: EXPERT_MANIFEST_SCHEMA_VERSION,
@@ -126,6 +126,18 @@ mod tests {
         );
         for (index, manifest) in manifests.iter().enumerate() {
             manifest.validate().unwrap();
+            assert_eq!(manifest.package.version, "1.0.1");
+            assert_eq!(manifest.definition.card.version, manifest.package.version);
+            assert_eq!(manifest.definition.card.id, manifest.package.id);
+            assert_eq!(manifest.definition.definition_revision, 2);
+            assert!(manifest.definition.card.description.len() <= 512);
+            assert_eq!(manifest.prompt_contract.revision, 1);
+            assert!(
+                manifest
+                    .result_contracts
+                    .iter()
+                    .all(|contract| contract.revision == 1)
+            );
             assert!(
                 manifests[..index]
                     .iter()

@@ -350,7 +350,7 @@ mod tests {
                 floe_experts::ExpertBindingCommand {
                     assignment_id: schedule_assignment.id,
                     package: schedule_installation.package.clone(),
-                    definition_revision: 1,
+                    definition_revision: 2,
                     requirement_key: "floe.source.calendar".into(),
                     expected_binding_revision: schedule_assignment.binding.revision,
                     selected: vec![floe_context_contract::SourceSelectionReference {
@@ -566,7 +566,7 @@ mod tests {
                 DirectoryEntry {
                     definition: floe_agent_contract::AgentDefinition {
                         card,
-                        definition_revision: 1,
+                        definition_revision: 2,
                     },
                     admission,
                     selection,
@@ -610,7 +610,7 @@ mod tests {
                     principal: person_id.to_string(),
                     invocation_key: InvocationKey::from_uuid(request.invocation_id).unwrap(),
                     selected_agent_id: request.agent_id.clone(),
-                    selected_definition_revision: 1,
+                    selected_definition_revision: 2,
                     message: request.assignment.clone(),
                     context_refs: vec![],
                     execution_context: DelegationExecutionContext {

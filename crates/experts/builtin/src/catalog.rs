@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use floe_agent_contract::DataClass;
 
-pub const BUILTIN_EXPERT_PACKAGE_VERSION: &str = "1.0.0";
+pub const BUILTIN_EXPERT_PACKAGE_VERSION: &str = "1.0.1";
 pub const BUILTIN_EXPERT_PUBLISHER: &str = "floe";
 pub const BUILTIN_EXPERT_STATE_SCHEMA_VERSION: u32 = 1;
 
@@ -109,49 +109,49 @@ impl BuiltinExpertKind {
         match self {
             Self::Schedule => (
                 "Schedule Expert",
-                "Reviews calendars, availability, conflicts, and the realism of plans from a scheduling perspective.",
+                "Assesses availability, conflicts, and time constraints from selected calendar evidence. Develops scheduling recommendations and reviewable calendar proposals within the observed time range.",
                 vec!["schedule", "calendar"],
                 "Provide independent scheduling judgment",
             ),
             Self::Commitments => (
                 "Commitments Expert",
-                "Finds obligations and follow-ups across the bounded personal context granted to it.",
+                "Identifies obligations, deadlines, expected replies, and unresolved follow-ups from selected communication evidence, with available calendar, task, and confirmed-memory context. Focuses on what remains owed or unfinished.",
                 vec!["commitments", "planning"],
                 "Review commitments and follow-ups",
             ),
             Self::Communication => (
                 "Communication Expert",
-                "Assesses whether communication needs a response and prepares reviewable drafts.",
+                "Assesses selected communications for response need and appropriate tone, and prepares reviewable drafts grounded in their content. Focuses on understanding and responding to communications rather than sending them.",
                 vec!["communication"],
                 "Recommend bounded communication actions",
             ),
             Self::Relationships => (
                 "Relationships Expert",
-                "Reviews explicitly granted people and confirmed-interaction context for follow-ups.",
+                "Resolves people from selected identity evidence and uses available confirmed-interaction context to identify relationship-relevant follow-ups. Preserves uncertainty where identity or interaction history is incomplete.",
                 vec!["relationships"],
                 "Identify relationship follow-ups",
             ),
             Self::FocusAttention => (
                 "Focus & Attention Expert",
-                "Combines bounded attention, schedule, and active-work context into focus guidance.",
+                "Interprets coarse attention observations, with available calendar and work context, to assess interruption pressure and context switching and recommend focus protection.",
                 vec!["focus", "attention"],
                 "Recommend focus protection",
             ),
             Self::Wellbeing => (
                 "Wellbeing Expert",
-                "Uses coarse derived wellbeing and schedule context to recommend sustainable load.",
+                "Interprets coarse, derived wellbeing signals and available calendar context to recommend sustainable load and recovery. Provides non-diagnostic guidance rather than medical conclusions.",
                 vec!["wellbeing"],
                 "Recommend sustainable schedule load",
             ),
             Self::WorkContext => (
                 "Work Context Expert",
-                "Synthesizes bounded work context into blockers and next actions.",
+                "Connects selected project, file, meeting, decision, and communication evidence within the supplied workspace scope to identify grounded blockers and next actions.",
                 vec!["work"],
                 "Identify work blockers and next actions",
             ),
             Self::LifeLogistics => (
                 "Life Logistics Expert",
-                "Synthesizes bounded logistics context into preparation recommendations.",
+                "Interprets selected reservation, travel, delivery, errand, and supported home-state evidence to identify preparation needs and reviewable change recommendations. Recommendations do not execute purchases or home actions.",
                 vec!["life", "logistics"],
                 "Recommend logistics preparation",
             ),

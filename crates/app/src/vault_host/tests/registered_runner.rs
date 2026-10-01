@@ -145,6 +145,7 @@ pub(super) fn example_manifest() -> floe_experts::ExpertManifest {
     manifest.package.version = "1.0.0".into();
     manifest.definition.card.id = manifest.package.id.clone();
     manifest.definition.card.version = manifest.package.version.clone();
+    manifest.definition.definition_revision = 1;
     manifest.definition.card.name = "Example test Expert".into();
     manifest.definition.card.supported_placements = vec![ModelPlacement::Remote];
     manifest.publisher = "example.test".into();
@@ -2099,7 +2100,7 @@ async fn hosted_calendar_settings_use_product_connection_and_pinned_producer() {
             floe_experts::ExpertBindingCommand {
                 assignment_id,
                 package: package.clone(),
-                definition_revision: 1,
+                definition_revision: 2,
                 requirement_key: "floe.source.mail".into(),
                 expected_binding_revision: assignment.binding.revision,
                 selected: vec![saved_mail.clone()],
@@ -2124,7 +2125,7 @@ async fn hosted_calendar_settings_use_product_connection_and_pinned_producer() {
         assignment_id,
         package_id: package.id,
         package_version: package.version,
-        definition_revision: 1,
+        definition_revision: 2,
         requirement_key: "floe.source.mail".into(),
         expected_binding_revision: binding.revision,
         candidate_ids: vec![],
@@ -2217,6 +2218,114 @@ async fn initial_shipped_setup_selects_single_native_source_only_once() {
     .unwrap();
     let after = open.vault.expert_registry().await.unwrap().unwrap();
     assert_eq!(after.assignments[0].binding.revision, revision);
+}
+
+#[tokio::test]
+async fn shipped_descriptions_reach_context_projection_after_fresh_install() {
+    for registration in super::conversation_turn::expert_dispatch::shipped_registrations() {
+        let person = PersonId::new();
+        let manifest = registration.manifest.clone();
+        let expected = manifest.definition.clone();
+        let (_root, open) =
+            installed_open_without_provider(person, vec![registration], manifest).await;
+        let directory = open.task_coordinator.catalog(&person.to_string()).unwrap();
+        assert_eq!(directory.cards, vec![expected.clone()]);
+        let active_experts = vec![expected.card.clone()];
+        let catalog = floe_agent_contract::AllowedCatalog {
+            cards: directory.cards,
+            tools: vec![],
+            revision: directory.revision,
+        };
+        let context = AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            optional_context_issues: vec![],
+            evidence: vec![],
+        };
+        let projection =
+            floe_context::assemble_context_projection(floe_context::ContextProjectionInput {
+                role: floe_context::ContextProjectionRole::Manager,
+                purpose: floe_inference::CANONICAL_MODEL_PURPOSE,
+                response_contract: floe_conversation::MANAGER_OUTPUT_CONTRACT,
+                correction: None,
+                prompt: floe_conversation::prompts::manager_prompt(None).unwrap(),
+                conversation: floe_agent_contract::ModelConversation {
+                    history: vec![],
+                    current_turn: vec![floe_agent_contract::ModelConversationEntry::User {
+                        message_id: Uuid::new_v4(),
+                        text: "Review the supplied context.".into(),
+                    }],
+                },
+                agent_context: &context,
+                catalog: &catalog,
+                active_experts: &active_experts,
+                authorized_history_dependencies: &[],
+                input_data_classes: vec![floe_agent_contract::DataClass::Personal],
+                max_output_bytes: 4096,
+            })
+            .unwrap();
+        assert_eq!(
+            projection.envelope.scoped_instructions.active_experts,
+            active_experts
+        );
+        assert_eq!(
+            projection.envelope.scoped_instructions.active_experts[0].version,
+            "1.0.1"
+        );
+        assert_eq!(catalog.cards[0].definition_revision, 2);
+    }
+}
+
+#[tokio::test]
+async fn stale_shipped_manifest_cannot_publish_current_registration_or_be_overwritten() {
+    let person = PersonId::new();
+    let registration = super::conversation_turn::expert_dispatch::shipped_registrations().remove(0);
+    let mut stale = registration.manifest.clone();
+    stale.package.version = "1.0.0".into();
+    stale.definition.card.version = stale.package.version.clone();
+    stale.definition.definition_revision = 1;
+    stale.definition.card.description =
+        "Reviews calendars, availability, conflicts, and the realism of plans from a scheduling perspective.".into();
+    let (_root, open) =
+        installed_open_without_provider(person, vec![registration], stale.clone()).await;
+    assert!(
+        open.task_coordinator
+            .catalog(&person.to_string())
+            .unwrap()
+            .cards
+            .is_empty()
+    );
+    let before = open.vault.expert_registry().await.unwrap().unwrap();
+    let mut changed = stale;
+    changed.definition.card.description = open.registrations[0]
+        .manifest
+        .definition
+        .card
+        .description
+        .clone();
+    assert_eq!(
+        open.vault
+            .install_expert_bundle(
+                floe_experts::ExpertInstallOperation {
+                    instance_id: before.instance_id,
+                    expected_revision: before.revision,
+                    operation_id: Uuid::new_v4(),
+                },
+                &[changed],
+                Cancellation::default(),
+            )
+            .await,
+        Err(AgentFailure::Conflict),
+    );
+    assert_eq!(open.vault.expert_registry().await.unwrap().unwrap(), before);
+    assert!(
+        open.task_coordinator
+            .catalog(&person.to_string())
+            .unwrap()
+            .cards
+            .is_empty()
+    );
 }
 
 #[tokio::test]

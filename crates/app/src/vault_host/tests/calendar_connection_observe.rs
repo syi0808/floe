@@ -358,7 +358,7 @@ fn calendar_connection_observe_conformance_eleven_to_twelve() {
             floe_experts::ExpertBindingCommand {
                 assignment_id: assignment.id,
                 package: schedule.package.clone(),
-                definition_revision: 1,
+                definition_revision: 2,
                 requirement_key: "floe.source.calendar".into(),
                 expected_binding_revision: assignment.binding.revision,
                 selected: vec![candidate.reference.clone()],

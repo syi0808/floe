@@ -84,6 +84,13 @@ pub(in crate::vault_host) async fn record_proposal_task_with_artifacts<Keys: Vau
     artifacts: Vec<Artifact>,
 ) -> TaskSnapshot {
     let task_id = TaskId::from_uuid(evidence.task_id).unwrap();
+    let definition_revision = completed_registry
+        .manifests
+        .iter()
+        .find(|manifest| manifest.package == evidence.package)
+        .unwrap()
+        .definition
+        .definition_revision;
     let coverage = DependencyCoverage::dependent(dependency.clone()).unwrap();
     let result = "A scheduling proposal is available for review.".to_owned();
     let terminal = TaskSnapshot {
@@ -91,7 +98,7 @@ pub(in crate::vault_host) async fn record_proposal_task_with_artifacts<Keys: Vau
         parent_run_id: None,
         principal: evidence.person_id.to_string(),
         agent_id: evidence.package.id.clone(),
-        definition_revision: 1,
+        definition_revision,
         state: TaskState::Completed,
         result: Some(result.clone()),
         artifacts,
@@ -116,7 +123,7 @@ pub(in crate::vault_host) async fn record_proposal_task_with_artifacts<Keys: Vau
                     .unwrap()
                     .installation_id,
                 package: evidence.package.clone(),
-                definition_revision: 1,
+                definition_revision,
     };
     let current_registry = vault.expert_registry().await.unwrap().unwrap();
     let selection = floe_experts::AgentRegistry::restore(
@@ -169,7 +176,7 @@ pub(in crate::vault_host) async fn record_proposal_task_with_artifacts<Keys: Vau
                 .unwrap()
                 .installation_id,
             package: evidence.package.clone(),
-            definition_revision: 1,
+            definition_revision,
         },
         next_private_state.revision - 1,
         next_private_state,
