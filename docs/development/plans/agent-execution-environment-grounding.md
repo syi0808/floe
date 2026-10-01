@@ -1,6 +1,6 @@
 # Agent execution environment and grounded Manager convergence
 
-- Status: in progress — Checkpoints 01–03 complete
+- Status: in progress — Checkpoints 01–04 complete
 - Baseline: main at 04386367221c66587a1f5001c13d89a0cbbda0d0
 - Classification: architectural change
 - Primary owners: App composition/lifecycle, Experts, Conversation, Context, Agent Runtime, Inference/provider adapters
@@ -1894,140 +1894,697 @@ After all verification and residual gates pass, update only this plan's `Executi
 
 # Checkpoint 05 — Context contract and prompt-cache cutover
 
+## Planning refresh and status
+
+- Status: not started — Checkpoints 01–04 are complete; no Checkpoint 05 implementation has landed.
+- Planning refresh baseline: `main` at `5894132a78efc13cb14e5858047860afb934a73b`.
+- The original Checkpoint 05 direction remains active: instruction, Run discovery, attempt evidence and volatile correction/runtime state must become distinct typed sections, and provider serialization must follow those lifetimes deterministically.
+- The original section was not code-line specific enough for the post-Checkpoint-03/04 code. This refresh fixes the exact contract replacement, Run-environment identity handoff, canonical hash inputs, provider framing and same-snapshot Swift/Go consumers before implementation begins.
+
+The refreshed source review freezes these decisions:
+
+1. **ContextEnvelope gets its own direct-cutover schema version.** Add `CONTEXT_ENVELOPE_SCHEMA_VERSION = 2` and validate only `ContextEnvelope` against it. Do not bump the repository-wide `AGENT_SCHEMA_VERSION`, A2A version, AppWire version, local-model command version or server `/v1/agent` version merely because this internal envelope shape changes. There is no v1 envelope decoder or compatibility branch.
+2. **The catalog is the sole discovery source.** Delete `ContextProjectionInput.active_experts` and `ConversationModelProjection.active_experts`. `DiscoveryContext` is derived only from the admitted `AllowedCatalog`. Active Expert discovery carries `AgentDefinition`, not a second independently supplied `AgentCard`, so definition revision and card identity stay together.
+3. **Run environment identity is derived diagnostic metadata, not a second authority.** Add a neutral Agent-contract manifest value containing `revision + digest`. Production root Conversation copies it from the same `RunExpertEnvironmentIdentity` that it places on `TurnRequest`; Expert/Learner/synthetic direct projections may omit it. The durable authority remains the Experts-owned Run identity on the Conversation Run.
+4. **Stable prompt bytes are built once per Run-bound Conversation projector.** `ConversationModelProjection::new` constructs and stores the Manager `PromptAssembly` and a separate finalization `PromptAssembly`. Model attempts clone the selected stored assembly; they do not call `manager_prompt` again.
+5. **Finalization output contract is not stable Role prose.** The finalization stable Role component contains only `FINALIZATION_ROLE_PROMPT`. `FINALIZATION_OUTPUT_CONTRACT` lives in `RunInstructions.response_contract`, like every other role output contract.
+6. **Hash inputs are exact and canonical.**
+   - Prompt component hash = SHA-256 of the exact `PromptComponent.content` UTF-8 bytes.
+   - Stable prompt hash = SHA-256 of the exact `PromptAssembly::render()` bytes sent as provider instructions.
+   - Agent-card hash = SHA-256 of the canonical `serde_json::to_vec(AgentCard)` bytes; definition revision is stored separately.
+   - Run-frame hash = SHA-256 of the exact canonical JSON bytes for `RunInstructions + DiscoveryContext`.
+   Hashes are identity/diagnostic data only; they never authorize execution or prove freshness.
+7. **One logical frame serializer owns the bytes providers hash/send.** Agent contract owns canonical Run-frame and Attempt-frame serialization. Provider adapters consume those bytes instead of rebuilding semantically equivalent JSON independently. Provider adapters still own external message/tool framing.
+8. **Provider ordering is exact.** The server transport sends stable instructions separately, then one Run frame, retained history, one Attempt frame, then current-turn messages. Foundation serializes those same logical sections in that same order. History/current-turn causal ordering is never sorted.
+9. **Only unordered discovery/schema sets are sorted.** Active Experts sort by `card.id`; capability descriptors/tools sort by stable ID. The catalog revision remains exact, including zero.
+10. **The native local-model host is part of this same-snapshot cutover.** `apps/client/macos/LocalModel/LocalModel.swift` directly parses the current `scoped_instructions` shape for learner detection and native tool/delegation construction. It must switch atomically to `run_frame.run_instructions`, `run_frame.discovery` and top-level `current_turn`; no old-shape fallback remains. The same Swift source is compiled for macOS and iOS.
+11. **The Go server outer API does not change.** `POST /v1/agent` remains schema 1 with `instructions` and native `input.messages/tools`. Go does not decode the ContextEnvelope, but its transcript grammar must accept the new Run-frame/history/Attempt-frame/current-turn ordering; add a representative regression instead of inventing a second envelope contract in Go.
+12. **No speculative cache telemetry contract is added.** Current providers do not expose trustworthy cache-read/cached-token metrics through the canonical response. CP05 records stable/run identity hashes already available from the projection; do not widen `ModelUsage`, provider wire or persistence to invent cache numbers.
+
 ## Goal
 
-Represent instruction, discovery data, evidence, history and attempt state with types that match their trust/lifetime, then serialize them deterministically so provider prompt caching follows the architecture instead of obscuring it.
+Converge the model-input lifetime model to:
 
-## Current code anchors
+```text
+Run-bound stable program
+  PromptAssembly
+    Behavior Kernel
+    Role
+    Persona (Manager)
+    Capability protocol
+  -> exact rendered bytes + stable_prompt_sha256
 
-- crates/contracts/agent/src/envelope.rs:21+ — ContextEnvelope.
-- crates/contracts/agent/src/envelope.rs:60-87 — ScopedInstructions mixes response rules, capabilities, Experts and correction.
-- crates/contracts/agent/src/envelope.rs:98-126 — ContextManifest lacks prompt/card hashes and definition revision.
-- crates/modules/context/src/application/model_projection.rs:50+ — ContextProjectionInput.
-- crates/modules/context/src/application/model_projection.rs:68+ — assemble_context_projection.
-- crates/modules/context/src/application/model_projection.rs:217+ — context_manifest.
-- crates/modules/conversation/src/application/model_projection.rs:24+ — ConversationModelProjection currently stores active_experts separately and rebuilds role prompt per attempt.
-- crates/adapters/providers/src/models/server.rs:234+ and 372+ — stable instructions plus dynamic first user message.
-- crates/adapters/providers/src/models/foundation.rs:115-156 — provider-local prompt JSON.
+Run-bound discovery frame
+  RunInstructions
+    purpose
+    response_contract
+  DiscoveryContext
+    catalog revision
+    capability descriptors
+    active AgentDefinitions
+  -> deterministic run-frame bytes + run_frame_sha256
 
-## Replace ContextEnvelope shape
+Attempt-bound frame
+  ContextualData
+    Memory / admitted evidence / issues
+  AttemptContext
+    correction
+    max_output_bytes
+  ContextManifest
+    safe hashes/revisions/environment identity
+  -> rebuilt per model attempt
 
-Replace, rather than wrap, ScopedInstructions/RuntimeContext with these semantic sections:
+Causal conversation
+  retained history
+  current turn
+  -> order preserved exactly
 
-    ContextEnvelope
-      stable_instructions: PromptAssembly
-      run_instructions: RunInstructions
-      discovery: DiscoveryContext
-      contextual_data: ContextualData
-      conversation: ModelConversation
-      attempt: AttemptContext
-      manifest: ContextManifest
+Provider
+  stable instructions
+  -> Run frame
+  -> retained history
+  -> Attempt frame
+  -> current turn
+```
 
-    RunInstructions
-      purpose
-      response_contract
+Trust is defined by the typed sections, not by JSON position. Prompt caching is an optimization over these deterministic bytes and never an authority source.
 
-    DiscoveryContext
-      available_capabilities
-      active_experts
+## Current code anchors at the planning refresh baseline
 
-    AttemptContext
-      correction
-      max_output_bytes
+### Agent contract
 
-Rules:
-- active_experts and capability descriptors are discovery data, not instructions;
-- correction is attempt-scoped protocol feedback;
-- runtime output bounds are attempt/runtime data;
-- stable_instructions contains only Behavior Kernel, Role, Persona and stable capability-use protocol;
-- no compatibility copy of ScopedInstructions remains after the cutover.
+- `crates/contracts/agent/src/envelope.rs:21` — `ContextEnvelope` still contains `scoped_instructions` and `runtime`.
+- `crates/contracts/agent/src/envelope.rs:60` — `ScopedInstructions` mixes purpose/response contract, discovery and correction.
+- `crates/contracts/agent/src/envelope.rs:92` — `RuntimeContext` contains only attempt output bounds.
+- `crates/contracts/agent/src/envelope.rs:98` — `ContextManifest`.
+- `crates/contracts/agent/src/envelope.rs:115` — `AgentCardManifestEntry` has only id/version.
+- `crates/contracts/agent/src/envelope.rs:122` — `PromptManifestEntry` has no content hash.
+- `crates/contracts/agent/src/prompts.rs:64` — `PromptComponent`.
+- `crates/contracts/agent/src/prompts.rs:73` — `PromptAssembly`.
+- `crates/contracts/agent/src/prompts.rs:80` — `PromptAssembly::render`, the exact stable instruction byte source.
+- `floe-agent-contract` already depends on `sha2`; no dependency addition is required for canonical hashes.
 
-## Stable prompt lifetime
+### Context assembly
 
-1. Build the Manager PromptAssembly once when constructing the Run-bound ConversationModelProjection, not independently on every model attempt.
-2. The same Run reuses exactly the same rendered stable prompt bytes unless the role intentionally changes to finalization.
-3. Finalization remains a separate role projection and may have its own stable prompt identity.
-4. Add a deterministic SHA-256 digest for each PromptComponent content and for the rendered stable prompt.
+- `crates/modules/context/src/application/model_projection.rs:50` — `ContextProjectionInput`, including duplicate `active_experts`.
+- `crates/modules/context/src/application/model_projection.rs:68` — `assemble_context_projection`.
+- `crates/modules/context/src/application/model_projection.rs:202` — `filter_experts`, currently reconciles separately supplied cards with the catalog.
+- `crates/modules/context/src/application/model_projection.rs:217` — `context_manifest`, currently records unhashed prompt/card metadata.
 
-## Manifest expansion
+### Conversation / root Run wiring
 
-ContextManifest must provide safe, bounded identity sufficient for debugging without storing raw private evidence:
+- `crates/modules/conversation/src/application/model_projection.rs:24` — `ConversationModelProjection` stores a separate `Vec<AgentCard>`.
+- `crates/modules/conversation/src/application/model_projection.rs:37` — constructor accepts that duplicate card list.
+- `crates/modules/conversation/src/application/model_projection.rs:77` — `project` rebuilds `role_prompt` on every model attempt.
+- `crates/modules/conversation/src/application/model_projection.rs:125` — `role_prompt`; finalization currently appends the output contract into the Role component.
+- `crates/app/src/vault_host/conversation_turn.rs:314` — root samples one `RunExpertEnvironment`.
+- `crates/app/src/vault_host/conversation_turn.rs:318` — root separately copies `active_experts` from the catalog.
+- `crates/app/src/vault_host/conversation_turn.rs:366` — root constructs `ConversationModelProjection`.
+- The same root later puts `expert_environment.identity()` on `TurnRequest`; CP05 must pass that exact identity into the projector rather than sample/copy another source.
 
-- prompt_components: kind, source, revision, content_sha256;
-- agent_cards: id, version, definition_revision, card_sha256;
-- Expert environment revision/digest for Manager projections;
-- evidence metadata already present: source handle/data class/expiry; do not add raw evidence payload;
-- memory identity/revision/source refs as today.
+### Inference and providers
 
-Do not duplicate grant authority in a second manifest representation when DependencyCoverage already owns it.
+- `crates/modules/inference/src/application/service.rs:159` — purpose equality still reads `envelope.scoped_instructions.purpose`.
+- The canonical request output bound still reads `envelope.runtime.max_output_bytes`; migrate it to `AttemptContext`.
+- `crates/adapters/providers/src/models/server.rs:234` — stable instructions are rendered directly.
+- `crates/adapters/providers/src/models/server.rs:372` — `canonical_model_input` currently puts scoped/context/runtime/manifest in one leading user frame, then history/current turn.
+- `crates/adapters/providers/src/models/foundation.rs:89` — `prepare_canonical`.
+- `crates/adapters/providers/src/models/foundation.rs:115` — stable instruction rendering; the remaining prompt is one provider-local JSON object.
+- `crates/adapters/providers/src/models/wire.rs` is already the shared provider-adapter owner for typed Conversation-to-message rendering and is the correct place to compose the shared transport framing around contract-owned canonical frame bytes.
 
-## Provider serialization
+### Native/local-model and server same-snapshot consumers
 
-### Server provider
+- `apps/client/macos/LocalModel/LocalModel.swift:390` — `learnerPromptClassification` reads `scoped_instructions`.
+- `apps/client/macos/LocalModel/LocalModel.swift:549` — `currentUserRequest` expects nested `conversation.current_turn`.
+- `apps/client/macos/LocalModel/LocalModel.swift:590` — `nativeActionTools` reads capabilities/Experts from `scoped_instructions`.
+- `tools/validation/LocalModelHostTests.swift:160+` — native tool/delegation fixtures encode the old shape.
+- `server/internal/inference/agent.go:21` — `validAgentInput`.
+- `server/internal/inference/agent.go:25` — transcript/tool grammar; it is envelope-agnostic but validates all new server messages.
+- `server/internal/inference/agent_test.go:71` — existing transcript ordering regression.
+- `server/internal/inference/agent_test.go:105` — v1 native endpoint contract regression.
 
-Refactor canonical_model_input so the request has deterministic sections:
+### Existing eval observability
 
-1. stable instructions remain the provider's high-priority instruction field;
-2. one deterministic run frame contains run_instructions + discovery;
-3. retained history follows in original order;
-4. one attempt context frame contains contextual_data + attempt metadata needed for this generation;
-5. current-turn messages/tool/delegation results follow in causal order.
+- `crates/app/examples/local_model_smoke/manager_guidance.rs:463` — report independently hashes prompt components.
+- `crates/app/examples/local_model_smoke/manager_guidance.rs:464` — independently hashes rendered stable instructions.
+- After CP05 these report fields should consume canonical manifest hashes instead of becoming a second prompt-identity implementation.
 
-If provider semantics require the attempt context frame immediately before the current user/current-turn entries, do that. Do not move instruction semantics to a lower-precedence channel just to improve cache hits.
+## 05-A — Replace the ContextEnvelope contract directly
 
-Sort only sets whose semantics are unordered:
-- Expert discovery by agent_id;
-- capability/tool descriptors by stable ID when order has no semantic meaning.
+### `crates/contracts/agent/src/envelope.rs`
 
-Never reorder Conversation history/current-turn causality.
+Introduce:
 
-### Foundation/local provider
+```rust
+pub const CONTEXT_ENVELOPE_SCHEMA_VERSION: u32 = 2;
 
-Produce the same logical section ordering in its structured prompt payload. Provider-specific external wire remains an adapter concern, but tests must prove the same typed envelope yields equivalent section content.
+pub struct ContextEnvelope {
+    pub schema_version: u32,
+    pub stable_instructions: PromptAssembly,
+    pub run_instructions: RunInstructions,
+    pub discovery: DiscoveryContext,
+    pub contextual_data: ContextualData,
+    pub conversation: ModelConversation,
+    pub attempt: AttemptContext,
+    pub manifest: ContextManifest,
+}
 
-### Tool schema/cache behavior
+pub struct RunInstructions {
+    pub purpose: String,
+    pub response_contract: String,
+}
 
-Do not change delegation authorization merely to preserve a cache key. Whether the provider advertises the generic delegation function when the catalog is empty may be changed only if:
-- Engine still rejects unknown/absent Expert selections;
-- Manager behavior eval shows no regression;
-- the decision is documented as cache/transport representation, not capability authority.
+pub struct DiscoveryContext {
+    pub revision: u64,
+    pub available_capabilities: Vec<CapabilityDescriptor>,
+    pub active_experts: Vec<AgentDefinition>,
+}
 
-## Cache observability
+pub struct AttemptContext {
+    pub correction: Option<ModelCorrection>,
+    pub max_output_bytes: usize,
+}
+```
 
-Record safe hashes/identity for model attempts:
+Delete `ScopedInstructions` and `RuntimeContext`; do not retain aliases, optional legacy fields, serde aliases or fallback decoding.
 
-- stable_prompt_sha256;
-- Expert environment revision/digest;
-- serialized run-frame digest;
-- provider-reported cached-token/cache-read metrics when the provider exposes them.
+Validation:
 
-Do not invent cached-token counts when the provider does not report them.
+- `ContextEnvelope.schema_version == CONTEXT_ENVELOPE_SCHEMA_VERSION`;
+- stable instructions validate normally;
+- `RunInstructions.purpose` is nonempty and within `MAX_SCOPED_PURPOSE_BYTES`;
+- `response_contract` is nonempty and within `MAX_RESPONSE_CONTRACT_BYTES`; delete the old “legacy empty response contract” allowance;
+- discovery capability IDs and Expert IDs are unique and strictly sorted by stable ID;
+- every capability/definition validates;
+- revision zero remains valid;
+- correction validates when present;
+- output bytes are `1..=MAX_OUTPUT_BYTES`;
+- Conversation validates.
 
-Extend the existing safe debug/eval surfaces rather than adding a new general telemetry subsystem.
+Do not change `AGENT_SCHEMA_VERSION` globally.
+
+### Canonical frame serialization
+
+Add contract-owned methods/helpers whose bytes are the only inputs used by both hashing and provider framing:
+
+```text
+ContextEnvelope::canonical_run_frame_json()
+  -> exact JSON for { run_instructions, discovery }
+
+ContextEnvelope::canonical_attempt_frame_json()
+  -> exact JSON for { contextual_data, attempt, manifest }
+```
+
+Use typed serializable structs with fixed field order. Do not build these hashes from provider-local `serde_json::Value` maps.
+
+The canonical Run frame deliberately does not contain evidence, correction, history, current turn, credentials or live authority.
+
+### Hash helpers
+
+In the Agent contract, add deterministic SHA-256 helpers for:
+
+- PromptComponent content;
+- rendered PromptAssembly;
+- AgentCard canonical JSON;
+- canonical Run-frame bytes.
+
+Do not add provider/cache semantics to those helpers; they are content identities.
+
+## 05-B — Strengthen ContextManifest as a derived safe manifest
+
+### `crates/contracts/agent/src/envelope.rs`
+
+Replace manifest entry shapes with:
+
+```text
+PromptManifestEntry
+  kind
+  source
+  revision
+  content_sha256
+
+AgentCardManifestEntry
+  id
+  version
+  definition_revision
+  card_sha256
+
+ExpertEnvironmentManifestEntry
+  revision
+  digest
+```
+
+Extend `ContextManifest` with:
+
+```text
+stable_prompt_sha256
+run_frame_sha256
+expert_environment: Option<ExpertEnvironmentManifestEntry>
+```
+
+Keep evidence and memory entries as today. Do not copy `GrantAuthority`, `SourceAuthority`, credentials, recipient consent, endpoints or raw evidence into the manifest.
+
+`ExpertEnvironmentManifestEntry` is a derived debug/projection value:
+- revision may be zero;
+- digest must be nonzero;
+- when present, its revision must equal `DiscoveryContext.revision`;
+- it never replaces `RunExpertEnvironmentIdentity` on the durable Conversation Run.
+
+Make `ContextEnvelope::validate` verify that the manifest mirrors the actual envelope:
+
+- prompt component metadata/hashes match `stable_instructions.components` in order;
+- `stable_prompt_sha256` matches exact rendered bytes;
+- Agent-card manifest entries match `discovery.active_experts`, including definition revision and card hash;
+- `run_frame_sha256` matches exact canonical Run-frame bytes;
+- evidence/memory manifest entries match their corresponding contextual data identities;
+- environment metadata, if present, is valid and revision-aligned.
+
+A caller cannot supply a manifest that disagrees with the content it describes.
+
+## 05-C — Make Context derive discovery from AllowedCatalog only
+
+### `crates/modules/context/src/application/model_projection.rs:50+`
+
+Change `ContextProjectionInput`:
+
+- delete `active_experts`;
+- add `expert_environment: Option<ExpertEnvironmentManifestEntry>`;
+- keep `catalog` as the canonical discovery source.
+
+In `assemble_context_projection`:
+
+1. validate/sort catalog-derived discovery deterministically;
+2. derive `available_capabilities` from tools and sort by capability ID;
+3. derive `active_experts` from `catalog.cards` as `AgentDefinition` values sorted by `card.id`;
+4. construct `RunInstructions`;
+5. construct `AttemptContext`;
+6. build contextual data/conversation as today;
+7. create the derived manifest from exact envelope inputs and the optional environment identity;
+8. validate the complete envelope before releasing the projection.
+
+Delete `filter_experts`. There is no independent card input to reconcile.
+
+The catalog itself remains the Engine's executable tool/Expert authority. Discovery is its bounded model-visible projection, not a new capability authority.
+
+### Non-root callers
+
+Migrate direct Context projection callers:
+
+- delegated Expert host;
+- background Learner;
+- local-model smoke examples;
+- provider live fixtures;
+- registered-runner/context fixtures.
+
+Expert and Learner projections pass `expert_environment: None` unless they genuinely own a Run environment identity. Do not manufacture one merely to fill the manifest.
+
+## 05-D — Freeze stable prompt identity at Conversation Run construction
+
+### `crates/modules/conversation/src/application/model_projection.rs`
+
+Replace the current projector field:
+
+```text
+active_experts
+```
+
+and per-attempt `role_prompt()` construction with Run-bound:
+
+```text
+manager_prompt: PromptAssembly
+finalization_prompt: PromptAssembly
+expert_environment: ExpertEnvironmentManifestEntry
+```
+
+At `ConversationModelProjection::new`:
+
+1. validate session/context/classes;
+2. accept the exact root `RunExpertEnvironmentIdentity` supplied by App;
+3. convert it once to the neutral manifest value;
+4. build `manager_prompt(persona)` once;
+5. build `finalization_prompt` once by cloning the Manager assembly and replacing only the Role component content with `FINALIZATION_ROLE_PROMPT`;
+6. validate both assemblies.
+
+Do **not** append `FINALIZATION_OUTPUT_CONTRACT` to the finalization Role component. Its `RoleSpec.output_contract` becomes `RunInstructions.response_contract`.
+
+At every `project` call:
+
+- choose the stored Manager/finalization assembly by role and clone it;
+- require `request.catalog.revision == expert_environment.revision`;
+- pass the exact environment manifest value to Context;
+- do not rebuild persona/Manager prompt or inspect a second active-Expert list.
+
+Manager retries/corrections therefore retain identical stable bytes. Finalization intentionally uses its separate stable role identity.
+
+### `crates/app/src/vault_host/conversation_turn.rs:314+`
+
+After sampling the environment:
+
+```text
+let expert_environment = ...
+let environment_identity = expert_environment.identity()
+let catalog = expert_environment.catalog()
+```
+
+Pass the same `environment_identity` to:
+
+- `ConversationModelProjection::new`;
+- `TurnRequest.expert_environment`.
+
+Delete the intermediate `active_experts: Vec<AgentCard>`.
+
+This prevents diagnostic/model projection identity from drifting away from Run admission.
+
+## 05-E — Cut Inference and provider adapters to the new sections
+
+### `crates/modules/inference/src/application/service.rs`
+
+- replace `envelope.scoped_instructions.purpose` with `envelope.run_instructions.purpose`;
+- replace `envelope.runtime.max_output_bytes` with `envelope.attempt.max_output_bytes`;
+- migrate all test fixtures directly to envelope v2.
+
+No Inference authority or routing semantics change.
+
+### `crates/adapters/providers/src/models/wire.rs`
+
+Keep Conversation entry rendering here and add one shared provider-adapter framing seam that consumes the contract-owned canonical frame strings. Both server and Foundation must use it; neither may independently rebuild `RunInstructions/DiscoveryContext` or `ContextualData/AttemptContext/Manifest`.
+
+The framing helper must preserve:
+
+- exact canonical Run-frame content;
+- exact canonical Attempt-frame content;
+- retained-history order;
+- current-turn order;
+- existing Tool/Delegation call-result expansion.
+
+It does not sort Conversation messages.
+
+### Server transport — `crates/adapters/providers/src/models/server.rs:372+`
+
+Construct native `messages` in exactly this order:
+
+1. one `user` message whose content is the exact canonical Run-frame JSON string;
+2. retained history messages in original order;
+3. one `user` message whose content is the exact canonical Attempt-frame JSON string;
+4. current-turn messages in original causal order.
+
+Keep the rendered stable prompt in the outer `instructions` field.
+
+For native tool schemas:
+
+- sort catalog tools by stable tool ID before emitting them;
+- sort delegation agent IDs by card ID;
+- retain exact catalog lookup/revision validation for decoded calls;
+- do not expose a tool/delegation merely to stabilize a cache key.
+
+Outer `POST /v1/agent` request schema/version remains unchanged.
+
+### Foundation transport — `crates/adapters/providers/src/models/foundation.rs:89+`
+
+Replace the old one-object prompt with deterministic sections in this exact logical order:
+
+```json
+{
+  "run_frame": <canonical Run frame>,
+  "history": [...],
+  "attempt_context": <canonical Attempt frame>,
+  "current_turn": [...]
+}
+```
+
+Construct the prompt so the embedded Run/Attempt frame content is exactly the contract-owned canonical serialization used for the manifest hashes; do not recompute equivalent provider-local maps.
+
+Keep:
+
+- separate `instructions`;
+- current stable-instruction, prompt, response, token and deadline bounds;
+- provider protection/data-class checks;
+- Tool/Delegation output resolution against the actual `AllowedCatalog`.
+
+No local-model command ABI/schema version change is required.
+
+## 05-F — Cut the Swift local-model consumer to the new prompt shape
+
+### `apps/client/macos/LocalModel/LocalModel.swift`
+
+This file is shared by macOS and iOS builds.
+
+Update:
+
+- `learnerPromptClassification`:
+  - read purpose from `run_frame.run_instructions.purpose`;
+  - read capability/Expert discovery from `run_frame.discovery`;
+  - learner remains valid only when discovery capabilities and Experts are both empty.
+- `nativeActionTools`:
+  - read capabilities from `run_frame.discovery.available_capabilities`;
+  - read Expert definitions from `run_frame.discovery.active_experts`;
+  - derive each delegation ID from `definition.card.id`;
+  - keep deterministic sorting and existing schema bounds.
+- `currentUserRequest`:
+  - read directly from top-level `current_turn`.
+
+Do not accept `scoped_instructions` or the old nested `conversation.current_turn` as a fallback.
+
+### `tools/validation/LocalModelHostTests.swift`
+
+Replace old JSON fixtures with the new Run/history/Attempt/current-turn shape and add direct regressions that:
+
+- capabilities still create native tools;
+- active Expert definitions still create the delegate tool;
+- learner classification uses Run instructions/discovery;
+- current user request comes only from `current_turn`;
+- old scoped-instruction fixtures do not silently act as the new contract.
+
+### Go server same-snapshot regression
+
+Do not add ContextEnvelope structs to Go.
+
+In `server/internal/inference/agent_test.go`, add/update a representative `/v1/agent` input with:
+
+```text
+Run-frame user
+history exchange(s)
+Attempt-frame user
+current user/current-turn exchange
+```
+
+and prove `validAgentInput` accepts it while existing malformed tool-call/result ordering still fails.
+
+The production Go request decoder remains schema 1 unless implementation demonstrates an actual outer wire change.
+
+## 05-G — Canonical cache/debug observability without a telemetry subsystem
+
+### Context manifest
+
+The canonical safe identities after this checkpoint are:
+
+- `stable_prompt_sha256`;
+- per-component content SHA-256;
+- `run_frame_sha256`;
+- optional Expert environment revision/digest;
+- per-Agent card definition revision/card SHA-256;
+- existing evidence/memory identity metadata.
+
+These fields contain no raw credentials, endpoints, grant tokens or evidence payloads.
+
+### `crates/app/examples/local_model_smoke/manager_guidance.rs:463+`
+
+Stop independently implementing prompt identity.
+
+Use the projection manifest to report:
+
+- prompt component kind/source/revision/content hash;
+- stable prompt hash;
+- run-frame hash;
+- Expert environment identity when present;
+- ordered card id/version/definition revision/card hash.
+
+Continue computing corpus/configuration hashes where those are genuinely harness-owned.
+
+Do not add provider cached-token/cache-read fields unless a current provider supplies trustworthy values.
 
 ## Required tests
 
-- identical stable Manager program + changed evidence -> stable prompt bytes/hash identical;
-- changed Expert catalog -> stable prompt hash identical, environment/run-frame hash changes;
-- identical Expert environment reconstructed -> byte-identical discovery serialization/hash;
-- prompt/persona revision change -> stable prompt hash changes;
-- correction changes only attempt-scoped section;
-- evidence changes do not change run discovery identity;
-- server and Foundation serializers preserve instruction/discovery/evidence boundaries;
-- user/tool text containing instruction-like text remains data;
-- max byte budgets still fail closed before provider I/O;
-- no credential/token appears in manifest or cache diagnostics.
+### Contract / Context
 
-## Deletion/residual gate
+Add regressions for:
 
-Search for and remove obsolete uses of:
+- ContextEnvelope v2 accepts the exact new shape and rejects v1/unknown fields;
+- empty response contract is rejected;
+- discovery ordering is deterministic and unique;
+- revision-zero discovery remains valid;
+- prompt component content hashes and rendered stable hash are byte-exact;
+- card hashes/definition revisions mirror discovery;
+- Run-frame hash matches exact canonical serialized bytes;
+- manifest mismatch fails closed;
+- environment digest zero fails, revision zero with nonzero digest is valid;
+- environment revision must equal discovery/catalog revision;
+- changed evidence/correction does not change stable or Run-frame hash;
+- changed visible Expert definition/catalog changes Run-frame hash but not stable prompt hash;
+- instruction-like text inside discovery/evidence stays data.
 
-    ScopedInstructions
-    RuntimeContext
-    scoped_instructions
-    active_experts stored independently from the Run environment where it creates a duplicate source
+### Conversation
 
-Update every same-snapshot Rust/Swift/Go test/fixture that decodes ContextEnvelope. Do not retain a legacy envelope branch.
+Add regressions for:
+
+- projector construction freezes one Manager stable assembly;
+- repeated attempts with different correction/history/evidence use byte-identical stable prompt;
+- root environment identity is the exact manifest identity on every Manager attempt;
+- separate Runs with unchanged prompt/persona have the same stable prompt hash;
+- changed environment/catalog leaves stable prompt hash unchanged while environment/run-frame identity changes as applicable;
+- persona or prompt revision changes stable prompt hash;
+- finalization has a distinct stable Role hash and keeps its output contract only in `RunInstructions`.
+
+### Provider adapters
+
+Server and Foundation tests must prove:
+
+- same envelope yields byte-identical canonical Run/Attempt frame content;
+- server message order is Run frame -> history -> Attempt frame -> current turn;
+- Foundation structured prompt exposes the same order/section content;
+- correction changes only Attempt-frame content;
+- evidence changes only Attempt-frame content;
+- Tool/Expert discovery ordering is deterministic;
+- provider `instructions` equals the exact bytes whose hash is `stable_prompt_sha256`;
+- malicious instruction-like strings in user/tool/discovery/evidence never enter `instructions`;
+- all current byte/token/deadline limits still fail before provider I/O.
+
+### Same-snapshot native/server
+
+- `tools/validation/check-local-model.sh` passes with new Swift parsing and tests;
+- Go agent grammar accepts the representative CP05 ordering;
+- no old Swift scoped-instruction compatibility parser remains.
+
+## Documentation convergence in this checkpoint
+
+### `docs/architecture/runtime.md`
+
+After implementation, describe:
+
+- stable program / Run frame / attempt frame / causal Conversation as distinct lifetimes;
+- discovery derived from one AllowedCatalog and root environment identity;
+- Manager prompt assembly frozen at Run projector construction;
+- deterministic stable/run hashes as diagnostics/cache identities only;
+- server and Foundation preserving the same logical section order;
+- Swift local model consuming the same direct-cutover shape;
+- cache identity never replacing Context/Access/Run authority.
+
+Do not document Checkpoint 06 grounding prose as implemented yet.
+
+### `docs/architecture/authority-recovery.md`
+
+No authority owner changes in CP05. Update only if needed to state explicitly that prompt/cache hashes are diagnostic identity and never authority/freshness. Do not duplicate runtime serialization detail here.
+
+### ADRs
+
+ADR 0033 already freezes the Run-vs-attempt lifetime and discovery-not-instruction rationale and supersedes the conflicting portions of ADR 0017/0018. No ADR change is expected for this implementation unless the code requires a different durable decision.
+
+## Residual/deletion gate
+
+Search repository-wide and classify every remaining match for:
+
+```text
+ScopedInstructions
+RuntimeContext
+scoped_instructions
+envelope.runtime
+active_experts
+role_prompt(
+stable_instructions.render()
+prompt_components
+agent_cards
+run_frame_sha256
+stable_prompt_sha256
+CONTEXT_ENVELOPE_SCHEMA_VERSION
+```
+
+Expected final state:
+
+- zero production `ScopedInstructions`;
+- zero production `RuntimeContext`;
+- zero production serialized `scoped_instructions`;
+- no independent root/Context `active_experts` input separate from `AllowedCatalog`;
+- no per-attempt Manager prompt construction;
+- all stable prompt hashes derive from exact rendered instruction bytes;
+- all Run-frame hashes derive from exact contract canonical Run-frame bytes;
+- server/Foundation do not independently reconstruct the semantic Run/Attempt frames;
+- Swift contains no old-shape fallback;
+- Go has no duplicate ContextEnvelope type;
+- environment/prompt/card hashes contain no credentials, endpoints, raw evidence or authority tokens.
+
+Historical ADR text explicitly marked superseded and this plan's frozen before/after anchors may remain. Current architecture docs and production comments must describe only the new path.
+
+Do not add a permanent source-regex checker for this cutover.
+
+## Verification required before marking Checkpoint 05 complete
+
+Fast/targeted iteration:
+
+```sh
+cargo test -p floe-agent-contract --tests
+cargo test -p floe-context --tests
+cargo test -p floe-conversation --tests
+cargo test -p floe-agent-runtime --tests
+cargo test -p floe-inference --tests
+cargo test -p floe-provider-adapters --tests
+cargo test -p floe-app --lib
+tools/validation/check-local-model.sh
+```
+
+Because the server native-agent message sequence changes even though the outer `/v1/agent` schema does not, from `server/` run:
+
+```sh
+go test -race ./...
+go vet ./...
+```
+
+Final checkpoint gate:
+
+```sh
+CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast
+python3 tools/architecture/check_boundaries.py
+cargo build -p floe-ffi
+git diff --check
+
+cd apps/client
+flutter analyze
+flutter test
+flutter build macos
+```
+
+The Swift local-model source is shared with iOS, but do not claim an iOS simulator/device build unless it is actually run. Record any unavailable Apple prerequisite as UNVERIFIED rather than weakening the checkpoint's Rust/Swift/macOS gates.
+
+No live provider/account mutation is required. Do not create/modify credentials or invoke the opt-in live manager evaluation; Checkpoint 07 owns that evaluation.
+
+## Checkpoint 05 acceptance
+
+Checkpoint 05 is complete only when all are true:
+
+- ContextEnvelope v2 contains stable instructions, Run instructions, discovery, contextual data, Conversation, Attempt context and manifest with no legacy envelope fields;
+- discovery comes only from AllowedCatalog and preserves exact catalog revision;
+- production root projection carries the exact admitted Run environment identity as derived manifest metadata;
+- Manager stable prompt assembly is built once per Run-bound projector and reused across attempts;
+- finalization keeps its output contract outside stable Role text;
+- prompt/card/Run hashes are deterministic, byte-exact and validated against the data they describe;
+- evidence/correction changes cannot change stable or Run-frame identity;
+- visible discovery changes cannot change stable prompt identity;
+- server and Foundation use one canonical semantic frame serialization and preserve Run/history/Attempt/current-turn ordering;
+- Swift local-model parsing uses only the new shape and direct same-snapshot tests pass;
+- Go `/v1/agent` grammar accepts the new message ordering without an outer protocol/schema change;
+- cache/debug identities contain no secret or raw evidence payload;
+- no speculative cache metrics or cache authority is introduced;
+- no old/new envelope compatibility branch remains;
+- current architecture documentation matches the implementation;
+- all residual and verification gates pass;
+- execution report records start HEAD, fetched origin/main, implementation/report commit SHA(s), changed owners/contracts, deleted old shape, same-snapshot Swift/Go changes, hash inputs, tests, residuals, docs, worktree state, and explicitly states Checkpoint 06 was not started.
+
+## Checkpoint commit discipline
+
+Implement Checkpoint 05 as one logical context/prompt-cache cutover when practical. Multiple local commits are acceptable only to keep the cross-language direct replacement buildable; list every SHA in the execution report.
+
+After verification, update only this plan's `Execution report / Checkpoint 05`, commit that report, and stop. Do not begin Checkpoint 06 in the same implementation pass.
+
+
 
 # Checkpoint 06 — Manager epistemic policy cutover
 
