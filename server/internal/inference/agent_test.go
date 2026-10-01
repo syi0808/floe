@@ -8,6 +8,20 @@ import (
 	"testing"
 )
 
+func TestAgentStableInstructionByteBoundaries(test *testing.T) {
+	for _, bytes := range []int{4097, 8192, 8193} {
+		request := agentRequest()
+		request.Agent = true
+		request.Instructions = strings.Repeat("가", bytes/3) + strings.Repeat("x", bytes%3)
+		if len(request.Instructions) != bytes {
+			test.Fatalf("fixture size: got %d, want %d", len(request.Instructions), bytes)
+		}
+		if accepted := validRequest(request); accepted != (bytes <= 8192) {
+			test.Errorf("%d UTF-8 bytes: accepted = %v", bytes, accepted)
+		}
+	}
+}
+
 func TestOrderedNativeOutputPreservesPreamblesAndMultipleCalls(test *testing.T) {
 	var message map[string]any
 	raw := `{"content":"Checking both.","tool_calls":[

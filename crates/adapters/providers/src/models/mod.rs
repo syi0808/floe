@@ -10,3 +10,14 @@ pub use foundation::{
 };
 pub use root::{PreparedRootTransport, RootModelProvider};
 pub use server::{PreparedServerTransport, ServerModelProvider};
+
+#[cfg(test)]
+fn resize_test_instructions(prompt: &mut floe_agent_contract::prompts::PromptAssembly, bytes: usize) {
+    let first_bytes = (bytes - 6).min(4096);
+    let sizes = [first_bytes, bytes - first_bytes - 5, 1];
+    assert_eq!(prompt.components.len(), sizes.len());
+    for (component, size) in prompt.components.iter_mut().zip(sizes) {
+        component.content = "가".repeat(size / 3) + &"x".repeat(size % 3);
+    }
+    assert_eq!(prompt.render().len(), bytes);
+}

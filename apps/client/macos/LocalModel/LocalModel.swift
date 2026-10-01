@@ -1,6 +1,8 @@
 import Foundation
 import FoundationModels
 
+let localModelMaxStableInstructionsBytes = 8192
+
 struct LocalModelInput: Codable, Equatable, Sendable {
   let instructions: String
   let prompt: String
@@ -9,7 +11,7 @@ struct LocalModelInput: Codable, Equatable, Sendable {
   let deadlineMilliseconds: Int
 
   var valid: Bool {
-    !instructions.isEmpty && instructions.utf8.count <= 4096 &&
+    !instructions.isEmpty && instructions.utf8.count <= localModelMaxStableInstructionsBytes &&
       !prompt.isEmpty && prompt.utf8.count <= 12288 &&
       (1...1024).contains(maxResponseTokens) &&
       (1...16384).contains(maxOutputBytes) &&

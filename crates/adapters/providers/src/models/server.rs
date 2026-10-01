@@ -7,6 +7,7 @@ use std::{
 use floe_agent_contract::{
     AgentFailure, MAX_CONTEXT_REFS, MAX_OUTPUT_BYTES, valid_context_refs,
 };
+use floe_agent_contract::prompts::MAX_STABLE_INSTRUCTIONS_BYTES;
 use floe_execution::limits::{CallLimiter, CallLimits};
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
@@ -231,7 +232,7 @@ impl floe_inference::PreparedModelTransport for PreparedServerTransport {
         // Dispatch authority arrives through the consumed Access target;
         // the envelope/catalog own everything else the wire may carry.
         let instructions = request.envelope.stable_instructions.render();
-        if instructions.len() > 4096 {
+        if instructions.len() > MAX_STABLE_INSTRUCTIONS_BYTES {
             return Err(AgentFailure::BudgetExceeded);
         }
         let input = canonical_model_input(&request)?;
@@ -1135,6 +1136,12 @@ mod tests {
 
     #[tokio::test]
     async fn canonical_generate_posts_agent_wire_and_maps_answer() {
+        for bytes in [4097, 8192] {
+            generate_posts_instructions_of_size(bytes).await;
+        }
+    }
+
+    async fn generate_posts_instructions_of_size(bytes: usize) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
@@ -1211,7 +1218,9 @@ mod tests {
             assert_eq!(body["purpose"], "everyday_assistance");
             assert_eq!(body["allow_external"], false);
             assert!(body["expected_recipient"].is_null());
-            assert!(!body["instructions"].as_str().unwrap().is_empty());
+            let mut expected = canonical_request().envelope.stable_instructions;
+            super::super::resize_test_instructions(&mut expected, bytes);
+            assert_eq!(body["instructions"], expected.render());
             assert!(body["input"]["messages"].as_array().unwrap().len() >= 2);
             let output = json!({
                 "output": [{"kind": "answer", "text": "Hello from server"}],
@@ -1247,6 +1256,7 @@ mod tests {
         assert_eq!(observed.len(), 1);
         assert_eq!(observed[0].profile.id, "server-model");
         let mut request = canonical_request();
+        super::super::resize_test_instructions(&mut request.envelope.stable_instructions, bytes);
         request.deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         let response = floe_inference::PreparedModelTransport::generate(
             &observed[0].transport,
@@ -1263,6 +1273,32 @@ mod tests {
         assert_eq!(response.used_tokens, 7);
         assert_eq!(response.cost_micros, 0);
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn oversized_stable_instructions_are_rejected_before_server_io() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let transport = PreparedServerTransport {
+            base_url: format!("http://{}", listener.local_addr().unwrap()),
+            bearer_token: "c".repeat(32),
+            purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE.into(),
+            recipient: None,
+            model_calls: provider_call_limit(),
+        };
+        let mut request = canonical_request();
+        super::super::resize_test_instructions(&mut request.envelope.stable_instructions, 8193);
+        let result = floe_inference::PreparedModelTransport::generate(
+            &transport,
+            request,
+            admitted_target("server-model", None).await,
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), AgentFailure::InvalidInput);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), listener.accept())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

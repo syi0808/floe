@@ -29,6 +29,8 @@ Responsibilities do not collapse across this chain:
 - Access owns exact-recipient processing/dispatch/release authority, including the contextual recipient-consent store.
 - Provider adapters resolve private credentials and execute transport.
 
+The Agent contract's `PromptAssembly` owns the stable-instruction limit: 8,192 UTF-8 bytes including rendered separators, with each component and Persona still bounded to 4,096 bytes. Rust Foundation and server transports use `MAX_STABLE_INSTRUCTIONS_BYTES`; Swift `LocalModelInput` and Go `/v1/agent` enforce the same byte boundary before model I/O. This limit does not enlarge token budgets, response limits, deadlines, Foundation context reservation or transport-body limits.
+
 A dispatch the fence cannot admit on a recoverable consent case blocks as a typed expected completion, never a forged answer or a silent reroute: Inference returns the exact requirement, the Engine journals the blocked attempt, and Conversation publishes the durable card under the attempted origin and completes with the deterministic limitation. Missing consent never triggers hidden fallback to another recipient; hard denials (prohibited classes, foreign identity, no lineage, transport failure) fail closed without a card. Approved consent unblocks only the exact reviewed dispatch: recipient, profile, purpose, consumer, classes, scopes, lineage, pairing and device all bind the consent id.
 
 Product Run snapshots project model-attempt and delegated-Task references from Conversation's

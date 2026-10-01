@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use floe_agent_contract::AGENT_VERSION;
+use floe_agent_contract::prompts::MAX_STABLE_INSTRUCTIONS_BYTES;
 use floe_agent_contract::{AgentFailure, SessionProtection, valid_context_refs};
 #[cfg(test)]
 use floe_agent_contract::ModelPlacement;
@@ -112,7 +113,7 @@ fn prepare_canonical(
         return Err(AgentFailure::PolicyDenied);
     }
     let instructions = request.envelope.stable_instructions.render();
-    if instructions.len() > 4096 {
+    if instructions.len() > MAX_STABLE_INSTRUCTIONS_BYTES {
         return Err(AgentFailure::BudgetExceeded);
     }
     if request.remaining_tokens < CONTEXT_RESERVATION {
@@ -636,6 +637,26 @@ mod tests {
             max_output_bytes: 16384,
             deadline: Instant::now() + Duration::from_secs(1),
             cancellation: Cancellation::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn stable_instruction_byte_boundaries_are_checked_before_native_io() {
+        for bytes in [4097, 8192, 8193] {
+            let mut request = canonical_request();
+            super::super::resize_test_instructions(&mut request.envelope.stable_instructions, bytes);
+            let expected = request.envelope.stable_instructions.render();
+            let transport = Mock::new(answer());
+            let result = generate_canonical(&transport, request, SessionProtection::SyntheticOnly)
+                .await;
+            let calls = transport.calls.lock().unwrap();
+            if bytes <= MAX_STABLE_INSTRUCTIONS_BYTES {
+                assert!(result.is_ok(), "{bytes}: {result:?}");
+                assert_eq!(calls[0]["input"]["instructions"], expected);
+            } else {
+                assert_eq!(result.unwrap_err(), AgentFailure::InvalidInput);
+                assert!(calls.is_empty());
+            }
         }
     }
 

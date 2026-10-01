@@ -16,6 +16,7 @@ pub const MODEL_CORRECTION: &str = include_str!("../prompts/model_correction.txt
 const DEFAULT_PERSONA: &str = include_str!("../prompts/default_persona.txt");
 pub const BEHAVIOR_KERNEL_REVISION: u64 = 3;
 pub const CAPABILITY_PROTOCOL_REVISION: u64 = 3;
+pub const MAX_STABLE_INSTRUCTIONS_BYTES: usize = 8192;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -96,7 +97,7 @@ impl PromptAssembly {
                     || component.content.trim().is_empty()
                     || component.content.len() > 4096
             })
-            || self.render().len() > 8192
+            || self.render().len() > MAX_STABLE_INSTRUCTIONS_BYTES
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -177,4 +178,46 @@ pub fn validate_persona(persona: &PersonaProfile) -> Result<(), AgentFailure> {
         return Err(AgentFailure::InvalidInput);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stable_instructions_use_utf8_byte_limits_with_bounded_components() {
+        for bytes in [4097, 8192, 8193] {
+            let first_bytes = (bytes - 6).min(4096);
+            let sizes = [first_bytes, bytes - first_bytes - 5, 1];
+            let mut prompt = expert_prompt("fixture-role", 1, "fixture");
+            for (component, size) in prompt.components.iter_mut().zip(sizes) {
+                component.content = "가".repeat(size / 3) + &"x".repeat(size % 3);
+                assert!(component.content.len() <= 4096);
+            }
+            assert_eq!(prompt.render().len(), bytes);
+            assert_eq!(
+                prompt.validate(),
+                if bytes <= MAX_STABLE_INSTRUCTIONS_BYTES {
+                    Ok(())
+                } else {
+                    Err(AgentFailure::InvalidInput)
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn component_and_persona_limits_remain_4096_bytes() {
+        let mut prompt = expert_prompt("fixture-role", 1, &"x".repeat(4096));
+        assert_eq!(prompt.validate(), Ok(()));
+        prompt.components[1].content.push('x');
+        assert_eq!(prompt.validate(), Err(AgentFailure::InvalidInput));
+        let mut persona = PersonaProfile {
+            instructions: "x".repeat(4096),
+            ..PersonaProfile::default()
+        };
+        assert_eq!(persona.validate(), Ok(()));
+        persona.instructions.push('x');
+        assert_eq!(persona.validate(), Err(AgentFailure::InvalidInput));
+    }
 }
