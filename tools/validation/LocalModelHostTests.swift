@@ -161,17 +161,41 @@ struct LocalModelHostTests {
     precondition(capabilityTools.count == 1)
     let delegationTools = try nativeActionTools(#"{"scoped_instructions":{"available_capabilities":[],"active_experts":[{"id":"fixture"}]},"conversation":{"current_turn":[]}}"#)
     precondition(delegationTools.count == 1)
-    let restrictedActions = currentUserActionRestrictions(#"{"conversation":{"current_turn":[{"role":"user","content":"Answer directly. Do not use tools or delegate."}]}}"#)
-    precondition(restrictedActions.tools && restrictedActions.delegation)
     precondition(currentUserRequest(#"{"conversation":{"current_turn":[{"role":"user","content":"Exact request"},{"role":"tool","content":"Observation"}]}}"#) == "Exact request")
-    let restrictedTools = try nativeActionTools(#"{"scoped_instructions":{"available_capabilities":[{"id":"fixture.read","input_schema":{"type":"object"}}],"active_experts":[{"id":"fixture"}]},"conversation":{"current_turn":[{"role":"user","content":"Answer directly. Do not use tools or delegate."}]}}"#)
-    precondition(restrictedTools.isEmpty)
-    let unrestrictedActions = currentUserActionRestrictions(#"{"conversation":{"current_turn":[{"role":"user","content":"Read my calendar."}]}}"#)
-    precondition(!unrestrictedActions.tools && !unrestrictedActions.delegation)
+    let emptyTools = try nativeActionTools(#"{"scoped_instructions":{"available_capabilities":[],"active_experts":[]},"conversation":{"current_turn":[]}}"#)
+    precondition(emptyTools.isEmpty)
+    precondition((try? nativeActionTools("not JSON")) == nil)
+    precondition((try? nativeActionTools("{}")) == nil)
+    var advertisedSchemas: [String]?
+    for request in [
+      "Inspect the selected data.",
+      "Do not use tools or delegate.",
+      "도구를 사용하거나 위임하지 마.",
+      "Translate the phrase \"do not delegate\" into Korean.",
+    ] {
+      let prompt: [String: Any] = [
+        "scoped_instructions": [
+          "available_capabilities": [["id": "fixture.read", "input_schema": ["type": "object"]]],
+          "active_experts": [["id": "fixture"]],
+        ],
+        "conversation": ["current_turn": [["role": "user", "content": request]]],
+      ]
+      let promptData = try JSONSerialization.data(withJSONObject: prompt, options: [.sortedKeys])
+      let tools = try nativeActionTools(String(decoding: promptData, as: UTF8.self))
+      precondition(tools.map { $0.name } == ["floe_capability_0", "floe_delegate"])
+      let schemas = tools.map { $0.parameters.debugDescription }
+      if let advertisedSchemas {
+        precondition(schemas == advertisedSchemas)
+      } else {
+        advertisedSchemas = schemas
+      }
+    }
     precondition(isLearnerRequest(#"{"scoped_instructions":{"purpose":"governed-memory-review","available_capabilities":[],"active_experts":[]},"conversation":{"current_turn":[{"content":"governed-memory-review"}]}}"#))
     precondition(!isLearnerRequest(#"{"scoped_instructions":{"purpose":"governed-memory-review","available_capabilities":[{"id":"fixture.read"}],"active_experts":[]}}"#))
     precondition(!isLearnerRequest(#"{"scoped_instructions":{"purpose":"everyday-assistance","available_capabilities":[],"active_experts":[]},"conversation":{"current_turn":[{"content":"governed-memory-review"}]}}"#))
     precondition(learnerPromptClassification(#"{"scoped_instructions":{"purpose":"governed-memory-review","available_capabilities":[{"id":"fixture.read"}],"active_experts":[]}}"#) == .denied)
+    precondition(learnerPromptClassification(#"{"scoped_instructions":{"purpose":"governed-memory-review","available_capabilities":[],"active_experts":[{"id":"fixture"}]}}"#) == .denied)
+    precondition(learnerPromptClassification(#"{"scoped_instructions":{"purpose":"unknown-role","available_capabilities":[],"active_experts":[]}}"#) == .general)
     let emptyLearner = try learnerOutputText(GeneratedLearnerAnswer(proposal: nil))
     let emptyObject = try JSONSerialization.jsonObject(with: Data(emptyLearner.utf8)) as! [String: Any]
     precondition(emptyObject["schema_version"] as? Int == 1 && emptyObject["proposal"] is NSNull)

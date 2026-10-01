@@ -335,14 +335,8 @@ private func foundationGenerate(_ input: LocalModelInput) async throws -> LocalM
       break
     }
     let actionTools = try nativeActionTools(input.prompt)
-    let nativeInstructions = actionTools.isEmpty ? input.instructions : input.instructions + """
-
-      Use a tool only when the current user request strictly requires external evidence or expert
-      judgment. Never call a tool for a greeting, general conversation, or when the current user
-      explicitly says not to use tools or delegate. Otherwise answer the user directly.
-      """
     let session = LanguageModelSession(model: .default, tools: actionTools,
-                                       instructions: nativeInstructions)
+                                       instructions: input.instructions)
     guard let currentUserRequest = currentUserRequest(input.prompt) else {
       throw LocalModelFailure("invalid_model_output")
     }
@@ -562,15 +556,6 @@ func currentUserRequest(_ prompt: String) -> String? {
   return content
 }
 
-func currentUserActionRestrictions(_ prompt: String) -> (tools: Bool, delegation: Bool) {
-  let request = currentUserRequest(prompt)?.lowercased() ?? ""
-  let tools = ["do not use tools", "don't use tools", "do not call tools", "don't call tools",
-               "without using tools"].contains { request.contains($0) }
-  let delegation = ["do not delegate", "don't delegate", "without delegating", "tools or delegate"]
-    .contains { request.contains($0) }
-  return (tools, delegation)
-}
-
 #if os(macOS)
 @available(macOS 26.0, *)
 #elseif os(iOS)
@@ -609,9 +594,8 @@ func nativeActionTools(_ prompt: String) throws -> [any Tool] {
     throw LocalModelFailure("invalid_model_output")
   }
   let capabilities = scoped["available_capabilities"] as? [[String: Any]] ?? []
-  let restrictions = currentUserActionRestrictions(prompt)
   var tools: [any Tool] = []
-  for (index, capability) in (restrictions.tools ? [] : capabilities).enumerated() {
+  for (index, capability) in capabilities.enumerated() {
     guard let capabilityID = capability["id"] as? String, !capabilityID.isEmpty else {
       throw LocalModelFailure("invalid_model_output")
     }
@@ -619,14 +603,14 @@ func nativeActionTools(_ prompt: String) throws -> [any Tool] {
     let rootSchema = try dynamicSchema(inputSchema, name: "arguments_\(index)")
     tools.append(NativeActionTool(
       name: "floe_capability_\(index)",
-      description: "Call the exact Floe capability \(capabilityID) only when the user request requires it.",
+      description: "Call the advertised Floe capability \(capabilityID) with a JSON object matching its input schema.",
       parameters: try GenerationSchema(root: rootSchema, dependencies: []),
       capabilityID: capabilityID
     ))
   }
   let experts = scoped["active_experts"] as? [[String: Any]] ?? []
   let expertIDs = experts.compactMap { $0["id"] as? String }.filter { !$0.isEmpty }.sorted()
-  if !restrictions.delegation && !expertIDs.isEmpty {
+  if !expertIDs.isEmpty {
     let schema: [String: Any] = [
       "type": "object",
       "properties": [
@@ -638,7 +622,7 @@ func nativeActionTools(_ prompt: String) throws -> [any Tool] {
     ]
     tools.append(NativeActionTool(
       name: "floe_delegate",
-      description: "Delegate only when the user request requires one of the available Floe experts.",
+      description: "Delegate a natural-language assignment to one active Expert. Select its exact agent_id from the current catalog and include the relevant context, constraints, and desired outcome in message.",
       parameters: try GenerationSchema(
         root: dynamicSchema(schema, name: "delegation_arguments"), dependencies: []),
       capabilityID: "floe.a2a.delegate"

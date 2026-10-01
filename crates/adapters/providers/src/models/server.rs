@@ -435,7 +435,7 @@ fn canonical_model_input(
             "type": "function",
             "function": {
                 "name": tool_name(DELEGATION_CAPABILITY_ID),
-                "description": "Delegate a natural-language assignment to one active Expert agent.",
+                "description": "Delegate a natural-language assignment to one active Expert. Select its exact agent_id from the current catalog and include the relevant context, constraints, and desired outcome in message.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1030,6 +1030,10 @@ mod tests {
             .find(|tool| tool["function"]["name"] == tool_name(DELEGATION_CAPABILITY_ID))
             .expect("delegate tool is advertised")
             .clone();
+        assert_eq!(
+            delegate["function"]["description"],
+            "Delegate a natural-language assignment to one active Expert. Select its exact agent_id from the current catalog and include the relevant context, constraints, and desired outcome in message."
+        );
         let parameters = &delegate["function"]["parameters"];
         assert_eq!(parameters["properties"]["context_refs"]["type"], "array");
         assert_eq!(

@@ -55,6 +55,10 @@ The root Manager catalogue contains active Expert cards with their actual defini
 
 Generic `ToolDescriptor`, `ToolPort`, `ModelStep::CallTool`, provider Tool wire support and stable Tool journals remain role-neutral. An unregistered Tool request can produce a durable correction intent/result without dispatch. Expert capabilities and future non-domain presentation/navigation capabilities may use these contracts; no presentation capability is implemented here.
 
+Manager orchestration guidance is owned by Conversation and remains independent of the installed Expert roster. Agent Cards describe purpose and capabilities; they do not grant source access or prescribe routing policy. Selection and evidence sufficiency remain model judgments, while existing host contracts continue to enforce identity, authorization, output shape, budgets and external effects.
+
+Provider adapters preserve the supplied instructions and catalog. They may describe native call mechanics, but do not append a separate delegation preference or infer tool visibility from user-language substrings. The assembled stable-instruction limit is 8192 UTF-8 bytes across Rust provider preparation, the native input contract and the server Agent endpoint; individual prompt-component, Persona and total transport limits remain separate.
+
 Host-captured Expert source blockers publish durable safe references under the admitted Task origin. A deterministic blocked-domain report completes the Task without a conclusion or a model-proposed requirement. Blocked Expert model dispatch derives its lineage from the current Conversation Run's immediate resume origin, re-scopes a fresh blocker to the attempting Run, and publishes under the Task origin. Root model-recipient consent and source-derived history reauthorization remain separate from acquisition. A reviewed recipient grant remains exact and single-use, not a standing recipient permission.
 
 ### Expert delegation
