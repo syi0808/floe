@@ -1,6 +1,6 @@
 # Agent execution environment and grounded Manager convergence
 
-- Status: in progress — Checkpoint 01 complete
+- Status: in progress — Checkpoints 01–02 complete
 - Baseline: main at 04386367221c66587a1f5001c13d89a0cbbda0d0
 - Classification: architectural change
 - Primary owners: App composition/lifecycle, Experts, Conversation, Context, Agent Runtime, Inference/provider adapters
@@ -159,7 +159,7 @@ Use a dedicated architecture-decision commit. Record its SHA in this plan before
 
 ## Planning refresh and status
 
-- Status: not started — implementation has not begun.
+- Status: complete — implementation, deletion gates and required verification passed.
 - Planning refresh baseline: `main` at `4dd5ec2c2de03b834218b0eaf8429b1e6dc4f929`.
 - Checkpoint 01 is the only completed checkpoint; the latest `main` contains no production change after the original plan baseline.
 - The original Checkpoint 02 direction remains valid, but this section is deliberately refined to code-line level so implementation does not have to reopen lifecycle or cleanup decisions.
@@ -1238,10 +1238,32 @@ Populate this section during implementation. Do not copy checkpoint status into 
   - Checkpoint 02 was not started.
 
 ## Checkpoint 02
-- Status: not started
-- Start HEAD:
-- Commit(s):
+- Status: complete
 - Evidence:
+  1. Start HEAD and fetched `origin/main`: both `b19079fa851adc54136985f751a5a7d4deb4e0f9`. Ran `git fetch origin main`; the starting worktree was clean on `main`.
+  2. Implementation commit and final implementation HEAD: `071376d2ae6b4e97c00aab53bce696568bdda004`. This execution report is committed in the immediate documentation-only child of that commit; the Git commit containing this report identifies the final reporting HEAD without a circular self-SHA. No implementation changes follow the verified implementation commit.
+  3. Owners/canonical path: admitted `AppComposition::vault_command -> Worker::local_request -> execute_action(Create|Unlock) -> OpenVault::activate -> prepare_root_agent_environment`. App lifecycle owns root readiness; Experts owns bundle reconciliation and Registry configuration. Activation samples Registry absence, ensures the shipped bundle, binds initial defaults only for that absence, then publishes once before installing `current` and exposing Ready. Existing Registry with zero enabled assignments publishes an empty catalog; absent Registry fails with `NotFound`.
+  4. Exact changed implementation files and major symbols:
+     - `crates/app/src/vault_host.rs`: private `RootAgentEnvironmentAdmission`, `OpenVault::activate`, `prepare_root_agent_environment`, `publish_expert_directory`, Create/Unlock admission checks, explicit Registry-mutation publication, Conversation Session/turn/resume cleanup, admitted `perform_vault_lifecycle` fixture, Registry inspection regression.
+     - `crates/app/src/vault_host/expert_binding_settings.rs`: `bind_initial_defaults` returns after mutation instead of publishing; explicit `replace` publication remains.
+     - `crates/modules/experts/src/bundle_install.rs` and `crates/modules/experts/src/lib.rs`: canonical mode-free `ensure_expert_bundle` and narrowed exports; existing digest/CAS reconciliation algorithm preserved.
+     - `crates/app/src/vault_host/tests/root_environment.rs`: fresh Create/Resume, disabled-all, repeated reopen, absence-only native binding with exact verified device and UUID-v5 setup identity, existing Registry with missing shipped receipt, explicit empty binding/disable preservation despite a later source, explicit Registry publication, and unadmitted/mismatched/cancelled fail-closed lifecycle regressions.
+     - `crates/app/src/vault_host/tests/conversation_flows.rs`: replaced the defective general-turn-without-setup regression with absent-Registry Unlock preparation before Get/Resume/Turn; Registry is unchanged by Resume/Turn; Create-only install-count regression no longer needs Start; removed redundant manual shipped-install helpers/callers.
+     - `crates/app/src/vault_host/tests/registered_runner.rs`: activation admission fixtures, synthetic installs only after root preparation using current Registry revision, exact registered assignment/installation selection, unchanged missing-runner denial, focused initial-binding idempotency, and stale shipped-manifest activation rejection without overwriting stored configuration.
+     - `crates/app/src/vault_host/tests/native_actions.rs` and `crates/app/src/vault_host/tests/proposals.rs`: isolated fixed connection-store injection instead of host Keychain connection discovery in lifecycle fixtures.
+  5. Deleted surface: `ExpertInstallRefresh`, `ExpertRefreshOutcome`, `expert_refresh_outcome`, both refresh modes, degraded per-turn refresh handling, turn/resume Directory republishing, Start-owned install/binding/probe, initial-binding publication side effect, absent-Registry-to-empty-Directory branch, and duplicate shipped-install test setup. No compatibility path, readiness flag, new public/wire/FFI field or production fallback device was added.
+  6. Configuration versus authority: default binding is first-install convenience only; reconciliation and later sources do not rebind or re-enable existing configuration. Explicit Registry/binding changes publish through their mutation owner, not a subsequent Conversation repair. Grants, source authority, recipient consent, provider/OS authority, provenance, CAS, cancellation direction and uncertain-write recovery are unchanged. Run-pinned configuration semantics remain outside this checkpoint.
+  7. Targeted verification: `cargo test -p floe-experts --tests` passed (11 unit and 20 integration tests); `cargo test -p floe-app --lib root_environment` passed (3 tests); final `cargo test -p floe-app --lib` passed (303 passed, 1 existing ignored real-EventKit test, plus its isolated native fixture subprocess). Iteration corrected obsolete fixture assumptions and isolated native connection discovery; a transient proposal source-load Conflict did not recur in the final targeted or workspace gates. No regression assertion was weakened.
+  8. Residual audit:
+     - `rg -n 'ExpertInstallRefresh|ExpertRefreshOutcome|expert_refresh_outcome|ExistingOnly|InstallIfAbsent' crates apps server tools`: zero matches.
+     - Repository-wide search has only this plan's migration/evidence text and ADR 0033's historical `ExistingOnly` defect description; both are intentional, not runtime paths.
+     - `ensure_expert_bundle`: Experts definition/export, App-private wrapper and exactly one root-preparation caller. `bind_initial_defaults`: definition, root-preparation caller and the focused two-call idempotency test only.
+     - `publish_expert_directory`: root preparation, explicit Registry configuration and explicit binding mutation/rejoin paths, plus synthetic/mutation/denial tests only. No Session/turn/resume readiness caller remains.
+     - Searches for `install_builtin_(calendar|mail)_setup`, `general_turn_does_not_require`, `without expert setup` and `without experts` in App are empty. Reviewed Registry absence checks, Start arms and startup/unlock binding/enable behavior; no Ready absent Registry or existing-configuration auto-repair remains. No permanent migration checker was introduced.
+  9. Broader verification: final `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast` passed, including doctests/default example compilation and FFI/native fixture tests; `python3 tools/architecture/check_boundaries.py` passed (22 nodes, 103 edges, no errors/warnings); `cargo build -p floe-ffi` passed; `git diff --check` passed. Existing dead-code warnings remain in untouched App dispatch/interaction and Vault action-admission surfaces. The existing ignored real EventKit response-loss test requires explicit authorization/debug-app prerequisites; it is not claimed as validated. Flutter/Go/external-provider/device gates are not required by this App-private, unchanged-wire checkpoint and were not run. All lifecycle stores are isolated temporary roots; no user profile, credential or external account was reset or changed.
+  10. Documentation: `docs/architecture/runtime.md` now describes Vault-owned preparation, absence versus intentionally empty, first-install-only binding and Session/turn neutrality. This plan records completion/evidence. ADRs and `authority-recovery.md` were not rewritten to future Run-pinned semantics.
+  11. Worktree: clean after implementation commit; the immediate report-only commit contains solely this plan update. No generated, unrelated or untracked artifacts are retained; final clean status is checked after the report commit. No branch was created and nothing was pushed.
+  12. Checkpoint 03 was not started. All Checkpoint 02 acceptance and residual gates are closed; later checkpoints remain not started.
 
 ## Checkpoint 03
 - Status: not started
