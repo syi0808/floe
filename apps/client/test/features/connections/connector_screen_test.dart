@@ -1176,7 +1176,7 @@ Map<String, dynamic> _appleConnection(
         'schema_version': 1,
         'id': viewId,
         'version': '1.0.0',
-        'data_class': 'personal',
+        'data_class': provider == 'apple_health' ? 'highly_sensitive' : 'personal',
         'retention': 'ephemeral',
         'freshness_ttl_ms': 300000,
         'max_items': 64,

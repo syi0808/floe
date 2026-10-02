@@ -361,7 +361,7 @@ fn go_microsoft_teams_descriptor_conforms_to_the_shared_rust_contract() {
 
 #[test]
 fn android_context_descriptors_conform_to_the_shared_contract() {
-    for (source, connector, provider) in [
+    for (source, connector, provider, data_class) in [
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
@@ -369,6 +369,7 @@ fn android_context_descriptors_conform_to_the_shared_contract() {
             )),
             "calendar.android",
             "android_calendar",
+            DataClass::Personal,
         ),
         (
             include_str!(concat!(
@@ -377,6 +378,7 @@ fn android_context_descriptors_conform_to_the_shared_contract() {
             )),
             "contacts.android",
             "android_contacts",
+            DataClass::Personal,
         ),
         (
             include_str!(concat!(
@@ -385,12 +387,20 @@ fn android_context_descriptors_conform_to_the_shared_contract() {
             )),
             "health.android",
             "health_connect",
+            DataClass::HighlySensitive,
         ),
     ] {
         let snapshot: ConnectorSnapshot = serde_json::from_str(source).unwrap();
         assert!(validate_connector_snapshot(&snapshot, 1_789_128_000_000).is_empty());
         assert_eq!(snapshot.descriptor.id, connector);
         assert_eq!(snapshot.descriptor.provider, provider);
+        assert!(
+            snapshot
+                .descriptor
+                .views
+                .iter()
+                .all(|view| view.data_class == data_class)
+        );
         assert!(matches!(
             snapshot.descriptor.execution,
             ExecutionLocation::Device { .. }

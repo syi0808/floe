@@ -1,6 +1,6 @@
 # Reasoning, Gateway, source-processing, and Health privacy convergence
 
-- Status: in progress — Checkpoint 00 complete; Checkpoint 01 not started
+- Status: in progress — Checkpoints 00–01 complete; Checkpoint 02 not started
 - Investigation baseline: main at af2eda2bf276241d903bd4ed29c2565081804339
 - Governing decision: [ADR 0034](../../decisions/0034-gateway-reasoning-and-source-processing-authority.md)
 - Classification: architectural change
@@ -420,7 +420,7 @@ Record that agent-execution-environment-grounding Checkpoint 07 remains historic
 
 ### Status and refreshed baseline
 
-This checkpoint remains the active next checkpoint after Checkpoint 00. This section was refreshed against `main` at:
+Checkpoint 01 is complete; execution evidence is in section 22. This section was refreshed against `main` at:
 
     f08c6254f8820289378f5d2aa92b69c98097b3a8
 
@@ -2068,3 +2068,61 @@ The key architectural correction is:
 ### Next boundary
 
 Checkpoint 00 is complete. Checkpoint 01 has not started. The next implementation is Health sensitivity/model-input classification, not routing migration, recipient-consent code removal, or old CP08 grounding work.
+
+## 22. Checkpoint 01 execution record — 2026-10-02
+
+### Baseline, commits and scope
+
+- Fetched `origin main` before implementation. Starting HEAD and fetched `origin/main` were both `90c7a6967e018a674f2f5d3e339d66508b0ced4b`; the worktree was clean. CP00 was already complete.
+- Implemented in the prescribed order: 01-A View contract/evidence truth, 01-B1 Run-pinned Expert allowance, 01-B2 actual post-role-filtered input-class fold, 01-C native/fixture descriptors, then focused verification, residual audit and final gates.
+- The checkpoint commit is the commit introducing this record; Git history supplies its final SHA without a self-referential field. Its parent is `cd2f49d1`, a separate user-requested removal of Flutter pixel golden comparisons, commented-out comparisons and unused golden images. Widget behavior/layout assertions remain. No push was performed.
+- No stored payload/schema version, acquisition, retention, freshness, permission, source-grant, recipient-consent, route, Primary/Fallback, or Manager corpus/rubric meaning changed. Android changes are only its Health descriptor and matching fixture; no Android build was run.
+
+### Changed owners and removed downgrade surface
+
+- Context's typed `PersonalContextProjection::data_class()` statically classifies People/Attention as Personal and Wellbeing as HighlySensitive. `personal_context_evidence()` now uses that owner method, without changing serialized View bytes or provenance validation.
+- App's `expert_policy(package_data_class)` creates the sorted/deduplicated allowance `[Personal, admitted manifest class]`. Production uses `self.registration.manifest.data_class` from the exact Run-pinned endpoint registration, never a new live-catalog lookup. Malformed Credential/DeviceOnlyRaw allowances are retained for authorization to reject, not sanitized. Existing placements, transfer consent and `bounded_sensitive_projection = false` remain unchanged.
+- Context's single canonical assembler folds caller minimum/stricter classes with actual post-role-filtered evidence and Personal for projected Persona/Memory. The result is sorted/deduplicated and bounded; finalization does not inherit classes from discarded live context. Coverage and projection validation remain unchanged.
+- Removed the common hard-coded Personal evidence label, zero-argument Expert policy and assembler's direct clone of declared classes. No compatibility path, new provider abstraction or product DTO field was added.
+- Apple Contacts/Attention remain Personal; Apple Health now passes `highly_sensitive` through the shared descriptor helper. Android Health descriptor/fixture and Flutter Health fixture descriptors agree. Shared Rust descriptor parsing explicitly asserts Calendar/Contacts Personal and Health HighlySensitive.
+
+### Exact verification evidence
+
+All commands below completed with exit 0 on the final covered inputs unless the initial failure is explicitly identified:
+
+| Command | Observed result |
+| --- | --- |
+| `cargo test -p floe-context-contract --tests` | PASS, 27 unit tests |
+| `cargo test -p floe-context --tests` | PASS, 96 unit + 54 integration tests, including projection union/role/normalization and unchanged policy safety regressions |
+| `cargo test -p floe-experts-builtin --tests` | PASS, 14 unit + 42 integration tests. Initial two Wellbeing fixture failures were PolicyDenied from their obsolete Personal-only allowance; changed only Wellbeing test calls to an explicit Personal/HighlySensitive allowance, retaining invented-evidence/diagnosis assertions |
+| `cargo test -p floe-connections --tests` | PASS, 10 unit + 16 connected-context + 9 source-connection tests |
+| `cargo test -p floe-app --tests` | PASS, 303 unit tests, 1 ignored, 6 integration tests; isolated subprocess unit check also passed. Includes admitted manifest allowance and Personal-only/forbidden-class rejection |
+| `cargo test -p floe-access --tests` | PASS, 41 tests, including external HighlySensitive denial and forbidden-class denial |
+| `cd apps/client && flutter test test/features/settings/settings_screen_test.dart` | PASS, 11 tests |
+| `cd apps/client && flutter test test/features/connections/connector_screen_test.dart` | PASS, 15 tests |
+| `cd apps/client && flutter analyze` | PASS, no issues; rerun after user-requested golden removal also PASS |
+| `cd apps/client && flutter test` | Final PASS, 367 tests. Initial run: 366 passed, 1 failed, Expert Registry golden at width 520, 29px/0.02% difference. Reproduced the identical failure in an isolated `git archive` of starting HEAD with `flutter pub get` and the unchanged Registry test. User explicitly requested golden test deletion; separate commit removes pixel comparisons rather than rewriting images or weakening semantic assertions |
+| `cd apps/client/apple/FloeAppleHealth && swift test` | PASS, 8 tests |
+| `bash tools/validation/check-local-model.sh` | PASS, Swift host regression executable plus provider-adapter and Inference tests; local-model implementation unchanged |
+| `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast` | PASS, including doctests and default example compilation. Run once after final Rust inputs; no Rust inputs changed afterward |
+| `cargo build -p floe-ffi` | PASS |
+| `python3 tools/architecture/check_boundaries.py` | PASS, 22 nodes, 103 edges, no errors/warnings |
+| `cd apps/client && flutter build macos` | PASS, Release `floe_client.app`; native dylib rebuilt from the same Rust snapshot |
+| `cd apps/client && flutter build ios --simulator` | PASS under Xcode 26.0.1 / iOS 26 SDK, `Runner.app`; compiles the changed AppleContextChannel Runner source. Available iOS 26 simulator runtimes confirmed with `xcrun simctl list devices available` |
+| `git diff --check` | PASS |
+
+Existing dead-code warnings in App (`admit_agent_action_dispatch*`, `Supplied`, `generic_source_label`, `blocked_text`) and Vault test `RefreshOutcome.reason` remain; no warnings were suppressed. Native builds are compilation evidence, not real-device Health permission/runtime acceptance; CP01 changes descriptor classification only.
+
+### Residual audit and completion audit
+
+- Ran the entire 01-G pattern set over current `crates` and `apps/client` sources/fixtures, excluding generated build/Pods/ephemeral artifacts; reviewed all 293 matches by semantic owner. Also audited all `AuthorizedModelProjection` construction sites: the only production constructor is Context's assembler; the other literals are owner/runtime/provider test fixtures or the contract definition.
+- `expert_policy()` and `input_data_classes: input.input_data_classes.clone()` have zero live source matches. The two `call.policy`/`step.policy` clones remain deliberately as caller declarations into `ContextProjectionInput`, not final projection classes; both flow through the canonical union.
+- Every typed Wellbeing evidence path uses the corrected owner contract. Production Apple/Android Health descriptors and Health descriptor fixtures are HighlySensitive. Personal residuals are Calendar, Contacts, Attention, Mail, Work/Day/confirmed-interaction evidence, or synthetic Personal test contexts. Routing tests with Health-named provider labels use generic `mail.communication` fixture descriptors, not Health payload/classification; the explicitly deferred `apple_screen_time` fixture View naming remains untouched, with its Personal class derived from provider as required by 01-C3.
+- Health identifiers remaining in source selection, connection review, publication, native validation, freshness tests, supported View lists and prompts identify the existing View, not another classifier. HighlySensitive/Credential/DeviceOnlyRaw matches are canonical enum/serialization mappings, manifest declarations, owner regressions and existing fail-closed authorization/dispatch checks. Unrelated credential-storage/error names are not data-class downgrade paths.
+- Regression evidence covers People/Attention/Wellbeing classes; actual HighlySensitive + Personal Calendar union; normalization and stricter declarations; projected Persona/Memory; finalization filtering; unchanged coverage; Personal-only and forbidden-class rejection. Access's external HighlySensitive fence and Context authorizer are unchanged and pass their existing safety tests.
+- Updated `docs/architecture/modules.md` to describe current type-owned sensitivity, Run-pinned manifest allowance, canonical class union and the still-closed external Health fence. ADR 0034 rationale did not change; no ADR amendment was needed. Progress/evidence remains in this plan only.
+- Worktree is clean after the checkpoint commit; generated golden failure images were removed, not committed. No push, account/signing change, provider mutation or local-data reset was performed.
+
+### Next boundary
+
+Checkpoint 01 is complete. **Checkpoint 02 has not started.** Health still has deterministic reduction only; no local privacy transform/provenance, processing-policy cutover, recipient-consent deletion, Gateway routing or Primary/Fallback change was implemented. External HighlySensitive model dispatch remains denied.

@@ -56,7 +56,7 @@ pub struct ContextProjectionInput<'a> {
     pub catalog: &'a AllowedCatalog,
     pub expert_environment: Option<ExpertEnvironmentManifestEntry>,
     pub authorized_history_dependencies: &'a [ContextDependency],
-    /// Data classes of the admitted Session, never App policy.
+    /// Caller-admitted minimum or stricter classes, unioned with projected content.
     pub input_data_classes: Vec<DataClass>,
     pub max_output_bytes: usize,
 }
@@ -67,6 +67,7 @@ pub fn assemble_context_projection(
 ) -> Result<AuthorizedModelProjection, AgentFailure> {
     validate_input(&input)?;
     let live = live_context(input.role, input.agent_context);
+    let input_data_classes = effective_input_data_classes(&input.input_data_classes, &live)?;
     let mut available_capabilities = capability_summaries(input.catalog)?;
     available_capabilities.sort_by(|left, right| left.id.cmp(&right.id));
     let mut active_experts = input.catalog.cards.clone();
@@ -111,10 +112,27 @@ pub fn assemble_context_projection(
         projection_revision: 1,
         envelope,
         coverage,
-        input_data_classes: input.input_data_classes.clone(),
+        input_data_classes,
     };
     projection.validate()?;
     Ok(projection)
+}
+
+fn effective_input_data_classes(
+    declared: &[DataClass],
+    live: &AgentContext,
+) -> Result<Vec<DataClass>, AgentFailure> {
+    let mut classes = declared.to_vec();
+    classes.extend(live.evidence.iter().map(|evidence| evidence.data_class));
+    if live.persona.is_some() || !live.memories.is_empty() {
+        classes.push(DataClass::Personal);
+    }
+    classes.sort();
+    classes.dedup();
+    if classes.is_empty() || classes.len() > floe_agent_contract::MAX_INPUT_DATA_CLASSES {
+        return Err(AgentFailure::InvalidInput);
+    }
+    Ok(classes)
 }
 
 fn validate_input(input: &ContextProjectionInput<'_>) -> Result<(), AgentFailure> {
@@ -506,6 +524,116 @@ mod tests {
         assert_eq!(projection.envelope.contextual_data.memories.len(), 1);
         assert_eq!(projection.envelope.contextual_data.evidence.len(), 1);
         assert_eq!(projection.coverage, DependencyCoverage::Independent);
+    }
+
+    #[test]
+    fn declared_personal_cannot_downgrade_actual_sensitive_evidence() {
+        let mut context = agent_context();
+        context.memories.clear();
+        context.evidence[0].data_class = DataClass::HighlySensitive;
+        let catalog = catalog();
+        for mixed in [false, true] {
+            if mixed {
+                let mut calendar = context.evidence[0].clone();
+                calendar.source_handle = "calendar:test".into();
+                calendar.data_class = DataClass::Personal;
+                context.evidence.push(calendar);
+            }
+            let projection = assemble_context_projection(input(
+                ContextProjectionRole::Expert,
+                prompt(),
+                conversation(),
+                &context,
+                &catalog,
+                &[],
+            ))
+            .unwrap();
+            assert_eq!(
+                projection.input_data_classes,
+                vec![DataClass::Personal, DataClass::HighlySensitive]
+            );
+            assert_eq!(
+                projection.envelope.contextual_data.evidence,
+                context.evidence
+            );
+            assert_eq!(projection.coverage, DependencyCoverage::Independent);
+            projection.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn declared_classes_normalize_and_preserve_stricter_or_forbidden_values() {
+        let context = agent_context();
+        let catalog = catalog();
+        let mut projection_input = input(
+            ContextProjectionRole::Manager,
+            prompt(),
+            conversation(),
+            &context,
+            &catalog,
+            &[],
+        );
+        projection_input.input_data_classes = vec![
+            DataClass::HighlySensitive,
+            DataClass::Personal,
+            DataClass::HighlySensitive,
+        ];
+        let projection = assemble_context_projection(projection_input).unwrap();
+        assert_eq!(
+            projection.input_data_classes,
+            vec![DataClass::Personal, DataClass::HighlySensitive]
+        );
+        projection.validate().unwrap();
+        for class in [DataClass::Credential, DataClass::DeviceOnlyRaw] {
+            assert_eq!(
+                effective_input_data_classes(&[class], &context).unwrap(),
+                vec![DataClass::Personal, class]
+            );
+        }
+    }
+
+    #[test]
+    fn only_projected_persona_memory_and_evidence_contribute_classes() {
+        let catalog = catalog();
+        for persona in [false, true] {
+            let mut context = agent_context();
+            context.evidence.clear();
+            if persona {
+                context.memories.clear();
+                context.persona = Some(floe_agent_contract::prompts::PersonaProfile::default());
+            }
+            for role in [
+                ContextProjectionRole::Manager,
+                ContextProjectionRole::Expert,
+                ContextProjectionRole::Learner,
+                ContextProjectionRole::Finalization,
+            ] {
+                let mut projection_input =
+                    input(role, prompt(), conversation(), &context, &catalog, &[]);
+                projection_input.input_data_classes = vec![DataClass::HighlySensitive];
+                let projection = assemble_context_projection(projection_input).unwrap();
+                let expected = if role == ContextProjectionRole::Finalization {
+                    vec![DataClass::HighlySensitive]
+                } else {
+                    vec![DataClass::Personal, DataClass::HighlySensitive]
+                };
+                assert_eq!(projection.input_data_classes, expected);
+                projection.validate().unwrap();
+            }
+        }
+        let mut context = agent_context();
+        context.evidence[0].data_class = DataClass::HighlySensitive;
+        let projection = assemble_context_projection(input(
+            ContextProjectionRole::Finalization,
+            prompt(),
+            conversation(),
+            &context,
+            &catalog,
+            &[],
+        ))
+        .unwrap();
+        assert_eq!(projection.input_data_classes, vec![DataClass::Personal]);
+        assert!(projection.envelope.contextual_data.evidence.is_empty());
     }
 
     #[test]

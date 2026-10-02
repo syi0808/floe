@@ -105,6 +105,14 @@ fn policy() -> InferencePolicyDecision {
     }
 }
 
+fn wellbeing_policy() -> InferencePolicyDecision {
+    let mut policy = policy();
+    policy
+        .data_classes
+        .push(floe_agent_contract::DataClass::HighlySensitive);
+    policy
+}
+
 fn people() -> PeopleView {
     PeopleView {
         schema_version: AGENT_VERSION,
@@ -265,7 +273,7 @@ async fn personal_experts_combine_typed_views_with_bounded_provenance() {
     let wellbeing = decided(
         run_wellbeing_expert_with_views(
             &model,
-            &policy(),
+            &wellbeing_policy(),
             invocation(),
             WellbeingContextViews {
                 wellbeing: wellbeing(),
@@ -294,6 +302,14 @@ async fn personal_experts_combine_typed_views_with_bounded_provenance() {
     assert_eq!(calls[0].context.evidence.len(), 2);
     assert_eq!(calls[1].context.evidence.len(), 3);
     assert_eq!(calls[2].context.evidence.len(), 2);
+    assert_eq!(
+        calls[2].context.evidence[0].data_class,
+        floe_agent_contract::DataClass::HighlySensitive
+    );
+    assert_eq!(
+        calls[2].context.evidence[1].data_class,
+        floe_agent_contract::DataClass::Personal
+    );
     assert!(
         calls
             .iter()
@@ -336,7 +352,7 @@ async fn domain_experts_reject_invented_evidence_and_diagnostic_escalation() {
     assert_eq!(
         run_wellbeing_expert_with_views(
             &model,
-            &policy(),
+            &wellbeing_policy(),
             invocation(),
             WellbeingContextViews {
                 wellbeing: wellbeing(),
@@ -479,7 +495,7 @@ async fn multi_view_judgments_reject_cross_source_evidence_invention() {
     assert_eq!(
         run_wellbeing_expert_with_views(
             &model,
-            &policy(),
+            &wellbeing_policy(),
             invocation(),
             WellbeingContextViews {
                 wellbeing: wellbeing(),

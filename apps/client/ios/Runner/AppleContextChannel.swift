@@ -198,7 +198,7 @@ final class AppleContextChannel {
       connectionSnapshot(
         connectorID: "contacts.apple", provider: "apple_contacts",
         capabilityID: "contacts.identity.read", requiredScopes: [Self.contactsScope],
-        viewID: "people.identity", freshnessMs: 300_000, maxItems: 64, maxBytes: 32_768,
+        viewID: "people.identity", dataClass: "personal", freshnessMs: 300_000, maxItems: 64, maxBytes: 32_768,
         authorized: contactsSnapshot.canRead, unsupported: false,
         lastView: contactsLastView, lastSuccess: contactsLastSuccess,
         itemKey: "identities", observed: observed, deviceID: deviceID
@@ -206,7 +206,7 @@ final class AppleContextChannel {
       connectionSnapshot(
         connectorID: "health.apple", provider: "apple_health",
         capabilityID: "health.derived.read", requiredScopes: [Self.healthScope],
-        viewID: "wellbeing.derived", freshnessMs: 1_800_000, maxItems: 1, maxBytes: 8_192,
+        viewID: "wellbeing.derived", dataClass: "highly_sensitive", freshnessMs: 1_800_000, maxItems: 1, maxBytes: 8_192,
         authorized: healthLifecycle.state != .permissionRequired,
         unsupported: healthLifecycle.state == .unsupported,
         lastView: healthLastView, lastSuccess: healthLastSuccess,
@@ -215,7 +215,7 @@ final class AppleContextChannel {
       connectionSnapshot(
         connectorID: "attention.apple", provider: "apple_screen_time",
         capabilityID: "attention.coarse.read", requiredScopes: ["FamilyControls.authorization"],
-        viewID: "attention.coarse", freshnessMs: 120_000, maxItems: 1, maxBytes: 8_192,
+        viewID: "attention.coarse", dataClass: "personal", freshnessMs: 120_000, maxItems: 1, maxBytes: 8_192,
         authorized: false, unsupported: true, lastView: nil, lastSuccess: nil,
         itemKey: nil, observed: observed, deviceID: deviceID,
         failureKind: (screenTime?["outcome"] as? String) ?? "entitlement_unavailable"
@@ -225,7 +225,7 @@ final class AppleContextChannel {
 
   private func connectionSnapshot(
     connectorID: String, provider: String, capabilityID: String,
-    requiredScopes: [String], viewID: String, freshnessMs: Int,
+    requiredScopes: [String], viewID: String, dataClass: String, freshnessMs: Int,
     maxItems: Int, maxBytes: Int, authorized: Bool, unsupported: Bool,
     lastView: [String: Any]?, lastSuccess: Int64?, itemKey: String?, observed: Int64,
     deviceID: String,
@@ -268,7 +268,7 @@ final class AppleContextChannel {
           "required_scopes": requiredScopes, "output_view_id": viewID,
         ]],
         "views": [[
-          "schema_version": 1, "id": viewID, "version": "1.0.0", "data_class": "personal",
+          "schema_version": 1, "id": viewID, "version": "1.0.0", "data_class": dataClass,
           "retention": "ephemeral", "freshness_ttl_ms": freshnessMs,
           "max_items": maxItems, "max_bytes": maxBytes, "provenance_required": true,
         ]],

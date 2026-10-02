@@ -1568,7 +1568,7 @@ mod tests {
         SCHEDULE_RUNNER_CALLS.store(0, Ordering::Release);
         let executor = CannedExpertExecutor::answering(vec![]);
         let scope = expert_scope();
-        let policy = expert_policy();
+        let policy = expert_policy(floe_agent_contract::DataClass::Personal);
         let context = AgentContext {
             projection_version: 1,
             persona: None,
@@ -1985,7 +1985,7 @@ mod tests {
     async fn remote_expert_requires_an_admitted_reader() {
         let executor = CannedExpertExecutor::answering(vec![]);
         let scope = expert_scope();
-        let policy = expert_policy();
+        let policy = expert_policy(floe_agent_contract::DataClass::Personal);
         let context = AgentContext {
             projection_version: 1,
             persona: None,
@@ -2049,7 +2049,7 @@ mod tests {
     async fn expert_offering_exposes_only_bounded_context_observe_capabilities() {
         let executor = CannedExpertExecutor::answering(vec![]);
         let scope = expert_scope();
-        let policy = expert_policy();
+        let policy = expert_policy(floe_agent_contract::DataClass::Personal);
         let context = AgentContext {
             projection_version: 1,
             persona: None,
@@ -2099,7 +2099,7 @@ mod tests {
     async fn unregistered_expert_card_cannot_be_invoked_directly() {
         let executor = CannedExpertExecutor::answering(vec![]);
         let scope = expert_scope();
-        let policy = expert_policy();
+        let policy = expert_policy(floe_agent_contract::DataClass::Personal);
         let context = AgentContext {
             projection_version: 1,
             persona: None,
@@ -2344,7 +2344,7 @@ mod tests {
             views: HashMap::from([("mail.communication".into(), mail)]),
             calendar: None,
         };
-        let policy = expert_policy();
+        let policy = expert_policy(floe_agent_contract::DataClass::Personal);
         let context = AgentContext {
             projection_version: 1,
             persona: None,
@@ -2489,7 +2489,7 @@ mod tests {
         });
         let executor = CannedExpertExecutor::answering(vec![answer]);
         let scope = expert_scope();
-        let policy = expert_policy();
+        let policy = expert_policy(floe_agent_contract::DataClass::Personal);
         let remote_reader = SelectedViewFixtureReader {
             person_id,
             views: HashMap::from([("mail.communication".into(), mail)]),
@@ -2692,7 +2692,7 @@ mod tests {
         let executor = CannedExpertExecutor::answering(answers);
         let scope = expert_scope();
         let person_id = PersonId::new();
-        let policy = expert_policy();
+        let policy = expert_policy(floe_agent_contract::DataClass::Personal);
         let remote_reader = SelectedViewFixtureReader {
             person_id,
             views: cases
@@ -2793,7 +2793,7 @@ mod tests {
     async fn unavailable_personal_provider_is_typed_and_never_runs_the_expert() {
         let executor = CannedExpertExecutor::answering(vec![]);
         let scope = expert_scope();
-        let policy = expert_policy();
+        let policy = expert_policy(floe_agent_contract::DataClass::Personal);
         let context = AgentContext {
             projection_version: 1,
             persona: None,

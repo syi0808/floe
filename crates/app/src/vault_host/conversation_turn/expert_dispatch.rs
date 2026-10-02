@@ -307,7 +307,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 vault: &self.vault,
                 person_id: self.vault.person_id(),
             };
-            let policy = expert_policy();
+            let policy = expert_policy(self.registration.manifest.data_class);
             let cards = vec![self.registration.manifest.definition.card.clone()];
             let stateful_settlement = VaultStatefulExpertSettlement {
                 vault: self.vault.as_ref(),
@@ -1311,7 +1311,7 @@ mod capture_tests {
             ledger.work_lease(),
             floe_agent_contract::TraceContext::new(uuid::Uuid::new_v4()),
         );
-        let policy = expert_policy();
+        let policy = expert_policy(floe_agent_contract::DataClass::Personal);
         let context = floe_agent_contract::AgentContext {
             projection_version: 1,
             persona: None,
@@ -1596,7 +1596,7 @@ mod capture_tests {
             ledger.work_lease(),
             floe_agent_contract::TraceContext::new(uuid::Uuid::new_v4()),
         );
-        let policy = expert_policy();
+        let policy = expert_policy(floe_agent_contract::DataClass::Personal);
         let context = floe_agent_contract::AgentContext {
             projection_version: 1,
             persona: None,
@@ -1807,7 +1807,7 @@ mod capture_tests {
             ledger.work_lease(),
             floe_agent_contract::TraceContext::new(uuid::Uuid::new_v4()),
         );
-        let policy = expert_policy();
+        let policy = expert_policy(floe_agent_contract::DataClass::Personal);
         let context = floe_agent_contract::AgentContext {
             projection_version: 1,
             persona: None,
@@ -1970,7 +1970,7 @@ mod capture_tests {
             ledger.work_lease(),
             floe_agent_contract::TraceContext::new(uuid::Uuid::new_v4()),
         );
-        let policy = expert_policy();
+        let policy = expert_policy(floe_agent_contract::DataClass::Personal);
         let context = floe_agent_contract::AgentContext {
             projection_version: 1,
             persona: None,
@@ -2272,7 +2272,7 @@ mod capture_tests {
             ledger.work_lease(),
             floe_agent_contract::TraceContext::new(uuid::Uuid::new_v4()),
         );
-        let policy = expert_policy();
+        let policy = expert_policy(floe_agent_contract::DataClass::Personal);
         let context = floe_agent_contract::AgentContext {
             projection_version: 1,
             persona: None,

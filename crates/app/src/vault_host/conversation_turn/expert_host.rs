@@ -36,15 +36,80 @@ use super::super::personal_grants;
 /// bounds): it no longer selects a provider placement and never authorizes
 /// model transfer. Canonical Inference maps the Expert's requirement to an
 /// execution constraint, and Access fences the dispatch.
-pub(super) fn expert_policy() -> InferencePolicyDecision {
+pub(super) fn expert_policy(package_data_class: DataClass) -> InferencePolicyDecision {
+    let mut data_classes = vec![DataClass::Personal, package_data_class];
+    data_classes.sort();
+    data_classes.dedup();
     InferencePolicyDecision {
         purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE.into(),
-        data_classes: vec![DataClass::Personal],
+        data_classes,
         allowed_placements: vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote],
         performance_class: "interactive".into(),
         projection_version: 1,
         external_transfer_consent: TransferConsent::NotGranted,
         bounded_sensitive_projection: false,
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn admitted_manifest_class_is_an_allowance_not_evidence_authority() {
+    let registration = floe_experts_builtin::registrations()
+        .into_iter()
+        .find(|entry| entry.manifest.data_class == DataClass::HighlySensitive)
+        .unwrap();
+    let policy = expert_policy(registration.manifest.data_class);
+    assert_eq!(
+        policy.data_classes,
+        vec![DataClass::Personal, DataClass::HighlySensitive]
+    );
+    assert_eq!(
+        policy.external_transfer_consent,
+        TransferConsent::NotGranted
+    );
+    assert!(!policy.bounded_sensitive_projection);
+    let context = floe_agent_contract::AgentContext {
+        projection_version: 1,
+        persona: None,
+        memories: vec![],
+        optional_context_issues: vec![],
+        evidence: vec![floe_agent_contract::ContextEvidence {
+            source_handle: "health:test".into(),
+            data_class: DataClass::HighlySensitive,
+            untrusted_text: "bounded wellbeing".into(),
+            expires_at_unix_ms: 100,
+        }],
+    };
+    assert_eq!(
+        policy.authorize(
+            ModelPlacement::DeviceLocal,
+            floe_agent_contract::SessionProtection::Encrypted,
+            &context,
+            1
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        expert_policy(DataClass::Personal).authorize(
+            ModelPlacement::DeviceLocal,
+            floe_agent_contract::SessionProtection::Encrypted,
+            &context,
+            1
+        ),
+        Err(AgentFailure::PolicyDenied)
+    );
+    for class in [DataClass::Credential, DataClass::DeviceOnlyRaw] {
+        let policy = expert_policy(class);
+        assert!(policy.data_classes.contains(&class));
+        assert_eq!(
+            policy.authorize(
+                ModelPlacement::DeviceLocal,
+                floe_agent_contract::SessionProtection::Encrypted,
+                &context,
+                1
+            ),
+            Err(AgentFailure::PolicyDenied)
+        );
     }
 }
 
@@ -1790,7 +1855,7 @@ mod tests {
             person_id: PersonId::new(),
             invocation_id: Uuid::new_v4(),
             prompt: floe_experts_builtin::prompts::focus_expert_prompt(),
-            policy: expert_policy(),
+            policy: expert_policy(floe_agent_contract::DataClass::Personal),
             context: test_context(),
             assignment: "Protect the current focus period.".into(),
             requirement: ExpertModelRequirement::DeviceOnly,
@@ -1818,7 +1883,7 @@ mod tests {
             person_id: PersonId::new(),
             invocation_id: Uuid::new_v4(),
             prompt: floe_experts_builtin::prompts::focus_expert_prompt(),
-            policy: expert_policy(),
+            policy: expert_policy(floe_agent_contract::DataClass::Personal),
             context: test_context(),
             requirement: ExpertModelRequirement::Any,
             transcript: vec![ExpertTranscriptEntry::Task {

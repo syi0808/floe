@@ -1,9 +1,9 @@
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
 use floe_context_contract::{
-    AttentionState, AttentionView, CapacityState, PeopleIdentity, PeopleView, RecoveryState,
-    WellbeingView, personal_context_evidence, validate_attention_view, validate_people_view,
-    validate_wellbeing_view,
+    AttentionState, AttentionView, CapacityState, DataClass, PeopleIdentity, PeopleView,
+    RecoveryState, WellbeingView, personal_context_evidence, validate_attention_view,
+    validate_people_view, validate_wellbeing_view,
 };
 
 const NOW: i64 = 1_789_000_000_000;
@@ -34,6 +34,7 @@ fn android_people_fixture_crosses_the_shared_identity_boundary() {
     .unwrap();
     validate_people_view(&view, 1_789_128_000_000).unwrap();
     let evidence = personal_context_evidence(&view).unwrap();
+    assert_eq!(evidence.data_class, DataClass::Personal);
     assert!(evidence.untrusted_text.contains("Alex"));
     assert!(!evidence.untrusted_text.contains("content://"));
 }
@@ -46,6 +47,7 @@ fn health_connect_fixture_crosses_the_derived_wellbeing_boundary() {
     .unwrap();
     validate_wellbeing_view(&view, 1_789_128_000_000).unwrap();
     let evidence = personal_context_evidence(&view).unwrap();
+    assert_eq!(evidence.data_class, DataClass::HighlySensitive);
     assert!(!evidence.untrusted_text.contains("heart_rate"));
     assert!(!evidence.untrusted_text.contains("raw"));
 }
@@ -113,6 +115,18 @@ fn bounded_personal_views_expose_derived_context_without_raw_source_data() {
     };
     validate_wellbeing_view(&wellbeing, NOW).unwrap();
 
+    assert_eq!(
+        personal_context_evidence(&people).unwrap().data_class,
+        DataClass::Personal
+    );
+    assert_eq!(
+        personal_context_evidence(&attention).unwrap().data_class,
+        DataClass::Personal
+    );
+    assert_eq!(
+        personal_context_evidence(&wellbeing).unwrap().data_class,
+        DataClass::HighlySensitive
+    );
     for evidence in [
         personal_context_evidence(&people).unwrap(),
         personal_context_evidence(&attention).unwrap(),

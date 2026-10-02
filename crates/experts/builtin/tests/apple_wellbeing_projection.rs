@@ -1,5 +1,6 @@
 use floe_context_contract::{
-    CapacityState, RecoveryState, WellbeingView, personal_context_evidence, validate_wellbeing_view,
+    CapacityState, DataClass, RecoveryState, WellbeingView, personal_context_evidence,
+    validate_wellbeing_view,
 };
 
 #[test]
@@ -18,6 +19,7 @@ fn apple_fixture_crosses_the_derived_wellbeing_boundary() {
     );
 
     let evidence = personal_context_evidence(&view).unwrap();
+    assert_eq!(evidence.data_class, DataClass::HighlySensitive);
     for forbidden in [
         "\"sleep_hours\":",
         "\"steps\":",

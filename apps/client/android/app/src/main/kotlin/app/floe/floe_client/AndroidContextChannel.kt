@@ -646,7 +646,7 @@ internal class AndroidContextChannel(
                 "provider" to "health_connect",
                 "execution" to mapOf("kind" to "device", "device_id" to deviceId()),
                 "capabilities" to listOf(mapOf("schema_version" to 1, "id" to "health.derived.read", "version" to "1.0.0", "authority" to "observe", "required_scopes" to HEALTH_PERMISSIONS.sorted(), "output_view_id" to "wellbeing.derived")),
-                "views" to listOf(mapOf("schema_version" to 1, "id" to "wellbeing.derived", "version" to "1.0.0", "data_class" to "personal", "retention" to "derived_only", "freshness_ttl_ms" to FRESHNESS_MS, "max_items" to 1, "max_bytes" to MAX_WELLBEING_BYTES, "provenance_required" to true)),
+                "views" to listOf(mapOf("schema_version" to 1, "id" to "wellbeing.derived", "version" to "1.0.0", "data_class" to "highly_sensitive", "retention" to "derived_only", "freshness_ttl_ms" to FRESHNESS_MS, "max_items" to 1, "max_bytes" to MAX_WELLBEING_BYTES, "provenance_required" to true)),
             ),
             "connection" to connection,
             "views" to views,
