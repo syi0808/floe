@@ -28,11 +28,11 @@ ADR status should describe the **decision**, not whether code, tests or live acc
 ### Inference and agent runtime
 
 - [0010 — Local connection console](0010-local-connection-console.md)
-- [0011 — Inference performance classes](0011-inference-performance-classes.md)
+- [0011 — Inference performance classes](0011-inference-performance-classes.md) — client processing boundary and fallback policy amended by [0034](0034-gateway-reasoning-and-source-processing-authority.md).
 - [0012 — Memory and Expert-first slices](0012-memory-and-expert-first-slices.md)
 - [0013 — Conversation, learning and voice sequence](0013-conversational-agent-learning-and-voice-sequence.md)
 - [0014 — Connected Agent sources](0014-s4-connected-agent-sources.md) — dedicated next-event Feasibility source amended by [0032](0032-retire-dedicated-feasibility-vertical.md).
-- [0015 — Privacy-aware inference](0015-s4-privacy-aware-inference.md)
+- [0015 — Privacy-aware inference](0015-s4-privacy-aware-inference.md) — recipient consent and sensitive reasoning placement superseded by [0034](0034-gateway-reasoning-and-source-processing-authority.md).
 - [0016 — Native Agent model protocol](0016-native-agent-model-protocol.md)
 - [0017 — Agent context assembly](0017-agent-context-assembly.md)
 - [0018 — Manager–Expert A2A delegation](0018-manager-expert-a2a-delegation.md)
@@ -41,16 +41,17 @@ ADR status should describe the **decision**, not whether code, tests or live acc
 - [0021 — Connected-domain expansion](0021-s5-5-connected-domain-expansion.md) — location/ETA/weather rollout amended by [0032](0032-retire-dedicated-feasibility-vertical.md).
 - [0022 — Generalizable Agent guidance](0022-generalizable-agent-guidance.md)
 - [0023 — Page-independent assistant conversation](0023-page-independent-assistant-conversation.md)
-- [0030 — Conversation-owned durable interactions and origin-linked resume](0030-durable-interaction-and-linked-resume.md) — Observe reviewed-target semantics amended by ADR 0031.
-- [0033 — Run-scoped Agent environment and grounded Manager](0033-run-scoped-agent-environment-and-grounded-manager.md) — amends 0017/0018 for root Agent readiness, Run-pinned Expert configuration, attempt Context and Manager grounding.
+- [0030 — Conversation-owned durable interactions and origin-linked resume](0030-durable-interaction-and-linked-resume.md) — Observe reviewed-target semantics amended by ADR 0031; model-review retirement and durable automatic resume amended by [0034](0034-gateway-reasoning-and-source-processing-authority.md).
+- [0033 — Run-scoped Agent environment and grounded Manager](0033-run-scoped-agent-environment-and-grounded-manager.md) — amends 0017/0018 for root Agent readiness, Run-pinned Expert configuration, attempt Context and Manager grounding; live processing authority and Primary/Fallback evaluation order amended by [0034](0034-gateway-reasoning-and-source-processing-authority.md).
+- [0034 — Gateway reasoning and source-owned processing authority](0034-gateway-reasoning-and-source-processing-authority.md) — accepted product trust boundary, shared Gateway-primary/local-fallback reasoning, Health-only mandatory local privacy transformation and source-review auto-resume; acceptance does not claim runtime implementation.
 
 ### Device context, connections and authority
 
-- [0024 — Device context collection and convergence](0024-device-context-collection-and-convergence.md) — dedicated ETA/weather Feasibility collection amended by [0032](0032-retire-dedicated-feasibility-vertical.md).
+- [0024 — Device context collection and convergence](0024-device-context-collection-and-convergence.md) — dedicated ETA/weather Feasibility collection amended by [0032](0032-retire-dedicated-feasibility-vertical.md); Health processing and onward reasoning authority amended by [0034](0034-gateway-reasoning-and-source-processing-authority.md).
 - [0025 — Person-owned connections](0025-person-owned-connections.md)
 - [0026 — Server-owned provider OAuth](0026-server-owned-provider-oauth.md)
 - [0027 — Connection authority and observation](0027-connection-authority-and-observation.md) — accepted source/authority separation; standing Observe epochs amended by [0031](0031-connection-owned-source-scope-and-logical-observe.md).
-- [0028 — Pairing-integrated authority and connection permissions](0028-pairing-integrated-authority-and-connection-permissions.md) — accepted pairing and connection-level presentation; source-resource/standing Observe semantics amended by [0031](0031-connection-owned-source-scope-and-logical-observe.md).
+- [0028 — Pairing-integrated authority and connection permissions](0028-pairing-integrated-authority-and-connection-permissions.md) — accepted pairing and connection-level presentation; source-resource/standing Observe semantics amended by [0031](0031-connection-owned-source-scope-and-logical-observe.md); separate model-recipient authority superseded by [0034](0034-gateway-reasoning-and-source-processing-authority.md).
 - [0031 — Connection-owned source scope and logical standing Observe](0031-connection-owned-source-scope-and-logical-observe.md) — amends 0027/0028/0030; Feasibility contextual-authority exception retired by [0032](0032-retire-dedicated-feasibility-vertical.md).
 - [0032 — Retire the dedicated Schedule Feasibility vertical](0032-retire-dedicated-feasibility-vertical.md) — removes the event/location/ETA/weather vertical and its special contextual authority.
 

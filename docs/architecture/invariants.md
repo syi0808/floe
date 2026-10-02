@@ -6,7 +6,7 @@ This document defines repository-wide properties that Floe's completed architect
 
 Every durable piece of state, policy or authority has one semantic owner.
 
-A caller may carry a reference, snapshot or derived value, but it must not become a competing source of truth. Identity, connections, credentials, consent, conversation state, execution state and side-effect intent must be obtained from or validated by their canonical owner.
+A caller may carry a reference, snapshot or derived value, but it must not become a competing source of truth. Identity, connections, credentials, source-processing permission, conversation state, execution state and side-effect intent must be obtained from or validated by their canonical owner.
 
 Duplicating an authoritative value in request payloads, convenience structs or adapters creates disagreement states and forces downstream code to decide which copy wins.
 
@@ -83,7 +83,15 @@ Removing obsolete surface is part of completing the change that made it obsolete
 
 Architecture convergence never authorizes weakening correctness or safety checks.
 
-Authorization, exact-recipient consent, key identity, provenance, compare-and-swap semantics, durable pre-dispatch intent, cancellation direction and uncertain external-write recovery remain hard requirements. Their detailed ownership and recovery semantics are documented in [authority and recovery](authority-recovery.md).
+Authorization, verified Gateway identity, source-owned processing authority, key identity, provenance, compare-and-swap semantics, durable pre-dispatch intent, cancellation direction and uncertain external-write recovery remain hard requirements. Their detailed ownership and recovery semantics are documented in [authority and recovery](authority-recovery.md).
+
+[ADR 0034](../decisions/0034-gateway-reasoning-and-source-processing-authority.md) deliberately replaces the exact model-recipient consent invariant. The final processing boundary is DeviceOnly/GatewayAllowed at the source grant, not a provider/profile approval. Pairing does not grant source access, model routing cannot widen source permission, and processing permission cannot authorize an Action. Keep live source/grant/identity/provenance fences when retiring the obsolete consent representation.
+
+Manager, shipped Experts and Learner converge on one Gateway-primary/local-fallback selector. Fallback requires valid planning-time Primary absence; permission denial, credential or inventory errors, transport failure, deadline and cancellation cannot masquerade as absence. Product clients carry purpose and a meaningful Device/Gateway boundary, never concrete routing identity.
+
+Health alone has a mandatory source-owned device-local semantic transform before any Health View enters reasoning. Raw samples and the pre-transform aggregate remain outside Agent/Context and Gateway inputs. Transform failure is closed; transform evidence is not authority; HighlySensitive is not downgraded; Gateway use still requires source processing permission. Do not generalize this into a speculative cross-connector framework.
+
+These are completed-system requirements. Accepted decisions must not be presented as implemented runtime until their corresponding cutovers land.
 
 If a simpler design cannot preserve a safety invariant, the design is incomplete rather than the invariant being optional.
 

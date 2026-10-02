@@ -2,7 +2,15 @@
 
 ## Status
 
-Accepted as reusable inference infrastructure.
+Accepted as reusable inference infrastructure, as amended by [ADR 0034](0034-gateway-reasoning-and-source-processing-authority.md).
+
+## Amendment by ADR 0034
+
+Product-purpose selection and Gateway-owned provider/model configuration remain accepted. The external-transfer-consent discovery/response language below is superseded: the client sees purpose availability and, when useful, Device/Gateway processing, never a concrete downstream recipient or a model-approval requirement. GatewayAllowed is source-owned processing policy and includes the Gateway's configured downstream providers.
+
+The previously separate fallback-policy decision is now fixed for Manager, shipped Experts and Learner: Gateway Primary, device-local Fallback only on valid planning-time Primary absence. Credential, inventory, transport, timeout and source-permission failures are not absence. Internal operator/profile configuration remains possible without becoming product intent or user authority.
+
+The original text below is retained as rationale where not superseded, including historical API/version references. This amendment does not assert that the replacement protocol or routing is already implemented; the [convergence plan](../development/plans/reasoning-source-processing-convergence.md) owns the cutover.
 
 ## Context
 

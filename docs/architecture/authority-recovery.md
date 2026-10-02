@@ -2,7 +2,13 @@
 
 These are durable architectural safety properties, not a progress checklist.
 
-Prompt, card, Run-frame and environment manifest hashes are diagnostic content identities only. They never establish source freshness, grants, exact-recipient consent or execution permission, and never replace the durable Experts-owned Run environment identity or live Context/Access checks.
+## Accepted processing authority and current implementation
+
+[ADR 0034](../decisions/0034-gateway-reasoning-and-source-processing-authority.md) supersedes exact model-recipient consent as a required authority. Preserve verified Gateway identity, Access-owned source processing permission, source/grant provenance, key identity, CAS, durable pre-dispatch intent, cancellation direction and uncertain-write recovery. DeviceOnly/GatewayAllowed belongs to the source grant; processing expansion belongs to source/connection review, never model routing. Health additionally requires source-owned local-transform evidence and retains HighlySensitive classification. Neither pairing nor transformation grants source or Action permission.
+
+The authority descriptions below that mention recipient consent, recipient lineage, allow_external or expected_recipient describe the current pre-cutover implementation, not invariants to retain. Their replacements are accepted but not yet implemented here. The [convergence plan](../development/plans/reasoning-source-processing-convergence.md) owns their ordered removal; update current implementation descriptions as those code cutovers land. Existing live admission/handoff/post-I/O/release checks must not be removed merely because their recipient-specific representation is being retired.
+
+Prompt, card, Run-frame and environment manifest hashes are diagnostic content identities only. They never establish source freshness, grants, processing permission, Gateway identity or execution permission, and never replace the durable Experts-owned Run environment identity or live Context/Access checks.
 
 ## Authority is explicit and owner-scoped
 
@@ -36,7 +42,7 @@ Source-backed model/tool inputs retain enough identity to determine:
 - observation/projection revision;
 - coverage and freshness;
 - consumer/purpose/data class;
-- exact processing recipient where required.
+- exact processing recipient in the pre-cutover implementation; ADR 0034 replaces this with the source processing boundary and required Health transform provenance.
 
 A broader follow-up request cannot silently reuse evidence whose coverage is too narrow. Unknown or unavailable evidence is not represented as an empty successful observation.
 
@@ -68,6 +74,8 @@ A continuation child does not supersede a parent's pending batch merely by exist
 This invariant is part of the stable architecture: a child may take over only after durably binding the exact validated batch and starting cursor.
 
 Conversation durably records the Experts-owned environment revision/digest on every Run, separately from canonical user intent. Pending-batch Continue requires the source and destination Run environment identities to match before any stored step executes; without pending work a new Run may sample new configuration. Journal batch revisions must match the admitted Run, including resumed re-records and finalization. Executor activation interrupts Working Runs on reopen while preserving their original environment identities; it does not reconstruct endpoints or resume the same Run under current Directory state. Registry configuration changes apply only to future Runs, not as authority over admitted Tasks.
+
+ADR 0034 separately requires durable post-review automatic resume: a terminal interaction group with at least one Resolved member records the need for one fresh linked child and recovers it idempotently across crash/reopen and lost acknowledgements. This is an accepted requirement, not a claim that the existing best-effort trigger is already durable. Removing the routine resolved-card Continue action must follow that recovery cutover; it does not remove the exact-batch continuation machinery above.
 
 ## Model attempts and budgets
 
@@ -105,3 +113,4 @@ Do not hold a global Vault transaction across model or provider I/O.
 - [ADR 0025 — Person-owned connections](../decisions/0025-person-owned-connections.md)
 - [ADR 0027 — Connection authority and observation](../decisions/0027-connection-authority-and-observation.md) (accepted; standing Observe semantics amended by ADR 0031)
 - [ADR 0031 — Connection-owned source scope and logical standing Observe](../decisions/0031-connection-owned-source-scope-and-logical-observe.md)
+- [ADR 0034 — Gateway reasoning and source-owned processing authority](../decisions/0034-gateway-reasoning-and-source-processing-authority.md)

@@ -3,6 +3,17 @@
 - **Status:** accepted
 - **Date:** 2026-09-11
 - **Amends:** ADR 0014 source placement, ADR 0015 sensitive routing and ADR 0021 S5.5 rollout
+- **Amended by:** [ADR 0034](0034-gateway-reasoning-and-source-processing-authority.md) for Health-local privacy processing and onward reasoning authority
+
+## Amendment by ADR 0034
+
+Observation, replication, reasoning and Actions remain separate planes. Source/device ownership, bounded acquisition, freshness, non-export of raw data and independent cross-device/cross-Person authority remain valid. The original remote-model consent language below is superseded by source-owned DeviceOnly/GatewayAllowed processing policy. GatewayAllowed permits processing through the verified Gateway and its configured downstream providers; it is not a concrete recipient approval and is not inferred from pairing or relay permission.
+
+Health/Wellbeing now requires deterministic minimization followed by a mandatory device-local semantic privacy transform before either local or Gateway reasoning. Only a typed, still-HighlySensitive WellbeingView with source-owned transform evidence is eligible. Raw samples and pre-transform aggregates do not enter reasoning. Unavailable or failed transformation is fail-closed source unavailability, with no remote sanitizer, deterministic semantic fallback or freshness extension. Health Gateway use additionally requires current source GatewayAllowed permission.
+
+Local Agent labels in the original diagrams describe session/source ownership, not a requirement for local-only reasoning. Manager, shipped Experts and Learner instead share Gateway-primary/local-fallback selection under ADR 0034, with fallback only for valid planning-time Primary absence. Cross-device relay, sync and SharedContextGrant remain independently governed roadmap capabilities, not work implemented by this amendment. The mandatory transform scope is Health-only; it introduces neither a generic privacy framework nor Android local-model implementation.
+
+Conflicting statements and rollout examples below are preserved as historical rationale rather than current execution policy. The [reasoning/source-processing convergence plan](../development/plans/reasoning-source-processing-convergence.md) owns the ordered implementation; accepting this amendment does not claim that its runtime cutovers or cross-device capabilities are already implemented.
 
 ## Context
 

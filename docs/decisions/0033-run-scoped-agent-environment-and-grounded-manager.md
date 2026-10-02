@@ -4,6 +4,15 @@
 - **Date:** 2026-10-01
 - **Amends:** ADR 0017 context lifetime/assembly semantics and ADR 0018 Manager–Expert discovery/delegation semantics
 - **Scope:** root Agent readiness, Run-scoped Expert configuration, attempt-scoped Context, prompt-cache boundaries and Manager grounding
+- **Amended by:** [ADR 0034](0034-gateway-reasoning-and-source-processing-authority.md) for live source-processing authority and Primary/Fallback grounding evaluation order
+
+## Amendment by ADR 0034
+
+Root readiness, immutable Run Expert configuration, attempt-scoped evidence, prompt identity and the factual-support rule remain accepted. References below to live model-recipient consent are superseded by live source-owned processing authority and verified Gateway identity; Run configuration still cannot grant or freeze authority.
+
+The pre-cutover Foundation Manager Checkpoint 07 evaluation remains historical execution evidence, including the hard-gate failure. It is not evidence that the intended Gateway Primary fails. Do not start the old agent-execution-environment-grounding CP08 or a typed-grounding implementation from that result alone. The [reasoning/source-processing convergence plan](../development/plans/reasoning-source-processing-convergence.md) is the single migration sequence; its Checkpoint 11 evaluates Gateway Primary under the existing strict corpus/rubric and Foundation Fallback under a separately reported hard safety floor after the cutover.
+
+Primary strict PASS leaves typed grounding deferred absent another concrete need. Primary strict FAIL requires a new post-cutover grounding design. Fallback-only safety failure marks that fallback not Ready and requires bounded mitigation, rather than weakening factual safety or forcing Primary-level intelligence from it. The original unconditional escalation wording below is amended by this evaluation order, not permission to accept unsupported claims. This ADR amendment does not claim that the new routing or evaluation has been implemented.
 
 ## Context
 

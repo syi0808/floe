@@ -47,7 +47,8 @@
 
 # Safety and scope
 
-- Preserve authorization, exact-recipient consent, key identity, provenance, CAS, durable pre-dispatch intent, cancellation direction and uncertain external-write recovery. Do not weaken checks or regression assertions to make a build pass.
+- Preserve authorization, verified Gateway identity, source-owned processing authority, key identity, provenance, CAS, durable pre-dispatch intent, cancellation direction and uncertain external-write recovery. Do not weaken checks or regression assertions to make a build pass.
+- [ADR 0034](docs/decisions/0034-gateway-reasoning-and-source-processing-authority.md) supersedes exact model-recipient consent as a governing invariant. Ordinary model invocation is not approval; source processing expansion belongs to source/connection review. Manager, shipped Experts and Learner share Gateway-primary/local-fallback planning, with fallback only for valid planning-time Primary absence, never permission or failure bypass. Health alone requires a separate source-owned local privacy transform before reasoning; failure is closed and HighlySensitive remains HighlySensitive. These are accepted targets, not claims that all runtime cutovers have landed.
 - Query, preview, observer timeout and screen disposal are not implicit Run cancellation. Do not hold a global Vault transaction while waiting for model or provider I/O.
 - Task instructions do not authorize push, deployment or external-account changes unless the user explicitly requests them.
 - Keep product requirements, current architecture, temporary execution plans and historical evidence separate. Start from source plus [docs/architecture/README.md](docs/architecture/README.md); read a task-specific plan only when the current task actually has one. Historical plans in Git history do not override current source, architecture or accepted ADRs.

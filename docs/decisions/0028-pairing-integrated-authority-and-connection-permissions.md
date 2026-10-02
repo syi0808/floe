@@ -4,6 +4,15 @@
 - **Date:** 2026-09-13
 - **Amends:** ADR 0010 pairing experience and ADR 0027 consent presentation
 - **Extends:** ADR 0025 Person-owned connection boundaries
+- **Amended by:** [ADR 0034](0034-gateway-reasoning-and-source-processing-authority.md) for source-owned processing authority and model-review retirement
+
+## Amendment by ADR 0034
+
+The pairing ceremony, proof of possession, mutually verified identity/issuer binding and fail-closed repair remain. Pairing grants no connector Observe access. Source lifecycle and standing grant/resource separation continue to follow ADR 0031; Observe remains distinct from Act.
+
+The separate exact-model-recipient authority described below is superseded. Access owns DeviceOnly/GatewayAllowed processing policy on the source grant, including the categories used. Permission expansion is reviewed on the owning source/connection against current source, grant and compare-only policy evidence. GatewayAllowed covers the verified Gateway and its configured downstream reasoning providers, not a concrete model/profile. Existing DeviceOnly permission is never silently widened, and ordinary model invocation is not another approval event.
+
+The original security and implemented-shape statements about contextual model-recipient approval are retained as historical descriptions, not invariants to preserve. Connection review must not expose provider/model/profile routing as a user authority. Verified source/configuration resolution leads to the durable automatic linked-resume contract in ADR 0034, without treating navigation as approval or bypassing current owner checks. Acceptance of this amendment does not claim that its protocol, permission or recovery implementation has landed; the [convergence plan](../development/plans/reasoning-source-processing-convergence.md) owns that sequence.
 
 ## Context
 

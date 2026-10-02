@@ -48,7 +48,9 @@ The final structure review includes workspace type/compile checks, actual depend
 
 ## Safety and compatibility
 
-Keep inspectable, source-backed memory, explicit action approval, exact-recipient consent, key identity, provenance, durable pre-dispatch intent and uncertain-write recovery. Query, preview and screen disposal are not implicit conversation cancellation.
+Keep inspectable, source-backed memory, explicit action approval, verified Gateway identity, source-owned processing authority, key identity, provenance, CAS, durable pre-dispatch intent, cancellation direction and uncertain-write recovery. Query, preview and screen disposal are not implicit conversation cancellation.
+
+[ADR 0034](docs/decisions/0034-gateway-reasoning-and-source-processing-authority.md) replaces exact model-recipient approval with source/connection processing policy and purpose-based Gateway reasoning. Its Gateway-primary/local-fallback and mandatory Health-local-transform rules are accepted architecture targets, not a statement that the current runtime has completed the cutover. The [convergence plan](docs/development/plans/reasoning-source-processing-convergence.md) owns implementation order and evidence.
 
 Floe is pre-stable, so internal backward compatibility is not a default goal unless an external protocol or durable user-data requirement makes it one. Do not add parallel v2/v3 implementations merely to preserve obsolete local callers. A fixed schema/version number does not make old binaries or data compatible: build the client and bundled library together, and explicitly select fresh Floe development data when stored meaning changes. Never automatically replace keys or delete data on an access error.
 

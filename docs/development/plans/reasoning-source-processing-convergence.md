@@ -1,7 +1,8 @@
 # Reasoning, Gateway, source-processing, and Health privacy convergence
 
-- Status: planned — implementation has not started
+- Status: in progress — Checkpoint 00 complete; Checkpoint 01 not started
 - Investigation baseline: main at af2eda2bf276241d903bd4ed29c2565081804339
+- Governing decision: [ADR 0034](../../decisions/0034-gateway-reasoning-and-source-processing-authority.md)
 - Classification: architectural change
 - Authoritative scope: this plan supersedes the previously implied "start CP08 / add typed grounding contract next" sequence after agent-execution-environment-grounding Checkpoint 07. Do not start that old CP08 while this plan is active.
 - Primary owners: Product/AppWire, Conversation, Context, Access, Inference, provider adapters, Experts, Knowledge/Learner, Connections, Apple native Health/local-model integration, Go Gateway
@@ -395,7 +396,7 @@ Do not rewrite historical evidence into current architecture. Amend or supersede
 
 ### Old invariant to retire
 
-Active repository guidance currently says "preserve exact-recipient consent". After this checkpoint, the active invariant must instead be equivalent to:
+Before Checkpoint 00, active repository guidance said "preserve exact-recipient consent". After this checkpoint, the active invariant must instead be equivalent to:
 
     preserve verified Gateway identity, source-owned processing authority,
     provenance, key identity, CAS, durable pre-dispatch intent,
@@ -1639,3 +1640,32 @@ User review
 The key architectural correction is:
 
 > Privacy minimization belongs to the source owner; model placement does not substitute for it. The product trusts the paired Floe Gateway as the external reasoning boundary, while the server owns concrete model routing. Health adds one mandatory device-local privacy transform before either Gateway or local Agent reasoning can consume its derived context.
+
+## 21. Checkpoint 00 execution record — 2026-10-02
+
+### Baseline and scope
+
+- Starting main and fetched main-equivalent: 12881cafd620f58fb522167fdf8904d2feb2ab75, verified through the GitHub branch API.
+- CP00 is documentation-only. No production Rust/Swift/Go/Dart, tests, manifests, schemas, credentials, accounts or stored user data were changed.
+- The checkpoint commit is the commit introducing this record; its parent is the baseline above. Git history supplies the final SHA without a self-referential completion field.
+
+### Completed decision cutover
+
+- Added accepted ADR 0034 with the eleven required decisions, source/processing/Action separation, the Health-only boundary, common Primary/Fallback semantics and Primary-versus-Fallback evaluation consequences.
+- Replaced the governing exact-recipient preservation instruction in AGENTS.md, the architecture-change skill, README and architecture invariants with verified Gateway identity and source-owned processing authority while preserving the other safety fences.
+- Updated all four required product documents and the architecture runtime/modules/authority documents. Accepted targets are explicitly distinguished from current pre-cutover implementation; no Gateway-first, mandatory-transform or crash-durable-resume behavior is claimed as already shipped.
+- Added scoped amendments to ADRs 0011, 0015, 0024, 0028, 0030 and 0033 without rewriting their original evidence. Updated the ADR and architecture indexes to route to the new authority decision and this single migration plan.
+- Preserved the old agent-execution-environment-grounding file and its CP07 failure evidence. Its recipient-preservation and immediate CP08 instructions are superseded by this plan and ADR 0034, not another active sequence. Only still-valid closure work may be rebased at CP12.
+
+### Verification and bounded residuals
+
+- Reviewed the changed document contents and GitHub comparison against the baseline. The decision/invariant/product change set contains only Markdown paths; production behavior, fixed Manager corpus/rubric and historical CP07 evidence are unchanged.
+- Reviewed the CP00-required document set and ADR cross-references. The six earlier ADR amendments identify which decisions are superseded and which source, identity, Run, provenance and Action safety properties remain.
+- Residual terminology was classified within the changed guidance: new-decision explanations, explicitly superseded ADR rationale, explicitly marked pre-cutover runtime descriptions, and this plan's investigation/deletion instructions. These are not instructions to preserve the old model-consent authority. Existing production symbols remain deliberately untouched for CP01–CP09; this is not the final residual-deletion gate in section 17.
+- No permanent grep checker, second execution plan or new runtime abstraction was introduced. Existing source/Action authority checks are not disabled or relaxed.
+- Runtime/build suites were not run: CP00 changes no code, build inputs or runtime configuration. A local checkout was unavailable because container GitHub DNS resolution failed; local git diff --check and the Cargo dependency checker were not run. Verification used the connected GitHub file/tree/commit APIs and document/diff review, not an asserted local test pass.
+- Worktree cleanliness is not applicable to this API-based edit; no local repository worktree was created or modified. Publish only as a non-forced fast-forward from the verified baseline, then verify main points to the resulting commit.
+
+### Next boundary
+
+Checkpoint 00 is complete. Checkpoint 01 has not started. The next implementation is Health sensitivity/model-input classification, not routing migration, recipient-consent code removal, or old CP08 grounding work.

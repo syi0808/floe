@@ -31,6 +31,8 @@ Voice is not a separate assistant core. Wake detection, text chat, voice session
 
 Ambient does not mean continuous surveillance. Background understanding comes from explicitly permitted OS/provider changes and bounded context, not an assumption of always-on microphone, screen capture, precise-location history or raw activity collection.
 
+Ordinary conversation does not ask the person to choose or approve a concrete model/provider/profile. Product policy selects a purpose; the client may explain Device or Floe Gateway processing when useful. The Gateway owns downstream routing. Internal terms such as server-model, selected model adapter and recipient IDs are not conversation UI.
+
 ## Interventions
 
 An insight does not automatically become an interruption.
@@ -68,4 +70,10 @@ Intelligence may request work but does not provide its own authority, approval, 
 
 Closing a review is neither approval nor rejection. An uncertain provider result leads to lookup/reconciliation rather than blind retry.
 
-A blocked request completes with the Manager's honest limitation and an inline **Review request**. The person can choose **Not now** or a safe backend-projected action; neither dismissing nor leaving the card grants approval. Verified owner resolution may start one linked follow-up in the same conversation. That follow-up is a fresh Run and does not duplicate the original user text. Source or processing review is not an Action proposal and never authorizes a consequential effect.
+A source/configuration block is represented by an inline **Review request** bound to the original work. The original Run does not wait indefinitely for the person. A review card is separate from generated assistant output; no synthetic model-consent reply is stored as though a model answered. The person can choose **Not now** or a safe backend-projected action; neither dismissing nor leaving the card grants approval. Missing Gateway processing permission is reviewed for the source/connection, not for a concrete downstream model.
+
+Once the origin's review group is terminal with at least one verified resolution, Floe durably requests automatic continuation. Crash/reopen, duplicate decisions and lost acknowledgements must converge on one linked follow-up without a routine **Continue** button. That follow-up is a fresh Run, revalidates source/grant authority and does not duplicate the original user text. Source or processing review is not an Action proposal and never authorizes a consequential effect.
+
+Health's unavailable local privacy transformer is a source limitation, not an approval request. A Gateway transport failure is a reasoning-service failure, not permission to retry on a local model. Explain the affected capability and supported remainder without implying an observation or successful action that did not occur.
+
+These are accepted experience requirements under [ADR 0034](../decisions/0034-gateway-reasoning-and-source-processing-authority.md), not a claim that the current client/runtime already implements them. Implementation order and evidence belong to the [convergence plan](../development/plans/reasoning-source-processing-convergence.md).

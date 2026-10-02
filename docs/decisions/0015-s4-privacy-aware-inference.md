@@ -5,6 +5,15 @@
 - **Amends:** [ADR 0013](0013-conversational-agent-learning-and-voice-sequence.md)
 - **Related:** [ADR 0010](0010-local-connection-console.md),
   [ADR 0011](0011-inference-performance-classes.md)
+- **Amended by:** [ADR 0034](0034-gateway-reasoning-and-source-processing-authority.md)
+
+## Amendment by ADR 0034
+
+The original S4 rationale/evidence requirements below are historical where they conflict with ADR 0034. Per-domain external-transfer/recipient-consent decisions and sensitivity-driven default reasoning placement are replaced by source-owned DeviceOnly/GatewayAllowed processing authority and one Gateway-primary/local-fallback selector for Manager, shipped Experts and Learner. Ordinary model invocation has no model approval event; source-processing expansion uses the owning connection review.
+
+Health requires deterministic minimization followed by a mandatory device-local semantic privacy operation before any reasoning, whether local or Gateway. It is not an Agent Tool/ModelPort call and cannot fall back to a remote sanitizer or deterministic semantic classification. Wellbeing remains HighlySensitive; successful transform evidence and source GatewayAllowed permission are separate preconditions. This mandatory transform is Health-only, not a new rule for every sensitive connector.
+
+Raw/credential non-export, bounded inputs, real adapter contract verification, redacted diagnostics and failure visibility remain valid. Authentication feasibility statements and slice counts below are historical, not current provider support or implementation claims. The [convergence plan](../development/plans/reasoning-source-processing-convergence.md) owns the ordered implementation of the accepted amendment.
 
 ## Context
 

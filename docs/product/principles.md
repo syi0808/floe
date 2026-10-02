@@ -50,15 +50,17 @@ A person should be able to understand:
 
 - what Floe can access;
 - where data is stored;
-- what may be sent to an external model;
+- whether a source's bounded View may be processed only on Device or through Floe Gateway;
 - which Expert may consume a view;
 - what external actions Floe may perform.
 
-Derived data can remain highly sensitive even when raw data stays local.
+Gateway processing includes its configured downstream reasoning providers; the person reviews the source processing boundary, not a concrete model/profile. Derived data can remain highly sensitive even when raw data stays local.
 
-## Sensitive processing stays local where practical
+## Sensitive processing is source-owned
 
-Raw Health data, wake-word audio, voiceprints and other high-sensitivity signals should be reduced locally when the product goal can be met with a bounded derived view.
+Raw Health data stays on its owning device. Before Health enters reasoning, deterministic minimization is followed by a mandatory device-local semantic privacy transform producing a typed Wellbeing View. No available local transformer means Health-derived reasoning is unavailable, not permission to send raw data elsewhere or substitute the old deterministic semantic classifier. The result remains HighlySensitive and still needs the source's processing permission.
+
+This mandatory local-LLM rule applies to Health/Wellbeing only. Other sensitive signals retain their own domain-specific minimization policies; do not prebuild a universal transform framework. Privacy transformation is a source operation, not an Agent Tool or reasoning fallback.
 
 ## Floe owns its core interfaces
 
@@ -76,6 +78,10 @@ The core stack should remain operable by users. Hosted Floe is a managed distrib
 
 Models and Experts may understand, recommend and propose. Access and Actions own authorization and consequential execution. No prompt or model output grants itself more authority.
 
-## Model routing is explicit policy
+## Reasoning is purpose-based, not a model approval ceremony
 
-Business domains express the task, data requirements and constraints. Inference owns model profile, approved route, attempt and usage semantics; Access owns processing/recipient authority. There is no hidden central router that may silently export sensitive context or choose an unapproved recipient.
+Business domains express purpose, data requirements and constraints. The client does not choose or expose provider/model/profile/recipient; Gateway routing belongs to the server. Ordinary conversation does not require a separate model-use approval. Missing source processing permission is reviewed on the owning source/connection, never on a model card.
+
+Manager, shipped Experts and Learner share Gateway-primary/local-fallback reasoning. Local fallback is eligible only for valid planning-time Primary absence, not credential, inventory, transport, timeout or authorization failures. In particular, it must not bypass source processing review.
+
+These product requirements are defined by [ADR 0034](../decisions/0034-gateway-reasoning-and-source-processing-authority.md). They describe the accepted product contract, not implementation completion; current behavior and cutover evidence remain in architecture and the authoritative execution plan.

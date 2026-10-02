@@ -2,6 +2,12 @@
 
 This is the stable semantic ownership map for the Rust workspace. Package paths match the current workspace layout.
 
+## Accepted processing decision versus current implementation
+
+[ADR 0034](../decisions/0034-gateway-reasoning-and-source-processing-authority.md) replaces exact model-recipient consent with Access-owned source processing policy, removes concrete model routing from product intent, and selects Gateway-primary/local-fallback reasoning for Manager, shipped Experts and Learner. Health owns a separate mandatory local privacy operation, with Context retaining its sensitivity and transform provenance. These are accepted target contracts; this document does not claim their code cutover is complete.
+
+The table and detailed rules below describe the pre-cutover implementation where recipient contracts/consent, product profiles and existing routing still exist. They are implementation anchors to replace, not requirements to preserve those representations. Update the affected rows/rules as each owner cutover lands under the [single convergence plan](../development/plans/reasoning-source-processing-convergence.md).
+
 | Layer | Package / path | Owns |
 |---|---|---|
 | Contract | `floe-kernel` — `crates/contracts/kernel` | IDs and small shared values |

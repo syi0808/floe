@@ -58,6 +58,8 @@ Pure cross-owner value contracts live in `crates/contracts/`. Built-in Experts a
 - `invariants.md` defines cross-cutting final-state properties; [architecture evolution](../development/architecture-evolution.md) defines how changes converge back to those properties.
 - Task-specific execution plans may own temporary sequencing. ADRs own durable rationale. Neither replaces current architecture documentation.
 
-## Current state
+## Current state and accepted decisions
 
-The owner/runtime and outer product boundaries have converged on the topology documented here. There is no repository-wide migration checkpoint to resume. Future structural work starts from current source and these architecture documents, and uses a task-specific plan only when the change itself requires staged migration.
+The modular-monolith owner boundaries remain the implementation baseline. [ADR 0034](../decisions/0034-gateway-reasoning-and-source-processing-authority.md) accepts a replacement for exact model-recipient authority, product profile selection and the existing reasoning-placement policy, together with a mandatory Health-local privacy transform. That acceptance is not a runtime implementation claim.
+
+The [reasoning/source-processing convergence plan](../development/plans/reasoning-source-processing-convergence.md) is the single migration sequence for that decision. Runtime, module and authority documents retain clearly identified pre-cutover implementation descriptions until the owning checkpoint lands. The older agent-execution-environment-grounding plan remains evidence, not an instruction to start its old CP08; grounding is reconsidered only after the new plan's Primary/Fallback evaluation.

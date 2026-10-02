@@ -100,9 +100,11 @@ Real provider/OS/storage/transport adapters remain valid. Internal compatibility
 
 ## 7. Preserve safety invariants
 
-Never weaken authorization, exact-recipient consent, key identity, provenance, CAS, durable pre-dispatch intent, cancellation direction or uncertain external-write recovery to make the new structure fit.
+Never weaken authorization, verified Gateway identity, source-owned processing authority, key identity, provenance, CAS, durable pre-dispatch intent, cancellation direction or uncertain external-write recovery to make the new structure fit.
 
-Use docs/architecture/authority-recovery.md when the change touches these semantics.
+ADR 0034 deliberately supersedes exact model-recipient consent. Preserve live source/processing admission and verified Gateway identity rather than retaining the obsolete consent vertical. A source-processing denial is not local-fallback eligibility; Health transform success is not permission or declassification. Keep accepted target decisions distinct from current code until the owning checkpoint implements them.
+
+Use docs/architecture/authority-recovery.md when the change touches these semantics, and docs/decisions/0034-gateway-reasoning-and-source-processing-authority.md for this authority-model rationale.
 
 ## 8. Residual audit
 

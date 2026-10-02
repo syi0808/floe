@@ -2,6 +2,15 @@
 
 - **Status:** accepted
 - **Date:** 2026-09-24
+- **Amended by:** [ADR 0034](0034-gateway-reasoning-and-source-processing-authority.md) for model-review retirement and durable automatic resume; ADR 0031 continues to govern standing Observe reviewed-target semantics
+
+## Amendment by ADR 0034
+
+Conversation's durable interaction ownership, immutable reviewed target, CAS, durable owner-operation intent, no live user wait and fresh linked-Run semantics remain. Exact model-recipient interactions, consent-specific lineage and synthetic model-consent limitation replies in the original text below are superseded. Source-processing mismatch is an owner-derived SourceAccess review on the connection, not another model approval. ExpertBinding remains configuration navigation, not permission.
+
+After an origin's interaction group is terminal with at least one Resolved member, the resume-required state must be durable and idempotently reconciled to one linked child Run, including crash after mutation/resolution, lost acknowledgement and duplicate/racing decisions. The existing unique slot alone does not prove durable scheduling. Routine Resolved-to-Continue product action is removed only with that recovery cutover; internal resume and exact-batch continuation machinery remain distinct.
+
+A blocked Run need not invent an Assistant answer. Project the durable card separately from generated output, without waiting live for the person. Unknown/forged provenance and hard identity failures remain fail-closed; a known source processing-policy mismatch may be reviewed through its owner. The historical recipient-specific non-goals below do not override this amendment. The [convergence plan](../development/plans/reasoning-source-processing-convergence.md) owns implementation and acceptance; this amendment is not a claim that automatic resume is already crash-durable.
 
 ## Context
 

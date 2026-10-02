@@ -6,11 +6,23 @@ The Manager owns the continuous user relationship, final synthesis and intervent
 
 The Manager may answer directly from sufficient already-admitted Conversation, Persona, Memory or product context, delegate, ask for clarification, defer or remain silent. Fresh source-backed domain acquisition and bounded domain judgment belong inside an admitted Expert Task reached through A2A delegation. An unavailable, disabled or unbound Expert is a limitation, not permission for a direct-source fallback.
 
+## Shared reasoning, separate responsibilities
+
+Manager, shipped Experts and Learner use one canonical Inference policy: Gateway/server Primary, device-local LLM Fallback. Manager and delegated Experts normally use everyday_assistance; Learner uses deep_work. Knowledge still owns Learner proposals, review semantics, prompt, budget and job lifecycle.
+
+Fallback is only for valid planning-time Primary absence, including an inventory that truthfully declares the purpose unavailable. Credential/identity errors, invalid inventory, transport failure, timeout, cancellation and source-processing denial do not trigger silent local retry. Availability and execution must agree. Source-processing mismatch produces a source/connection review, not a model card or a local authorization bypass.
+
+The user relates to Floe and product purpose, not a provider/model/profile. Ordinary reasoning is not a per-model approval event, and Learner has no separate background model-recipient grant.
+
+Health privacy transformation is not Agent reasoning: the source must first produce a typed, still-HighlySensitive WellbeingView with valid local-transform evidence. Only that View can be used by either Gateway Primary or local reasoning Fallback, subject to its source processing policy. The two local-model roles have separate contracts and invocations.
+
+These are accepted product requirements under [ADR 0034](../decisions/0034-gateway-reasoning-and-source-processing-authority.md); [current architecture](../architecture/README.md) distinguishes implemented behavior from pending cutovers. Primary and Fallback qualification are evaluated separately after the cutover, without weakening the factual-support rule or treating unavailable evidence as success.
+
 ## Experts are domain judgment agents
 
 Experts are not connector wrappers or provider-specific Tools. They receive bounded context and apply an independent domain perspective through the A2A Task lifecycle.
 
-Experts declare semantic source needs and users configure compatible source choices in generic Expert settings. A required source may remain unconfigured without hiding the Expert; a durable binding interaction links to settings instead of pretending a permission grant is missing. Context acquires only the Task's selected targets, and Access authorizes the actual consumer against current source authority. A blocked selected source produces a typed no-conclusion result and durable review interaction, never a fallback to another connected account. Source choice, source approval and model-recipient approval remain separate from Expert identity and Action authority.
+Experts declare semantic source needs and users configure compatible source choices in generic Expert settings. A required source may remain unconfigured without hiding the Expert; a durable binding interaction links to settings instead of pretending a permission grant is missing. Context acquires only the Task's selected targets, and Access authorizes the actual consumer against current source authority. A blocked selected source produces a typed no-conclusion result and durable review interaction, never a fallback to another connected account. Source choice and source processing approval remain separate from Expert identity and Action authority; a concrete model recipient is not another user approval identity.
 
 Representative judgment domains are:
 
@@ -35,7 +47,7 @@ The host supplies and enforces:
 
 - Expert identity/revision and assignment eligibility;
 - granted Views and capabilities;
-- model-processing authority;
+- source-owned processing authority and required Health transform provenance;
 - cancellation/deadline and token/cost limits;
 - output bounds;
 - Task lifecycle and stable identity.
