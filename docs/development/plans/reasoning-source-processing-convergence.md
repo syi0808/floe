@@ -418,79 +418,478 @@ Record that agent-execution-environment-grounding Checkpoint 07 remains historic
 
 ## 5. Checkpoint 01 — Correct Health sensitivity and model-input classification
 
+### Status and refreshed baseline
+
+This checkpoint remains the active next checkpoint after Checkpoint 00. This section was refreshed against `main` at:
+
+    f08c6254f8820289378f5d2aa92b69c98097b3a8
+
+No CP01 production implementation has started at this baseline. The line numbers below are execution anchors for this revision; if `main` moves before implementation, refresh the affected ranges before editing rather than applying line numbers mechanically.
+
+Checkpoint 01 owns only sensitivity truth and model-input classification. It does **not** implement the Health privacy transformer, source-processing-policy cutover, model-recipient-consent deletion, Gateway routing, Primary/Fallback selection, or Android runtime work.
+
 ### Goal
 
-Ensure actual model projections cannot downgrade Wellbeing from HighlySensitive to Personal before adding the privacy transformer.
+Make Health/Wellbeing sensitivity source-owned and make every model projection carry at least the sensitivity of the content it actually contains.
 
-### 01-A — Make View sensitivity source-owned
+After this checkpoint:
 
-Primary file:
+~~~text
+PeopleView
+  -> ContextEvidence Personal
+
+AttentionView
+  -> ContextEvidence Personal
+
+WellbeingView
+  -> ContextEvidence HighlySensitive
+
+declared/admitted caller classes
+  + actual live evidence classes
+  + Personal when projected Persona/Memory is present
+  -> canonical sorted/deduplicated AuthorizedModelProjection.input_data_classes
+~~~
+
+A caller or Expert policy may declare an equal or stricter class set. It may never relabel or omit an actual evidence class.
+
+### Refreshed source findings that constrain the implementation
+
+At the refreshed baseline:
+
+1. `crates/contracts/context/src/views/personal.rs:99-131` defines `PersonalContextProjection` without a sensitivity method and applies one common macro implementation to People, Attention and Wellbeing.
+2. `crates/contracts/context/src/views/personal.rs:196-205` hard-codes every personal-context evidence item to `DataClass::Personal`.
+3. `crates/contracts/agent/src/context.rs:72-95` already treats `InferencePolicyDecision.data_classes` as an allow-list: any live evidence class absent from the policy fails closed. Persona or Memory additionally requires `Personal`, and `Credential` / `DeviceOnlyRaw` are rejected.
+4. `crates/app/src/vault_host/conversation_turn/expert_host.rs:39-48` currently creates one common Expert policy containing only `Personal`. If Wellbeing evidence is corrected to `HighlySensitive` without changing this allowance, Context authorization will reject the Wellbeing path before model projection.
+5. `crates/experts/builtin/src/catalog.rs` already declares the Wellbeing package as `DataClass::HighlySensitive` through `BuiltinExpertKind::context_data_class()`, and `crates/experts/builtin/src/registration.rs:81-110` copies that value into `ExpertManifest.data_class`. This package declaration may define the Expert's permitted sensitivity envelope, but it must not become the source of an evidence item's classification.
+6. `crates/modules/context/src/application/model_projection.rs:47-60` receives caller-declared `input_data_classes`, while `assemble_context_projection():65-117` copies that list directly into the final projection at line 114 even though the assembled envelope already contains live evidence/Memory/Persona. That is a second downgrade path independent of `personal_context_evidence()`.
+7. `crates/modules/access/src/application/model_dispatch.rs:117-133` currently rejects `Credential` / `DeviceOnlyRaw` and also rejects external dispatch containing `HighlySensitive`. This remains intentionally fail-closed in CP01. Do not weaken it to make the newly correct classification reach a remote model.
+8. Apple and Android Health connector descriptors still advertise `wellbeing.derived` as `personal`. The Rust connected-context contract already parses descriptor `data_class` into `DataClass`; no schema/version expansion is required.
+
+These findings mean CP01 is not a one-line `Personal -> HighlySensitive` replacement. The source evidence, policy allowance and projection fold must converge together.
+
+### 01-A — Make personal View sensitivity source-owned
+
+Primary owner:
 
     crates/contracts/context/src/views/personal.rs
 
-Replace the uniform Personal classification in personal_context_evidence() with View-owned classification.
+#### 01-A1 — Put `data_class()` on the View projection contract
 
-A suitable final shape is:
+Edit around `PersonalContextProjection` at lines 99-105.
+
+Add a method equivalent to:
 
 ~~~text
-PersonalContextProjection
-  -> data_class()
-
-PeopleView
-  -> Personal
-
-AttentionView
-  -> Personal
-
-WellbeingView
-  -> HighlySensitive
+fn data_class(&self) -> DataClass;
 ~~~
 
-Do not infer Wellbeing sensitivity from the consuming Expert package. A View has the same sensitivity regardless of which consumer reads it.
+The implementation must be statically determined by the View type:
 
-Update validation/tests so serialization and ContextEvidence for Wellbeing retain HighlySensitive.
+~~~text
+PeopleView     -> Personal
+AttentionView  -> Personal
+WellbeingView  -> HighlySensitive
+~~~
 
-### 01-B — Remove the common Expert-policy downgrade
+The existing `projection!` macro at lines 107-131 may be changed to accept the class as an argument, for example:
+
+~~~text
+projection!(PeopleView, DataClass::Personal)
+projection!(AttentionView, DataClass::Personal)
+projection!(WellbeingView, DataClass::HighlySensitive)
+~~~
+
+or replaced by equally direct explicit implementations. Do not classify by `view_id` string at runtime and do not ask the consuming Expert which class the View should have.
+
+Do not change the serialized People/Attention/Wellbeing payload shape in CP01.
+
+#### 01-A2 — Remove the hard-coded Personal evidence class
+
+Edit `personal_context_evidence()` around lines 196-205.
+
+Replace:
+
+~~~text
+data_class: DataClass::Personal
+~~~
+
+with the class supplied by the View contract.
+
+The same typed `WellbeingView` must therefore be HighlySensitive regardless of whether it is read by Wellbeing, another future consumer, a fixture, or a local reasoning path.
+
+#### 01-A3 — Owner-level and fixture regressions
+
+Add or extend focused tests so the contract itself proves:
+
+- People evidence is `Personal`.
+- Attention evidence is `Personal`.
+- Wellbeing evidence is `HighlySensitive`.
+- JSON payload/provenance validation behavior is otherwise unchanged.
+
+Use the existing cross-platform fixture tests as secondary evidence:
+
+- `crates/experts/builtin/tests/personal_context.rs:29-51` — assert the Android People fixture is Personal and Android Wellbeing fixture is HighlySensitive.
+- `crates/experts/builtin/tests/personal_context.rs:88-125` — stop treating the three evidence values as sensitivity-equivalent; assert each class explicitly before the existing raw-data non-leakage assertions.
+- `crates/experts/builtin/tests/apple_wellbeing_projection.rs:5-30` — after `personal_context_evidence(&view)`, assert `HighlySensitive` before the existing forbidden-field assertions.
+
+Do not move sensitivity ownership into `floe-experts-builtin` merely because these cross-language tests currently live there.
+
+### 01-B — Make authorization and model projection preserve actual evidence sensitivity
+
+CP01 must close both current downgrade sites: the common Expert allow-list and the projection's direct copy of caller classes.
+
+#### 01-B1 — Scope the common Expert policy by admitted manifest sensitivity
+
+Primary files:
+
+    crates/app/src/vault_host/conversation_turn/expert_host.rs
+    crates/app/src/vault_host/conversation_turn/expert_dispatch.rs
+
+At `expert_host.rs:39-48`, replace the zero-argument:
+
+    expert_policy()
+
+with a helper taking the admitted package sensitivity, conceptually:
+
+    expert_policy(package_data_class: DataClass)
+
+Build a deterministic allowed class list with these semantics:
+
+1. preserve `Personal` because delegated Expert context may include Persona, Memory, Calendar/day or other Personal evidence;
+2. add the admitted manifest's `data_class` when it is not already present;
+3. sort and deduplicate the list;
+4. do not silently remove `Credential` or `DeviceOnlyRaw` if a malformed/untrusted manifest somehow declares them — existing authorization must still fail closed rather than the helper sanitizing the policy.
+
+For the shipped packages this yields:
+
+~~~text
+ordinary built-in Expert -> [Personal]
+Wellbeing Expert          -> [Personal, HighlySensitive]
+~~~
+
+At `expert_dispatch.rs:310-343`, construct this policy from the exact Run-pinned registration already held by the endpoint:
+
+    self.registration.manifest.data_class
+
+Do not look up `BuiltinExpertKind` or the live shipped catalog again. The admitted registration is the configuration truth for this Task.
+
+Update every test/internal caller of `expert_policy()` to pass the intended fixture class explicitly. Personal-only tests should continue to pass `Personal`; add a focused assertion that Wellbeing's admitted manifest produces a policy containing both Personal and HighlySensitive.
+
+This policy is an **allowance**, not the evidence classifier. An Expert manifest cannot convert Personal evidence into HighlySensitive or vice versa, and a Personal-only policy must still reject HighlySensitive evidence through the existing Context authorizer.
+
+Keep the existing CP01-era values of:
+
+    external_transfer_consent
+    bounded_sensitive_projection
+    allowed_placements
+
+unless a compile-only mechanical signature update is required. In particular, **do not** set `bounded_sensitive_projection = true` for Wellbeing and do not grant remote transfer in CP01. The mandatory Health privacy transform does not exist until CP02/03.
+
+#### 01-B2 — Fold effective classes from the actual Context projection
 
 Primary file:
 
-    crates/app/src/vault_host/conversation_turn/expert_host.rs
+    crates/modules/context/src/application/model_projection.rs
 
-The current expert_policy() hard-codes [Personal]. Replace the pattern in which a caller-declared list can understate actual evidence sensitivity.
+Current anchors:
 
-The final Context projection must compute model input classes from admitted content, at minimum:
+- `ContextProjectionInput.input_data_classes`: lines 47-60;
+- `assemble_context_projection()`: lines 65-117;
+- direct copy into `AuthorizedModelProjection`: line 114;
+- `validate_input()`: lines 120-140;
+- unit-test fixtures begin around line 250;
+- test `input()` sets caller classes around lines 417-439.
 
-- actual evidence classes;
-- Personal when Persona or confirmed Memory is present;
-- any role/request class that is independently required by the projection contract;
-- sorted/deduplicated canonical output.
+Keep the existing field for this checkpoint to avoid an unrelated caller-wide rename, but change its meaning/documentation from “the complete model-input class list” to the caller's admitted/declared minimum or stricter class set.
 
-A Wellbeing Expert using Wellbeing plus Calendar must therefore project at least:
+After:
 
-    [Personal, HighlySensitive]
+    let live = live_context(input.role, input.agent_context);
 
-The caller may impose a stricter class, but it may never lower the class derived from evidence.
+derive an effective class vector from the **post-role-filtered `live` context**, not from the unfiltered original `AgentContext`.
 
-### 01-C — Align Health descriptors
+Add a small private helper equivalent in behavior to:
 
-Update current Apple/Android Health descriptor fixtures/contracts that describe wellbeing.derived as personal so the shared semantic contract says HighlySensitive.
+~~~text
+effective_input_data_classes(declared, live):
+  classes = copy(declared)
+  classes += each live.evidence[*].data_class
 
-Android is not a delivery target in this plan. Change only shared contract/fixture meaning required to prevent platform-dependent sensitivity semantics; do not add Android local-model code or build gates.
+  if live.persona exists or live.memories is non-empty:
+      classes += Personal
 
-### 01-D — Regression tests
+  sort classes by DataClass canonical Ord
+  deduplicate
+  require 1..=MAX_INPUT_DATA_CLASSES
+  return classes
+~~~
 
-Required focused tests:
+Use that result for:
 
-- People evidence remains Personal.
-- Attention evidence remains Personal.
-- Wellbeing evidence is HighlySensitive.
-- Wellbeing + Calendar folds to Personal + HighlySensitive.
-- A caller-provided Personal policy cannot downgrade HighlySensitive evidence.
-- Credential and DeviceOnlyRaw remain rejected by generic Agent context/model dispatch.
+    AuthorizedModelProjection.input_data_classes
+
+instead of cloning `input.input_data_classes`.
+
+Important semantics:
+
+- The fold is a **union**, not an intersection. A stricter caller declaration remains visible.
+- Actual evidence can only add sensitivity; it cannot be hidden by a caller that declared `Personal`.
+- Persona/Memory adds `Personal` only when that content is actually in the projected `live` context. Do not add it from an original context that the selected role filtered out.
+- Do not infer classes from source handles, Expert IDs, Tool names, `view_id` strings or package names.
+- Do not filter `Credential` / `DeviceOnlyRaw` out of the declared list. Existing policy/dispatch denial owns rejection.
+- Do not place this fold in Inference or provider adapters. Context owns the assembled model input and therefore owns its effective class set.
+
+#### 01-B3 — Projection regressions
+
+Extend the existing `model_projection.rs` unit tests around lines 368-520.
+
+Required cases:
+
+1. Personal-only live evidence plus Personal declared input remains exactly `[Personal]`.
+2. Declared `[Personal]` plus a live HighlySensitive evidence item produces `[Personal, HighlySensitive]`.
+3. Wellbeing-like HighlySensitive evidence plus Personal Calendar/evidence produces the same canonical two-class set.
+4. Duplicate/unsorted declared values plus actual evidence normalize to one deterministic sorted/deduplicated vector.
+5. Persona or Memory in the projected role adds `Personal` even when the declared set is stricter and did not name Personal.
+6. A role that removes live Persona/Memory/evidence does not acquire classes from content that is absent from its output envelope.
+7. The resulting `AuthorizedModelProjection` still validates and preserves the existing coverage calculation.
+
+Add one regression that directly proves a caller-declared `[Personal]` cannot make a projection containing HighlySensitive evidence report only Personal.
+
+Do not change the fixed Manager grounding corpus/rubric as part of these tests.
+
+#### 01-B4 — Preserve current authorization failures
+
+Keep `crates/contracts/agent/src/context.rs:72-95` behavior:
+
+- evidence class must be included in `InferencePolicyDecision.data_classes`;
+- Persona/Memory requires Personal;
+- `Credential` and `DeviceOnlyRaw` fail closed.
+
+Keep and rerun `crates/modules/context/tests/policy.rs`, especially:
+
+- the HighlySensitive placement/consent test;
+- `raw_sources_and_credentials_stay_outside_agent_context_even_with_consent`.
+
+Keep `crates/modules/access/src/application/model_dispatch.rs:117-133` unchanged in meaning. External HighlySensitive dispatch is still denied at this checkpoint. If the corrected Wellbeing path exposes that denial in an integration test, record it as the intended pre-CP02/03/04 fail-closed state; **do not** bypass it with local fallback, fake consent, class downgrading or a new exception.
+
+### 01-C — Align Health connector descriptors with the shared semantic class
+
+This sub-checkpoint changes descriptor meaning only. It does not add a Health transform or Android delivery work.
+
+#### 01-C1 — Apple Health descriptor
+
+Primary file:
+
+    apps/client/ios/Runner/AppleContextChannel.swift
+
+Current anchors:
+
+- `connectionSnapshots(deviceID:)`: lines 192-223;
+- Contacts call: lines 198-205;
+- Health call: lines 206-214;
+- Attention call: lines 215-221;
+- shared `connectionSnapshot(...)` helper: lines 226-278;
+- helper hard-codes `"data_class": "personal"` around line 271.
+
+Make the shared helper accept a bounded `dataClass` argument rather than hard-coding Personal.
+
+Pass:
+
+~~~text
+contacts.apple / people.identity    -> personal
+health.apple / wellbeing.derived    -> highly_sensitive
+attention.apple / attention.coarse  -> personal
+~~~
+
+Use the existing wire spelling `highly_sensitive`. Do not change Health retention, freshness, source handles, permission semantics or payload bytes in CP01.
+
+#### 01-C2 — Android Health semantic descriptor only
+
+Primary files:
+
+    apps/client/android/app/src/main/kotlin/app/floe/floe_client/AndroidContextChannel.kt
+    apps/client/android/fixtures/health_connect_snapshot.json
+
+At `AndroidContextChannel.kt:641-653`, change only the Health `wellbeing.derived` descriptor's `data_class` from `personal` to `highly_sensitive`.
+
+Update the matching fixture descriptor in `health_connect_snapshot.json`.
+
+Do not alter Calendar/Contacts classes, add an Android local model, change Health Connect acquisition, or run Android build gates.
+
+#### 01-C3 — Shared descriptor regressions
+
+Primary Rust test:
+
+    crates/modules/connections/tests/connected_context.rs
+
+The existing `android_context_descriptors_conform_to_the_shared_contract` test around lines 362-405 parses Calendar, Contacts and Health fixtures but currently checks only connector/provider/execution/authority.
+
+Extend it so the expected descriptor class is explicit:
+
+~~~text
+calendar.android -> Personal
+contacts.android -> Personal
+health.android   -> HighlySensitive
+~~~
+
+This proves the JSON fixture is interpreted by the shared Rust `ViewDescriptor.data_class: DataClass` contract, not merely that the string is present.
+
+Update product-test fixture literals that model Health descriptors:
+
+    apps/client/test/features/settings/settings_screen_test.dart
+      _healthConnection: around lines 575-635
+      _appleHealthConnection: around lines 704-743
+
+    apps/client/test/features/connections/connector_screen_test.dart
+      _appleConnection: around lines 1138-1205
+
+Health fixture descriptors must use `highly_sensitive`; Personal connectors remain Personal.
+
+For `_appleConnection`, derive the descriptor class from the provider so only `apple_health` becomes HighlySensitive. Do not opportunistically fix unrelated `apple_screen_time` fixture semantics in this checkpoint.
+
+`apps/client/lib/features/connections/domain/agent_connections.dart` currently validates descriptor `data_class` structurally but does not retain it as a Dart domain field. Do **not** widen the product model merely for CP01 unless implementation proves a current product consumer genuinely needs the class. The Rust/shared descriptor and native snapshot remain the semantic source.
+
+### 01-D — Ordered implementation sequence
+
+Execute CP01 in this order to keep failures diagnostic:
+
+1. **01-A contract truth**
+   - add View-owned `data_class()`;
+   - change `personal_context_evidence()`;
+   - add People/Attention/Wellbeing classification tests.
+2. **01-B1 authorization allowance**
+   - make `expert_policy` manifest-class-aware;
+   - pass the exact admitted `registration.manifest.data_class`;
+   - update focused App tests/callers.
+3. **01-B2 projection fold**
+   - compute effective classes from declared classes + post-filter live context;
+   - port/add model-projection regressions.
+4. **01-C descriptors**
+   - Apple Health `highly_sensitive`;
+   - Android Health semantic descriptor + fixture only;
+   - Rust/Flutter fixture assertions.
+5. Run focused tests and fix only failures caused by this semantic cutover.
+6. Run the CP01 residual audit.
+7. Run the final affected-surface gates.
+8. Record the checkpoint execution evidence in this plan and mark CP01 complete only after every required gate is either PASS or explicitly unavailable for an environment reason allowed by the repository verification policy.
+
+Do not start CP02 while closing CP01.
+
+### 01-E — Explicit non-goals / forbidden shortcuts
+
+CP01 must not:
+
+- add `HealthPrivacyTransformInput/Output` or any FoundationModels Health operation;
+- mark pre-transform Wellbeing as Gateway-safe;
+- add transform provenance;
+- modify `ProcessingRestriction` or source grant meaning;
+- delete recipient-consent code;
+- change `allow_external` / `expected_recipient`;
+- change model routing order or fallback semantics;
+- set Wellbeing `bounded_sensitive_projection = true` merely to make remote dispatch pass;
+- change Access's current external HighlySensitive denial;
+- use local inference as a permission/classification bypass;
+- downgrade transformed or untransformed Health back to Personal;
+- create a generic sensitivity/transform framework;
+- add Android parity/build work;
+- bump wire/schema versions solely for this internal semantic correction.
+
+A failure caused by the newly correct HighlySensitive class is evidence of a later checkpoint boundary unless CP01 itself is incorrectly dropping/denying the class before the existing fail-closed remote fence.
+
+### 01-F — Focused verification
+
+Run narrow checks first.
+
+Rust:
+
+~~~sh
+cargo test -p floe-context-contract --tests
+cargo test -p floe-context --tests
+cargo test -p floe-experts-builtin --tests
+cargo test -p floe-connections --tests
+cargo test -p floe-app --tests
+cargo test -p floe-access --tests
+~~~
+
+If a package has no standalone integration target under `--tests`, use its current Cargo-defined test target rather than creating a new test executable solely for this checkpoint.
+
+Flutter fixture/UI parsing:
+
+~~~sh
+cd apps/client
+flutter test test/features/settings/settings_screen_test.dart
+flutter test test/features/connections/connector_screen_test.dart
+~~~
+
+Because `AppleContextChannel.swift` changes, validate an Apple product build that compiles that Runner source using the repository's current supported environment. At minimum retain:
+
+~~~sh
+cd apps/client
+flutter analyze
+flutter test
+flutter build macos
+~~~
+
+If a supported iOS simulator/device build is available in the local Xcode 26 environment, run the current repository iOS product build for that target. If no eligible runtime/signing/device prerequisite exists, record the exact reason as **UNVERIFIED**; do not change signing accounts, install runtimes, reset permissions or substitute an Android build.
+
+Final Rust/shared-contract gate after all Rust inputs are final:
+
+~~~sh
+CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast
+cargo build -p floe-ffi
+python3 tools/architecture/check_boundaries.py
+git diff --check
+~~~
+
+A successful targeted test does not replace the final workspace gate.
+
+### 01-G — Residual audit before completion
+
+Search the changed/current sources for the obsolete CP01 meanings, at minimum:
+
+~~~text
+personal_context_evidence
+data_class: DataClass::Personal
+"data_class": "personal"
+"data_class" to "personal"
+'data_class': 'personal'
+expert_policy()
+input_data_classes: input.input_data_classes.clone()
+input_data_classes: call.policy.data_classes.clone()
+input_data_classes: step.policy.data_classes.clone()
+wellbeing.derived
+health.apple
+health.android
+apple_health
+health_connect
+HighlySensitive
+DeviceOnlyRaw
+Credential
+~~~
+
+Classify every remaining match. Expected legitimate Personal matches include Calendar, Contacts, Attention, Mail and other Personal Views. The audit is complete only when every Health/Wellbeing descriptor/evidence path is HighlySensitive and no projection path can understate an included HighlySensitive evidence item.
+
+Do not turn this one-time residual list into a permanent grep script.
 
 ### Acceptance
 
-No Health View may reach Inference as Personal after this checkpoint.
+Checkpoint 01 is complete only when all of the following are true:
+
+1. `PeopleView -> ContextEvidence::Personal`.
+2. `AttentionView -> ContextEvidence::Personal`.
+3. `WellbeingView -> ContextEvidence::HighlySensitive`.
+4. The production Wellbeing Expert policy permits both its HighlySensitive evidence and any Personal context it legitimately carries, without using the manifest to relabel evidence.
+5. `AuthorizedModelProjection.input_data_classes` is the canonical union of caller-declared classes and the actual post-role-filtered model input; Persona/Memory contributes Personal.
+6. Declared `Personal` cannot downgrade live HighlySensitive evidence.
+7. Wellbeing + Personal Calendar/context projects at least `[Personal, HighlySensitive]` in canonical order.
+8. Credential and DeviceOnlyRaw remain rejected from generic Agent reasoning.
+9. Apple and Android Health descriptors advertise `wellbeing.derived` as `highly_sensitive` while non-Health Personal descriptors remain unchanged.
+10. The existing external HighlySensitive dispatch denial remains fail-closed; CP01 does not claim Health is ready for Gateway reasoning.
+11. No Health privacy-transform, source-processing-policy, recipient-consent, routing or fallback work from CP02+ has started.
+12. Focused and final required verification is recorded, with any unavailable Apple build gate called out precisely.
+
+No Health-derived View may reach Inference or a provider transport while being represented only as Personal after this checkpoint.
+
 
 ## 6. Checkpoint 02 — Add the Health-only device-local privacy-transform contract
 
