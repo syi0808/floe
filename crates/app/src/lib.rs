@@ -164,8 +164,6 @@ pub use turn_request::{ConversationResumeRequest, ConversationTurnRequest};
 pub use vault_services::{
     VaultLifecycleCommand, VaultLifecycleCommands, VaultLifecycleQueries, VaultLifecycleResult,
 };
-#[cfg(test)]
-pub(crate) use worker::WorkerOperation;
 pub use worker::{
     CalendarActionOperation, CalendarActionProposal, CalendarProposalInspection,
     ConversationSessionOperation, MemoryReviewDecision, MemoryReviewResult, RemotePairingChallenge,

@@ -1,0 +1,4623 @@
+{
+  "baseline": "3f4b407f8079d611224cd7adbef121f9e7e75e8e",
+  "evidence_checkpoint": "c44c57c4",
+  "branch": "refactor/architecture-20261002",
+  "status": "complete: all 70 audited registrations and exclusive support removed; static verification passed",
+  "scope": "T0 bindings test and exclusive support removal only; no implementation changes",
+  "gate": "Coordinator accepted complete 70-case semantic/fixture ledger before this bounded removal. Source hashes match frozen index; boundaries are brace-balanced after masking Rust strings/comments/chars.",
+  "method": "One-off static item-span scan plus manual boundary inspection. No compiler, formatter, build, test, architecture checker or dependency resolver.",
+  "registration_count": 70,
+  "files": [
+    {
+      "path": "crates/bindings/ffi/src/app_wire.rs",
+      "action": "remove_exact_items",
+      "before_sha256": "4e0732dc9c5654cdbe5267f77a8d13ec32a165cbd8f668eb23f77d493d242854",
+      "before_lines": 2936,
+      "removed_items": [
+        {
+          "symbol": "orphaned EOF blank line",
+          "kind": "whitespace only",
+          "start_line": 1817,
+          "end_line": 1817,
+          "start_byte": 74297,
+          "end_byte_exclusive": 74298,
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+          "first_line": "",
+          "last_line": "",
+          "preceding_lines": [
+            "    }",
+            "}"
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "mod tests {"
+          ],
+          "deletion_start_byte": 74297,
+          "deletion_end_byte_exclusive": 74298,
+          "deletion_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        },
+        {
+          "symbol": "tests",
+          "kind": "test-only gated item",
+          "start_line": 1818,
+          "end_line": 2936,
+          "start_byte": 74298,
+          "end_byte_exclusive": 115614,
+          "sha256": "f15bb68dab418a42114ec5569bc8e803824d5c68704b8d348d98e11db0ce5d21",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [],
+          "deletion_start_byte": 74298,
+          "deletion_end_byte_exclusive": 115614,
+          "deletion_sha256": "f15bb68dab418a42114ec5569bc8e803824d5c68704b8d348d98e11db0ce5d21"
+        }
+      ],
+      "registrations": [
+        {
+          "symbol": "vault_services_admit_identity_and_reject_wrong_operation_results",
+          "attribute_line": 2158,
+          "declaration_line": 2159,
+          "case_id": "B001",
+          "exact_item": {
+            "symbol": "vault_services_admit_identity_and_reject_wrong_operation_results",
+            "kind": "test registration",
+            "start_line": 2158,
+            "end_line": 2206,
+            "start_byte": 86411,
+            "end_byte_exclusive": 88205,
+            "sha256": "617c14d7da129edb75967439f2bcb308dde50ccb27e90ec334bf60c881f39aee",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    impl floe_app::ConversationQueries for Services {"
+            ]
+          }
+        },
+        {
+          "symbol": "query_services_receive_verified_identity_and_preserve_owner_results",
+          "attribute_line": 2309,
+          "declaration_line": 2310,
+          "case_id": "B002",
+          "exact_item": {
+            "symbol": "query_services_receive_verified_identity_and_preserve_owner_results",
+            "kind": "test registration",
+            "start_line": 2309,
+            "end_line": 2398,
+            "start_byte": 91826,
+            "end_byte_exclusive": 95323,
+            "sha256": "a04e47e6cd552e7408b6d3d461329c274e9cd42374cf40b124de6bee86dc1a8e",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    #[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "event_service_preserves_cursor_identity_values_and_errors",
+          "attribute_line": 2400,
+          "declaration_line": 2401,
+          "case_id": "B003",
+          "exact_item": {
+            "symbol": "event_service_preserves_cursor_identity_values_and_errors",
+            "kind": "test registration",
+            "start_line": 2400,
+            "end_line": 2474,
+            "start_byte": 95324,
+            "end_byte_exclusive": 98053,
+            "sha256": "2048604b19643e6d7f481d069242c19d41b664520a1ab038898f71dbc509923f",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    impl floe_app::HostServices for Services {"
+            ]
+          }
+        },
+        {
+          "symbol": "start_turn_uses_verified_host_identity_and_returns_durable_receipt",
+          "attribute_line": 2566,
+          "declaration_line": 2567,
+          "case_id": "B004",
+          "exact_item": {
+            "symbol": "start_turn_uses_verified_host_identity_and_returns_durable_receipt",
+            "kind": "test registration",
+            "start_line": 2566,
+            "end_line": 2617,
+            "start_byte": 101120,
+            "end_byte_exclusive": 103136,
+            "sha256": "e48958391115fafcc1f272ab678f00507d94294a0230f621e4e8ca6a0d35b9d5",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    #[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "cancel_run_uses_verified_host_identity",
+          "attribute_line": 2619,
+          "declaration_line": 2620,
+          "case_id": "B005",
+          "exact_item": {
+            "symbol": "cancel_run_uses_verified_host_identity",
+            "kind": "test registration",
+            "start_line": 2619,
+            "end_line": 2661,
+            "start_byte": 103137,
+            "end_byte_exclusive": 104635,
+            "sha256": "d362b3b5400604a10d6cbb276d993f6de9f0921c60b458c860e9be94639baa35",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    #[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "terminal_model_issue_exposes_safe_retry_classification",
+          "attribute_line": 2663,
+          "declaration_line": 2664,
+          "case_id": "B006",
+          "exact_item": {
+            "symbol": "terminal_model_issue_exposes_safe_retry_classification",
+            "kind": "test registration",
+            "start_line": 2663,
+            "end_line": 2679,
+            "start_byte": 104636,
+            "end_byte_exclusive": 105224,
+            "sha256": "3db16d5274c0013adc74737d99cf9058c18ca7bf2a002345c2c57ee4fe6d376a",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    #[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "interaction_list_bound_matches_app_owner",
+          "attribute_line": 2681,
+          "declaration_line": 2682,
+          "case_id": "B007",
+          "exact_item": {
+            "symbol": "interaction_list_bound_matches_app_owner",
+            "kind": "test registration",
+            "start_line": 2681,
+            "end_line": 2687,
+            "start_byte": 105225,
+            "end_byte_exclusive": 105427,
+            "sha256": "7b47f3f4c751fda5523b4117926dcea904300a05280fa853831f402312b92864",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    fn consent_interaction(state: floe_app::InteractionState) -> floe_app::ConversationInteraction {"
+            ]
+          }
+        },
+        {
+          "symbol": "interaction_snapshot_projects_safe_fields_and_backend_actions",
+          "attribute_line": 2752,
+          "declaration_line": 2753,
+          "case_id": "B008",
+          "exact_item": {
+            "symbol": "interaction_snapshot_projects_safe_fields_and_backend_actions",
+            "kind": "test registration",
+            "start_line": 2752,
+            "end_line": 2838,
+            "start_byte": 108170,
+            "end_byte_exclusive": 111862,
+            "sha256": "9567d71d6912a08103a974f2384909ded6c24994083870d42fa37ff2942362f5",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    #[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "interaction_commands_carry_decision_and_linked_receipt",
+          "attribute_line": 2840,
+          "declaration_line": 2841,
+          "case_id": "B009",
+          "exact_item": {
+            "symbol": "interaction_commands_carry_decision_and_linked_receipt",
+            "kind": "test registration",
+            "start_line": 2840,
+            "end_line": 2935,
+            "start_byte": 111863,
+            "end_byte_exclusive": 115612,
+            "sha256": "65a887a9c69c80f5b652f3be18e991405c904ba4e5e84157ebe4b50ff774cf13",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "}"
+            ]
+          }
+        }
+      ],
+      "contained_declaration_anchors": [
+        {
+          "line": 1826,
+          "kind": "struct",
+          "symbol": "Services",
+          "source_qualified_symbol": "Services"
+        },
+        {
+          "line": 1844,
+          "kind": "fn",
+          "symbol": "vault_result_for",
+          "source_qualified_symbol": "vault_result_for"
+        },
+        {
+          "line": 1869,
+          "kind": "fn",
+          "symbol": "vault_command",
+          "source_qualified_symbol": "vault_command"
+        },
+        {
+          "line": 1880,
+          "kind": "fn",
+          "symbol": "session_command",
+          "source_qualified_symbol": "session_command"
+        },
+        {
+          "line": 1891,
+          "kind": "fn",
+          "symbol": "expert_command",
+          "source_qualified_symbol": "expert_command"
+        },
+        {
+          "line": 1902,
+          "kind": "fn",
+          "symbol": "decide_memory",
+          "source_qualified_symbol": "decide_memory"
+        },
+        {
+          "line": 1913,
+          "kind": "fn",
+          "symbol": "mutate_day",
+          "source_qualified_symbol": "mutate_day"
+        },
+        {
+          "line": 1926,
+          "kind": "fn",
+          "symbol": "action_command",
+          "source_qualified_symbol": "action_command"
+        },
+        {
+          "line": 1937,
+          "kind": "fn",
+          "symbol": "apply_local_context",
+          "source_qualified_symbol": "apply_local_context"
+        },
+        {
+          "line": 1946,
+          "kind": "fn",
+          "symbol": "query_local_context",
+          "source_qualified_symbol": "query_local_context"
+        },
+        {
+          "line": 1955,
+          "kind": "fn",
+          "symbol": "inspect_actions",
+          "source_qualified_symbol": "inspect_actions"
+        },
+        {
+          "line": 1963,
+          "kind": "fn",
+          "symbol": "read_action_result",
+          "source_qualified_symbol": "read_action_result"
+        },
+        {
+          "line": 1973,
+          "kind": "fn",
+          "symbol": "read_day",
+          "source_qualified_symbol": "read_day"
+        },
+        {
+          "line": 1985,
+          "kind": "fn",
+          "symbol": "inspect_knowledge",
+          "source_qualified_symbol": "inspect_knowledge"
+        },
+        {
+          "line": 1993,
+          "kind": "fn",
+          "symbol": "read_knowledge_result",
+          "source_qualified_symbol": "read_knowledge_result"
+        },
+        {
+          "line": 2003,
+          "kind": "fn",
+          "symbol": "inspect_connections",
+          "source_qualified_symbol": "inspect_connections"
+        },
+        {
+          "line": 2010,
+          "kind": "fn",
+          "symbol": "read_connections_result",
+          "source_qualified_symbol": "read_connections_result"
+        },
+        {
+          "line": 2021,
+          "kind": "fn",
+          "symbol": "inspect_native_calendar_source",
+          "source_qualified_symbol": "inspect_native_calendar_source"
+        },
+        {
+          "line": 2028,
+          "kind": "fn",
+          "symbol": "mutate_native_calendar_source",
+          "source_qualified_symbol": "mutate_native_calendar_source"
+        },
+        {
+          "line": 2041,
+          "kind": "fn",
+          "symbol": "inspect_native_personal_source",
+          "source_qualified_symbol": "inspect_native_personal_source"
+        },
+        {
+          "line": 2049,
+          "kind": "fn",
+          "symbol": "setup_native_personal_source",
+          "source_qualified_symbol": "setup_native_personal_source"
+        },
+        {
+          "line": 2062,
+          "kind": "fn",
+          "symbol": "connection_observe",
+          "source_qualified_symbol": "connection_observe"
+        },
+        {
+          "line": 2071,
+          "kind": "fn",
+          "symbol": "read_connection_observe_result",
+          "source_qualified_symbol": "read_connection_observe_result"
+        },
+        {
+          "line": 2082,
+          "kind": "fn",
+          "symbol": "inspect_remote_calendar_sources",
+          "source_qualified_symbol": "inspect_remote_calendar_sources"
+        },
+        {
+          "line": 2089,
+          "kind": "fn",
+          "symbol": "mutate_remote_calendar_source",
+          "source_qualified_symbol": "mutate_remote_calendar_source"
+        },
+        {
+          "line": 2102,
+          "kind": "fn",
+          "symbol": "inspect_experts",
+          "source_qualified_symbol": "inspect_experts"
+        },
+        {
+          "line": 2110,
+          "kind": "fn",
+          "symbol": "read_expert_result",
+          "source_qualified_symbol": "read_expert_result"
+        },
+        {
+          "line": 2121,
+          "kind": "fn",
+          "symbol": "get_session",
+          "source_qualified_symbol": "get_session"
+        },
+        {
+          "line": 2129,
+          "kind": "fn",
+          "symbol": "read_session_result",
+          "source_qualified_symbol": "read_session_result"
+        },
+        {
+          "line": 2140,
+          "kind": "fn",
+          "symbol": "vault_status",
+          "source_qualified_symbol": "vault_status"
+        },
+        {
+          "line": 2148,
+          "kind": "fn",
+          "symbol": "read_vault_result",
+          "source_qualified_symbol": "read_vault_result"
+        },
+        {
+          "line": 2159,
+          "kind": "fn",
+          "symbol": "vault_services_admit_identity_and_reject_wrong_operation_results",
+          "source_qualified_symbol": "vault_services_admit_identity_and_reject_wrong_operation_results"
+        },
+        {
+          "line": 2209,
+          "kind": "fn",
+          "symbol": "read_conversation",
+          "source_qualified_symbol": "read_conversation"
+        },
+        {
+          "line": 2226,
+          "kind": "fn",
+          "symbol": "read_interaction",
+          "source_qualified_symbol": "read_interaction"
+        },
+        {
+          "line": 2240,
+          "kind": "fn",
+          "symbol": "list_interactions",
+          "source_qualified_symbol": "list_interactions"
+        },
+        {
+          "line": 2256,
+          "kind": "fn",
+          "symbol": "read_conversation_events",
+          "source_qualified_symbol": "read_conversation_events"
+        },
+        {
+          "line": 2279,
+          "kind": "fn",
+          "symbol": "receipt",
+          "source_qualified_symbol": "receipt"
+        },
+        {
+          "line": 2310,
+          "kind": "fn",
+          "symbol": "query_services_receive_verified_identity_and_preserve_owner_results",
+          "source_qualified_symbol": "query_services_receive_verified_identity_and_preserve_owner_results"
+        },
+        {
+          "line": 2401,
+          "kind": "fn",
+          "symbol": "event_service_preserves_cursor_identity_values_and_errors",
+          "source_qualified_symbol": "event_service_preserves_cursor_identity_values_and_errors"
+        },
+        {
+          "line": 2477,
+          "kind": "fn",
+          "symbol": "shutdown",
+          "source_qualified_symbol": "shutdown"
+        },
+        {
+          "line": 2483,
+          "kind": "fn",
+          "symbol": "start_turn",
+          "source_qualified_symbol": "start_turn"
+        },
+        {
+          "line": 2500,
+          "kind": "fn",
+          "symbol": "cancel_run",
+          "source_qualified_symbol": "cancel_run"
+        },
+        {
+          "line": 2517,
+          "kind": "fn",
+          "symbol": "resolve_interaction",
+          "source_qualified_symbol": "resolve_interaction"
+        },
+        {
+          "line": 2533,
+          "kind": "fn",
+          "symbol": "refresh_interaction",
+          "source_qualified_symbol": "refresh_interaction"
+        },
+        {
+          "line": 2549,
+          "kind": "fn",
+          "symbol": "resume_interaction",
+          "source_qualified_symbol": "resume_interaction"
+        },
+        {
+          "line": 2567,
+          "kind": "fn",
+          "symbol": "start_turn_uses_verified_host_identity_and_returns_durable_receipt",
+          "source_qualified_symbol": "start_turn_uses_verified_host_identity_and_returns_durable_receipt"
+        },
+        {
+          "line": 2620,
+          "kind": "fn",
+          "symbol": "cancel_run_uses_verified_host_identity",
+          "source_qualified_symbol": "cancel_run_uses_verified_host_identity"
+        },
+        {
+          "line": 2664,
+          "kind": "fn",
+          "symbol": "terminal_model_issue_exposes_safe_retry_classification",
+          "source_qualified_symbol": "terminal_model_issue_exposes_safe_retry_classification"
+        },
+        {
+          "line": 2682,
+          "kind": "fn",
+          "symbol": "interaction_list_bound_matches_app_owner",
+          "source_qualified_symbol": "interaction_list_bound_matches_app_owner"
+        },
+        {
+          "line": 2689,
+          "kind": "fn",
+          "symbol": "consent_interaction",
+          "source_qualified_symbol": "consent_interaction"
+        },
+        {
+          "line": 2753,
+          "kind": "fn",
+          "symbol": "interaction_snapshot_projects_safe_fields_and_backend_actions",
+          "source_qualified_symbol": "interaction_snapshot_projects_safe_fields_and_backend_actions"
+        },
+        {
+          "line": 2841,
+          "kind": "fn",
+          "symbol": "interaction_commands_carry_decision_and_linked_receipt",
+          "source_qualified_symbol": "interaction_commands_carry_decision_and_linked_receipt"
+        }
+      ],
+      "preserved_segments": [
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 1,
+          "end_line": 1816,
+          "start_byte": 0,
+          "end_byte_exclusive": 74297,
+          "sha256": "6621a16fd91f6d9657d8ce242d97c2d2ca3f4610230226baa83cf6e472d42b57",
+          "first_line": "use std::collections::BTreeMap;",
+          "last_line": "}",
+          "preceding_lines": [],
+          "following_lines": [
+            "",
+            "#[cfg(test)]"
+          ]
+        }
+      ],
+      "expected_after_sha256": "6621a16fd91f6d9657d8ce242d97c2d2ca3f4610230226baa83cf6e472d42b57",
+      "after_sha256": "6621a16fd91f6d9657d8ce242d97c2d2ca3f4610230226baa83cf6e472d42b57",
+      "status": "exact recorded spans removed; all complement bytes preserved"
+    },
+    {
+      "path": "crates/bindings/ffi/src/context_wire.rs",
+      "action": "remove_exact_items",
+      "before_sha256": "1c41db6977766769fa299948bba94c405e03f58c075ab8289c735f6241e140fc",
+      "before_lines": 386,
+      "removed_items": [
+        {
+          "symbol": "orphaned EOF blank line",
+          "kind": "whitespace only",
+          "start_line": 357,
+          "end_line": 357,
+          "start_byte": 14464,
+          "end_byte_exclusive": 14465,
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+          "first_line": "",
+          "last_line": "",
+          "preceding_lines": [
+            "    })",
+            "}"
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "mod tests {"
+          ],
+          "deletion_start_byte": 14464,
+          "deletion_end_byte_exclusive": 14465,
+          "deletion_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        },
+        {
+          "symbol": "tests",
+          "kind": "test-only gated item",
+          "start_line": 358,
+          "end_line": 386,
+          "start_byte": 14465,
+          "end_byte_exclusive": 15654,
+          "sha256": "66e51d29f8d67093239d334ab1fa89e372dea9ce25ea34ca7db3480ed005e2f6",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [],
+          "deletion_start_byte": 14465,
+          "deletion_end_byte_exclusive": 15654,
+          "deletion_sha256": "66e51d29f8d67093239d334ab1fa89e372dea9ce25ea34ca7db3480ed005e2f6"
+        }
+      ],
+      "registrations": [
+        {
+          "symbol": "native_completion_rejects_nil_request_and_changed_subject",
+          "attribute_line": 362,
+          "declaration_line": 363,
+          "case_id": "B010",
+          "exact_item": {
+            "symbol": "native_completion_rejects_nil_request_and_changed_subject",
+            "kind": "test registration",
+            "start_line": 362,
+            "end_line": 385,
+            "start_byte": 14509,
+            "end_byte_exclusive": 15652,
+            "sha256": "d085e490cbbd05ef63e5052b0f93180e32159b8edbe273214e607378e4ead0e6",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    use super::*;",
+              ""
+            ],
+            "following_lines": [
+              "}"
+            ]
+          }
+        }
+      ],
+      "contained_declaration_anchors": [
+        {
+          "line": 363,
+          "kind": "fn",
+          "symbol": "native_completion_rejects_nil_request_and_changed_subject",
+          "source_qualified_symbol": "native_completion_rejects_nil_request_and_changed_subject"
+        }
+      ],
+      "preserved_segments": [
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 1,
+          "end_line": 356,
+          "start_byte": 0,
+          "end_byte_exclusive": 14464,
+          "sha256": "d1ef59fab1a44aba47f3dacc10004129d606db88806bd6d378118a6df4e125d4",
+          "first_line": "use crate::conversion::native::{",
+          "last_line": "}",
+          "preceding_lines": [],
+          "following_lines": [
+            "",
+            "#[cfg(test)]"
+          ]
+        }
+      ],
+      "expected_after_sha256": "d1ef59fab1a44aba47f3dacc10004129d606db88806bd6d378118a6df4e125d4",
+      "after_sha256": "d1ef59fab1a44aba47f3dacc10004129d606db88806bd6d378118a6df4e125d4",
+      "status": "exact recorded spans removed; all complement bytes preserved"
+    },
+    {
+      "path": "crates/bindings/ffi/src/conversion/day.rs",
+      "action": "remove_exact_items",
+      "before_sha256": "9817989107d35c9457fe72ef5654c456d876c2e6a5225ecdb7c5111b77654b0c",
+      "before_lines": 774,
+      "removed_items": [
+        {
+          "symbol": "use floe_app::Revision;",
+          "kind": "test-only gated item",
+          "start_line": 6,
+          "end_line": 7,
+          "start_byte": 225,
+          "end_byte_exclusive": 262,
+          "sha256": "ddf727c35c4068151fe745ed9023f035a6005b3c99df7ff8b571c0bd32e5a43f",
+          "first_line": "#[cfg(test)]",
+          "last_line": "use floe_app::Revision;",
+          "preceding_lines": [
+            "//! translation, so it lives here, at the binding that needs both.",
+            ""
+          ],
+          "following_lines": [
+            "use floe_app::{",
+            "    AllDaySchedule, CalendarBatch, CalendarFailure, CalendarMirrorState, CalendarRange,"
+          ],
+          "deletion_start_byte": 225,
+          "deletion_end_byte_exclusive": 262,
+          "deletion_sha256": "ddf727c35c4068151fe745ed9023f035a6005b3c99df7ff8b571c0bd32e5a43f"
+        },
+        {
+          "symbol": "parse_test_id",
+          "kind": "exclusive helper macro",
+          "start_line": 48,
+          "end_line": 55,
+          "start_byte": 1867,
+          "end_byte_exclusive": 2122,
+          "sha256": "b1c0afcb298501e8763c1985ed16a416621f692d7d2f712d073a5f15066ea416",
+          "first_line": "macro_rules! parse_test_id {",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "",
+            "parse_test_id!(parse_person_id, floe_app::PersonId);"
+          ],
+          "deletion_start_byte": 1867,
+          "deletion_end_byte_exclusive": 2123,
+          "deletion_sha256": "6e91123afbe7758fbc4f0da446669fcb4ea02ea734107c4bc17b44c19e669726"
+        },
+        {
+          "symbol": "parse_person_id",
+          "kind": "exclusive helper macro invocation",
+          "start_line": 57,
+          "end_line": 57,
+          "start_byte": 2123,
+          "end_byte_exclusive": 2176,
+          "sha256": "81101e6e62bc8e376b13f626d0692474b1793bd6fdf4be98725ad62d03f3d67d",
+          "first_line": "parse_test_id!(parse_person_id, floe_app::PersonId);",
+          "last_line": "parse_test_id!(parse_person_id, floe_app::PersonId);",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "parse_test_id!(parse_capture_id, floe_app::CaptureId);",
+            "parse_id!(parse_event_id, EventId);"
+          ],
+          "deletion_start_byte": 2123,
+          "deletion_end_byte_exclusive": 2176,
+          "deletion_sha256": "81101e6e62bc8e376b13f626d0692474b1793bd6fdf4be98725ad62d03f3d67d"
+        },
+        {
+          "symbol": "parse_capture_id",
+          "kind": "exclusive helper macro invocation",
+          "start_line": 58,
+          "end_line": 58,
+          "start_byte": 2176,
+          "end_byte_exclusive": 2231,
+          "sha256": "c5929b435b8eabe8f8c85be7a80af37285d24860b498d5d2d821e46ccffbd941",
+          "first_line": "parse_test_id!(parse_capture_id, floe_app::CaptureId);",
+          "last_line": "parse_test_id!(parse_capture_id, floe_app::CaptureId);",
+          "preceding_lines": [
+            "",
+            "parse_test_id!(parse_person_id, floe_app::PersonId);"
+          ],
+          "following_lines": [
+            "parse_id!(parse_event_id, EventId);",
+            "parse_id!(parse_task_id, TaskId);"
+          ],
+          "deletion_start_byte": 2176,
+          "deletion_end_byte_exclusive": 2231,
+          "deletion_sha256": "c5929b435b8eabe8f8c85be7a80af37285d24860b498d5d2d821e46ccffbd941"
+        },
+        {
+          "symbol": "calendar_source_from_dto",
+          "kind": "test-only gated item",
+          "start_line": 122,
+          "end_line": 132,
+          "start_byte": 4529,
+          "end_byte_exclusive": 4925,
+          "sha256": "77f6744e8a7aa4734300fc067bf72e0623e4b293a0223488a9aa65a82e7185eb",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "",
+            "pub fn calendar_sync_status_to_dto(value: CalendarSyncStatus) -> CalendarSyncStatusDto {"
+          ],
+          "deletion_start_byte": 4529,
+          "deletion_end_byte_exclusive": 4926,
+          "deletion_sha256": "f412f7be734acf42f052ad9b1c0a4f3f06d153a08004bddbbd8980d7656c9e61"
+        },
+        {
+          "symbol": "calendar_sync_status_from_dto",
+          "kind": "test-only gated item",
+          "start_line": 143,
+          "end_line": 151,
+          "start_byte": 5256,
+          "end_byte_exclusive": 5601,
+          "sha256": "e586044d13087bc84ffb23f1c0a682ee91a31337855f2a5e345d21a82e8f63b1",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "",
+            "pub fn calendar_mirror_state_to_dto(value: CalendarMirrorState) -> CalendarMirrorStateDto {"
+          ],
+          "deletion_start_byte": 5256,
+          "deletion_end_byte_exclusive": 5602,
+          "deletion_sha256": "0b350e6a39bed714ab8742b74f042ebbb91f6c11221c7070bdc9815ac1255a30"
+        },
+        {
+          "symbol": "calendar_mirror_state_from_dto",
+          "kind": "test-only gated item",
+          "start_line": 169,
+          "end_line": 184,
+          "start_byte": 6238,
+          "end_byte_exclusive": 6893,
+          "sha256": "e2076a69eb440f9c11d22ecae062357a8bb34bdbb21f1d07598f9f9881310c0c",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "",
+            "pub fn priority_to_dto(value: Priority) -> PriorityDto {"
+          ],
+          "deletion_start_byte": 6238,
+          "deletion_end_byte_exclusive": 6894,
+          "deletion_sha256": "bac629cf096d6045f81748b525b0faf652bf00bbf2289dcf99c91004dc9088e4"
+        },
+        {
+          "symbol": "source_ref_from_dto",
+          "kind": "test-only gated item",
+          "start_line": 214,
+          "end_line": 226,
+          "start_byte": 7713,
+          "end_byte_exclusive": 8183,
+          "sha256": "6e2eae487a8958209eab5b715666118e065cd1357148aafbb2b20e8e669d30b8",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "",
+            "pub fn domain_ref_to_dto(value: DomainRef) -> DomainRefDto {"
+          ],
+          "deletion_start_byte": 7713,
+          "deletion_end_byte_exclusive": 8184,
+          "deletion_sha256": "f031288c9760519fd5dd59f0ead7927593e0d09dd2fbe26b2e7a6b4d95ce0d47"
+        },
+        {
+          "symbol": "event_from_dto",
+          "kind": "test-only gated item",
+          "start_line": 301,
+          "end_line": 318,
+          "start_byte": 10735,
+          "end_byte_exclusive": 11540,
+          "sha256": "2541dafd1769a2b156edfbeafb0da3492ccd5d5b50ac9e2ee94b6993335a8d33",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "",
+            "pub fn task_to_dto(value: Task) -> TaskDto {"
+          ],
+          "deletion_start_byte": 10735,
+          "deletion_end_byte_exclusive": 11541,
+          "deletion_sha256": "1fe52f81f76b21df6fbeee122d6d835078f76c944a5c6c333733e2b7b61dcab5"
+        },
+        {
+          "symbol": "task_from_dto",
+          "kind": "test-only gated item",
+          "start_line": 336,
+          "end_line": 369,
+          "start_byte": 12112,
+          "end_byte_exclusive": 13231,
+          "sha256": "aecc75317d1b6145a625f696b39df9e69a312e10c7e564f6dea6325e9f094180",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "",
+            "pub fn note_to_dto(value: Note) -> NoteDto {"
+          ],
+          "deletion_start_byte": 12112,
+          "deletion_end_byte_exclusive": 13232,
+          "deletion_sha256": "df3f70d8cc39888e653c972bf68738c239dbf4a03fe36a4ef0ffe9e9fa0486b9"
+        },
+        {
+          "symbol": "note_from_dto",
+          "kind": "test-only gated item",
+          "start_line": 384,
+          "end_line": 399,
+          "start_byte": 13650,
+          "end_byte_exclusive": 14367,
+          "sha256": "260e92b605f60f3500ae91549fcffb15a98e6396a84896239f61f48d202d323c",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "",
+            "/// The classification a caller chose for one capture."
+          ],
+          "deletion_start_byte": 13650,
+          "deletion_end_byte_exclusive": 14368,
+          "deletion_sha256": "9dadd616bbd680bc2676373fd8d9ade967882c5358ec9ebec4cf7b656a3ba8ee"
+        },
+        {
+          "symbol": "timeline_item_from_dto",
+          "kind": "test-only gated item",
+          "start_line": 472,
+          "end_line": 481,
+          "start_byte": 16744,
+          "end_byte_exclusive": 17159,
+          "sha256": "05c54f5cfae9be952278123e8882885d9398b8593f888c8bdefe4fa7084f5887",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "",
+            "pub fn capture_source_to_dto(value: CaptureSource) -> CaptureSourceDto {"
+          ],
+          "deletion_start_byte": 16744,
+          "deletion_end_byte_exclusive": 17160,
+          "deletion_sha256": "c134ca5cc8d81500acf7855696093a8e3f6d8e50ea647af9f9a2c55eb8abe26a"
+        },
+        {
+          "symbol": "capture_source_from_dto",
+          "kind": "test-only gated item",
+          "start_line": 490,
+          "end_line": 496,
+          "start_byte": 17374,
+          "end_byte_exclusive": 17602,
+          "sha256": "52e94c54aa0f0349a47fc7dcb1c1ad4e7567095765943294e03dac54f7a15d0f",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "",
+            "pub fn capture_processing_to_dto(value: CaptureProcessing) -> CaptureProcessingDto {"
+          ],
+          "deletion_start_byte": 17374,
+          "deletion_end_byte_exclusive": 17603,
+          "deletion_sha256": "8a6f537f91691e76ac2df72d03f1bcc5ad5f03076dd2079a815e39dd6b3746a6"
+        },
+        {
+          "symbol": "capture_processing_from_dto",
+          "kind": "test-only gated item",
+          "start_line": 514,
+          "end_line": 531,
+          "start_byte": 18183,
+          "end_byte_exclusive": 18881,
+          "sha256": "86fa699a51fd2974c4548c9c325c991af3cc4ecd604e0018b85b28d8f7cb5c19",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "",
+            "pub fn capture_to_dto(value: Capture) -> CaptureDto {"
+          ],
+          "deletion_start_byte": 18183,
+          "deletion_end_byte_exclusive": 18882,
+          "deletion_sha256": "912fb6f748e0362003166008e92d25333f584127e09386d9b01d24ff11b4e2d9"
+        },
+        {
+          "symbol": "capture_from_dto",
+          "kind": "test-only gated item",
+          "start_line": 545,
+          "end_line": 560,
+          "start_byte": 19295,
+          "end_byte_exclusive": 19922,
+          "sha256": "18e0622bf721f7c56dd087e030d5cb44258d3301b582b5b2c95e76ec866b0913",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "",
+            "pub fn day_snapshot_to_dto(value: DaySnapshot) -> Result<DaySnapshotDto, ProtocolConversionError> {"
+          ],
+          "deletion_start_byte": 19295,
+          "deletion_end_byte_exclusive": 19923,
+          "deletion_sha256": "5adae629b2fc91698db986d34ec3be0f86361f038e3ecbc6613ad9b7fb09b401"
+        },
+        {
+          "symbol": "orphaned EOF blank line",
+          "kind": "whitespace only",
+          "start_line": 581,
+          "end_line": 581,
+          "start_byte": 20847,
+          "end_byte_exclusive": 20848,
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+          "first_line": "",
+          "last_line": "",
+          "preceding_lines": [
+            "    })",
+            "}"
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "pub fn day_snapshot_from_dto("
+          ],
+          "deletion_start_byte": 20847,
+          "deletion_end_byte_exclusive": 20848,
+          "deletion_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        },
+        {
+          "symbol": "day_snapshot_from_dto",
+          "kind": "test-only gated item",
+          "start_line": 582,
+          "end_line": 616,
+          "start_byte": 20848,
+          "end_byte_exclusive": 22159,
+          "sha256": "b07480686ffe5a60c60b8066944bddf4e1380288f66e0ea73bc1b4bed2a6b7eb",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "",
+            "#[cfg(test)]"
+          ],
+          "deletion_start_byte": 20848,
+          "deletion_end_byte_exclusive": 22160,
+          "deletion_sha256": "cc72cac68ec269de56acb42f0c66ac41506447942add66aed377a91f2165984c"
+        },
+        {
+          "symbol": "tests",
+          "kind": "test-only gated item",
+          "start_line": 618,
+          "end_line": 774,
+          "start_byte": 22160,
+          "end_byte_exclusive": 27895,
+          "sha256": "a8668573a81b92d2f8ce709f1b264ac3aa21b50a720ce44acfd0ebe9a2fe635d",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [],
+          "deletion_start_byte": 22160,
+          "deletion_end_byte_exclusive": 27895,
+          "deletion_sha256": "a8668573a81b92d2f8ce709f1b264ac3aa21b50a720ce44acfd0ebe9a2fe635d"
+        }
+      ],
+      "registrations": [
+        {
+          "symbol": "domain_snapshot_round_trip_preserves_all_item_kinds",
+          "attribute_line": 636,
+          "declaration_line": 637,
+          "case_id": "B011",
+          "exact_item": {
+            "symbol": "domain_snapshot_round_trip_preserves_all_item_kinds",
+            "kind": "test registration",
+            "start_line": 636,
+            "end_line": 680,
+            "start_byte": 22772,
+            "end_byte_exclusive": 24351,
+            "sha256": "ef4cb4adb1078bb88460b9f5fec656ee8c5d9465e17edbade2c071bbb6dad8e6",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    #[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "capture_round_trip_preserves_processing_and_revision",
+          "attribute_line": 682,
+          "declaration_line": 683,
+          "case_id": "B012",
+          "exact_item": {
+            "symbol": "capture_round_trip_preserves_processing_and_revision",
+            "kind": "test registration",
+            "start_line": 682,
+            "end_line": 695,
+            "start_byte": 24352,
+            "end_byte_exclusive": 24966,
+            "sha256": "aa00643dc84fbcca037bb6d7a78806ed3625683afd55b9ddaf95f17c81bf16d0",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    #[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "conversion_rejects_invalid_versions_and_domain_values",
+          "attribute_line": 697,
+          "declaration_line": 698,
+          "case_id": "B013",
+          "exact_item": {
+            "symbol": "conversion_rejects_invalid_versions_and_domain_values",
+            "kind": "test registration",
+            "start_line": 697,
+            "end_line": 728,
+            "start_byte": 24967,
+            "end_byte_exclusive": 26130,
+            "sha256": "5c12bbf9ea6d7f55787c396a10d7d185a85ab471fe962f7f119c9cbb0dd22866",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    #[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "calendar_mirror_state_conversion_preserves_wire_json_shape",
+          "attribute_line": 730,
+          "declaration_line": 731,
+          "case_id": "B014",
+          "exact_item": {
+            "symbol": "calendar_mirror_state_conversion_preserves_wire_json_shape",
+            "kind": "test registration",
+            "start_line": 730,
+            "end_line": 773,
+            "start_byte": 26131,
+            "end_byte_exclusive": 27893,
+            "sha256": "a97cd9eb3fcff7b635a38fc95f974d4d22ca536dc1f8a769c2c00900f87149a8",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "}"
+            ]
+          }
+        }
+      ],
+      "contained_declaration_anchors": [
+        {
+          "line": 57,
+          "kind": "macro-generated",
+          "symbol": "parse_person_id",
+          "source_qualified_symbol": "parse_person_id"
+        },
+        {
+          "line": 58,
+          "kind": "macro-generated",
+          "symbol": "parse_capture_id",
+          "source_qualified_symbol": "parse_capture_id"
+        },
+        {
+          "line": 123,
+          "kind": "fn",
+          "symbol": "calendar_source_from_dto",
+          "source_qualified_symbol": "calendar_source_from_dto"
+        },
+        {
+          "line": 144,
+          "kind": "fn",
+          "symbol": "calendar_sync_status_from_dto",
+          "source_qualified_symbol": "calendar_sync_status_from_dto"
+        },
+        {
+          "line": 170,
+          "kind": "fn",
+          "symbol": "calendar_mirror_state_from_dto",
+          "source_qualified_symbol": "calendar_mirror_state_from_dto"
+        },
+        {
+          "line": 215,
+          "kind": "fn",
+          "symbol": "source_ref_from_dto",
+          "source_qualified_symbol": "source_ref_from_dto"
+        },
+        {
+          "line": 302,
+          "kind": "fn",
+          "symbol": "event_from_dto",
+          "source_qualified_symbol": "event_from_dto"
+        },
+        {
+          "line": 337,
+          "kind": "fn",
+          "symbol": "task_from_dto",
+          "source_qualified_symbol": "task_from_dto"
+        },
+        {
+          "line": 385,
+          "kind": "fn",
+          "symbol": "note_from_dto",
+          "source_qualified_symbol": "note_from_dto"
+        },
+        {
+          "line": 473,
+          "kind": "fn",
+          "symbol": "timeline_item_from_dto",
+          "source_qualified_symbol": "timeline_item_from_dto"
+        },
+        {
+          "line": 491,
+          "kind": "fn",
+          "symbol": "capture_source_from_dto",
+          "source_qualified_symbol": "capture_source_from_dto"
+        },
+        {
+          "line": 515,
+          "kind": "fn",
+          "symbol": "capture_processing_from_dto",
+          "source_qualified_symbol": "capture_processing_from_dto"
+        },
+        {
+          "line": 546,
+          "kind": "fn",
+          "symbol": "capture_from_dto",
+          "source_qualified_symbol": "capture_from_dto"
+        },
+        {
+          "line": 583,
+          "kind": "fn",
+          "symbol": "day_snapshot_from_dto",
+          "source_qualified_symbol": "day_snapshot_from_dto"
+        },
+        {
+          "line": 632,
+          "kind": "fn",
+          "symbol": "id",
+          "source_qualified_symbol": "id"
+        },
+        {
+          "line": 637,
+          "kind": "fn",
+          "symbol": "domain_snapshot_round_trip_preserves_all_item_kinds",
+          "source_qualified_symbol": "domain_snapshot_round_trip_preserves_all_item_kinds"
+        },
+        {
+          "line": 683,
+          "kind": "fn",
+          "symbol": "capture_round_trip_preserves_processing_and_revision",
+          "source_qualified_symbol": "capture_round_trip_preserves_processing_and_revision"
+        },
+        {
+          "line": 698,
+          "kind": "fn",
+          "symbol": "conversion_rejects_invalid_versions_and_domain_values",
+          "source_qualified_symbol": "conversion_rejects_invalid_versions_and_domain_values"
+        },
+        {
+          "line": 731,
+          "kind": "fn",
+          "symbol": "calendar_mirror_state_conversion_preserves_wire_json_shape",
+          "source_qualified_symbol": "calendar_mirror_state_conversion_preserves_wire_json_shape"
+        }
+      ],
+      "preserved_segments": [
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 1,
+          "end_line": 5,
+          "start_byte": 0,
+          "end_byte_exclusive": 225,
+          "sha256": "e671da15c5219f506db2c649d8d89633ef0297a914e3e08f1ae19e2a7c7c768b",
+          "first_line": "//! Codec between the app wire DTOs and the Day values the app's API carries.",
+          "last_line": "",
+          "preceding_lines": [],
+          "following_lines": [
+            "#[cfg(test)]",
+            "use floe_app::Revision;"
+          ]
+        },
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 8,
+          "end_line": 47,
+          "start_byte": 262,
+          "end_byte_exclusive": 1867,
+          "sha256": "2ce0611e35281fa9c8dba8a056270702842c899f02900eda48583c0c850bfc66",
+          "first_line": "use floe_app::{",
+          "last_line": "",
+          "preceding_lines": [
+            "#[cfg(test)]",
+            "use floe_app::Revision;"
+          ],
+          "following_lines": [
+            "macro_rules! parse_test_id {",
+            "    ($function:ident, $type:path) => {"
+          ]
+        },
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 59,
+          "end_line": 121,
+          "start_byte": 2231,
+          "end_byte_exclusive": 4529,
+          "sha256": "ec176deecb44209fa3d0d62d60cbfbe5f12463a0811012adb8f79fde70b9d044",
+          "first_line": "parse_id!(parse_event_id, EventId);",
+          "last_line": "",
+          "preceding_lines": [
+            "parse_test_id!(parse_person_id, floe_app::PersonId);",
+            "parse_test_id!(parse_capture_id, floe_app::CaptureId);"
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "pub fn calendar_source_from_dto(value: CalendarSourceDto) -> CalendarSource {"
+          ]
+        },
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 134,
+          "end_line": 142,
+          "start_byte": 4926,
+          "end_byte_exclusive": 5256,
+          "sha256": "67eaaa69ebd2d45805217dc49f0aacdb39c9c2c41265846d33df29ca432c17c4",
+          "first_line": "pub fn calendar_sync_status_to_dto(value: CalendarSyncStatus) -> CalendarSyncStatusDto {",
+          "last_line": "",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "pub fn calendar_sync_status_from_dto(value: CalendarSyncStatusDto) -> CalendarSyncStatus {"
+          ]
+        },
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 153,
+          "end_line": 168,
+          "start_byte": 5602,
+          "end_byte_exclusive": 6238,
+          "sha256": "9e5516eae6e778b2bc577c40176164729bf8be42b5a3bdc5c5c89de7c0911af3",
+          "first_line": "pub fn calendar_mirror_state_to_dto(value: CalendarMirrorState) -> CalendarMirrorStateDto {",
+          "last_line": "",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "pub fn calendar_mirror_state_from_dto(value: CalendarMirrorStateDto) -> CalendarMirrorState {"
+          ]
+        },
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 186,
+          "end_line": 213,
+          "start_byte": 6894,
+          "end_byte_exclusive": 7713,
+          "sha256": "098250de5222db10591d224240db7ed23a859d1b716f893ae73f31841800959f",
+          "first_line": "pub fn priority_to_dto(value: Priority) -> PriorityDto {",
+          "last_line": "",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "pub fn source_ref_from_dto(value: SourceRefDto) -> Result<SourceRef, ProtocolConversionError> {"
+          ]
+        },
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 228,
+          "end_line": 300,
+          "start_byte": 8184,
+          "end_byte_exclusive": 10735,
+          "sha256": "2e787b60ff3fff9006d08351aefa829856ba43c17c9b59bb162f9e21acc968dc",
+          "first_line": "pub fn domain_ref_to_dto(value: DomainRef) -> DomainRefDto {",
+          "last_line": "",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "pub fn event_from_dto(value: EventDto) -> Result<Event, ProtocolConversionError> {"
+          ]
+        },
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 320,
+          "end_line": 335,
+          "start_byte": 11541,
+          "end_byte_exclusive": 12112,
+          "sha256": "3037bc873c4c3ceb548cd64de38057376d5676662b2ebfaf0b9611a80b96734f",
+          "first_line": "pub fn task_to_dto(value: Task) -> TaskDto {",
+          "last_line": "",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "pub fn task_from_dto(value: TaskDto) -> Result<Task, ProtocolConversionError> {"
+          ]
+        },
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 371,
+          "end_line": 383,
+          "start_byte": 13232,
+          "end_byte_exclusive": 13650,
+          "sha256": "11b32d2930042add285f4c5fa4c4441343754f571658abca7fdc077a852f6363",
+          "first_line": "pub fn note_to_dto(value: Note) -> NoteDto {",
+          "last_line": "",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "pub fn note_from_dto(value: NoteDto) -> Result<Note, ProtocolConversionError> {"
+          ]
+        },
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 401,
+          "end_line": 471,
+          "start_byte": 14368,
+          "end_byte_exclusive": 16744,
+          "sha256": "d0762ee46e6fed93a4d2245154cbc8945dfef0561347b616fe9f14c84f0b7958",
+          "first_line": "/// The classification a caller chose for one capture.",
+          "last_line": "",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "pub fn timeline_item_from_dto("
+          ]
+        },
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 483,
+          "end_line": 489,
+          "start_byte": 17160,
+          "end_byte_exclusive": 17374,
+          "sha256": "c2a8938573eb8c80b2867e0123f4ab07f4f4a862cf9905ae84d9e5a56fd56d14",
+          "first_line": "pub fn capture_source_to_dto(value: CaptureSource) -> CaptureSourceDto {",
+          "last_line": "",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "pub fn capture_source_from_dto(value: CaptureSourceDto) -> CaptureSource {"
+          ]
+        },
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 498,
+          "end_line": 513,
+          "start_byte": 17603,
+          "end_byte_exclusive": 18183,
+          "sha256": "ebd1541046501255472c03a519de13d932e77837b7b919d061166ac5bc897c52",
+          "first_line": "pub fn capture_processing_to_dto(value: CaptureProcessing) -> CaptureProcessingDto {",
+          "last_line": "",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "pub fn capture_processing_from_dto("
+          ]
+        },
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 533,
+          "end_line": 544,
+          "start_byte": 18882,
+          "end_byte_exclusive": 19295,
+          "sha256": "9797ca8c831a8dd7f7cc460d9bb1e1e9ab7db1efcc15b564f783427b7940bd3a",
+          "first_line": "pub fn capture_to_dto(value: Capture) -> CaptureDto {",
+          "last_line": "",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "pub fn capture_from_dto(value: CaptureDto) -> Result<Capture, ProtocolConversionError> {"
+          ]
+        },
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 562,
+          "end_line": 580,
+          "start_byte": 19923,
+          "end_byte_exclusive": 20847,
+          "sha256": "db8361c95f12184ea7aaf65407edb1d1b2473f33d486d3a7d52ce681ebde75b4",
+          "first_line": "pub fn day_snapshot_to_dto(value: DaySnapshot) -> Result<DaySnapshotDto, ProtocolConversionError> {",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "",
+            "#[cfg(test)]"
+          ]
+        }
+      ],
+      "expected_after_sha256": "ef304c7ef3075206abebfee2ca15680cb1fff81349c7d55f180f53a7c398a54d",
+      "after_sha256": "ef304c7ef3075206abebfee2ca15680cb1fff81349c7d55f180f53a7c398a54d",
+      "status": "exact recorded spans removed; all complement bytes preserved"
+    },
+    {
+      "path": "crates/bindings/ffi/src/conversion/owners.rs",
+      "action": "remove_exact_items",
+      "before_sha256": "91216fdff13f68902add7054c61ed97fe5fa09823ca434b5489ecc7be57a7a38",
+      "before_lines": 714,
+      "removed_items": [
+        {
+          "symbol": "orphaned EOF blank line",
+          "kind": "whitespace only",
+          "start_line": 568,
+          "end_line": 568,
+          "start_byte": 21615,
+          "end_byte_exclusive": 21616,
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+          "first_line": "",
+          "last_line": "",
+          "preceding_lines": [
+            "    })",
+            "}"
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "mod tests {"
+          ],
+          "deletion_start_byte": 21615,
+          "deletion_end_byte_exclusive": 21616,
+          "deletion_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        },
+        {
+          "symbol": "tests",
+          "kind": "test-only gated item",
+          "start_line": 569,
+          "end_line": 714,
+          "start_byte": 21616,
+          "end_byte_exclusive": 26705,
+          "sha256": "598f4e21e157b76c036b56fe9709f1557af6eb2c04450dfb376a1c517a873332",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [],
+          "deletion_start_byte": 21616,
+          "deletion_end_byte_exclusive": 26705,
+          "deletion_sha256": "598f4e21e157b76c036b56fe9709f1557af6eb2c04450dfb376a1c517a873332"
+        }
+      ],
+      "registrations": [
+        {
+          "symbol": "failure_recovery_is_stage_aware_and_conservative",
+          "attribute_line": 574,
+          "declaration_line": 575,
+          "case_id": "B015",
+          "exact_item": {
+            "symbol": "failure_recovery_is_stage_aware_and_conservative",
+            "kind": "test registration",
+            "start_line": 574,
+            "end_line": 713,
+            "start_byte": 21692,
+            "end_byte_exclusive": 26703,
+            "sha256": "b08732b9c15de575224a058251e4240587aabcd3b7b550c9521282bb32dc9ad8",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    use floe_app::AgentFailure;",
+              ""
+            ],
+            "following_lines": [
+              "}"
+            ]
+          }
+        }
+      ],
+      "contained_declaration_anchors": [
+        {
+          "line": 575,
+          "kind": "fn",
+          "symbol": "failure_recovery_is_stage_aware_and_conservative",
+          "source_qualified_symbol": "failure_recovery_is_stage_aware_and_conservative"
+        }
+      ],
+      "preserved_segments": [
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 1,
+          "end_line": 567,
+          "start_byte": 0,
+          "end_byte_exclusive": 21615,
+          "sha256": "f154e892df1cb79a2914cac1373d076651907b2a7d7c4e7ec1a9c2797f8c116f",
+          "first_line": "use floe_app::{",
+          "last_line": "}",
+          "preceding_lines": [],
+          "following_lines": [
+            "",
+            "#[cfg(test)]"
+          ]
+        }
+      ],
+      "expected_after_sha256": "f154e892df1cb79a2914cac1373d076651907b2a7d7c4e7ec1a9c2797f8c116f",
+      "after_sha256": "f154e892df1cb79a2914cac1373d076651907b2a7d7c4e7ec1a9c2797f8c116f",
+      "status": "exact recorded spans removed; all complement bytes preserved"
+    },
+    {
+      "path": "crates/bindings/ffi/src/diagnostics.rs",
+      "action": "remove_exact_items",
+      "before_sha256": "cc9276ef66a7363cfb060aa2803168d53d3baf9b5015a39dbdaf16e9828c0a31",
+      "before_lines": 60,
+      "removed_items": [
+        {
+          "symbol": "orphaned EOF blank line",
+          "kind": "whitespace only",
+          "start_line": 45,
+          "end_line": 45,
+          "start_byte": 1294,
+          "end_byte_exclusive": 1295,
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+          "first_line": "",
+          "last_line": "",
+          "preceding_lines": [
+            "    }",
+            "}"
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "mod tests {"
+          ],
+          "deletion_start_byte": 1294,
+          "deletion_end_byte_exclusive": 1295,
+          "deletion_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        },
+        {
+          "symbol": "tests",
+          "kind": "test-only gated item",
+          "start_line": 46,
+          "end_line": 60,
+          "start_byte": 1295,
+          "end_byte_exclusive": 1782,
+          "sha256": "faddf6cc608f033f68404bea48465a1a2e1c141f6d4dbf7e15947e26395e0f12",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [],
+          "deletion_start_byte": 1295,
+          "deletion_end_byte_exclusive": 1782,
+          "deletion_sha256": "faddf6cc608f033f68404bea48465a1a2e1c141f6d4dbf7e15947e26395e0f12"
+        }
+      ],
+      "registrations": [
+        {
+          "symbol": "panic_error_is_correlated_without_exposing_payload",
+          "attribute_line": 51,
+          "declaration_line": 52,
+          "case_id": "B016",
+          "exact_item": {
+            "symbol": "panic_error_is_correlated_without_exposing_payload",
+            "kind": "test registration",
+            "start_line": 51,
+            "end_line": 59,
+            "start_byte": 1359,
+            "end_byte_exclusive": 1780,
+            "sha256": "30d050925efeea2070d5186b17c902eb85a81db6753f115f87b586e659606031",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    use uuid::Uuid;",
+              ""
+            ],
+            "following_lines": [
+              "}"
+            ]
+          }
+        }
+      ],
+      "contained_declaration_anchors": [
+        {
+          "line": 52,
+          "kind": "fn",
+          "symbol": "panic_error_is_correlated_without_exposing_payload",
+          "source_qualified_symbol": "panic_error_is_correlated_without_exposing_payload"
+        }
+      ],
+      "preserved_segments": [
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 1,
+          "end_line": 44,
+          "start_byte": 0,
+          "end_byte_exclusive": 1294,
+          "sha256": "987ef0e7116dc1ddb2a85e3c5f0e96172cc852ebd78b3678c15e5171176c1a6c",
+          "first_line": "use std::{any::Any, sync::Once};",
+          "last_line": "}",
+          "preceding_lines": [],
+          "following_lines": [
+            "",
+            "#[cfg(test)]"
+          ]
+        }
+      ],
+      "expected_after_sha256": "987ef0e7116dc1ddb2a85e3c5f0e96172cc852ebd78b3678c15e5171176c1a6c",
+      "after_sha256": "987ef0e7116dc1ddb2a85e3c5f0e96172cc852ebd78b3678c15e5171176c1a6c",
+      "status": "exact recorded spans removed; all complement bytes preserved"
+    },
+    {
+      "path": "crates/bindings/ffi/src/remote_wire.rs",
+      "action": "remove_exact_items",
+      "before_sha256": "cb2cdb30720cea9109a35bea87c7cd85680c7b2d663b4a0340720485255b662c",
+      "before_lines": 444,
+      "removed_items": [
+        {
+          "symbol": "orphaned EOF blank line",
+          "kind": "whitespace only",
+          "start_line": 205,
+          "end_line": 206,
+          "start_byte": 7697,
+          "end_byte_exclusive": 7699,
+          "sha256": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+          "first_line": "",
+          "last_line": "",
+          "preceding_lines": [
+            "    })",
+            "}"
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "mod tests {"
+          ],
+          "deletion_start_byte": 7697,
+          "deletion_end_byte_exclusive": 7699,
+          "deletion_sha256": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070"
+        },
+        {
+          "symbol": "tests",
+          "kind": "test-only gated item",
+          "start_line": 207,
+          "end_line": 444,
+          "start_byte": 7699,
+          "end_byte_exclusive": 15999,
+          "sha256": "d288375cb425e90fd12858f0a88eac05ffc3b3e95225e416d92367cd83f18da1",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "",
+            ""
+          ],
+          "following_lines": [],
+          "deletion_start_byte": 7699,
+          "deletion_end_byte_exclusive": 15999,
+          "deletion_sha256": "d288375cb425e90fd12858f0a88eac05ffc3b3e95225e416d92367cd83f18da1"
+        }
+      ],
+      "registrations": [
+        {
+          "symbol": "remote_handlers_use_verified_host_identity_and_owner_services",
+          "attribute_line": 290,
+          "declaration_line": 291,
+          "case_id": "B017",
+          "exact_item": {
+            "symbol": "remote_handlers_use_verified_host_identity_and_owner_services",
+            "kind": "test registration",
+            "start_line": 290,
+            "end_line": 365,
+            "start_byte": 10426,
+            "end_byte_exclusive": 13086,
+            "sha256": "5d1ebb4a6615969196ffe1598b890f8fc026eac26846634a8c138e063d5d1464",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    #[derive(Clone)]"
+            ]
+          }
+        },
+        {
+          "symbol": "approved_token_is_serializable_but_omitted_from_debug_and_conversion_errors",
+          "attribute_line": 380,
+          "declaration_line": 381,
+          "case_id": "B018",
+          "exact_item": {
+            "symbol": "approved_token_is_serializable_but_omitted_from_debug_and_conversion_errors",
+            "kind": "test registration",
+            "start_line": 380,
+            "end_line": 443,
+            "start_byte": 13454,
+            "end_byte_exclusive": 15997,
+            "sha256": "ffac0b9870e8d7464993fbc208158b5467a5e9230da586cbf7462ddd02137551",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "}"
+            ]
+          }
+        }
+      ],
+      "contained_declaration_anchors": [
+        {
+          "line": 214,
+          "kind": "struct",
+          "symbol": "Services",
+          "source_qualified_symbol": "Services"
+        },
+        {
+          "line": 217,
+          "kind": "fn",
+          "symbol": "shutdown",
+          "source_qualified_symbol": "shutdown"
+        },
+        {
+          "line": 223,
+          "kind": "fn",
+          "symbol": "remote_pairing",
+          "source_qualified_symbol": "remote_pairing"
+        },
+        {
+          "line": 242,
+          "kind": "fn",
+          "symbol": "read_pairing_result",
+          "source_qualified_symbol": "read_pairing_result"
+        },
+        {
+          "line": 264,
+          "kind": "fn",
+          "symbol": "remote_access",
+          "source_qualified_symbol": "remote_access"
+        },
+        {
+          "line": 276,
+          "kind": "fn",
+          "symbol": "read_access_result",
+          "source_qualified_symbol": "read_access_result"
+        },
+        {
+          "line": 291,
+          "kind": "fn",
+          "symbol": "remote_handlers_use_verified_host_identity_and_owner_services",
+          "source_qualified_symbol": "remote_handlers_use_verified_host_identity_and_owner_services"
+        },
+        {
+          "line": 368,
+          "kind": "struct",
+          "symbol": "TraceBuffer",
+          "source_qualified_symbol": "TraceBuffer"
+        },
+        {
+          "line": 371,
+          "kind": "fn",
+          "symbol": "write",
+          "source_qualified_symbol": "write"
+        },
+        {
+          "line": 375,
+          "kind": "fn",
+          "symbol": "flush",
+          "source_qualified_symbol": "flush"
+        },
+        {
+          "line": 381,
+          "kind": "fn",
+          "symbol": "approved_token_is_serializable_but_omitted_from_debug_and_conversion_errors",
+          "source_qualified_symbol": "approved_token_is_serializable_but_omitted_from_debug_and_conversion_errors"
+        }
+      ],
+      "preserved_segments": [
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 1,
+          "end_line": 204,
+          "start_byte": 0,
+          "end_byte_exclusive": 7697,
+          "sha256": "240cb777a1773bdf2922263db2ee63b1656c61eb40a3f5f7cff69dbad91822eb",
+          "first_line": "use crate::app_wire::{",
+          "last_line": "}",
+          "preceding_lines": [],
+          "following_lines": [
+            "",
+            ""
+          ]
+        }
+      ],
+      "expected_after_sha256": "240cb777a1773bdf2922263db2ee63b1656c61eb40a3f5f7cff69dbad91822eb",
+      "after_sha256": "240cb777a1773bdf2922263db2ee63b1656c61eb40a3f5f7cff69dbad91822eb",
+      "status": "exact recorded spans removed; all complement bytes preserved"
+    },
+    {
+      "path": "crates/bindings/ffi/tests/c_abi.rs",
+      "action": "delete_file",
+      "before_sha256": "ff1cac1e86736304f0ebf23442e3847fc91a44dbeb3d2aa941f1d0d05c0cfe65",
+      "before_lines": 613,
+      "removed_items": [
+        {
+          "symbol": "entire file",
+          "kind": "exclusive integration suite",
+          "start_line": 1,
+          "end_line": 613,
+          "start_byte": 0,
+          "end_byte_exclusive": 24152,
+          "sha256": "ff1cac1e86736304f0ebf23442e3847fc91a44dbeb3d2aa941f1d0d05c0cfe65",
+          "first_line": "use std::ffi::{CStr, CString, c_char};",
+          "last_line": "}",
+          "preceding_lines": [],
+          "following_lines": [],
+          "deletion_start_byte": 0,
+          "deletion_end_byte_exclusive": 24152,
+          "deletion_sha256": "ff1cac1e86736304f0ebf23442e3847fc91a44dbeb3d2aa941f1d0d05c0cfe65"
+        }
+      ],
+      "registrations": [
+        {
+          "symbol": "product_open_binds_native_identity_before_database_side_effects",
+          "attribute_line": 86,
+          "declaration_line": 87,
+          "case_id": "B019",
+          "exact_item": {
+            "symbol": "product_open_binds_native_identity_before_database_side_effects",
+            "kind": "test registration",
+            "start_line": 86,
+            "end_line": 164,
+            "start_byte": 3187,
+            "end_byte_exclusive": 6690,
+            "sha256": "e36ef6238db308563c6b8e4e83557c8e4b36b5b8dfe78d063a074bce6e95ad27",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "impl Drop for Core {"
+            ]
+          }
+        },
+        {
+          "symbol": "complete_command_surface_round_trips_and_persists",
+          "attribute_line": 222,
+          "declaration_line": 223,
+          "case_id": "B020",
+          "exact_item": {
+            "symbol": "complete_command_surface_round_trips_and_persists",
+            "kind": "test registration",
+            "start_line": 222,
+            "end_line": 351,
+            "start_byte": 8208,
+            "end_byte_exclusive": 12978,
+            "sha256": "15d207b104c05434b959c06d0ebe3f9a4f4d9db9d99130bcf42d2c430a42edb3",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "remote_owner_abis_validate_envelopes_and_preserve_request_correlation",
+          "attribute_line": 353,
+          "declaration_line": 354,
+          "case_id": "B021",
+          "exact_item": {
+            "symbol": "remote_owner_abis_validate_envelopes_and_preserve_request_correlation",
+            "kind": "test registration",
+            "start_line": 353,
+            "end_line": 407,
+            "start_byte": 12979,
+            "end_byte_exclusive": 15338,
+            "sha256": "3aec367a4c85a230bf5b38c5979e358a2775172add0120f0dea0aec0fd5b980a",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "context_identity_is_admitted_and_publications_are_ephemeral",
+          "attribute_line": 409,
+          "declaration_line": 410,
+          "case_id": "B022",
+          "exact_item": {
+            "symbol": "context_identity_is_admitted_and_publications_are_ephemeral",
+            "kind": "test registration",
+            "start_line": 409,
+            "end_line": 448,
+            "start_byte": 15339,
+            "end_byte_exclusive": 17170,
+            "sha256": "7e041d1a6c7337aed427eae3d6586254e341bfcf6c383fb8636e57ea76e88be7",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "native_calendar_setup_requires_a_live_device_probe",
+          "attribute_line": 450,
+          "declaration_line": 451,
+          "case_id": "B023",
+          "exact_item": {
+            "symbol": "native_calendar_setup_requires_a_live_device_probe",
+            "kind": "test registration",
+            "start_line": 450,
+            "end_line": 488,
+            "start_byte": 17171,
+            "end_byte_exclusive": 18781,
+            "sha256": "b28861ecbb05bf2c393573f2e556c6ad67ea08d02e726a5f456fc5f0e0611a99",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "#[test]",
+              "fn owner_results_are_correlated_and_status_never_provisions_keys() {"
+            ]
+          }
+        },
+        {
+          "symbol": "owner_results_are_correlated_and_status_never_provisions_keys",
+          "attribute_line": 489,
+          "declaration_line": 490,
+          "case_id": "B024",
+          "exact_item": {
+            "symbol": "owner_results_are_correlated_and_status_never_provisions_keys",
+            "kind": "test registration",
+            "start_line": 489,
+            "end_line": 534,
+            "start_byte": 18781,
+            "end_byte_exclusive": 20454,
+            "sha256": "38d73c4596c2370da19bdd5026ec479c2bf83ef7697ecbd0a90dcc0f7a50a80c",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "    assert_eq!(core.context(foreign, false)[\"error\"][\"code\"], \"validation\");",
+              "}"
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "actions_accept_intent_not_execution_authority",
+          "attribute_line": 536,
+          "declaration_line": 537,
+          "case_id": "B025",
+          "exact_item": {
+            "symbol": "actions_accept_intent_not_execution_authority",
+            "kind": "test registration",
+            "start_line": 536,
+            "end_line": 563,
+            "start_byte": 20455,
+            "end_byte_exclusive": 21664,
+            "sha256": "1020f1c5affb2953b5bcf1eea92d4da17bb3c48fe3f537aaedc77e9d0e4af86f",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "abi_returns_typed_errors_for_bad_boundary_input_without_writes",
+          "attribute_line": 565,
+          "declaration_line": 566,
+          "case_id": "B026",
+          "exact_item": {
+            "symbol": "abi_returns_typed_errors_for_bad_boundary_input_without_writes",
+            "kind": "test registration",
+            "start_line": 565,
+            "end_line": 613,
+            "start_byte": 21665,
+            "end_byte_exclusive": 24152,
+            "sha256": "a251f5674d224cb9b3e6442efa71813087c6a44e56b170457c61179eda4b99de",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": []
+          }
+        }
+      ],
+      "contained_declaration_anchors": [
+        {
+          "line": 7,
+          "kind": "const",
+          "symbol": "PERSON",
+          "source_qualified_symbol": "PERSON"
+        },
+        {
+          "line": 9,
+          "kind": "struct",
+          "symbol": "Core",
+          "source_qualified_symbol": "Core"
+        },
+        {
+          "line": 12,
+          "kind": "fn",
+          "symbol": "open",
+          "source_qualified_symbol": "impl Core {::open"
+        },
+        {
+          "line": 42,
+          "kind": "fn",
+          "symbol": "execute",
+          "source_qualified_symbol": "impl Core {::execute"
+        },
+        {
+          "line": 47,
+          "kind": "fn",
+          "symbol": "load",
+          "source_qualified_symbol": "impl Core {::load"
+        },
+        {
+          "line": 50,
+          "kind": "fn",
+          "symbol": "context",
+          "source_qualified_symbol": "impl Core {::context"
+        },
+        {
+          "line": 57,
+          "kind": "fn",
+          "symbol": "observe",
+          "source_qualified_symbol": "impl Core {::observe"
+        },
+        {
+          "line": 70,
+          "kind": "fn",
+          "symbol": "query_v2",
+          "source_qualified_symbol": "impl Core {::query_v2"
+        },
+        {
+          "line": 75,
+          "kind": "fn",
+          "symbol": "command_v2",
+          "source_qualified_symbol": "impl Core {::command_v2"
+        },
+        {
+          "line": 80,
+          "kind": "fn",
+          "symbol": "events_v2",
+          "source_qualified_symbol": "impl Core {::events_v2"
+        },
+        {
+          "line": 87,
+          "kind": "fn",
+          "symbol": "product_open_binds_native_identity_before_database_side_effects",
+          "source_qualified_symbol": "product_open_binds_native_identity_before_database_side_effects"
+        },
+        {
+          "line": 167,
+          "kind": "fn",
+          "symbol": "drop",
+          "source_qualified_symbol": "impl Drop for Core {::drop"
+        },
+        {
+          "line": 172,
+          "kind": "fn",
+          "symbol": "take_json",
+          "source_qualified_symbol": "take_json"
+        },
+        {
+          "line": 182,
+          "kind": "fn",
+          "symbol": "day",
+          "source_qualified_symbol": "day"
+        },
+        {
+          "line": 190,
+          "kind": "fn",
+          "symbol": "command",
+          "source_qualified_symbol": "command"
+        },
+        {
+          "line": 194,
+          "kind": "fn",
+          "symbol": "intent",
+          "source_qualified_symbol": "intent"
+        },
+        {
+          "line": 198,
+          "kind": "fn",
+          "symbol": "query",
+          "source_qualified_symbol": "query"
+        },
+        {
+          "line": 202,
+          "kind": "fn",
+          "symbol": "data",
+          "source_qualified_symbol": "data"
+        },
+        {
+          "line": 214,
+          "kind": "fn",
+          "symbol": "changed",
+          "source_qualified_symbol": "changed"
+        },
+        {
+          "line": 223,
+          "kind": "fn",
+          "symbol": "complete_command_surface_round_trips_and_persists",
+          "source_qualified_symbol": "complete_command_surface_round_trips_and_persists"
+        },
+        {
+          "line": 354,
+          "kind": "fn",
+          "symbol": "remote_owner_abis_validate_envelopes_and_preserve_request_correlation",
+          "source_qualified_symbol": "remote_owner_abis_validate_envelopes_and_preserve_request_correlation"
+        },
+        {
+          "line": 410,
+          "kind": "fn",
+          "symbol": "context_identity_is_admitted_and_publications_are_ephemeral",
+          "source_qualified_symbol": "context_identity_is_admitted_and_publications_are_ephemeral"
+        },
+        {
+          "line": 451,
+          "kind": "fn",
+          "symbol": "native_calendar_setup_requires_a_live_device_probe",
+          "source_qualified_symbol": "native_calendar_setup_requires_a_live_device_probe"
+        },
+        {
+          "line": 490,
+          "kind": "fn",
+          "symbol": "owner_results_are_correlated_and_status_never_provisions_keys",
+          "source_qualified_symbol": "owner_results_are_correlated_and_status_never_provisions_keys"
+        },
+        {
+          "line": 537,
+          "kind": "fn",
+          "symbol": "actions_accept_intent_not_execution_authority",
+          "source_qualified_symbol": "actions_accept_intent_not_execution_authority"
+        },
+        {
+          "line": 566,
+          "kind": "fn",
+          "symbol": "abi_returns_typed_errors_for_bad_boundary_input_without_writes",
+          "source_qualified_symbol": "abi_returns_typed_errors_for_bad_boundary_input_without_writes"
+        }
+      ],
+      "preserved_segments": [],
+      "expected_after_sha256": null,
+      "after_sha256": null,
+      "status": "deleted; recoverable from baseline Git object"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/connection_observe.rs",
+      "action": "remove_exact_items",
+      "before_sha256": "c8fcdc0511c1abc8994fec7202766ae8c26d4cd24f2584eba9562ef15b25bfd1",
+      "before_lines": 338,
+      "removed_items": [
+        {
+          "symbol": "orphaned EOF blank line",
+          "kind": "whitespace only",
+          "start_line": 173,
+          "end_line": 173,
+          "start_byte": 5991,
+          "end_byte_exclusive": 5992,
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+          "first_line": "",
+          "last_line": "",
+          "preceding_lines": [
+            "        && !value.chars().any(char::is_control)",
+            "}"
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "mod tests {"
+          ],
+          "deletion_start_byte": 5991,
+          "deletion_end_byte_exclusive": 5992,
+          "deletion_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        },
+        {
+          "symbol": "tests",
+          "kind": "test-only gated item",
+          "start_line": 174,
+          "end_line": 338,
+          "start_byte": 5992,
+          "end_byte_exclusive": 12513,
+          "sha256": "9faa3720ffe54c36c72911b80058ea2b3324068d9f01d512125c1af4f6d3aff4",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [],
+          "deletion_start_byte": 5992,
+          "deletion_end_byte_exclusive": 12513,
+          "deletion_sha256": "9faa3720ffe54c36c72911b80058ea2b3324068d9f01d512125c1af4f6d3aff4"
+        }
+      ],
+      "registrations": [
+        {
+          "symbol": "mutation_requires_exact_review_only_for_enable",
+          "attribute_line": 178,
+          "declaration_line": 179,
+          "case_id": "B027",
+          "exact_item": {
+            "symbol": "mutation_requires_exact_review_only_for_enable",
+            "kind": "test registration",
+            "start_line": 178,
+            "end_line": 194,
+            "start_byte": 6036,
+            "end_byte_exclusive": 6668,
+            "sha256": "bf7a86e7391020f3a2d0797241050be2c47d19db36e2d7b227c2a410cf79bea1",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    use super::*;",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    #[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "observe_wire_rejects_leaf_and_routing_authority_fields",
+          "attribute_line": 196,
+          "declaration_line": 197,
+          "case_id": "B028",
+          "exact_item": {
+            "symbol": "observe_wire_rejects_leaf_and_routing_authority_fields",
+            "kind": "test registration",
+            "start_line": 196,
+            "end_line": 217,
+            "start_byte": 6669,
+            "end_byte_exclusive": 7613,
+            "sha256": "32530d2babcc6317a0b087bfe14534b696efab6ecf066669f00981c66de74ee7",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    #[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "native_and_hosted_observe_share_one_exact_wire",
+          "attribute_line": 219,
+          "declaration_line": 220,
+          "case_id": "B029",
+          "exact_item": {
+            "symbol": "native_and_hosted_observe_share_one_exact_wire",
+            "kind": "test registration",
+            "start_line": 219,
+            "end_line": 300,
+            "start_byte": 7614,
+            "end_byte_exclusive": 11010,
+            "sha256": "87143f3e122478d0e6bcdca1990ac1cb440c266c4d21bcd4abd287b5c4d0d2a7",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    #[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "overview_rejects_old_selected_granted_projection",
+          "attribute_line": 302,
+          "declaration_line": 303,
+          "case_id": "B030",
+          "exact_item": {
+            "symbol": "overview_rejects_old_selected_granted_projection",
+            "kind": "test registration",
+            "start_line": 302,
+            "end_line": 318,
+            "start_byte": 11011,
+            "end_byte_exclusive": 11826,
+            "sha256": "cb334d6bc9dd8a2eb3e188c74b461f1862587abf4b0442a9a12c10eb15a46815",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    #[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "app_result_keeps_owner_correlation_at_top_level",
+          "attribute_line": 320,
+          "declaration_line": 321,
+          "case_id": "B031",
+          "exact_item": {
+            "symbol": "app_result_keeps_owner_correlation_at_top_level",
+            "kind": "test registration",
+            "start_line": 320,
+            "end_line": 337,
+            "start_byte": 11827,
+            "end_byte_exclusive": 12511,
+            "sha256": "e3ed77b83bb552492e1f64eddb785adfd26067bd1e3a11d8cc46d37f9deb83cd",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "}"
+            ]
+          }
+        }
+      ],
+      "contained_declaration_anchors": [
+        {
+          "line": 179,
+          "kind": "fn",
+          "symbol": "mutation_requires_exact_review_only_for_enable",
+          "source_qualified_symbol": "mutation_requires_exact_review_only_for_enable"
+        },
+        {
+          "line": 197,
+          "kind": "fn",
+          "symbol": "observe_wire_rejects_leaf_and_routing_authority_fields",
+          "source_qualified_symbol": "observe_wire_rejects_leaf_and_routing_authority_fields"
+        },
+        {
+          "line": 220,
+          "kind": "fn",
+          "symbol": "native_and_hosted_observe_share_one_exact_wire",
+          "source_qualified_symbol": "native_and_hosted_observe_share_one_exact_wire"
+        },
+        {
+          "line": 303,
+          "kind": "fn",
+          "symbol": "overview_rejects_old_selected_granted_projection",
+          "source_qualified_symbol": "overview_rejects_old_selected_granted_projection"
+        },
+        {
+          "line": 321,
+          "kind": "fn",
+          "symbol": "app_result_keeps_owner_correlation_at_top_level",
+          "source_qualified_symbol": "app_result_keeps_owner_correlation_at_top_level"
+        }
+      ],
+      "preserved_segments": [
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 1,
+          "end_line": 172,
+          "start_byte": 0,
+          "end_byte_exclusive": 5991,
+          "sha256": "f50bdfc08f407f5405267245fae738af50e15a6965fbcc2daac566bd7c800af0",
+          "first_line": "use floe_context_contract::{ConnectionId, ConnectorId, GrantAuthority, GrantId, SourceAuthority};",
+          "last_line": "}",
+          "preceding_lines": [],
+          "following_lines": [
+            "",
+            "#[cfg(test)]"
+          ]
+        }
+      ],
+      "expected_after_sha256": "f50bdfc08f407f5405267245fae738af50e15a6965fbcc2daac566bd7c800af0",
+      "after_sha256": "f50bdfc08f407f5405267245fae738af50e15a6965fbcc2daac566bd7c800af0",
+      "status": "exact recorded spans removed; all complement bytes preserved"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/connections.rs",
+      "action": "remove_exact_items",
+      "before_sha256": "42701fa7390aca6c0246039bbb07aa2ae95b9cd2fcafdb0f0a3f56022a26cf71",
+      "before_lines": 543,
+      "removed_items": [
+        {
+          "symbol": "source_tests",
+          "kind": "test-only gated item",
+          "start_line": 224,
+          "end_line": 320,
+          "start_byte": 7393,
+          "end_byte_exclusive": 11809,
+          "sha256": "e3f08903b1ce7e283575dd34e01a96588f68caed804d143658ac8e2f06b7b233",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [
+            "#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]",
+            "#[serde(deny_unknown_fields)]"
+          ],
+          "deletion_start_byte": 7393,
+          "deletion_end_byte_exclusive": 11809,
+          "deletion_sha256": "e3f08903b1ce7e283575dd34e01a96588f68caed804d143658ac8e2f06b7b233"
+        }
+      ],
+      "registrations": [
+        {
+          "symbol": "native_personal_setup_is_source_configuration_only",
+          "attribute_line": 228,
+          "declaration_line": 229,
+          "case_id": "B032",
+          "exact_item": {
+            "symbol": "native_personal_setup_is_source_configuration_only",
+            "kind": "test registration",
+            "start_line": 228,
+            "end_line": 264,
+            "start_byte": 7444,
+            "end_byte_exclusive": 9200,
+            "sha256": "a305086d1186f68bcdd93b278170e5b05f361edbf6488fa4fd3de27faec769c4",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    use super::*;",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    #[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "source_mutation_accepts_expected_revision_but_not_authority_or_next_revision",
+          "attribute_line": 266,
+          "declaration_line": 267,
+          "case_id": "B033",
+          "exact_item": {
+            "symbol": "source_mutation_accepts_expected_revision_but_not_authority_or_next_revision",
+            "kind": "test registration",
+            "start_line": 266,
+            "end_line": 287,
+            "start_byte": 9201,
+            "end_byte_exclusive": 10291,
+            "sha256": "419d0f5f054d14269ac630cf9bb879dd4a004eecf2bde1a5a13419bc0a0d63c6",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    #[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "remote_binding_has_local_cas_and_no_producer_authority",
+          "attribute_line": 289,
+          "declaration_line": 290,
+          "case_id": "B034",
+          "exact_item": {
+            "symbol": "remote_binding_has_local_cas_and_no_producer_authority",
+            "kind": "test registration",
+            "start_line": 289,
+            "end_line": 319,
+            "start_byte": 10292,
+            "end_byte_exclusive": 11807,
+            "sha256": "44e0c912f3b5a062220c9bfe55c972cc4672d85698c6c32c5f47c9ca254d420b",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "}",
+              "#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]"
+            ]
+          }
+        }
+      ],
+      "contained_declaration_anchors": [
+        {
+          "line": 229,
+          "kind": "fn",
+          "symbol": "native_personal_setup_is_source_configuration_only",
+          "source_qualified_symbol": "native_personal_setup_is_source_configuration_only"
+        },
+        {
+          "line": 267,
+          "kind": "fn",
+          "symbol": "source_mutation_accepts_expected_revision_but_not_authority_or_next_revision",
+          "source_qualified_symbol": "source_mutation_accepts_expected_revision_but_not_authority_or_next_revision"
+        },
+        {
+          "line": 290,
+          "kind": "fn",
+          "symbol": "remote_binding_has_local_cas_and_no_producer_authority",
+          "source_qualified_symbol": "remote_binding_has_local_cas_and_no_producer_authority"
+        }
+      ],
+      "preserved_segments": [
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 1,
+          "end_line": 223,
+          "start_byte": 0,
+          "end_byte_exclusive": 7393,
+          "sha256": "9bcc735e546933cdc1015ced1989d8bd6b2e50fd5bb15cdb2ebab7f68f87864f",
+          "first_line": "use floe_context_contract::SourceAuthority;",
+          "last_line": "",
+          "preceding_lines": [],
+          "following_lines": [
+            "#[cfg(test)]",
+            "mod source_tests {"
+          ]
+        },
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 321,
+          "end_line": 543,
+          "start_byte": 11809,
+          "end_byte_exclusive": 18926,
+          "sha256": "aa027e203ac72223a7ad73d1f277791ccf5bbad1c884ac5c96d650746d255ce1",
+          "first_line": "#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "    }",
+            "}"
+          ],
+          "following_lines": []
+        }
+      ],
+      "expected_after_sha256": "0ed8006e33833b094992a114675866735302c71938032f28ef4c8beb8dc9a2a1",
+      "after_sha256": "0ed8006e33833b094992a114675866735302c71938032f28ef4c8beb8dc9a2a1",
+      "status": "exact recorded spans removed; all complement bytes preserved"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/day_mutation.rs",
+      "action": "remove_exact_items",
+      "before_sha256": "f3bb6a96a6c865290b4b29a0d8f22980dc8a64d85138ee865c567a0935819b12",
+      "before_lines": 204,
+      "removed_items": [
+        {
+          "symbol": "orphaned EOF blank line",
+          "kind": "whitespace only",
+          "start_line": 154,
+          "end_line": 154,
+          "start_byte": 4676,
+          "end_byte_exclusive": 4677,
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+          "first_line": "",
+          "last_line": "",
+          "preceding_lines": [
+            "    }",
+            "}"
+          ],
+          "following_lines": [
+            "#[cfg(test)]",
+            "mod tests {"
+          ],
+          "deletion_start_byte": 4676,
+          "deletion_end_byte_exclusive": 4677,
+          "deletion_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        },
+        {
+          "symbol": "tests",
+          "kind": "test-only gated item",
+          "start_line": 155,
+          "end_line": 204,
+          "start_byte": 4677,
+          "end_byte_exclusive": 6383,
+          "sha256": "285b3c8b3cece16f43080ced92affd042525e1afe16aaa3848a0024e68734e21",
+          "first_line": "#[cfg(test)]",
+          "last_line": "}",
+          "preceding_lines": [
+            "}",
+            ""
+          ],
+          "following_lines": [],
+          "deletion_start_byte": 4677,
+          "deletion_end_byte_exclusive": 6383,
+          "deletion_sha256": "285b3c8b3cece16f43080ced92affd042525e1afe16aaa3848a0024e68734e21"
+        }
+      ],
+      "registrations": [
+        {
+          "symbol": "day_wire_rejects_removed_source_configuration_commands",
+          "attribute_line": 160,
+          "declaration_line": 161,
+          "case_id": "B035",
+          "exact_item": {
+            "symbol": "day_wire_rejects_removed_source_configuration_commands",
+            "kind": "test registration",
+            "start_line": 160,
+            "end_line": 176,
+            "start_byte": 4760,
+            "end_byte_exclusive": 5416,
+            "sha256": "a566248ab6526cbde70d604123f8fe561c37f0d27af89a1e88122e94297de307",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    use serde_json::json;",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "    #[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "day_import_carries_source_identity_and_mirror_cas_only",
+          "attribute_line": 178,
+          "declaration_line": 179,
+          "case_id": "B036",
+          "exact_item": {
+            "symbol": "day_import_carries_source_identity_and_mirror_cas_only",
+            "kind": "test registration",
+            "start_line": 178,
+            "end_line": 203,
+            "start_byte": 5417,
+            "end_byte_exclusive": 6381,
+            "sha256": "6e34db828effa2f3db05b72999c701c568a2bcbe513f16509b7c454dc20b9b2e",
+            "first_line": "    #[test]",
+            "last_line": "    }",
+            "preceding_lines": [
+              "    }",
+              ""
+            ],
+            "following_lines": [
+              "}"
+            ]
+          }
+        }
+      ],
+      "contained_declaration_anchors": [
+        {
+          "line": 161,
+          "kind": "fn",
+          "symbol": "day_wire_rejects_removed_source_configuration_commands",
+          "source_qualified_symbol": "day_wire_rejects_removed_source_configuration_commands"
+        },
+        {
+          "line": 179,
+          "kind": "fn",
+          "symbol": "day_import_carries_source_identity_and_mirror_cas_only",
+          "source_qualified_symbol": "day_import_carries_source_identity_and_mirror_cas_only"
+        }
+      ],
+      "preserved_segments": [
+        {
+          "symbol": "preserved source segment",
+          "kind": "unchanged source",
+          "start_line": 1,
+          "end_line": 153,
+          "start_byte": 0,
+          "end_byte_exclusive": 4676,
+          "sha256": "4b2d2aebbe90e4bd84a3475442fbf4bd06421df4acc52548754f15f5c7892804",
+          "first_line": "use super::{",
+          "last_line": "}",
+          "preceding_lines": [],
+          "following_lines": [
+            "",
+            "#[cfg(test)]"
+          ]
+        }
+      ],
+      "expected_after_sha256": "4b2d2aebbe90e4bd84a3475442fbf4bd06421df4acc52548754f15f5c7892804",
+      "after_sha256": "4b2d2aebbe90e4bd84a3475442fbf4bd06421df4acc52548754f15f5c7892804",
+      "status": "exact recorded spans removed; all complement bytes preserved"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/app_wire_v2.rs",
+      "action": "delete_file",
+      "before_sha256": "63d79d150074c369ff32a75b4ac516f1903281818be1af9d56777e20c14aa309",
+      "before_lines": 251,
+      "removed_items": [
+        {
+          "symbol": "entire file",
+          "kind": "exclusive integration suite",
+          "start_line": 1,
+          "end_line": 251,
+          "start_byte": 0,
+          "end_byte_exclusive": 11501,
+          "sha256": "63d79d150074c369ff32a75b4ac516f1903281818be1af9d56777e20c14aa309",
+          "first_line": "use floe_protocol::{",
+          "last_line": "}",
+          "preceding_lines": [],
+          "following_lines": [],
+          "deletion_start_byte": 0,
+          "deletion_end_byte_exclusive": 11501,
+          "deletion_sha256": "63d79d150074c369ff32a75b4ac516f1903281818be1af9d56777e20c14aa309"
+        }
+      ],
+      "registrations": [
+        {
+          "symbol": "app_wire_v2_golden_fixtures_are_stable",
+          "attribute_line": 40,
+          "declaration_line": 41,
+          "case_id": "B037",
+          "exact_item": {
+            "symbol": "app_wire_v2_golden_fixtures_are_stable",
+            "kind": "test registration",
+            "start_line": 40,
+            "end_line": 51,
+            "start_byte": 2056,
+            "end_byte_exclusive": 2737,
+            "sha256": "09de6f61003d4b71bcd407f8602e7d34fcb0ca8ccad8c791eb7e4ee1c839795e",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "app_wire_version_is_distinct_from_legacy_protocol",
+          "attribute_line": 53,
+          "declaration_line": 54,
+          "case_id": "B038",
+          "exact_item": {
+            "symbol": "app_wire_version_is_distinct_from_legacy_protocol",
+            "kind": "test registration",
+            "start_line": 53,
+            "end_line": 65,
+            "start_byte": 2738,
+            "end_byte_exclusive": 3261,
+            "sha256": "0b24ba3942329dba3638ee28f569db711f1b9b209b5aa69519a9a102e8cc6dc0",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "app_wire_rejects_invalid_identity_and_unknown_fields",
+          "attribute_line": 67,
+          "declaration_line": 68,
+          "case_id": "B039",
+          "exact_item": {
+            "symbol": "app_wire_rejects_invalid_identity_and_unknown_fields",
+            "kind": "test registration",
+            "start_line": 67,
+            "end_line": 81,
+            "start_byte": 3262,
+            "end_byte_exclusive": 3969,
+            "sha256": "2e8d14faa9ad6ff4d341b513611453a51cc76063c7a067863e60fba87f616465",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "app_wire_text_validation_uses_normalized_text_and_keeps_payload_defense",
+          "attribute_line": 83,
+          "declaration_line": 84,
+          "case_id": "B040",
+          "exact_item": {
+            "symbol": "app_wire_text_validation_uses_normalized_text_and_keeps_payload_defense",
+            "kind": "test registration",
+            "start_line": 83,
+            "end_line": 111,
+            "start_byte": 3970,
+            "end_byte_exclusive": 5395,
+            "sha256": "dede7d46487ac97e79de118f0c2242b8cb7908efb87864be32ebebb958c9ad7e",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "app_wire_validates_continuation_and_event_bounds",
+          "attribute_line": 113,
+          "declaration_line": 114,
+          "case_id": "B041",
+          "exact_item": {
+            "symbol": "app_wire_validates_continuation_and_event_bounds",
+            "kind": "test registration",
+            "start_line": 113,
+            "end_line": 156,
+            "start_byte": 5396,
+            "end_byte_exclusive": 7045,
+            "sha256": "885312f471bd870f24969a6e7aadb5b778f2d745cb7da7b9a4358a577d97a68b",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "app_wire_interaction_fixtures_are_stable",
+          "attribute_line": 158,
+          "declaration_line": 159,
+          "case_id": "B042",
+          "exact_item": {
+            "symbol": "app_wire_interaction_fixtures_are_stable",
+            "kind": "test registration",
+            "start_line": 158,
+            "end_line": 181,
+            "start_byte": 7046,
+            "end_byte_exclusive": 8370,
+            "sha256": "da41a105e75e57a56f5f6d446fde2112762333b28bb41540687b8e476172cb76",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "app_wire_interaction_rejects_forged_and_authority_fields",
+          "attribute_line": 183,
+          "declaration_line": 184,
+          "case_id": "B043",
+          "exact_item": {
+            "symbol": "app_wire_interaction_rejects_forged_and_authority_fields",
+            "kind": "test registration",
+            "start_line": 183,
+            "end_line": 239,
+            "start_byte": 8371,
+            "end_byte_exclusive": 11077,
+            "sha256": "ed06a824608ab29dc992ad20e9502940286ef32ca4473579f323df8922b5538f",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "app_wire_preserves_explicit_profile_selection",
+          "attribute_line": 241,
+          "declaration_line": 242,
+          "case_id": "B044",
+          "exact_item": {
+            "symbol": "app_wire_preserves_explicit_profile_selection",
+            "kind": "test registration",
+            "start_line": 241,
+            "end_line": 251,
+            "start_byte": 11078,
+            "end_byte_exclusive": 11501,
+            "sha256": "8b48e97a176f3d3dba95b58640c6fe3917703e29c49c4760e4eb80521ae75ce6",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": []
+          }
+        }
+      ],
+      "contained_declaration_anchors": [
+        {
+          "line": 8,
+          "kind": "fn",
+          "symbol": "fixture",
+          "source_qualified_symbol": "fixture"
+        },
+        {
+          "line": 31,
+          "kind": "fn",
+          "symbol": "assert_round_trip",
+          "source_qualified_symbol": "assert_round_trip"
+        },
+        {
+          "line": 41,
+          "kind": "fn",
+          "symbol": "app_wire_v2_golden_fixtures_are_stable",
+          "source_qualified_symbol": "app_wire_v2_golden_fixtures_are_stable"
+        },
+        {
+          "line": 54,
+          "kind": "fn",
+          "symbol": "app_wire_version_is_distinct_from_legacy_protocol",
+          "source_qualified_symbol": "app_wire_version_is_distinct_from_legacy_protocol"
+        },
+        {
+          "line": 68,
+          "kind": "fn",
+          "symbol": "app_wire_rejects_invalid_identity_and_unknown_fields",
+          "source_qualified_symbol": "app_wire_rejects_invalid_identity_and_unknown_fields"
+        },
+        {
+          "line": 84,
+          "kind": "fn",
+          "symbol": "app_wire_text_validation_uses_normalized_text_and_keeps_payload_defense",
+          "source_qualified_symbol": "app_wire_text_validation_uses_normalized_text_and_keeps_payload_defense"
+        },
+        {
+          "line": 114,
+          "kind": "fn",
+          "symbol": "app_wire_validates_continuation_and_event_bounds",
+          "source_qualified_symbol": "app_wire_validates_continuation_and_event_bounds"
+        },
+        {
+          "line": 159,
+          "kind": "fn",
+          "symbol": "app_wire_interaction_fixtures_are_stable",
+          "source_qualified_symbol": "app_wire_interaction_fixtures_are_stable"
+        },
+        {
+          "line": 184,
+          "kind": "fn",
+          "symbol": "app_wire_interaction_rejects_forged_and_authority_fields",
+          "source_qualified_symbol": "app_wire_interaction_rejects_forged_and_authority_fields"
+        },
+        {
+          "line": 242,
+          "kind": "fn",
+          "symbol": "app_wire_preserves_explicit_profile_selection",
+          "source_qualified_symbol": "app_wire_preserves_explicit_profile_selection"
+        }
+      ],
+      "preserved_segments": [],
+      "expected_after_sha256": null,
+      "after_sha256": null,
+      "status": "deleted; recoverable from baseline Git object"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/local_owner_wire.rs",
+      "action": "delete_file",
+      "before_sha256": "3d6e0942e1a9233f12a23294343e456ca13830e958d4b7b0943362b31df7968a",
+      "before_lines": 328,
+      "removed_items": [
+        {
+          "symbol": "entire file",
+          "kind": "exclusive integration suite",
+          "start_line": 1,
+          "end_line": 328,
+          "start_byte": 0,
+          "end_byte_exclusive": 12571,
+          "sha256": "3d6e0942e1a9233f12a23294343e456ca13830e958d4b7b0943362b31df7968a",
+          "first_line": "use floe_protocol::{AppCommandRequestDto, AppQueryRequestDto};",
+          "last_line": "}",
+          "preceding_lines": [],
+          "following_lines": [],
+          "deletion_start_byte": 0,
+          "deletion_end_byte_exclusive": 12571,
+          "deletion_sha256": "3d6e0942e1a9233f12a23294343e456ca13830e958d4b7b0943362b31df7968a"
+        }
+      ],
+      "registrations": [
+        {
+          "symbol": "personal_source_setup_uses_connections_product_wire",
+          "attribute_line": 5,
+          "declaration_line": 6,
+          "case_id": "B045",
+          "exact_item": {
+            "symbol": "personal_source_setup_uses_connections_product_wire",
+            "kind": "test registration",
+            "start_line": 5,
+            "end_line": 35,
+            "start_byte": 102,
+            "end_byte_exclusive": 1350,
+            "sha256": "def702001b42b3339e81ce1a1cf4d73fd36e1450339e47350909a69b3c2eb4a6",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "use uuid::Uuid;",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "vault_commands_are_strict_owner_intent",
+          "attribute_line": 37,
+          "declaration_line": 38,
+          "case_id": "B046",
+          "exact_item": {
+            "symbol": "vault_commands_are_strict_owner_intent",
+            "kind": "test registration",
+            "start_line": 37,
+            "end_line": 80,
+            "start_byte": 1351,
+            "end_byte_exclusive": 2833,
+            "sha256": "1a6d1c858854a36602273e170a049d57ef4c80b7bf9db085c749a00d7e7775cb",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "vault_queries_reject_identity_and_invalid_operation_ids",
+          "attribute_line": 82,
+          "declaration_line": 83,
+          "case_id": "B047",
+          "exact_item": {
+            "symbol": "vault_queries_reject_identity_and_invalid_operation_ids",
+            "kind": "test registration",
+            "start_line": 82,
+            "end_line": 113,
+            "start_byte": 2834,
+            "end_byte_exclusive": 3989,
+            "sha256": "a3aa171d3e637b6bb3d2286688b93e15b68f2e2f0f4c4b912bf89dcb0ee9460d",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "local_owner_commands_reject_identity_topology_and_malformed_ids",
+          "attribute_line": 115,
+          "declaration_line": 116,
+          "case_id": "B048",
+          "exact_item": {
+            "symbol": "local_owner_commands_reject_identity_topology_and_malformed_ids",
+            "kind": "test registration",
+            "start_line": 115,
+            "end_line": 170,
+            "start_byte": 3990,
+            "end_byte_exclusive": 6537,
+            "sha256": "fbaefff8567e3907ed98f3d941cb8245ef53191b2cb6edc6c910f35784d98a79",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "every_owner_result_query_requires_non_nil_correlation_and_rejects_authority_fields",
+          "attribute_line": 172,
+          "declaration_line": 173,
+          "case_id": "B049",
+          "exact_item": {
+            "symbol": "every_owner_result_query_requires_non_nil_correlation_and_rejects_authority_fields",
+            "kind": "test registration",
+            "start_line": 172,
+            "end_line": 207,
+            "start_byte": 6538,
+            "end_byte_exclusive": 7787,
+            "sha256": "979554ce44329c2d71079ecd9df6a379ecf64c6ce7b156af03baf90a8e2175e7",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "day_actions_and_native_completions_accept_intent_not_authority",
+          "attribute_line": 209,
+          "declaration_line": 210,
+          "case_id": "B050",
+          "exact_item": {
+            "symbol": "day_actions_and_native_completions_accept_intent_not_authority",
+            "kind": "test registration",
+            "start_line": 209,
+            "end_line": 265,
+            "start_byte": 7788,
+            "end_byte_exclusive": 10292,
+            "sha256": "12bb623916f85a896a880ce76ed9882cf1b8f9b899b99986f1a121d7d0f023a1",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "#[test]",
+              "fn retired_access_routes_are_unknown() {"
+            ]
+          }
+        },
+        {
+          "symbol": "retired_access_routes_are_unknown",
+          "attribute_line": 266,
+          "declaration_line": 267,
+          "case_id": "B051",
+          "exact_item": {
+            "symbol": "retired_access_routes_are_unknown",
+            "kind": "test registration",
+            "start_line": 266,
+            "end_line": 282,
+            "start_byte": 10292,
+            "end_byte_exclusive": 11139,
+            "sha256": "9fb1e035695acceb739d982e9eb338ad986de93854b8ba9421affbf5363589f2",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "    }",
+              "}"
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "personal_acquisition_accepts_only_current_domains_and_fields",
+          "attribute_line": 284,
+          "declaration_line": 285,
+          "case_id": "B052",
+          "exact_item": {
+            "symbol": "personal_acquisition_accepts_only_current_domains_and_fields",
+            "kind": "test registration",
+            "start_line": 284,
+            "end_line": 328,
+            "start_byte": 11140,
+            "end_byte_exclusive": 12571,
+            "sha256": "85f2b85327f235f1ab5c0c21712944c6e6d29fade4dfcb04cd97f76c81aee50a",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": []
+          }
+        }
+      ],
+      "contained_declaration_anchors": [
+        {
+          "line": 6,
+          "kind": "fn",
+          "symbol": "personal_source_setup_uses_connections_product_wire",
+          "source_qualified_symbol": "personal_source_setup_uses_connections_product_wire"
+        },
+        {
+          "line": 38,
+          "kind": "fn",
+          "symbol": "vault_commands_are_strict_owner_intent",
+          "source_qualified_symbol": "vault_commands_are_strict_owner_intent"
+        },
+        {
+          "line": 83,
+          "kind": "fn",
+          "symbol": "vault_queries_reject_identity_and_invalid_operation_ids",
+          "source_qualified_symbol": "vault_queries_reject_identity_and_invalid_operation_ids"
+        },
+        {
+          "line": 116,
+          "kind": "fn",
+          "symbol": "local_owner_commands_reject_identity_topology_and_malformed_ids",
+          "source_qualified_symbol": "local_owner_commands_reject_identity_topology_and_malformed_ids"
+        },
+        {
+          "line": 173,
+          "kind": "fn",
+          "symbol": "every_owner_result_query_requires_non_nil_correlation_and_rejects_authority_fields",
+          "source_qualified_symbol": "every_owner_result_query_requires_non_nil_correlation_and_rejects_authority_fields"
+        },
+        {
+          "line": 210,
+          "kind": "fn",
+          "symbol": "day_actions_and_native_completions_accept_intent_not_authority",
+          "source_qualified_symbol": "day_actions_and_native_completions_accept_intent_not_authority"
+        },
+        {
+          "line": 267,
+          "kind": "fn",
+          "symbol": "retired_access_routes_are_unknown",
+          "source_qualified_symbol": "retired_access_routes_are_unknown"
+        },
+        {
+          "line": 285,
+          "kind": "fn",
+          "symbol": "personal_acquisition_accepts_only_current_domains_and_fields",
+          "source_qualified_symbol": "personal_acquisition_accepts_only_current_domains_and_fields"
+        }
+      ],
+      "preserved_segments": [],
+      "expected_after_sha256": null,
+      "after_sha256": null,
+      "status": "deleted; recoverable from baseline Git object"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/protocol.rs",
+      "action": "delete_file",
+      "before_sha256": "a97757b3160d5e89edc5cac3f8aab9722fc46e2a33a6028af7a620dfd830ab25",
+      "before_lines": 361,
+      "removed_items": [
+        {
+          "symbol": "entire file",
+          "kind": "exclusive integration suite",
+          "start_line": 1,
+          "end_line": 361,
+          "start_byte": 0,
+          "end_byte_exclusive": 13069,
+          "sha256": "a97757b3160d5e89edc5cac3f8aab9722fc46e2a33a6028af7a620dfd830ab25",
+          "first_line": "use std::collections::BTreeMap;",
+          "last_line": "}",
+          "preceding_lines": [],
+          "following_lines": [],
+          "deletion_start_byte": 0,
+          "deletion_end_byte_exclusive": 13069,
+          "deletion_sha256": "a97757b3160d5e89edc5cac3f8aab9722fc46e2a33a6028af7a620dfd830ab25"
+        }
+      ],
+      "registrations": [
+        {
+          "symbol": "registry_configuration_transport_rejects_raw_grants_state_and_unknown_operations",
+          "attribute_line": 5,
+          "declaration_line": 6,
+          "case_id": "B053",
+          "exact_item": {
+            "symbol": "registry_configuration_transport_rejects_raw_grants_state_and_unknown_operations",
+            "kind": "test registration",
+            "start_line": 5,
+            "end_line": 23,
+            "start_byte": 56,
+            "end_byte_exclusive": 1071,
+            "sha256": "e7361e88c21ae7cef192608dc10f0a2921dddc4e478fd8fd721a3cd945c9e5a5",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "use floe_protocol::*;",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "expert_binding_wire_accepts_only_opaque_candidate_ids",
+          "attribute_line": 25,
+          "declaration_line": 26,
+          "case_id": "B054",
+          "exact_item": {
+            "symbol": "expert_binding_wire_accepts_only_opaque_candidate_ids",
+            "kind": "test registration",
+            "start_line": 25,
+            "end_line": 71,
+            "start_byte": 1072,
+            "end_byte_exclusive": 2640,
+            "sha256": "571af82636071c87f07887e2fecd229334ddda52deb3ae21c2697bb29cc6e511",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "use serde_json::json;",
+              "use uuid::Uuid;"
+            ]
+          }
+        },
+        {
+          "symbol": "calendar_scoped_conversation_actions_are_not_part_of_the_protocol",
+          "attribute_line": 75,
+          "declaration_line": 76,
+          "case_id": "B055",
+          "exact_item": {
+            "symbol": "calendar_scoped_conversation_actions_are_not_part_of_the_protocol",
+            "kind": "test registration",
+            "start_line": 75,
+            "end_line": 83,
+            "start_byte": 2679,
+            "end_byte_exclusive": 3061,
+            "sha256": "e7ca7c1c505f251d8ddf483c0e25fd9a33542562edf4ae50b55278f7542dd1c2",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "use uuid::Uuid;",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "obsolete_conversation_turn_wire_is_rejected",
+          "attribute_line": 85,
+          "declaration_line": 86,
+          "case_id": "B056",
+          "exact_item": {
+            "symbol": "obsolete_conversation_turn_wire_is_rejected",
+            "kind": "test registration",
+            "start_line": 85,
+            "end_line": 96,
+            "start_byte": 3062,
+            "end_byte_exclusive": 3422,
+            "sha256": "edadeeacf0e7c62e3ae01473099f8f5a6e678565f110de1bd36a8033b4258970",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "proposal_inspection_transport_accepts_only_a_recorded_reference",
+          "attribute_line": 98,
+          "declaration_line": 99,
+          "case_id": "B057",
+          "exact_item": {
+            "symbol": "proposal_inspection_transport_accepts_only_a_recorded_reference",
+            "kind": "test registration",
+            "start_line": 98,
+            "end_line": 120,
+            "start_byte": 3423,
+            "end_byte_exclusive": 4118,
+            "sha256": "ec3f23172e83adb8463c3304e1ef0e2a274cd4ab26a9ad2dfcaefdd0e00e9931",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "memory_review_transport_accepts_only_user_decisions_on_candidate_ids",
+          "attribute_line": 122,
+          "declaration_line": 123,
+          "case_id": "B058",
+          "exact_item": {
+            "symbol": "memory_review_transport_accepts_only_user_decisions_on_candidate_ids",
+            "kind": "test registration",
+            "start_line": 122,
+            "end_line": 141,
+            "start_byte": 4119,
+            "end_byte_exclusive": 4946,
+            "sha256": "889bee215e995a728f4691da698abd8d334a577e75ecda23c8f9d698df717f2f",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "memory_overview_transport_is_read_only",
+          "attribute_line": 143,
+          "declaration_line": 144,
+          "case_id": "B059",
+          "exact_item": {
+            "symbol": "memory_overview_transport_is_read_only",
+            "kind": "test registration",
+            "start_line": 143,
+            "end_line": 154,
+            "start_byte": 4947,
+            "end_byte_exclusive": 5455,
+            "sha256": "e1d680d052abf9274b0bb52b754d3a9d1145fdf6a3fa53aa06bf57341b2fd0ea",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "snapshot_has_a_versioned_stable_wire_shape",
+          "attribute_line": 156,
+          "declaration_line": 157,
+          "case_id": "B060",
+          "exact_item": {
+            "symbol": "snapshot_has_a_versioned_stable_wire_shape",
+            "kind": "test registration",
+            "start_line": 156,
+            "end_line": 212,
+            "start_byte": 5456,
+            "end_byte_exclusive": 7670,
+            "sha256": "1fd2552eb82731effac1b6cc6c1063aa1c108d9629267da32738b860f97605ed",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "capture_and_error_envelopes_have_explicit_tags",
+          "attribute_line": 214,
+          "declaration_line": 215,
+          "case_id": "B061",
+          "exact_item": {
+            "symbol": "capture_and_error_envelopes_have_explicit_tags",
+            "kind": "test registration",
+            "start_line": 214,
+            "end_line": 252,
+            "start_byte": 7671,
+            "end_byte_exclusive": 8886,
+            "sha256": "b380e0bdb4c0e5f2020ebc8912dba6c128c71a3837319cf49bfb2bc16688dbf9",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "all_command_variants_round_trip_through_json",
+          "attribute_line": 254,
+          "declaration_line": 255,
+          "case_id": "B062",
+          "exact_item": {
+            "symbol": "all_command_variants_round_trip_through_json",
+            "kind": "test registration",
+            "start_line": 254,
+            "end_line": 331,
+            "start_byte": 8887,
+            "end_byte_exclusive": 11326,
+            "sha256": "7ba02863287192d0cc60aab130fb797ae6a5a33c1a6f1f1113f8675bcf37a231",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "#[test]",
+              "fn connections_transport_is_read_only() {"
+            ]
+          }
+        },
+        {
+          "symbol": "connections_transport_is_read_only",
+          "attribute_line": 332,
+          "declaration_line": 333,
+          "case_id": "B063",
+          "exact_item": {
+            "symbol": "connections_transport_is_read_only",
+            "kind": "test registration",
+            "start_line": 332,
+            "end_line": 345,
+            "start_byte": 11326,
+            "end_byte_exclusive": 11816,
+            "sha256": "22d3f9f52eeb45b52aa2565bf37bc2f32cc15204a32e6a08bde41b2dfd3d91ac",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "    }",
+              "}"
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "admitted_day_envelopes_and_nested_tags_are_stable",
+          "attribute_line": 347,
+          "declaration_line": 348,
+          "case_id": "B064",
+          "exact_item": {
+            "symbol": "admitted_day_envelopes_and_nested_tags_are_stable",
+            "kind": "test registration",
+            "start_line": 347,
+            "end_line": 361,
+            "start_byte": 11817,
+            "end_byte_exclusive": 13069,
+            "sha256": "6fed9ffa319fc9a3665de850932e79a9d3bf2302b28ec3fcbcfa7c12683d25db",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": []
+          }
+        }
+      ],
+      "contained_declaration_anchors": [
+        {
+          "line": 6,
+          "kind": "fn",
+          "symbol": "registry_configuration_transport_rejects_raw_grants_state_and_unknown_operations",
+          "source_qualified_symbol": "registry_configuration_transport_rejects_raw_grants_state_and_unknown_operations"
+        },
+        {
+          "line": 26,
+          "kind": "fn",
+          "symbol": "expert_binding_wire_accepts_only_opaque_candidate_ids",
+          "source_qualified_symbol": "expert_binding_wire_accepts_only_opaque_candidate_ids"
+        },
+        {
+          "line": 76,
+          "kind": "fn",
+          "symbol": "calendar_scoped_conversation_actions_are_not_part_of_the_protocol",
+          "source_qualified_symbol": "calendar_scoped_conversation_actions_are_not_part_of_the_protocol"
+        },
+        {
+          "line": 86,
+          "kind": "fn",
+          "symbol": "obsolete_conversation_turn_wire_is_rejected",
+          "source_qualified_symbol": "obsolete_conversation_turn_wire_is_rejected"
+        },
+        {
+          "line": 99,
+          "kind": "fn",
+          "symbol": "proposal_inspection_transport_accepts_only_a_recorded_reference",
+          "source_qualified_symbol": "proposal_inspection_transport_accepts_only_a_recorded_reference"
+        },
+        {
+          "line": 123,
+          "kind": "fn",
+          "symbol": "memory_review_transport_accepts_only_user_decisions_on_candidate_ids",
+          "source_qualified_symbol": "memory_review_transport_accepts_only_user_decisions_on_candidate_ids"
+        },
+        {
+          "line": 144,
+          "kind": "fn",
+          "symbol": "memory_overview_transport_is_read_only",
+          "source_qualified_symbol": "memory_overview_transport_is_read_only"
+        },
+        {
+          "line": 157,
+          "kind": "fn",
+          "symbol": "snapshot_has_a_versioned_stable_wire_shape",
+          "source_qualified_symbol": "snapshot_has_a_versioned_stable_wire_shape"
+        },
+        {
+          "line": 215,
+          "kind": "fn",
+          "symbol": "capture_and_error_envelopes_have_explicit_tags",
+          "source_qualified_symbol": "capture_and_error_envelopes_have_explicit_tags"
+        },
+        {
+          "line": 255,
+          "kind": "fn",
+          "symbol": "all_command_variants_round_trip_through_json",
+          "source_qualified_symbol": "all_command_variants_round_trip_through_json"
+        },
+        {
+          "line": 333,
+          "kind": "fn",
+          "symbol": "connections_transport_is_read_only",
+          "source_qualified_symbol": "connections_transport_is_read_only"
+        },
+        {
+          "line": 348,
+          "kind": "fn",
+          "symbol": "admitted_day_envelopes_and_nested_tags_are_stable",
+          "source_qualified_symbol": "admitted_day_envelopes_and_nested_tags_are_stable"
+        }
+      ],
+      "preserved_segments": [],
+      "expected_after_sha256": null,
+      "after_sha256": null,
+      "status": "deleted; recoverable from baseline Git object"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/remote_wire.rs",
+      "action": "delete_file",
+      "before_sha256": "6d893869f7a0512e70ae9bfd3089dc3523ce72199079abd79277ad250b7cac08",
+      "before_lines": 224,
+      "removed_items": [
+        {
+          "symbol": "entire file",
+          "kind": "exclusive integration suite",
+          "start_line": 1,
+          "end_line": 224,
+          "start_byte": 0,
+          "end_byte_exclusive": 7869,
+          "sha256": "6d893869f7a0512e70ae9bfd3089dc3523ce72199079abd79277ad250b7cac08",
+          "first_line": "use floe_protocol::*;",
+          "last_line": "}",
+          "preceding_lines": [],
+          "following_lines": [],
+          "deletion_start_byte": 0,
+          "deletion_end_byte_exclusive": 7869,
+          "deletion_sha256": "6d893869f7a0512e70ae9bfd3089dc3523ce72199079abd79277ad250b7cac08"
+        }
+      ],
+      "registrations": [
+        {
+          "symbol": "remote_access_rejects_unknown_operation",
+          "attribute_line": 34,
+          "declaration_line": 35,
+          "case_id": "B065",
+          "exact_item": {
+            "symbol": "remote_access_rejects_unknown_operation",
+            "kind": "test registration",
+            "start_line": 34,
+            "end_line": 39,
+            "start_byte": 928,
+            "end_byte_exclusive": 1237,
+            "sha256": "9ac19e0884cb5bba6e296ec1a5947bc59512a15e5846fa3c1819fa1d32768ea3",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "pairing_contract_roundtrips_only_setup_intent_and_signed_evidence",
+          "attribute_line": 41,
+          "declaration_line": 42,
+          "case_id": "B066",
+          "exact_item": {
+            "symbol": "pairing_contract_roundtrips_only_setup_intent_and_signed_evidence",
+            "kind": "test registration",
+            "start_line": 41,
+            "end_line": 92,
+            "start_byte": 1238,
+            "end_byte_exclusive": 3382,
+            "sha256": "958f2351708aedb21ad36bcc1cb900ee0fbe0f7c93a289d323d5f017e94650b2",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "remote_access_rejects_all_transport_and_identity_fields",
+          "attribute_line": 94,
+          "declaration_line": 95,
+          "case_id": "B067",
+          "exact_item": {
+            "symbol": "remote_access_rejects_all_transport_and_identity_fields",
+            "kind": "test registration",
+            "start_line": 94,
+            "end_line": 136,
+            "start_byte": 3383,
+            "end_byte_exclusive": 4918,
+            "sha256": "0aaeb5e590479af7182f0541c874c9bc30d17740cd4ebe132106748a942838d2",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "remote_requests_reject_invalid_versions_ids_and_bounds",
+          "attribute_line": 138,
+          "declaration_line": 139,
+          "case_id": "B068",
+          "exact_item": {
+            "symbol": "remote_requests_reject_invalid_versions_ids_and_bounds",
+            "kind": "test registration",
+            "start_line": 138,
+            "end_line": 184,
+            "start_byte": 4919,
+            "end_byte_exclusive": 6624,
+            "sha256": "99f110ba6ae9b8711222c19ac0b7b3007eacb24e31c6104abdcdb6e1fc569d4f",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "pairing_credential_is_only_approved_output_and_never_debug_output",
+          "attribute_line": 186,
+          "declaration_line": 187,
+          "case_id": "B069",
+          "exact_item": {
+            "symbol": "pairing_credential_is_only_approved_output_and_never_debug_output",
+            "kind": "test registration",
+            "start_line": 186,
+            "end_line": 219,
+            "start_byte": 6625,
+            "end_byte_exclusive": 7701,
+            "sha256": "28f428288bd04a32f27433e87d9229f8af7f6db0b5017d34f05bd49767e4e2ae",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": [
+              "",
+              "#[test]"
+            ]
+          }
+        },
+        {
+          "symbol": "unknown_remote_agent_vault_operation_is_rejected",
+          "attribute_line": 221,
+          "declaration_line": 222,
+          "case_id": "B070",
+          "exact_item": {
+            "symbol": "unknown_remote_agent_vault_operation_is_rejected",
+            "kind": "test registration",
+            "start_line": 221,
+            "end_line": 224,
+            "start_byte": 7702,
+            "end_byte_exclusive": 7869,
+            "sha256": "6a2d207a2f27a5107d86bcee5108f831beeb32634f91577710e8142a4b8a8bfe",
+            "first_line": "#[test]",
+            "last_line": "}",
+            "preceding_lines": [
+              "}",
+              ""
+            ],
+            "following_lines": []
+          }
+        }
+      ],
+      "contained_declaration_anchors": [
+        {
+          "line": 5,
+          "kind": "fn",
+          "symbol": "producer",
+          "source_qualified_symbol": "producer"
+        },
+        {
+          "line": 17,
+          "kind": "fn",
+          "symbol": "challenge",
+          "source_qualified_symbol": "challenge"
+        },
+        {
+          "line": 30,
+          "kind": "fn",
+          "symbol": "envelope",
+          "source_qualified_symbol": "envelope"
+        },
+        {
+          "line": 35,
+          "kind": "fn",
+          "symbol": "remote_access_rejects_unknown_operation",
+          "source_qualified_symbol": "remote_access_rejects_unknown_operation"
+        },
+        {
+          "line": 42,
+          "kind": "fn",
+          "symbol": "pairing_contract_roundtrips_only_setup_intent_and_signed_evidence",
+          "source_qualified_symbol": "pairing_contract_roundtrips_only_setup_intent_and_signed_evidence"
+        },
+        {
+          "line": 95,
+          "kind": "fn",
+          "symbol": "remote_access_rejects_all_transport_and_identity_fields",
+          "source_qualified_symbol": "remote_access_rejects_all_transport_and_identity_fields"
+        },
+        {
+          "line": 139,
+          "kind": "fn",
+          "symbol": "remote_requests_reject_invalid_versions_ids_and_bounds",
+          "source_qualified_symbol": "remote_requests_reject_invalid_versions_ids_and_bounds"
+        },
+        {
+          "line": 187,
+          "kind": "fn",
+          "symbol": "pairing_credential_is_only_approved_output_and_never_debug_output",
+          "source_qualified_symbol": "pairing_credential_is_only_approved_output_and_never_debug_output"
+        },
+        {
+          "line": 222,
+          "kind": "fn",
+          "symbol": "unknown_remote_agent_vault_operation_is_rejected",
+          "source_qualified_symbol": "unknown_remote_agent_vault_operation_is_rejected"
+        }
+      ],
+      "preserved_segments": [],
+      "expected_after_sha256": null,
+      "after_sha256": null,
+      "status": "deleted; recoverable from baseline Git object"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/integration.rs",
+      "action": "delete_file",
+      "before_sha256": "f1bce45f1f15a5a0b6cd6f0ee3a9429106ac8d5c473adc44d1d922fef9b2d5a4",
+      "before_lines": 4,
+      "removed_items": [
+        {
+          "symbol": "integration",
+          "kind": "test harness",
+          "start_line": 1,
+          "end_line": 4,
+          "start_byte": 0,
+          "end_byte_exclusive": 70,
+          "sha256": "f1bce45f1f15a5a0b6cd6f0ee3a9429106ac8d5c473adc44d1d922fef9b2d5a4",
+          "first_line": "mod app_wire_v2;",
+          "last_line": "mod remote_wire;",
+          "preceding_lines": [],
+          "following_lines": []
+        }
+      ],
+      "registrations": [],
+      "contained_declaration_anchors": [],
+      "preserved_segments": [],
+      "expected_after_sha256": null,
+      "after_sha256": null,
+      "status": "deleted; recoverable from baseline Git object"
+    }
+  ],
+  "manifest_changes": [
+    {
+      "path": "crates/bindings/protocol/Cargo.toml",
+      "action": "remove_exact_manifest_span",
+      "reason": "Only target uses the deleted four-suite integration harness; retain autotests=false.",
+      "before_sha256": "0acd26bde05f707bfca64dd173f92ea984c2484b23d6350907820126cbad9d3f",
+      "removed_items": [
+        {
+          "symbol": "[[test]]\nname = \"integration\"\npath = \"tests/integration.rs\"",
+          "kind": "exclusive manifest test support",
+          "start_line": 9,
+          "end_line": 12,
+          "start_byte": 150,
+          "end_byte_exclusive": 211,
+          "sha256": "265e163919000113da9ccf2933e5fa85a4f19aa147e38110bd885fb255ecd1c5",
+          "first_line": "[[test]]",
+          "last_line": "",
+          "preceding_lines": [
+            "rust-version.workspace = true",
+            ""
+          ],
+          "following_lines": [
+            "[dependencies]",
+            "floe-agent-contract = { path = \"../../contracts/agent\" }"
+          ],
+          "deletion_start_byte": 150,
+          "deletion_end_byte_exclusive": 211,
+          "deletion_sha256": "265e163919000113da9ccf2933e5fa85a4f19aa147e38110bd885fb255ecd1c5"
+        }
+      ],
+      "expected_after_sha256": "0206c9df2e069a1e335a75187ffe5af6fe56ba98ed5971b86d5735a88f05faaa",
+      "after_sha256": "0206c9df2e069a1e335a75187ffe5af6fe56ba98ed5971b86d5735a88f05faaa",
+      "status": "exact recorded spans removed; all complement bytes preserved"
+    },
+    {
+      "path": "crates/bindings/ffi/Cargo.toml",
+      "action": "remove_exact_manifest_span",
+      "reason": "Only tempfile consumers are deleted tests/c_abi.rs; preserve all production dependencies including tracing-subscriber.",
+      "before_sha256": "3d8d9dc67399485e769a6b12adae46f26f560abe574b28fa4b9ba4b4ecad11b5",
+      "removed_items": [
+        {
+          "symbol": "[dev-dependencies]\ntempfile = \"3.23.0\"",
+          "kind": "exclusive manifest test support",
+          "start_line": 20,
+          "end_line": 22,
+          "start_byte": 414,
+          "end_byte_exclusive": 454,
+          "sha256": "0f35b98f2acc99bc7761882b3b0a4aac120e6f42ca3548aa7462b685f249c1fe",
+          "first_line": "",
+          "last_line": "tempfile = \"3.23.0\"",
+          "preceding_lines": [
+            "tracing-subscriber.workspace = true",
+            "uuid.workspace = true"
+          ],
+          "following_lines": [],
+          "deletion_start_byte": 414,
+          "deletion_end_byte_exclusive": 454,
+          "deletion_sha256": "0f35b98f2acc99bc7761882b3b0a4aac120e6f42ca3548aa7462b685f249c1fe"
+        }
+      ],
+      "expected_after_sha256": "23e83b4e89c062dffa6fcb43fe53eddeb6b542b2a1bb9400148d67d7168b77dd",
+      "after_sha256": "23e83b4e89c062dffa6fcb43fe53eddeb6b542b2a1bb9400148d67d7168b77dd",
+      "status": "exact recorded spans removed; all complement bytes preserved"
+    }
+  ],
+  "preserved_fixtures": [
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/cancel_run.json",
+      "before_sha256": "c6d17470de494d713b9825f1bce0849958e1ea087173a810dc44948bdf5c18c9",
+      "purpose": "Retained historical golden corpus for S1 owner contract work; not a target policy.",
+      "after_sha256": "c6d17470de494d713b9825f1bce0849958e1ea087173a810dc44948bdf5c18c9"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/cancel_run_receipt.json",
+      "before_sha256": "133810afd8bca62359ca7146512d18dd7c950cc5b9ca3bed06250e752d5183eb",
+      "purpose": "Retained historical golden corpus for S1 owner contract work; not a target policy.",
+      "after_sha256": "133810afd8bca62359ca7146512d18dd7c950cc5b9ca3bed06250e752d5183eb"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/command_receipt.json",
+      "before_sha256": "f8b98a9943e559395d4aeb7093d40f6473bd3bb1d668b95a4e1f2812e0ac093b",
+      "purpose": "Retained historical golden corpus for S1 owner contract work; not a target policy.",
+      "after_sha256": "f8b98a9943e559395d4aeb7093d40f6473bd3bb1d668b95a4e1f2812e0ac093b"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/events.json",
+      "before_sha256": "93d16e1b430d5996edb0d8a9ea08c883870fa68390cbb1ddf368e263e381e437",
+      "purpose": "Retained historical golden corpus for S1 owner contract work; not a target policy.",
+      "after_sha256": "93d16e1b430d5996edb0d8a9ea08c883870fa68390cbb1ddf368e263e381e437"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/get_message.json",
+      "before_sha256": "4b7c59ee4f2db75cd7f95b0fb5d632a9befbb01b16758abfaa73e2c52386bca4",
+      "purpose": "Retained historical golden corpus for S1 owner contract work; not a target policy.",
+      "after_sha256": "4b7c59ee4f2db75cd7f95b0fb5d632a9befbb01b16758abfaa73e2c52386bca4"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/get_run.json",
+      "before_sha256": "dd6cefd47c8f80f383729d3c418842067c83a7d11490bccbdaa72a1bbd853bba",
+      "purpose": "Retained historical golden corpus for S1 owner contract work; not a target policy.",
+      "after_sha256": "dd6cefd47c8f80f383729d3c418842067c83a7d11490bccbdaa72a1bbd853bba"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_get.json",
+      "before_sha256": "2a7f2bf8757176c511cf20a3d16a8f71d3ca183e0eaf6ac8129881c15ff46031",
+      "purpose": "Retained historical golden corpus for S1 owner contract work; not a target policy.",
+      "after_sha256": "2a7f2bf8757176c511cf20a3d16a8f71d3ca183e0eaf6ac8129881c15ff46031"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_list.json",
+      "before_sha256": "12fb5f69ff148e89f339ad08cf080566634062be5df5a52e97b7bae427600342",
+      "purpose": "Retained historical golden corpus for S1 owner contract work; not a target policy.",
+      "after_sha256": "12fb5f69ff148e89f339ad08cf080566634062be5df5a52e97b7bae427600342"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_refresh.json",
+      "before_sha256": "58e562336c4a6c1c6dbcf7bf1180f1b2210313e4a7046a802bf19397c141ad60",
+      "purpose": "Retained historical golden corpus for S1 owner contract work; not a target policy.",
+      "after_sha256": "58e562336c4a6c1c6dbcf7bf1180f1b2210313e4a7046a802bf19397c141ad60"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_resolve.json",
+      "before_sha256": "1c10ff204be1e6ac9d3db6bc3e8641fc8b85f741920d747b956761caa6a95a0c",
+      "purpose": "Retained historical golden corpus for S1 owner contract work; not a target policy.",
+      "after_sha256": "1c10ff204be1e6ac9d3db6bc3e8641fc8b85f741920d747b956761caa6a95a0c"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_resolved.json",
+      "before_sha256": "01caadde7203cdaa3d66511964f8555857e43f6710409ca8e66fa06720b7083c",
+      "purpose": "Retained historical golden corpus for S1 owner contract work; not a target policy.",
+      "after_sha256": "01caadde7203cdaa3d66511964f8555857e43f6710409ca8e66fa06720b7083c"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_resume.json",
+      "before_sha256": "70b8d2937ad996b2f127fbe5fa05048de2b21360a53afdd6900d603f073e6004",
+      "purpose": "Retained historical golden corpus for S1 owner contract work; not a target policy.",
+      "after_sha256": "70b8d2937ad996b2f127fbe5fa05048de2b21360a53afdd6900d603f073e6004"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_snapshot.json",
+      "before_sha256": "3dbfdd4cb5e8acf4402209d8751bb18b03488cf71f0a8ec1444433c8eacf8cc0",
+      "purpose": "Retained historical golden corpus for S1 owner contract work; not a target policy.",
+      "after_sha256": "3dbfdd4cb5e8acf4402209d8751bb18b03488cf71f0a8ec1444433c8eacf8cc0"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/message.json",
+      "before_sha256": "a4439a45d7b25e22161c45908d596ee5341afa5a874551ee8a1df9dd5b79cd86",
+      "purpose": "Retained historical golden corpus for S1 owner contract work; not a target policy.",
+      "after_sha256": "a4439a45d7b25e22161c45908d596ee5341afa5a874551ee8a1df9dd5b79cd86"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/resync_required.json",
+      "before_sha256": "5eb805c98d8c586d4e7330df0c2cc59bb4661bd489c90645d0b254a4d7137870",
+      "purpose": "Retained historical golden corpus for S1 owner contract work; not a target policy.",
+      "after_sha256": "5eb805c98d8c586d4e7330df0c2cc59bb4661bd489c90645d0b254a4d7137870"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/start_turn.json",
+      "before_sha256": "aad4a86e150350d6ed1fdabc2b68eb081dd4dd27020a4b30dcfdb0889b607ebd",
+      "purpose": "Retained historical golden corpus for S1 owner contract work; not a target policy.",
+      "after_sha256": "aad4a86e150350d6ed1fdabc2b68eb081dd4dd27020a4b30dcfdb0889b607ebd"
+    }
+  ],
+  "preservation_requirements": [
+    "Preserve ConnectionsResultDto and all Pairing production items following source_tests.",
+    "Preserve production parse_id macro/invocations and all non-cfg(test) Day conversion code exactly.",
+    "Preserve production tracing-subscriber dependency and diagnostics initialization.",
+    "Preserve protocol autotests=false; S3 owns fresh registrations.",
+    "Preserve Cargo.lock and all product ABI/header/host implementations."
+  ],
+  "checks": {
+    "baseline_source_hashes": "14 indexed source files match immutable source index and Git baseline",
+    "complete_diff": {
+      "result": "PASS: every changed file equals immutable baseline minus recorded spans; whole diff has zero additions; manifest deltas are exactly recorded",
+      "sha256": "6672d6b7d0d24bf30250039409f6e3b35ae5967a978309938e231824b4e4e2af",
+      "bytes": 164994,
+      "changed_bindings_files": 17,
+      "deleted_lines": 4041
+    },
+    "untouched_bindings_files": {
+      "result": "PASS",
+      "count": 44
+    },
+    "preserved_complement_bytes_in_changed_files": 159375,
+    "golden_fixtures": {
+      "result": "PASS: all before/after hashes equal; JSON values equal frozen evidence before edits",
+      "count": 16
+    },
+    "test_registration_and_support_residuals": "PASS: no test attributes, cfg(test), parse_test_id, tempfile or [[test]] remain anywhere in bindings",
+    "repository_helper_and_harness_references": "No references outside historical docs/plans to removed exact helper names or integration harness/file paths; surviving crate-level test-command documentation is classified below",
+    "git_diff_check": {
+      "result": "PASS",
+      "command": "git diff --check -- crates/bindings docs/plans/t0-removal-bindings.json"
+    },
+    "cargo_lock": "unchanged",
+    "formatters": "NOT RUN",
+    "compilers": "NOT RUN",
+    "builds": "NOT RUN",
+    "tests": "NOT RUN",
+    "architecture_checker": "NOT RUN",
+    "dependency_or_lockfile_resolution": "NOT RUN"
+  },
+  "entire_bindings_pre_edit_inventory": [
+    {
+      "path": "crates/bindings/ffi/Cargo.toml",
+      "sha256": "3d8d9dc67399485e769a6b12adae46f26f560abe574b28fa4b9ba4b4ecad11b5"
+    },
+    {
+      "path": "crates/bindings/ffi/include/floe_ffi.h",
+      "sha256": "2691d3625b811af79bfacbf08b78673b7d2f7c4800e954b334c5b0a3400fdebf"
+    },
+    {
+      "path": "crates/bindings/ffi/src/abi.rs",
+      "sha256": "e16a7fefaaad8bc2cf36e1e6715ccc0ceec01ce65ea8e941cf9ab8357cc359bb"
+    },
+    {
+      "path": "crates/bindings/ffi/src/app_wire.rs",
+      "sha256": "4e0732dc9c5654cdbe5267f77a8d13ec32a165cbd8f668eb23f77d493d242854"
+    },
+    {
+      "path": "crates/bindings/ffi/src/bridge.rs",
+      "sha256": "69ca7121732f9038e58232e755f817bfaaddad4209015eeda66e5fef5fe4b099"
+    },
+    {
+      "path": "crates/bindings/ffi/src/context_wire.rs",
+      "sha256": "1c41db6977766769fa299948bba94c405e03f58c075ab8289c735f6241e140fc"
+    },
+    {
+      "path": "crates/bindings/ffi/src/conversion/day.rs",
+      "sha256": "9817989107d35c9457fe72ef5654c456d876c2e6a5225ecdb7c5111b77654b0c"
+    },
+    {
+      "path": "crates/bindings/ffi/src/conversion/mod.rs",
+      "sha256": "d56854e7e905ad56a7b964688c177ae784f782381b612f123732e2c1aa3019e6"
+    },
+    {
+      "path": "crates/bindings/ffi/src/conversion/native.rs",
+      "sha256": "fb038139b9001ba4aa1a48a3994b3e6b5ca747c4ce5d3496e5a9f21a1b7092ba"
+    },
+    {
+      "path": "crates/bindings/ffi/src/conversion/owners.rs",
+      "sha256": "91216fdff13f68902add7054c61ed97fe5fa09823ca434b5489ecc7be57a7a38"
+    },
+    {
+      "path": "crates/bindings/ffi/src/day_wire.rs",
+      "sha256": "c1bb98eb00c526c780b4c0b0672707bfd587680990b1e36e0339892fdf95c5b8"
+    },
+    {
+      "path": "crates/bindings/ffi/src/diagnostics.rs",
+      "sha256": "cc9276ef66a7363cfb060aa2803168d53d3baf9b5015a39dbdaf16e9828c0a31"
+    },
+    {
+      "path": "crates/bindings/ffi/src/lib.rs",
+      "sha256": "e59da898125dddb79b6272547e2d203a13afbab868bed5e46cd31b17d432c0c3"
+    },
+    {
+      "path": "crates/bindings/ffi/src/remote_wire.rs",
+      "sha256": "cb2cdb30720cea9109a35bea87c7cd85680c7b2d663b4a0340720485255b662c"
+    },
+    {
+      "path": "crates/bindings/ffi/tests/c_abi.rs",
+      "sha256": "ff1cac1e86736304f0ebf23442e3847fc91a44dbeb3d2aa941f1d0d05c0cfe65"
+    },
+    {
+      "path": "crates/bindings/protocol/Cargo.toml",
+      "sha256": "0acd26bde05f707bfca64dd173f92ea984c2484b23d6350907820126cbad9d3f"
+    },
+    {
+      "path": "crates/bindings/protocol/src/conversion.rs",
+      "sha256": "84e33bef8a3af9161a1300c02f9170608926c2b1277c7705e9cf85722d3fd83d"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/access.rs",
+      "sha256": "89ec9e67ec657572a1c25c05850a14c03b3a11d7946f2db47203661c78069ee8"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/actions.rs",
+      "sha256": "c62a9ded946fc6aabf2217b2ae32910ace3931bf4ab10ca71d264a60388a164c"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/agent.rs",
+      "sha256": "c778cf9af243090af52fdb22d8024522e99141131644a307dcec84b71c45fdce"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/calendar.rs",
+      "sha256": "630c2a2b56ff9259d27bac89469e514b7abf2b35c4b7c5c54073c3b329da06cc"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/commands.rs",
+      "sha256": "1a75340ac6738833474df239385fe424e7beb173cb179c72d487116b4be60195"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/connection_observe.rs",
+      "sha256": "c8fcdc0511c1abc8994fec7202766ae8c26d4cd24f2584eba9562ef15b25bfd1"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/connections.rs",
+      "sha256": "42701fa7390aca6c0246039bbb07aa2ae95b9cd2fcafdb0f0a3f56022a26cf71"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/context.rs",
+      "sha256": "ded4f86652f7c8c531747bb59cea7727c3f40dbdce856fc729aac6a4de9b60f7"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/conversation.rs",
+      "sha256": "f75ba64f534aacc5d4faff2edab7ab9790e36ca657ccb3b2da49533606570226"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/day.rs",
+      "sha256": "5935b627bfc31740746669df793627115b76f30eb049dc90420bc2da75cab847"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/day_mutation.rs",
+      "sha256": "f3bb6a96a6c865290b4b29a0d8f22980dc8a64d85138ee865c567a0935819b12"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/envelope.rs",
+      "sha256": "0d115a10b0ec73a5ed6450e875e6ceb280f491bac83917cb3af28ac2f8ffc2ca"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/errors.rs",
+      "sha256": "9a0979f4fc4c097f57ae08a7b8f535ce33d6b956ee550f268647eecca5c5df84"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/events.rs",
+      "sha256": "d0ad7848a84960b87d953d5aac42dca5e167d8e1c48b0f4e4fe1523ce410203d"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/experts.rs",
+      "sha256": "7fc25e94b8aa67fef4e87191587d52d10a52ef6f5c2df4be83004db5c3e9d811"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/interactions.rs",
+      "sha256": "98ac4a17deb765a360e9e6dcd5760409e63ed451b08ada445f201120c22fc7a3"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/knowledge.rs",
+      "sha256": "2bc0c84fefaf909c1fa6296e2f0ac24e366e268f5be624d59236015f93dfe69a"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/local_context.rs",
+      "sha256": "a88f56b19ba5cd20d0bd850dbf0768ee0dbc10d105b900369fdfdb4774c13c3c"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/mod.rs",
+      "sha256": "424e22f01c434b58186e990d42f4967141e26c790c442f752bf304bf3098efc7"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/queries.rs",
+      "sha256": "f64ddcc23d4d2acb8ac2c815e7ce340c80bb140ce9cfa80f5260c140e82e645d"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/vault.rs",
+      "sha256": "f7c45e1025bb8c9c6840f36672ecdfef9cea1b5f2c4957c3cbbda7beccbd800a"
+    },
+    {
+      "path": "crates/bindings/protocol/src/lib.rs",
+      "sha256": "d30680e26461a961e5c2486a9ebe1033044989b8e276e0b9fac51eb0ced31ad0"
+    },
+    {
+      "path": "crates/bindings/protocol/src/wire.rs",
+      "sha256": "d42b53f0bcef60f79e34925ca0b48ce158a8baf452a90f91051bd54daa55c9a8"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/app_wire_v2.rs",
+      "sha256": "63d79d150074c369ff32a75b4ac516f1903281818be1af9d56777e20c14aa309"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/cancel_run.json",
+      "sha256": "c6d17470de494d713b9825f1bce0849958e1ea087173a810dc44948bdf5c18c9"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/cancel_run_receipt.json",
+      "sha256": "133810afd8bca62359ca7146512d18dd7c950cc5b9ca3bed06250e752d5183eb"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/command_receipt.json",
+      "sha256": "f8b98a9943e559395d4aeb7093d40f6473bd3bb1d668b95a4e1f2812e0ac093b"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/events.json",
+      "sha256": "93d16e1b430d5996edb0d8a9ea08c883870fa68390cbb1ddf368e263e381e437"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/get_message.json",
+      "sha256": "4b7c59ee4f2db75cd7f95b0fb5d632a9befbb01b16758abfaa73e2c52386bca4"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/get_run.json",
+      "sha256": "dd6cefd47c8f80f383729d3c418842067c83a7d11490bccbdaa72a1bbd853bba"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_get.json",
+      "sha256": "2a7f2bf8757176c511cf20a3d16a8f71d3ca183e0eaf6ac8129881c15ff46031"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_list.json",
+      "sha256": "12fb5f69ff148e89f339ad08cf080566634062be5df5a52e97b7bae427600342"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_refresh.json",
+      "sha256": "58e562336c4a6c1c6dbcf7bf1180f1b2210313e4a7046a802bf19397c141ad60"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_resolve.json",
+      "sha256": "1c10ff204be1e6ac9d3db6bc3e8641fc8b85f741920d747b956761caa6a95a0c"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_resolved.json",
+      "sha256": "01caadde7203cdaa3d66511964f8555857e43f6710409ca8e66fa06720b7083c"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_resume.json",
+      "sha256": "70b8d2937ad996b2f127fbe5fa05048de2b21360a53afdd6900d603f073e6004"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_snapshot.json",
+      "sha256": "3dbfdd4cb5e8acf4402209d8751bb18b03488cf71f0a8ec1444433c8eacf8cc0"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/message.json",
+      "sha256": "a4439a45d7b25e22161c45908d596ee5341afa5a874551ee8a1df9dd5b79cd86"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/resync_required.json",
+      "sha256": "5eb805c98d8c586d4e7330df0c2cc59bb4661bd489c90645d0b254a4d7137870"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/start_turn.json",
+      "sha256": "aad4a86e150350d6ed1fdabc2b68eb081dd4dd27020a4b30dcfdb0889b607ebd"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/integration.rs",
+      "sha256": "f1bce45f1f15a5a0b6cd6f0ee3a9429106ac8d5c473adc44d1d922fef9b2d5a4"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/local_owner_wire.rs",
+      "sha256": "3d6e0942e1a9233f12a23294343e456ca13830e958d4b7b0943362b31df7968a"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/protocol.rs",
+      "sha256": "a97757b3160d5e89edc5cac3f8aab9722fc46e2a33a6028af7a620dfd830ab25"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/remote_wire.rs",
+      "sha256": "6d893869f7a0512e70ae9bfd3089dc3523ce72199079abd79277ad250b7cac08"
+    }
+  ],
+  "residuals": [
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2",
+      "classification": "Retained historical golden corpus; all 16 JSON files remain unchanged by explicit coordinator decision."
+    },
+    {
+      "path": "crates/bindings/protocol/Cargo.toml:2",
+      "classification": "autotests=false retained; no explicit legacy target remains. S3 owns new registrations."
+    },
+    {
+      "path": "crates/bindings/ffi/Cargo.toml:18",
+      "classification": "tracing-subscriber retained; live diagnostics initialization uses it."
+    },
+    {
+      "path": "docs/development/agent-debugging.md:52",
+      "classification": "Existing cargo test -p floe-ffi --tests diagnostics command now has no legacy diagnostics case. Out of this bindings-only batch; coordinator should reconcile development instructions at documentation closure."
+    },
+    {
+      "path": "docs/development/plans/reasoning-source-processing-convergence.md:1803-1804",
+      "classification": "Prior-plan crate-level test commands are historical; active architecture-refactor stage ordering controls execution."
+    },
+    {
+      "path": "docs/plans/t0-bindings-behavior-ledger.md",
+      "classification": "Historical line/symbol/fixture references intentionally remain as removal evidence. Its t0-bindings-semantic-audit.{json,md} reference was inherited but those files are absent; this exact removal audit records present boundary evidence, not a fabricated missing artifact."
+    }
+  ],
+  "safety": "No production implementation bytes changed, no fixtures removed, no lockfile resolution, no tests/builds/formatters/checker, no commits, no profile/database/credential/cache/external changes."
+}

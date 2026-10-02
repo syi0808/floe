@@ -21,5 +21,4 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-chrono.workspace = true
 floe-context-contract = { path = "../../contracts/context" }

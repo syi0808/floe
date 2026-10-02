@@ -303,22 +303,3 @@ impl AgentBudget {
         Some(expanded)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn default_manager_budget_supports_long_running_turns() {
-        let budget = AgentBudget::default();
-        assert_eq!(budget.max_iterations, 100);
-        assert_eq!(budget.max_capability_calls, 100);
-        assert_eq!(budget.max_tokens, 409_600);
-        assert_eq!(budget.max_context_bytes, 1_048_576);
-        assert_eq!(budget.max_session_bytes, 2_097_152);
-        assert_eq!(budget.deadline_ms, 300_000);
-        assert_eq!(budget.expanded(1).unwrap().max_iterations, 175);
-        assert_eq!(budget.expanded(2).unwrap().max_iterations, 307);
-        assert_eq!(budget.expanded(3).unwrap().max_iterations, 538);
-        assert!(budget.expanded(4).is_none());
-    }
-}

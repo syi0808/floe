@@ -1,0 +1,790 @@
+{
+  "kind": "PARTIAL_PREPARED_SNAPSHOT",
+  "base_commit": "e28907066184b168148ea38ab8a95aa12c3e5ceb",
+  "not_full_base_tree": true,
+  "scope": "Exact97basepaths from approved S1 protocol/events input, all bytes restored from e2890706; no current S1 source/reference or later documentation overlays.",
+  "exclusions": [
+    "All repository paths not in files; partial snapshot only",
+    "current-reference/kernel OwnerActor overlay",
+    "current-reference/Conversation RunRecord overlay",
+    "post-e289 canonical/architecture clarification overlays"
+  ],
+  "files": [
+    {
+      "path": ".agents/skills/architecture-change/SKILL.md",
+      "mode": "100644",
+      "git_blob": "db049f888e21bcc800e69e16ce71c4ac8f7e4c27",
+      "sha256": "2f0b7b0fbe0259d607a0b18476edbf238839faf5cd19a36aed40f77b0e8bcc51",
+      "bytes": 7987,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": ".agents/skills/code-change-verification/SKILL.md",
+      "mode": "100644",
+      "git_blob": "9d58cb20c3afaed6c2a44cc2413ec362db3b3132",
+      "sha256": "2767b5503028d20253c900676ec62312f9b0fe6ac9f819a0c1d4f0f9b8c23ecd",
+      "bytes": 8519,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "AGENTS.md",
+      "mode": "100644",
+      "git_blob": "3c1b2d700814a1504f6bec184e5ae7ad91533bfc",
+      "sha256": "4779ba75ac838df75b913482241d157ec32e6a93e1e829d1510d8d07933c72f6",
+      "bytes": 8449,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "Cargo.toml",
+      "mode": "100644",
+      "git_blob": "997ed42eb8d50a225b99fdef0758faefe4e28458",
+      "sha256": "64b4fd9c9590607eabe0b125197d6365fffea4c43b5ccec66cb6ada3d816acae",
+      "bytes": 1659,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/app/src/composition.rs",
+      "mode": "100644",
+      "git_blob": "8d1aab458bfeff29f66f9f334efdcff4b2d6d2ab",
+      "sha256": "d22dae6662606c642e2229f8b77eab3247709d7ca9c95af99b1fddd38a6dc860",
+      "bytes": 17854,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/app/src/events.rs",
+      "mode": "100644",
+      "git_blob": "0c6bd510fe07a191f45846a3656cdaad59d3161d",
+      "sha256": "4b583ff606750c9b05677092ade146230a6af593b57365a0c7c9037bf5d2622e",
+      "bytes": 3615,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/app/src/lib.rs",
+      "mode": "100644",
+      "git_blob": "9acf9d3b9f8f7037aedb8b1b4d807fa77dbb74d4",
+      "sha256": "6def64dad87118799fa60a885dcecae40d5edeb0c61422289e5b36ac9902707a",
+      "bytes": 7127,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/app/src/services.rs",
+      "mode": "100644",
+      "git_blob": "acb8167962793d4b69b699d2eaacecfff5223c0a",
+      "sha256": "3cec949d7b04277ccec37f3cdb47822dd30b043272e35f828ac266feb19c59a1",
+      "bytes": 11189,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/app/src/vault_host.rs",
+      "mode": "100644",
+      "git_blob": "a472f571a7260112c97f8cd90820fb772d87702a",
+      "sha256": "50433f48176b32ab8e9a31dde752a44366bd25ea4bc438b27009377beb0f377a",
+      "bytes": 125795,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/ffi/src/app_wire.rs",
+      "mode": "100644",
+      "git_blob": "086430a11676db9f3b8d3dd774eebeceddd8ba9b",
+      "sha256": "6621a16fd91f6d9657d8ce242d97c2d2ca3f4610230226baa83cf6e472d42b57",
+      "bytes": 74297,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/Cargo.toml",
+      "mode": "100644",
+      "git_blob": "a6c77ef77dc921a8cd04256945ee443342f05e3a",
+      "sha256": "0206c9df2e069a1e335a75187ffe5af6fe56ba98ed5971b86d5735a88f05faaa",
+      "bytes": 457,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/conversion.rs",
+      "mode": "100644",
+      "git_blob": "bcf066f5107645e6cdb08d13456d78ba380ea924",
+      "sha256": "84e33bef8a3af9161a1300c02f9170608926c2b1277c7705e9cf85722d3fd83d",
+      "bytes": 3375,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/access.rs",
+      "mode": "100644",
+      "git_blob": "6652d6873aafb6ccb7652f28b986f20f9f4355ea",
+      "sha256": "89ec9e67ec657572a1c25c05850a14c03b3a11d7946f2db47203661c78069ee8",
+      "bytes": 2729,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/actions.rs",
+      "mode": "100644",
+      "git_blob": "e6d7d1e283e0a921755694b781f2359e5f998f43",
+      "sha256": "c62a9ded946fc6aabf2217b2ae32910ace3931bf4ab10ca71d264a60388a164c",
+      "bytes": 2947,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/agent.rs",
+      "mode": "100644",
+      "git_blob": "56b01a2c87c1752767c113dced415e928d6aa393",
+      "sha256": "c778cf9af243090af52fdb22d8024522e99141131644a307dcec84b71c45fdce",
+      "bytes": 6472,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/calendar.rs",
+      "mode": "100644",
+      "git_blob": "cda551a01b2bb2eeb6174b1cec189d01280a40fb",
+      "sha256": "630c2a2b56ff9259d27bac89469e514b7abf2b35c4b7c5c54073c3b329da06cc",
+      "bytes": 2232,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/commands.rs",
+      "mode": "100644",
+      "git_blob": "9222e9929f1e9f83830c7eb8efc1f92ff589a718",
+      "sha256": "1a75340ac6738833474df239385fe424e7beb173cb179c72d487116b4be60195",
+      "bytes": 13864,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/connection_observe.rs",
+      "mode": "100644",
+      "git_blob": "a7194b1e4791de22245132b480eb23dadb0c4a77",
+      "sha256": "f50bdfc08f407f5405267245fae738af50e15a6965fbcc2daac566bd7c800af0",
+      "bytes": 5991,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/connections.rs",
+      "mode": "100644",
+      "git_blob": "53538dd18bd1d41ce18b7af1a767c4e738a93af2",
+      "sha256": "0ed8006e33833b094992a114675866735302c71938032f28ef4c8beb8dc9a2a1",
+      "bytes": 14510,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/context.rs",
+      "mode": "100644",
+      "git_blob": "c40b0000b0975c6bfd03cc9fa2fcad9f2aa977e1",
+      "sha256": "ded4f86652f7c8c531747bb59cea7727c3f40dbdce856fc729aac6a4de9b60f7",
+      "bytes": 3808,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/conversation.rs",
+      "mode": "100644",
+      "git_blob": "6f62d0fef47882d9bb58351c8448f28532966a74",
+      "sha256": "f75ba64f534aacc5d4faff2edab7ab9790e36ca657ccb3b2da49533606570226",
+      "bytes": 444,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/day.rs",
+      "mode": "100644",
+      "git_blob": "eeeff23eb040edb6846b431344aaa62e3a4f3d91",
+      "sha256": "5935b627bfc31740746669df793627115b76f30eb049dc90420bc2da75cab847",
+      "bytes": 4997,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/day_mutation.rs",
+      "mode": "100644",
+      "git_blob": "9d91ca21d2c31903ac1b6363a0fb73c20bdecab7",
+      "sha256": "4b2d2aebbe90e4bd84a3475442fbf4bd06421df4acc52548754f15f5c7892804",
+      "bytes": 4676,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/envelope.rs",
+      "mode": "100644",
+      "git_blob": "0c29fc6e0bd0dc44b0f038bcf7900b5824826662",
+      "sha256": "0d115a10b0ec73a5ed6450e875e6ceb280f491bac83917cb3af28ac2f8ffc2ca",
+      "bytes": 1455,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/errors.rs",
+      "mode": "100644",
+      "git_blob": "6a0ca8a41290c8ef8788d99c3d9a2d59f72e3c3d",
+      "sha256": "9a0979f4fc4c097f57ae08a7b8f535ce33d6b956ee550f268647eecca5c5df84",
+      "bytes": 1708,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/events.rs",
+      "mode": "100644",
+      "git_blob": "1ef162ff210c8446421a4853de3929205a2ddae5",
+      "sha256": "d0ad7848a84960b87d953d5aac42dca5e167d8e1c48b0f4e4fe1523ce410203d",
+      "bytes": 1980,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/experts.rs",
+      "mode": "100644",
+      "git_blob": "7494a75b5cef739166a74362c20d8608d73e2de2",
+      "sha256": "7fc25e94b8aa67fef4e87191587d52d10a52ef6f5c2df4be83004db5c3e9d811",
+      "bytes": 2385,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/interactions.rs",
+      "mode": "100644",
+      "git_blob": "62fda278b6459ecec5e7616fbbf019020e6bfee8",
+      "sha256": "98ac4a17deb765a360e9e6dcd5760409e63ed451b08ada445f201120c22fc7a3",
+      "bytes": 5294,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/knowledge.rs",
+      "mode": "100644",
+      "git_blob": "d565d36d55d0c44290298c5819a7384503f2a287",
+      "sha256": "2bc0c84fefaf909c1fa6296e2f0ac24e366e268f5be624d59236015f93dfe69a",
+      "bytes": 553,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/local_context.rs",
+      "mode": "100644",
+      "git_blob": "93aad16a96691385cc196507549e993238aa7c85",
+      "sha256": "a88f56b19ba5cd20d0bd850dbf0768ee0dbc10d105b900369fdfdb4774c13c3c",
+      "bytes": 3149,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/mod.rs",
+      "mode": "100644",
+      "git_blob": "597e78b7cd1fb01faa1a9b65c49f25e97976cb21",
+      "sha256": "424e22f01c434b58186e990d42f4967141e26c790c442f752bf304bf3098efc7",
+      "bytes": 4456,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/queries.rs",
+      "mode": "100644",
+      "git_blob": "1eb2841260d2defdcc884cddf1c278df00ad39f4",
+      "sha256": "f64ddcc23d4d2acb8ac2c815e7ce340c80bb140ce9cfa80f5260c140e82e645d",
+      "bytes": 11536,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/vault.rs",
+      "mode": "100644",
+      "git_blob": "afa5c1a84dd01853293fcb7b3c53d58c19ca12f4",
+      "sha256": "f7c45e1025bb8c9c6840f36672ecdfef9cea1b5f2c4957c3cbbda7beccbd800a",
+      "bytes": 380,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/lib.rs",
+      "mode": "100644",
+      "git_blob": "3f492f4012e2fbdf20aa59c3ae3d8487a0796a09",
+      "sha256": "d30680e26461a961e5c2486a9ebe1033044989b8e276e0b9fac51eb0ced31ad0",
+      "bytes": 4013,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/src/wire.rs",
+      "mode": "100644",
+      "git_blob": "11f70260b55f1167266be92feb86d3761f0646d4",
+      "sha256": "d42b53f0bcef60f79e34925ca0b48ce158a8baf452a90f91051bd54daa55c9a8",
+      "bytes": 4261,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/cancel_run.json",
+      "mode": "100644",
+      "git_blob": "2218653cd5d18156626b774ac0ace37773efde4f",
+      "sha256": "c6d17470de494d713b9825f1bce0849958e1ea087173a810dc44948bdf5c18c9",
+      "bytes": 282,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/cancel_run_receipt.json",
+      "mode": "100644",
+      "git_blob": "057e0c85c09f0ae0c8667ffbce3534d460babfd6",
+      "sha256": "133810afd8bca62359ca7146512d18dd7c950cc5b9ca3bed06250e752d5183eb",
+      "bytes": 315,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/command_receipt.json",
+      "mode": "100644",
+      "git_blob": "b52021883bbcf644f3153dc938a36acc871f1894",
+      "sha256": "f8b98a9943e559395d4aeb7093d40f6473bd3bb1d668b95a4e1f2812e0ac093b",
+      "bytes": 342,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/events.json",
+      "mode": "100644",
+      "git_blob": "bd6ab5802200edae7a1c5e6f265d7b8e92a78c31",
+      "sha256": "93d16e1b430d5996edb0d8a9ea08c883870fa68390cbb1ddf368e263e381e437",
+      "bytes": 935,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/get_message.json",
+      "mode": "100644",
+      "git_blob": "aa39e886288cffbfce713ad848c1744d534775bd",
+      "sha256": "4b7c59ee4f2db75cd7f95b0fb5d632a9befbb01b16758abfaa73e2c52386bca4",
+      "bytes": 197,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/get_run.json",
+      "mode": "100644",
+      "git_blob": "37507f396be64e0b1ffda1f516cec69c9ece6855",
+      "sha256": "dd6cefd47c8f80f383729d3c418842067c83a7d11490bccbdaa72a1bbd853bba",
+      "bytes": 189,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_get.json",
+      "mode": "100644",
+      "git_blob": "9abd0e6a76166623f7cfc3722688ca60de8098d1",
+      "sha256": "2a7f2bf8757176c511cf20a3d16a8f71d3ca183e0eaf6ac8129881c15ff46031",
+      "bytes": 205,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_list.json",
+      "mode": "100644",
+      "git_blob": "ace54af5bff302ac827ff014f7a4c0aaa999175c",
+      "sha256": "12fb5f69ff148e89f339ad08cf080566634062be5df5a52e97b7bae427600342",
+      "bytes": 202,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_refresh.json",
+      "mode": "100644",
+      "git_blob": "5d746696ed4daa493295cc45c903fc057a2366ad",
+      "sha256": "58e562336c4a6c1c6dbcf7bf1180f1b2210313e4a7046a802bf19397c141ad60",
+      "bytes": 353,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_resolve.json",
+      "mode": "100644",
+      "git_blob": "2c61142340918e6424b81aac80928a7846854033",
+      "sha256": "1c10ff204be1e6ac9d3db6bc3e8641fc8b85f741920d747b956761caa6a95a0c",
+      "bytes": 522,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_resolved.json",
+      "mode": "100644",
+      "git_blob": "3fdfdbe3e0f0e62d5f71831e4b33058d72dbbcbe",
+      "sha256": "01caadde7203cdaa3d66511964f8555857e43f6710409ca8e66fa06720b7083c",
+      "bytes": 1341,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_resume.json",
+      "mode": "100644",
+      "git_blob": "226d9d2f7beb31412f9cd6e1988d9bd6ccd0bbdd",
+      "sha256": "70b8d2937ad996b2f127fbe5fa05048de2b21360a53afdd6900d603f073e6004",
+      "bytes": 351,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_snapshot.json",
+      "mode": "100644",
+      "git_blob": "8b8018afee9c9d27aee019515534264f0014c257",
+      "sha256": "3dbfdd4cb5e8acf4402209d8751bb18b03488cf71f0a8ec1444433c8eacf8cc0",
+      "bytes": 1227,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/message.json",
+      "mode": "100644",
+      "git_blob": "1e10f261b5d863d124c64da1611edb8f3330e8f7",
+      "sha256": "a4439a45d7b25e22161c45908d596ee5341afa5a874551ee8a1df9dd5b79cd86",
+      "bytes": 286,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/resync_required.json",
+      "mode": "100644",
+      "git_blob": "c24ed64ef5ff75f0b02ae96e2736e293245d9a3c",
+      "sha256": "5eb805c98d8c586d4e7330df0c2cc59bb4661bd489c90645d0b254a4d7137870",
+      "bytes": 200,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/start_turn.json",
+      "mode": "100644",
+      "git_blob": "898f3a53f3ffcb717ecf83440be5f9cc042af1f0",
+      "sha256": "aad4a86e150350d6ed1fdabc2b68eb081dd4dd27020a4b30dcfdb0889b607ebd",
+      "bytes": 398,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/contracts/agent/src/interaction.rs",
+      "mode": "100644",
+      "git_blob": "eeaacde0e219ee57599db3db026cc4820b7e676c",
+      "sha256": "d2ff17bff5915003c75cd3e7a3d57d9fe5bb4976e7762bc6c08cd3a974c119d6",
+      "bytes": 1299,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/contracts/kernel/Cargo.toml",
+      "mode": "100644",
+      "git_blob": "2eabb38600975533bdd4ce45d43f66f3dc044096",
+      "sha256": "07e4c466dc463964b478de943f362982bc3a80e1e2d431f89bed0c465bbe3f5d",
+      "bytes": 190,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/contracts/kernel/src/lib.rs",
+      "mode": "100644",
+      "git_blob": "4da3218c93d9dd2e3e2ce97c3d11532aaf092f50",
+      "sha256": "aaa7c94a7aecd9b3e35988d368792a73ae882995611c0b73926a22fdee4d4395",
+      "bytes": 4665,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/Cargo.toml",
+      "mode": "100644",
+      "git_blob": "0ea9d86bf637d33f5ee3f6e2d01575afde4c1ef7",
+      "sha256": "ee169d73d10a66e6afcab1ae30d54585df3b5a92d55aeced2c4013811e55d535",
+      "bytes": 729,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/prompts/manager_role.txt",
+      "mode": "100644",
+      "git_blob": "674ea6500e5e79ceedd9226baacd50562e7fa44e",
+      "sha256": "a0ed037b21c750c09696a7e176a88601d57f0872a447effa02e521a1a5d44fc5",
+      "bytes": 3260,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/prompts/model_correction.txt",
+      "mode": "100644",
+      "git_blob": "05f498e937772d3309d3aa7eb2efe40112430703",
+      "sha256": "556b6e25981a8ddda43176a7a460713ebaf33b715083f1e2fb622ea99790817a",
+      "bytes": 504,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/adapters/context_reader.rs",
+      "mode": "100644",
+      "git_blob": "cec5eb364a594f97112d5231e707ddb33b163c4c",
+      "sha256": "09c30025766b9c0d8aa96b1e9236dbda38b1ced917a457ca0d6f4646bf58e236",
+      "bytes": 720,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/adapters/mod.rs",
+      "mode": "100644",
+      "git_blob": "34289097df5fdde481a8de519479c6dce8903e1c",
+      "sha256": "41ef2da00003d16e24f58c0bf58cb97ad309d6bedaa1ddf578a0c362d60d9b8e",
+      "bytes": 31,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/api.rs",
+      "mode": "100644",
+      "git_blob": "e3f6d7e9f3d3c02d80ad7595795467cbfdcd50a2",
+      "sha256": "2c21748abc23e960c44f76006e7d28942dd9d09e642b3c79c0c7a1ecdd3d488e",
+      "bytes": 6807,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/admission.rs",
+      "mode": "100644",
+      "git_blob": "c70bd82a7ab47f5c9e31470e8a025f19170aba2c",
+      "sha256": "7259e8c01415663dc801e9a8bc8d20be8732ab32d52c31617d5533c31c529133",
+      "bytes": 13988,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/archive.rs",
+      "mode": "100644",
+      "git_blob": "2ec5677a888ae32db07f588f4b499a04de5cffc1",
+      "sha256": "abac862347042dd512d3fc179ffc44be8317db92811eaf5a8eb8affd4f724638",
+      "bytes": 1763,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/cancellation.rs",
+      "mode": "100644",
+      "git_blob": "df47d64ff5a953a145a953ab32b28c678c24acc4",
+      "sha256": "b55e6d579c505deefe90f109be71feb04db102a097864b50e6b5aa4e93c3cf3a",
+      "bytes": 7500,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/coordinator.rs",
+      "mode": "100644",
+      "git_blob": "cffb57748a556070c04d98410ec1455b6a9b01fa",
+      "sha256": "ea6964877a9f205f5e03d916a17cc83c7ce931e232bc2bce873d0080c9b6ec38",
+      "bytes": 43488,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/finalization.rs",
+      "mode": "100644",
+      "git_blob": "4be11bdff8e071620fd3e217fbf513bc39938515",
+      "sha256": "917735b645ab09ed7d46ab1f048bdd72e0650bd5e053b168fd2863d2326db63b",
+      "bytes": 12625,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/governed_session.rs",
+      "mode": "100644",
+      "git_blob": "08efdf98e80ad3cb4a4630b9bfe5d264815ba604",
+      "sha256": "f4f53e5c34e657bfa5707b6d5db95675911213c764b97ec524bde2905a2ca953",
+      "bytes": 7576,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/history_projection.rs",
+      "mode": "100644",
+      "git_blob": "c872a3e68cdc94f8ab8f191dd8bbdd70515fa848",
+      "sha256": "5e7fff61be562aa9d4244cc43c57bb845292e1692e7e7306edbaf19d3fd36b98",
+      "bytes": 4095,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/interactions.rs",
+      "mode": "100644",
+      "git_blob": "76975c8b63fa6191c4901157895a75bb3e541555",
+      "sha256": "1bfdd29bf770162dd81fc9cbbfacfd19a75305291f11766c520a1dc574be0746",
+      "bytes": 16879,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/mod.rs",
+      "mode": "100644",
+      "git_blob": "0b9a11ee8344c3dd96cbb4aca60c9cf6ec42dcca",
+      "sha256": "d34802c22b1a4c4b2c208fc2a4d16acb2dbea1592bd42107d183c962ccf1aecd",
+      "bytes": 1571,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/model_projection.rs",
+      "mode": "100644",
+      "git_blob": "c9e11f437a0806a4d464162e7cab3f3dcc131b01",
+      "sha256": "5cb7f4bbbce96ed6c5314cc7cf9ee03a940189d0eb78bf9ce3fbae24f68ef4dc",
+      "bytes": 5730,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/query.rs",
+      "mode": "100644",
+      "git_blob": "22e92da4d625fcb9013d70dd9a6810f5127db953",
+      "sha256": "3b3a504c48584a809249d18a9bcf9eb6b32413899f44deaf84b22eb60f9a9a8d",
+      "bytes": 1023,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/recovery.rs",
+      "mode": "100644",
+      "git_blob": "58c7cbeedff3dd0509b449e69f8089e1d1a09f19",
+      "sha256": "43917e6dfaad984b488e376b69ca62aca0c139ddcd048d0111cfd4125237e042",
+      "bytes": 32971,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/resume.rs",
+      "mode": "100644",
+      "git_blob": "81769d18500f9bb6bc34bebc0e677e1cc138f52b",
+      "sha256": "0b88672a67150e78a3aa597f9a824caef5acb4b3dbadca3e393d09318b04a355",
+      "bytes": 2427,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/session.rs",
+      "mode": "100644",
+      "git_blob": "6eb365ac3574ff5613dfa8b0667e5f36bdecefbe",
+      "sha256": "ed9cfed074dd03f057895fa31edb2782c4cd586416b790a46a2e80146be2575e",
+      "bytes": 3951,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/domain/intent.rs",
+      "mode": "100644",
+      "git_blob": "898f88fbd1bbc1551db05d13fdc9a78477e258b1",
+      "sha256": "c4bf75e4b3b81d3fe585521cb37f5e51ad033c657a7480b1644bfcb4b8f9d820",
+      "bytes": 5984,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/domain/interaction.rs",
+      "mode": "100644",
+      "git_blob": "25f043e4f2cda417159e4ab793911c8298ff21d0",
+      "sha256": "d9c096e431b46ff561f5787ddc91c48eef735f7300d83103e7644b839870c304",
+      "bytes": 42130,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/domain/mod.rs",
+      "mode": "100644",
+      "git_blob": "9dc852cbdafad3bbc342bde4c28a9dd0704e6b57",
+      "sha256": "762e2077083864bc6dea90fe42983fb1795f4c63802e053b7fc8dd4c83ca3cf2",
+      "bytes": 21475,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/lib.rs",
+      "mode": "100644",
+      "git_blob": "52787937b1bb0a56060a0c5963b7ab4581e76bd2",
+      "sha256": "fdf37b1b3dc490751cbd5071e05bf4a1f15d64a78da45c505ac560eacf85a8de",
+      "bytes": 3561,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/ports/interactions.rs",
+      "mode": "100644",
+      "git_blob": "b6c1e081daeed37ef43299ca2befb6fb59f57c5a",
+      "sha256": "7bc752d5135819c1b72aed9819848c5a899c27f26f7c72548fb8b7462aadcafc",
+      "bytes": 2770,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/ports/mod.rs",
+      "mode": "100644",
+      "git_blob": "a169bfb085a459fe807c09a1246fb601ff5e3d85",
+      "sha256": "0c134fb4f17db5c287db8ad8d61ee3c0cd5624bfb0996f7c3a4e320b1ea5d2ba",
+      "bytes": 2632,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/prompts.rs",
+      "mode": "100644",
+      "git_blob": "e4c0a64457b2790d16f999ac393746743614a0a9",
+      "sha256": "394d90580647ef5217ebf46eff9178de9a89c8cf32b66c6b2b75ea18d19ded78",
+      "bytes": 2204,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/turn/mod.rs",
+      "mode": "100644",
+      "git_blob": "f1b9801f198d54e02f4877c5619eaf0856d1d04b",
+      "sha256": "bdefddc1b30e8eb3c18eaaf9459cf1ce6a9abb449c202a374246176c63bda046",
+      "bytes": 155,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "crates/modules/conversation/src/turn/session.rs",
+      "mode": "100644",
+      "git_blob": "25a37dc52bd4ee7b5773cf62da006399d10990e1",
+      "sha256": "6725f2d8cc29fedf9dfa6d39b3f4a75dd314c6b9a997b84b6f30c24512d91928",
+      "bytes": 9157,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "docs/README.md",
+      "mode": "100644",
+      "git_blob": "d196b858c9865405252a9e898221e57146efcb4e",
+      "sha256": "8ebe3394f85510191d6491cb68badb186794b9b856ebf5c0dda2c21ac02cfe1d",
+      "bytes": 4655,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "docs/architecture/README.md",
+      "mode": "100644",
+      "git_blob": "8e877c42ff4d6fabf6c70523358d31a64574fbdb",
+      "sha256": "6cad381a81ead40085d04fdbff6f2a73414230ecb5e136ad122855fefba3aead",
+      "bytes": 3730,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "docs/architecture/invariants.md",
+      "mode": "100644",
+      "git_blob": "7739f6e786e7735c87632546b2c8118efcf5791d",
+      "sha256": "b85f09694a0c5b2aa1230175ad21c6897568d78f52e99bc04abaae83d41835be",
+      "bytes": 10017,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "docs/architecture/runtime.md",
+      "mode": "100644",
+      "git_blob": "50f18a52262aafe39dc3ea854782a22546bcc59a",
+      "sha256": "0afa113a3ad5c04fc03e2c883073e3904986baec01a11208ae49758c1542cd9d",
+      "bytes": 38673,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "docs/plans/2026-10-02-app-cutover.md",
+      "mode": "100644",
+      "git_blob": "5c16b33ed2b52ea35416c107afd67bd6cf0e2d5c",
+      "sha256": "fab815e103a2662bae667bcb40227f772d7dacc850d382bebea23910d761f0b2",
+      "bytes": 50746,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "docs/plans/2026-10-02-architecture-refactor.md",
+      "mode": "100644",
+      "git_blob": "16b13789ee80b58997cbf5c88b6ea35470f71375",
+      "sha256": "7de5e6b8a041c802444b9b43b7910659d68d90712330276102b51d220e73db6a",
+      "bytes": 82735,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "docs/plans/2026-10-02-bindings-cutover.md",
+      "mode": "100644",
+      "git_blob": "0fcd7b1d143912afb80c47ad1e079e5a4c40c2e0",
+      "sha256": "8a3619e55058b12133d5b35e34a12a87b253c12d840e1bf4f1f64ed4d1d2ed51",
+      "bytes": 24175,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "docs/plans/2026-10-02-canonical-contracts.md",
+      "mode": "100644",
+      "git_blob": "82ca1fc434c322fee9a94e2ad0bc1fdd769a97bd",
+      "sha256": "0534f340a10bb87ca95736cc658ab4832e23e860c5a00032d0b443d435fd4c75",
+      "bytes": 70275,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "docs/plans/2026-10-02-client-cutover.md",
+      "mode": "100644",
+      "git_blob": "331bf99e1de62831e1b99adb4a3c66afaa15d7c8",
+      "sha256": "5b69b04ba75a6618dd4389503394546bc116c896e2bb2344076fab044d8f76ad",
+      "bytes": 49478,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "docs/plans/2026-10-02-rust-cutover.md",
+      "mode": "100644",
+      "git_blob": "237f7d341a0a4cf14b33e263bd20ec2b1c78fd58",
+      "sha256": "3882c3193f5dde15bcaf45ea120e8c36b2353d6f5e4dbf9da4b2890668d7d5d2",
+      "bytes": 42415,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "docs/plans/2026-10-02-vault-cutover.md",
+      "mode": "100644",
+      "git_blob": "def1ac648f16d7b1ffb8f3aed390532f77e8d77f",
+      "sha256": "a87ae19987477030b1c1857c4a5a136884a6dabc3e3ca97e753eebe4694e2bb8",
+      "bytes": 42858,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "docs/plans/README.md",
+      "mode": "100644",
+      "git_blob": "7a8841284f70e950ebc42e25d2b62f593a556627",
+      "sha256": "67beb6ae121a5e611fb1868e313e0cdf48c4a0c2bfe8e7d7dba934521e14ae52",
+      "bytes": 6783,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "docs/plans/t0-bindings-behavior-ledger.md",
+      "mode": "100644",
+      "git_blob": "2a47af6f91130956df347c43ef8d333539a71878",
+      "sha256": "fc5548023a8a83b14596438f410f4cbbbfb0f1af9c7879a4185affdf27baa1af",
+      "bytes": 38212,
+      "origin": "exact_base_commit"
+    },
+    {
+      "path": "docs/plans/t0-removal-bindings.json",
+      "mode": "100644",
+      "git_blob": "740ddfafafdc01d2805544c3b69f1731c7d70b1f",
+      "sha256": "54d85f374b085985da5f7b803891f6c702833e64d19ed4605560114883d039d5",
+      "bytes": 164609,
+      "origin": "exact_base_commit"
+    }
+  ]
+}

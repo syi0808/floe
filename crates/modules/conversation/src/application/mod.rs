@@ -40,6 +40,3 @@ pub use session::{
     admit_unscoped_session, admitted_session, get_session, recovered_session, resume_session,
     start_session,
 };
-
-#[cfg(test)]
-mod tests;
