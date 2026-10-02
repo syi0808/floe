@@ -11,6 +11,7 @@
 - Compatibility rule: Floe is pre-stable. Replace obsolete internal contracts directly. Do not keep old/new model-consent, routing, or source-processing paths alive through compatibility adapters, nullable migration fields, parallel schemas, or permanent legacy decoders.
 - Platform rule: Apple is the delivery target. Android Health semantics may be made fail-closed at shared boundaries, but this plan does not add or validate an Android local-model implementation.
 - Privacy scope rule: mandatory local semantic privacy transformation is implemented for Health/Wellbeing only in this plan. Do not generalize it to Calendar, Mail, Contacts, Work Context, Logistics, Tasks, or Memory without a separate product decision and a demonstrated second use case.
+- Checkpoint detail rule: this file remains the ordering/invariant authority. Code-line execution detail may live under [reasoning-source-processing-convergence/](reasoning-source-processing-convergence/); each parent checkpoint links its active detail document instead of duplicating implementation instructions.
 
 ## 0. Why this plan exists
 
@@ -891,158 +892,60 @@ Checkpoint 01 is complete only when all of the following are true:
 No Health-derived View may reach Inference or a provider transport while being represented only as Personal after this checkpoint.
 
 
+
 ## 6. Checkpoint 02 — Add the Health-only device-local privacy-transform contract
+
+### Status
+
+Checkpoint 02 is the active next checkpoint after CP01. Production implementation has not started at the refreshed baseline:
+
+    fb6e36a160149cac6e5b1a4c02991a4d78b15544
+
+Authoritative code-line execution detail:
+
+- [02 — Health privacy-transform contract and FoundationModels host](reasoning-source-processing-convergence/02-health-privacy-transform-contract.md)
+
+If `main` moves before implementation, refresh that document's line anchors and assumptions first.
 
 ### Goal
 
-Introduce one narrow source-owned semantic transform for Health without creating a generic privacy-transform framework.
-
-### Owner and dependency shape
-
-Health owns the typed transformation contract. The Apple FoundationModels implementation remains a platform adapter.
-
-Recommended shape:
+Introduce one narrow Health-owned typed semantic transform plus a separate device-local FoundationModels operation. Do not create a generic privacy-transform framework and do not cut the real HealthKit product path over yet.
 
 ~~~text
 FloeAppleHealth
-  HealthPrivacyTransformInput
-  HealthPrivacyTransformOutput
-  HealthPrivacyTransforming protocol
+  -> typed HealthPrivacyTransformInput / Output / protocol
+  -> deterministic post-transform Wellbeing projection seam
 
-HealthKitWellbeingProvider
-  -> deterministic acquisition/preprocessing
-  -> HealthPrivacyTransforming
-  -> deterministic WellbeingView projection
-
-Apple host/local-model adapter
-  -> FoundationModels
-  -> implements HealthPrivacyTransforming
+libfloe_local_model.dylib
+  -> existing Agent/Learner LocalModelHost
+  -> separate HealthPrivacyTransformHost
+       -> independent job/lifecycle
+       -> same physical FoundationModels capability
+       -> no Agent prompt/tools/history/catalog
 ~~~
 
-Do not make FloeAppleHealth depend on Conversation, Agent Runtime, Inference, Experts, or Knowledge.
+The Health transform must not share the existing Agent `LocalModelHost` job slot. Privacy transform and local Agent reasoning are distinct operations and must be able to coexist without replay/conflict aliasing.
 
-Do not route this through CanonicalModelRequest, ModelPort, InferenceService, or ModelCallOutcome.
+### Frozen boundary
 
-### 02-A — Split deterministic reduction from semantic transform
-
-Current AppleWellbeingReducer performs both minimization and semantic classification.
-
-Keep deterministic work that is safe and useful before the LLM:
-
-- exact HealthKit read type allow-list;
-- 36-hour bound;
-- sample/query bounds;
-- sleep interval merge;
-- numeric aggregation;
-- removal of HealthKit metadata, identifiers, source details, and individual samples.
-
-Create a bounded transform input equivalent to:
-
-~~~text
-HealthPrivacyTransformInput {
-  sleep_hours: optional bounded number
-  steps: optional bounded number
-  exercise_minutes: optional bounded number
-}
-~~~
-
-Do not include:
-
-- Person ID;
-- device ID;
-- source handle;
-- sample UUID/object ID;
-- HealthKit source/provider metadata;
-- arbitrary timestamps beyond what the transform requires;
-- Conversation text/history;
-- Persona;
-- Memory;
-- Expert/Tool catalog;
-- credentials;
-- grant IDs/authority revisions.
-
-Move capacity/recovery semantic classification behind the transformer. Do not keep the current deterministic capacity/recovery rule as a fallback for unavailable local LLM.
-
-### 02-B — Typed transform output
-
-The transform output must be closed and typed, with no free-form explanation required for product use:
-
-~~~text
-HealthPrivacyTransformOutput {
-  capacity: reduced | typical | strong | unknown
-  recovery: needs_recovery | typical | recovered | unknown
-}
-~~~
-
-The source host, not the LLM, should continue to construct:
-
-- source/evidence handles;
-- observed/expires timestamps;
-- confidence derived from available bounded evidence where possible;
-- schema/version fields;
-- provenance/authority fields.
-
-The LLM must not manufacture authority or provenance.
-
-### 02-C — FoundationModels adapter
-
-The existing shared Apple runtime is:
-
-    apps/client/macos/LocalModel/LocalModel.swift
-
-and is compiled for both macOS and iOS by:
-
-    apps/client/macos/build_native.sh
-    apps/client/ios/build_native.sh
-
-Reuse the physical FoundationModels capability, but add a separate Health-transform operation/typed generator rather than reusing Agent prompt classification.
-
-The transform invocation must have:
-
-- no Agent stable instructions;
-- no run frame;
-- no conversation;
-- no tool construction;
-- no learner classification;
-- no delegation;
-- a narrow fixed source-owned instruction;
-- a typed @Generable output;
-- an independent request/deadline/release lifecycle if it uses the dylib command boundary.
-
-If direct Swift composition is simpler, inject a HealthPrivacyTransforming implementation at AppleContextChannel/host composition. Do not add an internal compatibility facade merely to preserve the Agent local-model wire.
-
-### 02-D — Availability and failure mapping
-
-The mandatory transform fails closed for:
-
-- unsupported OS/profile;
-- device not eligible;
-- Apple Intelligence disabled;
-- model not ready;
-- model unavailable;
-- invalid typed output;
-- timeout/deadline;
-- cancellation.
-
-Map the result to a source/capability unavailability class suitable for later user-facing presentation. It is not SourceAccess permission denial and not a model-consent interaction.
-
-### 02-E — Unit tests
-
-Add deterministic Swift tests with injected/fake transformers for:
-
-- exact bounded transform input;
-- raw sample/metadata non-leakage;
-- typed output projection;
-- unavailable transformer fails;
-- invalid transform output fails;
-- timeout/cancellation fail;
-- current deterministic semantic classifier is not used as fallback.
-
-The native local-model validation harness must also cover the new operation/typed decoder without requiring a live Foundation model.
+- Health owns transform input/output/protocol and fixed transform instruction.
+- Transform input contains only bounded aggregate sleep/steps/exercise values.
+- FoundationModels Health generation uses `tools: []` and a closed typed generated output.
+- The local-model dylib exposes a separate Health command/ABI with its own start/poll/cancel/release state.
+- The new Health transform path never calls deterministic capacity/recovery classification as fallback.
+- CP02 does not change `HealthKitWellbeingProvider.readDerivedWellbeing()`. The old deterministic path remains only as the pre-CP03 product path.
+- CP03 owns transformer injection, mandatory product use, legacy classifier removal from the product path, transform failure lifecycle and provenance.
+- Do not change processing authority, recipient consent, Gateway routing, Primary/Fallback routing, AppWire, Flutter product API or Android local-model behavior.
 
 ### Acceptance
 
-The source package has one typed Health privacy-transform boundary. No generic Agent runtime type appears in that contract.
+- One source-owned typed Health transform contract exists.
+- One independent FoundationModels Health operation exists and is deterministically testable without a live model.
+- Health operation cannot receive Agent instructions, Conversation, Tools, Expert discovery, Persona, Memory, credentials or authority identifiers.
+- Agent and Health local-model jobs have independent ownership/lifecycle.
+- Every production/validation compile of `LocalModel.swift` also compiles the source-owned Health contract source.
+- The real HealthKit provider remains pre-cutover and CP03 has not started.
+
 
 ## 7. Checkpoint 03 — Cut Apple Health acquisition over to mandatory local transform
 
