@@ -167,7 +167,7 @@ Run `flutter run -d macos -t lib/main_design_system.dart` to inspect shared colo
 button sizes and states, field alignment, and selection controls. Reusable controls use
 semantic state colors from `FloeColor`/`FloeStates`, spacing from `FloeSpace`, and
 36px compact, 44px standard, or 48px field metrics from `FloeControlSize`. Add new
-reusable states to the catalog and its golden before using them in a feature screen.
+reusable states to the catalog and its widget tests before using them in a feature screen.
 
 For custom controls, use `PressableScale(builder: (states) => InkWell(statesController: states, ...))`. The navigation and Floe anchor use this path with a 0.98 scale. Always connect the supplied state controller to the interactive child so disabled states, keyboard activation, and gesture cancellation follow Flutter's native behavior rather than raw pointer events. Reduced motion suppresses scaling. Checkbox, switch, popup-menu, and platform picker interactions retain their native behavior.
 

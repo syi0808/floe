@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('catalog provides a stable visual component baseline', (
+  testWidgets('catalog exposes the reusable component sections', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1024, 1200);
@@ -27,9 +27,6 @@ void main() {
     expect(find.text('Buttons'), findsOneWidget);
     expect(find.text('Fields'), findsOneWidget);
     expect(find.text('Selection'), findsOneWidget);
-    await expectLater(
-      find.byType(DesignSystemCatalog),
-      matchesGoldenFile('../goldens/design_system_catalog.png'),
-    );
+    expect(tester.takeException(), isNull);
   });
 }

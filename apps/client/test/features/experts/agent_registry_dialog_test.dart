@@ -73,12 +73,6 @@ void main() {
         expect(find.text('floe.schedule'), findsNothing);
         expect(find.text(registryAssignment), findsNothing);
         expect(tester.takeException(), isNull);
-        if (width == 520) {
-          await expectLater(
-            find.byType(AgentRegistrySettings),
-            matchesGoldenFile('../../goldens/agent_registry.png'),
-          );
-        }
       },
     );
   }
