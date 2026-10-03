@@ -50,6 +50,14 @@ pub struct PairingRecord {
     pub cancellation_command: Option<Uuid>,
 }
 impl PairingRecord {
+    /// Recovery can only reobserve the exact locally confirmed operation.
+    /// Missing private inputs never authorize a new enrollment behind repair.
+    pub fn can_reconcile_repair(&self) -> bool {
+        self.state == PairingState::RepairRequired
+            && self.handle.is_some()
+            && self.reviewed.is_some()
+            && self.confirmation_command.is_some()
+    }
     pub fn validate(&self) -> Result<(), PairingError> {
         if self.operation_id.is_nil()
             || self.command_id.is_nil()
@@ -102,9 +110,12 @@ impl PairingRecord {
                 | PairingState::Committing => {
                     vec![ConnectionAction::Cancel, ConnectionAction::Reobserve]
                 }
+                PairingState::RepairRequired if self.can_reconcile_repair() => {
+                    vec![ConnectionAction::Cancel, ConnectionAction::Reobserve]
+                }
                 _ => vec![],
             },
-            next_observation_after_ms: (!self.state.terminal()).then_some(2000),
+            next_observation_after_ms: (!self.state.terminal() || self.can_reconcile_repair()).then_some(2000),
         }
     }
 }
@@ -326,7 +337,7 @@ impl GatewayPairingService {
     ) -> Result<PairingSnapshot, PairingError> {
         check(actor, scope)?;
         let mut record = self.current(actor, operation_id).await?;
-        if record.state.terminal() {
+        if record.state.terminal() && !record.can_reconcile_repair() {
             return Ok(record.snapshot());
         }
         if record.state == PairingState::Committing {
@@ -406,7 +417,9 @@ impl GatewayPairingService {
         if record.cancellation_command == Some(command_id) {
             return Ok(record.snapshot());
         }
-        if record.revision != expected_revision || record.state.terminal() || command_id.is_nil() {
+        if record.revision != expected_revision
+            || (record.state.terminal() && !record.can_reconcile_repair())
+            || command_id.is_nil() {
             return Err(PairingError::Conflict);
         }
         record.cancellation_command = Some(command_id);
@@ -429,7 +442,10 @@ impl GatewayPairingService {
             PairingProgress::Rejected => record.state = PairingState::Rejected,
             PairingProgress::Expired => record.state = PairingState::Expired,
             PairingProgress::Cancelled => record.state = PairingState::Cancelled,
-            PairingProgress::RepairRequired => record.state = PairingState::RepairRequired,
+            PairingProgress::RepairRequired => {
+                if record.state == PairingState::RepairRequired { return Ok(record); }
+                record.state = PairingState::RepairRequired;
+            },
             PairingProgress::Approved => {
                 if record.confirmation_command.is_none() {
                     return Err(PairingError::Conflict);
@@ -546,6 +562,8 @@ fn pairing_failure_projection(record: &PairingRecord) -> Option<crate::Connectio
         reload_required: true,
         seal_session: false,
         recovery,
-        safe_actions: vec![],
+        safe_actions: if record.can_reconcile_repair() {
+            vec![ConnectionAction::Cancel, ConnectionAction::Reobserve]
+        } else { vec![] },
     })
 }

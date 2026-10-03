@@ -26,6 +26,10 @@ impl floe_actions::ActionSourceReader for crate::TursoStore {
             floe_connections::SourceRepository::list_current(self,person_id,&connector).await.map_err(|_|floe_kernel::AgentFailure::StorageUnavailable)
         })
     }
+    fn read_reservation_fence<'a>(&'a self,person_id:PersonId,connection_id:&'a floe_context_contract::ConnectionId)
+        ->BoxFuture<'a,Result<floe_connections::SourceReservationFence,floe_kernel::AgentFailure>>{
+        Box::pin(async move{floe_connections::SourceOperationRepository::read_reservation_fence(self,person_id,connection_id).await.map_err(|_|floe_kernel::AgentFailure::StorageUnavailable)})
+    }
     fn source_is_fenced<'a>(&'a self,person_id:PersonId,connection_id:&'a floe_context_contract::ConnectionId)
         ->BoxFuture<'a,Result<bool,floe_kernel::AgentFailure>>{
         Box::pin(async move{floe_connections::SourceOperationRepository::source_is_fenced(self,person_id,connection_id).await.map_err(|_|floe_kernel::AgentFailure::StorageUnavailable)})

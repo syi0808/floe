@@ -46,11 +46,12 @@ impl ActionsService {
                 (effect,ActionOrigin::Direct{command_id,actor_device_id:actor.device_id.clone()},None,now+chrono::Duration::minutes(15))
             },
             ActionIntent::ExpertProposal{receipt,artifact_id,destination_ref,timezone}=>{
-                let destination=self.resolve_destination(actor,destination_ref,scope).await?;
                 receipt.validate()?;
                 if artifact_id.is_nil() || !crate::domain::record::bounded(&timezone,128){return Err(AgentFailure::InvalidInput);}
                 let evidence=self.proposals.read(actor,&receipt,artifact_id,scope).await?;
                 evidence.proposal.validate()?;
+                self.capture_dependency_sources(actor,&evidence.coverage,scope).await?;
+                let destination=self.resolve_destination(actor,destination_ref,scope).await?;
                 let proposal=&evidence.proposal;
                 let dependency=&evidence.dependency;
                 if evidence.receipt!=receipt || evidence.artifact_id!=artifact_id || proposal.person_id!=actor.person_id

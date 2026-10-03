@@ -3,7 +3,7 @@ use floe_day::{DayCollectionCommit, DayCollectionReceipt, DayError, MirrorExpect
 use serde::{Deserialize, Serialize};
 use turso::Connection;
 use crate::{StoreError, TursoStore};
-use super::day_refresh::{current_calendar_sources_on, finish_transaction, mirror_on, persist_mirror_on, versions_of};
+use super::day_refresh::{current_calendar_sources_on, finish_transaction, mirror_on, persist_mirror_on, versions_of, require_executor};
 
 const TABLE: &str = "CREATE TABLE day_action_collections (execution_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, device_id TEXT NOT NULL, receipt_digest TEXT NOT NULL, intent_digest TEXT NOT NULL, payload TEXT NOT NULL)";
 #[derive(Deserialize, Serialize)]
@@ -17,7 +17,7 @@ pub(super) async fn validate_collection_schema(connection: &Connection) -> Resul
 fn storage(error: impl std::fmt::Display) -> DayError { DayError::storage(error.to_string()) }
 fn hex(digest: &[u8; 32]) -> String { digest.iter().map(|byte| format!("{byte:02x}")).collect() }
 
-pub(super) async fn collect(store: &TursoStore, commit: DayCollectionCommit) -> Result<DayCollectionReceipt, DayError> {
+pub(super) async fn collect(store: &TursoStore, commit: DayCollectionCommit, fence: &floe_day::DayWriteFence) -> Result<DayCollectionReceipt, DayError> {
     commit.validate()?;
     let connection = store.connection().await.map_err(storage)?;
     connection.execute("BEGIN IMMEDIATE", ()).await.map_err(storage)?;
@@ -32,6 +32,8 @@ pub(super) async fn collect(store: &TursoStore, commit: DayCollectionCommit) -> 
             return Ok(stored.receipt);
         }
         drop(rows);
+        fence.check(commit.person_id, &commit.device_id, commit.executor_generation)?;
+        require_executor(&connection, commit.person_id, &commit.device_id, commit.executor_generation).await?;
         let sources = current_calendar_sources_on(&connection, commit.person_id).await?;
         let target = sources.iter().find(|source| source.version.source.connection_id() == commit.collection.source().connection_id).ok_or_else(|| DayError::conflict("Calendar collection source missing"))?;
         if !target.source.is_serving() { return Err(DayError::conflict("Calendar collection source unavailable")); }
@@ -44,9 +46,10 @@ pub(super) async fn collect(store: &TursoStore, commit: DayCollectionCommit) -> 
         let payload = serde_json::to_string(&CollectionRecord { command: commit.clone(), receipt: receipt.clone() }).map_err(storage)?;
         if payload.len() > 64 * 1024 { return Err(DayError::validation("Calendar collection receipt budget")); }
         persist_mirror_on(&connection, commit.person_id, expectation, current, &mirror, serde_json::to_string(&mirror).map_err(storage)?).await?;
-        let changed = connection.execute("INSERT OR IGNORE INTO day_action_collections(execution_id,person_id,device_id,receipt_digest,intent_digest,payload) VALUES (?,?,?,?,?,?)", (commit.execution_id.to_string(),commit.person_id.to_string(),commit.device_id,hex(&commit.receipt_digest),hex(&commit.intent_digest),payload)).await.map_err(storage)?;
+        let changed = connection.execute("INSERT OR IGNORE INTO day_action_collections(execution_id,person_id,device_id,receipt_digest,intent_digest,payload) VALUES (?,?,?,?,?,?)", (commit.execution_id.to_string(),commit.person_id.to_string(),commit.device_id.clone(),hex(&commit.receipt_digest),hex(&commit.intent_digest),payload)).await.map_err(storage)?;
         if changed != 1 { return Err(DayError::conflict("Day collection receipt raced")); }
         Ok(receipt)
     }.await;
+    let result = result.and_then(|result| { fence.check(commit.person_id, &commit.device_id, commit.executor_generation)?; Ok(result) });
     finish_transaction(&connection, result).await
 }

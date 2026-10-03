@@ -46,6 +46,40 @@ impl ContextCore {
 pub struct ContextCalendarAcquisition { core: Arc<ContextCore> }
 impl ContextCalendarAcquisition { pub fn new(core: Arc<ContextCore>) -> Self { Self { core } } }
 impl CalendarAcquisitionPort for ContextCalendarAcquisition {
+    fn inspect_sources<'a>(&'a self, actor: &'a OwnerActor, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<floe_day::CalendarCacheInspection, CalendarRefreshError>> {
+        Box::pin(async move {
+            let inventory = self.core.inventory(actor, scope).await?;
+            let facts = ConfiguredCalendarAuthority { sources: self.core.sources.clone(), transport: self.core.calendar_transport.clone() };
+            let mut sources = Vec::with_capacity(inventory.len());
+            for source in &inventory {
+                check(scope)?;
+                let version = calendar_source_version(source)?;
+                let failure = if source.state() != SourceState::Ready || source.resources().is_empty() { Some(CalendarFailure::CalendarUnavailable) }
+                else if self.core.sources.source_is_fenced(actor.person_id, source.connection_id()).await.map_err(|_| DayRefreshFailure::StorageUnavailable)? { Some(CalendarFailure::SourceFenced) }
+                else {
+                    match facts.observe_current(actor, &version.source, scope).await {
+                        Ok(observed) => {
+                            let valid = observed.validate_metadata(actor, &version.source, version.provider, self.core.clock.now());
+                            if valid.is_err() || observed.observed_at > self.core.clock.now() || self.core.clock.now().signed_duration_since(observed.observed_at) > chrono::Duration::seconds(30) { Some(CalendarFailure::SourceChanged) } else { None }
+                        }
+                        Err(failure) => Some(source_failure(failure)),
+                    }
+                };
+                let observed_at = self.core.clock.now();
+                sources.push(match failure { Some(failure) => floe_day::CalendarCacheSourceStatus::Unavailable { source: version, failure, observed_at }, None => floe_day::CalendarCacheSourceStatus::Current { source: version, observed_at } });
+            }
+            let after = self.core.inventory(actor, scope).await?;
+            if after != inventory { return Err(DayRefreshFailure::SourceChanged); }
+            for status in &mut sources {
+                if matches!(status, floe_day::CalendarCacheSourceStatus::Current { .. }) && self.core.sources.source_is_fenced(actor.person_id, &status.source().source.connection_id()).await.map_err(|_| DayRefreshFailure::StorageUnavailable)? {
+                    *status = floe_day::CalendarCacheSourceStatus::Unavailable { source: status.source().clone(), failure: CalendarFailure::SourceFenced, observed_at: self.core.clock.now() };
+                }
+            }
+            check(scope)?;
+            let result = floe_day::CalendarCacheInspection { actor: actor.clone(), sources, observed_at: self.core.clock.now() };
+            result.validate(actor, self.core.clock.now()).map_err(|_| DayRefreshFailure::InvalidAcquisition)?; Ok(result)
+        })
+    }
     fn acquire<'a>(&'a self, request: CalendarRefreshRequest, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<CalendarAcquisition, CalendarRefreshError>> {
         Box::pin(async move {
             request.actor.validate().map_err(|_| DayRefreshFailure::InvalidAcquisition)?;

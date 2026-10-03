@@ -10,6 +10,7 @@ mod conversation;
 mod day;
 mod day_refresh;
 mod day_collection;
+mod day_mutation;
 #[cfg(unix)]
 mod memory_review;
 #[cfg(unix)]

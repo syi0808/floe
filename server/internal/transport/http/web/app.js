@@ -79,7 +79,13 @@ async function refresh() {
   element('login-panel').hidden = true; element('dashboard').hidden = false;
   element('address').textContent = state.address; pairing = state.pairing;
   element('pair-panel').hidden = !pairing; element('pair-code').textContent = pairing?.code || '';
-  element('approve').disabled = pairing?.local_confirmed !== true;
+  const pairingActions = pairing?.allowed_actions || [];
+  for (const name of ['approve', 'reject', 'resume', 'abort']) {
+    element(name).hidden = !pairingActions.includes(name);
+    element(name).disabled = !pairingActions.includes(name);
+  }
+  element('pair-phase').textContent = pairing?.phase === 'activating'
+    ? 'Activation needs an operator decision. Resume uses only the original retained credential and unexpired proof. Abort succeeds only if Trust confirms activation did not commit. An active client must be explicitly revoked below.' : '';
   element('pair-identity').textContent = pairing
     ? `${pairing.person_id} · ${pairing.device_id}` : '';
   element('pair-fingerprint').textContent = pairing
@@ -141,6 +147,18 @@ for (const operation of ['approve', 'reject']) element(operation).onclick = () =
     : {schema_version: 1, pairing_id: pairing.id};
   await api(`pair/${operation}`, body); await refresh();
   notice(operation === 'approve' ? 'App approved. Return to Floe to finish connecting.' : 'Request rejected.');
+});
+for (const operation of ['resume', 'abort']) element(operation).onclick = () => action(element(operation), async () => {
+  if (!pairing || !pairing.allowed_actions.includes(operation)) return;
+  if (!confirm(operation === 'resume'
+    ? 'Resume this exact activation using its original proof and retained credential?'
+    : 'Abort this activation only if it has not committed? An already active client remains active.')) return;
+  const result = await api('pair/recover', {schema_version: 1, pairing_id: pairing.id,
+    issuer_fingerprint: pairing.issuer_fingerprint, action: operation});
+  await refresh();
+  notice(result.status === 'approved'
+    ? (result.credential_delivery === 'repair_required' ? 'Activation already committed, but credential delivery needs repair. Revoke the active client below if recovery is unavailable.' : 'Activation committed. Return to Floe to finish connecting.')
+    : 'The uncommitted activation was aborted. Its recovery receipt was retained.');
 });
 async function codex(operation) {
   const value = await api(`codex/${operation}`, {}); codexPending = value.status === 'pending';

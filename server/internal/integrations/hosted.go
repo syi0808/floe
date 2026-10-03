@@ -133,7 +133,7 @@ func (s *Service) BeginHostedSetup(ctx context.Context, operator trust.OperatorP
 	}
 	// The exact owned operation is durable before writing a credential or opening OAuth.
 	if secret != "" {
-		if err = s.vault.Put(a.Record.Credential, secret); err != nil {
+		if err = s.vault.Put(ctx, a.Record.Credential, secret); err != nil {
 			return s.hostedFailure(ctx, operator, a, "credential_store_unavailable")
 		}
 	}

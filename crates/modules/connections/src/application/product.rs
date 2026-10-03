@@ -1650,7 +1650,9 @@ impl ConnectionsService {
                 let result = service.reconcile_pairing(&actor, id, &scope).await;
                 if result
                     .as_ref()
-                    .is_ok_and(|snapshot| snapshot.state.terminal())
+                    .is_ok_and(|snapshot| snapshot.state.terminal()
+                        && !(snapshot.state == PairingState::RepairRequired
+                            && snapshot.allowed_actions.contains(&ConnectionAction::Reobserve)))
                 {
                     break;
                 }

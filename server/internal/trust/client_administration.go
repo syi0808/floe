@@ -12,7 +12,7 @@ type RevocationCleanup interface {
     ApplyRevocation(context.Context,CleanupTicket) error
     ResumeCleanup(context.Context) error
 }
-type PairingCleanup interface {ClearClient(string)}
+type PairingCleanup interface {ClearClient(context.Context,string) error}
 type ClientAdministration struct {
     trust *Service
     cleanup RevocationCleanup
@@ -40,7 +40,7 @@ func (a *ClientAdministration) Revoke(ctx context.Context,p OperatorPrincipal,id
         return err
     })
     if err!=nil{return Result(err)}
-    a.pairing.ClearClient(id)
+    credentialErr:=a.pairing.ClearClient(ctx,id)
     if err=a.cleanup.ApplyRevocation(ctx,receipt.Cleanup);err!=nil{return operation.Reject(operation.Unavailable,"connection_cleanup_pending")}
     a.mu.Lock()
     if !a.closed {
@@ -48,6 +48,7 @@ func (a *ClientAdministration) Revoke(ctx context.Context,p OperatorPrincipal,id
         go func(){defer a.active.Done();work,cancel:=context.WithTimeout(a.ctx,40*time.Second);defer cancel();_ = a.cleanup.ResumeCleanup(work)}()
     }
     a.mu.Unlock()
+    if credentialErr!=nil{return operation.Reject(operation.Unavailable,"pairing_credential_cleanup_pending")}
     return operation.Accept(map[string]any{"ok":true,"cleanup":"pending"})
 }
 func (a *ClientAdministration) Close(){a.mu.Lock();a.closed=true;a.cancel();a.mu.Unlock();a.active.Wait()}

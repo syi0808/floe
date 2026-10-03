@@ -229,7 +229,7 @@ pub enum ActionUnknownReason { Timeout, ResponseLost, InvalidReceipt, CancelledA
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all="snake_case")]
-pub enum ActionNotAppliedReason { PermissionDenied, ProviderRejected, ProviderUnavailable }
+pub enum ActionNotAppliedReason { PermissionDenied, ProviderRejected, ProviderUnavailable, SourceChanged }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

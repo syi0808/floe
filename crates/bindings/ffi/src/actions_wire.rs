@@ -289,6 +289,7 @@ fn status_out(value: owner::ActionStatus) -> dto::ActionStatusDto {
             owner::ActionNotAppliedReason::PermissionDenied => dto::ActionNotAppliedReasonDto::PermissionDenied,
             owner::ActionNotAppliedReason::ProviderRejected => dto::ActionNotAppliedReasonDto::ProviderRejected,
             owner::ActionNotAppliedReason::ProviderUnavailable => dto::ActionNotAppliedReasonDto::ProviderUnavailable,
+            owner::ActionNotAppliedReason::SourceChanged => dto::ActionNotAppliedReasonDto::SourceChanged,
         } },
         owner::ActionStatus::Unknown { reason } => dto::ActionStatusDto::Unknown { reason: match reason {
             owner::ActionUnknownReason::Timeout => dto::ActionUnknownReasonDto::Timeout,

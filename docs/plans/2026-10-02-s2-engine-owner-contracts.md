@@ -229,3 +229,12 @@ Affected current files include agent-contract/{delegation.rs,ports.rs,expert_mod
 Experts promotes agent-runtime to production and adds kernel; the old Inference dependency is already removed. Knowledge adds agent-runtime and does not import Context/Inference/Access. Context adds the Experts inward-port edge and already has Knowledge. Construct repositories/native/Gateway adapters, then Access/Connections and independent Inference, then ContextCore and its small adapters, then Experts/Knowledge, then complete ContextService, then Conversation. No new workspace crate, optional late initialization, service locator, Arc construction cycle or business-owner import of builtin packages.
 
 No S2 implementation, tests or checks are authorized by this proposal alone. After coordinator review fixes these exact shapes, use bounded disjoint worker packages; perform the planned structural closure before G2/S3 checks and behavioral tests.
+
+
+## S3 regression: configuration changes after Task admission
+
+Exercise the actual TaskCoordinator and common Engine endpoint with an admitted source selection A. Pause before endpoint execution, replace the assignment binding with B, and disable the assignment or installation. The already admitted Task must retain A and its exact definition/admission; all actual reads use A, and none use B. With A's source/grant authority still valid, the Task may settle normally. A stateful settlement must preserve the newer B binding and disabled configuration while applying only its assignment-local private-state CAS.
+
+Repeat with A revoked or its source authority changed before acquisition/dispatch. The live source fence must deny or return its typed source review; the Task must never fall through to B. An incompatible installed manifest/admission or private-state revision must still conflict. Replaying a committed receipt after rebind/disable must return the exact original execution, selection, parent identity and accounting without source/model I/O or another charge. No binding-equality comparison against current Registry state may serve as a Task authority check.
+
+This is a behavioral regression obligation for the coordinated S3 stage; it records no test implementation or execution result.

@@ -12,15 +12,25 @@ static int floe_keychain(const char *name, const char *value, int operation, cha
     CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword);
     CFDictionarySetValue(query, kSecAttrService, CFSTR("app.floe.server.credentials"));
     CFDictionarySetValue(query, kSecAttrAccount, account);
+    CFDictionarySetValue(query, kSecAttrSynchronizable, kCFBooleanFalse);
+    CFDictionarySetValue(query, kSecUseAuthenticationUI, kSecUseAuthenticationUIFail);
     OSStatus status;
     if (operation == 0) {
         CFDictionarySetValue(query, kSecReturnData, kCFBooleanTrue);
         CFTypeRef data = NULL;
         status = SecItemCopyMatching(query, &data);
         if (status == errSecItemNotFound) status = errSecSuccess;
+        else if (status == errSecSuccess && data == NULL) status = errSecDecode;
         if (status == errSecSuccess && data != NULL) {
+            if (CFGetTypeID(data) != CFDataGetTypeID() || CFDataGetLength((CFDataRef)data) == 0 || CFDataGetLength((CFDataRef)data) > 131072) {
+                CFRelease(data); CFRelease(query); CFRelease(account); return errSecDecode;
+            }
             CFIndex length = CFDataGetLength((CFDataRef)data);
+            if (memchr(CFDataGetBytePtr((CFDataRef)data), 0, length) != NULL) {
+                CFRelease(data); CFRelease(query); CFRelease(account); return errSecDecode;
+            }
             *output = malloc(length + 1);
+            if (*output == NULL) {CFRelease(data); CFRelease(query); CFRelease(account); return errSecAllocate;}
             memcpy(*output, CFDataGetBytePtr((CFDataRef)data), length);
             (*output)[length] = 0;
             CFRelease(data);
@@ -35,6 +45,7 @@ static int floe_keychain(const char *name, const char *value, int operation, cha
 			CFDictionaryRemoveValue(query, kSecAttrAccessible);
 			CFMutableDictionaryRef update = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
 			CFDictionarySetValue(update, kSecValueData, data);
+            CFDictionarySetValue(update, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly);
 			status = SecItemUpdate(query, update);
 			CFRelease(update);
 		}
@@ -51,28 +62,17 @@ static int floe_keychain(const char *name, const char *value, int operation, cha
 import "C"
 
 import (
-	"errors"
-	"strings"
 	"unsafe"
 )
 
-type Keychain struct{}
-
-func (Keychain) Get(name string) (string, error) { return keychain(name, "", 0) }
-func (Keychain) Put(name, value string) error    { _, err := keychain(name, value, 1); return err }
-func (Keychain) Delete(name string) error        { _, err := keychain(name, "", 2); return err }
-
-func keychain(name, value string, operation int) (string, error) {
-	if strings.ContainsRune(name+value, 0) {
-		return "", errors.New("invalid credential")
-	}
+func nativeKeychain(name, value string, operation int) (string, error) {
 	account, secret := C.CString(name), C.CString(value)
 	defer C.free(unsafe.Pointer(account))
 	defer C.free(unsafe.Pointer(secret))
 	var output *C.char
-	if C.floe_keychain(account, secret, C.int(operation), &output) != 0 {
-		return "", errors.New("credential store unavailable")
-	}
+	status := C.floe_keychain(account, secret, C.int(operation), &output)
+    if status == C.errSecInteractionNotAllowed || status == C.errSecAuthFailed {return "",ErrLocked}
+    if status != 0 {return "",ErrUnavailable}
 	if output == nil {
 		return "", nil
 	}

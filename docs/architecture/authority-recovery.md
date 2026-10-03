@@ -48,11 +48,11 @@ A broader follow-up request cannot silently reuse evidence whose coverage is too
 
 When one logical view reads multiple connected sources, each source retains its own grant, `GrantAuthority`, `SourceAuthority` and `ContextDependency`. Context may merge bounded payloads, but it cannot manufacture an aggregate grant or dependency or drop a contributing dependency from model coverage.
 
-Expert package artifacts retain exact internal coverage in `ExpertReport` and the durable `TaskSnapshot`; their A2A, Conversation and Flutter projections omit grant/source authority. A completed Task has a bounded text result, but that result does not replace provenance or encode package schema. Unknown coverage cannot cross the completed report/Task boundary.
+Expert package artifacts retain exact internal coverage in the journaled final payload, TaskSnapshot and immutable TaskExecutionReceipt. Product projections expose bounded text and safe artifact metadata without internal authority. An artifact's narrower direct contributor does not erase the Task's inherited or other settled dependencies. Unknown coverage cannot become a Completed or Blocked Task report, and package JSON cannot establish Task provenance or user-review authority.
 
 ## Validated pending work is durable work
 
-The Agent Runtime validates a complete model-produced batch before executing side effects. Once a validated batch is durable, crash recovery must continue that batch rather than ask the model for a different plan.
+The common Agent Runtime validates a complete model-produced batch before executing its steps. A package finalizer returns the validated text and artifacts once, before canonical batch/output acknowledgement. The final size and provenance checks cover the transformed payload. Recovery consumes the acknowledged payload and exact pinned batch; it never reruns package transformation or asks a model to replace durable pending work.
 
 `ValidatedModelBatch.projection_coverage` records the exact source provenance of pending work. Conversation reauthorizes that stored coverage through the current `DependencyResolver` immediately before pending execution and again before terminal output release. Stale or Unknown dependencies suppress the stored step or answer; neither message shape nor Expert/capability identity can reconstruct missing provenance.
 
@@ -79,11 +79,25 @@ ADR 0034 separately requires durable post-review automatic resume: a terminal in
 
 ## Model attempts and budgets
 
-- One attempt identity is preserved through Engine, Inference and transport.
-- Inference is the model usage reserve/handoff/settlement owner on the canonical path.
-- Preflight failure before dispatch must not be charged as dispatched work.
-- A dispatched failure's durable usage survives restart.
-- Recovery must not resurrect budget, double-settle an attempt or double-charge finalization.
+`ModelPort::prepare` returns one owned prepared call and immutable plan before Context projects source data. A source-review outcome precedes attempt allocation and ModelIntent. Validation correction may reuse that same prepared object and plan; no failure after possible handoff permits automatic transport retry or fallback.
+
+The owning Run, Task or Learner claim has the sole canonical `JournalEvent` sequence. ModelIntent binds attempt ID, actual plan/projection, optional owning Task and a conservative reservation ceiling. Inference records a pending dispatch fact before handoff, then produces exactly one terminal immutable attempt receipt on settlement, over-budget response or drop. The Engine acknowledges ModelResult before releasing its in-memory receipt. A proven pre-handoff failure may settle with zero charge; missing or uncertain post-handoff evidence retains conservative charge and unknown flags.
+
+Usage remains monotonic through cancellation, finalization and recovery. Charged unknown tokens/cost stay separate from observed usage, including unknown dimensions with a zero charged amount. `TaskModelAccounting` retains exact unknown-token and unknown-cost attempt counts. Attempt references/tombstones are bounded; capacity exhaustion rejects admission before another attempt. Journal capacity separately reserves room for terminal intent settlement.
+
+### Task settlement and parent recovery
+
+Each Task pins execution/generation, original request identity, admitted selection and allowance. Every append atomically advances its durable journal head. Task terminal state, exact output/coverage, accounting receipt and any assignment-local private-state transition commit together. A missing tail or mismatched head fails closed. Source retention capabilities survive until settlement is acknowledged.
+
+The parent records DelegationIntent before handoff and later records the authenticated immutable Task receipt as DelegationResult. It never copies Task ModelResults into the parent journal. Aggregation includes a distinct Task execution once, even when a continuation replays its receipt; changed evidence for the same execution is corruption. Observer timeout or cancellation after delegation cannot manufacture an Unadmitted/Rejected zero-charge result. Only owner-verified absence of Task admission supports that result.
+
+A continuation first reconciles unresolved delegation from actual stored Task evidence. A Working Task remains pending; recovery never reruns its endpoint. Ancestor adoption authenticates the original request and exact batch/cursor lineage without rewriting the Task's original parent. A recovered Blocked Task retains replay/accounting and its pending cursor, is omitted from provider history, and blocks the child before any new dispatch so Conversation can publish the authenticated review group.
+
+### Learner recovery and memory review
+
+A Learner claim has an immutable Person/device/budget binding and one authenticated canonical journal. Fresh claims are admitted only from Queued or explicitly Deferred work. Expired Running recovery preserves the same claim for a genuinely empty journal or known acknowledged Output. Incomplete, unresolved or unknown execution becomes Failed with an Interrupted issue and cannot generate a fresh model call.
+
+Staging proves the exact proposal against that claim's stored Output and head. Its immutable stage receipt retains the complete original request even though the candidate key deliberately omits mutable payload/time/revision fields; changed same-key requests conflict. Staging never activates memory. User decisions have immutable command receipts and apply the Knowledge-owned review plan atomically. Public review and decision projections expose safe content, validity and actual acknowledgement identity without storage hashes, idempotency keys or raw provenance.
 
 ## External writes and uncertain outcomes
 

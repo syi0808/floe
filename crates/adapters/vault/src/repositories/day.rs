@@ -4,17 +4,15 @@ use crate::{
     engine::{require_schema, storage_error, unsupported_profile},
     StoreError, StoreErrorCode, TursoStore,
 };
-use floe_day::{
-    CalendarMirror, Capture, Event, Note, Task, TimelineItem,
-};
-use floe_kernel::{CaptureId, EventId, NoteId, PersonId, TaskId};
-use serde::{de::DeserializeOwned, Serialize};
+use floe_day::{CalendarMirror, Event, Note, Task, TimelineItem};
+use floe_kernel::PersonId;
 use turso::Connection;
 
 const DAY_TABLES: &[&str] = &["captures", "events", "tasks", "notes", "calendar_mirrors"];
 
 pub(crate) async fn initialize_day_schema(connection: &Connection) -> Result<(), StoreError> {
     super::day_collection::initialize_collection_schema(connection).await?;
+    super::day_mutation::initialize_mutation_schema(connection).await?;
     connection
         .execute(
             "CREATE TABLE IF NOT EXISTS floe_day_schema (id INTEGER PRIMARY KEY CHECK(id = 1), version INTEGER NOT NULL CHECK(version = 1))",
@@ -67,6 +65,7 @@ pub(crate) async fn initialize_day_schema(connection: &Connection) -> Result<(),
 
 pub(crate) async fn validate_day_schema(connection: &Connection) -> Result<(), StoreError> {
     super::day_collection::validate_collection_schema(connection).await?;
+    super::day_mutation::validate_mutation_schema(connection).await?;
     require_schema(
         connection,
         "floe_day_schema",
@@ -122,464 +121,35 @@ pub(crate) async fn validate_day_schema(connection: &Connection) -> Result<(), S
 }
 
 impl TursoStore {
-    pub async fn calendar_mirror(
-        &self,
-        person_id: PersonId,
-    ) -> Result<Option<CalendarMirror>, StoreError> {
-        self.get("calendar_mirrors", person_id.to_string()).await
-    }
-
-    async fn put<T: Serialize>(
-        &self,
-        table: &str,
-        id: String,
-        person_id: PersonId,
-        value: &T,
-    ) -> Result<(), StoreError> {
-        let payload = serde_json::to_string(value).map_err(storage_error)?;
-        self.connection()
-            .await?
-            .execute(
-                &format!("INSERT INTO {table}(id, person_id, payload) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET person_id=excluded.person_id, payload=excluded.payload"),
-                (id, person_id.to_string(), payload),
-            )
-            .await
-            .map_err(storage_error)?;
-        Ok(())
-    }
-
-    async fn get<T: DeserializeOwned>(
-        &self,
-        table: &str,
-        id: String,
-    ) -> Result<Option<T>, StoreError> {
-        let mut rows = self
-            .connection()
-            .await?
-            .query(&format!("SELECT payload FROM {table} WHERE id = ?"), (id,))
-            .await
-            .map_err(storage_error)?;
-        let Some(row) = rows.next().await.map_err(storage_error)? else {
-            return Ok(None);
-        };
-        let payload: String = row.get(0).map_err(storage_error)?;
-        if payload.len() > floe_day::MAX_DAY_SNAPSHOT_BYTES { return Err(StoreError::new(crate::StoreErrorCode::Validation, "Day read byte budget")); }
-        serde_json::from_str(&payload).map(Some).map_err(storage_error)
-    }
-
-    pub async fn put_capture(&self, value: &Capture) -> Result<(), StoreError> {
-        self.put("captures", value.id.to_string(), value.person_id, value)
-            .await
-    }
-
-    pub async fn put_event(&self, value: &Event) -> Result<(), StoreError> {
-        self.put("events", value.id.to_string(), value.person_id, value)
-            .await
-    }
-
-    pub async fn put_task(&self, value: &Task) -> Result<(), StoreError> {
-        self.put("tasks", value.id.to_string(), value.person_id, value)
-            .await
-    }
-
-    pub async fn put_note(&self, value: &Note) -> Result<(), StoreError> {
-        self.put("notes", value.id.to_string(), value.person_id, value)
-            .await
-    }
-
-    async fn put_if_revision<T, F>(
-        &self,
-        table: &str,
-        id: String,
-        person_id: PersonId,
-        value: &T,
-        expected: floe_kernel::Revision,
-        revision: F,
-    ) -> Result<(), StoreError>
-    where
-        T: Serialize + DeserializeOwned,
-        F: Fn(&T) -> floe_kernel::Revision,
-    {
-        let payload = serde_json::to_string(value).map_err(storage_error)?;
+    pub async fn calendar_mirror(&self, person_id: PersonId) -> Result<Option<CalendarMirror>, StoreError> {
         let connection = self.connection().await?;
-        connection
-            .execute("BEGIN IMMEDIATE", ())
-            .await
-            .map_err(storage_error)?;
-        let result = async {
-            let mut rows = connection
-                .query(
-                    &format!("SELECT payload FROM {table} WHERE id = ? AND person_id = ?"),
-                    (id.clone(), person_id.to_string()),
-                )
-                .await
-                .map_err(storage_error)?;
-            let stored = rows
-                .next()
-                .await
-                .map_err(storage_error)?
-                .map(|row| row.get::<String>(0).map_err(storage_error))
-                .transpose()?;
-            drop(rows);
-            let Some(stored) = stored else {
-                return Err(StoreError::new(
-                    StoreErrorCode::NotFound,
-                    "timeline item not found",
-                ));
-            };
-            let current: T = serde_json::from_str(&stored).map_err(storage_error)?;
-            if revision(&current) != expected {
-                return Err(
-                    StoreError::new(StoreErrorCode::Conflict, "stale revision")
-                        .with_metadata("expected", expected.0.to_string())
-                        .with_metadata("actual", revision(&current).0.to_string()),
-                );
-            }
-            let changed = connection
-                .execute(
-                    &format!("UPDATE {table} SET payload = ? WHERE id = ? AND person_id = ? AND payload = ?"),
-                    (payload, id, person_id.to_string(), stored),
-                )
-                .await
-                .map_err(storage_error)?;
-            if changed != 1 {
-                return Err(StoreError::new(
-                    StoreErrorCode::Conflict,
-                    "timeline item changed; reload and retry",
-                ));
-            }
-            connection
-                .execute("COMMIT", ())
-                .await
-                .map_err(storage_error)?;
-            Ok(())
-        }
-        .await;
-        if result.is_err() {
-            let _ = connection.execute("ROLLBACK", ()).await;
-        }
-        result
-    }
-
-    pub async fn put_event_if_revision(
-        &self,
-        value: &Event,
-        expected: floe_kernel::Revision,
-    ) -> Result<(), StoreError> {
-        self.put_if_revision(
-            "events",
-            value.id.to_string(),
-            value.person_id,
-            value,
-            expected,
-            |item| item.revision,
-        )
-        .await
-    }
-
-    pub async fn put_task_if_revision(
-        &self,
-        value: &Task,
-        expected: floe_kernel::Revision,
-    ) -> Result<(), StoreError> {
-        self.put_if_revision(
-            "tasks",
-            value.id.to_string(),
-            value.person_id,
-            value,
-            expected,
-            |item| item.revision,
-        )
-        .await
-    }
-
-    pub async fn put_note_if_revision(
-        &self,
-        value: &Note,
-        expected: floe_kernel::Revision,
-    ) -> Result<(), StoreError> {
-        self.put_if_revision(
-            "notes",
-            value.id.to_string(),
-            value.person_id,
-            value,
-            expected,
-            |item| item.revision,
-        )
-        .await
-    }
-
-    pub async fn get_capture(&self, id: CaptureId) -> Result<Option<Capture>, StoreError> {
-        self.get("captures", id.to_string()).await
-    }
-
-    pub async fn get_event(&self, id: EventId) -> Result<Option<Event>, StoreError> {
-        self.get("events", id.to_string()).await
-    }
-
-    pub async fn get_task(&self, id: TaskId) -> Result<Option<Task>, StoreError> {
-        self.get("tasks", id.to_string()).await
-    }
-
-    pub async fn get_note(&self, id: NoteId) -> Result<Option<Note>, StoreError> {
-        self.get("notes", id.to_string()).await
-    }
-
-    pub async fn classify(
-        &self,
-        capture: &Capture,
-        item: &TimelineItem,
-    ) -> Result<(), StoreError> {
-        let (table, id, person_id, payload) = match item {
-            TimelineItem::Event(value) => (
-                "events",
-                value.id.to_string(),
-                value.person_id,
-                serde_json::to_string(value),
-            ),
-            TimelineItem::Task(value) => (
-                "tasks",
-                value.id.to_string(),
-                value.person_id,
-                serde_json::to_string(value),
-            ),
-            TimelineItem::Note(value) => (
-                "notes",
-                value.id.to_string(),
-                value.person_id,
-                serde_json::to_string(value),
-            ),
-        };
-        if person_id != capture.person_id {
-            return Err(StoreError::new(
-                StoreErrorCode::Validation,
-                "capture and classified item must belong to the same person",
-            ));
-        }
-        let capture_payload = serde_json::to_string(capture).map_err(storage_error)?;
-        let payload = payload.map_err(storage_error)?;
-        let connection = self.connection().await?;
-        connection
-            .execute("BEGIN IMMEDIATE", ())
-            .await
-            .map_err(storage_error)?;
-        let result = async {
-            let mut rows = connection
-                .query(
-                    "SELECT payload FROM captures WHERE id = ? AND person_id = ?",
-                    (capture.id.to_string(), capture.person_id.to_string()),
-                )
-                .await
-                .map_err(storage_error)?;
-            let stored = rows
-                .next()
-                .await
-                .map_err(storage_error)?
-                .map(|row| row.get::<String>(0).map_err(storage_error))
-                .transpose()?;
-            drop(rows);
-            let Some(stored) = stored else {
-                return Err(StoreError::new(
-                    StoreErrorCode::NotFound,
-                    "capture not found",
-                ));
-            };
-            let current: Capture = serde_json::from_str(&stored).map_err(storage_error)?;
-            if current.revision.next() != capture.revision {
-                return Err(
-                    StoreError::new(StoreErrorCode::Conflict, "stale revision")
-                        .with_metadata(
-                            "expected",
-                            capture.revision.0.saturating_sub(1).to_string(),
-                        )
-                        .with_metadata("actual", current.revision.0.to_string()),
-                );
-            }
-            if !matches!(current.processing, floe_day::CaptureProcessing::Pending) {
-                return Err(StoreError::new(
-                    StoreErrorCode::Conflict,
-                    "capture has already been resolved",
-                ));
-            }
-            connection
-                .execute(
-                    &format!("INSERT INTO {table}(id, person_id, payload) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload"),
-                    (id, person_id.to_string(), payload),
-                )
-                .await
-                .map_err(storage_error)?;
-            connection
-                .execute(
-                    "INSERT INTO captures(id, person_id, payload) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
-                    (capture.id.to_string(), capture.person_id.to_string(), capture_payload),
-                )
-                .await
-                .map_err(storage_error)?;
-            connection
-                .execute("COMMIT", ())
-                .await
-                .map_err(storage_error)?;
-            Ok::<_, StoreError>(())
-        }
-        .await;
-        if result.is_err() {
-            let _ = connection.execute("ROLLBACK", ()).await;
-        }
-        result
+        super::day_refresh::mirror_on(&connection, person_id).await.map(|value| value.map(|(mirror, _)| mirror)).map_err(|error| StoreError::new(StoreErrorCode::Storage, error.to_string()))
     }
 }
-
 impl floe_day::DayRepository for TursoStore {
-    fn collect_action<'a>(&'a self, commit: floe_day::DayCollectionCommit) -> floe_execution::BoxFuture<'a, Result<floe_day::DayCollectionReceipt, floe_day::DayError>> {
-        Box::pin(async move { super::day_collection::collect(self, commit).await })
-    }
-    fn put_capture<'a>(
-        &'a self,
-        value: &'a Capture,
-    ) -> floe_execution::BoxFuture<'a, Result<(), floe_day::DayError>> {
-        Box::pin(async move {
-            TursoStore::put_capture(self, value)
-                .await
-                .map_err(day_error)
-        })
-    }
-
-    fn put_event<'a>(
-        &'a self,
-        value: &'a Event,
-    ) -> floe_execution::BoxFuture<'a, Result<(), floe_day::DayError>> {
-        Box::pin(async move { TursoStore::put_event(self, value).await.map_err(day_error) })
-    }
-
-    fn put_event_if_revision<'a>(
-        &'a self,
-        value: &'a Event,
-        expected: floe_day::Revision,
-    ) -> floe_execution::BoxFuture<'a, Result<(), floe_day::DayError>> {
-        Box::pin(async move {
-            TursoStore::put_event_if_revision(self, value, expected)
-                .await
-                .map_err(day_error)
-        })
-    }
-
-    fn put_task<'a>(
-        &'a self,
-        value: &'a Task,
-    ) -> floe_execution::BoxFuture<'a, Result<(), floe_day::DayError>> {
-        Box::pin(async move { TursoStore::put_task(self, value).await.map_err(day_error) })
-    }
-
-    fn put_task_if_revision<'a>(
-        &'a self,
-        value: &'a Task,
-        expected: floe_day::Revision,
-    ) -> floe_execution::BoxFuture<'a, Result<(), floe_day::DayError>> {
-        Box::pin(async move {
-            TursoStore::put_task_if_revision(self, value, expected)
-                .await
-                .map_err(day_error)
-        })
-    }
-
-    fn put_note<'a>(
-        &'a self,
-        value: &'a Note,
-    ) -> floe_execution::BoxFuture<'a, Result<(), floe_day::DayError>> {
-        Box::pin(async move { TursoStore::put_note(self, value).await.map_err(day_error) })
-    }
-
-    fn put_note_if_revision<'a>(
-        &'a self,
-        value: &'a Note,
-        expected: floe_day::Revision,
-    ) -> floe_execution::BoxFuture<'a, Result<(), floe_day::DayError>> {
-        Box::pin(async move {
-            TursoStore::put_note_if_revision(self, value, expected)
-                .await
-                .map_err(day_error)
-        })
-    }
-
-    fn get_capture<'a>(
-        &'a self,
-        id: CaptureId,
-    ) -> floe_execution::BoxFuture<'a, Result<Option<Capture>, floe_day::DayError>> {
-        Box::pin(async move { TursoStore::get_capture(self, id).await.map_err(day_error) })
-    }
-
-    fn get_event<'a>(
-        &'a self,
-        id: EventId,
-    ) -> floe_execution::BoxFuture<'a, Result<Option<Event>, floe_day::DayError>> {
-        Box::pin(async move { TursoStore::get_event(self, id).await.map_err(day_error) })
-    }
-
-    fn get_task<'a>(
-        &'a self,
-        id: TaskId,
-    ) -> floe_execution::BoxFuture<'a, Result<Option<Task>, floe_day::DayError>> {
-        Box::pin(async move { TursoStore::get_task(self, id).await.map_err(day_error) })
-    }
-
-    fn get_note<'a>(
-        &'a self,
-        id: NoteId,
-    ) -> floe_execution::BoxFuture<'a, Result<Option<Note>, floe_day::DayError>> {
-        Box::pin(async move { TursoStore::get_note(self, id).await.map_err(day_error) })
-    }
-
-    fn read_items<'a>(&'a self, query: floe_day::DayReadQuery) -> floe_execution::BoxFuture<'a, Result<Vec<TimelineItem>, floe_day::DayError>> {
-        Box::pin(async move { read_items(self, query).await })
-    }
-
-    fn classify<'a>(
-        &'a self,
-        capture: &'a Capture,
-        item: &'a TimelineItem,
-    ) -> floe_execution::BoxFuture<'a, Result<(), floe_day::DayError>> {
-        Box::pin(async move {
-            TursoStore::classify(self, capture, item)
-                .await
-                .map_err(day_error)
-        })
-    }
-
-    fn calendar_mirror<'a>(
-        &'a self,
-        person_id: PersonId,
-    ) -> floe_execution::BoxFuture<'a, Result<Option<CalendarMirror>, floe_day::DayError>> {
-        Box::pin(async move {
-            TursoStore::calendar_mirror(self, person_id)
-                .await
-                .map_err(day_error)
-        })
-    }
+    fn mutate<'a>(&'a self, command: floe_day::DayMutationCommand, fence: &'a floe_day::DayWriteFence) -> floe_execution::BoxFuture<'a, Result<floe_day::DayMutationResult, floe_day::DayError>> { Box::pin(async move { super::day_mutation::mutate(self, command, fence).await }) }
+    fn collect_action<'a>(&'a self, commit: floe_day::DayCollectionCommit, fence: &'a floe_day::DayWriteFence) -> floe_execution::BoxFuture<'a, Result<floe_day::DayCollectionReceipt, floe_day::DayError>> { Box::pin(async move { super::day_collection::collect(self, commit, fence).await }) }
+    fn read_items<'a>(&'a self, query: floe_day::DayReadQuery) -> floe_execution::BoxFuture<'a, Result<Vec<TimelineItem>, floe_day::DayError>> { Box::pin(async move { read_items(self, query).await }) }
+    fn calendar_mirror<'a>(&'a self, person_id: PersonId) -> floe_execution::BoxFuture<'a, Result<Option<CalendarMirror>, floe_day::DayError>> { Box::pin(async move { TursoStore::calendar_mirror(self, person_id).await.map_err(day_error) }) }
 }
-
 fn day_error(error: StoreError) -> floe_day::DayError {
-    let code = match error.code {
-        StoreErrorCode::Validation => floe_day::DayErrorCode::Validation,
-        StoreErrorCode::NotFound => floe_day::DayErrorCode::NotFound,
-        StoreErrorCode::Conflict => floe_day::DayErrorCode::Conflict,
-        _ => floe_day::DayErrorCode::Storage,
-    };
-    let mut result = floe_day::DayError::new(code, error.message);
-    for (key, value) in error.metadata {
-        result = result.with_metadata(key, value);
-    }
-    result
+    let code = match error.code { StoreErrorCode::Validation => floe_day::DayErrorCode::Validation, StoreErrorCode::NotFound => floe_day::DayErrorCode::NotFound, StoreErrorCode::Conflict => floe_day::DayErrorCode::Conflict, _ => floe_day::DayErrorCode::Storage };
+    floe_day::DayError { code, message: error.message, metadata: error.metadata }
 }
 
 // SQL only preselects a conservative superset of the owner query. Fractional
 // UTC timestamps sharing a boundary second are admitted here and decided by
 // Day's exact predicate after decoding. Unrelated history never enters a Vec.
 async fn read_items(store: &TursoStore, query: floe_day::DayReadQuery) -> Result<Vec<TimelineItem>, floe_day::DayError> {
-    use floe_day::DayReadSelection;
     query.validate()?;
     let connection = store.connection().await.map_err(day_error)?;
     connection.execute("BEGIN", ()).await.map_err(|error| floe_day::DayError::storage(error.to_string()))?;
-    let result = async {
+    let result = read_items_on(&connection, &query).await;
+    super::day_refresh::finish_transaction(&connection, result).await
+}
+pub(super) async fn read_items_on(connection: &Connection, query: &floe_day::DayReadQuery) -> Result<Vec<TimelineItem>, floe_day::DayError> {
+    use floe_day::DayReadSelection;
+    query.validate()?;
         let mut values = Vec::new(); let mut bytes = 0usize;
         let tables: &[&str] = match &query.selection { DayReadSelection::DisplayDay { .. } => &["events", "tasks", "notes"], DayReadSelection::ActionWindow { .. } => &["events"], DayReadSelection::OpenTasks => &["tasks"], DayReadSelection::CurrentNotes => &["notes"] };
         for table in tables {
@@ -624,6 +194,4 @@ async fn read_items(store: &TursoStore, query: floe_day::DayReadQuery) -> Result
             }
         }
         Ok(values)
-    }.await;
-    super::day_refresh::finish_transaction(&connection, result).await
 }

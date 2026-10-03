@@ -24,12 +24,12 @@ type provider struct {
 	target          inference.ProviderTarget
 	credential      string
 	credentialError error
-	lookup          func(string) (string, error)
+	lookup          func(context.Context, string) (string, error)
 	client          *http.Client
 	codex           CodexClient
 }
 
-func newProvider(target inference.ProviderTarget, lookup func(string) (string, error), codex CodexClient) (*provider, error) {
+func newProvider(ctx context.Context, target inference.ProviderTarget, lookup func(context.Context, string) (string, error), codex CodexClient) (*provider, error) {
 	if strings.TrimSpace(target.Model) == "" || len(target.Model) > 128 || strings.ContainsAny(target.Model, "\r\n") {
 		return nil, errors.New("invalid model")
 	}
@@ -59,7 +59,8 @@ func newProvider(target inference.ProviderTarget, lookup func(string) (string, e
 		if !environmentName.MatchString(target.APIKeyEnv) {
 			return nil, errors.New("invalid credential reference")
 		}
-		p.credential, p.credentialError = lookup(target.APIKeyEnv)
+		p.credential, p.credentialError = lookup(ctx, target.APIKeyEnv)
+        if errors.Is(p.credentialError,context.DeadlineExceeded) || errors.Is(p.credentialError,context.Canceled){return nil,p.credentialError}
 		if p.credential == "" || len(p.credential) > 8192 || strings.ContainsAny(p.credential, "\r\n") {
 			p.credentialError = errors.New("credential unavailable")
 		}

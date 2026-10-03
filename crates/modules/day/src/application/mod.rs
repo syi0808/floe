@@ -3,9 +3,8 @@ mod commands;
 mod observations;
 mod refresh;
 
-pub use commands::{Classification, DayService};
+pub use commands::DayService;
 
 pub use calendar_views::*;
 
 mod mutations;
-pub use mutations::{DayMutation, DayMutationRequest, DayMutationResult};

@@ -105,6 +105,7 @@ impl TursoStore {
         require_schema(&connection,"source_connections_person_connector","CREATE INDEX source_connections_person_connector ON source_connections(person_id, connector_id)").await?;
         require_schema(&connection,"source_operations","CREATE TABLE source_operations (operation_id TEXT PRIMARY KEY, command_id TEXT NOT NULL, person_id TEXT NOT NULL, connection_id TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision > 0), fence INTEGER NOT NULL CHECK(fence IN (0,1)), payload TEXT NOT NULL, UNIQUE(person_id,command_id))").await?;
         require_schema(&connection,"source_operation_fence","CREATE UNIQUE INDEX source_operation_fence ON source_operations(connection_id) WHERE fence = 1").await?;
+        require_schema(&connection,"source_operation_history","CREATE INDEX source_operation_history ON source_operations(connection_id)").await?;
         Ok(())
     }
 

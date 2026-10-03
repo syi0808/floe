@@ -11,17 +11,17 @@ import (
 )
 
 type CodexClient interface {
-	Ready() bool
+	Ready(context.Context) bool
 	ReplayIdentity() string
 	Generate(context.Context, string, string, string, json.RawMessage, json.RawMessage) (string, error)
 }
 
 type Factory struct {
-	lookup func(string) (string, error)
+	lookup func(context.Context, string) (string, error)
 	codex  CodexClient
 }
 
-func NewFactory(lookup func(string) (string, error), codex CodexClient) *Factory {
+func NewFactory(lookup func(context.Context, string) (string, error), codex CodexClient) *Factory {
 	return &Factory{lookup: lookup, codex: codex}
 }
 
@@ -31,24 +31,25 @@ func (f *Factory) ValidateTarget(target inference.ProviderTarget) error {
 	if strings.TrimSpace(target.Model) == "" || len(target.Model) > 128 {
 		return errors.New("invalid model")
 	}
-	_, err := newProvider(target, func(string) (string, error) { return "validation-placeholder", nil }, nil)
+	_, err := newProvider(context.Background(), target, func(context.Context, string) (string, error) { return "validation-placeholder", nil }, nil)
 	if target.Provider == "codex_oauth" && target.BaseURL == "https://chatgpt.com/backend-api/codex" && target.APIKeyEnv == "" {
 		return nil
 	}
 	return err
 }
 
-func (f *Factory) Open(targets map[string]inference.ProviderTarget) (map[string]inference.ModelAccount, inference.ModelExecutor, error) {
+func (f *Factory) Open(ctx context.Context, targets map[string]inference.ProviderTarget) (map[string]inference.ModelAccount, inference.ModelExecutor, error) {
 	if f == nil || f.lookup == nil || len(targets) > 32 {
 		return nil, nil, errors.New("invalid provider config")
 	}
 	r := &registry{targets: make(map[string]*provider, len(targets))}
 	accounts := make(map[string]inference.ModelAccount, len(targets))
 	for id, target := range targets {
+        if err:=ctx.Err();err!=nil{return nil,nil,err}
 		if !inference.ValidAlias(id) {
 			return nil, nil, errors.New("invalid target")
 		}
-		adapter, err := newProvider(target, f.lookup, f.codex)
+		adapter, err := newProvider(ctx, target, f.lookup, f.codex)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -66,14 +67,18 @@ func (p *provider) Ready(ctx context.Context) error {
 		return inference.Failure{Code: inference.ProviderCredentialsUnavailable}
 	}
 	if p.target.APIKeyEnv != "" {
-		current, err := p.lookup(p.target.APIKeyEnv)
+		current, err := p.lookup(ctx, p.target.APIKeyEnv)
+        if errors.Is(err,context.DeadlineExceeded) || errors.Is(err,context.Canceled){return err}
 		if err != nil || current != p.credential {
 			return inference.Failure{Code: inference.ProviderCredentialsUnavailable}
 		}
 	}
-	if p.target.Provider == "codex_oauth" && (p.codex == nil || !p.codex.Ready() || p.codex.ReplayIdentity() == "") {
-		return inference.Failure{Code: inference.ProviderCredentialsUnavailable}
-	}
+	if p.target.Provider == "codex_oauth" {
+        if p.codex==nil{return inference.Failure{Code:inference.ProviderCredentialsUnavailable}}
+        ready:=p.codex.Ready(ctx)
+        if err:=ctx.Err();err!=nil{return err}
+        if !ready || p.codex.ReplayIdentity()==""{return inference.Failure{Code:inference.ProviderCredentialsUnavailable}}
+    }
 	return nil
 }
 

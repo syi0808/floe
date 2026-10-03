@@ -258,9 +258,10 @@ impl AgentEndpoint for EngineExpertEndpoint {
             let registry_snapshot = self.registry.read(&self.actor, scope).await?;
             let registry = crate::AgentRegistry::restore(registry_snapshot.clone(), registry_snapshot.instance_id)?;
             let resolved = registry.resolve_admitted(self.actor.person_id, &self.admission)?;
-            if resolved.manifest != self.manifest
-                || crate::ExpertExecutionSelection::from_binding(&resolved.manifest, &resolved.assignment.binding)? != self.selection
-            { return Err(AgentFailure::Conflict); }
+            // Registry binding/enable changes govern future admissions. This
+            // Task keeps its admitted selection while live source authority is
+            // revalidated by Context; a rebind cannot redirect or cancel it.
+            if resolved.manifest != self.manifest { return Err(AgentFailure::Conflict); }
             let started_at_unix_ms = self.clock.now_unix_ms();
             let program_request = ExpertProgramRequest {
                 actor: self.actor.clone(), request: request.clone(), admission: self.admission.clone(),

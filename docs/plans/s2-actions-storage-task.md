@@ -57,3 +57,5 @@ CalendarExternalRevision is tagged: ProviderOpaque or ObservationFingerprint. Ev
 ## Return
 
 Return the complete owned patch, exact exported constructor/module/init changes required, relevant residual obsolete symbols outside your scope, and any unresolved contract blocker. State that no checks ran. Do not commit or publish unless separately instructed by coordinator. Report useful results promptly; if an action is denied, stop that action and report exact target/blocker rather than work around a restriction.
+
+The full coverage also crosses an Actions-owned source preflight outside encrypted SQL. Each dependency retains a current source snapshot and Connections reservation watermark, rechecked before `prepare_dispatch` and by the live prepared Rust executor immediately before native handoff. The final SQL grant check is not a substitute for this metadata reservation barrier. No provider or model I/O occurs under the Vault transaction; the remaining race after durable `Executing` is documented in `s2-native-actions-wire.md`.

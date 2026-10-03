@@ -12,19 +12,19 @@ The table and detailed rules below describe the pre-cutover implementation where
 |---|---|---|
 | Contract | `floe-kernel` — `crates/contracts/kernel` | IDs and small shared values |
 | Contract | `floe-context-contract` — `crates/contracts/context` | source-view, provenance and recipient value contracts |
-| Contract | `floe-agent-contract` — `crates/contracts/agent` | Agent Card, Message, Task, Artifact and endpoint contracts |
-| Runtime | `floe-execution` — `crates/runtime/execution` | cancellation, budgets and execution limits; no business state |
-| Runtime | `floe-agent-runtime` — `crates/runtime/agent` | role-neutral LLM / Tool / Delegate loop |
+| Contract | `floe-agent-contract` — `crates/contracts/agent` | prepared-model, canonical journal, Tool/Delegate, immutable Task receipt, blockage and artifact contracts |
+| Runtime | `floe-execution` — `crates/runtime/execution` | scoped cancellation, monotonic budget leases, dispatch facts and immutable per-attempt accounting |
+| Runtime | `floe-agent-runtime` — `crates/runtime/agent` | common prepare/project/model/Tool/Delegate Engine, validated final payloads and canonical journal projection |
 | Module | `floe-access` — `crates/modules/access` | grants, authority, exact recipients, dispatch/release admission and revocation fences |
 | Module | `floe-connections` — `crates/modules/connections` | Connection, OAuth and pairing lifecycle; durable Calendar and standing personal source identity, resources, local configuration CAS, `SourceAuthority` and trusted native subject identity |
-| Module | `floe-inference` — `crates/modules/inference` | model profiles/routes, model attempts, Access-consumed dispatch through `ModelProvider`/`PreparedModelTransport`, and model usage ownership |
-| Module | `floe-knowledge` — `crates/modules/knowledge` | Memory, Playbook records and bounded learning |
+| Module | `floe-inference` — `crates/modules/inference` | Gateway-primary preparation with verified-absence local fallback, owned prepared calls and Access-consumed attempt dispatch/accounting |
+| Module | `floe-knowledge` — `crates/modules/knowledge` | Memory/Playbook semantics, safe memory review and user decisions, explicit learning discovery, claim journals and common-Engine Learner lifecycle |
 | Module | `floe-day` — `crates/modules/day` | Calendar event mirror, sync freshness/status and independent mirror CAS; Tasks, Notes and Day-domain projection, not source configuration |
 | Module | `floe-context` — `crates/modules/context` | authorized projections, source acquisition, provenance, coverage and freshness |
 | Module | `floe-actions` — `crates/modules/actions` | proposals, review/approval, idempotent external actions and outcome reconciliation |
-| Module | `floe-experts` — `crates/modules/experts` | Expert directory, eligibility, assignment, Task ownership and endpoint dispatch |
+| Module | `floe-experts` — `crates/modules/experts` | registry/directory, immutable binding review, Task admission/journal/receipt, typed blockage and common Engine endpoint |
 | Module | `floe-conversation` — `crates/modules/conversation` | Session, root Run, transcript, exact validated-batch continuation and coverage reauthorization, finalization and durable user interactions (origin, reviewed target, lifecycle, decision intent, resume linkage) |
-| Extension | `floe-experts-builtin` — `crates/experts/builtin` | built-in domain Expert endpoint implementations |
+| Extension | `floe-experts-builtin` — `crates/experts/builtin` | pure package roles, source-tool schemas, domain judgment and final payload construction |
 | Platform | `floe-diagnostics` — `crates/platform/diagnostics` | privacy-safe tracing, correlation and diagnostic export |
 | Platform | `floe-native` — `crates/platform/native` | native host drivers and secure-key/platform access |
 | Adapter | `floe-provider-adapters` — `crates/adapters/providers` | model/source/control transports and OS/HTTP adapter implementations |
@@ -37,12 +37,7 @@ The table and detailed rules below describe the pre-cutover implementation where
 
 A stateful concept has one semantic owner. Storage location, call-site convenience or composition does not create a second owner.
 
-Built-in Expert implementations depend on owner contracts and dispatch APIs, not
-directly on the generic Agent Runtime or Conversation implementation. Conversation
-uses the Agent Runtime's schema validation rather than declaring a second direct
-schema-validator dependency. Test-only wiring stays in dev-dependencies: Day's
-Tokio harness, Conversation's clock fixtures, App's base64 fixtures and Vault's
-Inference records/Tokio harness are not production dependencies of those packages.
+Builtin Programs depend on owner contracts and pure domain helpers. Experts owns their shared Engine endpoint; packages have no separate model loop, source host or Conversation publisher. Context implements the Experts and Knowledge inverse projection/evidence ports using actual source owners. Vault implements owner-defined storage ports and applies owner-produced transitions in encrypted transactions. Repository location does not move admission, recovery or review policy into storage.
 
 - **App** constructs and injects services and owns bounded first-party product policy composition. Each supported connector/View has one final policy derived from trusted shipped Expert capability declarations; its digest is the digest of the same policy used at activation, independent of Registry, binding, connection identity and source resources. It chooses the product-supported connector Views and actual built-in readers. Connections receives source setup/resources as product intent; one App `ConnectionObserve` product contract receives connection-level inspect, review and enable/disable intent for native Calendar, hosted Views, Contacts, Attention and Wellbeing. Access remains the grant authority. The client never supplies leaf resources as standing permission scope, and echoes only a backend-produced compare-only review expectation on enable.
 - **Protocol/FFI** convert product intent and results. They do not decide execution topology.
@@ -58,7 +53,8 @@ Inference records/Tokio harness are not production dependencies of those package
 - **Permission and provenance resources differ.** `ContextDependency.resources` names grant permission scope; `source_resources` names the exact provider or leaf set observed, with a separate current `source_authority`. The canonical connection/View resource formatter is shared by the context contract. Hosted generic signed View preview carries the current server `calendar_ids` separately from the logical resource; Context records and reauthorizes that exact signed set. Exact-recipient processing review binds both resource sets, `GrantAuthority` and `SourceAuthority`. Vault grant transactions validate the current grant without waiting for provider or Connections I/O.
 - **Logical multi-source views preserve physical authority.** Context may deterministically merge a bounded set of source payloads, but the authorized read retains one dependency/scope binding per contributing source and every dependency is recorded and reauthorized independently.
 - **Registry binding is not source permission.** Experts owns per-assignment selected source references and binding revisions as configuration. Context owns candidate identities and exact-target acquisition; Connections owns source/resource lifecycle; Access owns Observe authority over the exact source. Native and hosted Calendar resource edits advance their owning source authority and stale old dependencies, but do not re-review the logical grant or mutate Expert bindings. A hosted server edit advances producer revision/epoch; Flutter mirrors the current resource set into local Connections, which advances local `SourceAuthority` on a real membership change. Trusted first-party Calendar consumers come from shipped manifest capability declarations, not Registry assignment or binding state. Task admission persists the immutable selected execution snapshot and later binding changes fence, never reroute, pending execution. No Registry setup, view or assignment state authorizes a source read.
-- **Experts** own Task/A2A semantics; the generic Agent Runtime does not know built-in Expert packages.
+- **Experts** owns Task admission, pinned selection, canonical Task journals and immutable execution receipts. Its common endpoint runs a retained pure Program through the role-neutral Engine. Conversation records the settled Task receipt once as a DelegationResult; it does not duplicate Task ModelResults or charge them twice. Context supplies actual source reads and prepared-plan projections through Experts-owned ports. Binding settings and Task-origin reviews share the same durable review/command policy.
+- **Knowledge** owns explicit learning eligibility, immutable claim inputs, candidate staging, user review and confirmed-memory projection. Learner is a bounded role of the common Engine with its own claim journal and authenticated head. Recovery retains known output without inference replay and preserves unknown charges. Knowledge owns background scheduling, foreground preemption and bounded shutdown. Its public review/decision projections omit storage hashes and raw evidence references.
 - **Actions** own Calendar Create/Update/Delete, manual and Expert-origin admission, immutable review/approval, pre-dispatch intent, native outcome evidence, explicit reconciliation and Day collection tickets through one encrypted repository. Product inputs use opaque destination choices or Day Event references; raw targets and source preconditions are resolved inside the owner. Experts prove historical Task/artifact provenance through an inward port implemented by Vault; Actions owns effect policy, without an Actions-to-Experts dependency. Native adapters implement single-use execution and causal receipt lookup. App constructs and forwards owner handles, and intelligence may propose inert artifacts without directly mutating providers.
 
 ## Dependency enforcement

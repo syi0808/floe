@@ -76,7 +76,7 @@ impl crate::RefreshCommit {
         let crate::DayRefreshState::Completed { day } = &self.next.state else { return Err(DayError::conflict("refresh commit requires completion")); };
         self.acquisition.validate_record(&self.previous, now)?;
         let expected = reconcile(self.previous.expected_mirror_revision, &self.acquisition, current)?;
-        if expected != self.mirror || day.person_id != self.previous.person_id || day.date != self.previous.query.date || day.generated_at != self.previous.query.now || day.timezone_offset_seconds != self.previous.query.timezone_offset_seconds || day.calendar_mirror_revision != Some(self.mirror.mirror_revision) || day.calendar != Some(crate::project_calendar_coverage(&self.mirror.state, &self.previous.query.range()?, self.previous.query.now)) { return Err(DayError::validation("completed refresh does not match acquired mirror")); }
+        if expected != self.mirror || day.person_id != self.previous.person_id || day.date != self.previous.query.date || day.generated_at != self.previous.query.now || day.timezone_offset_seconds != self.previous.query.timezone_offset_seconds || day.calendar_mirror_revision != Some(self.mirror.mirror_revision) || day.calendar != Some(crate::project_calendar_coverage(&self.mirror.state, &self.previous.query.range()?, self.acquisition.completed_at)) { return Err(DayError::validation("completed refresh does not match acquired mirror")); }
         Ok(())
     }
 }

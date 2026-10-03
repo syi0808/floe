@@ -66,30 +66,30 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 		cfg := googleauth.Config{ClientID: env("FLOE_GOOGLE_OAUTH_CLIENT_ID"), ClientSecret: env("FLOE_GOOGLE_OAUTH_CLIENT_SECRET")}
 		switch r.ConnectorID {
 		case "gmail":
-			auth, err = googleauth.New(vault, cfg, c.Binding.Slot)
+			auth, err = googleauth.New(ctx,vault, cfg, c.Binding.Slot)
 		case "google_drive.files":
-			auth, err = googleauth.NewDrive(vault, cfg, c.Binding.Slot)
+			auth, err = googleauth.NewDrive(ctx,vault, cfg, c.Binding.Slot)
 		case "calendar.google":
 			var concrete *googleauth.Runtime
-            concrete,err=googleauth.NewCalendar(vault,cfg,c.Binding.Slot)
+            concrete,err=googleauth.NewCalendar(ctx,vault,cfg,c.Binding.Slot)
             auth,identity=concrete,concrete
 		}
 	case "microsoft.mail", "calendar.microsoft", "microsoft.teams":
 		cfg := microsoftauth.Config{ClientID: env("FLOE_MICROSOFT_OAUTH_CLIENT_ID"), ClientSecret: env("FLOE_MICROSOFT_OAUTH_CLIENT_SECRET")}
 		switch r.ConnectorID {
 		case "microsoft.mail":
-			auth, err = microsoftauth.New(vault, cfg, c.Binding.Slot)
+			auth, err = microsoftauth.New(ctx,vault, cfg, c.Binding.Slot)
 		case "calendar.microsoft":
 			var concrete *microsoftauth.Runtime
-            concrete,err=microsoftauth.NewCalendar(vault,cfg,c.Binding.Slot)
+            concrete,err=microsoftauth.NewCalendar(ctx,vault,cfg,c.Binding.Slot)
             auth,identity=concrete,concrete
 		case "microsoft.teams":
-			auth, err = microsoftauth.NewTeams(vault, cfg, c.Binding.Slot)
+			auth, err = microsoftauth.NewTeams(ctx,vault, cfg, c.Binding.Slot)
 		}
 	case "github.issues":
-		auth, err = workoauth.NewGitHub(vault, workoauth.Config{ClientID: env("FLOE_GITHUB_OAUTH_CLIENT_ID")}, c.Binding.Slot)
+		auth, err = workoauth.NewGitHub(ctx,vault, workoauth.Config{ClientID: env("FLOE_GITHUB_OAUTH_CLIENT_ID")}, c.Binding.Slot)
 	case "slack.conversations":
-		auth, err = workoauth.NewSlack(vault, workoauth.Config{ClientID: env("FLOE_SLACK_OAUTH_CLIENT_ID"), ClientSecret: env("FLOE_SLACK_OAUTH_CLIENT_SECRET")}, c.Binding.Slot)
+		auth, err = workoauth.NewSlack(ctx,vault, workoauth.Config{ClientID: env("FLOE_SLACK_OAUTH_CLIENT_ID"), ClientSecret: env("FLOE_SLACK_OAUTH_CLIENT_SECRET")}, c.Binding.Slot)
 	case "home_assistant.states":
 		client, e := homeconnector.New(vaultTokenSource{vault, c.Binding.Slot}, scope["base_url"].(string), r.ConnectionID)
 		if e != nil {
@@ -246,7 +246,7 @@ type vaultTokenSource struct {
 
 func (v vaultTokenSource) Token(ctx context.Context) (string, error) {
     if err:=ctx.Err();err!=nil{return "",err}
-	token, err := v.vault.Get(v.name)
+	token, err := v.vault.Get(ctx, v.name)
     if ctxErr:=ctx.Err();ctxErr!=nil{return "",ctxErr}
 	if err != nil || token == "" {
 		return "", errors.New("credential unavailable")

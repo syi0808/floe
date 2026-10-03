@@ -42,7 +42,7 @@ func New(config Config)(*Node,error){
     defer func(){if failed {runtime.Close()}}()
     model,err:=inference.NewService(t);if err!=nil{return nil,err}
     factory:=providers.NewFactory(vault.Get,runtime)
-    configuration,err:=inference.OpenConfiguration(config.Directory,model,t,vault,factory);if err!=nil{return nil,err}
+    configuration,err:=inference.OpenConfiguration(context.Background(),config.Directory,model,t,vault,factory);if err!=nil{return nil,err}
     engine,err:=authority.New(authority.Options{Trust:t});if err!=nil{return nil,err}
     sources,err:=integrations.New(context.Background(),config.Directory,t,vault,integrationFactories(config.Directory,vault,os.Getenv));if err!=nil{return nil,err}
     defer func(){if failed {sources.Close()}}()

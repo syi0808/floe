@@ -37,9 +37,9 @@ var ErrUnavailable = errors.New("Microsoft authentication unavailable")
 var ErrCredentialExpired = errors.New("Microsoft credential expired")
 
 type Store interface {
-	Get(string) (string, error)
-	Put(string, string) error
-	Delete(string) error
+	Get(context.Context, string) (string, error)
+	Put(context.Context, string, string) error
+	Delete(context.Context, string) error
 }
 
 type Config struct {
@@ -69,6 +69,7 @@ type loginFlow struct {
 }
 
 type Runtime struct {
+    credentialReadError error
 	operation            sync.Mutex
 	identityFence        sync.RWMutex
 	mu                   sync.RWMutex
@@ -88,7 +89,7 @@ type Runtime struct {
 	allowTestEndpoints   bool
 }
 
-func New(store Store, config Config, boundCredential string) (*Runtime, error) {
+func New(ctx context.Context, store Store, config Config, boundCredential string) (*Runtime, error) {
 	if store == nil || !validCredential(config.ClientID, 512) || len(config.ClientSecret) > 2048 || strings.ContainsAny(config.ClientSecret, "\r\n") {
 		return nil, ErrUnavailable
 	}
@@ -104,20 +105,21 @@ func New(store Store, config Config, boundCredential string) (*Runtime, error) {
 	}
 	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 5 * time.Second, MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second}
 	runtime := &Runtime{store: store, config: config, client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, authURL: defaultAuthURL, tokenURL: defaultTokenURL, metadataURL: defaultMetadataURL, callbackAddress: "127.0.0.1:0", credentialName: boundCredential, credentialNamespace: name, scope: scope}
-    runtime.load()
+    runtime.load(ctx)
+    if err:=runtime.credentialReadFailure();err!=nil{return nil,err}
     return runtime, nil
 }
 
-func NewCalendar(store Store, config Config, boundCredential string) (*Runtime, error) {
+func NewCalendar(ctx context.Context, store Store, config Config, boundCredential string) (*Runtime, error) {
 	config.CredentialName = calendarCredentialName
 	config.Scope = calendarReadScope
-	return New(store, config, boundCredential)
+	return New(ctx, store, config, boundCredential)
 }
 
-func NewTeams(store Store, config Config, boundCredential string) (*Runtime, error) {
+func NewTeams(ctx context.Context, store Store, config Config, boundCredential string) (*Runtime, error) {
 	config.CredentialName = teamsCredentialName
 	config.Scope = teamsReadScope
-	return New(store, config, boundCredential)
+	return New(ctx, store, config, boundCredential)
 }
 
 func (runtime *Runtime) Ready() bool { runtime.mu.RLock(); defer runtime.mu.RUnlock(); return runtime.tokens != nil }
@@ -131,7 +133,8 @@ func (runtime *Runtime) credentialKey() string {
 func (runtime *Runtime) Token(ctx context.Context) (string, error) {
 	runtime.operation.Lock()
 	defer runtime.operation.Unlock()
-	current := runtime.load()
+	current := runtime.load(ctx)
+    if err:=runtime.credentialReadFailure();err!=nil{return "",err}
 	if current == nil {
 		return "", ErrCredentialExpired
 	}
@@ -150,7 +153,7 @@ func (runtime *Runtime) Token(ctx context.Context) (string, error) {
 	}
 	refreshed, err := runtime.tokenRequest(ctx, form, current, "")
 	if errors.Is(err, ErrCredentialExpired) {
-		runtime.clear()
+		runtime.clear(ctx)
 	}
 	if err != nil {
 		return "", ErrCredentialExpired
@@ -160,17 +163,17 @@ func (runtime *Runtime) Token(ctx context.Context) (string, error) {
 			if refreshed.ProviderIdentity == "" {
 				refreshed.ProviderIdentity = current.ProviderIdentity
 			}
-			_ = runtime.save(refreshed)
+			_ = runtime.save(ctx, refreshed)
 			return "", ErrCredentialExpired
 		}
 		if current.ProviderIdentity != "" && current.ProviderIdentity != refreshed.ProviderIdentity {
 			refreshed.IdentityVerified = false
 			refreshed.IdentityReviewRequired = true
-			_ = runtime.save(refreshed)
+			_ = runtime.save(ctx, refreshed)
 			return "", ErrCredentialExpired
 		}
 	}
-	if runtime.save(refreshed) != nil {
+	if runtime.save(ctx, refreshed) != nil {
 		return "", ErrCredentialExpired
 	}
 	return refreshed.AccessToken, nil
@@ -179,7 +182,8 @@ func (runtime *Runtime) Token(ctx context.Context) (string, error) {
 func (runtime *Runtime) ProviderIdentity(ctx context.Context) (string, error) {
 	runtime.operation.Lock()
 	defer runtime.operation.Unlock()
-	current := runtime.load()
+	current := runtime.load(ctx)
+    if err:=runtime.credentialReadFailure();err!=nil{return "",err}
 	if current == nil || !runtime.requiresProviderIdentity() || !hasScope(current.Scope, openidScope) || !hasScope(current.Scope, profileScope) {
 		return "", ErrCredentialExpired
 	}
@@ -200,10 +204,10 @@ func (runtime *Runtime) ProviderIdentity(ctx context.Context) (string, error) {
 	if current.ProviderIdentity != "" && current.ProviderIdentity != refreshed.ProviderIdentity {
 		refreshed.IdentityVerified = false
 		refreshed.IdentityReviewRequired = true
-		_ = runtime.save(refreshed)
+		_ = runtime.save(ctx, refreshed)
 		return "", ErrCredentialExpired
 	}
-	if err := runtime.save(refreshed); err != nil {
+	if err := runtime.save(ctx, refreshed); err != nil {
 		return "", err
 	}
 	return refreshed.ProviderIdentity, nil
@@ -246,7 +250,7 @@ func (runtime *Runtime) authorization(ctx context.Context, action authorizationC
 	if action == authorizationDisconnect {
 		runtime.cancelLogin()
 		runtime.publishIdentityDeny()
-		if runtime.store.Delete(runtime.credentialKey()) != nil {
+		if runtime.store.Delete(ctx, runtime.credentialKey()) != nil {
 			return integrations.AuthorizationProgress{}, ErrUnavailable
 		}
 		runtime.identityFence.Lock()
@@ -258,7 +262,9 @@ func (runtime *Runtime) authorization(ctx context.Context, action authorizationC
 	if action == authorizationCancel {
 		runtime.cancelLogin()
 	}
-	if action == authorizationBegin && (runtime.load() == nil || runtime.requiresProviderIdentity() && !runtime.identityReady()) {
+	current:=runtime.load(ctx)
+    if err:=runtime.credentialReadFailure();err!=nil{return integrations.AuthorizationProgress{},err}
+    if action == authorizationBegin && (current == nil || runtime.requiresProviderIdentity() && !runtime.identityReady(ctx)) {
 		runtime.mu.RLock()
 		pending := runtime.flow != nil && runtime.flow.expires.After(time.Now())
 		runtime.mu.RUnlock()
@@ -272,7 +278,9 @@ func (runtime *Runtime) authorization(ctx context.Context, action authorizationC
 	flow := runtime.flow
 	runtime.mu.RUnlock()
 	status, authURL := "disconnected", ""
-	if runtime.load() != nil {
+	current=runtime.load(ctx)
+    if err:=runtime.credentialReadFailure();err!=nil{return integrations.AuthorizationProgress{},err}
+    if current != nil {
 		status = "connected"
 	} else if flow != nil && flow.expires.After(time.Now()) {
 		status, authURL = "pending", flow.authURL
@@ -353,7 +361,7 @@ func (runtime *Runtime) callback(flow *loginFlow, writer http.ResponseWriter, re
 	}
 	value, err := runtime.tokenRequest(ctx, form, nil, flow.nonce)
 	if err == nil {
-		err = runtime.save(value)
+		err = runtime.save(ctx, value)
 	}
 	if err != nil {
 		writer.WriteHeader(http.StatusBadGateway)
@@ -429,7 +437,7 @@ func (runtime *Runtime) tokenRequest(ctx context.Context, form url.Values, previ
 	return bundle, nil
 }
 
-func (runtime *Runtime) load() *tokenBundle {
+func (runtime *Runtime) load(ctx context.Context) *tokenBundle {
 	runtime.mu.RLock()
 	current := runtime.tokens
 	runtime.mu.RUnlock()
@@ -441,13 +449,14 @@ func (runtime *Runtime) load() *tokenBundle {
 	credentialName := runtime.credentialName
 	credentialGeneration := runtime.credentialGeneration
 	runtime.mu.RUnlock()
-	encoded, err := runtime.store.Get(credentialName)
-	if err != nil || encoded == "" || len(encoded) > 32768 {
-		return nil
-	}
+	encoded, err := runtime.store.Get(ctx, credentialName)
+	runtime.noteCredentialRead(err)
+    if err!=nil{return nil}
+    if encoded==""{return nil}
+    if len(encoded)>32768{runtime.noteCredentialRead(ErrUnavailable);return nil}
 	var value tokenBundle
 	if !decodePersistedTokenBundle(encoded, &value) || value.ClientID != runtime.config.ClientID || !validCredential(value.AccessToken, 16384) || !validCredential(value.RefreshToken, 16384) || !hasScope(value.Scope, runtime.scope) || value.ExpiresAt.IsZero() || !runtime.validPersistedIdentity(value) {
-		return nil
+		runtime.noteCredentialRead(ErrUnavailable);return nil
 	}
 	if runtime.requiresProviderIdentity() && (!hasScope(value.Scope, openidScope) || !hasScope(value.Scope, profileScope)) {
 		value.ProviderIdentity, value.IdentityVerified = "", false
@@ -520,17 +529,17 @@ func (runtime *Runtime) validPersistedIdentity(value tokenBundle) bool {
 	return true
 }
 
-func (runtime *Runtime) identityReady() bool {
-	current := runtime.load()
+func (runtime *Runtime) identityReady(ctx context.Context) bool {
+	current := runtime.load(ctx)
 	return current != nil && current.IdentityVerified && !current.IdentityReviewRequired && current.ProviderIdentity != "" && hasScope(current.Scope, openidScope) && hasScope(current.Scope, profileScope)
 }
 
-func (runtime *Runtime) save(value *tokenBundle) error {
+func (runtime *Runtime) save(ctx context.Context, value *tokenBundle) error {
 	if value == nil || !runtime.validPersistedIdentity(*value) {
 		return ErrUnavailable
 	}
 	encoded, err := json.Marshal(value)
-	if err != nil || runtime.store.Put(runtime.credentialKey(), string(encoded)) != nil {
+	if err != nil || runtime.store.Put(ctx, runtime.credentialKey(), string(encoded)) != nil {
 		runtime.publishIdentityDeny()
 		return ErrUnavailable
 	}
@@ -538,14 +547,15 @@ func (runtime *Runtime) save(value *tokenBundle) error {
 	runtime.identityFence.Lock()
 	runtime.mu.Lock()
 	runtime.tokens = &copy
+    runtime.credentialReadError=nil
 	runtime.mu.Unlock()
 	runtime.identityFence.Unlock()
 	return nil
 }
 
-func (runtime *Runtime) clear() {
+func (runtime *Runtime) clear(ctx context.Context) {
 	runtime.publishIdentityDeny()
-	_ = runtime.store.Delete(runtime.credentialKey())
+	_ = runtime.store.Delete(ctx, runtime.credentialKey())
 	runtime.identityFence.Lock()
 	runtime.mu.Lock()
 	runtime.tokens = nil
@@ -631,3 +641,6 @@ func validBoundCredential(namespace, name string) bool {
 func callbackPage(title, message string) string {
 	return "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>" + html.EscapeString(title) + "</title><body style='font:16px system-ui;padding:48px'><h1>" + html.EscapeString(title) + "</h1><p>" + html.EscapeString(message) + "</p></body>"
 }
+
+func (runtime *Runtime) noteCredentialRead(err error){runtime.mu.Lock();runtime.credentialReadError=err;runtime.mu.Unlock()}
+func (runtime *Runtime) credentialReadFailure()error{runtime.mu.RLock();defer runtime.mu.RUnlock();return runtime.credentialReadError}

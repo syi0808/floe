@@ -64,7 +64,7 @@ pub fn project_calendar_coverage(mirror: &CalendarMirrorState, requested: &Calen
         let person = source.source.source.person_id(); let connection = source.source.source.connection_id();
         let resources = source.source.calendars.iter().map(|calendar| {
             let status = source.calendar_statuses.get(&calendar.calendar_id);
-            DayCalendarResourceCoverage { resource_ref: display_reference(person, connection.as_str(), &calendar.calendar_id), label: calendar.calendar_name.clone(), state: coverage_state(status.and_then(|status| status.last_success_at), status.and_then(|status| status.error), status.and_then(|status| status.last_range.as_ref()).is_some_and(|range| covers(range, requested)), now), last_success_at: status.and_then(|status| status.last_success_at), last_range: status.and_then(|status| status.last_range.clone()), failure: status.and_then(|status| status.error), failure_at: status.and_then(|status| status.error_at) }
+            DayCalendarResourceCoverage { resource_ref: display_reference(person, connection.as_str(), &calendar.calendar_id), label: calendar.calendar_name.clone(), state: coverage_state(status.and_then(|status| status.last_success_at), status.map(|status| status.error).unwrap_or(source.error), status.and_then(|status| status.last_range.as_ref()).is_some_and(|range| covers(range, requested)), now), last_success_at: status.and_then(|status| status.last_success_at), last_range: status.and_then(|status| status.last_range.clone()), failure: status.map(|status| status.error).unwrap_or(source.error), failure_at: status.map(|status| status.error_at).unwrap_or(source.error_at) }
         }).collect::<Vec<_>>();
         let current = resources.iter().filter(|resource| resource.state == DayCoverageState::Current).count();
         let state = if current > 0 && current < resources.len() { DayCoverageState::Partial } else { coverage_state(source.last_success_at, source.error, source.last_range.as_ref().is_some_and(|range| covers(range, requested)), now) };
@@ -80,4 +80,15 @@ fn display_reference(person: PersonId, connection: &str, resource: &str) -> Uuid
 
 fn covers(cached: &CalendarRange, requested: &CalendarRange) -> bool {
     cached.start_date <= requested.start_date && cached.end_date_exclusive >= requested.end_date_exclusive && crate::range_bounds(cached).ok().zip(crate::range_bounds(requested).ok()).is_some_and(|((start, end), (requested_start, requested_end))| start <= requested_start && end >= requested_end)
+}
+
+/// A local mutation receipt has no live source metadata probe. It may preserve
+/// cached data and previous failure evidence, but cannot claim Current status.
+pub fn project_unverified_calendar_coverage(mirror: &CalendarMirrorState, requested: &CalendarRange, now: DateTime<Utc>) -> DayCalendarCoverage {
+    let mut coverage = project_calendar_coverage(mirror, requested, now);
+    for source in &mut coverage.sources {
+        if matches!(source.state, DayCoverageState::Current | DayCoverageState::Partial) { source.state = DayCoverageState::Stale; }
+        for resource in &mut source.resources { if matches!(resource.state, DayCoverageState::Current | DayCoverageState::Partial) { resource.state = DayCoverageState::Stale; } }
+    }
+    coverage
 }

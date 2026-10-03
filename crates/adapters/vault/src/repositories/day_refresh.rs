@@ -343,7 +343,7 @@ async fn ensure_successful_sources_unfenced(
     Ok(())
 }
 
-async fn require_executor(connection: &Connection, person_id: PersonId, device_id: &str, generation: uuid::Uuid) -> Result<(), DayError> {
+pub(super) async fn require_executor(connection: &Connection, person_id: PersonId, device_id: &str, generation: uuid::Uuid) -> Result<(), DayError> {
     let mut rows = connection.query("SELECT executor_generation,active FROM day_executors WHERE person_id=? AND device_id=?", (person_id.to_string(),device_id.to_owned())).await.map_err(storage_error)?;
     let row = rows.next().await.map_err(storage_error)?.ok_or_else(|| conflict("Day executor is unavailable"))?;
     if row.get::<String>(0).map_err(storage_error)? != generation.to_string() || row.get::<i64>(1).map_err(storage_error)? != 1 || rows.next().await.map_err(storage_error)?.is_some() { return Err(conflict("Day executor changed")); } Ok(())
@@ -435,6 +435,14 @@ impl floe_day::DayRefreshRepository for TursoStore {
                     ));
                 }
 
+                let mut other = connection.query("SELECT 1 FROM day_mutation_receipts WHERE person_id=? AND command_id=?", (admission.person_id.to_string(),admission.command_id.to_string())).await.map_err(storage_error)?;
+                if other.next().await.map_err(storage_error)?.is_some() { return Err(conflict("Day command kind changed")); }
+                drop(other);
+                let mut counts = connection.query("SELECT (SELECT COUNT(*) FROM day_mutation_receipts WHERE person_id=?1)+(SELECT COUNT(*) FROM day_refreshes WHERE person_id=?1)", (admission.person_id.to_string(),)).await.map_err(storage_error)?;
+                let count: i64 = counts.next().await.map_err(storage_error)?.ok_or_else(|| storage_error("missing Day command count"))?.get(0).map_err(storage_error)?;
+                if count < 0 { return Err(storage_error("invalid Day command count")); }
+                if count as usize >= floe_day::MAX_DAY_COMMAND_RECEIPTS { return Err(DayError::budget("Day command receipt capacity reached")); }
+                drop(counts);
                 let _ = admission.record(MirrorExpectation::Absent)?;
                 require_executor(&connection, admission.person_id, &admission.device_id, admission.executor_generation).await?;
                 if refresh_by_id(&connection, admission.operation_id)

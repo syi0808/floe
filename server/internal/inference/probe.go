@@ -17,6 +17,8 @@ type ProbeResult struct {
 // including one with no purpose route. Its input is fixed synthetic Agent data.
 // Product inference still requires the exact observed purpose capability.
 func (s *Service) ProbeTarget(ctx context.Context, operator trust.OperatorPrincipal, targetID string) (ProbeResult, error) {
+    ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
+    defer cancel()
 	if !ValidAlias(targetID) {
 		return ProbeResult{}, Failure{Code: Validation}
 	}
@@ -68,9 +70,7 @@ func (s *Service) ProbeTarget(ctx context.Context, operator trust.OperatorPrinci
 	target := ResolvedModelTarget{targetID: targetID, accountIdentity: identity, generation: generation}
 	trace := newTraceID()
 	started := time.Now()
-	bounded, cancel := context.WithTimeout(ctx, 40*time.Second)
-	defer cancel()
-	out, err := executor.InvokeAgent(bounded, target, request)
+	out, err := executor.InvokeAgent(ctx, target, request)
 	if err == nil {
 		err = ValidateAgentResult(request, out)
 	}
@@ -81,7 +81,7 @@ func (s *Service) ProbeTarget(ctx context.Context, operator trust.OperatorPrinci
 		err = s.trust.WithCurrentOperator(operator, func() error { return nil })
 	}
 	if err == nil {
-		if e := account.Ready(bounded); e != nil {
+		if e := account.Ready(ctx); e != nil {
 			err = e
 		} else if account.ReplayIdentity() != identity {
 			err = Failure{Code: IdentityMismatch}

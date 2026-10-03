@@ -34,11 +34,11 @@ impl CalendarActionCollection {
 pub struct DayCollectionReceipt { pub execution_id: Uuid, pub receipt_digest: [u8; 32], pub day_projection_ref: String }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct DayCollectionCommit { pub person_id: PersonId, pub device_id: String, pub execution_id: Uuid, pub receipt_digest: [u8; 32], pub intent_digest: [u8; 32], pub collection: CalendarActionCollection, pub collected_at: DateTime<Utc> }
+pub struct DayCollectionCommit { pub person_id: PersonId, pub device_id: String, pub executor_generation: Uuid, pub execution_id: Uuid, pub receipt_digest: [u8; 32], pub intent_digest: [u8; 32], pub collection: CalendarActionCollection, pub collected_at: DateTime<Utc> }
 impl DayCollectionCommit {
     pub fn validate(&self) -> Result<(), DayError> {
         self.collection.validate()?;
-        if !self.person_id.is_valid() || self.device_id.is_empty() || self.device_id.len() > 256 || self.execution_id.is_nil() || self.receipt_digest == [0; 32] || self.intent_digest != crate::digest(&(self.person_id, &self.device_id, self.execution_id, self.receipt_digest, &self.collection))? { return Err(DayError::validation("invalid Calendar collection intent")); } Ok(())
+        if !self.person_id.is_valid() || self.device_id.is_empty() || self.device_id.len() > 256 || self.executor_generation.is_nil() || self.execution_id.is_nil() || self.receipt_digest == [0; 32] || self.intent_digest != crate::digest(&(self.person_id, &self.device_id, self.execution_id, self.receipt_digest, &self.collection))? { return Err(DayError::validation("invalid Calendar collection intent")); } Ok(())
     }
     /// Called by the repository with current complete inventory and mirror in
     /// its short local transaction. No external effect or permission is made.

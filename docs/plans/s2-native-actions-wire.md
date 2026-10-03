@@ -55,7 +55,7 @@ Typed outcome JSON is exactly `CalendarEffectOutcome`:
 
 Committed effect tagged `kind` is `created { event:CalendarWriteResult }`, `updated { target:CalendarTarget,event:CalendarWriteResult }`, or `deleted { target:CalendarTarget }`. `CalendarWriteResult` is `{external_id,external_revision,title,schedule,can_modify}`. Native acknowledgement evidence is `{kind:"native_acknowledgement",host_epoch,receipt_id:UUID}`. Normal create/update/delete after a matching successful SDK acknowledgement remain supported. Delete receipt copies the exact original target only after successful `remove`; ordinary absence is not a receipt.
 
-NotApplied reason is `permission_denied|provider_rejected|provider_unavailable`. Unknown reason is `timeout|response_lost|invalid_receipt|cancelled_after_dispatch|inconclusive_lookup|native_operation_pending|native_receipt_unavailable`. All physical outcomes bind the original EffectIdentity and preserve the operation even if the original authorization expires later.
+NotApplied reason is `permission_denied|provider_rejected|provider_unavailable|source_changed`. Unknown reason is `timeout|response_lost|invalid_receipt|cancelled_after_dispatch|inconclusive_lookup|native_operation_pending|native_receipt_unavailable`. All physical outcomes bind the original EffectIdentity and preserve the operation even if the original authorization expires later.
 
 ## Readback and lookup
 
@@ -78,3 +78,11 @@ No `acknowledge_as_success`, `acknowledge_as_failure`, retry write, cancellation
 ## Implementation package
 
 Swift owns only the EventKit Action branches/cache and exact wire adaptation in `apps/client/macos/CalendarActions/EventKitActions.swift`; if a separate native test/support file is genuinely necessary report it before adding. Do not edit Rust, FFI, Flutter, iOS unrelated Calendar read paths, provider data or credentials. Preserve independently owned source read operations. Return an exact patch and a concise source review; no checks or live native operations. The Rust Actions owner implements the paired adapter and validates every returned identity/receipt.
+
+## Inherited source reservation fence
+
+The Rust owner authenticates the full terminal Task coverage, not only the proposal's direct Calendar contributor. For every dependency it captures the current `SourceConnection` plus Connections' `SourceReservationFence`: explicit `NeverReserved`, or the latest retained immutable operation ID, reservation ID and reservation generation, together with the current fence. New reservations insert their operation and active fence atomically; command replay does not create a new stamp. Completed reservations remain observable, including Observe/Pause operations that do not change source revision. SQLite insertion ordering is adapter-private and is never a product authority.
+
+The ordering is: authenticate Task receipt → capture each source between equal clear reservation stamps → native preflight with source checks before/after → recheck all retained sources/stamps → encrypted transaction revalidates full Task grants and commits `Executing` → the live Rust prepared capability rechecks every source/stamp immediately before native handoff. These retained snapshots never enter the native request or product DTOs. Before `Executing`, a mismatch blocks the Action. After `Executing`, the unique live capability can return positive `NotApplied(source_changed)` only while it proves `action_native` has not been invoked, using its exact existing host epoch/preparation ID. Recovery after a crash cannot reconstruct that non-invocation proof.
+
+Source metadata, the encrypted Vault and EventKit do not share a transaction. The final source check→SDK call race remains after durable `Executing`; a reservation beginning in that interval cannot retroactively turn a dispatched effect into a prewrite rejection. Such work retains the normal causal acknowledgement/Unknown recovery semantics and is never blindly retried.

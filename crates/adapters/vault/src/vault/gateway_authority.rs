@@ -550,6 +550,11 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
             let mut rows=tx.query("SELECT payload FROM gateway_pairing_operations WHERE operation_id=? AND person_id=?",(next.operation_id.to_string(),self.person_id.to_string())).await.map_err(storage)?;
             let current:PairingRecord=bounded_decode(&rows.next().await.map_err(storage)?.ok_or(AgentFailure::Conflict)?.get::<String>(0).map_err(storage)?)?;drop(rows);
             validate_pairing_successor(&current,&next,expected_revision)?;
+            if current.can_reconcile_repair(){
+                let mut rows=tx.query("SELECT payload FROM gateway_credential_expectation WHERE id=1",()).await.map_err(storage)?;
+                let expectation:floe_access::GatewayCredentialExpectation=bounded_decode(&rows.next().await.map_err(storage)?.ok_or(AgentFailure::PolicyDenied)?.get::<String>(0).map_err(storage)?)?;drop(rows);
+                if expectation!=(floe_access::GatewayCredentialExpectation::Pending{operation_id:current.operation_id}){return Err(AgentFailure::Conflict)}
+            }
             if next.state==PairingState::Paired{
                 let enrollment=next.enrollment.as_ref().ok_or(AgentFailure::PolicyDenied)?;
                 let mut rows=tx.query("SELECT payload FROM gateway_credential_expectation WHERE id=1",()).await.map_err(storage)?;
@@ -575,7 +580,12 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
             if person != self.person_id || limit == 0 || limit > 64 {
                 return Err(PairingError::InvalidInput);
             }
-            let mut rows=self.connection().map_err(pairing_storage)?.query("SELECT payload FROM gateway_pairing_operations WHERE person_id=? AND state IN ('pending','awaiting_local_confirmation','awaiting_approval','verifying','committing') ORDER BY operation_id LIMIT ?",(person.to_string(),limit as i64)).await.map_err(|_|PairingError::StorageUnavailable)?;
+            let connection=self.connection().map_err(pairing_storage)?;
+            let mut expectation_rows=connection.query("SELECT payload FROM gateway_credential_expectation WHERE id=1",()).await.map_err(|_|PairingError::StorageUnavailable)?;
+            let expectation:floe_access::GatewayCredentialExpectation=bounded_decode(&expectation_rows.next().await.map_err(|_|PairingError::StorageUnavailable)?.ok_or(PairingError::StorageUnavailable)?.get::<String>(0).map_err(|_|PairingError::StorageUnavailable)?).map_err(pairing_storage)?;
+            drop(expectation_rows);
+            let floe_access::GatewayCredentialExpectation::Pending{operation_id}=expectation else{return Ok(Vec::new())};
+            let mut rows=connection.query("SELECT payload FROM gateway_pairing_operations WHERE person_id=? AND operation_id=? AND state IN ('pending','awaiting_local_confirmation','awaiting_approval','verifying','committing','repair_required')",(person.to_string(),operation_id.to_string())).await.map_err(|_|PairingError::StorageUnavailable)?;
             let mut output = Vec::new();
             while let Some(row) = rows
                 .next()
@@ -589,7 +599,9 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                 )
                 .map_err(pairing_storage)?;
                 record.validate()?;
-                output.push(record);
+                if record.person_id!=person || record.operation_id!=operation_id{return Err(PairingError::ForeignIdentity)}
+                if record.state!=PairingState::RepairRequired || record.can_reconcile_repair(){output.push(record);}
+
             }
             Ok(output)
         })
@@ -602,7 +614,7 @@ fn validate_pairing_successor(
 ) -> Result<(), AgentFailure> {
     if current.revision != expected
         || current.revision.checked_add(1) != Some(next.revision)
-        || current.state.terminal()
+        || (current.state.terminal() && !current.can_reconcile_repair())
         || current.operation_id != next.operation_id
         || current.command_id != next.command_id
         || current.person_id != next.person_id
@@ -643,6 +655,9 @@ fn validate_pairing_successor(
         ) | (
             PairingState::Committing,
             PairingState::Verifying | PairingState::Paired
+        ) | (
+            PairingState::RepairRequired,
+            PairingState::Verifying
         )
     ) || next.state == current.state
         || matches!(

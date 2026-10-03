@@ -185,7 +185,7 @@ func (handler *Handler) manage(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	if request.Method != http.MethodPost {
-		if request.URL.Path == "/manage/api/pair/approve" || request.URL.Path == "/manage/api/pair/reject" {
+		if request.URL.Path == "/manage/api/pair/approve" || request.URL.Path == "/manage/api/pair/reject" || request.URL.Path == "/manage/api/pair/recover" {
 			failure(writer, http.StatusMethodNotAllowed, "method_not_allowed")
 		} else {
 			failure(writer, http.StatusNotFound, "not_found")
@@ -201,16 +201,18 @@ func (handler *Handler) manage(writer http.ResponseWriter, request *http.Request
 		dispatch(writer, request, func(in pairing.ApprovalRequest) operation.Result {
 			return handler.Pairing.Approve(request.Context(), operator, in)
 		})
-	case "/manage/api/pair/reject":
+	case "/manage/api/pair/recover":
+        dispatch(writer,request,func(in pairing.RecoveryRequest) operation.Result{return handler.Pairing.Recover(request.Context(),operator,in)})
+    case "/manage/api/pair/reject":
 		dispatch(writer, request, func(in pairing.RejectionRequest) operation.Result {
 			return handler.Pairing.Reject(request.Context(), operator, in)
 		})
 	case "/manage/api/route":
-		dispatch(writer, request, func(in RouteRequest) operation.Result { return handler.Configuration.UpdateRoute(operator,inference.RouteUpdate{Purpose:in.Purpose,Enabled:in.Enabled,Target:in.Target,ReasoningEffort:in.ReasoningEffort}) })
+		dispatch(writer, request, func(in RouteRequest) operation.Result { return handler.Configuration.UpdateRoute(request.Context(),operator,inference.RouteUpdate{Purpose:in.Purpose,Enabled:in.Enabled,Target:in.Target,ReasoningEffort:in.ReasoningEffort}) })
 	case "/manage/api/target":
-		dispatch(writer, request, func(in TargetRequest) operation.Result { return handler.Configuration.UpdateTarget(operator,inference.TargetUpdate{ID:in.ID,Provider:in.Provider,BaseURL:in.BaseURL,Model:in.Model,APIKey:in.APIKey}) })
+		dispatch(writer, request, func(in TargetRequest) operation.Result { return handler.Configuration.UpdateTarget(request.Context(),operator,inference.TargetUpdate{ID:in.ID,Provider:in.Provider,BaseURL:in.BaseURL,Model:in.Model,APIKey:in.APIKey}) })
 	case "/manage/api/provider":
-		dispatch(writer, request, func(in ProviderRequest) operation.Result { return handler.Configuration.UpdateProvider(operator,inference.ProviderUpdate{Provider:in.Provider,BaseURL:in.BaseURL,APIKey:in.APIKey,Purposes:in.Purposes}) })
+		dispatch(writer, request, func(in ProviderRequest) operation.Result { return handler.Configuration.UpdateProvider(request.Context(),operator,inference.ProviderUpdate{Provider:in.Provider,BaseURL:in.BaseURL,APIKey:in.APIKey,Purposes:in.Purposes}) })
 	case "/manage/api/test":
 		dispatch(writer, request, func(input TestRequest) operation.Result {
 			result,err:=handler.Inference.Service.ProbeTarget(request.Context(),operator,input.ID)
@@ -228,7 +230,7 @@ func (handler *Handler) manage(writer http.ResponseWriter, request *http.Request
 		if request.URL.Path == "/manage/api/client/delete" {
 			writeResult(writer, handler.Clients.Revoke(request.Context(),operator,input.ID))
 		} else {
-			writeResult(writer, handler.Configuration.DeleteTarget(operator,input.ID))
+			writeResult(writer, handler.Configuration.DeleteTarget(request.Context(),operator,input.ID))
 		}
 	default:
 		if strings.HasPrefix(request.URL.Path, "/manage/api/codex/") {
@@ -291,7 +293,8 @@ func (handler *Handler) managementState(request *http.Request,operator trust.Ope
     traces,err:=handler.Inference.Service.Traces(operator,20);if err!=nil{return operation.Reject(operation.Unauthenticated,"unauthorized")}
     var inventory any=config.Inventory
     if !config.InventoryAvailable {inventory=nil}
-    return operation.Accept(map[string]any{"providers":config.Profiles,"clients":ids,"client_scopes":scopes,"pairing":handler.Pairing.Pending(),"address":"http://"+handler.Address,"traces":traces,"inventory":inventory})
+    pending,err:=handler.Pairing.Pending(request.Context());if err!=nil{return trust.Result(err)}
+    return operation.Accept(map[string]any{"providers":config.Profiles,"clients":ids,"client_scopes":scopes,"pairing":pending,"address":"http://"+handler.Address,"traces":traces,"inventory":inventory})
 }
 
 func (handler *Handler) ServeUnavailable(writer http.ResponseWriter){writer.Header().Set("Cache-Control","no-store");failure(writer,http.StatusServiceUnavailable,"node_closed")}

@@ -1,3 +1,5 @@
+mod dependency_sources;
+pub use dependency_sources::ActionDependencySourceFence;
 mod authority;
 mod expert_proposal;
 pub(crate) mod record;

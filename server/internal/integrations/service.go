@@ -568,7 +568,7 @@ func (s *Service) cleanup(ctx context.Context, id string) error {
 		}
 		if !c.VaultDone[r.ConnectionID] {
 			if r.Credential != "" {
-				if err := s.vault.Delete(r.Credential); err != nil {
+				if err := s.vault.Delete(ctx, r.Credential); err != nil {
 					unlock()
 					return err
 				}

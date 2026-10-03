@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "Historical G1 passed at665df6b3. S2 lifetime panic/timeout retention, full Task-coverage Action grant checks, enrollment identity and immutable Knowledge stage replay contracts are saved. Known pending Go credential deadline/Activating recovery, Day manual receipt/cache-status integration, Knowledge adapter and clients remain before G2. No S2 executable validation.",
+  "verification": "Historical G1 passed before S2. Day command and collection fences, live cache metadata, inherited Action source reservation checks, pinned Task selection, host retirement and Gateway credential/pairing recovery are source-complete in this checkpoint. Knowledge adapter review, client integration and pending-resume backlog closure remain before G2. No S2 executable validation.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "893b5ce606e2704cec02d1248543ed374864b7d9",
+  "current_correction_source_commit": "36eb7c6258004901f93cf4e2ac23fc71dc77a2f1",
   "current_status_document": "docs/plans/2026-10-03-g1-first-pass.md"
 }

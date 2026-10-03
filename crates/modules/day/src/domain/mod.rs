@@ -23,3 +23,12 @@ pub use projection::{MAX_DAY_SNAPSHOT_ITEMS, MAX_DAY_SNAPSHOT_BYTES, DaySnapshot
 
 mod read;
 pub use read::{DayReadQuery, DayReadSelection};
+
+mod mutation;
+pub use mutation::{Classification, DayMutation, DayMutationRequest, DayMutationResult, DayMutationCommand, DayMutationTarget, DayMutationPrior, DayMutationApplied, MAX_DAY_COMMAND_RECEIPTS, MAX_DAY_MUTATION_BYTES, MAX_DAY_MUTATION_RECEIPT_BYTES};
+
+mod cache_status;
+pub use cache_status::{CalendarCacheInspection, CalendarCacheSourceStatus};
+
+mod write_fence;
+pub use write_fence::DayWriteFence;

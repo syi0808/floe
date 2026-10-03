@@ -1,6 +1,7 @@
 package inference
 
 import (
+    "context"
 	"errors"
 	"sync"
 
@@ -19,7 +20,7 @@ type ProviderTarget struct {
 // the inference service. It does not dispatch inference requests.
 type ProviderFactory interface {
 	ValidateTarget(ProviderTarget) error
-	Open(map[string]ProviderTarget) (map[string]ModelAccount, ModelExecutor, error)
+	Open(context.Context, map[string]ProviderTarget) (map[string]ModelAccount, ModelExecutor, error)
 }
 
 type Configuration struct {
@@ -33,7 +34,7 @@ type Configuration struct {
 	configUnavailable bool
 }
 
-func OpenConfiguration(directory string, engine *Service, authority Trust, vault credentials.Store, factory ProviderFactory) (*Configuration, error) {
+func OpenConfiguration(ctx context.Context, directory string, engine *Service, authority Trust, vault credentials.Store, factory ProviderFactory) (*Configuration, error) {
 	if directory == "" || engine == nil || authority == nil || vault == nil || factory == nil {
 		return nil, errors.New("inference configuration dependencies required")
 	}
@@ -49,7 +50,7 @@ func OpenConfiguration(directory string, engine *Service, authority Trust, vault
 		factory:   factory,
 		state:     state,
 	}
-	config, accounts, executor, err := configuration.prepare(state)
+	config, accounts, executor, err := configuration.prepare(ctx, state)
 	if err != nil {
 		return nil, errors.New("inference configuration unavailable")
 	}
@@ -59,9 +60,9 @@ func OpenConfiguration(directory string, engine *Service, authority Trust, vault
 	return configuration, nil
 }
 
-func (c *Configuration) prepare(state configurationState) (InferenceConfig, map[string]ModelAccount, ModelExecutor, error) {
+func (c *Configuration) prepare(ctx context.Context, state configurationState) (InferenceConfig, map[string]ModelAccount, ModelExecutor, error) {
 	config := InferenceConfig{Routes: state.Routes}
-	accounts, executor, err := c.open(state)
+	accounts, executor, err := c.open(ctx, state)
 	if err != nil || validatePreparedConfiguration(config, accounts, executor) != nil {
 		return InferenceConfig{}, nil, nil, errors.New("invalid inference configuration")
 	}
@@ -80,7 +81,7 @@ func validatePreparedConfiguration(config InferenceConfig, accounts map[string]M
 	return nil
 }
 
-func (c *Configuration) open(state configurationState) (map[string]ModelAccount, ModelExecutor, error) {
+func (c *Configuration) open(ctx context.Context, state configurationState) (map[string]ModelAccount, ModelExecutor, error) {
 	targets := make(map[string]ProviderTarget, len(state.Targets)+9)
 	for id, target := range state.Targets {
 		targets[id] = target
@@ -100,7 +101,7 @@ func (c *Configuration) open(state configurationState) (map[string]ModelAccount,
 			return nil, nil, errors.New("invalid inference target")
 		}
 	}
-	return c.factory.Open(targets)
+	return c.factory.Open(ctx, targets)
 }
 
 func profileTargetID(provider, purpose string) string {

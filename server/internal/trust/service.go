@@ -589,26 +589,31 @@ func validDigest(s string) bool {
 }
 
 type PairingReadback struct {
-	ClientID, PersonID, DeviceID, IssuerKeyID, IssuerPublicKey, IssuerFingerprint, TokenHash string
+	ClientID, PersonID, DeviceID, IssuerKeyID, IssuerPublicKey, IssuerFingerprint, TokenHash, EnrollmentID string
 	Producer                                                                                 ProducerMetadata
 }
 
-func (s *Service) ReadPairing(ctx context.Context, id, proof string) (PairingReadback, error) {
-	if err := ctx.Err(); err != nil {
-		return PairingReadback{}, err
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	c, ok := s.state.Clients[id]
-	if s.unavailable || !ok || s.blocked(c.PersonID) || subtle.ConstantTimeCompare([]byte(c.PollProofHash), []byte(Digest(proof))) != 1 {
-		return PairingReadback{}, fail(operation.Conflict, "pairing_repair_required")
-	}
-	for _, r := range s.state.Issuers {
-		if r.ClientID == id {
-			return PairingReadback{id, c.PersonID, c.DeviceID, r.KeyID, base64.RawURLEncoding.EncodeToString(r.PublicKey), Digest(string(r.PublicKey)), c.TokenHash, s.metadataLocked()}, nil
-		}
-	}
-	return PairingReadback{}, fail(operation.Conflict, "pairing_repair_required")
+func (s *Service) ReadPairing(ctx context.Context,id,proof string)(PairingReadback,error){
+    receipt,committed,err:=s.InspectPairing(ctx,id,proof)
+    if err!=nil{return PairingReadback{},err}
+    if !committed{return PairingReadback{},fail(operation.Conflict,"pairing_repair_required")}
+    return receipt,nil
+}
+// InspectPairing distinguishes authoritative non-commit from unreadable or
+// indeterminate Trust. Only this result can authorize aborting an activation.
+func (s *Service) InspectPairing(ctx context.Context,id,proof string)(PairingReadback,bool,error){
+    if err:=ctx.Err();err!=nil{return PairingReadback{},false,err}
+    if !ValidID(id){return PairingReadback{},false,fail(operation.Invalid,"validation")}
+    if _,err:=DecodeBase64(proof,32);err!=nil{return PairingReadback{},false,fail(operation.Invalid,"validation")}
+    s.mu.RLock();defer s.mu.RUnlock()
+    if s.unavailable{return PairingReadback{},false,fail(operation.Unavailable,"trust_unavailable")}
+    c,ok:=s.state.Clients[id]
+    if !ok{return PairingReadback{},false,nil}
+    if s.blocked(c.PersonID) || subtle.ConstantTimeCompare([]byte(c.PollProofHash),[]byte(Digest(proof)))!=1{return PairingReadback{},false,fail(operation.Conflict,"pairing_repair_required")}
+    for _,r:=range s.state.Issuers {
+        if r.ClientID==id{return PairingReadback{id,c.PersonID,c.DeviceID,r.KeyID,base64.RawURLEncoding.EncodeToString(r.PublicKey),Digest(string(r.PublicKey)),c.TokenHash,r.EnrollmentID,s.metadataLocked()},true,nil}
+    }
+    return PairingReadback{},false,fail(operation.Conflict,"pairing_repair_required")
 }
 
 // WithPairingOperation authorizes the operator's hosted setup for one previously bound app operation.

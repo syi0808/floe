@@ -46,14 +46,21 @@ pub enum ProductCalendarPermission { NativeRead, ProviderRead { identity_generat
 pub struct ProductSourceObservation { pub expectation: SourceExpectation, pub provider: CalendarProvider, pub permission: ProductCalendarPermission, pub observed_at: DateTime<Utc> }
 impl ProductSourceObservation {
     pub fn validate(&self, request: &ProductCalendarReadRequest, now: DateTime<Utc>) -> Result<(), AgentFailure> {
-        self.expectation.validate()?; self.expectation.validate_device(&request.actor.device_id)?;
-        if self.expectation.source != request.source || self.expectation.revision.is_none() || self.observed_at > now || now.signed_duration_since(self.observed_at) > chrono::Duration::seconds(30) || self.expectation.physical_resources.len() > 256 { return Err(AgentFailure::StaleContext); }
-        match (request.source.connector().as_str(), self.provider, self.permission, self.expectation.gateway.is_some()) {
+        self.validate_metadata(&request.actor, &request.source, self.provider, now)
+    }
+    /// Metadata-only status checks reuse the exact source/permission policy
+    /// without inventing a refresh operation or minting a read permit.
+    pub fn validate_metadata(&self, actor: &OwnerActor, source: &GrantSourceBinding, expected_provider: CalendarProvider, now: DateTime<Utc>) -> Result<(), AgentFailure> {
+        actor.validate()?; source.validate().map_err(|_| AgentFailure::InvalidInput)?;
+        self.expectation.validate()?; self.expectation.validate_device(&actor.device_id)?;
+        if source.person_id() != actor.person_id || self.expectation.source != *source || self.provider != expected_provider || self.expectation.revision.is_none() || self.observed_at > now || now.signed_duration_since(self.observed_at) > chrono::Duration::seconds(30) || self.expectation.physical_resources.len() > 256 { return Err(AgentFailure::StaleContext); }
+        match (source.connector().as_str(), self.provider, self.permission, self.expectation.gateway.is_some()) {
             ("calendar.event_kit", CalendarProvider::EventKit, ProductCalendarPermission::NativeRead, false) => Ok(()),
             ("calendar.google", CalendarProvider::Google, ProductCalendarPermission::ProviderRead { identity_generation, gateway_runtime_generation }, true) | ("calendar.microsoft", CalendarProvider::Microsoft, ProductCalendarPermission::ProviderRead { identity_generation, gateway_runtime_generation }, true) if identity_generation > 0 && gateway_runtime_generation > 0 => Ok(()),
             _ => Err(AgentFailure::PolicyDenied),
         }
     }
+
 }
 
 pub struct ProductCalendarReadPermit {

@@ -2,6 +2,7 @@ package pairing
 
 import (
 	"bytes"
+    "context"
 	"encoding/base64"
 	"encoding/json"
 	"floe/server/internal/operation"
@@ -34,15 +35,16 @@ type privateReceipt struct {
 	Proof             string                 `json:"proof"`
 	LocalProof        trust.Proof            `json:"local_proof"`
 	Producer          trust.ProducerMetadata `json:"producer"`
+	ActivationTokenHash string `json:"activation_token_hash,omitempty"`
 	ExpectedRevision  uint64                 `json:"expected_revision"`
 }
 
 func repair() error { return operation.Fail(operation.Conflict, "pairing_repair_required") }
-func (o *Operations) index() (receiptIndex, error) {
+func (o *Operations) index(ctx context.Context) (receiptIndex, error) {
 	if o.credentials == nil {
 		return receiptIndex{}, repair()
 	}
-	raw, err := o.credentials.Get("FLOE_PAIRING_INDEX")
+	raw, err := o.credentials.Get(ctx, "FLOE_PAIRING_INDEX")
 	if err != nil {
 		return receiptIndex{}, operation.Fail(operation.Unavailable, "pairing_credential_unavailable")
 	}
@@ -64,7 +66,7 @@ func (o *Operations) index() (receiptIndex, error) {
 	}
 	return index, nil
 }
-func (o *Operations) reserve(index receiptIndex, op, id string) error {
+func (o *Operations) reserve(ctx context.Context, index receiptIndex, op, id string) error {
 	if len(index.Entries) >= maxPairingReceipts {
 		return operation.Fail(operation.Limited, "pairing_receipt_capacity")
 	}
@@ -73,24 +75,24 @@ func (o *Operations) reserve(index receiptIndex, op, id string) error {
 	if err != nil {
 		return repair()
 	}
-	if o.credentials.Put("FLOE_PAIRING_INDEX", string(encoded)) != nil {
+	if o.credentials.Put(ctx, "FLOE_PAIRING_INDEX", string(encoded)) != nil {
 		return operation.Fail(operation.Unavailable, "pairing_credential_unavailable")
 	}
 	return nil
 }
-func (o *Operations) save(p *Pending) error {
-	record := privateReceipt{Version: 1, OperationID: p.operationID, Pending: *p, Status: p.status, ChallengeID: p.challengeID, ChallengeBytes: p.challengeBytes, ChallengeB64: p.challengeB64, ProducerSignature: p.producerSignature, Proof: p.proof, LocalProof: p.localProof, Producer: p.producer, ExpectedRevision: p.expectedRevision}
+func (o *Operations) save(ctx context.Context, p *Pending) error {
+	record := privateReceipt{Version: 1, OperationID: p.operationID, Pending: *p, Status: p.status, ChallengeID: p.challengeID, ChallengeBytes: p.challengeBytes, ChallengeB64: p.challengeB64, ProducerSignature: p.producerSignature, Proof: p.proof, LocalProof: p.localProof, Producer: p.producer, ExpectedRevision: p.expectedRevision, ActivationTokenHash:p.activationTokenHash}
 	encoded, err := json.Marshal(record)
 	if err != nil || len(encoded) > 32768 {
 		return repair()
 	}
-	if o.credentials == nil || o.credentials.Put("FLOE_PAIRING_ATTEMPT_"+p.operationID, string(encoded)) != nil {
+	if o.credentials == nil || o.credentials.Put(ctx, "FLOE_PAIRING_ATTEMPT_"+p.operationID, string(encoded)) != nil {
 		return operation.Fail(operation.Unavailable, "pairing_credential_unavailable")
 	}
 	return nil
 }
-func (o *Operations) load(entry receiptIndexEntry) (*Pending, error) {
-	raw, err := o.credentials.Get("FLOE_PAIRING_ATTEMPT_" + entry.OperationID)
+func (o *Operations) load(ctx context.Context, entry receiptIndexEntry) (*Pending, error) {
+	raw, err := o.credentials.Get(ctx, "FLOE_PAIRING_ATTEMPT_" + entry.OperationID)
 	if err != nil {
 		return nil, operation.Fail(operation.Unavailable, "pairing_credential_unavailable")
 	}
@@ -109,24 +111,25 @@ func (o *Operations) load(entry receiptIndexEntry) (*Pending, error) {
 	p.localProof = record.LocalProof
 	p.producer = record.Producer
 	p.expectedRevision = record.ExpectedRevision
+    p.activationTokenHash = record.ActivationTokenHash
 	if !trust.ValidID(p.PersonID) || !trust.ValidDevice(p.DeviceID) || !trust.ValidID(p.IssuerKeyID) || !trust.ValidID(p.challengeID) || len(p.challengeBytes) == 0 || len(p.producerSignature) != 64 {
 		return nil, repair()
 	}
 	switch p.status {
-	case "pending", "local_confirmed", "activating", "approved", "rejected", "cancelled", "expired":
+	case "pending", "local_confirmed", "activating", "approved", "rejected", "cancelled", "expired", "aborted":
 	default:
 		return nil, repair()
 	}
 	return &p, nil
 }
-func (o *Operations) find(id string) (*Pending, error) {
-	index, err := o.index()
+func (o *Operations) find(ctx context.Context, id string) (*Pending, error) {
+	index, err := o.index(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for _, entry := range index.Entries {
 		if entry.PairingID == id {
-			return o.load(entry)
+			return o.load(ctx, entry)
 		}
 	}
 	return nil, nil

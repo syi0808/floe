@@ -1209,6 +1209,7 @@ private func actionPreflight(_ request: [String: Any]) throws -> [String: Any] {
 private func notAppliedReason(_ error: NativeFailure) -> String {
   switch error.reason {
   case "permission_denied": return "permission_denied"
+  case "source_changed": return "source_changed"
   case "provider_unavailable": return "provider_unavailable"
   default: return "provider_rejected"
   }

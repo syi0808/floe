@@ -1,11 +1,10 @@
 //! Trusted publication and decision commands for durable interactions.
 //!
-//! Publication verifies the interaction against its admitted origin: the
-//! Person against the Session, the Run against the Session, and the Tool
-//! call, Delegation Task or Model attempt against the origin Run's durable
-//! journal identity. A forged origin conflicts even when every id is
-//! well-formed. Decisions bind the reviewed target digest through
-//! compare-and-swap; an identical command id rejoins the recorded decision.
+//! Publication is handled by the typed review path and authenticates the
+//! recorded Run projection or actual Task receipt against its durable journal.
+//! This module admits decisions against the immutable reviewed target. An
+//! identical command rejoins its receipt; owner resolution commits the durable
+//! resume request in the same encrypted transaction.
 
 use floe_agent_contract::AgentFailure;
 use floe_kernel::{PersonId, RunId};

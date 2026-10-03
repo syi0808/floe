@@ -1,7 +1,7 @@
 {
   "baseline": "3f4b407f8079d611224cd7adbef121f9e7e75e8e",
   "branch": "refactor/architecture-20261002",
-  "stage": "S2 active: Task-owned journals/immutable receipts, role-neutral Engine, Experts binding and lifecycle frozen for parallel adapters. No S2 checks.",
+  "stage": "S2 active: owner implementations and App/FFI cutover largely landed; client integration, Knowledge storage review, manual Day command receipts, full Actions dependency invalidation and final lifetime/Gateway recovery fixes remain before G2.",
   "registration_counts": {
     "rust": 1298,
     "rust_retained_owners": 751,
@@ -40,7 +40,7 @@
     "builds": "Full builds NOT RUN; G1 Go internal packages only passed",
     "tests": "NOT RUN",
     "architecture_checker": "NOT RUN",
-    "product_changes": "S1 production code actively changing; T0 retained-production-byte verification applies only e289 checkpoint.",
+    "product_changes": "Current source is S2 and unverified. Historical G1 passes apply only to their pinned snapshots; no S2 formatter/compiler/build/analyzer/tests/checker has run.",
     "test_removals": "Complete:1298 Rust,266 Go,326 Dart sites/370expanded,33 Swift framework registrations,20 Python tests and2standalone Swift programs removed with exclusive support/targets. No execution claimed.",
     "static_diff": "Full git diff --check PASS; global Rust/Dart/Swift registrations and explicit old test targets absent. Go *_test.go absent."
   },
@@ -105,18 +105,18 @@
     "protocol": "Cloud two-file followup applied; current native caller corrections active. No cloud worker editing now.",
     "events": "Owner event buffer applied; actual blocked interaction references added; current native ownership."
   },
-  "last_update": "2026-10-03 05:27 UTC",
+  "last_update": "2026-10-03 07:28 UTC",
   "implementation_ownership": {
-    "implement_shared_model_runtime": "shared contracts/runtime/inference, Experts/builtin model call seams, Knowledge Learner journal/model seams, App Expert/Learner adapters and examples; now Conversation owner code and pure projections",
-    "implement_go_gateway_slice": "Go/Vault Conversation and native callback lane completed/checkpointed; current static race/transaction audit",
-    "implement_gateway_identity_transport": "Rust Connections/provider/native Gateway+Health proof, SourceOperation Turso, pairing/private Vault key/pin/signing; full Connections product API closure",
-    "implement_source_review_authority": "Source owner closure plus Connections FFI complete; now final App vault_host/composition/owner_handles/lib static integration fixes",
-    "remove_core_rust_tests": "Apple Health/native and Flutter client S1 implementation (reused task after T0 completion)",
-    "coordinator": "FFI Conversation/main dispatch, protocol integration, dependency policy/docs and stage closure"
+    "coordinator": "App/FFI/protocol integration, immutable Task proposal refs, publication worktree and client contract coordination",
+    "implement_shared_model_runtime": "common Engine/Experts/builtins/Knowledge; pending native Knowledge adapter review",
+    "implement_source_review_authority": "Day/Access/Context source policy and native product reads; manual Day replay transaction",
+    "implement_gateway_identity_transport": "Actions/native effect proof, full Task coverage admission/invalidation and lifecycle review",
+    "implement_go_gateway_slice": "Go credential deadline/pairing repair followup and adversarial adjudication",
+    "remove_core_rust_tests": "retained CLI diagnostics, cross-boundary audit and outer Host close lifetime fix"
   },
-  "verification_gate": "G1 compiler-only complete. S2 all-owner structural closure next; G2 full builds before S3 test reconstruction.",
+  "verification_gate": "G1 passed historically. G2 is not yet opened: complete all S2 client/owner/storage/lifecycle cutovers first, then full production and Apple builds; S3 tests only afterward.",
   "ancillary_handoff": "Parent completed partial97baselinefiles+manifest branch codex/handoff-s1-e2890706: commit d0eacbd08dc05dde224a1512d313d2a30845648e, tree5c7ac2f02ab0874f62d82562b9126cf5eecaca77. Not full e289 tree, no active S1 publication. Parent owns remote writes.",
-  "day_stage": "Full refresh/multi-source mirror/acquisition owner closure remains S2. S1 cached reads/CRUD only; no refresh success/availability claims.",
+  "day_stage": "Owned multi-source refresh, safe snapshots, product read admission, latest complete interval cache per resource, bounded selected reads, and immutable refresh replay implemented. Manual mutation atomic command receipts are being added; no live provider effects or data reset.",
   "review": "Current source audit and fixes closed across credential, pairing, Access review/Actions invalidation, source device, Go probe/Microsoft identity, safe projections and native callback lifetime. Full static evidence in s1-gateway-current-source-audit-20261002.md and s1-boundary-closure-notes.md. No current runtime validation claim.",
   "current_gate_sheet": "s1-g1-command-sheet.md",
   "g1_input": {
@@ -133,5 +133,10 @@
     "2026-10-02-s2-engine-owner-contracts.md",
     "s2-action-recovery-contract-proposal.md"
   ],
-  "s2_contract_source": "8bd2f3985b9342af02487ff74ced4ec70628496d"
+  "s2_cloud_lanes": {
+    "knowledge_storage": "active, four exclusive Vault files; native review required",
+    "client_actions": "active, exact safe wire and owned Actions feature",
+    "client_day": "active, safe Day UI/refresh with no client source orchestration",
+    "client_experts_knowledge": "active, safe review/settings plus bounded ExpertBinding card branches"
+  }
 }

@@ -6,7 +6,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use floe_access::{CalendarReadAccessRequest, CalendarReadAccessStamp};
 use floe_actions::{ActionCalendarExecutor, PreparedCalendarEffect, ActionRecord, ActionSourceFence, CalendarEffect,
     ActionBlockedReason, ActionUnknownReason, EffectIdentity, ExecutionIntent, DispatchAdmission,
-    CalendarEffectOutcome, CalendarReceiptEvidence, CalendarDestinationObservation};
+    CalendarEffectOutcome, CalendarReceiptEvidence, CalendarDestinationObservation, ActionDependencySourceFence};
 use floe_execution::{BoxFuture, ExecutionScope};
 use floe_kernel::OwnerActor;
 use floe_agent_contract::AgentFailure;
@@ -474,6 +474,7 @@ struct NativePreparedCalendarEffect {
     actor:OwnerActor,
     sources:Arc<dyn floe_connections::ConnectionsRepository>,
     record:ActionRecord,
+    dependencies:Vec<ActionDependencySourceFence>,
     identity:EffectIdentity,
     host_epoch:uuid::Uuid,
     preparation_id:uuid::Uuid,
@@ -500,6 +501,19 @@ async fn require_source_fence(sources:&dyn floe_connections::ConnectionsReposito
         || current.revision()!=expected.revision || current.source_authority()!=expected.authority
         || current.execution_owner_id().as_str()!=expected.execution_owner || current.native_subject_fingerprint()!=Some(expected.native_subject_fingerprint.as_str())
         || resources!=expected.resources {return Err(AgentFailure::PolicyDenied);}
+    Ok(())
+}
+
+async fn require_dependency_sources(sources:&dyn floe_connections::ConnectionsRepository,actor:&OwnerActor,dependencies:&[ActionDependencySourceFence])->Result<(),AgentFailure>{
+    if dependencies.len()>floe_context_contract::MAX_CONTEXT_DEPENDENCIES{return Err(AgentFailure::BudgetExceeded);}
+    for expected in dependencies {
+        expected.validate(actor.person_id)?;
+        let id=expected.source.connection_id();
+        let before=sources.read_reservation_fence(actor.person_id,id).await.map_err(|_|AgentFailure::StaleContext)?;
+        let current=sources.load(actor.person_id,id).await.map_err(|_|AgentFailure::StaleContext)?;
+        let after=sources.read_reservation_fence(actor.person_id,id).await.map_err(|_|AgentFailure::StaleContext)?;
+        if before!=expected.reservation || after!=expected.reservation || current.as_ref()!=Some(&expected.source){return Err(AgentFailure::StaleContext);}
+    }
     Ok(())
 }
 
@@ -530,11 +544,17 @@ impl ActionCalendarExecutor for NativeCalendarExecutor {
             Ok(result.resources)
         })
     }
-    fn prepare<'a>(&'a self,actor:&'a OwnerActor,record:&'a ActionRecord,local_events:&'a [Event],scope:&'a ExecutionScope)
+    fn prepare<'a>(&'a self,actor:&'a OwnerActor,record:&'a ActionRecord,dependencies:&'a [ActionDependencySourceFence],local_events:&'a [Event],scope:&'a ExecutionScope)
         ->BoxFuture<'a,Result<Box<dyn PreparedCalendarEffect>,ActionBlockedReason>>{
         Box::pin(async move{
             if actor!=&self.actor || record.person_id!=actor.person_id || record.device_id!=actor.device_id || record.validate().is_err()
                 || record.state!=floe_actions::ActionState::Approved || record.execution.is_some(){return Err(ActionBlockedReason::PolicyDenied);}
+            match &record.origin {
+                floe_actions::ActionOrigin::Expert{..} if !record.dependency.as_ref().is_some_and(|selected|dependencies.iter().any(|entry|&entry.dependency==selected))=>return Err(ActionBlockedReason::PolicyDenied),
+                floe_actions::ActionOrigin::Direct{..} if !dependencies.is_empty()=>return Err(ActionBlockedReason::PolicyDenied),
+                _=>{},
+            }
+            scope.run(require_dependency_sources(self.sources.as_ref(),actor,dependencies)).await.map_err(|_|ActionBlockedReason::SourceChanged)?;
             require_action_source(self.sources.as_ref(),actor,&record.effect,&record.source).await.map_err(|_|ActionBlockedReason::SourceChanged)?;
             let identity=action_identity(actor,record);
             let deadline=native_action_deadline(scope).map_err(|_|ActionBlockedReason::ExecutorUnavailable)?;
@@ -550,7 +570,8 @@ impl ActionCalendarExecutor for NativeCalendarExecutor {
                 _=>return Err(ActionBlockedReason::ExecutorUnavailable),
             };
             require_action_source(self.sources.as_ref(),actor,&record.effect,&record.source).await.map_err(|_|ActionBlockedReason::SourceChanged)?;
-            Ok(Box::new(NativePreparedCalendarEffect{actor:actor.clone(),sources:self.sources.clone(),record:record.clone(),identity,host_epoch,preparation_id,expires_at}) as Box<dyn PreparedCalendarEffect>)
+            scope.run(require_dependency_sources(self.sources.as_ref(),actor,dependencies)).await.map_err(|_|ActionBlockedReason::SourceChanged)?;
+            Ok(Box::new(NativePreparedCalendarEffect{actor:actor.clone(),sources:self.sources.clone(),record:record.clone(),dependencies:dependencies.to_vec(),identity,host_epoch,preparation_id,expires_at}) as Box<dyn PreparedCalendarEffect>)
         })
     }
     fn recover<'a>(&'a self,actor:&'a OwnerActor,intent:&'a ExecutionIntent,scope:&'a ExecutionScope)->BoxFuture<'a,CalendarEffectOutcome>{
@@ -596,7 +617,17 @@ impl PreparedCalendarEffect for NativePreparedCalendarEffect {
                 return unknown(intent,ActionUnknownReason::InvalidReceipt);
             }
             if scope.cancellation().is_cancelled(){return unknown(intent,ActionUnknownReason::CancelledAfterDispatch);}
-            if require_action_source(self.sources.as_ref(),&self.actor,&intent.effect,&intent.source).await.is_err(){return unknown(intent,ActionUnknownReason::InconclusiveLookup);}
+            let source_check=scope.run(async {
+                require_action_source(self.sources.as_ref(),&self.actor,&intent.effect,&intent.source).await?;
+                require_dependency_sources(self.sources.as_ref(),&self.actor,&self.dependencies).await
+            }).await;
+            if source_check.is_err(){
+                // This unique live capability has not called action_native.
+                // Executing is durable, but non-invocation is positive evidence.
+                return CalendarEffectOutcome::NotApplied{proof:floe_actions::NotAppliedProof{
+                    identity:intent.identity(),host_epoch:self.host_epoch,invocation_id:self.preparation_id,
+                    reason:floe_actions::ActionNotAppliedReason::SourceChanged,rejected_at:Utc::now()}};
+            }
             let Ok(deadline)=native_action_deadline(&scope) else{return unknown(intent,ActionUnknownReason::Timeout)};
             let request=json!({"schema_version":1,"operation":"action_dispatch","admission":intent,"preparation_id":self.preparation_id,"host_epoch":self.host_epoch,"deadline":deadline});
             let result:CalendarEffectOutcome=match action_native(request,&scope,false).await{

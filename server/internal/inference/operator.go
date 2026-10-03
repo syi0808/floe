@@ -53,7 +53,7 @@ type OperatorSnapshot struct {
 // UpdateRoute replaces or removes one purpose route after revalidating the
 // current operator. The operator lock precedes the configuration and engine
 // locks for every configuration mutation.
-func (c *Configuration) UpdateRoute(operator trust.OperatorPrincipal, input RouteUpdate) operation.Result {
+func (c *Configuration) UpdateRoute(ctx context.Context, operator trust.OperatorPrincipal, input RouteUpdate) operation.Result {
 	return c.withCurrentOperator(operator, func() operation.Result {
 		if !ValidPurpose(input.Purpose) || !ValidEffort(input.ReasoningEffort) {
 			return operation.Reject(operation.Invalid, "validation")
@@ -73,11 +73,11 @@ func (c *Configuration) UpdateRoute(operator trust.OperatorPrincipal, input Rout
 			}
 			next.Routes[purpose] = PurposeRoute{TargetID: input.Target, ReasoningEffort: input.ReasoningEffort, Enabled: input.Enabled}
 		}
-		return c.commitConfiguration(next)
+		return c.commitConfiguration(ctx, next)
 	})
 }
 
-func (c *Configuration) UpdateTarget(operator trust.OperatorPrincipal, input TargetUpdate) operation.Result {
+func (c *Configuration) UpdateTarget(ctx context.Context, operator trust.OperatorPrincipal, input TargetUpdate) operation.Result {
 	return c.withCurrentOperator(operator, func() operation.Result {
 		if !ValidAlias(input.ID) || strings.HasPrefix(input.ID,"managed_") || len(input.APIKey) > 8192 || strings.ContainsAny(input.APIKey, "\r\n\x00") {
 			return operation.Reject(operation.Invalid, "validation")
@@ -107,14 +107,14 @@ func (c *Configuration) UpdateTarget(operator trust.OperatorPrincipal, input Tar
 		if len(next.Targets) > 32 {
 			return operation.Reject(operation.Limited, "target_limit")
 		}
-		if apiKey != "" && c.vault.Put(target.APIKeyEnv, apiKey) != nil {
+		if apiKey != "" && c.vault.Put(ctx, target.APIKeyEnv, apiKey) != nil {
 			return operation.Reject(operation.Unavailable, "credential_store_unavailable")
 		}
-		return c.commitConfiguration(next)
+		return c.commitConfiguration(ctx, next)
 	})
 }
 
-func (c *Configuration) UpdateProvider(operator trust.OperatorPrincipal, input ProviderUpdate) operation.Result {
+func (c *Configuration) UpdateProvider(ctx context.Context, operator trust.OperatorPrincipal, input ProviderUpdate) operation.Result {
 	return c.withCurrentOperator(operator, func() operation.Result {
 		if input.Purposes == nil || input.Provider != "codex_oauth" && input.Provider != "openai_compatible" || len(input.Purposes) > 3 || len(input.APIKey) > 8192 || strings.ContainsAny(input.APIKey, "\r\n\x00") {
 			return operation.Reject(operation.Invalid, "validation")
@@ -132,7 +132,7 @@ func (c *Configuration) UpdateProvider(operator trust.OperatorPrincipal, input P
 		}
 		if len(input.Purposes) == 0 {
 			delete(next.Providers, input.Provider)
-			return c.commitConfiguration(next)
+			return c.commitConfiguration(ctx, next)
 		}
 		baseURL, apiKey := input.BaseURL, input.APIKey
 		if input.Provider == "codex_oauth" {
@@ -153,14 +153,14 @@ func (c *Configuration) UpdateProvider(operator trust.OperatorPrincipal, input P
 			next.Routes[Purpose(purpose)] = PurposeRoute{TargetID: profileTargetID(input.Provider, purpose), ReasoningEffort: configured.ReasoningEffort, Enabled: true}
 		}
 		next.Providers[input.Provider] = profile
-		if apiKey != "" && c.vault.Put(profile.APIKeyEnv, apiKey) != nil {
+		if apiKey != "" && c.vault.Put(ctx, profile.APIKeyEnv, apiKey) != nil {
 			return operation.Reject(operation.Unavailable, "credential_store_unavailable")
 		}
-		return c.commitConfiguration(next)
+		return c.commitConfiguration(ctx, next)
 	})
 }
 
-func (c *Configuration) DeleteTarget(operator trust.OperatorPrincipal, id string) operation.Result {
+func (c *Configuration) DeleteTarget(ctx context.Context, operator trust.OperatorPrincipal, id string) operation.Result {
 	return c.withCurrentOperator(operator, func() operation.Result {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -174,7 +174,7 @@ func (c *Configuration) DeleteTarget(operator trust.OperatorPrincipal, id string
 				delete(next.Routes, purpose)
 			}
 		}
-		return c.commitConfiguration(next)
+		return c.commitConfiguration(ctx, next)
 	})
 }
 
@@ -230,12 +230,13 @@ func (c *Configuration) withCurrentOperator(operator trust.OperatorPrincipal, ap
 	return result
 }
 
-func (c *Configuration) commitConfiguration(state configurationState) operation.Result {
+func (c *Configuration) commitConfiguration(ctx context.Context, state configurationState) operation.Result {
+    if ctx.Err()!=nil{return operation.Reject(operation.Unavailable,"configuration_unavailable")}
 	if c.configUnavailable {
 		return operation.Reject(operation.Unavailable, "configuration_unavailable")
 	}
-	config, accounts, executor, err := c.prepare(state)
-	if err != nil {
+	config, accounts, executor, err := c.prepare(ctx, state)
+	if err != nil || ctx.Err()!=nil {
 		return operation.Reject(operation.Unavailable, "configuration_unavailable")
 	}
 	if c.save(state) != nil {

@@ -215,7 +215,7 @@ fn storage_error(_: impl std::fmt::Display) -> SourceRepositoryError {
 
 use floe_connections::{
     SourceOperationAdmission, SourceOperationChange, SourceOperationPhase, SourceOperationRecord,
-    SourceOperationRepository, SourceOperationReservation,
+    SourceOperationRepository, SourceOperationReservation, SourceReservationFence, SourceReservationWatermark,
 };
 use uuid::Uuid;
 const MAX_OPERATION_BYTES: usize = 16_384;
@@ -225,6 +225,7 @@ pub(crate) async fn initialize_source_operations(
 ) -> Result<(), SourceRepositoryError> {
     connection.execute("CREATE TABLE IF NOT EXISTS source_operations (operation_id TEXT PRIMARY KEY, command_id TEXT NOT NULL, person_id TEXT NOT NULL, connection_id TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision > 0), fence INTEGER NOT NULL CHECK(fence IN (0,1)), payload TEXT NOT NULL, UNIQUE(person_id,command_id))", ()).await.map_err(storage_error)?;
     connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS source_operation_fence ON source_operations(connection_id) WHERE fence = 1", ()).await.map_err(storage_error)?;
+    connection.execute("CREATE INDEX IF NOT EXISTS source_operation_history ON source_operations(connection_id)", ()).await.map_err(storage_error)?;
     Ok(())
 }
 async fn fenced_on(
@@ -408,6 +409,39 @@ impl SourceOperationRepository for TursoStore {
                 records.push(decode_operation(&row)?);
             }
             Ok(records)
+        })
+    }
+    fn read_reservation_fence<'a>(&'a self,person_id:PersonId,connection_id:&'a ConnectionId)
+        ->BoxFuture<'a,Result<SourceReservationFence,SourceRepositoryError>>{
+        Box::pin(async move {
+            if !person_id.is_valid(){return Err(SourceRepositoryError::Conflict);}
+            let connection=self.connection().await.map_err(storage_error)?;
+            connection.execute("BEGIN",()).await.map_err(storage_error)?;
+            let result=async {
+                // New reservations are inserted with fence=1 in one immediate
+                // transaction. Rows are retained; command replay never inserts.
+                let mut rows=connection.query("SELECT operation_id, command_id, person_id, connection_id, revision, fence, CASE WHEN length(CAST(payload AS BLOB)) <= 16384 THEN payload ELSE NULL END FROM source_operations WHERE connection_id = ? ORDER BY rowid DESC LIMIT 1",(connection_id.as_str(),)).await.map_err(storage_error)?;
+                let latest=rows.next().await.map_err(storage_error)?.as_ref().map(decode_operation).transpose()?;
+                drop(rows);
+                let mut rows=connection.query("SELECT operation_id, command_id, person_id, connection_id, revision, fence, payload FROM source_operations WHERE connection_id = ? AND fence = 1",(connection_id.as_str(),)).await.map_err(storage_error)?;
+                let active=rows.next().await.map_err(storage_error)?.as_ref().map(decode_operation).transpose()?;
+                if rows.next().await.map_err(storage_error)?.is_some(){return Err(SourceRepositoryError::Corrupt);}
+                let fence=match latest {
+                    None if active.is_none()=>SourceReservationFence{watermark:SourceReservationWatermark::NeverReserved,fenced:false},
+                    Some(record)=>{
+                        if record.expected.source.person_id()!=person_id || record.expected.source.connection_id()!=*connection_id
+                            || active.as_ref().is_some_and(|operation|operation.operation_id!=record.operation_id)
+                            || active.is_some()!=record.phase.holds_fence(){return Err(SourceRepositoryError::Corrupt);}
+                        SourceReservationFence{watermark:SourceReservationWatermark::Reserved{
+                            operation_id:record.operation_id,reservation_id:record.reservation_id,reservation_generation:record.reservation_generation},
+                            fenced:record.phase.holds_fence()}
+                    },
+                    _=>return Err(SourceRepositoryError::Corrupt),
+                };
+                fence.validate()?;
+                Ok(fence)
+            }.await;
+            finish_source_transaction(&connection,result).await
         })
     }
     fn source_is_fenced<'a>(

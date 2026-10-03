@@ -1,5 +1,5 @@
-use crate::{CalendarMirror, Capture, Event, Note, Task, TimelineItem};
-use floe_kernel::{CaptureId, EventId, NoteId, PersonId, Revision, TaskId};
+use crate::{CalendarMirror, TimelineItem};
+use floe_kernel::{PersonId, Revision};
 use std::{collections::BTreeMap, fmt::Display};
 use thiserror::Error;
 
@@ -54,20 +54,13 @@ impl DayError {
     }
 }
 
+impl From<crate::DomainError> for DayError {
+    fn from(error: crate::DomainError) -> Self { Self::validation(error.to_string()) }
+}
+
 pub trait DayRepository: super::refresh_repository::DayRefreshRepository + Send + Sync {
-    fn collect_action<'a>(&'a self, commit: crate::DayCollectionCommit) -> floe_execution::BoxFuture<'a, Result<crate::DayCollectionReceipt, DayError>>;
-    fn put_capture<'a>(&'a self, value: &'a Capture) -> floe_execution::BoxFuture<'a, Result<(), DayError>>;
-    fn put_event<'a>(&'a self, value: &'a Event) -> floe_execution::BoxFuture<'a, Result<(), DayError>>;
-    fn put_event_if_revision<'a>(&'a self, value: &'a Event, expected: Revision) -> floe_execution::BoxFuture<'a, Result<(), DayError>>;
-    fn put_task<'a>(&'a self, value: &'a Task) -> floe_execution::BoxFuture<'a, Result<(), DayError>>;
-    fn put_task_if_revision<'a>(&'a self, value: &'a Task, expected: Revision) -> floe_execution::BoxFuture<'a, Result<(), DayError>>;
-    fn put_note<'a>(&'a self, value: &'a Note) -> floe_execution::BoxFuture<'a, Result<(), DayError>>;
-    fn put_note_if_revision<'a>(&'a self, value: &'a Note, expected: Revision) -> floe_execution::BoxFuture<'a, Result<(), DayError>>;
-    fn get_capture<'a>(&'a self, id: CaptureId) -> floe_execution::BoxFuture<'a, Result<Option<Capture>, DayError>>;
-    fn get_event<'a>(&'a self, id: EventId) -> floe_execution::BoxFuture<'a, Result<Option<Event>, DayError>>;
-    fn get_task<'a>(&'a self, id: TaskId) -> floe_execution::BoxFuture<'a, Result<Option<Task>, DayError>>;
-    fn get_note<'a>(&'a self, id: NoteId) -> floe_execution::BoxFuture<'a, Result<Option<Note>, DayError>>;
+    fn mutate<'a>(&'a self, command: crate::DayMutationCommand, fence: &'a crate::DayWriteFence) -> floe_execution::BoxFuture<'a, Result<crate::DayMutationResult, DayError>>;
+    fn collect_action<'a>(&'a self, commit: crate::DayCollectionCommit, fence: &'a crate::DayWriteFence) -> floe_execution::BoxFuture<'a, Result<crate::DayCollectionReceipt, DayError>>;
     fn read_items<'a>(&'a self, query: crate::DayReadQuery) -> floe_execution::BoxFuture<'a, Result<Vec<TimelineItem>, DayError>>;
-    fn classify<'a>(&'a self, capture: &'a Capture, item: &'a TimelineItem) -> floe_execution::BoxFuture<'a, Result<(), DayError>>;
     fn calendar_mirror<'a>(&'a self, person_id: PersonId) -> floe_execution::BoxFuture<'a, Result<Option<CalendarMirror>, DayError>>;
 }

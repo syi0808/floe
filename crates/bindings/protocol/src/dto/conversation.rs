@@ -141,6 +141,10 @@ impl ConversationSessionSnapshotDto {
         if self.revision == 0 || self.revision > i64::MAX as u64 {
             return Err("conversation.session.revision");
         }
+        if self.usage.unknown_token_attempts > self.usage.model_attempts
+            || self.usage.unknown_cost_attempts > self.usage.model_attempts {
+            return Err("conversation.session.usage");
+        }
         if self.messages.len() > MAX_SESSION_MESSAGES {
             return Err("conversation.session.messages");
         }

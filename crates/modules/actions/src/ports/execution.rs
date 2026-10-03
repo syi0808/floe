@@ -15,6 +15,7 @@ pub trait ActionSourceReader:Send+Sync {
     fn list_calendar_sources<'a>(&'a self,person_id:PersonId)->BoxFuture<'a,Result<Vec<SourceConnection>,AgentFailure>>;
     fn load<'a>(&'a self,person_id:PersonId,connection_id:&'a ConnectionId)->BoxFuture<'a,Result<Option<SourceConnection>,AgentFailure>>;
     fn source_is_fenced<'a>(&'a self,person_id:PersonId,connection_id:&'a ConnectionId)->BoxFuture<'a,Result<bool,AgentFailure>>;
+    fn read_reservation_fence<'a>(&'a self,person_id:PersonId,connection_id:&'a ConnectionId)->BoxFuture<'a,Result<floe_connections::SourceReservationFence,AgentFailure>>;
 }
 
 #[derive(Clone,Debug,serde::Deserialize,Eq,PartialEq,serde::Serialize)]
@@ -59,7 +60,7 @@ impl ActionsClock for SystemActionsClock {fn now(&self)->chrono::DateTime<chrono
 pub trait ActionCalendarExecutor:Send+Sync {
     fn destinations<'a>(&'a self,actor:&'a OwnerActor,source:&'a ActionSourceFence,scope:&'a ExecutionScope)
         ->BoxFuture<'a,Result<Vec<CalendarDestinationObservation>,ActionBlockedReason>>;
-    fn prepare<'a>(&'a self,actor:&'a OwnerActor,record:&'a ActionRecord,local_events:&'a [Event],scope:&'a ExecutionScope)
+    fn prepare<'a>(&'a self,actor:&'a OwnerActor,record:&'a ActionRecord,dependencies:&'a [crate::ActionDependencySourceFence],local_events:&'a [Event],scope:&'a ExecutionScope)
         ->BoxFuture<'a,Result<Box<dyn PreparedCalendarEffect>,ActionBlockedReason>>;
     /// Recovery is lookup-only, including exact historical native receipt readback.
     /// Missing receipt and matching Update/Delete postconditions stay Unknown.

@@ -32,6 +32,10 @@ impl ActionsService {
         if record.state!=ActionState::Approved{return Ok(());}
         if self.closed.load(Ordering::Acquire)||scope.cancellation().is_cancelled(){return self.stop(&record,PreDispatchState::Cancelled).await;}
         if self.clock.now()>=record.expires_at{return self.stop(&record,PreDispatchState::Expired).await;}
+        let dependencies=match self.prepare_dependency_sources(actor,&record,scope).await {
+            Ok(value)=>value,
+            Err(_)=>return self.stop(&record,PreDispatchState::Blocked{reason:ActionBlockedReason::SourceChanged}).await,
+        };
         let source=match self.observe_source(actor,&record.effect).await {
             Ok(source) if source==record.source=>source,
             _=>return self.stop(&record,PreDispatchState::Blocked{reason:ActionBlockedReason::SourceChanged}).await,
@@ -39,14 +43,15 @@ impl ActionsService {
         let events=match self.current_events(actor,&record.effect,scope).await {
             Ok(events)=>events,Err(_)=>return self.stop(&record,PreDispatchState::Blocked{reason:ActionBlockedReason::SourceChanged}).await,
         };
-        let prepared=match self.executor.prepare(actor,&record,&events,scope).await {
+        let prepared=match self.executor.prepare(actor,&record,&dependencies,&events,scope).await {
             Ok(prepared)=>prepared,Err(reason)=>return self.stop(&record,PreDispatchState::Blocked{reason}).await,
         };
         if self.closed.load(Ordering::Acquire)||scope.cancellation().is_cancelled(){return self.stop(&record,PreDispatchState::Cancelled).await;}
         if Instant::now()>=scope.deadline(){return self.stop(&record,PreDispatchState::Blocked{reason:ActionBlockedReason::ExecutorUnavailable}).await;}
         let unchanged_source=self.observe_source(actor,&record.effect).await.is_ok_and(|current|current==source);
         let unchanged_events=self.current_events(actor,&record.effect,scope).await.is_ok_and(|current|current==events);
-        if !unchanged_source || !unchanged_events {
+        let unchanged_dependencies=self.revalidate_dependency_sources(actor,&dependencies,scope).await.is_ok();
+        if !unchanged_source || !unchanged_events || !unchanged_dependencies {
             return self.stop(&record,PreDispatchState::Blocked{reason:ActionBlockedReason::SourceChanged}).await;
         }
         if self.clock.now()>=record.expires_at{return self.stop(&record,PreDispatchState::Expired).await;}
