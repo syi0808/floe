@@ -43,9 +43,37 @@ impl ModelSchema {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ModelOutputFormat { Text, Json { schema: ModelSchema } }
+impl<'de> Deserialize<'de> for ModelOutputFormat {
+    fn deserialize<D: Deserializer<'de>>(deserializer:D) -> Result<Self,D::Error> {
+        struct FormatVisitor;
+        impl<'de> Visitor<'de> for FormatVisitor {
+            type Value=ModelOutputFormat;
+            fn expecting(&self, f:&mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("an exact model output format") }
+            fn visit_map<A:MapAccess<'de>>(self,mut map:A) -> Result<Self::Value,A::Error> {
+                let mut kind:Option<String>=None;
+                let mut schema:Option<ModelSchema>=None;
+                while let Some(key)=map.next_key::<String>()? {
+                    match key.as_str() {
+                        "kind" if kind.is_none() => kind=Some(map.next_value()?),
+                        "schema" if schema.is_none() => schema=Some(map.next_value()?),
+                        _ => return Err(serde::de::Error::custom("unknown or duplicate output-format field")),
+                    }
+                }
+                match (kind.as_deref(),schema) {
+                    (Some("text"),None) => Ok(ModelOutputFormat::Text),
+                    (Some("json"),Some(schema)) => Ok(ModelOutputFormat::Json {schema}),
+                    _ => Err(serde::de::Error::custom("invalid output-format fields")),
+                }
+            }
+        }
+        // An internally tagged derive would buffer the schema before RawValue
+        // could retain its original numeric lexemes and duplicate keys.
+        deserializer.deserialize_map(FormatVisitor)
+    }
+}
 impl ModelOutputFormat {
     pub fn validate(&self) -> Result<(), ModelContractError> {
         match self { Self::Text => Ok(()), Self::Json { schema } => schema.validate() }
@@ -227,7 +255,7 @@ impl<'de> Deserialize<'de> for UniqueValue {
             fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Self::Value,E> { Ok(UniqueValue(Value::Bool(value))) }
             fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value,E> { if value.unsigned_abs() > MAX_SAFE_INTEGER as u64 { return Err(E::custom("number outside safe range")); } Ok(UniqueValue(Value::Number(value.into()))) }
             fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value,E> { if value > MAX_SAFE_INTEGER as u64 { return Err(E::custom("number outside safe range")); } Ok(UniqueValue(Value::Number(value.into()))) }
-            fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Self::Value,E> { if !value.is_finite() || value.abs() > MAX_SAFE_INTEGER { return Err(E::custom("number outside safe range")); } Ok(UniqueValue(Value::Number(Number::from_f64(value).ok_or_else(|| E::custom("nonfinite number"))?))) }
+            fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Self::Value,E> { if !value.is_finite() || value.abs() > MAX_SAFE_INTEGER { return Err(E::custom("number outside safe range")); } Ok(UniqueValue(Value::Number(if value.fract() == 0.0 { Number::from(value as i64) } else { Number::from_f64(value).ok_or_else(|| E::custom("nonfinite number"))? }))) }
             fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value,E> { Ok(UniqueValue(Value::String(value.to_owned()))) }
             fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value,E> { Ok(UniqueValue(Value::String(value))) }
             fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value,E> { Ok(UniqueValue(Value::Null)) }

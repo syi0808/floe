@@ -268,7 +268,7 @@ fn decode_output(
                 capability_id,
                 input,
             } => {
-                if !inference_wire::valid_alias(capability_id) {
+                if !crate::models::agent_codec::valid_alias(capability_id) {
                     return Err(AgentFailure::ServerModelInvalidOutput);
                 }
                 super::json::strict_json_bytes(input.as_bytes(), 32_768)
@@ -283,7 +283,7 @@ fn decode_output(
     }
     if ids.len() != calls
         || ids.iter().collect::<BTreeSet<_>>().len() != calls
-        || ids.iter().any(|id| !inference_wire::valid_call_id(id))
+        || ids.iter().any(|id| !crate::models::agent_codec::valid_call_id(id))
     {
         return Err(AgentFailure::ServerModelInvalidOutput);
     }

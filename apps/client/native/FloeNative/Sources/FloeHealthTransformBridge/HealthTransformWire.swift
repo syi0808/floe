@@ -47,6 +47,13 @@ public struct HealthTransformBinding: Codable, Equatable, Sendable {
         self.nativeSubjectFingerprint = nativeSubjectFingerprint
     }
 
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.requestID == rhs.requestID && lhs.personID == rhs.personID
+            && lhs.hostEpoch.utf8.elementsEqual(rhs.hostEpoch.utf8)
+            && lhs.deviceID.utf8.elementsEqual(rhs.deviceID.utf8)
+            && lhs.nativeSubjectFingerprint == rhs.nativeSubjectFingerprint
+    }
+
     public func validate() throws {
         guard requestID != Self.zeroUUID,
               personID != Self.zeroUUID,

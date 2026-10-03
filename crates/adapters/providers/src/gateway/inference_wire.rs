@@ -91,14 +91,6 @@ fn required_nullable<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Optio
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ErrorBody {
-    schema_version: u32,
-    error: ErrorCode,
-    #[serde(deserialize_with = "required_trace")]
-    trace_id: Option<String>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ErrorCode {
     code: String,
 }
@@ -117,24 +109,15 @@ pub(crate) fn valid_hex(value: &str, length: usize) -> bool {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-pub(crate) fn valid_call_id(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
-}
-pub(crate) fn valid_alias(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-}
-
 pub(crate) fn failure(
     status: u16,
     bytes: &[u8],
 ) -> Result<(ModelObservationError, AgentFailure), AgentFailure> {
     use AgentFailure as F;
-    let body: ErrorBody = decode(bytes)?;
-    if body.schema_version != 2 || body.trace_id.as_ref().is_some_and(|id| !valid_hex(id, 32)) {
+    let body: InferenceErrorBody = decode(bytes)?;
+    if body.schema_version != 2 || body.trace_id.is_some() || body.attempt_id.is_some()
+        || body.purpose.is_some() || body.capability_revision.is_some()
+        || body.usage.tokens.is_some() || body.usage.cost_micros.is_some() {
         return Err(F::ServerModelInvalidOutput);
     }
     map_failure(status, &body.error.code)

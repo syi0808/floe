@@ -1,5 +1,5 @@
 use crate::gateway::json::strict_json_bytes;
-use floe_agent_contract::{AgentFailure, MAX_CONTEXT_REFS, MAX_OUTPUT_BYTES, valid_context_refs};
+use floe_agent_contract::{AgentFailure, MAX_CONTEXT_REFS, valid_context_refs};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -79,7 +79,7 @@ pub(crate) fn encode_agent_input(
                         "message": {"type": "string", "minLength": 1, "maxLength": 4096},
                         "context_refs": {
                             "type": "array",
-                            "items": {"type": "string", "maxLength": MAX_OUTPUT_BYTES},
+                            "items": {"type": "string"},
                             "maxItems": MAX_CONTEXT_REFS
                         }
                     },
@@ -120,9 +120,8 @@ pub(crate) fn decode_agent_step(
                 #[serde(default)]
                 context_refs: Vec<String>,
             }
-            strict_object(&input)?;
-            let delegation: DelegationInput =
-                serde_json::from_str(&input).map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
+            let delegation: DelegationInput = serde_json::from_value(strict_object(&input)?)
+                .map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
             if !valid_context_refs(&delegation.context_refs) {
                 return Err(AgentFailure::ServerModelInvalidOutput);
             }
@@ -145,9 +144,8 @@ pub(crate) fn decode_agent_step(
             capability_id,
             input,
         } => {
-            if strict_object(&input).is_err() {
-                return Err(AgentFailure::ServerModelInvalidOutput);
-            }
+            let value = strict_object(&input).map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
+            let input = serde_json::to_string(&value).map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
             let descriptor = catalog
                 .tools
                 .iter()
@@ -192,9 +190,7 @@ fn rewrite_tool_calls(message: &mut serde_json::Value) -> Result<(), AgentFailur
 }
 
 fn strict_object(raw: &str) -> Result<serde_json::Value, AgentFailure> {
-    strict_json_bytes(raw.as_bytes(), 32768)?;
-    let value: serde_json::Value =
-        serde_json::from_str(raw).map_err(|_| AgentFailure::InvalidInput)?;
+    let value = floe_model_contract::strict_json(raw.as_bytes(), 32768).map_err(|_| AgentFailure::InvalidInput)?;
     if !value.is_object() {
         return Err(AgentFailure::InvalidInput);
     }
@@ -236,7 +232,7 @@ fn validate_input(input: &serde_json::Value) -> Result<(), AgentFailure> {
                     }
                     for call in calls {
                         let id = call["id"].as_str().ok_or(AgentFailure::InvalidInput)?;
-                        if !super::inference_wire::valid_call_id(id) || !used.insert(id.to_owned())
+                        if !valid_call_id(id) || !used.insert(id.to_owned())
                         {
                             return Err(AgentFailure::InvalidInput);
                         }
@@ -244,7 +240,7 @@ fn validate_input(input: &serde_json::Value) -> Result<(), AgentFailure> {
                         let name = call["function"]["name"]
                             .as_str()
                             .ok_or(AgentFailure::InvalidInput)?;
-                        if !super::inference_wire::valid_alias(name) {
+                        if !valid_alias(name) {
                             return Err(AgentFailure::InvalidInput);
                         }
                         strict_object(
@@ -280,3 +276,15 @@ pub(crate) enum WireStep {
         input: String,
     },
 }
+
+pub(crate) fn valid_call_id(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+}
+pub(crate) fn valid_alias(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+

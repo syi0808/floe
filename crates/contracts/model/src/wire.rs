@@ -168,12 +168,54 @@ impl DeviceModelResponse {
         }
     }
 }
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DeviceModelCommand {
     Prepare { schema_version: u32, requirements: DeviceModelRequirements },
     Start { schema_version: u32, request: DeviceModelRequest },
     Poll { schema_version: u32, operation_id: Uuid }, Cancel { schema_version: u32, operation_id: Uuid }, Release { schema_version: u32, operation_id: Uuid },
+}
+impl<'de> Deserialize<'de> for DeviceModelCommand {
+    fn deserialize<D:Deserializer<'de>>(deserializer:D) -> Result<Self,D::Error> {
+        struct CommandVisitor;
+        impl<'de> serde::de::Visitor<'de> for CommandVisitor {
+            type Value=DeviceModelCommand;
+            fn expecting(&self,f:&mut std::fmt::Formatter<'_>) -> std::fmt::Result {f.write_str("an exact DeviceModel command")}
+            fn visit_map<A:serde::de::MapAccess<'de>>(self,mut map:A) -> Result<Self::Value,A::Error> {
+                let mut version:Option<u32>=None; let mut operation:Option<String>=None;
+                let mut requirements:Option<DeviceModelRequirements>=None;
+                let mut request:Option<DeviceModelRequest>=None; let mut id:Option<Uuid>=None;
+                while let Some(key)=map.next_key::<String>()? {
+                    match key.as_str() {
+                        "schema_version" if version.is_none() => version=Some(map.next_value()?),
+                        "operation" if operation.is_none() => operation=Some(map.next_value()?),
+                        "requirements" if requirements.is_none() => requirements=Some(map.next_value()?),
+                        "request" if request.is_none() => request=Some(map.next_value()?),
+                        "operation_id" if id.is_none() => id=Some(map.next_value()?),
+                        _ => return Err(serde::de::Error::custom("unknown or duplicate DeviceModel command field")),
+                    }
+                }
+                let schema_version=version.filter(|version| *version==DEVICE_MODEL_VERSION)
+                    .ok_or_else(|| <A::Error as serde::de::Error>::custom("unsupported DeviceModel version"))?;
+                let command=match (operation.as_deref(),requirements,request,id) {
+                    (Some("prepare"),Some(requirements),None,None) => {
+                        requirements.validate().map_err(serde::de::Error::custom)?;
+                        DeviceModelCommand::Prepare {schema_version,requirements}
+                    }
+                    (Some("start"),None,Some(request),None) => {
+                        request.validate().map_err(serde::de::Error::custom)?;
+                        DeviceModelCommand::Start {schema_version,request}
+                    }
+                    (Some("poll"),None,None,Some(operation_id)) if !operation_id.is_nil() => DeviceModelCommand::Poll {schema_version,operation_id},
+                    (Some("cancel"),None,None,Some(operation_id)) if !operation_id.is_nil() => DeviceModelCommand::Cancel {schema_version,operation_id},
+                    (Some("release"),None,None,Some(operation_id)) if !operation_id.is_nil() => DeviceModelCommand::Release {schema_version,operation_id},
+                    _ => return Err(serde::de::Error::custom("invalid DeviceModel command fields")),
+                };
+                Ok(command)
+            }
+        }
+        deserializer.deserialize_map(CommandVisitor)
+    }
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
@@ -186,6 +228,35 @@ pub enum DeviceModelReply {
 }
 impl DeviceModelReply {
     pub fn decode(bytes: &[u8]) -> Result<Self, ModelContractError> {
+        if bytes.is_empty() || bytes.len() > MAX_DEVICE_RESPONSE_BYTES { return Err(ModelContractError::Bounds); }
+        // A bounded raw content stage keeps acknowledged usage when only model
+        // content is malformed. Exact metadata remains independently strict.
+        #[derive(Deserialize)]
+        struct Status { status: String }
+        let status: Status = serde_json::from_slice(bytes).map_err(|_| ModelContractError::Invalid)?;
+        if status.status == "done" {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Done { schema_version:u32, status:String, response:Box<serde_json::value::RawValue> }
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct RawResponse {
+                operation_id:Uuid, binding_id:String, usage:DeviceModelUsage,
+                #[serde(default)]
+                output:Option<Box<serde_json::value::RawValue>>,
+            }
+            let done:Done=serde_json::from_slice(bytes).map_err(|_| ModelContractError::Invalid)?;
+            if done.schema_version != DEVICE_MODEL_VERSION || done.status != "done" { return Err(ModelContractError::Unsupported); }
+            let raw:RawResponse=serde_json::from_str(done.response.get()).map_err(|_| ModelContractError::Invalid)?;
+            if raw.operation_id.is_nil() || !valid_binding(&raw.binding_id) { return Err(ModelContractError::Invalid); }
+            raw.usage.validate()?;
+            let output=raw.output.and_then(|output| strict_json(output.get().as_bytes(),MAX_DEVICE_RESPONSE_BYTES).ok())
+                .and_then(|output| serde_json::from_value(output).ok())
+                .unwrap_or(DeviceModelOutput::Failure { failure:DeviceModelFailure::InvalidOutput });
+            return Ok(Self::Done { schema_version:done.schema_version,response:DeviceModelResponse {
+                operation_id:raw.operation_id,binding_id:raw.binding_id,usage:raw.usage,output,
+            } });
+        }
         let value = strict_json(bytes, MAX_DEVICE_RESPONSE_BYTES)?;
         let reply: Self = serde_json::from_value(value).map_err(|_| ModelContractError::Invalid)?;
         let version = match &reply {

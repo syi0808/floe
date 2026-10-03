@@ -16,10 +16,12 @@ final class HealthTransformHost: @unchecked Sendable {
 
     private struct Job {
         let requestID: UUID
+        let incarnation: UUID
         let input: HealthTransformInput
         let binding: HealthTransformBinding
         let deadlineUptimeNanoseconds: UInt64
-        var task: Task<Void, Never>?
+        var task: Task<Result<HealthTransformOutput, HealthTransformFailure>, Never>?
+        var workerObserver: Task<Void, Never>?
         var timer: Task<Void, Never>?
         var reply: HealthTransformReply?
         var released = false
@@ -144,8 +146,10 @@ final class HealthTransformHost: @unchecked Sendable {
         }
 
         let deadline = adding(now, Self.operationDeadlineNanoseconds)
+        let incarnation = UUID()
         job = Job(
             requestID: requestID,
+            incarnation: incarnation,
             input: input,
             binding: binding,
             deadlineUptimeNanoseconds: deadline
@@ -153,7 +157,7 @@ final class HealthTransformHost: @unchecked Sendable {
         operationIdentities[requestID] = .inFlight
         lock.unlock()
 
-        return launch(requestID: requestID, input: input, deadline: deadline)
+        return launch(requestID: requestID, incarnation: incarnation, input: input, deadline: deadline)
     }
 
     /// Returns a terminal/replay response when admission cannot proceed.
@@ -207,11 +211,14 @@ final class HealthTransformHost: @unchecked Sendable {
 
     private func launch(
         requestID: UUID,
+        incarnation: UUID,
         input: HealthTransformInput,
         deadline: UInt64
     ) -> HealthTransformReply {
         lock.lock()
-        guard var current = job, current.requestID == requestID else {
+        guard var current = job, current.requestID == requestID,
+              current.incarnation == incarnation, current.deadlineUptimeNanoseconds == deadline,
+              current.task == nil, !current.workerFinished else {
             lock.unlock()
             return failure(.conflict, requestID)
         }
@@ -222,15 +229,13 @@ final class HealthTransformHost: @unchecked Sendable {
 
         // The task first reacquires the lock in beginWorker. Since this lock is
         // held through installation, no model work can begin under the lock.
-        // Even an already-cancelled reservation gets this short finishing task;
-        // its physical return is what starts identity retention.
-        current.task = Task.detached { [self, input] in
-            guard !Task.isCancelled, beginWorker(requestID) else {
-                finish(requestID, .failure(.cancelled))
-                return
+        // Even an already-cancelled reservation gets this short worker. Only
+        // the observer awaiting its physical return may complete the job.
+        let worker: Task<Result<HealthTransformOutput, HealthTransformFailure>, Never> = Task.detached { [self, input] in
+            guard !Task.isCancelled, beginWorker(requestID, incarnation: incarnation, deadline: deadline) else {
+                return .failure(.cancelled)
             }
 
-            let result: Result<HealthTransformOutput, HealthTransformFailure>
             do {
                 try Task.checkCancellation()
                 let transform = try HealthTransform(
@@ -240,11 +245,15 @@ final class HealthTransformHost: @unchecked Sendable {
                 )
                 let output = try await transform.transform(input)
                 try Task.checkCancellation()
-                result = .success(output)
+                return .success(output)
             } catch {
-                result = .failure(mapError(error))
+                return .failure(mapError(error))
             }
-            finish(requestID, result)
+        }
+        current.task = worker
+        current.workerObserver = Task.detached { [self, worker] in
+            let result = await worker.value
+            finish(requestID, incarnation: incarnation, deadline: deadline, result)
         }
         let timerStart = DispatchTime.now().uptimeNanoseconds
         let remaining = deadline > timerStart ? deadline - timerStart : 0
@@ -252,7 +261,7 @@ final class HealthTransformHost: @unchecked Sendable {
             current.timer = Task.detached { [self] in
                 do {
                     try await Task.sleep(nanoseconds: remaining)
-                    expire(requestID, deadline: deadline)
+                    expire(requestID, incarnation: incarnation, deadline: deadline)
                 } catch {}
             }
         }
@@ -263,10 +272,11 @@ final class HealthTransformHost: @unchecked Sendable {
     }
 
     /// Prevents a released/cancelled reservation from starting model work.
-    private func beginWorker(_ requestID: UUID) -> Bool {
+    private func beginWorker(_ requestID: UUID, incarnation: UUID, deadline: UInt64) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         guard let current = job, current.requestID == requestID,
+              current.incarnation == incarnation, current.deadlineUptimeNanoseconds == deadline,
               !current.released, current.reply == nil else {
             return false
         }
@@ -315,12 +325,13 @@ final class HealthTransformHost: @unchecked Sendable {
         }
     }
 
-    private func expire(_ requestID: UUID, deadline: UInt64) {
+    private func expire(_ requestID: UUID, incarnation: UUID, deadline: UInt64) {
         lock.lock()
         defer { lock.unlock() }
         // A cancelled timer may already have left sleep. It cannot affect a
         // later reuse of this UUID after the original identity horizon ends.
         guard var current = job, current.requestID == requestID,
+              current.incarnation == incarnation,
               current.deadlineUptimeNanoseconds == deadline, current.reply == nil else { return }
         current.reply = failure(.deadlineExceeded, requestID)
         current.task?.cancel()
@@ -330,14 +341,19 @@ final class HealthTransformHost: @unchecked Sendable {
 
     private func finish(
         _ requestID: UUID,
+        incarnation: UUID,
+        deadline: UInt64,
         _ result: Result<HealthTransformOutput, HealthTransformFailure>
     ) {
         lock.lock()
         defer { lock.unlock() }
-        guard var current = job, current.requestID == requestID, !current.workerFinished else { return }
+        guard var current = job, current.requestID == requestID,
+              current.incarnation == incarnation, current.deadlineUptimeNanoseconds == deadline,
+              !current.workerFinished else { return }
 
         current.timer?.cancel()
         current.task = nil
+        current.workerObserver = nil
         current.timer = nil
         current.workerFinished = true
         let completedAtUptime = DispatchTime.now().uptimeNanoseconds
