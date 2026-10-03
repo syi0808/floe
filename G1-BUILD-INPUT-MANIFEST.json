@@ -5900,6 +5900,6 @@
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "3303b16044ea91cab1c11b9a81b45063be4aad8e",
+  "current_correction_source_commit": "29b4c992cb4e0f5e4c9a4ca684bd033f65ce4993",
   "current_status_document": "docs/plans/t0-execution-status.json"
 }
