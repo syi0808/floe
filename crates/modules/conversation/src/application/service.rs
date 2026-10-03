@@ -282,7 +282,7 @@ where
             now_unix_ms: chrono::Utc::now().timestamp_millis(),
         };
         let prepared = match scope
-            .run(self.coordinator.prepare_run(actor, &request))
+            .run(self.coordinator.prepare_run(actor, &request, scope))
             .await?
         {
             RunAdmission::Existing(receipt) => return Ok(CommandReceipt::from(&receipt)),
@@ -353,7 +353,7 @@ where
                     environment.identity(),
                 )?;
                 request.delegation_context =
-                    Some(floe_agent_contract::DelegationExecutionContext {
+                    Some(floe_agent_contract::DelegationContextInput {
                         session_id: request.session_id,
                         device_id: actor.device_id.clone(),
                         agent_context: context,
@@ -887,6 +887,7 @@ where
                 .map(CommandReceipt::from);
             let interaction = super::interaction_projection::project_interaction(
                 self.inner.dependencies.connections.as_ref(),
+                self.inner.dependencies.experts_owner.as_ref(),
                 actor,
                 &interaction,
                 chrono::Utc::now().timestamp_millis(),
@@ -930,15 +931,19 @@ where
                         }),
                 )
                 .await?;
-            let interaction = recover_source_interaction(
-                self.inner.dependencies.repository.as_ref(),
-                self.inner.dependencies.connections.as_ref(),
-                actor,
-                request.interaction_id,
-                chrono::Utc::now().timestamp_millis(),
-                scope,
-            )
-            .await?;
+            let stored = self.inner.interaction(actor, request.interaction_id, Some(request.session_id), scope)
+                .await?.ok_or(AgentFailure::NotFound)?;
+            let interaction = if matches!(stored.target, ReviewedTarget::ExpertBinding(_)) {
+                super::interaction_resolution::recover_binding_interaction(
+                    self.inner.dependencies.repository.as_ref(),
+                    self.inner.dependencies.experts_owner.as_ref(), actor, &request,
+                    chrono::Utc::now().timestamp_millis(), scope,
+                ).await?
+            } else {
+                recover_source_interaction(self.inner.dependencies.repository.as_ref(),
+                    self.inner.dependencies.connections.as_ref(), actor, request.interaction_id,
+                    chrono::Utc::now().timestamp_millis(), scope).await?
+            };
             drop(admission);
             self.inner.resume_pending(actor, scope).await?;
             let linked = self
@@ -948,6 +953,7 @@ where
                 .map(CommandReceipt::from);
             let interaction = super::interaction_projection::project_interaction(
                 self.inner.dependencies.connections.as_ref(),
+                self.inner.dependencies.experts_owner.as_ref(),
                 actor,
                 &interaction,
                 chrono::Utc::now().timestamp_millis(),

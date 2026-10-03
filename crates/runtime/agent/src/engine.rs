@@ -1302,7 +1302,7 @@ fn verify_receipt(
     }
     receipt.validate(maximum_bytes)?;
     if serde_json::to_vec(receipt)
-        .map(|encoded| encoded.len() > maximum_bytes)
+        .map(|encoded| encoded.len() > floe_agent_contract::MAX_TASK_RECEIPT_BYTES)
         .unwrap_or(true)
     {
         return Err(AgentFailure::InvalidModelOutput);

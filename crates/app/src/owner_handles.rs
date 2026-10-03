@@ -17,18 +17,24 @@ pub struct ReadyOwners {
     available: AtomicBool,
     pub connections: Arc<floe_connections::ConnectionsService>,
     pub conversation: Arc<dyn floe_conversation::ConversationOwner>,
+    pub experts: Arc<dyn floe_experts::ExpertsOwner>,
+    pub knowledge: Arc<dyn floe_knowledge::KnowledgeOwner>,
+    pub actions: Arc<floe_actions::ActionsService>,
 }
 impl ReadyOwners {
     pub(crate) fn new(
         actor: OwnerActor,
         connections: Arc<floe_connections::ConnectionsService>,
         conversation: Arc<dyn floe_conversation::ConversationOwner>,
+        experts: Arc<dyn floe_experts::ExpertsOwner>,
+        knowledge: Arc<dyn floe_knowledge::KnowledgeOwner>,
+        actions: Arc<floe_actions::ActionsService>,
     ) -> Self {
         Self {
             actor,
             available: AtomicBool::new(true),
             connections,
-            conversation,
+            conversation, experts, knowledge, actions,
         }
     }
     pub(crate) fn check(&self, actor: &OwnerActor) -> Result<(), AgentFailure> {
@@ -44,6 +50,9 @@ impl ReadyOwners {
     pub(crate) fn close_admission(&self) {
         self.available.store(false, Ordering::Release);
         self.conversation.close_admission();
+        self.experts.close_admission();
+        self.knowledge.close_admission();
+        self.actions.shutdown();
         self.connections.shutdown();
     }
 }

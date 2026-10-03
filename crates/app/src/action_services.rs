@@ -1,125 +1,143 @@
-use crate::local_operations::{LocalOperationIntent, LocalOperationOwner};
-use crate::{
-    AgentFailure, AppComposition, CalendarActionOperation, CalendarActionsResult,
-    CalendarProposalInspection, CallerContext, ServiceError, VaultState,
-};
+//! Mechanical host forwarding to the admitted Actions owner.
+use std::time::Duration;
+
+use floe_execution::Cancellation;
 use uuid::Uuid;
 
+use crate::{AgentFailure, AppComposition, CallerContext};
+pub use floe_actions::{
+    ActionAuthorityMode, ActionDecisionKind, ActionDestinationChoice, ActionIntent,
+    ActionReviewRef, ActionSnapshot, ActionsAuthority, ActionsPage,
+};
+
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ActionInspection {
-    Capabilities,
+pub enum ActionsCommand {
+    Submit {
+        intent: ActionIntent,
+    },
+    Decide {
+        action_ref: Uuid,
+        review_ref: ActionReviewRef,
+        decision: ActionDecisionKind,
+        expected_revision: u64,
+    },
+    Reconcile {
+        action_ref: Uuid,
+        expected_revision: u64,
+    },
+    SetAuthority {
+        mode: ActionAuthorityMode,
+        expected_revision: u64,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ActionsQuery {
+    Destinations,
     Authority,
-    List,
-    Get {
-        action_id: Uuid,
+    Inspect {
+        action_ref: Uuid,
     },
-    Proposal {
-        session_id: Uuid,
-        invocation_id: Uuid,
+    List {
+        cursor: Option<Uuid>,
+        limit: u16,
     },
 }
 
-#[derive(Clone, Debug)]
-pub struct ActionOperationResult {
-    pub operation_id: Uuid,
-    pub stage: String,
-    pub done: bool,
-    pub state: Option<VaultState>,
-    pub calendar_actions: Option<CalendarActionsResult>,
-    pub proposal: Option<CalendarProposalInspection>,
-    pub failure: Option<AgentFailure>,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ActionsCommandResult {
+    Action(ActionSnapshot),
+    Authority(ActionsAuthority),
 }
 
-pub trait ActionCommands {
-    fn action_command(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-        command: CalendarActionOperation,
-    ) -> Result<ActionOperationResult, ServiceError>;
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ActionsQueryResult {
+    Destinations(Vec<ActionDestinationChoice>),
+    Authority(ActionsAuthority),
+    Action(ActionSnapshot),
+    Page(ActionsPage),
 }
 
-pub trait ActionQueries {
-    fn inspect_actions(
+pub trait ActionsCommands {
+    fn actions_command(
         &self,
         caller: &CallerContext,
-        operation_id: Uuid,
-        inspection: ActionInspection,
-    ) -> Result<ActionOperationResult, ServiceError>;
-    fn read_action_result(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-        release: bool,
-    ) -> Result<ActionOperationResult, ServiceError>;
+        command_id: Uuid,
+        command: ActionsCommand,
+    ) -> Result<ActionsCommandResult, AgentFailure>;
 }
 
-impl ActionCommands for AppComposition {
-    fn action_command(
+pub trait ActionsQueries {
+    fn actions_query(
         &self,
         caller: &CallerContext,
-        operation_id: Uuid,
-        command: CalendarActionOperation,
-    ) -> Result<ActionOperationResult, ServiceError> {
-        self.action_operation(
-            caller,
-            operation_id,
-            Some(LocalOperationIntent::ActionCommand(command)),
-            false,
-        )
+        request_id: Uuid,
+        query: ActionsQuery,
+    ) -> Result<ActionsQueryResult, AgentFailure>;
+}
+
+impl ActionsCommands for AppComposition {
+    fn actions_command(
+        &self,
+        caller: &CallerContext,
+        command_id: Uuid,
+        command: ActionsCommand,
+    ) -> Result<ActionsCommandResult, AgentFailure> {
+        let owners = self.ready_owners(caller)?;
+        let actor = caller.owner_actor();
+        let scope = crate::host_scope(command_id, Cancellation::new(), Duration::from_secs(35));
+        self.execute_owner(async {
+            match command {
+                ActionsCommand::Submit { intent } => owners.actions
+                    .submit(&actor, command_id, intent, &scope)
+                    .await
+                    .map(ActionsCommandResult::Action),
+                ActionsCommand::Decide { action_ref, review_ref, decision, expected_revision } => owners.actions
+                    .decide(&actor, command_id, action_ref, review_ref, decision, expected_revision, &scope)
+                    .await
+                    .map(ActionsCommandResult::Action),
+                ActionsCommand::Reconcile { action_ref, expected_revision } => owners.actions
+                    .reconcile(&actor, command_id, action_ref, expected_revision, &scope)
+                    .await
+                    .map(ActionsCommandResult::Action),
+                ActionsCommand::SetAuthority { mode, expected_revision } => owners.actions
+                    .set_calendar_create_authority(&actor, command_id, mode, expected_revision, &scope)
+                    .await
+                    .map(ActionsCommandResult::Authority),
+            }
+        })
     }
 }
 
-impl ActionQueries for AppComposition {
-    fn inspect_actions(
+impl ActionsQueries for AppComposition {
+    fn actions_query(
         &self,
         caller: &CallerContext,
-        operation_id: Uuid,
-        inspection: ActionInspection,
-    ) -> Result<ActionOperationResult, ServiceError> {
-        self.action_operation(
-            caller,
-            operation_id,
-            Some(LocalOperationIntent::ActionInspection(inspection)),
-            false,
-        )
-    }
-    fn read_action_result(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-        release: bool,
-    ) -> Result<ActionOperationResult, ServiceError> {
-        self.action_operation(caller, operation_id, None, release)
-    }
-}
-
-impl AppComposition {
-    fn action_operation(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-        intent: Option<LocalOperationIntent>,
-        release: bool,
-    ) -> Result<ActionOperationResult, ServiceError> {
-        let result = self
-            .agent_vault
-            .local_request(
-                caller,
-                operation_id,
-                intent,
-                LocalOperationOwner::Actions,
-                release,
-            )
-            .map_err(crate::composition::service_failure)?;
-        Ok(ActionOperationResult {
-            operation_id: result.request_id,
-            stage: result.stage,
-            done: result.done,
-            state: result.state,
-            calendar_actions: result.calendar_actions,
-            proposal: result.proposal,
-            failure: result.failure,
+        request_id: Uuid,
+        query: ActionsQuery,
+    ) -> Result<ActionsQueryResult, AgentFailure> {
+        let owners = self.ready_owners(caller)?;
+        let actor = caller.owner_actor();
+        let scope = crate::host_scope(request_id, Cancellation::new(), Duration::from_secs(35));
+        self.execute_owner(async {
+            match query {
+                ActionsQuery::Destinations => owners.actions
+                    .destinations(&actor, &scope)
+                    .await
+                    .map(ActionsQueryResult::Destinations),
+                ActionsQuery::Authority => owners.actions
+                    .inspect_authority(&actor, &scope)
+                    .await
+                    .map(ActionsQueryResult::Authority),
+                ActionsQuery::Inspect { action_ref } => owners.actions
+                    .inspect(&actor, action_ref, &scope)
+                    .await
+                    .map(ActionsQueryResult::Action),
+                ActionsQuery::List { cursor, limit } => owners.actions
+                    .list(&actor, cursor, limit, &scope)
+                    .await
+                    .map(ActionsQueryResult::Page),
+            }
         })
     }
 }

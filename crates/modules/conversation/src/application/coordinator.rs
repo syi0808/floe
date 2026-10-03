@@ -59,6 +59,7 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
         &self,
         actor: &OwnerActor,
         request: &TurnRequest,
+        scope: &ExecutionScope,
     ) -> Result<RunAdmission, AgentFailure> {
         actor.validate()?;
         request.validate()?;
@@ -83,6 +84,7 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
                     self.repository.as_ref(),
                     reference.run_id,
                     &request.principal,
+                    self.experts.as_ref(), actor, scope,
                 )
                 .await?;
                 if snapshot.reference != *reference
@@ -676,6 +678,9 @@ pub async fn continuation<Repository: ConversationRepository>(
     repository: &Repository,
     run_id: RunId,
     principal: &str,
+    experts: &dyn floe_experts::ExpertsOwner,
+    actor: &OwnerActor,
+    scope: &ExecutionScope,
 ) -> Result<ContinuationSnapshot, AgentFailure> {
     if !run_id.is_valid()
         || principal.trim() != principal
@@ -730,15 +735,49 @@ pub async fn continuation<Repository: ConversationRepository>(
     let mut seen_exchanges = std::collections::HashSet::new();
     let mut replay_invocations = std::collections::HashSet::new();
     let mut replay_calls = std::collections::HashSet::new();
+    let mut original_delegations = std::collections::BTreeMap::new();
     for receipt in chain.iter() {
-        let entries = repository.load_journal(receipt.run_id).await?;
+        let mut entries = repository.load_journal(receipt.run_id).await?;
+        crate::validate_run_journal(receipt, &entries)?;
+        if receipt.principal != actor.person_id.to_string() || receipt.device_id != actor.device_id {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let mut pending = std::collections::BTreeMap::new();
+        for entry in &entries {
+            match &entry.event {
+                floe_agent_contract::JournalEvent::DelegationIntent { request } => {
+                    original_delegations.entry(request.task_id).or_insert_with(|| request.clone());
+                    pending.insert(request.task_id, request.clone());
+                }
+                floe_agent_contract::JournalEvent::DelegationResult { receipt } => {
+                    pending.remove(&receipt.task_id);
+                }
+                _ => {}
+            }
+        }
+        for request in pending.values() {
+            let original = original_delegations.get(&request.task_id).ok_or(AgentFailure::StorageUnavailable)?;
+            let mut normalized = request.clone();
+            normalized.parent_run_id = original.parent_run_id;
+            if normalized != *original { return Err(AgentFailure::Conflict); }
+            let mut recovered = experts.recover_delegation(actor, original, scope).await?;
+            if request.parent_run_id != original.parent_run_id {
+                recovered.replay = Some(replay.iter().find(|entry: &&floe_agent_contract::ReplayReceipt|
+                    entry.task_id == Some(request.task_id)).cloned().ok_or(AgentFailure::Conflict)?);
+            }
+            scope.run(repository.reconcile_delegation(receipt.run_id, recovered)).await?;
+        }
+        if !pending.is_empty() { entries = repository.load_journal(receipt.run_id).await?; }
         total_entries = total_entries
             .checked_add(entries.len())
             .ok_or(AgentFailure::StorageUnavailable)?;
         if total_entries > 512 {
             return Err(AgentFailure::BudgetExceeded);
         }
-        let projected = project_journal(receipt, &entries)?;
+        let projected = floe_agent_runtime::project_execution_journal(
+            &super::recovery::journal_binding(receipt, &entries), &entries,
+            floe_agent_runtime::JournalProjectionMode::ContinueSettledDelegation,
+        )?;
         // A resumed run re-journals the steps it replays, so the same logical
         // exchange can appear in several runs: keep the first, skip repeats.
         // Duplicates inside one journal are still rejected by projection.
@@ -974,4 +1013,64 @@ fn report_coverage(
         }
     }
     Ok(coverage)
+}
+
+/// Authenticate reuse of one immutable Task across a bounded continuation chain.
+/// Storage loads all rows and journals from one transaction before calling this.
+pub fn validate_task_delegation_lineage(
+    chain: &[(RunReceipt, Vec<crate::JournalEntry>)],
+    task: &floe_experts::TaskRecord,
+) -> Result<(), AgentFailure> {
+    use floe_agent_contract::{JournalEvent, delegation_request_digest};
+    if chain.is_empty() || chain.len() > 4 { return Err(AgentFailure::Conflict); }
+    task.validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
+    let first = &chain[0].0;
+    if first.continuation_of.is_some() { return Err(AgentFailure::Conflict); }
+    let mut seen = std::collections::HashSet::new();
+    let mut carried = None;
+    let mut original = None;
+    let mut current_intent = false;
+    for (index, (run, entries)) in chain.iter().enumerate() {
+        run.validate()?;
+        if !seen.insert(run.run_id) || run.principal != task.snapshot.principal
+            || run.device_id != task.device_id || run.session_id != first.session_id
+            || run.user_message_id != first.user_message_id { return Err(AgentFailure::Conflict); }
+        if index > 0 {
+            let parent = &chain[index - 1].0;
+            let reference = parent.continuation().ok_or(AgentFailure::Conflict)?;
+            if run.continuation_of != Some(parent.run_id)
+                || run.continuation_executor_generation != Some(parent.executor_generation)
+                || run.continuation_level != reference.level { return Err(AgentFailure::Conflict); }
+        }
+        let mode = if index + 1 < chain.len() {
+            floe_agent_runtime::JournalProjectionMode::ContinueSettledDelegation
+        } else { floe_agent_runtime::JournalProjectionMode::DurablePrefix };
+        let projected = floe_agent_runtime::project_execution_journal(
+            &super::recovery::journal_binding(run, entries), entries, mode)?;
+        let live = projected.pending_batch.clone().zip(projected.cursor.clone());
+        carried = reconcile_resume_lineage(carried, &projected.lineage, live)?;
+        current_intent = false;
+        for entry in entries {
+            if let JournalEvent::DelegationIntent { request } = &entry.event {
+                if request.task_id != task.snapshot.task_id { continue; }
+                let mut normalized = request.clone();
+                normalized.parent_run_id = task.snapshot.parent_run_id;
+                if request.principal != task.snapshot.principal
+                    || request.selected_agent_id != task.snapshot.agent_id
+                    || request.selected_definition_revision != task.snapshot.definition_revision
+                    || request.execution_context.session_id != run.session_id
+                    || request.execution_context.device_id != task.device_id
+                    || request.invocation_key != task.invocation_key
+                    || delegation_request_digest(&normalized) != task.request_digest {
+                    return Err(AgentFailure::Conflict);
+                }
+                if task.snapshot.parent_run_id == Some(run.run_id.as_uuid()) {
+                    if original.replace(normalized).is_some() { return Err(AgentFailure::Conflict); }
+                } else if original.as_ref() != Some(&normalized) { return Err(AgentFailure::Conflict); }
+                current_intent = true;
+            }
+        }
+    }
+    if original.is_none() || !current_intent { return Err(AgentFailure::Conflict); }
+    Ok(())
 }

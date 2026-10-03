@@ -43,16 +43,67 @@ impl EngineExpertEndpoint {
 
 struct CapturedRead { observation: ExpertToolObservation }
 #[derive(Default)]
-struct TaskEvidence { reads: Mutex<Vec<CapturedRead>> }
+struct TaskEvidence {
+    reads: Mutex<Vec<CapturedRead>>,
+    projection: Mutex<Option<floe_agent_contract::AuthorizedModelProjection>>,
+    acknowledged_coverage: Mutex<Option<DependencyCoverage>>,
+}
 impl TaskEvidence {
     fn observations(&self) -> Result<Vec<ExpertToolObservation>, AgentFailure> {
         Ok(self.reads.lock().map_err(|_| AgentFailure::StorageUnavailable)?
             .iter().map(|read| read.observation.clone()).collect())
     }
     fn coverage(&self) -> Result<DependencyCoverage, AgentFailure> {
-        self.observations()?.iter().try_fold(DependencyCoverage::Independent, |coverage, read|
-            coverage.merge(&read.coverage()).map_err(|_| AgentFailure::PolicyDenied))
+        Ok(self.acknowledged_coverage.lock().map_err(|_| AgentFailure::StorageUnavailable)?
+            .clone().unwrap_or(DependencyCoverage::Independent))
     }
+    fn acknowledge(&self, event: &floe_agent_contract::JournalEvent) -> Result<(), AgentFailure> {
+        let observed = match event {
+            floe_agent_contract::JournalEvent::ValidatedBatch { batch } => &batch.projection_coverage,
+            floe_agent_contract::JournalEvent::ToolResult { result } => &result.coverage,
+            _ => return Ok(()),
+        };
+        let mut coverage = self.acknowledged_coverage.lock().map_err(|_| AgentFailure::StorageUnavailable)?;
+        *coverage = Some(coverage.as_ref().unwrap_or(&DependencyCoverage::Independent).merge(observed)?);
+        Ok(())
+    }
+}
+
+// This forwards to the sole durable Task journal and projects only acknowledged
+// coverage. Captured-but-unacknowledged reads cannot become terminal evidence.
+struct ExpertJournal<'a> {
+    inner: &'a dyn floe_agent_contract::ExecutionJournal,
+    evidence: &'a TaskEvidence,
+}
+impl floe_agent_contract::ExecutionJournal for ExpertJournal<'_> {
+    fn record_intent<'a>(&'a self, event: floe_agent_contract::JournalEvent)
+        -> BoxFuture<'a, Result<floe_agent_contract::JournalAck, AgentFailure>>
+    { Box::pin(async move {
+        let ack = self.inner.record_intent(event.clone()).await?;
+        self.evidence.acknowledge(&event)?;
+        Ok(ack)
+    }) }
+    fn record_result<'a>(&'a self, event: floe_agent_contract::JournalEvent)
+        -> BoxFuture<'a, Result<floe_agent_contract::JournalAck, AgentFailure>>
+    { Box::pin(async move {
+        let ack = self.inner.record_result(event.clone()).await?;
+        self.evidence.acknowledge(&event)?;
+        Ok(ack)
+    }) }
+    fn record_output<'a>(&'a self, event: floe_agent_contract::JournalEvent)
+        -> BoxFuture<'a, Result<floe_agent_contract::JournalAck, AgentFailure>>
+    { Box::pin(async move {
+        let ack = self.inner.record_output(event.clone()).await?;
+        self.evidence.acknowledge(&event)?;
+        Ok(ack)
+    }) }
+    fn checkpoint<'a>(&'a self, event: floe_agent_contract::JournalEvent)
+        -> BoxFuture<'a, Result<floe_agent_contract::JournalAck, AgentFailure>>
+    { Box::pin(async move {
+        let ack = self.inner.checkpoint(event.clone()).await?;
+        self.evidence.acknowledge(&event)?;
+        Ok(ack)
+    }) }
 }
 
 struct ExpertTools<'a> {
@@ -136,13 +187,18 @@ impl ModelProjectionPort for ExpertProjection<'_> {
                 || request.plan.consumer != crate::DELEGATED_EXPERT_INFERENCE_CONSUMER
                 || scope.task_id() != Some(self.invocation.request.task_id)
             { return Err(AgentFailure::PolicyDenied); }
-            self.endpoint.projection.project(ExpertProjectionRequest {
+            let outcome = self.endpoint.projection.project(ExpertProjectionRequest {
                 actor: self.endpoint.actor.clone(), execution: self.invocation.execution,
                 request, context: self.invocation.request.execution_context.agent_context.clone(),
                 prompt: self.spec.prompt.clone(), observations: self.evidence.observations()?,
                 package_data_class: self.endpoint.manifest.data_class,
                 inherited_coverage: self.invocation.request.execution_context.projection_coverage.clone(),
-            }, scope).await
+            }, scope).await?;
+            if let ModelProjectionOutcome::Ready(projection) = &outcome {
+                projection.validate()?;
+                *self.evidence.projection.lock().map_err(|_| AgentFailure::StorageUnavailable)? = Some(projection.clone());
+            }
+            Ok(outcome)
         })
     }
 }
@@ -151,6 +207,7 @@ struct ExpertValidator<'a> {
     program: &'a dyn ExpertProgram,
     request: &'a ExpertProgramRequest,
     evidence: &'a TaskEvidence,
+    clock: &'a dyn ExpertClock,
     settlement: Mutex<Option<EndpointSettlement>>,
 }
 impl FinalPayloadValidator for ExpertValidator<'_> {
@@ -158,7 +215,17 @@ impl FinalPayloadValidator for ExpertValidator<'_> {
         -> Result<ValidatedFinalPayload, AgentFailure>
     {
         if role != self.request.admission.package.id { return Err(AgentFailure::InvalidInput); }
-        let output = self.program.finalize(self.request, &self.evidence.observations()?, text, artifacts)?;
+        let projection = self.evidence.projection.lock().map_err(|_| AgentFailure::StorageUnavailable)?
+            .clone().ok_or(AgentFailure::PolicyDenied)?;
+        let data = projection.envelope.contextual_data;
+        let mut judgment = self.request.clone();
+        judgment.now_unix_ms = self.clock.now_unix_ms();
+        judgment.context.projection_version = data.projection_version;
+        judgment.context.memories = data.memories;
+        judgment.context.optional_context_issues = data.optional_context_issues;
+        judgment.context.evidence = data.evidence;
+        judgment.coverage = projection.coverage;
+        let output = self.program.finalize(&judgment, &self.evidence.observations()?, text, artifacts)?;
         if let Some(settlement) = &output.settlement { settlement.validate()?; }
         *self.settlement.lock().map_err(|_| AgentFailure::StorageUnavailable)? = output.settlement;
         Ok(output.payload)
@@ -194,10 +261,15 @@ impl AgentEndpoint for EngineExpertEndpoint {
             if resolved.manifest != self.manifest
                 || crate::ExpertExecutionSelection::from_binding(&resolved.manifest, &resolved.assignment.binding)? != self.selection
             { return Err(AgentFailure::Conflict); }
+            let started_at_unix_ms = self.clock.now_unix_ms();
             let program_request = ExpertProgramRequest {
                 actor: self.actor.clone(), request: request.clone(), admission: self.admission.clone(),
                 selection: self.selection.clone(), private_state: resolved.assignment.private_state,
-                now_unix_ms: self.clock.now_unix_ms(),
+                now_unix_ms: started_at_unix_ms,
+                context: request.execution_context.agent_context.clone(),
+                coverage: request.execution_context.projection_coverage.clone(),
+                started_at_unix_ms, state_schema_version: self.manifest.state_schema_version,
+                data_class: self.manifest.data_class,
             };
             let spec = self.program.specification(&program_request)?;
             spec.prompt.validate()?;
@@ -219,7 +291,7 @@ impl AgentEndpoint for EngineExpertEndpoint {
             if tools.len() != self.selection.requirements.len() { return Err(AgentFailure::CapabilityDenied); }
             let evidence = TaskEvidence::default();
             let validator = ExpertValidator { program: self.program.as_ref(), request: &program_request,
-                evidence: &evidence, settlement: Mutex::new(None) };
+                evidence: &evidence, clock: self.clock.as_ref(), settlement: Mutex::new(None) };
             let outcome = Engine::default().drive(EngineRequest {
                 execution_id: invocation.execution.execution_id,
                 principal: request.principal.clone(), device_id: self.actor.device_id.clone(),
@@ -237,7 +309,8 @@ impl AgentEndpoint for EngineExpertEndpoint {
                 projection: &ExpertProjection { endpoint: self, invocation: &invocation, evidence: &evidence, spec: &spec },
                 model: self.model.as_ref(),
                 tools: &ExpertTools { endpoint: self, invocation: &invocation, evidence: &evidence, spec: &spec },
-                delegation: &NoExpertDelegation, journal: invocation.journal.as_ref(), validator: &validator,
+                delegation: &NoExpertDelegation,
+                journal: &ExpertJournal { inner: invocation.journal.as_ref(), evidence: &evidence }, validator: &validator,
             }).await?;
             match outcome {
                 EngineOutcome::Completed(report) => {

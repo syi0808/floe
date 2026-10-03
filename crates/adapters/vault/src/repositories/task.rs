@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
-use crate::{
-    EncryptedAgentVault, VaultKeyProvider, VaultTaskActivation, VaultTaskAdmission, VaultTaskRecord,
+use crate::{EncryptedAgentVault, VaultKeyProvider};
+use floe_agent_contract::{
+    AgentFailure, BoxFuture, EndpointSettlement, ExecutionJournal, JournalAck, JournalEvent,
+    TaskExecutionKey, TaskExecutionReceipt, TaskExecutionReceiptRef, TaskId,
 };
-use floe_agent_contract::{AgentFailure, BoxFuture, EndpointSettlement, TaskId, TaskSnapshot};
-use floe_experts::{ExpertSettlement, ExpertTaskCompletion};
-use floe_experts::{TaskActivation, TaskAdmission, TaskRecord, TaskRepository};
+use floe_experts::{
+    ExpertSettlement, TaskActivation, TaskAdmission, TaskExecutionCommit, TaskRecord,
+    TaskRepository,
+};
 
 pub struct VaultTaskRepository<Keys> {
     vault: Arc<EncryptedAgentVault<Keys>>,
@@ -17,28 +20,16 @@ impl<Keys> VaultTaskRepository<Keys> {
     }
 }
 
-impl<Keys: VaultKeyProvider> TaskRepository for VaultTaskRepository<Keys> {
+impl<Keys: VaultKeyProvider + 'static> TaskRepository for VaultTaskRepository<Keys> {
     fn activate<'a>(&'a self) -> BoxFuture<'a, Result<TaskActivation, AgentFailure>> {
-        Box::pin(async move {
-            let activation = self.vault.activate_task_executor().await?;
-            Ok(from_vault_activation(activation))
-        })
+        Box::pin(async move { self.vault.activate_task_executor().await })
     }
 
     fn admit<'a>(
         &'a self,
         proposed: TaskRecord,
     ) -> BoxFuture<'a, Result<TaskAdmission, AgentFailure>> {
-        Box::pin(async move {
-            match self.vault.admit_task(to_vault_record(proposed)).await? {
-                VaultTaskAdmission::Created(record) => {
-                    Ok(TaskAdmission::Created(from_vault_record(record)))
-                }
-                VaultTaskAdmission::Existing(record) => {
-                    Ok(TaskAdmission::Existing(from_vault_record(record)))
-                }
-            }
-        })
+        Box::pin(async move { self.vault.admit_task(proposed).await })
     }
 
     fn compare_and_swap<'a>(
@@ -46,7 +37,7 @@ impl<Keys: VaultKeyProvider> TaskRepository for VaultTaskRepository<Keys> {
         task_id: TaskId,
         expected_aggregate_revision: u64,
         executor_generation: u64,
-        snapshot: TaskSnapshot,
+        snapshot: floe_agent_contract::TaskSnapshot,
     ) -> BoxFuture<'a, Result<TaskRecord, AgentFailure>> {
         Box::pin(async move {
             self.vault
@@ -57,95 +48,100 @@ impl<Keys: VaultKeyProvider> TaskRepository for VaultTaskRepository<Keys> {
                     snapshot,
                 )
                 .await
-                .map(from_vault_record)
         })
+    }
+
+    fn journal(
+        &self,
+        execution: TaskExecutionKey,
+    ) -> Result<Arc<dyn ExecutionJournal>, AgentFailure> {
+        execution.validate()?;
+        Ok(Arc::new(VaultTaskExecutionJournal {
+            vault: self.vault.clone(),
+            execution,
+        }))
+    }
+
+    fn load_journal<'a>(
+        &'a self,
+        execution: TaskExecutionKey,
+    ) -> BoxFuture<'a, Result<Vec<floe_agent_contract::JournalEntry>, AgentFailure>> {
+        Box::pin(async move { self.vault.load_task_journal(execution).await })
+    }
+
+    fn read_execution_receipt<'a>(
+        &'a self,
+        reference: TaskExecutionReceiptRef,
+    ) -> BoxFuture<'a, Result<TaskExecutionReceipt, AgentFailure>> {
+        Box::pin(async move { self.vault.read_task_execution_receipt(reference).await })
     }
 
     fn validate_settlement(&self, settlement: &EndpointSettlement) -> Result<(), AgentFailure> {
         ExpertSettlement::from_endpoint_settlement(settlement, settlement.owner()).map(|_| ())
     }
 
-    fn settle<'a>(
+    fn settle_execution<'a>(
         &'a self,
-        task_id: TaskId,
-        expected_aggregate_revision: u64,
-        executor_generation: u64,
-        snapshot: TaskSnapshot,
-        settlement: Option<EndpointSettlement>,
-    ) -> BoxFuture<'a, Result<TaskRecord, AgentFailure>> {
-        Box::pin(async move {
-            let Some(settlement) = settlement else {
-                return self
-                    .compare_and_swap(
-                        task_id,
-                        expected_aggregate_revision,
-                        executor_generation,
-                        snapshot,
-                    )
-                    .await;
-            };
-            let settlement =
-                ExpertSettlement::from_endpoint_settlement(&settlement, &snapshot.agent_id)?;
-            self.vault
-                .settle_expert_task_checked(
-                    ExpertTaskCompletion {
-                        settlement,
-                        task_id,
-                        expected_task_revision: expected_aggregate_revision,
-                        executor_generation,
-                        task_snapshot: snapshot,
-                    },
-                    || Ok(()),
-                )
-                .await
-                .map(from_vault_record)
-        })
+        commit: TaskExecutionCommit,
+    ) -> BoxFuture<'a, Result<TaskExecutionReceipt, AgentFailure>> {
+        Box::pin(async move { self.vault.settle_task_execution(commit).await })
     }
 
     fn get<'a>(
         &'a self,
         task_id: TaskId,
     ) -> BoxFuture<'a, Result<Option<TaskRecord>, AgentFailure>> {
+        Box::pin(async move { self.vault.task(task_id).await })
+    }
+}
+
+struct VaultTaskExecutionJournal<Keys> {
+    vault: Arc<EncryptedAgentVault<Keys>>,
+    execution: TaskExecutionKey,
+}
+
+impl<Keys: VaultKeyProvider + 'static> VaultTaskExecutionJournal<Keys> {
+    fn record<'a>(
+        &'a self,
+        phase: &'static str,
+        event: JournalEvent,
+    ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
         Box::pin(async move {
-            self.vault
-                .task(task_id)
-                .await
-                .map(|record| record.map(from_vault_record))
+            let revision = self
+                .vault
+                .append_task_journal(self.execution, phase, event)
+                .await?;
+            Ok(JournalAck::Accepted { revision })
         })
     }
 }
 
-fn to_vault_record(record: TaskRecord) -> VaultTaskRecord {
-    VaultTaskRecord {
-        snapshot: record.snapshot,
-        admission: record.admission,
-        selection: record.selection,
-        invocation_key: record.invocation_key,
-        request_digest: record.request_digest,
-        aggregate_revision: record.aggregate_revision,
-        executor_generation: record.executor_generation,
+impl<Keys: VaultKeyProvider + 'static> ExecutionJournal for VaultTaskExecutionJournal<Keys> {
+    fn record_intent<'a>(
+        &'a self,
+        event: JournalEvent,
+    ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
+        self.record("intent", event)
     }
-}
 
-fn from_vault_record(record: VaultTaskRecord) -> TaskRecord {
-    TaskRecord {
-        snapshot: record.snapshot,
-        admission: record.admission,
-        selection: record.selection,
-        invocation_key: record.invocation_key,
-        request_digest: record.request_digest,
-        aggregate_revision: record.aggregate_revision,
-        executor_generation: record.executor_generation,
+    fn record_result<'a>(
+        &'a self,
+        event: JournalEvent,
+    ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
+        self.record("result", event)
     }
-}
 
-fn from_vault_activation(activation: VaultTaskActivation) -> TaskActivation {
-    TaskActivation {
-        executor_generation: activation.executor_generation,
-        interrupted: activation
-            .interrupted
-            .into_iter()
-            .map(from_vault_record)
-            .collect(),
+    fn record_output<'a>(
+        &'a self,
+        event: JournalEvent,
+    ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
+        self.record("output", event)
+    }
+
+    fn checkpoint<'a>(
+        &'a self,
+        event: JournalEvent,
+    ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
+        self.record("checkpoint", event)
     }
 }

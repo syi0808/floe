@@ -2,8 +2,7 @@
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 
-use floe_agent_contract::InferencePolicyDecision;
-use floe_agent_contract::{AgentFailure, DataClass};
+use floe_agent_contract::AgentFailure;
 use floe_day::CalendarRange;
 
 /// The explicit user shortcut that asks for a protected focus window today.
@@ -91,21 +90,6 @@ pub fn requested_range(
         return Err(AgentFailure::InvalidInput);
     }
     Ok(range)
-}
-
-/// The Context/source policy this run's model call carries.
-///
-/// This carries Context/source semantics only (data classes, freshness,
-/// bounds): it no longer selects a provider placement and never authorizes
-/// model transfer. Canonical Inference selects the shared prepared model,
-/// and Access fences source processing at dispatch.
-pub fn run_policy(data_class: DataClass) -> InferencePolicyDecision {
-    InferencePolicyDecision {
-        purpose: "everyday_assistance".into(),
-        data_classes: vec![data_class],
-        performance_class: "interactive".into(),
-        projection_version: 1,
-    }
 }
 
 /// The instants one calendar day covers, in the offsets the range declares.

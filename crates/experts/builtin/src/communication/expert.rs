@@ -3,17 +3,25 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_agent_contract::AGENT_VERSION;
-use floe_agent_contract::AgentFailure;
-use floe_agent_contract::ExpertModel;
-use floe_agent_contract::InferencePolicyDecision;
-use floe_context_contract::CommunicationView;
+use floe_agent_contract::prompts::{PromptAssembly, PromptComponentKind};
+use floe_agent_contract::{AGENT_VERSION, AgentFailure, AgentContext};
+use floe_context_contract::{
+    CommunicationView, communication_context_evidence, validate_communication_view,
+    MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS,
+};
+use floe_experts::{
+    ExpertFinalOutput, ExpertProgram, ExpertProgramRequest, ExpertProgramSpec,
+    ExpertToolObservation,
+};
 
 use crate::prompts::communication_expert_prompt;
-use crate::shared::{
-    ExpertJudgment, MAX_MAIL_EXPERT_FINDINGS, MailExpertInvocation, decode_answer, run_mail_model,
-    validate_summary,
-};
+
+const MAIL_REQUIREMENT: &str = "floe.source.mail";
+const FINAL_JUDGMENT_INSTRUCTION: &str = "Before the final judgment, read every declared evidence tool marked as required. Return exactly one JSON object matching this package's output contract.";
+const OUTPUT_CONTRACT: &str = r#"{"type":"object","additionalProperties":false,"properties":{"summary":{"type":"string","minLength":1,"maxLength":2048},"assessments":{"type":"array","maxItems":16,"items":{"type":"object","additionalProperties":false,"properties":{"evidence_handle":{"type":"string","minLength":1,"maxLength":128},"needs_reply":{"type":"boolean"},"rationale":{"type":"string","minLength":1,"maxLength":512},"channel":{"type":"string","const":"email"},"tone":{"type":"string","minLength":1,"maxLength":64},"draft":{"type":["string","null"],"minLength":1,"maxLength":4096}},"required":["evidence_handle","needs_reply","rationale","channel","tone","draft"]}}},"required":["summary","assessments"]}"#;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CommunicationProgram;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -64,62 +72,116 @@ struct CommunicationModelOutput {
     assessments: Vec<CommunicationAssessment>,
 }
 
-pub async fn run_communication_expert<Model: ExpertModel>(
-    model: &Model,
-    policy: &InferencePolicyDecision,
-    invocation: MailExpertInvocation,
-) -> Result<ExpertJudgment<CommunicationExpertResult>, AgentFailure> {
-    let response = match run_mail_model(
-        model,
-        policy,
-        &invocation,
-        communication_expert_prompt(),
-        invocation.context.clone(),
-    )
-    .await?
-    {
-        ExpertJudgment::Decided(response) => response,
-        ExpertJudgment::Blocked(requirement) => {
-            return Ok(ExpertJudgment::Blocked(requirement));
-        }
-    };
-    let mut output: CommunicationModelOutput =
-        decode_answer(&response, invocation.max_output_bytes)?;
-    validate_summary(&output.summary)?;
-    if output.assessments.len() > MAX_MAIL_EXPERT_FINDINGS {
-        return Err(AgentFailure::BudgetExceeded);
+impl ExpertProgram for CommunicationProgram {
+    fn specification(
+        &self,
+        request: &ExpertProgramRequest,
+    ) -> Result<ExpertProgramSpec, AgentFailure> {
+        let prompt = append_required_evidence_instruction(communication_expert_prompt())?;
+        crate::program_support::specification(request, prompt, OUTPUT_CONTRACT)
     }
-    let mut assessment_handles = std::collections::HashSet::new();
-    for assessment in &mut output.assessments {
-        if !evidence_exists(&invocation.view, &assessment.evidence_handle)
-            || assessment.rationale.trim().is_empty()
-            || assessment.rationale.len() > 512
-            || assessment.tone.trim().is_empty()
-            || assessment.tone.len() > 64
-            || assessment.draft.as_ref().is_some_and(|draft| {
-                draft.trim().is_empty() || draft.len() > 4096 || !assessment.needs_reply
-            })
-            || !assessment_handles.insert(assessment.evidence_handle.clone())
-        {
+
+    fn finalize(
+        &self,
+        request: &ExpertProgramRequest,
+        observations: &[ExpertToolObservation],
+        text: &str,
+        artifacts: &[floe_agent_contract::Artifact],
+    ) -> Result<ExpertFinalOutput, AgentFailure> {
+        if !artifacts.is_empty() {
             return Err(AgentFailure::InvalidModelOutput);
         }
-        assessment.result = match (assessment.needs_reply, assessment.draft.is_some()) {
-            (false, _) => CommunicationResultKind::NoReply,
-            (true, false) => CommunicationResultKind::ReplyRecommended,
-            (true, true) => CommunicationResultKind::DraftForReview,
+        if text.len() > request.request.execution_context.max_output_bytes.min(8192) {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+
+        let view = match crate::program_support::read_one::<CommunicationView>(
+            observations,
+            MAIL_REQUIREMENT,
+        )? {
+            Some(view) => view,
+            None if crate::program_support::was_unavailable(observations, MAIL_REQUIREMENT) => {
+                return crate::program_support::unavailable(
+                    request,
+                    observations,
+                    MAIL_REQUIREMENT,
+                    crate::BuiltinExpertKind::Communication.result_artifact_name(),
+                    super::RESULT_MEDIA_TYPE,
+                    "Mail is temporarily unavailable, so there is no communication assessment.",
+                );
+            }
+            None => return Err(AgentFailure::InvalidModelOutput),
         };
-        assessment.requires_review = assessment.draft.is_some();
+
+        validate_communication_view(
+            &view,
+            request.now_unix_ms,
+            MAX_COMMUNICATION_ITEMS,
+            MAX_COMMUNICATION_BYTES,
+        )?;
+        let mut context: AgentContext = request.context.clone();
+        context.evidence.push(communication_context_evidence(&view)?);
+        context.validate()?;
+
+        let mut output: CommunicationModelOutput =
+            serde_json::from_str(text).map_err(|_| AgentFailure::InvalidModelOutput)?;
+        crate::shared::validate_summary(&output.summary)?;
+        if output.assessments.len() > crate::shared::MAX_MAIL_EXPERT_FINDINGS {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let mut assessment_handles = std::collections::HashSet::new();
+        for assessment in &mut output.assessments {
+            if !view
+                .items
+                .iter()
+                .any(|item| item.evidence_handle == assessment.evidence_handle)
+                || assessment.rationale.trim().is_empty()
+                || assessment.rationale.len() > 512
+                || assessment.tone.trim().is_empty()
+                || assessment.tone.len() > 64
+                || assessment.draft.as_ref().is_some_and(|draft| {
+                    draft.trim().is_empty() || draft.len() > 4096 || !assessment.needs_reply
+                })
+                || !assessment_handles.insert(assessment.evidence_handle.clone())
+            {
+                return Err(AgentFailure::InvalidModelOutput);
+            }
+            assessment.result = match (assessment.needs_reply, assessment.draft.is_some()) {
+                (false, _) => CommunicationResultKind::NoReply,
+                (true, false) => CommunicationResultKind::ReplyRecommended,
+                (true, true) => CommunicationResultKind::DraftForReview,
+            };
+            assessment.requires_review = assessment.draft.is_some();
+        }
+        let result = CommunicationExpertResult {
+            schema_version: AGENT_VERSION,
+            invocation_id: request.request.invocation_key.as_uuid(),
+            source_handle: view.source_handle,
+            expires_at_unix_ms: view.expires_at_unix_ms,
+            summary: output.summary,
+            assessments: output.assessments,
+        };
+        crate::program_support::result(
+            request,
+            observations,
+            crate::BuiltinExpertKind::Communication.result_artifact_name(),
+            super::RESULT_MEDIA_TYPE,
+            result.summary.clone(),
+            &result,
+        )
     }
-    Ok(ExpertJudgment::Decided(CommunicationExpertResult {
-        schema_version: AGENT_VERSION,
-        invocation_id: invocation.invocation_id,
-        source_handle: invocation.view.source_handle,
-        expires_at_unix_ms: invocation.view.expires_at_unix_ms,
-        summary: output.summary,
-        assessments: output.assessments,
-    }))
 }
 
-fn evidence_exists(view: &CommunicationView, handle: &str) -> bool {
-    view.items.iter().any(|item| item.evidence_handle == handle)
+fn append_required_evidence_instruction(
+    mut prompt: PromptAssembly,
+) -> Result<PromptAssembly, AgentFailure> {
+    let role = prompt
+        .components
+        .iter_mut()
+        .find(|component| component.kind == PromptComponentKind::Role)
+        .ok_or(AgentFailure::InvalidInput)?;
+    role.content.push_str("\n\n");
+    role.content.push_str(FINAL_JUDGMENT_INSTRUCTION);
+    prompt.validate()?;
+    Ok(prompt)
 }

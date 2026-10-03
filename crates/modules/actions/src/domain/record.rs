@@ -68,7 +68,8 @@ impl CalendarTarget {
         }
         match &self.original.source {
             SourceRef::Calendar(value) if value.can_modify && bounded(&value.external_id, 1024)
-                && value.provider == CalendarProvider::EventKit && value.external_revision.is_valid() && self.original.deleted_at.is_none() => Ok(value),
+                && value.provider == CalendarProvider::EventKit && matches!(value.external_revision,CalendarExternalRevision::ObservationFingerprint(_))
+                && value.external_revision.is_valid() && self.original.deleted_at.is_none() => Ok(value),
             _ => Err(AgentFailure::InvalidInput),
         }
     }
@@ -159,7 +160,7 @@ pub struct ActionSourceFence {
 impl ActionSourceFence {
     pub fn validate_identity(&self,device:&str)->Result<(),AgentFailure>{
         if self.revision == 0 || !self.authority.is_valid() || !bounded(self.connection_id.as_str(),256)
-            || !matches!(self.execution_owner.strip_prefix("apple:").or_else(||self.execution_owner.strip_prefix("macos:")), Some(owner) if owner == device)
+            || self.execution_owner.strip_prefix("apple:")!=Some(device)
             || !bounded(&self.native_subject_fingerprint, 512) || self.resources.is_empty()
             || self.resources.iter().any(|value|!bounded(value,512))
             || self.resources.windows(2).any(|pair|pair[0]>=pair[1]) { return Err(AgentFailure::PolicyDenied); }
@@ -295,7 +296,7 @@ impl CalendarEffectReceipt {
         };
         if let Some(result)=result {
             let Some((title,schedule))=intent.effect.write() else{return Err(AgentFailure::PolicyDenied)};
-            if !bounded(&result.external_id,1024) || !result.external_revision.is_valid()
+            if !bounded(&result.external_id,1024) || !matches!(result.external_revision,CalendarExternalRevision::ObservationFingerprint(_)) || !result.external_revision.is_valid()
                 || result.title!=title || &result.schedule!=schedule {return Err(AgentFailure::PolicyDenied);}
         }
         Ok(())

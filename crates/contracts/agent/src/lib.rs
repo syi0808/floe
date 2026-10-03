@@ -10,7 +10,7 @@ mod delegation;
 mod endpoint;
 mod envelope;
 mod expert;
-mod expert_model;
+mod capability;
 mod history;
 mod interaction;
 mod message;
@@ -47,11 +47,7 @@ pub use envelope::{
     MemoryManifestEntry, PromptManifestEntry, RunInstructions, content_sha256,
 };
 pub use expert::{PackageKind, PackageRef};
-pub use expert_model::{
-    CapabilityDescriptor, ExpertCapabilityObservation, ExpertModel, ExpertModelAnswer,
-    ExpertModelCall, ExpertModelOutcome, ExpertReasoner, ExpertReasoningStep, ExpertStep,
-    ExpertStepOutcome, ExpertStepResult, ExpertTranscriptEntry,
-};
+pub use capability::CapabilityDescriptor;
 pub use floe_context_contract::{
     CalendarProvider, CalendarReadAccessStamp, CalendarScope, ContextDependency, ContextEvidence,
     ContextIssue, ContextIssueReason, ContextMemory, ContextSource, DataClass, DependencyCoverage,
@@ -92,7 +88,8 @@ pub use projection::{
 };
 pub use replay::{AttemptId, InvocationKey, ReplayReceipt, input_digest};
 pub use task_execution::{TaskBlockage, TaskExecutionEvidence, TaskExecutionKey,
-    TaskExecutionReceipt, TaskExecutionReceiptRef, TaskModelAccounting, UnresolvedModelAttempt};
+    TaskExecutionReceipt, TaskExecutionReceiptRef, TaskModelAccounting, UnresolvedModelAttempt,
+    MAX_TASK_EXECUTION_RECEIPT_BYTES, MAX_TASK_RECEIPT_BYTES};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionProtection {

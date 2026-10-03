@@ -3,6 +3,13 @@ use uuid::Uuid;
 
 use crate::{AgentFailure, PreparedModelPlan, SourceProjectionReview, TaskId, TaskSnapshot, TaskState};
 
+/// A bounded snapshot plus the whole Task's accounting and immutable identity.
+/// This envelope is independent of the model/output payload allowance.
+pub const MAX_TASK_EXECUTION_RECEIPT_BYTES: usize = 256 * 1024;
+/// The parent receipt repeats the snapshot and may include a replay receipt
+/// carrying the same immutable execution evidence.
+pub const MAX_TASK_RECEIPT_BYTES: usize = 1024 * 1024;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskExecutionKey {
@@ -106,6 +113,9 @@ impl TaskExecutionReceipt {
         {
             return Err(AgentFailure::StorageUnavailable);
         }
+        if serde_json::to_vec(self).map_err(|_| AgentFailure::StorageUnavailable)?.len()
+            > MAX_TASK_EXECUTION_RECEIPT_BYTES
+        { return Err(AgentFailure::BudgetExceeded); }
         Ok(())
     }
 }

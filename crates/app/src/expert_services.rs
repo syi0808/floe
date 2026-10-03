@@ -1,157 +1,72 @@
-use serde::{Deserialize, Serialize};
+//! Mechanical forwarding to the one admitted Experts owner.
+use crate::{AppComposition, CallerContext};
+use floe_kernel::{AgentFailure, CommandId};
 use uuid::Uuid;
 
-use crate::local_operations::{LocalOperationIntent, LocalOperationOwner};
-use crate::{AgentFailure, AppComposition, CallerContext, ServiceError, VaultState};
-
-pub use floe_experts::{RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview};
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExpertCommand {
-    ConfigureRegistry(RegistryConfiguration),
-    ReplaceBinding(ExpertBindingSelectionIntent),
+    SetInstallationEnabled { installation_ref: Uuid, expected_revision: u64, enabled: bool },
+    PrepareBindingReview { assignment_ref: Uuid, requirement_ref: String, expected_binding_revision: u64 },
+    ReplaceBinding { review_ref: floe_experts::BindingReviewRef, expected_binding_revision: u64, candidate_refs: Vec<Uuid> },
 }
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ExpertInspection {
-    Registry,
-    Candidates {
-        assignment_id: Uuid,
-        requirement_key: String,
-    },
+pub enum ExpertQuery {
+    Directory,
+    InspectBinding { assignment_ref: Uuid, requirement_ref: String },
+    InspectBindingReview { review_ref: floe_experts::BindingReviewRef },
 }
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ExpertBindingSelectionIntent {
-    pub assignment_id: Uuid,
-    pub package_id: String,
-    pub package_version: String,
-    pub definition_revision: u64,
-    pub requirement_key: String,
-    pub expected_binding_revision: u64,
-    pub candidate_ids: Vec<String>,
+pub enum ExpertCommandResult {
+    Directory(floe_experts::ExpertDirectorySnapshot),
+    BindingReview(floe_experts::BindingReview),
 }
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ExpertSourceCandidateView {
-    pub candidate_id: String,
-    pub title: String,
-    pub detail: String,
-    pub availability: String,
-    pub selected: bool,
+pub enum ExpertQueryResult {
+    Directory(floe_experts::ExpertDirectorySnapshot),
+    Binding(floe_experts::BindingInspection),
+    BindingReview(floe_experts::BindingReview),
 }
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ExpertCandidateCatalog {
-    pub assignment_id: Uuid,
-    pub requirement_key: String,
-    pub binding_revision: u64,
-    pub candidates: Vec<ExpertSourceCandidateView>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ExpertOperationResult {
-    pub operation_id: Uuid,
-    pub stage: String,
-    pub done: bool,
-    pub state: Option<VaultState>,
-    pub registry: Option<RegistryOverview>,
-    pub candidates: Option<ExpertCandidateCatalog>,
-    pub failure: Option<AgentFailure>,
-}
-
 pub trait ExpertCommands {
-    fn expert_command(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-        command: ExpertCommand,
-    ) -> Result<ExpertOperationResult, ServiceError>;
+    fn expert_command(&self, caller: &CallerContext, command_id: Uuid, command: ExpertCommand)
+        -> Result<ExpertCommandResult, AgentFailure>;
 }
-
 pub trait ExpertQueries {
-    fn inspect_experts(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-        inspection: ExpertInspection,
-    ) -> Result<ExpertOperationResult, ServiceError>;
-    fn read_expert_result(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-        release: bool,
-    ) -> Result<ExpertOperationResult, ServiceError>;
+    fn expert_query(&self, caller: &CallerContext, request_id: Uuid, query: ExpertQuery)
+        -> Result<ExpertQueryResult, AgentFailure>;
 }
-
 impl ExpertCommands for AppComposition {
-    fn expert_command(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-        command: ExpertCommand,
-    ) -> Result<ExpertOperationResult, ServiceError> {
-        self.expert_operation(
-            caller,
-            operation_id,
-            Some(LocalOperationIntent::ExpertCommand(command)),
-            false,
-        )
+    fn expert_command(&self, caller: &CallerContext, command_id: Uuid, command: ExpertCommand)
+        -> Result<ExpertCommandResult, AgentFailure> {
+        let command_id = CommandId::from_uuid(command_id).ok_or(AgentFailure::InvalidInput)?;
+        let owners = self.ready_owners(caller)?;
+        let actor = caller.owner_actor();
+        let scope = crate::host_scope(command_id.as_uuid(), floe_execution::Cancellation::new(), std::time::Duration::from_secs(35));
+        self.execute_owner(async {
+            match command {
+                ExpertCommand::SetInstallationEnabled { installation_ref, expected_revision, enabled } =>
+                    owners.experts.set_installation_enabled(&actor, command_id, installation_ref, expected_revision, enabled, &scope)
+                        .await.map(ExpertCommandResult::Directory),
+                ExpertCommand::PrepareBindingReview { assignment_ref, requirement_ref, expected_binding_revision } =>
+                    owners.experts.prepare_binding_review(&actor, command_id, assignment_ref, requirement_ref, expected_binding_revision, &scope)
+                        .await.map(ExpertCommandResult::BindingReview),
+                ExpertCommand::ReplaceBinding { review_ref, expected_binding_revision, candidate_refs } =>
+                    owners.experts.replace_binding(&actor, command_id, review_ref, expected_binding_revision, candidate_refs, &scope)
+                        .await.map(ExpertCommandResult::Directory),
+            }
+        })
     }
 }
-
 impl ExpertQueries for AppComposition {
-    fn inspect_experts(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-        inspection: ExpertInspection,
-    ) -> Result<ExpertOperationResult, ServiceError> {
-        self.expert_operation(
-            caller,
-            operation_id,
-            Some(LocalOperationIntent::ExpertInspection(inspection)),
-            false,
-        )
-    }
-    fn read_expert_result(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-        release: bool,
-    ) -> Result<ExpertOperationResult, ServiceError> {
-        self.expert_operation(caller, operation_id, None, release)
-    }
-}
-
-impl AppComposition {
-    fn expert_operation(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-        intent: Option<LocalOperationIntent>,
-        release: bool,
-    ) -> Result<ExpertOperationResult, ServiceError> {
-        let result = self
-            .agent_vault
-            .local_request(
-                caller,
-                operation_id,
-                intent,
-                LocalOperationOwner::Experts,
-                release,
-            )
-            .map_err(crate::composition::service_failure)?;
-        Ok(ExpertOperationResult {
-            operation_id: result.request_id,
-            stage: result.stage,
-            done: result.done,
-            state: result.state,
-            registry: result.registry,
-            candidates: result.expert_candidates,
-            failure: result.failure,
+    fn expert_query(&self, caller: &CallerContext, request_id: Uuid, query: ExpertQuery)
+        -> Result<ExpertQueryResult, AgentFailure> {
+        if request_id.is_nil() { return Err(AgentFailure::InvalidInput); }
+        let owners = self.ready_owners(caller)?;
+        let actor = caller.owner_actor();
+        let scope = crate::host_scope(request_id, floe_execution::Cancellation::new(), std::time::Duration::from_secs(35));
+        self.execute_owner(async {
+            match query {
+                ExpertQuery::Directory => owners.experts.directory(&actor, &scope).await.map(ExpertQueryResult::Directory),
+                ExpertQuery::InspectBinding { assignment_ref, requirement_ref } =>
+                    owners.experts.inspect_binding(&actor, assignment_ref, requirement_ref, &scope).await.map(ExpertQueryResult::Binding),
+                ExpertQuery::InspectBindingReview { review_ref } =>
+                    owners.experts.inspect_binding_review(&actor, review_ref, &scope).await.map(ExpertQueryResult::BindingReview),
+            }
         })
     }
 }

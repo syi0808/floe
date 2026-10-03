@@ -7,6 +7,10 @@ use floe_kernel::{AgentFailure, RunId};
 use std::sync::Arc;
 
 pub trait ConversationRepository: Send + Sync {
+    /// Settle only an already-recorded delegation intent after owner recovery.
+    fn reconcile_delegation<'a>(&'a self, run_id: RunId, receipt: floe_agent_contract::TaskReceipt)
+        -> BoxFuture<'a, Result<(), AgentFailure>>;
+
     fn finish_blocked_run<'a>(
         &'a self,
         commit: crate::BlockedRunCommit,

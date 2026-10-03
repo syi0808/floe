@@ -17,9 +17,15 @@ pub struct AppComposition {
 
 impl HostServices for AppComposition {
     fn shutdown(&self) -> Result<(), crate::HostError> {
+        self.core.day.close_admission();
+        let gateway = self.core.product_gateway.close();
         #[cfg(unix)]
         self.agent_vault.shutdown();
-        Ok(())
+        let scope = crate::host_scope(uuid::Uuid::new_v4(), floe_execution::Cancellation::new(), std::time::Duration::from_secs(35));
+        let day = self.runtime.block_on(self.core.day.shutdown(&scope));
+        gateway.map_err(|_| crate::HostError::Shutdown)?;
+        day.map_err(|_| crate::HostError::Shutdown)
+
     }
 }
 
@@ -73,11 +79,24 @@ pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
     let store = runtime
         .block_on(floe_vault::TursoStore::open_existing(path))
         .map_err(|error| AppOpenError::Store(error.to_string()))?;
-    let core = Arc::new(crate::FloeCore {
-        store: Arc::new(store),
-        lease_registry: Arc::new(floe_context::SourceLeaseRegistry::new()),
-    });
+    let caller = crate::CallerContext::verified(identity, crate::bootstrap::runtime_epoch())
+        .map_err(AppOpenError::Host)?;
+    let store = Arc::new(store);
     let local_context = Arc::new(crate::local_context::LocalContextHost::default());
+    let product_gateway = Arc::new(floe_provider_adapters::gateway::ProductGatewayLeaseRegistry::new());
+    let transport = Arc::new(floe_provider_adapters::sources::CalendarProductAdapter::new(
+        local_context.calendar_handle(), product_gateway.clone(),
+    ));
+    let context = Arc::new(floe_context::ContextCore::new(store.clone(), transport,
+        Arc::new(floe_access::SystemAccessClock)));
+    let day = Arc::new(floe_day::DayService::new(store.clone(),
+        Arc::new(floe_context::ContextCalendarAcquisition::new(context)),
+        Arc::new(floe_day::SystemDayClock)));
+    let scope = crate::host_scope(uuid::Uuid::new_v4(), floe_execution::Cancellation::new(), std::time::Duration::from_secs(35));
+    runtime.block_on(day.activate(&caller.owner_actor(), &scope))
+        .map_err(|error| AppOpenError::Store(error.to_string()))?;
+    let core = Arc::new(crate::FloeCore { store,
+        lease_registry: Arc::new(floe_context::SourceLeaseRegistry::new()), day, product_gateway });
     let services = AppComposition {
         runtime,
         core: core.clone(),
@@ -85,7 +104,7 @@ pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
         #[cfg(unix)]
         agent_vault: vault_host::VaultBridge::new(path, core, local_context),
     };
-    AppHost::bootstrap_claim(services, identity).map_err(AppOpenError::Host)
+    Ok(AppHost::with_caller(services, caller))
 }
 
 #[derive(Clone, Debug)]

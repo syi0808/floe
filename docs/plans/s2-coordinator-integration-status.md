@@ -13,9 +13,15 @@ Completed source transformations in this checkpoint:
 
 Still being integrated in the same S2 phase:
 
-- Full Vault audit persistence and same-transaction Task receipt/source/binding evidence verification.
-- Binding review completion reconciliation and complete safe interaction/Task DTO callers.
+- Binding storage returned; native review is in progress. Task and source audit persistence now authenticate same-transaction evidence.
+- Binding completion reconciliation now uses an explicit refresh cause and actual consumed-review receipt, never a fabricated approve decision. Safe DTO/client callers are still being cut over.
 - App typed owner construction/lifecycle, remaining worker-bus removal, FFI/CLI/client cutover.
 - Day, Actions, Experts and Knowledge owner outputs and storage/transport patches from their disjoint implementation scopes.
 
 This checkpoint preserves work; it does not claim compilation, feature closure or behavioral validation. Old App callsites and some storage/DTO references are intentionally awaiting the same-phase owner cutover, not retained compatibility paths.
+
+## Later S2 integration checkpoint
+
+Task storage now reserves receipt capacity and authenticates journal heads. Narrow terminal Run reconciliation settles a previously admitted Task result before rebuilding continuation accounting; bounded continuation ancestry and immutable replay evidence authenticate adoption. A recovered Blocked Task remains out of model history and is re-published by the child Run before dispatch. Historical timeout state remains unchanged.
+
+The Go source checkpoint, all builtin Expert Programs and the single encrypted Actions owner/native adapter are saved. App Actions, Experts and Knowledge forwarders are changing to typed owner calls with exact failures. Host construction now admits one Day lifetime before exposing AppHost. The old Vault/domain worker bus is being replaced with lifecycle-only scheduling. Context source policy extraction and Knowledge storage remain in progress. No S2 executable validation has run.

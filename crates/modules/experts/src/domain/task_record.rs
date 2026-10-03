@@ -17,6 +17,13 @@ use uuid::Uuid;
 use crate::{ExpertAdmissionIdentity, ExpertExecutionSelection};
 use crate::task_repository::TaskExecutionCommit;
 
+pub const MAX_TASK_RECORD_BYTES: usize = 512 * 1024;
+/// Replacing the initial snapshot and null receipt can grow a row by at most
+/// these two bounded values plus scalar/framing growth. Admission and every
+/// journal append preserve this space before any external handoff is allowed.
+pub const MAX_TASK_TERMINAL_RESERVE_BYTES: usize = floe_agent_contract::MAX_OUTPUT_BYTES
+    + floe_agent_contract::MAX_TASK_EXECUTION_RECEIPT_BYTES + 1024;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskRecord {
@@ -32,6 +39,10 @@ pub struct TaskRecord {
     pub device_id: String,
     pub catalog_revision: u64,
     pub model_allowance: ModelReservationCeiling,
+    pub maximum_output_bytes: usize,
+    /// The actual acknowledged journal prefix, updated in the append transaction.
+    pub journal_revision: u64,
+    pub journal_digest: [u8; 32],
     pub receipt: Option<TaskExecutionReceipt>,
 }
 
@@ -61,6 +72,10 @@ impl TaskRecord {
     }
 
     pub fn validate(&self, maximum_bytes: usize) -> Result<(), AgentFailure> {
+        if self.maximum_output_bytes == 0 || self.maximum_output_bytes > floe_agent_contract::MAX_OUTPUT_BYTES {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        let maximum_bytes = maximum_bytes.min(self.maximum_output_bytes);
         self.snapshot.validate(maximum_bytes)?;
         self.execution().validate()?;
         self.model_allowance.validate()?;
@@ -74,15 +89,20 @@ impl TaskRecord {
             || self.device_id.trim() != self.device_id
             || self.device_id.len() > floe_agent_contract::MAX_DELEGATION_DEVICE_ID_BYTES
             || self.device_id.chars().any(char::is_control)
+            || self.journal_revision > 512 || self.journal_digest == [0; 32]
+            || (self.journal_revision == 0
+                && self.journal_digest != floe_agent_runtime::journal_digest(&[])?)
         {
             return Err(AgentFailure::StorageUnavailable);
         }
+        validate_record_capacity(self)?;
         if !terminal(self.snapshot.state) {
             if self.receipt.is_some() || self.snapshot.result.is_some()
                 || !self.snapshot.artifacts.is_empty() || self.snapshot.issue.is_some()
                 || self.snapshot.blockage.is_some()
                 || self.snapshot.coverage != DependencyCoverage::Unknown
                 || (self.snapshot.state == TaskState::Submitted && self.aggregate_revision != 1)
+                || (self.snapshot.state == TaskState::Submitted && self.journal_revision != 0)
                 || (self.snapshot.state == TaskState::Working && self.aggregate_revision != 2)
             {
                 return Err(AgentFailure::StorageUnavailable);
@@ -93,6 +113,8 @@ impl TaskRecord {
         receipt.validate(maximum_bytes)?;
         if receipt.snapshot != self.snapshot || receipt.reference.execution != self.execution()
             || receipt.reference.task_revision != self.aggregate_revision
+            || receipt.reference.journal_revision != self.journal_revision
+            || receipt.journal_digest != self.journal_digest
             || receipt.reference.digest != receipt_digest(self, receipt)?
             || (!matches!(self.snapshot.state, TaskState::Completed | TaskState::Blocked)
                 && (self.snapshot.issue.is_none() || !self.snapshot.artifacts.is_empty()
@@ -141,6 +163,7 @@ pub fn settle_task_execution(
     journal: &[JournalEntry],
     maximum_bytes: usize,
 ) -> Result<TaskRecord, AgentFailure> {
+    let maximum_bytes = maximum_bytes.min(record.maximum_output_bytes);
     record.validate(maximum_bytes)?;
     commit.execution.validate()?;
     commit.terminal.validate(maximum_bytes)?;
@@ -234,6 +257,72 @@ pub fn interrupt_task_execution(
 pub(crate) fn project_task_journal(record: &TaskRecord, journal: &[JournalEntry])
     -> Result<JournalProjection, AgentFailure>
 {
+    let projection = project_task_journal_contents(record, journal)?;
+    if projection.journal_revision != record.journal_revision
+        || projection.journal_digest != record.journal_digest
+    { return Err(AgentFailure::StorageUnavailable); }
+    Ok(projection)
+}
+
+/// Authenticate a complete stored prefix against its Task-owned watermark.
+pub fn validate_task_journal(record: &TaskRecord, journal: &[JournalEntry]) -> Result<(), AgentFailure> {
+    record.validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
+    project_task_journal(record, journal).map(|_| ())
+}
+
+/// Derive the one next Task head. Storage appends the entry and this exact
+/// owner-produced row in the same transaction before acknowledging either.
+pub fn advance_task_journal(record: &TaskRecord, journal: &[JournalEntry]) -> Result<TaskRecord, AgentFailure> {
+    record.validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
+    if record.snapshot.state != TaskState::Working
+        || journal.len() as u64 != record.journal_revision.checked_add(1).ok_or(AgentFailure::BudgetExceeded)?
+    { return Err(AgentFailure::Conflict); }
+    let (last, prefix) = journal.split_last().ok_or(AgentFailure::InvalidInput)?;
+    project_task_journal(record, prefix)?;
+    let projection = project_task_journal_contents(record, journal)?;
+    // Reserve before dispatch; actual later charges remain recordable even
+    // when the provider reports an overrun of that reservation.
+    if matches!(&last.event, JournalEvent::ModelIntent { .. })
+        && (projection.own_accounting.usage.tokens > record.model_allowance.tokens
+            || projection.own_accounting.usage.cost_micros > record.model_allowance.cost_micros)
+    { return Err(AgentFailure::BudgetExceeded); }
+    let mut next = record.clone();
+    next.journal_revision = projection.journal_revision;
+    next.journal_digest = projection.journal_digest;
+    next.validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
+    // The acknowledgement can always be recovered into an accounting-bearing
+    // Interrupted receipt, even if no more work can run after this append.
+    let interrupted = TaskSnapshot { state: TaskState::Interrupted, result: None,
+        artifacts: vec![], coverage: DependencyCoverage::Unknown,
+        issue: Some(AgentFailure::Interrupted), blockage: None, ..next.snapshot.clone() };
+    settle_task_execution(&next, &TaskExecutionCommit { execution: next.execution(),
+        expected_task_revision: next.aggregate_revision, expected_journal_revision: next.journal_revision,
+        terminal: interrupted, settlement: None }, journal, floe_agent_contract::MAX_OUTPUT_BYTES)?;
+    // A final payload/review is acknowledged only when its actual Task terminal
+    // snapshot also fits. Never acknowledge output which cannot become a receipt.
+    let terminal = match &last.event {
+        JournalEvent::Output { text, artifacts, .. } => Some(TaskSnapshot {
+            state: TaskState::Completed, result: Some(text.clone()), artifacts: artifacts.clone(),
+            coverage: journal_coverage(journal)?, issue: None, blockage: None, ..next.snapshot.clone()
+        }),
+        JournalEvent::ToolReviewRequired { call_id, blockers } => Some(TaskSnapshot {
+            state: TaskState::Blocked, result: None, artifacts: vec![], coverage: journal_coverage(journal)?,
+            issue: None, blockage: Some(TaskBlockage::SourceRead { tool_call_id: *call_id,
+                blockers: blockers.clone() }), ..next.snapshot.clone()
+        }),
+        _ => None,
+    };
+    if let Some(terminal) = terminal {
+        settle_task_execution(&next, &TaskExecutionCommit { execution: next.execution(),
+            expected_task_revision: next.aggregate_revision, expected_journal_revision: next.journal_revision,
+            terminal, settlement: None }, journal, floe_agent_contract::MAX_OUTPUT_BYTES)?;
+    }
+    Ok(next)
+}
+
+fn project_task_journal_contents(record: &TaskRecord, journal: &[JournalEntry])
+    -> Result<JournalProjection, AgentFailure>
+{
     // Current Expert packages have no subdelegation or finalization/continuation branch.
     if journal.iter().any(|entry| match &entry.event {
         JournalEvent::DelegationIntent { .. } | JournalEvent::DelegationResult { .. }
@@ -262,17 +351,7 @@ fn validate_terminal_evidence(
     projection: &JournalProjection,
 ) -> Result<(), AgentFailure> {
     if matches!(terminal.state, TaskState::Completed | TaskState::Blocked) {
-        let coverage = journal.iter().try_fold(DependencyCoverage::Independent, |coverage, entry| {
-            let observed = match &entry.event {
-                JournalEvent::ToolResult { result } => Some(&result.coverage),
-                JournalEvent::ValidatedBatch { batch } => Some(&batch.projection_coverage),
-                _ => None,
-            };
-            match observed {
-                Some(observed) => coverage.merge(observed).map_err(|_| AgentFailure::StorageUnavailable),
-                None => Ok(coverage),
-            }
-        })?;
+        let coverage = journal_coverage(journal)?;
         if terminal.coverage != coverage {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -327,6 +406,28 @@ fn validate_terminal_evidence(
     Ok(())
 }
 
+fn journal_coverage(journal: &[JournalEntry]) -> Result<DependencyCoverage, AgentFailure> {
+    journal.iter().try_fold(DependencyCoverage::Independent, |coverage, entry| {
+        let observed = match &entry.event {
+            JournalEvent::ToolResult { result } => Some(&result.coverage),
+            JournalEvent::ValidatedBatch { batch } => Some(&batch.projection_coverage),
+            _ => None,
+        };
+        match observed {
+            Some(observed) => coverage.merge(observed).map_err(|_| AgentFailure::StorageUnavailable),
+            None => Ok(coverage),
+        }
+    })
+}
+
+fn validate_record_capacity(record: &TaskRecord) -> Result<(), AgentFailure> {
+    let bytes = serde_json::to_vec(record).map_err(|_| AgentFailure::StorageUnavailable)?.len();
+    let maximum = if record.receipt.is_some() { MAX_TASK_RECORD_BYTES }
+        else { MAX_TASK_RECORD_BYTES - MAX_TASK_TERMINAL_RESERVE_BYTES };
+    if bytes > maximum { return Err(AgentFailure::BudgetExceeded); }
+    Ok(())
+}
+
 pub(crate) fn missing_requirement_keys(selection: &ExpertExecutionSelection) -> Vec<String> {
     selection.requirements.iter()
         .filter(|requirement| requirement.selected.len() < usize::from(requirement.minimum_sources))
@@ -347,6 +448,7 @@ fn receipt_digest(record: &TaskRecord, receipt: &TaskExecutionReceipt) -> Result
     let bytes = serde_json::to_vec(&(
         "floe.task-execution-receipt.sha256.v1", record.execution(), &record.device_id,
         record.catalog_revision, record.model_allowance, &record.admission, &record.selection,
+        record.maximum_output_bytes,
         record.invocation_key, record.request_digest, receipt.reference.task_revision,
         receipt.reference.journal_revision, receipt.journal_digest, &receipt.snapshot,
         &receipt.accounting,
@@ -367,11 +469,14 @@ pub fn validate_task_artifact(
     record: &TaskRecord,
     reference: &TaskExecutionReceiptRef,
     artifact_id: Uuid,
-    actor: &floe_kernel::OwnerActor,
+    person_id: floe_kernel::PersonId,
+    device_id: &str,
 ) -> Result<TaskArtifactEvidence, AgentFailure> {
-    actor.validate()?;
+    if !person_id.is_valid() || device_id.trim().is_empty() {
+        return Err(AgentFailure::InvalidInput);
+    }
     record.validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
-    if actor.person_id.to_string() != record.snapshot.principal || actor.device_id != record.device_id {
+    if person_id.to_string() != record.snapshot.principal || device_id != record.device_id {
         return Err(AgentFailure::CapabilityDenied);
     }
     let receipt = record.receipt.as_ref().ok_or(AgentFailure::Conflict)?;

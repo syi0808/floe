@@ -213,11 +213,12 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
             self.dependencies.tasks.recover_delegation(actor, request, scope).await })
     }
     fn close_admission(&self) {
+        self.closing.store(true, std::sync::atomic::Ordering::Release);
         self.dependencies.tasks.close_admission();
     }
 
     fn shutdown<'a>(&'a self) -> BoxFuture<'a, Result<(), AgentFailure>> {
-        Box::pin(async move { self.dependencies.tasks.shutdown().await })
+        Box::pin(async move { self.close_admission(); self.dependencies.tasks.shutdown().await })
     }
 
     fn read_task_execution_receipt<'a>(

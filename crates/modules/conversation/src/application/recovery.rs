@@ -98,7 +98,7 @@ pub(super) fn project_active_journal(
     {
         return Err(AgentFailure::Conflict);
     }
-    project_entries(source, entries, false)
+    project_entries(source, entries, true)
 }
 
 pub(crate) fn journal_binding(source: &RunReceipt, entries: &[JournalEntry])

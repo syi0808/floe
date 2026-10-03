@@ -82,3 +82,5 @@ mod failure_projection;
 pub use failure_projection::{
     ConversationFailure, ConversationRecovery, project_conversation_failure,
 };
+
+pub use coordinator::validate_task_delegation_lineage;

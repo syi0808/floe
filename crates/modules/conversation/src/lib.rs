@@ -30,7 +30,7 @@ pub use domain::{
     DecisionAdmission, ExpireInteraction, ExpireOutcome,
     INTERACTION_PENDING_LIFETIME_MS, InteractionDecision, InteractionDecisionKind,
     InteractionOrigin, InteractionRefresh, InteractionRequirement, InteractionRequirementKind,
-    InteractionResolution, InteractionResolutionReceipt, InteractionResumeRef, InteractionState,
+    InteractionResolution, InteractionResolutionReceipt, InteractionResolutionCause, InteractionResumeRef, InteractionState,
     JournalEntry, MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_COMPACTION_SUMMARY_BYTES,
     MAX_RESUME_LINEAGE, MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES,
     MAX_REVIEWED_SOURCE_BYTES, MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN,
@@ -106,3 +106,5 @@ pub use application::{
 pub use application::interrupt_for_activation;
 
 pub use application::{ConversationFailure, ConversationRecovery, project_conversation_failure};
+
+pub use application::validate_task_delegation_lineage;

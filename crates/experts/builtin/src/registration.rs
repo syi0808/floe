@@ -4,46 +4,24 @@ use floe_experts::{
     ExpertSourceRequirement,
 };
 
-use crate::{BuiltinExpertHost, BuiltinExpertKind, BuiltinExpertOutput, BuiltinExpertRequest};
+use std::sync::Arc;
+use floe_experts::ExpertProgram;
+use crate::BuiltinExpertKind;
 
-#[derive(Clone, Copy)]
-pub struct BuiltinExpertRunner(BuiltinExpertKind);
-
-impl BuiltinExpertRunner {
-    pub fn manifest(self) -> ExpertManifest {
-        manifest(self.0)
-    }
-
-    pub async fn run<Host: BuiltinExpertHost>(
-        self,
-        host: &Host,
-        request: &BuiltinExpertRequest,
-    ) -> Result<BuiltinExpertOutput, floe_agent_contract::AgentFailure> {
-        match self.0 {
-            BuiltinExpertKind::Schedule => crate::schedule::dispatch::dispatch(host, request).await,
-            BuiltinExpertKind::Commitments => crate::commitments::dispatch(host, request).await,
-            BuiltinExpertKind::Communication => crate::communication::dispatch(host, request).await,
-            BuiltinExpertKind::Relationships => crate::relationships::dispatch(host, request).await,
-            BuiltinExpertKind::FocusAttention => {
-                crate::focus_attention::dispatch(host, request).await
-            }
-            BuiltinExpertKind::Wellbeing => crate::wellbeing::dispatch(host, request).await,
-            BuiltinExpertKind::WorkContext => crate::work_context::dispatch(host, request).await,
-            BuiltinExpertKind::LifeLogistics => {
-                crate::life_logistics::dispatch(host, request).await
-            }
-        }
-    }
-}
-
-pub fn registrations() -> Vec<ExpertRegistration<BuiltinExpertRunner>> {
-    BuiltinExpertKind::ALL
-        .into_iter()
-        .map(|kind| ExpertRegistration {
-            manifest: manifest(kind),
-            runner: BuiltinExpertRunner(kind),
-        })
-        .collect()
+pub fn registrations() -> Vec<ExpertRegistration<Arc<dyn ExpertProgram>>> {
+    BuiltinExpertKind::ALL.into_iter().map(|kind| {
+        let program: Arc<dyn ExpertProgram> = match kind {
+            BuiltinExpertKind::Schedule => Arc::new(crate::schedule::ScheduleProgram),
+            BuiltinExpertKind::Commitments => Arc::new(crate::commitments::CommitmentsProgram),
+            BuiltinExpertKind::Communication => Arc::new(crate::communication::CommunicationProgram),
+            BuiltinExpertKind::Relationships => Arc::new(crate::relationships::RelationshipsProgram),
+            BuiltinExpertKind::FocusAttention => Arc::new(crate::focus_attention::FocusAttentionProgram),
+            BuiltinExpertKind::Wellbeing => Arc::new(crate::wellbeing::WellbeingProgram),
+            BuiltinExpertKind::WorkContext => Arc::new(crate::work_context::WorkContextProgram),
+            BuiltinExpertKind::LifeLogistics => Arc::new(crate::life_logistics::LifeLogisticsProgram),
+        };
+        ExpertRegistration { manifest: manifest(kind), runner: program }
+    }).collect()
 }
 
 pub fn manifests() -> Vec<ExpertManifest> {

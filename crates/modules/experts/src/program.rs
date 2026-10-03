@@ -12,6 +12,12 @@ pub struct ExpertProgramRequest {
     pub selection: ExpertExecutionSelection,
     pub private_state: ExpertPrivateState,
     pub now_unix_ms: i64,
+    /// Final judgment receives the exact context of the acknowledged model projection.
+    pub context: floe_agent_contract::AgentContext,
+    pub coverage: floe_agent_contract::DependencyCoverage,
+    pub started_at_unix_ms: i64,
+    pub state_schema_version: u32,
+    pub data_class: floe_agent_contract::DataClass,
 }
 
 #[derive(Clone, Debug)]

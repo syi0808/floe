@@ -313,7 +313,7 @@ impl OwnerResolutionReceipt {
             }
             Self::ExpertBinding { receipt } => {
                 receipt.review_ref.validate()?;
-                if !receipt.command_id.is_valid() || receipt.assignment_ref.is_nil() || receipt.binding_revision == 0 || receipt.registry_revision == 0 {
+                if !receipt.command_id.is_valid() || receipt.assignment_ref.is_nil() || receipt.binding_revision == 0 || receipt.registry_revision == 0 || receipt.committed_at_unix_ms < 0 {
                     return Err(AgentFailure::InvalidInput);
                 }
             }

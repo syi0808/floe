@@ -1,247 +1,164 @@
-//! Durable projection for Actions: proposals, approvals and settled outcomes.
+#![cfg(unix)]
+
+use std::sync::Arc;
 
 use floe_actions::{
-    ActionAuthority, ActionError, ActionErrorCode, ActionRepository, CalendarAction,
-    CalendarSourceReader,
+    ActionAdmission, ActionDecision, ActionPage, ActionReconciliation, ActionStoreError,
+    ActionsAuthority, ActionsRepository, AuthorityChange, CollectionAck, CollectionTicket,
+    DispatchAdmission, DispatchIntent, ExecutionSettlement, PreDispatchStop, RecoveryPage,
+    AdmittedAction, ActionRecord,
 };
-use floe_agent_contract::AgentFailure;
-use floe_connections::{ConnectionId, ConnectorId, SourceConnection, SourceRepository};
-use floe_day::{CalendarMirror, Event, PersonId};
-use serde_json::to_string;
+use floe_execution::BoxFuture;
+use floe_kernel::PersonId;
 use uuid::Uuid;
 
-use crate::engine::storage_error;
-use crate::{StoreError, StoreErrorCode, TursoStore};
+use crate::{EncryptedAgentVault, VaultKeyProvider};
 
-impl TursoStore {
-    pub(crate) async fn action_authority(
-        &self,
-        person_id: PersonId,
-    ) -> Result<Option<floe_actions::ActionAuthority>, StoreError> {
-        self.get("action_authorities", person_id.to_string()).await
+impl floe_actions::ActionSourceReader for crate::TursoStore {
+    fn load<'a>(&'a self,person_id:PersonId,connection_id:&'a floe_context_contract::ConnectionId)
+        ->BoxFuture<'a,Result<Option<floe_connections::SourceConnection>,floe_kernel::AgentFailure>>{
+        Box::pin(async move{floe_connections::SourceRepository::load(self,person_id,connection_id).await.map_err(|_|floe_kernel::AgentFailure::StorageUnavailable)})
     }
-
-    pub(crate) async fn put_action_authority(
-        &self,
-        authority: &floe_actions::ActionAuthority,
-    ) -> Result<(), StoreError> {
-        self.put(
-            "action_authorities",
-            authority.person_id.to_string(),
-            authority.person_id,
-            authority,
-        )
-        .await
+    fn list_calendar_sources<'a>(&'a self,person_id:PersonId)
+        ->BoxFuture<'a,Result<Vec<floe_connections::SourceConnection>,floe_kernel::AgentFailure>>{
+        Box::pin(async move{
+            let connector=floe_context_contract::ConnectorId::try_new("calendar.event_kit").map_err(|_|floe_kernel::AgentFailure::InvalidInput)?;
+            floe_connections::SourceRepository::list_current(self,person_id,&connector).await.map_err(|_|floe_kernel::AgentFailure::StorageUnavailable)
+        })
     }
-
-    pub(crate) async fn calendar_actions(
-        &self,
-        person_id: PersonId,
-    ) -> Result<Vec<floe_actions::CalendarAction>, StoreError> {
-        let mut actions: Vec<floe_actions::CalendarAction> =
-            self.list("calendar_actions", person_id).await?;
-        actions.sort_by_key(|action| (std::cmp::Reverse(action.created_at), action.id));
-        Ok(actions)
-    }
-
-    pub(crate) async fn calendar_action(
-        &self,
-        person_id: PersonId,
-        id: uuid::Uuid,
-    ) -> Result<floe_actions::CalendarAction, StoreError> {
-        let action: floe_actions::CalendarAction = self
-            .get("calendar_actions", id.to_string())
-            .await?
-            .ok_or_else(|| {
-                StoreError::new(StoreErrorCode::NotFound, "calendar action not found")
-            })?;
-        if action.person_id != person_id {
-            return Err(StoreError::new(
-                StoreErrorCode::NotFound,
-                "calendar action not found",
-            ));
-        }
-        Ok(action)
-    }
-
-    pub(crate) async fn bounded_expert_calendar_action(
-        &self,
-        person_id: PersonId,
-        id: uuid::Uuid,
-    ) -> Result<Option<floe_actions::CalendarAction>, floe_agent_contract::AgentFailure> {
-        use floe_agent_contract::AgentFailure;
-        let connection = self
-            .connection()
-            .await
-            .map_err(|_| AgentFailure::StorageUnavailable)?;
-        let mut rows = connection.query(
-            "SELECT length(CAST(payload AS BLOB)), CASE WHEN length(CAST(payload AS BLOB)) <= 65536 THEN payload ELSE NULL END FROM calendar_actions WHERE id = ? AND person_id = ?",
-            (id.to_string(), person_id.to_string()),
-        ).await.map_err(|_| AgentFailure::StorageUnavailable)?;
-        let Some(row) = rows
-            .next()
-            .await
-            .map_err(|_| AgentFailure::StorageUnavailable)?
-        else {
-            return Ok(None);
-        };
-        if row
-            .get::<i64>(0)
-            .map_err(|_| AgentFailure::StorageUnavailable)?
-            > 65_536
-        {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        let action: floe_actions::CalendarAction = serde_json::from_str(
-            &row.get::<String>(1)
-                .map_err(|_| AgentFailure::StorageUnavailable)?,
-        )
-        .map_err(|_| AgentFailure::StorageUnavailable)?;
-        if action.person_id != person_id || action.id != id {
-            return Err(AgentFailure::Conflict);
-        }
-        Ok(Some(action))
-    }
-
-    pub(crate) async fn save_calendar_action(
-        &self,
-        action: &floe_actions::CalendarAction,
-        previous: Option<&floe_actions::CalendarAction>,
-    ) -> Result<(), StoreError> {
-        let connection = self.connection().await?;
-        let payload = to_string(action).map_err(storage_error)?;
-        let changed = if let Some(previous) = previous {
-            connection.execute(
-                "UPDATE calendar_actions SET payload = ? WHERE id = ? AND person_id = ? AND payload = ?",
-                (payload, action.id.to_string(), action.person_id.to_string(), to_string(previous).map_err(storage_error)?),
-            ).await.map_err(storage_error)?
-        } else {
-            connection.execute(
-                "INSERT OR IGNORE INTO calendar_actions(id, person_id, payload) VALUES (?, ?, ?)",
-                (action.id.to_string(), action.person_id.to_string(), payload),
-            ).await.map_err(storage_error)?
-        };
-        if changed != 1 {
-            return Err(StoreError::new(
-                StoreErrorCode::Conflict,
-                "calendar action changed; reload its status",
-            ));
-        }
-        Ok(())
+    fn source_is_fenced<'a>(&'a self,person_id:PersonId,connection_id:&'a floe_context_contract::ConnectionId)
+        ->BoxFuture<'a,Result<bool,floe_kernel::AgentFailure>>{
+        Box::pin(async move{floe_connections::SourceOperationRepository::source_is_fenced(self,person_id,connection_id).await.map_err(|_|floe_kernel::AgentFailure::StorageUnavailable)})
     }
 }
 
-impl ActionRepository for TursoStore {
-    async fn calendar_actions(
-        &self,
-        person_id: PersonId,
-    ) -> Result<Vec<CalendarAction>, ActionError> {
-        TursoStore::calendar_actions(self, person_id)
-            .await
-            .map_err(action_error)
-    }
+/// The one Actions repository, backed by the Person's encrypted Vault.
+pub struct VaultActionsRepository<Keys> {
+    vault: Arc<EncryptedAgentVault<Keys>>,
+}
 
-    async fn calendar_action(
-        &self,
-        person_id: PersonId,
-        id: Uuid,
-    ) -> Result<CalendarAction, ActionError> {
-        TursoStore::calendar_action(self, person_id, id)
-            .await
-            .map_err(action_error)
-    }
-
-    async fn save_calendar_action(
-        &self,
-        action: &CalendarAction,
-        previous: Option<&CalendarAction>,
-    ) -> Result<(), ActionError> {
-        TursoStore::save_calendar_action(self, action, previous)
-            .await
-            .map_err(action_error)
-    }
-
-    async fn bounded_expert_calendar_action(
-        &self,
-        person_id: PersonId,
-        invocation_id: Uuid,
-    ) -> Result<Option<CalendarAction>, ActionError> {
-        TursoStore::bounded_expert_calendar_action(self, person_id, invocation_id)
-            .await
-            .map_err(|failure| match failure {
-                AgentFailure::Conflict => ActionError::conflict("calendar action changed"),
-                AgentFailure::BudgetExceeded => {
-                    ActionError::budget("calendar action exceeds the bounded read")
-                }
-                _ => ActionError::storage("calendar action is unavailable"),
-            })
-    }
-
-    async fn action_authority(
-        &self,
-        person_id: PersonId,
-    ) -> Result<Option<ActionAuthority>, ActionError> {
-        TursoStore::action_authority(self, person_id)
-            .await
-            .map_err(action_error)
-    }
-
-    async fn put_action_authority(&self, authority: &ActionAuthority) -> Result<(), ActionError> {
-        TursoStore::put_action_authority(self, authority)
-            .await
-            .map_err(action_error)
-    }
-
-    async fn calendar_mirror(
-        &self,
-        person_id: PersonId,
-    ) -> Result<Option<CalendarMirror>, ActionError> {
-        TursoStore::calendar_mirror(self, person_id)
-            .await
-            .map_err(action_error)
-    }
-
-    async fn list_events(&self, person_id: PersonId) -> Result<Vec<Event>, ActionError> {
-        TursoStore::list_events(self, person_id)
-            .await
-            .map_err(action_error)
+impl<Keys: VaultKeyProvider> VaultActionsRepository<Keys> {
+    pub fn new(vault: Arc<EncryptedAgentVault<Keys>>) -> Self {
+        Self { vault }
     }
 }
 
-impl CalendarSourceReader for TursoStore {
-    async fn current_calendar_source(
-        &self,
+impl<Keys: VaultKeyProvider> ActionsRepository for VaultActionsRepository<Keys> {
+    fn get<'a>(
+        &'a self,
         person_id: PersonId,
-        connector_id: &ConnectorId,
-    ) -> Result<Option<SourceConnection>, ActionError> {
-        let mut sources = SourceRepository::list_current(self, person_id, connector_id)
-            .await
-            .map_err(|error| ActionError::storage(error.to_string()))?;
-        if sources.len() > 1 {
-            return Err(ActionError::conflict("multiple current Calendar sources"));
-        }
-        Ok(sources.pop())
+        action_id: Uuid,
+    ) -> BoxFuture<'a, Result<Option<ActionRecord>, ActionStoreError>> {
+        Box::pin(async move { self.vault.actions_get(person_id, action_id).await })
     }
 
-    async fn calendar_source(
-        &self,
+    fn list<'a>(
+        &'a self,
         person_id: PersonId,
-        connection_id: &ConnectionId,
-    ) -> Result<Option<SourceConnection>, ActionError> {
-        SourceRepository::load(self, person_id, connection_id)
-            .await
-            .map_err(|error| ActionError::storage(error.to_string()))
+        cursor: Option<Uuid>,
+        limit: u16,
+    ) -> BoxFuture<'a, Result<ActionPage, ActionStoreError>> {
+        Box::pin(async move { self.vault.actions_list(person_id, cursor, limit).await })
     }
-}
 
-fn action_error(error: StoreError) -> ActionError {
-    let code = match error.code {
-        StoreErrorCode::Validation | StoreErrorCode::NoFocusSlot => ActionErrorCode::Validation,
-        StoreErrorCode::NotFound => ActionErrorCode::NotFound,
-        StoreErrorCode::Conflict => ActionErrorCode::Conflict,
-        StoreErrorCode::Storage => ActionErrorCode::Storage,
-    };
-    let mut result = ActionError::new(code, error.message);
-    result.metadata = error.metadata;
-    result
+    fn find_admission<'a>(
+        &'a self,
+        person_id: PersonId,
+        command_id: Uuid,
+        request_digest: [u8; 32],
+    ) -> BoxFuture<'a, Result<Option<ActionRecord>, ActionStoreError>> {
+        Box::pin(async move {
+            self.vault
+                .actions_find_admission(person_id, command_id, request_digest)
+                .await
+        })
+    }
+
+    fn admit<'a>(
+        &'a self,
+        admission: ActionAdmission,
+    ) -> BoxFuture<'a, Result<AdmittedAction, ActionStoreError>> {
+        Box::pin(async move { self.vault.actions_admit(admission).await })
+    }
+
+    fn record_decision<'a>(
+        &'a self,
+        decision: ActionDecision,
+    ) -> BoxFuture<'a, Result<ActionRecord, ActionStoreError>> {
+        Box::pin(async move { self.vault.actions_record_decision(decision).await })
+    }
+
+    fn admit_reconciliation<'a>(
+        &'a self,
+        command: ActionReconciliation,
+    ) -> BoxFuture<'a, Result<ActionRecord, ActionStoreError>> {
+        Box::pin(async move { self.vault.actions_admit_reconciliation(command).await })
+    }
+
+    fn stop_before_dispatch<'a>(
+        &'a self,
+        stop: PreDispatchStop,
+    ) -> BoxFuture<'a, Result<ActionRecord, ActionStoreError>> {
+        Box::pin(async move { self.vault.actions_stop_before_dispatch(stop).await })
+    }
+
+    fn prepare_dispatch<'a>(
+        &'a self,
+        intent: DispatchIntent,
+    ) -> BoxFuture<'a, Result<DispatchAdmission, ActionStoreError>> {
+        Box::pin(async move { self.vault.actions_prepare_dispatch(intent).await })
+    }
+
+    fn load_execution<'a>(
+        &'a self,
+        person_id: PersonId,
+        execution_id: Uuid,
+    ) -> BoxFuture<'a, Result<Option<DispatchAdmission>, ActionStoreError>> {
+        Box::pin(async move {
+            self.vault
+                .actions_load_execution(person_id, execution_id)
+                .await
+        })
+    }
+
+    fn settle_execution<'a>(
+        &'a self,
+        settlement: ExecutionSettlement,
+    ) -> BoxFuture<'a, Result<ActionRecord, ActionStoreError>> {
+        Box::pin(async move { self.vault.actions_settle_execution(settlement).await })
+    }
+
+    fn pending_recovery<'a>(
+        &'a self,
+        person_id: PersonId,
+        cursor: Option<Uuid>,
+        limit: u16,
+    ) -> BoxFuture<'a, Result<RecoveryPage, ActionStoreError>> {
+        Box::pin(async move {
+            self.vault
+                .actions_pending_recovery(person_id, cursor, limit)
+                .await
+        })
+    }
+
+    fn ack_collection<'a>(
+        &'a self,
+        ack: CollectionAck,
+    ) -> BoxFuture<'a, Result<CollectionTicket, ActionStoreError>> {
+        Box::pin(async move { self.vault.actions_ack_collection(ack).await })
+    }
+
+    fn read_authority<'a>(
+        &'a self,
+        person_id: PersonId,
+    ) -> BoxFuture<'a, Result<ActionsAuthority, ActionStoreError>> {
+        Box::pin(async move { self.vault.actions_read_authority(person_id).await })
+    }
+
+    fn compare_and_set_authority<'a>(
+        &'a self,
+        change: AuthorityChange,
+    ) -> BoxFuture<'a, Result<ActionsAuthority, ActionStoreError>> {
+        Box::pin(async move { self.vault.actions_compare_and_set_authority(change).await })
+    }
 }

@@ -244,6 +244,9 @@ pub struct TaskReceipt {
 impl TaskReceipt {
     pub fn validate(&self, maximum_bytes: usize) -> Result<(), AgentFailure> {
         self.snapshot.validate(maximum_bytes)?;
+        if serde_json::to_vec(self).map_err(|_| AgentFailure::InvalidInput)?.len()
+            > crate::MAX_TASK_RECEIPT_BYTES
+        { return Err(AgentFailure::BudgetExceeded); }
         if self.task_id != self.snapshot.task_id { return Err(AgentFailure::InvalidInput); }
         match &self.execution {
             crate::TaskExecutionEvidence::Admitted(receipt) => {

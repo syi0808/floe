@@ -41,13 +41,7 @@ pub enum AppInteractionTargetDto {
     #[serde(rename = "source_review")]
     SourceReview { review: super::ObserveReviewDto },
     #[serde(rename = "expert_binding")]
-    ExpertBinding {
-        assignment_id: AssignmentRefDto,
-        package_id: String,
-        package_version: String,
-        requirement_key: String,
-        capability: String,
-    },
+    ExpertBinding { review: super::BindingReviewDto },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -100,8 +94,8 @@ impl AppInteractionSnapshotDto {
             ) if !source_label.is_empty() && source_label.len() <= 256 => {}
             (
                 AppInteractionKindDto::ExpertBinding,
-                AppInteractionTargetDto::ExpertBinding { .. },
-            ) => {}
+                AppInteractionTargetDto::ExpertBinding { review },
+            ) => { review.validate()?; }
             _ => return Err("interaction.target.kind"),
         }
         if self.actions.len() > 16

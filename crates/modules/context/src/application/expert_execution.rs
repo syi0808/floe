@@ -120,11 +120,15 @@ impl floe_experts::ExpertProjectionPort for ContextExpertProjection {
             authorize_coverage(dependencies, &input.inherited_coverage, scope).await?;
             let mut coverage = input.inherited_coverage.clone();
             let mut seen = HashSet::new();
+            let mut seen_calls = HashSet::new();
             for entry in &request.conversation.current_turn {
                 match entry {
                     ModelConversationEntry::ToolExchange { call, result } => {
-                        let observation = input.observations.iter().find(|observation| observation.call == *call)
-                            .ok_or(AgentFailure::PolicyDenied)?;
+                        if !seen_calls.insert(call.call_id) { return Err(AgentFailure::PolicyDenied); }
+                        let Some(observation) = input.observations.iter().find(|observation| observation.call == *call) else {
+                            validate_tool_correction(&request.catalog, call, result)?;
+                            continue;
+                        };
                         if observation.requirement_key != call.tool_id || !seen.insert(call.call_id)
                             || !tool_ids.contains(&call.tool_id) || !result.artifacts.is_empty()
                             || result.coverage != observation.coverage()
@@ -191,6 +195,32 @@ impl floe_experts::ExpertProjectionPort for ContextExpertProjection {
             })
         })
     }
+}
+
+/// The Engine may reject a call before the source port runs. Only its exact
+/// fixed, source-free correction is admitted without a source observation.
+fn validate_tool_correction(catalog: &floe_agent_contract::AllowedCatalog,
+    call: &floe_agent_contract::ToolCall, result: &floe_agent_contract::ToolResult)
+    -> Result<(), AgentFailure>
+{
+    floe_agent_contract::validate_tool_input(&call.input)?;
+    let expected = match catalog.tools.iter().find(|tool| tool.id == call.tool_id) {
+        None => "tool is not registered",
+        Some(tool) if tool.definition_revision != call.definition_revision => "tool descriptor is stale",
+        Some(tool) => {
+            let value: Value = serde_json::from_str(&call.input).map_err(|_| AgentFailure::InvalidModelOutput)?;
+            let schema: Value = serde_json::from_str(&tool.input_schema).map_err(|_| AgentFailure::InvalidInput)?;
+            let validator = jsonschema::validator_for(&schema).map_err(|_| AgentFailure::InvalidInput)?;
+            if validator.is_valid(&value) { return Err(AgentFailure::PolicyDenied); }
+            "tool arguments do not satisfy the registered input schema"
+        }
+    };
+    if result.call_id != call.call_id || result.text != expected || !result.artifacts.is_empty()
+        || result.coverage != DependencyCoverage::Independent
+        || result.issue.as_ref().is_none_or(|issue|
+            issue.failure != AgentFailure::InvalidModelOutput || !issue.retryable)
+    { return Err(AgentFailure::PolicyDenied); }
+    Ok(())
 }
 
 impl ContextExpertSources {

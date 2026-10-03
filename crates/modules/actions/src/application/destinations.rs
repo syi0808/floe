@@ -39,7 +39,7 @@ impl ActionsService {
             self.admit_actor(actor,scope)?;
             if !source.is_serving(){continue;}
             let execution_owner=source.execution_owner_id().as_str();
-            if !matches!(execution_owner.strip_prefix("apple:").or_else(||execution_owner.strip_prefix("macos:")),Some(device) if device==actor.device_id){continue;}
+            if execution_owner.strip_prefix("apple:")!=Some(actor.device_id.as_str()){continue;}
             if self.sources.source_is_fenced(actor.person_id,source.connection_id()).await?{return Err(AgentFailure::Conflict);}
             let fence=Self::source_fence(actor,&source)?;
             let observations=self.executor.destinations(actor,&fence,scope).await.map_err(|reason|match reason {

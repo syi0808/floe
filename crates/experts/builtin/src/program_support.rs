@@ -77,11 +77,14 @@ pub fn result<Result_: serde::Serialize>(request: &ExpertProgramRequest,
     if text.trim().is_empty() || text.len() > request.request.execution_context.max_output_bytes {
         return Err(AgentFailure::InvalidModelOutput);
     }
+    if request.coverage == DependencyCoverage::Unknown
+        || request.coverage.merge(&coverage(observations)?).map_err(|_| AgentFailure::PolicyDenied)? != request.coverage
+    { return Err(AgentFailure::PolicyDenied); }
     let data = serde_json::to_string(result).map_err(|_| AgentFailure::InvalidModelOutput)?;
     let artifact = Artifact {
         artifact_id: Uuid::new_v5(&request.request.task_id.as_uuid(), name.as_bytes()),
         name: name.to_owned(), parts: vec![ArtifactPart::Data { media_type: media_type.to_owned(), data }],
-        coverage: coverage(observations)?,
+        coverage: request.coverage.clone(),
     };
     artifact.validate(request.request.execution_context.max_output_bytes)?;
     Ok(ExpertFinalOutput {

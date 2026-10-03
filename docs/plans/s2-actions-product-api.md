@@ -40,6 +40,8 @@ Create and Expert submission resolve only the opaque Actions destination selecto
 - `update { event_ref,expected_revision,destination_label,previous_title,previous_schedule,title,schedule }`
 - `delete { event_ref,expected_revision,destination_label,title,schedule }`
 
+Observed original titles (`update.previous_title` and `delete.title`) preserve empty or whitespace-only provider titles. New user-requested titles remain required and validated by Actions.
+
 No raw CalendarEffect, native original record, physical ID or revision is in the product snapshot. The immutable stored effect and native evidence remain inside Actions/Vault/provider boundaries.
 
 `status` is tagged by `state`: `pending_review|approved|rejected|cancelled|expired|executing|blocked {reason}|failed {reason}|unknown {reason}|succeeded {collection}`. Collection is `pending|collected` and never changes the external effect's success into failure. Block reasons are `permission_denied|policy_denied|source_changed|executor_unavailable|schedule_conflict`. Failed reasons are `permission_denied|provider_rejected|provider_unavailable` and require a stored positive native prewrite proof. Unknown reasons are `timeout|response_lost|invalid_receipt|cancelled_after_dispatch|inconclusive_lookup|native_operation_pending|native_receipt_unavailable`. Update matching postcondition or Delete absence is insufficient evidence.

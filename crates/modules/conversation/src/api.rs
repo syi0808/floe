@@ -1,5 +1,5 @@
 use floe_agent_contract::{
-    AllowedCatalog, DelegationExecutionContext, DelegationPort, ModelPort, ModelProjectionPort,
+    AllowedCatalog, DelegationContextInput, DelegationPort, ModelPort, ModelProjectionPort,
     ReplayReceipt, RoleSpec, ToolPort,
 };
 use floe_agent_runtime::FinalPayloadValidator;
@@ -65,7 +65,7 @@ pub struct TurnRequest {
     /// Runtime-only delegation host context, forwarded to the Engine without
     /// interpretation. Never part of the canonical turn intent or request
     /// identity, exactly like device/credential state.
-    pub delegation_context: Option<DelegationExecutionContext>,
+    pub delegation_context: Option<DelegationContextInput>,
     /// The verified calling device, supplied by admitted App execution.
     /// Runtime-only (never part of intent): binds a published model
     /// blockage to this device so a foreign device can never decide it.

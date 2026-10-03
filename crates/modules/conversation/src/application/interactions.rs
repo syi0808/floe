@@ -7,18 +7,11 @@
 //! well-formed. Decisions bind the reviewed target digest through
 //! compare-and-swap; an identical command id rejoins the recorded decision.
 
-use floe_agent_contract::{AgentFailure, JournalEvent, UserInteractionKind};
+use floe_agent_contract::AgentFailure;
 use floe_kernel::{PersonId, RunId};
 use uuid::Uuid;
-
-use crate::{
-    ConversationInteraction, ConversationRepository, DecisionAdmission, ExpireInteraction,
-    ExpireOutcome, InteractionDecision, InteractionDecisionKind, InteractionOrigin,
-    InteractionRepository, InteractionRequirement, InteractionState, PublishAdmission,
-    ReviewedTarget, RunState, SupersedeInteraction,
-    domain::INTERACTION_PENDING_LIFETIME_MS,
-    domain::{canonical_requirement_digest, canonical_target_digest, interaction_publication_id},
-};
+use crate::{ConversationInteraction, DecisionAdmission, ExpireInteraction, ExpireOutcome,
+    InteractionDecision, InteractionDecisionKind, InteractionRepository, SupersedeInteraction};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecideInteractionCommand {

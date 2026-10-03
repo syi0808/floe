@@ -207,13 +207,26 @@ impl ReviewedTarget {
     }
 }
 
+/// Why Conversation reconciled an independently authenticated owner receipt.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum InteractionResolutionCause {
+    Decision { command_id: Uuid },
+    Refresh { command_id: Uuid },
+}
+impl InteractionResolutionCause {
+    pub fn command_id(&self) -> Uuid {
+        match self { Self::Decision { command_id } | Self::Refresh { command_id } => *command_id }
+    }
+}
+
 /// The semantic receipt of a completed resolution: which decision and which
 /// stable owner operation produced it. Grant/authority facts stay with their
 /// owners; this receipt is coordination evidence only.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct InteractionResolutionReceipt {
-    pub decision_id: Uuid,
+    pub cause: InteractionResolutionCause,
     pub owner_command_id: Uuid,
     pub owner_receipt: super::OwnerResolutionReceipt,
     pub owner_operation_id: Uuid,
@@ -223,7 +236,12 @@ pub struct InteractionResolutionReceipt {
 impl InteractionResolutionReceipt {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         self.owner_receipt.validate()?;
-        if self.decision_id.is_nil()
+        if !matches!((&self.cause, &self.owner_receipt),
+            (InteractionResolutionCause::Decision { .. }, super::OwnerResolutionReceipt::SourceProcessing { .. })
+            | (InteractionResolutionCause::Refresh { .. }, super::OwnerResolutionReceipt::ExpertBinding { .. })) {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        if self.cause.command_id().is_nil()
             || self.owner_command_id.is_nil()
             || self.owner_receipt.command_id() != self.owner_command_id
             || self.owner_receipt.operation_id() != self.owner_operation_id
@@ -557,20 +575,34 @@ pub fn state_after_resolution(
         InteractionState::Resolving {
             decision_id,
             owner_command_id,
-        } if *decision_id == resolution.decision_id
+        } if resolution.cause == (InteractionResolutionCause::Decision { command_id: *decision_id })
             && *owner_command_id == resolution.owner_command_id
             && owner_receipt.command_id() == *owner_command_id
             && owner_receipt.operation_id() == resolution.owner_operation_id =>
         {
             Ok(InteractionState::Resolved {
                 receipt: InteractionResolutionReceipt {
-                    decision_id: *decision_id,
+                    cause: resolution.cause.clone(),
                     owner_command_id: *owner_command_id,
                     owner_operation_id: resolution.owner_operation_id,
                     owner_receipt: owner_receipt.clone(),
                     resolved_at_unix_ms: resolution.resolved_at_unix_ms,
                 },
             })
+        }
+        InteractionState::Pending
+            if matches!(resolution.cause, InteractionResolutionCause::Refresh { .. })
+                && matches!(owner_receipt, super::OwnerResolutionReceipt::ExpertBinding { .. })
+                && owner_receipt.command_id() == resolution.owner_command_id
+                && owner_receipt.operation_id() == resolution.owner_operation_id =>
+        {
+            Ok(InteractionState::Resolved { receipt: InteractionResolutionReceipt {
+                cause: resolution.cause.clone(),
+                owner_command_id: resolution.owner_command_id,
+                owner_operation_id: resolution.owner_operation_id,
+                owner_receipt: owner_receipt.clone(),
+                resolved_at_unix_ms: resolution.resolved_at_unix_ms,
+            } })
         }
         _ => Err(AgentFailure::Conflict),
     }
@@ -727,7 +759,7 @@ pub struct InteractionResolution {
     pub interaction_id: Uuid,
     pub person_id: PersonId,
     pub expected_revision: u64,
-    pub decision_id: Uuid,
+    pub cause: InteractionResolutionCause,
     pub owner_operation_id: Uuid,
     pub resolved_at_unix_ms: i64,
 }
@@ -739,7 +771,7 @@ impl InteractionResolution {
             || self.interaction_id.is_nil()
             || !self.person_id.is_valid()
             || self.expected_revision == 0
-            || self.decision_id.is_nil()
+            || self.cause.command_id().is_nil()
             || self.owner_operation_id.is_nil()
             || self.resolved_at_unix_ms < 0
         {

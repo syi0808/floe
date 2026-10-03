@@ -55,6 +55,9 @@ impl Default for LocalContextHost {
     }
 }
 impl LocalContextHost {
+    pub(crate) fn calendar_handle(&self) -> Arc<CalendarBroker> {
+        self.brokers.calendar_handle()
+    }
     pub fn calendar(&self) -> &CalendarBroker {
         self.brokers.calendar()
     }

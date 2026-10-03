@@ -176,6 +176,35 @@ impl<Repository: TaskRepository + 'static> TaskCoordinator<Repository> {
             .receipt.ok_or(AgentFailure::StorageUnavailable)
     }
 
+    /// Recover only acknowledged owner state. This path never resolves a live
+    /// endpoint, admits a Task, waits for a driver or dispatches model work.
+    pub async fn recover_delegation(
+        &self, actor: &floe_kernel::OwnerActor, request: &DelegationRequest,
+        scope: &ExecutionScope,
+    ) -> Result<TaskReceipt, AgentFailure> {
+        actor.validate()?;
+        validate_request_fields(request)?;
+        if request.principal != actor.person_id.to_string()
+            || request.execution_context.device_id != actor.device_id
+        { return Err(AgentFailure::CapabilityDenied); }
+        let Some(record) = scope.run(self.repository.get(request.task_id)).await? else {
+            // Durable admission precedes every endpoint handoff. Only a real
+            // successful absence read can attest that no Task was admitted.
+            let snapshot = TaskSnapshot { coverage: DependencyCoverage::Independent,
+                ..snapshot(request, TaskState::Rejected, Some(AgentFailure::Interrupted)) };
+            let rejected = TaskReceipt { task_id: request.task_id, snapshot, replay: None,
+                execution: TaskExecutionEvidence::Unadmitted };
+            rejected.validate(self.maximum_output_bytes)?;
+            return Ok(rejected);
+        };
+        validate_replay(request, delegation_request_digest(request), &record)?;
+        record.validate(self.maximum_output_bytes)?;
+        if !terminal(record.snapshot.state) { return Err(AgentFailure::Conflict); }
+        let execution = scope.run(verified_receipt(self.repository.as_ref(), &record,
+            self.maximum_output_bytes)).await?;
+        receipt(execution, self.maximum_output_bytes)
+    }
+
     /// Binding review needs the exact admitted selection as well as its receipt.
     pub(crate) async fn read_execution_record(
         &self, actor: &floe_kernel::OwnerActor, reference: &TaskExecutionReceiptRef,
@@ -250,6 +279,8 @@ impl<Repository: TaskRepository + 'static> TaskCoordinator<Repository> {
             execution_id: uuid::Uuid::new_v4(), device_id: request.execution_context.device_id.clone(),
             catalog_revision: request.selected_definition_revision,
             model_allowance: ModelReservationCeiling::for_lease(scope.budget()), receipt: None,
+            maximum_output_bytes: self.maximum_output_bytes.min(request.execution_context.max_output_bytes),
+            journal_revision: 0, journal_digest: floe_agent_runtime::journal_digest(&[])?,
         };
         proposed.validate_initial(self.maximum_output_bytes)?;
         let admitted = match scope.run(self.repository.admit(proposed.clone())).await? {
@@ -355,15 +386,31 @@ impl<Repository: TaskRepository + 'static> TaskCoordinator<Repository> {
                 Err(failure) => snapshot(&invocation.request, failure_state(failure), Some(failure)),
             }
         };
+        // The Task's envelope has its own admitted bound. A typed endpoint
+        // report that cannot fit is a terminal failure, never an unpersistable
+        // Working Task or an oversized successful receipt.
+        let terminal_snapshot = match terminal_snapshot.validate(working.maximum_output_bytes) {
+            Ok(()) => terminal_snapshot,
+            Err(failure) => {
+                settlement = None;
+                snapshot(&invocation.request, failure_state(failure), Some(failure))
+            }
+        };
         // Recording already completed work survives execution cancellation. It
         // performs no source/model I/O and never replenishes the Task allowance.
-        let journal = self.repository.load_journal(working.execution()).await?;
+        let current = self.repository.get(working.snapshot.task_id).await?
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        let mut expected_working = working.clone();
+        expected_working.journal_revision = current.journal_revision;
+        expected_working.journal_digest = current.journal_digest;
+        if current != expected_working { return Err(AgentFailure::Conflict); }
+        let journal = self.repository.load_journal(current.execution()).await?;
         let commit = TaskExecutionCommit {
-            execution: working.execution(), expected_task_revision: working.aggregate_revision,
-            expected_journal_revision: journal.last().map_or(0, |entry| entry.revision),
+            execution: current.execution(), expected_task_revision: current.aggregate_revision,
+            expected_journal_revision: current.journal_revision,
             terminal: terminal_snapshot, settlement,
         };
-        let expected = settle_task_execution(&working, &commit, &journal, self.maximum_output_bytes)?;
+        let expected = settle_task_execution(&current, &commit, &journal, self.maximum_output_bytes)?;
         let expected = expected.receipt.ok_or(AgentFailure::StorageUnavailable)?;
         let saved = self.repository.settle_execution(commit).await?;
         if saved != expected { return Err(AgentFailure::StorageUnavailable); }
@@ -443,16 +490,22 @@ fn validate_query(principal: &str, parent_run_id: Option<uuid::Uuid>, scope: &Ex
 }
 
 fn validate_request(request: &DelegationRequest, scope: &ExecutionScope) -> Result<(), AgentFailure> {
+    validate_request_fields(request)?;
+    if scope.task_id() != Some(request.task_id)
+        || scope.root_run_id().map(|id| id.as_uuid()) != request.parent_run_id
+    { return Err(AgentFailure::InvalidInput); }
+    ModelReservationCeiling::for_lease(scope.budget()).validate()
+}
+
+fn validate_request_fields(request: &DelegationRequest) -> Result<(), AgentFailure> {
     if !request.task_id.is_valid() || request.invocation_key.as_uuid().is_nil()
         || request.principal.trim().is_empty() || request.selected_agent_id.trim().is_empty()
         || request.selected_definition_revision == 0 || request.message.trim().is_empty()
         || request.message.len() > floe_agent_contract::MAX_OUTPUT_BYTES || request.context_refs.len() > 32
         || request.context_refs.iter().any(|reference| reference.trim().is_empty() || reference.len() > 512)
-        || scope.task_id() != Some(request.task_id)
-        || scope.root_run_id().map(|id| id.as_uuid()) != request.parent_run_id
+        || request.parent_run_id.is_some_and(|id| id.is_nil())
     { return Err(AgentFailure::InvalidInput); }
-    request.execution_context.validate()?;
-    ModelReservationCeiling::for_lease(scope.budget()).validate()
+    request.execution_context.validate()
 }
 
 fn validate_replay(request: &DelegationRequest, digest: [u8; 32], record: &TaskRecord)

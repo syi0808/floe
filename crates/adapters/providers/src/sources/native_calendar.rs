@@ -601,8 +601,10 @@ impl PreparedCalendarEffect for NativePreparedCalendarEffect {
             let request=json!({"schema_version":1,"operation":"action_dispatch","admission":intent,"preparation_id":self.preparation_id,"host_epoch":self.host_epoch,"deadline":deadline});
             let result:CalendarEffectOutcome=match action_native(request,&scope,false).await{
                 Ok(value)=>value,
-                Err(AgentFailure::Cancelled)=>return unknown(intent,ActionUnknownReason::CancelledAfterDispatch),
-                Err(AgentFailure::DeadlineExceeded)=>return unknown(intent,ActionUnknownReason::Timeout),
+                Err(NativeActionTransportError::NotInvoked(reason))=>return CalendarEffectOutcome::NotApplied{proof:floe_actions::NotAppliedProof{
+                    identity:intent.identity(),host_epoch:self.host_epoch,invocation_id:self.preparation_id,reason,rejected_at:Utc::now()}},
+                Err(NativeActionTransportError::Unknown(AgentFailure::Cancelled))=>return unknown(intent,ActionUnknownReason::CancelledAfterDispatch),
+                Err(NativeActionTransportError::Unknown(AgentFailure::DeadlineExceeded))=>return unknown(intent,ActionUnknownReason::Timeout),
                 Err(_)=>return unknown(intent,ActionUnknownReason::ResponseLost),
             };
             if result.validate_for(intent).is_err(){return unknown(intent,ActionUnknownReason::InvalidReceipt);}
@@ -627,26 +629,35 @@ struct NativeActionDestinations {
     source:ActionSourceFence,resources:Vec<CalendarDestinationObservation>,
 }
 
-async fn action_native<T:DeserializeOwned+serde::Serialize+Send+'static>(request:Value,scope:&ExecutionScope,readback:bool)->Result<T,AgentFailure>{
-    let input=serde_json::to_string(&request).map_err(|_|AgentFailure::InvalidInput)?;
-    if input.len()>floe_actions::MAX_ACTION_BYTES{return Err(AgentFailure::BudgetExceeded);}
-    if scope.cancellation().is_cancelled(){return Err(AgentFailure::Cancelled);}
-    if Instant::now()>=scope.deadline(){return Err(AgentFailure::DeadlineExceeded);}
+enum NativeActionTransportError {NotInvoked(floe_actions::ActionNotAppliedReason),Unknown(AgentFailure)}
+impl From<AgentFailure> for NativeActionTransportError{fn from(value:AgentFailure)->Self{Self::Unknown(value)}}
+
+async fn action_native<T:DeserializeOwned+serde::Serialize+Send+'static>(request:Value,scope:&ExecutionScope,readback:bool)->Result<T,NativeActionTransportError>{
+    let input=serde_json::to_string(&request).map_err(|_|NativeActionTransportError::NotInvoked(floe_actions::ActionNotAppliedReason::ProviderRejected))?;
+    if input.len()>floe_actions::MAX_ACTION_BYTES{return Err(NativeActionTransportError::NotInvoked(floe_actions::ActionNotAppliedReason::ProviderRejected));}
+    if scope.cancellation().is_cancelled(){return Err(AgentFailure::Cancelled.into());}
+    if Instant::now()>=scope.deadline(){return Err(AgentFailure::DeadlineExceeded.into());}
     let task=tokio::task::spawn_blocking(move||{
         let bridge=if readback{&EVENT_KIT_RECEIPTS}else{&EVENT_KIT};
-        let bytes=bridge.call(&input,Some(floe_actions::MAX_ACTION_BYTES)).map_err(|_|AgentFailure::CapabilityUnavailable)?;
+        // These three driver errors are returned strictly before invoke().
+        // NoResponse/ResponseTooLarge occur after it and remain uncertain.
+        let bytes=bridge.call(&input,Some(floe_actions::MAX_ACTION_BYTES)).map_err(|failure|match failure{
+            floe_native::NativeCallError::Busy|floe_native::NativeCallError::Unavailable=>NativeActionTransportError::NotInvoked(floe_actions::ActionNotAppliedReason::ProviderUnavailable),
+            floe_native::NativeCallError::InvalidRequest=>NativeActionTransportError::NotInvoked(floe_actions::ActionNotAppliedReason::ProviderRejected),
+            floe_native::NativeCallError::NoResponse|floe_native::NativeCallError::ResponseTooLarge=>NativeActionTransportError::Unknown(AgentFailure::CapabilityUnavailable),
+        })?;
         crate::gateway::json::strict_json_bytes(&bytes,floe_actions::MAX_ACTION_BYTES)?;
         let envelope:NativeActionEnvelope<T>=serde_json::from_slice(&bytes).map_err(|_|AgentFailure::CapabilityUnavailable)?;
         let raw:Value=serde_json::from_slice(&bytes).map_err(|_|AgentFailure::CapabilityUnavailable)?;
         let normalized=serde_json::to_value(&envelope.data).map_err(|_|AgentFailure::CapabilityUnavailable)?;
-        if !same_action_shape(&raw["data"],&normalized){return Err(AgentFailure::CapabilityUnavailable);}
+        if !same_action_shape(&raw["data"],&normalized){return Err(AgentFailure::CapabilityUnavailable.into());}
         Ok(envelope.data)
     });
     tokio::select!{
         biased;
-        _=scope.cancellation().cancelled()=>Err(AgentFailure::Cancelled),
-        _=tokio::time::sleep_until(scope.deadline())=>Err(AgentFailure::DeadlineExceeded),
-        result=task=>result.map_err(|_|AgentFailure::Interrupted)?,
+        _=scope.cancellation().cancelled()=>Err(AgentFailure::Cancelled.into()),
+        _=tokio::time::sleep_until(scope.deadline())=>Err(AgentFailure::DeadlineExceeded.into()),
+        result=task=>result.map_err(|_|NativeActionTransportError::Unknown(AgentFailure::Interrupted))?,
     }
 }
 

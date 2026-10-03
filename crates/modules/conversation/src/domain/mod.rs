@@ -29,7 +29,7 @@ pub use interaction::{
     ConversationInteraction, DecisionAdmission, ExpireInteraction,
     ExpireOutcome, INTERACTION_PENDING_LIFETIME_MS, InteractionDecision, InteractionDecisionKind,
     InteractionOrigin, InteractionRefresh, InteractionRequirement, InteractionRequirementKind,
-    InteractionResolution, InteractionResolutionReceipt, InteractionResumeRef, InteractionState,
+    InteractionResolution, InteractionResolutionReceipt, InteractionResolutionCause, InteractionResumeRef, InteractionState,
     MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_RESUME_LINEAGE, MAX_REVIEWED_IDENTIFIER_BYTES,
     MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES, MAX_REVIEWED_TARGET_BYTES,
     MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_BUNDLE_MEMBERS, NavigationDestination,

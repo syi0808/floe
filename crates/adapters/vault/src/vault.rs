@@ -27,7 +27,9 @@ mod context_cleanup;
 mod context_dependencies;
 mod conversation_interactions;
 mod conversations;
+mod conversation_delegation_recovery;
 mod expert_actions;
+pub use expert_actions::VaultExpertProposalReader;
 mod gateway_authority;
 mod keyring;
 mod learning;
@@ -40,10 +42,8 @@ pub use conversations::{
     VaultConversationActivation, VaultConversationAdmission, VaultConversationCancelAdmission,
     VaultConversationCancelReceipt, VaultConversationCancelRequest, VaultConversationJournalEntry,
 };
-pub use floe_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use keyring::KeyringVaultKeys;
 pub use session_archive::*;
-pub use tasks::{VaultTaskActivation, VaultTaskAdmission, VaultTaskRecord};
 
 pub struct VaultKey(Zeroizing<[u8; 32]>);
 
@@ -223,7 +223,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_learning_store().await?;
         vault.initialize_access_grant_store().await?;
         vault.initialize_connection_reviews(true).await?;
-        vault.initialize_agent_action_store().await?;
+        vault.initialize_actions_store().await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_conversation_store().await?;
         vault.initialize_task_store().await?;
@@ -314,7 +314,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_learning_store().await?;
         vault.initialize_access_grant_store().await?;
         vault.initialize_connection_reviews(false).await?;
-        vault.initialize_agent_action_store().await?;
+        vault.validate_actions_store().await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_conversation_store().await?;
         vault.initialize_task_store().await?;

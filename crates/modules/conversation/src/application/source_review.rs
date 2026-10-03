@@ -184,7 +184,7 @@ pub(crate) async fn build_blocked_run_commit<R: ConversationRepository>(
             };
             let actual = experts.read_task_execution_receipt(actor, &expected.reference, scope).await?;
             if actual != *expected || actual.snapshot != delegated.snapshot
-                || actual.snapshot.principal != receipt.principal || actual.snapshot.parent_run_id != Some(run_id.as_uuid())
+                || actual.snapshot.principal != receipt.principal || actual.snapshot.parent_run_id.is_none()
                 || !journal.iter().any(|entry| matches!(&entry.event, JournalEvent::DelegationResult { receipt } if receipt == &delegated))
             { return Err(AgentFailure::PolicyDenied); }
             let blockage = actual.snapshot.blockage.clone().ok_or(AgentFailure::StorageUnavailable)?;

@@ -27,7 +27,12 @@ impl JournalExecutionBinding {
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum JournalProjectionMode { DurablePrefix, Recoverable }
+pub enum JournalProjectionMode {
+    DurablePrefix,
+    Recoverable,
+    /// Only the owner of an eligible terminal Run may adopt this settled Task blocker.
+    ContinueSettledDelegation,
+}
 
 #[derive(Clone, Debug)]
 pub enum JournalBlockage {
@@ -476,9 +481,9 @@ pub fn project_execution_journal(
                         }
                     { return Err(AgentFailure::StorageUnavailable); }
                 }
-                if receipt.snapshot.state == TaskState::Blocked {
+                let blocked = receipt.snapshot.state == TaskState::Blocked;
+                if blocked {
                     blockage = Some(JournalBlockage::Delegation { receipt: receipt.as_ref().clone() });
-                    continue;
                 }
                 let text = receipt
                     .snapshot
@@ -488,10 +493,12 @@ pub fn project_execution_journal(
                 let mut original_request = request.clone();
                 original_request.parent_run_id = receipt.snapshot.parent_run_id;
                 let input_digest = floe_agent_contract::delegation_request_digest(&original_request);
-                exchanges.push(ModelConversationEntry::DelegationExchange {
-                    request: original_request,
-                    receipt: receipt.as_ref().clone(),
-                });
+                if !blocked {
+                    exchanges.push(ModelConversationEntry::DelegationExchange {
+                        request: original_request,
+                        receipt: receipt.as_ref().clone(),
+                    });
+                }
                 replay.push(ReplayReceipt {
                     principal: request.principal,
                     run_id: receipt.snapshot.parent_run_id.and_then(RunId::from_uuid),
@@ -724,7 +731,10 @@ pub fn project_execution_journal(
             }
         }
     }
-    if !storage_validation && blockage.is_some() { return Err(AgentFailure::AccessReviewRequired); }
+    if !storage_validation && blockage.is_some()
+        && !(mode == JournalProjectionMode::ContinueSettledDelegation
+            && matches!(&blockage, Some(JournalBlockage::Delegation { .. })))
+    { return Err(AgentFailure::AccessReviewRequired); }
     if !storage_validation && attempts.values().any(|state| !state.completed) {
         // A model attempt that never produced a result leaves nothing to resume.
         return Err(AgentFailure::Interrupted);

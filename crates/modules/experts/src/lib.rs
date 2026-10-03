@@ -1,10 +1,9 @@
-//! Expert directory, registration, endpoint dispatch, A2A Task transport and
+//! Expert directory, registration, shared Engine execution and
 //! Task ownership.
 //!
 //! Nothing here decides what a specific Expert means. The common path carries an
 //! agent identity and a role-neutral invocation.
 
-mod a2a;
 mod api;
 #[path = "application/service.rs"]
 mod service;
@@ -16,12 +15,9 @@ mod binding;
 pub use binding::{binding_review_digest, project_binding_mutation_receipt, project_binding_review,
     project_expert_directory, validate_binding_review_descriptor};
 pub use service::{ExpertsDependencies, ExpertsService};
-mod bundle_install;
 mod directory;
-mod dispatch;
 mod manifest;
 mod registry;
-mod requirement;
 mod selection;
 mod settlement;
 mod task;
@@ -51,23 +47,13 @@ pub use program::{ExpertFinalOutput, ExpertProgram, ExpertProgramRequest, Expert
 pub use ports::source::{ExpertProjectionPort, ExpertProjectionRequest, ExpertSourcePort,
     ExpertSourceRead, ExpertSourceRequest};
 
-pub use a2a::{
-    A2A_PROTOCOL_VERSION, A2AArtifact, A2AHost, A2AMessage, A2AMessageRole, A2APart, A2ARouter,
-    A2ASendMessageRequest, A2ATask, A2ATaskRequest, A2ATaskState, AgentCard, InProcessA2ATransport,
-    InProcessAgent, NoA2AHost,
-};
-pub use bundle_install::{BoxFuture, ExpertInstallStore, ensure_expert_bundle};
 pub use directory::{
     Directory, DirectoryEntry, DirectoryQuery, ExpertAdmissionIdentity,
     RunExpertEnvironmentIdentity,
 };
-pub use dispatch::{
-    ExpertDispatchTable, ExpertRun, TaskCoverageRecorder, admit_expert_message,
-    completed_expert_task, record_task_coverage, task_receipt_to_a2a,
-};
 /// What one Expert is asked to do and what it answers are contract values; what
 /// this module adds is the registry that admits an invocation and records it.
-pub use floe_agent_contract::{PackageKind, PackageRef};
+pub use floe_agent_contract::{AgentCard, PackageKind, PackageRef};
 pub use manifest::{
     ContractRef, EXPERT_MANIFEST_SCHEMA_VERSION, ExpertManifest, ExpertRegistration,
     ExpertSourceRequirement, MAX_REQUIREMENT_SOURCES, manifest_set_digest,
@@ -80,15 +66,15 @@ pub use registry::{
     RegistryConfigurationTarget, RegistryOverview, RegistrySnapshot, RequirementBinding,
     ResolvedExpert,
 };
-pub use requirement::RequirementReadOutcome;
 pub use selection::{
     AdmittedRequirementSelection, EXPERT_EXECUTION_SELECTION_SCHEMA_VERSION,
     ExpertExecutionSelection,
 };
-pub use settlement::{ExpertSettlement, ExpertTaskCompletion};
+pub use settlement::{ExpertSettlement, ExpertTaskCompletion, prepare_expert_completion};
 pub use task::{RunExpertEnvironment, TaskCoordinator};
 pub use task_record::{TaskRecord, TaskArtifactEvidence, settle_task_execution,
-    interrupt_task_execution, validate_task_artifact};
+    interrupt_task_execution, validate_task_artifact, advance_task_journal, validate_task_journal,
+    MAX_TASK_RECORD_BYTES, MAX_TASK_TERMINAL_RESERVE_BYTES};
 pub use task_repository::{TaskActivation, TaskAdmission, TaskExecutionCommit, TaskRepository};
 
 /// Role-neutral inference consumer for admitted delegated Experts.

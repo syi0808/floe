@@ -13,10 +13,10 @@ use super::*;
 
 const SCHEMA_VERSION: i64 = 9;
 const MAX_RUN_RECORD_BYTES: usize = 128 * 1024;
-const MAX_JOURNAL_ENTRY_BYTES: usize = 128 * 1024;
+const MAX_JOURNAL_ENTRY_BYTES: usize = floe_agent_contract::MAX_TASK_RECEIPT_BYTES + 4096;
 const MAX_RUN_ROWS: i64 = 4_096;
 const MAX_COMMAND_ROWS: i64 = 4_096;
-const MAX_JOURNAL_ENTRIES: u64 = 512;
+pub(super) const MAX_JOURNAL_ENTRIES: u64 = 512;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VaultConversationAdmission {
@@ -597,7 +597,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if record.state != RunState::Working { return Err(AgentFailure::Conflict); }
             if record.journal_revision >= MAX_JOURNAL_ENTRIES { return Err(AgentFailure::BudgetExceeded); }
             let event: JournalEvent = serde_json::from_str(payload).map_err(|_| AgentFailure::InvalidInput)?;
-            if kind != journal_kind(&event) { return Err(AgentFailure::InvalidInput); }
+            if kind != journal_kind(&event) || payload.len() > journal_event_byte_limit(&event) { return Err(AgentFailure::InvalidInput); }
             let mut entries = self.conversation_journal_on(&transaction, &record).await?;
             entries.push(JournalEntry { revision: record.journal_revision + 1, event });
             validate_journal(&record, &entries)?;
@@ -798,11 +798,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .blocked
                 .as_ref()
                 .ok_or(AgentFailure::InvalidInput)?;
+            self.validate_blocked_task_audits_on(&transaction, &commit).await?;
             for publication in &commit.publications {
                 if publication.record.device_id != current.device_id {
                     return Err(AgentFailure::Conflict);
                 }
-                self.store_projection_review_on(
+                self.store_review_audit_on(
                     &transaction,
                     &current,
                     &publication.record,
@@ -838,7 +839,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         if replay {
                             return Err(AgentFailure::StorageUnavailable);
                         }
-                        self.check_interaction_origin_on(&transaction, interaction, true)
+                        self.check_interaction_origin_on(&transaction, interaction)
                             .await?;
                         let stored = super::conversation_interactions::count_interactions(
                             &transaction,
@@ -898,7 +899,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             let event: JournalEvent =
                 serde_json::from_str(&payload).map_err(|_| AgentFailure::StorageUnavailable)?;
-            if kind != journal_kind(&event) {
+            if kind != journal_kind(&event) || payload.len() > journal_event_byte_limit(&event) {
                 return Err(AgentFailure::StorageUnavailable);
             }
             entries.push(JournalEntry { revision, event });
@@ -1177,7 +1178,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     let mut tables = transaction
         .query(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('agent_conversation_schema', 'agent_conversation_executor', 'agent_conversation_runs', 'agent_conversation_journal', 'agent_conversation_commands', 'agent_conversation_resume_slots', 'agent_conversation_resume_requests', 'agent_conversation_projection_reviews', 'agent_conversation_terminal_receipts', 'agent_conversation_session_commands', 'agent_conversation_recovery_commands')",
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('agent_conversation_schema', 'agent_conversation_executor', 'agent_conversation_runs', 'agent_conversation_journal', 'agent_conversation_commands', 'agent_conversation_resume_slots', 'agent_conversation_resume_requests', 'agent_conversation_review_audits', 'agent_conversation_terminal_receipts', 'agent_conversation_session_commands', 'agent_conversation_recovery_commands')",
             (),
         )
         .await
@@ -1211,7 +1212,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             .map_err(storage)?;
         transaction
             .execute(
-                "CREATE TABLE agent_conversation_journal (run_id TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision > 0), kind TEXT NOT NULL, payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 131072), PRIMARY KEY (run_id, revision), FOREIGN KEY (run_id) REFERENCES agent_conversation_runs(run_id))",
+                "CREATE TABLE agent_conversation_journal (run_id TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision > 0), kind TEXT NOT NULL, payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 1052672), PRIMARY KEY (run_id, revision), FOREIGN KEY (run_id) REFERENCES agent_conversation_runs(run_id))",
                 (),
             )
             .await
@@ -1237,7 +1238,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
         transaction.execute("CREATE TABLE agent_conversation_session_commands (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, session_id TEXT NOT NULL REFERENCES agent_sessions(id), initial_revision INTEGER NOT NULL CHECK(initial_revision = 0))", ()).await.map_err(storage)?;
         transaction.execute("CREATE TABLE agent_conversation_terminal_receipts (run_id TEXT PRIMARY KEY REFERENCES agent_conversation_runs(run_id), digest TEXT NOT NULL CHECK(length(digest) = 64))", ()).await.map_err(storage)?;
         transaction.execute(
-            "CREATE TABLE agent_conversation_projection_reviews (projection_operation_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, person_id TEXT NOT NULL, payload TEXT NOT NULL)", (),
+            "CREATE TABLE agent_conversation_review_audits (operation_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, person_id TEXT NOT NULL, payload TEXT NOT NULL)", (),
         ).await.map_err(storage)?;
         transaction
             .execute(
@@ -1267,7 +1268,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             "agent_conversation_commands".to_owned(),
             "agent_conversation_executor".to_owned(),
             "agent_conversation_journal".to_owned(),
-            "agent_conversation_projection_reviews".to_owned(),
+            "agent_conversation_review_audits".to_owned(),
             "agent_conversation_recovery_commands".to_owned(),
             "agent_conversation_resume_requests".to_owned(),
             "agent_conversation_resume_slots".to_owned(),
@@ -1335,7 +1336,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
         return Err(AgentFailure::VaultUnavailable);
     }
     transaction.query("SELECT origin_run_id, person_id, session_id, state, child_run_id, payload FROM agent_conversation_resume_requests LIMIT 0", ()).await.map_err(storage)?;
-    transaction.query("SELECT projection_operation_id, run_id, person_id, payload FROM agent_conversation_projection_reviews LIMIT 0", ()).await.map_err(storage)?;
+    transaction.query("SELECT operation_id, run_id, person_id, payload FROM agent_conversation_review_audits LIMIT 0", ()).await.map_err(storage)?;
     transaction
         .query(
             "SELECT run_id, digest FROM agent_conversation_terminal_receipts LIMIT 0",
@@ -1452,7 +1453,7 @@ fn parse_run_id(value: &str) -> Result<RunId, AgentFailure> {
         .and_then(|value| RunId::from_uuid(value).ok_or(AgentFailure::VaultUnavailable))
 }
 
-fn encode_record(record: &RunRecord) -> Result<String, AgentFailure> {
+pub(super) fn encode_record(record: &RunRecord) -> Result<String, AgentFailure> {
     let payload = serde_json::to_string(record).map_err(storage)?;
     if payload.len() > MAX_RUN_RECORD_BYTES {
         return Err(AgentFailure::BudgetExceeded);
@@ -1460,11 +1461,11 @@ fn encode_record(record: &RunRecord) -> Result<String, AgentFailure> {
     Ok(payload)
 }
 
-fn integer(value: u64) -> Result<i64, AgentFailure> {
+pub(super) fn integer(value: u64) -> Result<i64, AgentFailure> {
     i64::try_from(value).map_err(|_| AgentFailure::InvalidInput)
 }
 
-fn state_name(state: RunState) -> &'static str {
+pub(super) fn state_name(state: RunState) -> &'static str {
     match state {
         RunState::Working => "working",
         RunState::Blocked => "blocked",
@@ -1564,7 +1565,7 @@ pub(super) fn same_publication(
         && a.origin_run_id == b.origin_run_id
         && a.origin_turn_id == b.origin_turn_id
         && a.origin == b.origin
-        && a.projection == b.projection
+        && a.audit == b.audit
         && a.kind == b.kind
         && a.requirement == b.requirement
         && a.requirement_digest == b.requirement_digest
@@ -1854,4 +1855,11 @@ pub(super) async fn command_identity_used(
         }
     }
     Ok(false)
+}
+
+fn journal_event_byte_limit(event: &JournalEvent) -> usize {
+    match event {
+        JournalEvent::DelegationResult { .. } => MAX_JOURNAL_ENTRY_BYTES,
+        _ => 128 * 1024,
+    }
 }

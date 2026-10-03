@@ -205,6 +205,11 @@ impl<Keys: VaultKeyProvider> VaultConversationRepository<Keys> {
 impl<Keys: VaultKeyProvider + 'static> ConversationRepository
     for VaultConversationRepository<Keys>
 {
+    fn reconcile_delegation<'a>(&'a self, run_id: RunId, receipt: floe_agent_contract::TaskReceipt)
+        -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move { self.vault.reconcile_conversation_delegation(run_id, receipt).await })
+    }
+
     fn finish_blocked_run<'a>(
         &'a self,
         commit: floe_conversation::BlockedRunCommit,

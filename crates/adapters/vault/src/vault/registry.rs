@@ -1,9 +1,6 @@
-use floe_access::DependencyCoverage;
-use floe_agent_contract::TaskState;
 use floe_experts::{AgentRegistry, RegistrySnapshot};
 use turso::transaction::TransactionBehavior;
 
-use super::tasks::VaultTaskRecord;
 use super::*;
 
 const MAX_REGISTRY_BYTES: usize = 262_144;
@@ -275,131 +272,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(())
     }
 
-    pub async fn settle_expert_task_checked(
-        &self,
-        completion: floe_experts::ExpertTaskCompletion,
-        check: impl Fn() -> Result<(), AgentFailure> + Sync,
-    ) -> Result<VaultTaskRecord, AgentFailure> {
-        let floe_experts::ExpertTaskCompletion {
-            settlement,
-            task_id,
-            expected_task_revision,
-            executor_generation,
-            task_snapshot,
-        } = completion;
-        let coverage = if settlement.dependencies.is_empty() {
-            DependencyCoverage::Independent
-        } else {
-            DependencyCoverage::Dependent {
-                dependencies: settlement.dependencies.clone(),
-            }
-        };
-        coverage
-            .validate()
-            .map_err(|_| AgentFailure::PolicyDenied)?;
-        if settlement.admission.assignment_id.is_nil()
-            || settlement.invocation_id.is_nil()
-            || settlement.owner() != task_snapshot.agent_id
-            || task_snapshot.task_id != task_id
-            || task_snapshot.principal != self.person_id.to_string()
-            || task_snapshot.state != TaskState::Completed
-            || task_snapshot.coverage != coverage
-            || task_snapshot.result.as_deref() != Some(settlement.task_result.as_str())
-            || settlement.next_private_state.schema_version != 1
-            || settlement.next_private_state.last_invocation_id != Some(settlement.invocation_id)
-            || settlement.expected_private_state_revision.checked_add(1)
-                != Some(settlement.next_private_state.revision)
-            || settlement.next_private_state.completed_invocations
-                != settlement.next_private_state.revision
-        {
-            return Err(AgentFailure::Conflict);
-        }
-        check()?;
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(|error| self.registry_transaction_start_error(error))?;
-        let result = async {
-            let mut registry = self
-                .registry_on(&transaction)
-                .await?
-                .ok_or(AgentFailure::NotFound)?;
-            let current = self
-                .task_on(&transaction, task_id)
-                .await?
-                .ok_or(AgentFailure::NotFound)?;
-            if registry.instance_id != settlement.admission.registry_instance_id {
-                return Err(AgentFailure::Conflict);
-            }
-            let assignment = registry
-                .assignments
-                .iter_mut()
-                .find(|assignment| {
-                    assignment.id == settlement.admission.assignment_id
-                        && assignment.person_id == self.person_id
-                })
-                .ok_or(AgentFailure::Conflict)?;
-            if assignment.installation_id != settlement.admission.installation_id
-                || assignment.private_state.revision != settlement.expected_private_state_revision
-                || assignment.private_state.completed_invocations
-                    != settlement.expected_private_state_revision
-                || assignment.private_state.last_invocation_id == Some(settlement.invocation_id)
-                || !registry.installations.iter().any(|installation| {
-                    installation.id == assignment.installation_id
-                        && installation.package == settlement.admission.package
-                })
-                || settlement.admission.definition_revision != task_snapshot.definition_revision
-            {
-                return Err(AgentFailure::Conflict);
-            }
-            if current.admission != settlement.admission
-                || current.invocation_key.as_uuid() != settlement.invocation_id
-            {
-                return Err(AgentFailure::Conflict);
-            }
-            let next_task = current.transition(
-                expected_task_revision,
-                executor_generation,
-                task_snapshot,
-                self.person_id,
-            )?;
-            if self.active_executor_generation(&transaction).await? != executor_generation {
-                return Err(AgentFailure::Conflict);
-            }
-            self.validate_context_dependency_coverage_in_transaction(
-                &transaction,
-                &next_task.snapshot.coverage,
-            )
-            .await?;
-            assignment.private_state = settlement.next_private_state;
-            let previous_revision = registry.revision;
-            registry.revision = previous_revision
-                .checked_add(1)
-                .ok_or(AgentFailure::BudgetExceeded)?;
-            let payload = self.registry_payload(&registry)?;
-            self.update_registry(&transaction, previous_revision, registry.revision, payload)
-                .await?;
-            if super::tasks::write_task(
-                &transaction,
-                &next_task,
-                expected_task_revision,
-                executor_generation,
-            )
-            .await?
-                != 1
-            {
-                return Err(AgentFailure::Conflict);
-            }
-            self.check_access()?;
-            check()?;
-            Ok(next_task)
-        }
-        .await;
-        self.finish_registry_transaction_checked(transaction, result)
-            .await
-    }
-
     pub(super) async fn save_expert_registry_change_checked(
         &self,
         expected_revision: u64,
@@ -569,7 +441,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
     }
 
-    async fn update_registry(
+    pub(super) async fn update_registry(
         &self,
         connection: &turso::Connection,
         previous: u64,
@@ -584,7 +456,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(())
     }
 
-    fn registry_payload(&self, snapshot: &RegistrySnapshot) -> Result<String, AgentFailure> {
+    pub(super) fn registry_payload(&self, snapshot: &RegistrySnapshot) -> Result<String, AgentFailure> {
         if snapshot
             .assignments
             .iter()
