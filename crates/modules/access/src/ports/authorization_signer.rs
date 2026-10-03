@@ -5,8 +5,13 @@ use floe_kernel::AgentFailure;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub enum AuthorizationSigningCommand<'a> {
+    AssistantView(AssistantAuthorizationSigningCommand),
+    DayCalendarRefresh(crate::ProductCalendarSigningCommand<'a>),
+}
+
 #[derive(Clone, Debug)]
-pub struct AuthorizationSigningCommand {
+pub struct AssistantAuthorizationSigningCommand {
     pub operation_id: Uuid,
     pub request_digest: [u8; 32],
     pub expected: RemoteViewAuthorizationExpectation,
@@ -17,7 +22,7 @@ pub struct AuthorizationSigningCommand {
     pub producer_signature: Vec<u8>,
     pub expires_at_unix_ms: i64,
 }
-impl AuthorizationSigningCommand {
+impl AssistantAuthorizationSigningCommand {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         use sha2::Digest;
         let digest: [u8; 32] = sha2::Sha256::digest(&self.canonical_bytes).into();
@@ -46,7 +51,7 @@ pub trait AuthorizationSigner: Send + Sync {
     fn public_key<'a>(&'a self) -> BoxFuture<'a, Result<RemoteOwnerPublicKey, AgentFailure>>;
     fn sign_authorization<'a>(
         &'a self,
-        command: AuthorizationSigningCommand,
+        command: AuthorizationSigningCommand<'a>,
     ) -> BoxFuture<'a, Result<AuthorizationSignature, AgentFailure>>;
 }
 
@@ -66,13 +71,15 @@ pub struct VerifiedAuthorizationClaims {
 }
 
 pub trait AuthorizationProofVerifier: Send + Sync {
+    fn verify_product(&self, command: &crate::ProductCalendarSigningCommand<'_>) -> Result<crate::ProductCalendarChallenge, AgentFailure>;
+
     fn verify(
         &self,
-        command: &AuthorizationSigningCommand,
+        command: &AssistantAuthorizationSigningCommand,
     ) -> Result<VerifiedAuthorizationClaims, AgentFailure>;
 }
 
-impl AuthorizationSigningCommand {
+impl AssistantAuthorizationSigningCommand {
     pub fn validate_claims(
         &self,
         claims: &VerifiedAuthorizationClaims,

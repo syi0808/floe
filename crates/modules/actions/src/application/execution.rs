@@ -11,6 +11,7 @@ impl ActionsService {
         if self.closed.load(Ordering::Acquire){return Err(AgentFailure::VaultUnavailable);}
         let cancellation=Cancellation::new();
         let mut jobs=self.jobs.lock().map_err(|_|AgentFailure::StorageUnavailable)?;
+        if self.closed.load(Ordering::Acquire){return Err(AgentFailure::VaultUnavailable);}
         if jobs.contains_key(&id){return Ok(());}
         if jobs.len()>=64{return Err(AgentFailure::BudgetExceeded);}
         jobs.insert(id,cancellation.clone());
@@ -41,8 +42,11 @@ impl ActionsService {
         let prepared=match self.executor.prepare(actor,&record,&events,scope).await {
             Ok(prepared)=>prepared,Err(reason)=>return self.stop(&record,PreDispatchState::Blocked{reason}).await,
         };
-        self.admit_actor(actor,scope)?;
-        if self.observe_source(actor,&record.effect).await?!=source || self.current_events(actor,&record.effect,scope).await?!=events {
+        if self.closed.load(Ordering::Acquire)||scope.cancellation().is_cancelled(){return self.stop(&record,PreDispatchState::Cancelled).await;}
+        if Instant::now()>=scope.deadline(){return self.stop(&record,PreDispatchState::Blocked{reason:ActionBlockedReason::ExecutorUnavailable}).await;}
+        let unchanged_source=self.observe_source(actor,&record.effect).await.is_ok_and(|current|current==source);
+        let unchanged_events=self.current_events(actor,&record.effect,scope).await.is_ok_and(|current|current==events);
+        if !unchanged_source || !unchanged_events {
             return self.stop(&record,PreDispatchState::Blocked{reason:ActionBlockedReason::SourceChanged}).await;
         }
         if self.clock.now()>=record.expires_at{return self.stop(&record,PreDispatchState::Expired).await;}

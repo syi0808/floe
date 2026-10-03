@@ -63,6 +63,9 @@ pub struct CalendarTarget {
 
 impl CalendarTarget {
     pub fn source(&self) -> Result<&floe_day::CalendarSource, AgentFailure> {
+        if self.original.id.0.is_nil() || self.original.revision.0 == 0 || !matches!(self.original.schedule,floe_day::EventSchedule::Timed(_)) {
+            return Err(AgentFailure::InvalidInput);
+        }
         match &self.original.source {
             SourceRef::Calendar(value) if value.can_modify && bounded(&value.external_id, 1024)
                 && value.provider == CalendarProvider::EventKit && value.external_revision.is_valid() && self.original.deleted_at.is_none() => Ok(value),
@@ -362,11 +365,12 @@ impl ActionRecord {
             || self.review.authority_revision==0 || self.review.expires_at!=self.expires_at {return Err(AgentFailure::InvalidInput);}
         match (&self.origin,&self.dependency) {
             (ActionOrigin::Direct{command_id,actor_device_id},None) if !command_id.is_nil() && actor_device_id==&self.device_id=>{},
-            (ActionOrigin::Expert{task_id,invocation_id,package,installation_id,assignment_id,definition_revision,artifact_id,..},Some(dependency))
+            (ActionOrigin::Expert{task_id,invocation_id,package,installation_id,assignment_id,definition_revision,artifact_id,evidence_ref},Some(dependency))
                 if !task_id.is_nil() && !invocation_id.is_nil() && !installation_id.is_nil() && !assignment_id.is_nil()
                 && *definition_revision>0 && !artifact_id.is_nil() && package.kind==PackageKind::Expert
+                && evidence_ref.execution.task_id.as_uuid()==*task_id && evidence_ref.validate().is_ok()
                 && matches!(self.effect,CalendarEffect::Create{..}) && dependency.person_id()==self.person_id
-                && dependency.source().connection_id()==&self.source.connection_id && dependency.source_authority()==self.source.authority
+                && dependency.source().connection_id()==self.source.connection_id && dependency.source_authority()==self.source.authority
                 && self.expires_at<=dependency.expires_at()=>{dependency.validate().map_err(|_|AgentFailure::InvalidInput)?;},
             _=>return Err(AgentFailure::PolicyDenied),
         }
@@ -392,6 +396,8 @@ impl ActionRecord {
             (ActionState::Succeeded{..},_)|(_,Some(_))=>return Err(AgentFailure::InvalidInput),
             _=>{},
         }
+        if matches!(self.state,ActionState::PendingReview) && self.authorization.is_some()
+            || matches!(self.state,ActionState::Approved) && self.authorization.is_none() {return Err(AgentFailure::InvalidInput);}
         if let Some(authorization)=&self.authorization {authorization.validate_for(self,self.created_at)?;}
         action_digest(b"floe.actions.record.v1\0",self)?;
         Ok(())

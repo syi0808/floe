@@ -73,7 +73,7 @@ pub use application::source_policy::{
 pub use domain::gateway_identity::{RemoteOwnerPublicKey, RemoteViewAuthorizationExpectation};
 pub use ports::authorization_signer::{
     AuthorizationProofVerifier, AuthorizationSignature, AuthorizationSigner,
-    AuthorizationSigningCommand, VerifiedAuthorizationClaims,
+    AuthorizationSigningCommand, AssistantAuthorizationSigningCommand, VerifiedAuthorizationClaims,
 };
 pub use ports::gateway_trust::{GatewayCredentialExpectation, GatewayTrustReader};
 pub use ports::grant_repository::GrantRepository;
@@ -81,3 +81,9 @@ pub use ports::source_preview::SourcePreviewVerifier;
 pub use ports::trusted_consumer_catalog::{
     TrustedConsumerCatalog, TrustedConsumerRegistration, TrustedViewCapability,
 };
+
+pub use domain::product_calendar_read::*;
+pub use ports::product_source_authority::ProductSourceAuthority;
+pub use application::product_calendar_read::ProductCalendarReadAuthority;
+
+pub use domain::product_calendar_authorization::*;

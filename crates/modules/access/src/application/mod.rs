@@ -47,3 +47,5 @@ pub use remote_view::{
 pub mod authorization_signing;
 pub mod connection_review;
 pub mod source_policy;
+
+pub mod product_calendar_read;

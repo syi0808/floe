@@ -34,7 +34,7 @@ impl ActionsService {
                     || proposal.assignment_id!=evidence.assignment_id || dependency.person_id()!=actor.person_id
                     || dependency.observation_id()!=proposal.evidence_id || dependency.consumer().identifier()!=proposal.package.id
                     || dependency.operation()!=GrantOperation::Read || dependency.purpose()!=GrantPurpose::Assistant
-                    || dependency.source().connection_id()!=&destination.connection_id || dependency.source().connector().as_str()!="calendar.event_kit"
+                    || dependency.source().connection_id()!=destination.connection_id || dependency.source().connector().as_str()!="calendar.event_kit"
                     || !dependency.source_resources().iter().any(|resource|resource.as_str()==destination.calendar_id) {
                     return Err(AgentFailure::PolicyDenied);
                 }

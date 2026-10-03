@@ -16,13 +16,35 @@ pub struct CalendarSource {
     pub external_revision: CalendarExternalRevision,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CalendarExternalRevision {
     ProviderOpaque(String),
     ObservationFingerprint([u8; 32]),
 }
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum ExternalRevisionWire { ProviderOpaque { value: String }, ObservationFingerprint { sha256: String } }
+impl Serialize for CalendarExternalRevision {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let value = match self { Self::ProviderOpaque(value) => ExternalRevisionWire::ProviderOpaque { value: value.clone() }, Self::ObservationFingerprint(digest) => ExternalRevisionWire::ObservationFingerprint { sha256: digest.iter().map(|byte| format!("{byte:02x}")).collect() } };
+        value.serialize(serializer)
+    }
+}
+impl<'de> Deserialize<'de> for CalendarExternalRevision {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = match ExternalRevisionWire::deserialize(deserializer)? { ExternalRevisionWire::ProviderOpaque { value } => Self::ProviderOpaque(value), ExternalRevisionWire::ObservationFingerprint { sha256 } => {
+            if sha256.len() != 64 || !sha256.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) { return Err(serde::de::Error::custom("invalid observation fingerprint")); }
+            let mut digest = [0; 32]; for (index, byte) in digest.iter_mut().enumerate() { *byte = u8::from_str_radix(&sha256[index * 2..index * 2 + 2], 16).map_err(serde::de::Error::custom)?; } Self::ObservationFingerprint(digest)
+        } };
+        if !value.is_valid() { return Err(serde::de::Error::custom("invalid external revision")); } Ok(value)
+    }
+}
 impl CalendarExternalRevision {
+    pub fn from_observation_fingerprint_hex(value: &str) -> Option<Self> {
+        if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) { return None; }
+        let mut digest = [0; 32]; for (index, byte) in digest.iter_mut().enumerate() { *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?; }
+        let revision = Self::ObservationFingerprint(digest); revision.is_valid().then_some(revision)
+    }
     pub fn is_valid(&self) -> bool { match self { Self::ProviderOpaque(value) => !value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_control), Self::ObservationFingerprint(value) => *value != [0; 32] } }
     pub fn provider_precondition(&self) -> Option<&str> { match self { Self::ProviderOpaque(value) if self.is_valid() => Some(value), _ => None } }
 }

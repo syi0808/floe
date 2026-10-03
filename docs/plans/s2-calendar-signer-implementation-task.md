@@ -1,0 +1,21 @@
+# Bounded S2 Calendar Vault signer implementation
+
+Implement the frozen Access signing union in `crates/adapters/vault/src/vault/gateway_authority.rs`, with `authority_keys.rs` only if required. Coordinate any root module/initialization edits before touching them. Do not edit Actions, Day repositories, Access policy, provider code or App. Read the accepted Day proposal and `s2-calendar-provider-implementation-task.md` for the exact private wire. This is an explicitly incomplete S2 checkpoint; no compilation, builds, formatters, tests, checkers, dependency resolution, user-data/credential/provider operations, push or publication.
+
+Read `access/ports/authorization_signer.rs` and `domain/{product_calendar_read,product_calendar_authorization}.rs` completely. `AuthorizationSigningCommand<'a>` is a closed union: `AssistantView(AssistantAuthorizationSigningCommand)` or `DayCalendarRefresh(ProductCalendarSigningCommand<'a>)`. The product command borrows a private Access permit and its bounded ExecutionScope; it is not a caller claim that replaces policy.
+
+For AssistantView, retain every existing live grant/source/pin/key/receipt check, signed-byte identity, transactional replay behavior and admission-release association. Only adapt the renamed payload/union dispatch. Product tags must never enter this branch.
+
+For DayCalendarRefresh:
+
+1. Obtain exact current owner key and pinned producer without creating/replacing either. Invoke the injected `AuthorizationProofVerifier::verify_product` to independently strictly decode and verify the actual producer-signed bytes.
+2. Before opening a transaction, call `command.validate_for_signing(&verified_claims, person_id, owner_key_id).await`. This is the authoritative Access policy check: retained original deadline/cancellation, exact actor/source/resource/permission/provider and local Gateway runtime generations, plus every signed claim/limit/page/query/body binding. It performs source observation through the retained owner port. Vault must not implement a second product-read policy or use a synthetic grant.
+3. In the existing short encrypted authority transaction, recheck this Vault generation is available, exact current owner key, producer pin and committed credential expectation/enrollment/generation. Keep actual producer signature verification and exact signed-byte binding. No source/provider/native I/O occurs while the transaction is held.
+4. Persist a distinctly typed product authorization receipt keyed by challenge ID and exact canonical-byte digest. Bind Person/device, refresh/read/page IDs, signed claims, source/query/bounds, key/producer identity and signature. The product slot is separate from assistant grant receipts. Exact repeats return the original receipt; differing bytes/claims conflict.
+5. Admission stores the exact accepted product claim. Release requires the named prior product admission with the same Person/device/read/page/source/query/bounds/key/producer identity and verifies the exact staged result SHA-256. A release proof cannot attach to an assistant admission, another source/page or a stale local generation. Return the signature of the actual verified canonical bytes, never a reserialized approximation.
+
+Sealed/locked/failed key access remains a typed failure. Never create a plaintext signer, fallback store, replacement key, grant or source authority. `ProductGatewayLeaseRegistry` and App close admission/cancel leases before seal; Vault's own availability checks still fence retained Arcs.
+
+Add required product receipt schema only to explicit new-store initialization. Existing profile opening validates the supported schema; it does not initialize a missing table or migrate after failure. If shared initialization ownership blocks the narrow edit, send the exact statements/helper export to the coordinator.
+
+Return exact paths and source diff with a short explanation of preserved assistant checks and product receipt validation. Do not claim compiled, tested or production-complete. Report missing facts or API contradictions before weakening the contract.

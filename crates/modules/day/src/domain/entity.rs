@@ -30,6 +30,7 @@ pub enum SourceRef {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TimedSchedule {
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
@@ -54,6 +55,7 @@ impl TimedSchedule {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AllDaySchedule {
     pub start_date: NaiveDate,
     pub end_date_exclusive: NaiveDate,
@@ -72,6 +74,7 @@ impl AllDaySchedule {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EventSchedule {
     Timed(TimedSchedule),
     AllDay(AllDaySchedule),

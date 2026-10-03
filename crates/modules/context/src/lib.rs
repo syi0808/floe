@@ -30,6 +30,7 @@ mod application {
 mod ports {
     pub mod archive_reader;
     pub mod calendar_source;
+    pub mod calendar_product;
     pub mod evidence_reader;
     pub mod personal_source;
     pub mod source_reader;
@@ -143,3 +144,5 @@ pub use floe_context_contract::views::*;
 pub use floe_context_contract::{
     ContextMemory, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES, MemoryContextSnapshot,
 };
+
+pub use ports::calendar_product::{CalendarProductTransport, CalendarProductReadResult, CalendarProductPage, CalendarProductPageOutcome};

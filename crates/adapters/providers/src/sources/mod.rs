@@ -6,6 +6,6 @@ pub mod personal_native;
 pub mod server;
 
 pub use native_acquisition::LocalAcquisitionBrokers;
-pub use native_calendar::{NativeCalendar, NativeCalendarReadAccess};
+pub use native_calendar::{NativeCalendarExecutor, NativeCalendarReadAccess};
 pub use personal_native::NativePersonalDriver;
 pub use server::{AuthorizedSourceClient, AuthorizedViewRead, ServerSourceClient};
