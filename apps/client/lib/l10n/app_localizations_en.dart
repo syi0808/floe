@@ -219,7 +219,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get agentRemoteConsentRequired =>
-      'The server needs your approval before it can use the configured model.';
+      'Additional source access permission is required. Review the connection permissions.';
 
   @override
   String get agentRemoteCredentialExpired =>

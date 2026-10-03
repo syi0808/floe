@@ -363,11 +363,19 @@ impl AccessService {
                             if !consumers.contains(requirement.consumer()) {
                                 return Err(AgentFailure::PolicyDenied);
                             }
+                            // The first source permission review discloses both
+                            // assistant access and Gateway processing together.
+                            // Derive its scope only from the trusted View; an
+                            // existing grant keeps its reviewed policy above.
+                            let processing = ProcessingRestriction::gateway_allowed(
+                                capability.categories.clone(),
+                            )
+                            .map_err(|_| AgentFailure::InvalidInput)?;
                             (
                                 ExpectedGrant::Absent { resource },
                                 consumers,
                                 capability.categories,
-                                ProcessingRestriction::DeviceOnly,
+                                processing,
                             )
                         }
                         _ => return Err(AgentFailure::Conflict),

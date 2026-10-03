@@ -68,7 +68,7 @@
   "agentConnectedPreparing": "Preparing Calendar reply…",
   "agentConnectedReading": "Reading the enabled calendars…",
   "agentConnectedUnavailable": "No model is available. Connect a server or check the on-device model, then try again.",
-  "agentRemoteConsentRequired": "The server needs your approval before it can use the configured model.",
+  "agentRemoteConsentRequired": "Additional source access permission is required. Review the connection permissions.",
   "agentRemoteCredentialExpired": "The server model credential is unavailable or expired. Reconnect it in the server dashboard.",
   "agentRemoteQuotaExceeded": "The configured server model is busy or over quota. Try again later or configure another route.",
   "agentLocalModelUnavailable": "The on-device model could not run. Check that it is ready, then try again.",

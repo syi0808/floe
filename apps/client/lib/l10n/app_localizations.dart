@@ -493,7 +493,7 @@ abstract class AppLocalizations {
   /// No description provided for @agentRemoteConsentRequired.
   ///
   /// In en, this message translates to:
-  /// **'The server needs your approval before it can use the configured model.'**
+  /// **'Additional source access permission is required. Review the connection permissions.'**
   String get agentRemoteConsentRequired;
 
   /// No description provided for @agentRemoteCredentialExpired.

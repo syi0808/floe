@@ -1,9 +1,15 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:floe_client/app/design_tokens.dart';
+import 'package:floe_client/app/floe_badge.dart';
 import 'package:floe_client/app/floe_button.dart';
+import 'package:floe_client/app/floe_feedback.dart';
+import 'package:floe_client/app/floe_primitives.dart';
 import 'package:floe_client/app/floe_squircle.dart';
+import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/features/connections/domain/connection_models.dart';
 import 'package:floe_client/features/connections/presentation/connections_controller.dart';
 import 'package:floe_client/features/connections/presentation/gateway_connection_panel.dart';
@@ -17,6 +23,8 @@ final class ConnectorScreen extends StatefulWidget {
 }
 
 final class _ConnectorScreenState extends State<ConnectorScreen> {
+  IntegrationRef? selectedIntegration;
+  SourceRef? selectedSource;
   ConnectionsController? get controller => widget.controller;
   @override
   void initState() {
@@ -33,6 +41,8 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
   void didUpdateWidget(ConnectorScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != controller) {
+      selectedIntegration = null;
+      selectedSource = null;
       oldWidget.controller?.removeListener(_changed);
       controller?.addListener(_changed);
       if (controller != null) unawaited(controller!.load());
@@ -107,30 +117,226 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
               child: const Text('Cancel operation'),
             ),
         ],
-        for (final integration
-            in current.overview?.integrations ??
-                const <IntegrationSummary>[]) ...[
-          const SizedBox(height: FloeSpace.lg),
-          FloeSquircle(
-            padding: const EdgeInsets.all(FloeSpace.base),
-            child: IntegrationDetailPanel(
-              controller: current,
-              integration: integration,
+        const SizedBox(height: FloeSpace.lg),
+        _connections(context, current),
+      ],
+    );
+  }
+
+  Widget _connections(BuildContext context, ConnectionsController current) {
+    final integrations = current.overview?.integrations ?? const <IntegrationSummary>[];
+    final sources = current.overview?.sources ?? const <SourceSummary>[];
+    if (selectedIntegration != null || selectedSource != null) {
+      final integration = integrations
+          .where((value) => value.integrationRef == selectedIntegration)
+          .firstOrNull;
+      final source = integration?.source ?? sources
+          .where((value) => value.sourceRef == selectedSource)
+          .firstOrNull;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FloeTextLink(
+              label: AppLocalizations.of(context).backToConnections,
+              icon: LucideIcons.arrowLeft,
+              onPressed: () => setState(() {
+                selectedIntegration = null;
+                selectedSource = null;
+              }),
             ),
           ),
-        ],
-        for (final source
-            in current.overview?.sources ?? const <SourceSummary>[]) ...[
           const SizedBox(height: FloeSpace.lg),
-          _SourceCard(
-            key: ValueKey(source.sourceRef.value),
-            controller: current,
-            source: source,
-          ),
+          if (integration != null)
+            IntegrationDetailPanel(controller: current, integration: integration),
+          if (source != null) ...[
+            if (integration != null) const SizedBox(height: FloeSpace.lg),
+            _SourceCard(
+              key: ValueKey(source.sourceRef.value),
+              controller: current,
+              source: source,
+            ),
+          ],
+          if (integration == null && source == null)
+            Text(current.ready
+                ? 'This connection is no longer in the current list. Refresh Connections.'
+                : current.storageMessage),
+        ],
+      );
+    }
+    final strings = AppLocalizations.of(context);
+    final linkedSources = {
+      for (final integration in integrations)
+        if (integration.source case final source?) source.sourceRef,
+    };
+    final available = <Widget>[
+      for (final integration in integrations)
+        if (integration.state != 'unavailable') _integrationCard(context, integration),
+      for (final source in sources)
+        if (!linkedSources.contains(source.sourceRef) && source.availability != 'unavailable')
+          _sourceCard(source),
+    ];
+    final unavailable = <Widget>[
+      for (final integration in integrations)
+        if (integration.state == 'unavailable') _integrationCard(context, integration),
+      for (final source in sources)
+        if (!linkedSources.contains(source.sourceRef) && source.availability == 'unavailable')
+          _sourceCard(source),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          strings.manageTheServicesThatBringContextTo,
+          style: FloeType.body.copyWith(color: FloePalette.neutral600),
+        ),
+        const SizedBox(height: FloeSpace.lg),
+        if (available.isNotEmpty) ...[
+          Text(strings.availableServices, style: FloeType.title),
+          const SizedBox(height: FloeSpace.base),
+          _ConnectionCardGrid(cards: available),
+        ],
+        if (unavailable.isNotEmpty) ...[
+          const SizedBox(height: FloeSpace.lg),
+          Text(strings.unavailableServices, style: FloeType.title),
+          const SizedBox(height: FloeSpace.base),
+          _ConnectionCardGrid(cards: unavailable),
         ],
       ],
     );
   }
+
+  Widget _sourceCard(SourceSummary source) => _ConnectionCard(
+    key: ValueKey('source-${source.sourceRef.value}'),
+    icon: LucideIcons.plug,
+    name: source.displayLabels.join(' · '),
+    description: 'Manage the resources and access reviewed for this source.',
+    status: source.availability.replaceAll('_', ' '),
+    tone: source.availability == 'available' ? FloeBadgeTone.success : FloeBadgeTone.neutral,
+    onPressed: () => setState(() => selectedSource = source.sourceRef),
+  );
+
+  Widget _integrationCard(BuildContext context, IntegrationSummary integration) {
+    final strings = AppLocalizations.of(context);
+    // Platform affects display copy only; existence, status and actions are
+    // taken from the current owner's integration projection.
+    final macCalendar = integration.category == 'calendar' &&
+        integration.displayName == 'Calendar' &&
+        defaultTargetPlatform == TargetPlatform.macOS;
+    return _ConnectionCard(
+      key: ValueKey('integration-${integration.integrationRef.value}'),
+      icon: switch (integration.category) {
+        'calendar' => LucideIcons.calendarDays,
+        'contacts' => LucideIcons.contact,
+        'health' => LucideIcons.heartPulse,
+        'attention' => LucideIcons.focus,
+        _ => LucideIcons.plug,
+      },
+      name: macCalendar ? strings.macosCalendar : integration.displayName,
+      description: macCalendar ? strings.calendarsAlreadyOnThisMac : switch (integration.category) {
+        'calendar' => 'Manage the calendars available to Floe.',
+        'contacts' => 'Choose the contacts available to Floe.',
+        'health' => 'Use a derived wellbeing summary from Apple Health.',
+        'attention' => 'Manage coarse device attention signals.',
+        _ => 'Manage this service and its reviewed access.',
+      },
+      status: switch (integration.state) {
+        'connected' => 'Connected',
+        'connecting' => 'Connecting',
+        'error' => 'Error',
+        'available' => 'Available',
+        _ => 'Unavailable',
+      },
+      tone: switch (integration.state) {
+        'connected' => FloeBadgeTone.success,
+        'connecting' => FloeBadgeTone.warning,
+        'error' => FloeBadgeTone.danger,
+        'available' => FloeBadgeTone.info,
+        _ => FloeBadgeTone.neutral,
+      },
+      onPressed: () => setState(() => selectedIntegration = integration.integrationRef),
+    );
+  }
+}
+
+final class _ConnectionCard extends StatelessWidget {
+  const _ConnectionCard({
+    super.key,
+    required this.icon,
+    required this.name,
+    required this.description,
+    required this.status,
+    required this.tone,
+    required this.onPressed,
+  });
+  final IconData icon;
+  final String name;
+  final String description;
+  final String status;
+  final FloeBadgeTone tone;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => FloePressable(
+    size: FloeSquircleSize.lg,
+    fill: FloePalette.neutral0,
+    borderColor: FloePalette.neutral200,
+    borderWidth: 1,
+    hoverFill: FloePalette.primary50,
+    onPressed: onPressed,
+    child: Padding(
+      padding: const EdgeInsets.all(FloeSpace.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              FloeSquircle(
+                size: FloeSquircleSize.md,
+                fill: FloePalette.primary50,
+                borderWidth: 0,
+                padding: const EdgeInsets.all(14),
+                child: Icon(icon, size: 26, color: FloePalette.primary600),
+              ),
+              const SizedBox(width: FloeSpace.sm),
+              Flexible(child: FloeBadge(label: status, tone: tone, compact: true)),
+            ],
+          ),
+          const SizedBox(height: 20),
+          Text(name, style: FloeType.title),
+          const SizedBox(height: FloeSpace.sm),
+          Text(
+            description,
+            style: FloeType.bodySmall.copyWith(height: 1.6, color: FloePalette.neutral600),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+final class _ConnectionCardGrid extends StatelessWidget {
+  const _ConnectionCardGrid({required this.cards});
+  final List<Widget> cards;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final width = constraints.maxWidth < 620
+          ? constraints.maxWidth
+          : constraints.maxWidth < 930
+          ? (constraints.maxWidth - FloeSpace.lg) / 2
+          : (constraints.maxWidth - FloeSpace.lg * 2) / 3;
+      return Wrap(
+        spacing: FloeSpace.lg,
+        runSpacing: FloeSpace.lg,
+        children: [for (final card in cards) SizedBox(width: width, child: card)],
+      );
+    },
+  );
 }
 
 final class _SourceCard extends StatefulWidget {
@@ -146,7 +352,8 @@ final class _SourceCard extends StatefulWidget {
 }
 
 final class _SourceCardState extends State<_SourceCard> {
-  SourceProcessing processing = SourceProcessing.deviceOnly;
+  // This is a requested review choice, never the source's current permission.
+  SourceProcessing processing = SourceProcessing.gatewayAllowed;
   SourceReviewRef? selectionReview;
   final selected = <ResourceRef>{};
   @override
@@ -207,16 +414,25 @@ final class _SourceCardState extends State<_SourceCard> {
             ],
           ),
           if (source.allowedActions.contains('prepare_observe_review')) ...[
+            const SizedBox(height: FloeSpace.base),
+            const Text('Use with Floe', style: FloeType.title),
+            const SizedBox(height: FloeSpace.sm),
+            const Text(
+              'Review access to the selected resources and where Floe may process them. Nothing changes until you allow the reviewed access.',
+            ),
+            const SizedBox(height: FloeSpace.sm),
+            const Text('Requested processing', style: FloeType.label),
             DropdownButton<SourceProcessing>(
               value: processing,
+              isExpanded: true,
               items: const [
                 DropdownMenuItem(
                   value: SourceProcessing.deviceOnly,
-                  child: Text('Process on this device'),
+                  child: Text('This device only'),
                 ),
                 DropdownMenuItem(
                   value: SourceProcessing.gatewayAllowed,
-                  child: Text('Allow processing on my Gateway'),
+                  child: Text('This device and my verified Gateway'),
                 ),
               ],
               onChanged: controller.busy
@@ -225,11 +441,20 @@ final class _SourceCardState extends State<_SourceCard> {
                       if (value != null) setState(() => processing = value);
                     },
             ),
+            Text(
+              processing == SourceProcessing.gatewayAllowed
+                  ? 'The request includes source access and permission to process its reviewed data on this device or your verified Gateway.'
+                  : 'The request includes source access with processing limited to this device.',
+            ),
+            const Text(
+              'For Health sources, only locally transformed derived data may reach the Gateway. Raw Health data stays on this device.',
+            ),
+            const SizedBox(height: FloeSpace.sm),
             FloeButton.outlined(
               onPressed: controller.busy
                   ? null
                   : () => controller.prepareObserve(source, processing),
-              child: const Text('Review Observe access'),
+              child: const Text('Review access'),
             ),
           ],
           if (review != null) ...[
@@ -267,18 +492,25 @@ final class _SourceCardState extends State<_SourceCard> {
             const SizedBox(height: FloeSpace.base),
             for (final member in observe.displayMembers) Text(member),
             Text(
-              observe.processingDisclosure.requested ==
-                      SourceProcessing.deviceOnly
-                  ? 'These sources may be processed only on this device.'
-                  : 'These sources may be processed on this device or your verified Gateway.',
+              observe.processingDisclosure.current == SourceProcessing.deviceOnly
+                  ? 'Current processing: this device only.'
+                  : 'Current processing: this device and your verified Gateway.',
             ),
+            Text(
+              observe.processingDisclosure.requested == SourceProcessing.deviceOnly
+                  ? 'Requested processing: this device only.'
+                  : 'Requested processing: this device and your verified Gateway.',
+            ),
+            if (observe.processingDisclosure.current == SourceProcessing.deviceOnly &&
+                observe.processingDisclosure.requested == SourceProcessing.gatewayAllowed)
+              const Text('This review expands processing to your verified Gateway for the scope below.'),
             for (final label in observe.processingDisclosure.scopeLabels)
               Text(label),
             if (observe.processingDisclosure.categories.contains(
               'highly_sensitive',
             ))
               const Text(
-                'This includes highly sensitive data. Health is reduced privately on this device before use.',
+                'This includes highly sensitive data. Only locally transformed derived Health data may reach the Gateway; raw Health data stays on this device.',
               ),
             if (observe.allowedActions.contains('allow'))
               FloeButton.outlined(
