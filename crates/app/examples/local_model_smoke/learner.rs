@@ -65,7 +65,7 @@ fn unlock(host: &Host) -> Result<(), AgentFailure> {
         request.caller(),
         operation,
         VaultLifecycleCommand::Unlock,
-    )?;
+    ).map_err(floe_app::VaultLifecycleCommandFailure::into_failure)?;
     let deadline = Instant::now() + Duration::from_secs(30);
     while !result.done {
         if Instant::now() >= deadline {

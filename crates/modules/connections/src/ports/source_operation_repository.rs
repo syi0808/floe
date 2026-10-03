@@ -42,6 +42,16 @@ impl SourceReservationFence {
 }
 
 pub trait SourceOperationRepository: Send + Sync {
+    fn rejected_operation_command<'a>(
+        &'a self,
+        identity: crate::ConnectionsCommandIdentity,
+    ) -> BoxFuture<'a, Result<Option<floe_kernel::AgentFailure>, SourceRepositoryError>>;
+    /// Absence is proved against this source journal, never the encrypted product store.
+    fn reject_unadmitted_operation_command<'a>(
+        &'a self,
+        identity: crate::ConnectionsCommandIdentity,
+        reason: floe_kernel::AgentFailure,
+    ) -> BoxFuture<'a, Result<crate::ConnectionsCommandResolution, SourceRepositoryError>>;
     fn reserve<'a>(
         &'a self,
         request: SourceOperationReservation,

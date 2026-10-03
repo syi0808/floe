@@ -244,8 +244,8 @@ impl PairingRecord {
         let c = &started.challenge;
         let e = &started.enrollment;
         if !(self.state == PairingState::Pending
-            || (self.state == PairingState::RepairRequired
-                && (self.cancellation_command.is_some() || self.forgotten_command.is_some())))
+            || (self.state == PairingState::RepairRequired && self.cancellation_command.is_some())
+            || (self.state == PairingState::Forgotten && self.forgotten_command.is_some()))
             || self.handle.is_some()
             || self.start_phase != PairingStartPhase::Dispatched
             || c.handle.operation_id != self.operation_id
@@ -373,8 +373,8 @@ impl PairingRecord {
         next.validate()?;
         Ok(next)
     }
-    pub fn snapshot(&self) -> PairingSnapshot {
-        let actions = if self.forgotten_command.is_some() {
+    pub fn allowed_actions(&self) -> Vec<ConnectionAction> {
+        if self.forgotten_command.is_some() {
             vec![]
         } else {
             match self.state {
@@ -394,7 +394,10 @@ impl PairingRecord {
                 }
                 _ => vec![],
             }
-        };
+        }
+    }
+    pub fn snapshot(&self) -> PairingSnapshot {
+        let actions = self.allowed_actions();
         PairingSnapshot {
             operation_ref: self.operation_id,
             revision: self.revision,
@@ -986,6 +989,12 @@ fn pairing_failure_projection(record: &PairingRecord) -> Option<crate::Connectio
         ),
         _ => return None,
     };
+    let actions = record.allowed_actions();
+    let recovery = if actions.is_empty() {
+        crate::ConnectionRecovery::None
+    } else {
+        recovery
+    };
     Some(crate::ConnectionFailure {
         domain: crate::ConnectionFailureDomain::Connections,
         category: floe_kernel::AgentFailureCategory::Integrity,
@@ -995,11 +1004,7 @@ fn pairing_failure_projection(record: &PairingRecord) -> Option<crate::Connectio
         reload_required: true,
         seal_session: false,
         recovery,
-        safe_actions: if !record.state.terminal() || record.can_reconcile_repair() {
-            vec![ConnectionAction::Cancel, ConnectionAction::Reobserve]
-        } else {
-            vec![]
-        },
+        safe_actions: actions,
     })
 }
 

@@ -160,6 +160,7 @@ impl ConnectionsService {
             let intent = digest(&("forget_gateway", gateway_ref, expected_revision))?;
             let id = command_ref(actor.person_id, command_id);
             command_identity = Some(ConnectionsCommandIdentity {
+                journal: crate::ConnectionsCommandJournal::Product,
                 record_ref: id,
                 person_id: actor.person_id,
                 device_id: actor.device_id.clone(),
@@ -429,6 +430,7 @@ impl ConnectionsService {
             let intent = digest(&("integration_review", integration_ref, expected_revision))?;
             let id = command_ref(actor.person_id, command_id);
             command_identity = Some(ConnectionsCommandIdentity {
+                journal: crate::ConnectionsCommandJournal::Product,
                 record_ref: id,
                 person_id: actor.person_id,
                 device_id: actor.device_id.clone(),
@@ -539,6 +541,7 @@ impl ConnectionsService {
             ))?;
             let id = command_ref(actor.person_id, command_id);
             command_identity = Some(ConnectionsCommandIdentity {
+                journal: crate::ConnectionsCommandJournal::Product,
                 record_ref: id,
                 person_id: actor.person_id,
                 device_id: actor.device_id.clone(),
@@ -717,95 +720,154 @@ impl ConnectionsService {
     ) -> Result<ConnectionOperationSnapshot, ConnectionsCommandFailure> {
         let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
             ConnectionsCommandFailure::NotAdmitted;
+        let mut command_identity = None;
         let result: Result<ConnectionOperationSnapshot, AgentFailure> = async {
             self.ensure_open()?;
             check(actor, scope)?;
-            let cancel_intent = digest(&("cancel_operation", operation_ref, expected_revision))?;
-            let cancel_ref = command_ref(actor.person_id, command_id);
-            if let Some(record) = self
-                .command(actor, cancel_ref, command_id, cancel_intent)
-                .await?
-            {
+            let intent = digest(&("cancel_operation", operation_ref, expected_revision))?;
+            let id = command_ref(actor.person_id, command_id);
+            command_identity = Some(ConnectionsCommandIdentity {
+                journal: ConnectionsCommandJournal::Product,
+                record_ref: id,
+                person_id: actor.person_id,
+                device_id: actor.device_id.clone(),
+                command_id,
+                intent_digest: intent,
+            });
+            if let Some(record) = self.command(actor, id, command_id, intent).await? {
                 classify = ConnectionsCommandFailure::Admitted;
-                if let ConnectionsPayload::SourceCancellation(snapshot) = record.payload {
-                    return Ok(snapshot);
-                }
+                return self
+                    .observe_cancellation_admission(actor, record, scope)
+                    .await;
+            }
+            let observed = self.get_operation(actor, operation_ref, scope).await?;
+            if command_id.is_nil()
+                || expected_revision == 0
+                || expected_revision > observed.revision
+                || !observed.allowed_actions.contains(&ConnectionAction::Cancel)
+            {
                 return Err(AgentFailure::Conflict);
             }
-            if self
+            classify = ConnectionsCommandFailure::Indeterminate;
+            let pending = self
                 .products
-                .load(actor.person_id, operation_ref)
-                .await?
-                .is_none()
-            {
-                let operation = self
-                    .sources
-                    .load_operation(operation_ref)
-                    .await
-                    .map_err(source_error)?
-                    .ok_or(AgentFailure::NotFound)?;
-                if operation.device_id != actor.device_id
-                    || operation.expected.source.person_id() != actor.person_id
-                    || operation.revision != expected_revision
-                {
-                    return Err(AgentFailure::Conflict);
-                }
-                classify = ConnectionsCommandFailure::Indeterminate;
-                let operation = self
-                    .reconcile(
-                        actor,
+                .insert(record(
+                    actor,
+                    id,
+                    command_id,
+                    intent,
+                    ConnectionsPayload::CancellationIntent {
                         operation_ref,
-                        Some(SourceAbortReason::Cancelled),
-                        scope,
-                    )
-                    .await?;
-                // Reconciliation may return an already terminal source operation.
-                // This cancellation is acknowledged only by its own command receipt.
-                let snapshot = self
-                    .source_operation_snapshot(actor, &operation, scope)
-                    .await?;
-                self.products
-                    .insert(record(
-                        actor,
-                        cancel_ref,
-                        command_id,
-                        cancel_intent,
-                        ConnectionsPayload::SourceCancellation(snapshot.clone()),
-                    ))
-                    .await?;
-                return Ok(snapshot);
+                        expected_revision,
+                    },
+                ))
+                .await?;
+            classify = ConnectionsCommandFailure::Admitted;
+            self.observe_cancellation_admission(actor, pending, scope)
+                .await
+        }
+        .await;
+        self.finish_product_command(result, classify, command_identity)
+            .await
+    }
+    async fn observe_cancellation_admission(
+        &self,
+        actor: &OwnerActor,
+        receipt: ConnectionsRecord,
+        scope: &ExecutionScope,
+    ) -> Result<ConnectionOperationSnapshot, AgentFailure> {
+        let operation_ref = match &receipt.payload {
+            ConnectionsPayload::SourceCancellation(snapshot) => return Ok(snapshot.clone()),
+            ConnectionsPayload::CancellationIntent { operation_ref, .. } => *operation_ref,
+            _ => return Err(AgentFailure::Conflict),
+        };
+        // Admission survives observer cancellation. Only the registered owner
+        // job executes the cancellation; queries never enact it.
+        self.spawn_integration(actor.clone(), receipt, false, scope)?;
+        let mut snapshot = self.get_operation(actor, operation_ref, scope).await?;
+        snapshot
+            .allowed_actions
+            .retain(|action| *action != ConnectionAction::Cancel);
+        Ok(snapshot)
+    }
+    async fn drive_cancellation(
+        &self,
+        actor: &OwnerActor,
+        mut receipt: ConnectionsRecord,
+        scope: &ExecutionScope,
+    ) -> Result<ConnectionOperationSnapshot, AgentFailure> {
+        self.ensure_open()?;
+        check(actor, scope)?;
+        if receipt.person_id != actor.person_id || receipt.device_id != actor.device_id {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let (operation_ref, expected_revision) = match receipt.payload {
+            ConnectionsPayload::SourceCancellation(ref snapshot) => return Ok(snapshot.clone()),
+            ConnectionsPayload::CancellationIntent {
+                operation_ref,
+                expected_revision,
+            } => (operation_ref, expected_revision),
+            _ => return Err(AgentFailure::Conflict),
+        };
+        let snapshot = if let Some(mut stored) =
+            self.products.load(actor.person_id, operation_ref).await?
+        {
+            if stored.device_id != actor.device_id || stored.revision < expected_revision {
+                return Err(AgentFailure::PolicyDenied);
             }
-            let mut stored = self.product(actor, operation_ref).await?;
             let ConnectionsPayload::IntegrationOperation(mut operation) = stored.payload.clone()
             else {
                 return Err(AgentFailure::InvalidInput);
             };
-            if operation.cancellation_command == Some(command_id) {
-                return Ok(operation.snapshot);
+            if !matches!(
+                operation.snapshot.state,
+                ConnectionOperationState::Completed
+                    | ConnectionOperationState::Cancelled
+                    | ConnectionOperationState::Failed
+            ) {
+                if operation.cancellation_command.is_none() {
+                    operation.cancellation_command = Some(receipt.command_id);
+                    let previous = stored.revision;
+                    stored.revision = previous.checked_add(1).ok_or(AgentFailure::Conflict)?;
+                    operation.snapshot.revision = stored.revision;
+                    operation.snapshot.allowed_actions = vec![ConnectionAction::Reobserve];
+                    stored.payload = ConnectionsPayload::IntegrationOperation(operation.clone());
+                    stored = self.products.compare_and_swap(previous, stored).await?;
+                }
+                self.spawn_integration(actor.clone(), stored, false, scope)?;
             }
-            if command_id.is_nil()
-                || stored.revision != expected_revision
-                || matches!(
-                    operation.snapshot.state,
-                    ConnectionOperationState::Completed
-                        | ConnectionOperationState::Cancelled
-                        | ConnectionOperationState::Failed
-                )
+            operation.snapshot
+        } else {
+            let operation = self
+                .sources
+                .load_operation(operation_ref)
+                .await
+                .map_err(source_error)?
+                .ok_or(AgentFailure::NotFound)?;
+            if operation.device_id != actor.device_id
+                || operation.expected.source.person_id() != actor.person_id
+                || operation.revision < expected_revision
             {
-                return Err(AgentFailure::Conflict);
+                return Err(AgentFailure::PolicyDenied);
             }
-            operation.cancellation_command = Some(command_id);
-            let previous = stored.revision;
-            stored.revision += 1;
-            operation.snapshot.revision = stored.revision;
-            stored.payload = ConnectionsPayload::IntegrationOperation(operation);
-            classify = ConnectionsCommandFailure::Indeterminate;
-            let stored = self.products.compare_and_swap(previous, stored).await?;
-            classify = ConnectionsCommandFailure::Admitted;
-            self.drive_integration(actor, stored, false, scope).await
-        }
-        .await;
-        result.map_err(classify)
+            // Cancellation direction is monotonic for this immutable operation.
+            // Owner receipts decide whether cancellation or an earlier commit won.
+            let operation = self
+                .reconcile(
+                    actor,
+                    operation_ref,
+                    Some(SourceAbortReason::Cancelled),
+                    scope,
+                )
+                .await?;
+            self.source_operation_snapshot(actor, &operation, scope)
+                .await?
+        };
+        let previous = receipt.revision;
+        receipt.revision = previous.checked_add(1).ok_or(AgentFailure::Conflict)?;
+        receipt.payload = ConnectionsPayload::SourceCancellation(snapshot.clone());
+        self.products.compare_and_swap(previous, receipt).await?;
+        Ok(snapshot)
     }
     async fn drive_integration(
         &self,
@@ -975,6 +1037,7 @@ impl ConnectionsService {
             let intent = digest(&("source_review", source_ref, expected_revision))?;
             let id = command_ref(actor.person_id, command_id);
             command_identity = Some(ConnectionsCommandIdentity {
+                journal: crate::ConnectionsCommandJournal::Product,
                 record_ref: id,
                 person_id: actor.person_id,
                 device_id: actor.device_id.clone(),
@@ -1145,6 +1208,7 @@ impl ConnectionsService {
             ))?;
             let id = command_ref(actor.person_id, command_id);
             command_identity = Some(ConnectionsCommandIdentity {
+                journal: crate::ConnectionsCommandJournal::Product,
                 record_ref: id,
                 person_id: actor.person_id,
                 device_id: actor.device_id.clone(),
@@ -1428,6 +1492,7 @@ impl ConnectionsService {
             ))?;
             let id = command_ref(actor.person_id, command_id);
             command_identity = Some(ConnectionsCommandIdentity {
+                journal: crate::ConnectionsCommandJournal::Product,
                 record_ref: id,
                 person_id: actor.person_id,
                 device_id: actor.device_id.clone(),
@@ -1662,6 +1727,7 @@ impl ConnectionsService {
             let intent = digest(&("management_launch", gateway_ref, expected_revision))?;
             let id = command_ref(actor.person_id, command_id);
             command_identity = Some(ConnectionsCommandIdentity {
+                journal: crate::ConnectionsCommandJournal::Product,
                 record_ref: id,
                 person_id: actor.person_id,
                 device_id: actor.device_id.clone(),
@@ -1753,7 +1819,13 @@ impl ConnectionsService {
                 {
                     break;
                 }
-                let result = if matches!(current.payload, ConnectionsPayload::NativeSetup { .. }) {
+                let result = if matches!(
+                    current.payload,
+                    ConnectionsPayload::CancellationIntent { .. }
+                        | ConnectionsPayload::SourceCancellation(_)
+                ) {
+                    service.drive_cancellation(&actor, current, &scope).await
+                } else if matches!(current.payload, ConnectionsPayload::NativeSetup { .. }) {
                     service.drive_native_setup(&actor, current, &scope).await
                 } else {
                     service
@@ -1784,6 +1856,9 @@ impl ConnectionsService {
                 let Ok(Some(record)) = service.products.load(actor.person_id, id).await else {
                     break;
                 };
+                if matches!(record.payload, ConnectionsPayload::SourceCancellation(_)) {
+                    break;
+                }
                 current = record;
             }
         });
@@ -1990,6 +2065,7 @@ impl ConnectionsService {
                 continue;
             }
             let pending = match &record.payload {
+                ConnectionsPayload::CancellationIntent { .. } => true,
                 ConnectionsPayload::IntegrationOperation(operation) => matches!(
                     operation.snapshot.state,
                     ConnectionOperationState::Pending
@@ -2383,6 +2459,7 @@ impl ConnectionsService {
         if let Some(reason) = self
             .products
             .rejected_command(ConnectionsCommandIdentity {
+                journal: crate::ConnectionsCommandJournal::Product,
                 record_ref: id,
                 person_id: actor.person_id,
                 device_id: actor.device_id.clone(),

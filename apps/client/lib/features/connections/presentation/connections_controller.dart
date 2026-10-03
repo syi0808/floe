@@ -36,7 +36,7 @@ final class ConnectionsController extends ChangeNotifier {
   int? _activeCommandGeneration;
 
   bool get ready => vault.ready;
-  bool get busy => _commandBusy || !ready || _pendingCommand != null;
+  bool get busy => _commandBusy || !ready;
   bool get _acceptCommandResult =>
       !_disposed && ready && _activeCommandGeneration == _readinessGeneration;
 
@@ -103,12 +103,15 @@ final class ConnectionsController extends ChangeNotifier {
   int _loadGeneration = 0;
   Timer? _pairingObservation;
   Timer? _operationObservation;
-  Future<void> Function()? _pendingCommand;
-  String? _pendingCommandId;
-  bool _pendingWasUncertain = false;
+  final Map<String, _PendingCommand> _pendingCommands = {};
+  int get pendingCommandCount => _pendingCommands.length;
+  List<({String commandId, String label})> get pendingRequests => [
+    for (final value in _pendingCommands.values)
+      (commandId: value.id, label: value.label),
+  ];
 
   bool get hasUncertainCommand =>
-      _pendingCommand != null && !_commandBusy && ready;
+      _pendingCommands.isNotEmpty && !_commandBusy && ready;
 
   Future<void> load() async {
     if (_disposed || !ready) return;
@@ -118,7 +121,7 @@ final class ConnectionsController extends ChangeNotifier {
       if (_disposed || !ready || generation != _loadGeneration) return;
       if (overview != null && value.revision < overview!.revision) return;
       overview = value;
-      if (_pendingCommand == null) failure = null;
+      if (_pendingCommands.isEmpty) failure = null;
     } on Object catch (error) {
       if (!_disposed && ready && generation == _loadGeneration) {
         _reportStorageFailure(error);
@@ -131,46 +134,58 @@ final class ConnectionsController extends ChangeNotifier {
     _notify();
   }
 
-  Future<void> _command(Future<void> Function(String commandId) action) async {
-    if (_disposed || busy || _pendingCommand != null) return;
+  Future<void> _command(
+    String target,
+    String label,
+    Future<void> Function(String commandId) action,
+  ) async {
+    if (_disposed || busy) return;
+    if (_pendingCommands.containsKey(target)) {
+      failure =
+          'The earlier $label request is unresolved. Recover that same request before changing it.';
+      _notify();
+      return;
+    }
     final commandId = newAgentRequestId();
-    _pendingCommandId = commandId;
-    _pendingWasUncertain = false;
-    _pendingCommand = () => action(commandId);
-    await retryPendingCommand();
+    final pending = _PendingCommand(commandId, label, () => action(commandId));
+    _pendingCommands[target] = pending;
+    await _runPending(target, pending);
   }
 
-  /// Replays the identical owner-idempotent command after an uncertain response.
-  /// A new decision never borrows the pending command's durable identity.
-  Future<void> retryPendingCommand() async {
-    final pending = _pendingCommand;
-    if (_disposed || _commandBusy || !ready || pending == null) return;
-    final wasUncertain = _pendingWasUncertain;
-    // From this point a handoff can outlive this observer or its readiness.
-    _pendingWasUncertain = true;
+  /// Recovery retains each exact intent. Other targets and repair actions remain
+  /// available; only the owner can decide whether their authority permits them.
+  Future<void> retryPendingCommand([String? commandId]) async {
+    if (_pendingCommands.isEmpty) return;
+    final entry = commandId == null
+        ? _pendingCommands.entries.first
+        : _pendingCommands.entries
+              .where((entry) => entry.value.id == commandId)
+              .firstOrNull;
+    if (entry != null) await _runPending(entry.key, entry.value);
+  }
+
+  Future<void> _runPending(String target, _PendingCommand pending) async {
+    if (_disposed || _commandBusy || !ready) return;
+    final wasUncertain = pending.wasUncertain;
+    pending.wasUncertain = true;
     _commandBusy = true;
     final generation = _readinessGeneration;
     _activeCommandGeneration = generation;
     failure = null;
     _notify();
     try {
-      await pending();
+      await pending.action();
       if (_disposed || !ready || generation != _readinessGeneration) return;
-      _pendingCommand = null;
-      _pendingCommandId = null;
-      _pendingWasUncertain = false;
+      _pendingCommands.remove(target);
       await load();
     } on Object catch (error) {
       if (_disposed || !ready || generation != _readinessGeneration) return;
-      // A later rejection cannot erase uncertainty from an earlier handoff.
       if (error is ConnectionsCommandFailure &&
-          error.commandId == _pendingCommandId &&
+          error.commandId == pending.id &&
           (error.disposition == NativeCommandDisposition.notApplied ||
               (!wasUncertain &&
                   error.disposition == NativeCommandDisposition.notAdmitted))) {
-        _pendingCommand = null;
-        _pendingCommandId = null;
-        _pendingWasUncertain = false;
+        _pendingCommands.remove(target);
       }
       _reportStorageFailure(error);
       failure = _failureMessage(
@@ -184,18 +199,21 @@ final class ConnectionsController extends ChangeNotifier {
     }
   }
 
-  Future<void> prepareGateway(String address) => _command((id) async {
-    final value = await gateway.prepareGatewaySetup(
-      commandId: id,
-      addressText: address,
-    );
-    if (_acceptCommandResult) setup = value;
-  });
+  Future<void> prepareGateway(String address) =>
+      _command('prepareGateway:$address', 'Gateway setup', (id) async {
+        final value = await gateway.prepareGatewaySetup(
+          commandId: id,
+          addressText: address,
+        );
+        if (_acceptCommandResult) setup = value;
+      });
 
   Future<void> startPairing() async {
     final target = setup;
     if (target == null) return;
     await _command(
+      'startPairing',
+      'pairing',
       (id) async => _setPairing(
         await gateway.startPairing(
           commandId: id,
@@ -209,6 +227,8 @@ final class ConnectionsController extends ChangeNotifier {
     final current = pairing;
     if (current == null) return;
     await _command(
+      'confirmPairing:${current.operationRef}',
+      'pairing confirmation',
       (id) async => _setPairing(
         await gateway.confirmPairing(
           commandId: id,
@@ -223,6 +243,8 @@ final class ConnectionsController extends ChangeNotifier {
     final current = pairing;
     if (current == null) return;
     await _command(
+      'cancelPairing:${current.operationRef}',
+      'pairing cancellation',
       (id) async => _setPairing(
         await gateway.cancelPairing(
           commandId: id,
@@ -282,85 +304,107 @@ final class ConnectionsController extends ChangeNotifier {
     _notify();
   }
 
-  Future<void> forgetGateway(GatewaySummary value) => _command((id) async {
-    await gateway.forgetGateway(
-      commandId: id,
-      gatewayRef: value.gatewayRef,
-      expectedRevision: value.revision,
-    );
-  });
+  Future<void> forgetGateway(GatewaySummary value) => _command(
+    'forgetGateway:${value.gatewayRef}',
+    'Gateway removal',
+    (id) async {
+      await gateway.forgetGateway(
+        commandId: id,
+        gatewayRef: value.gatewayRef,
+        expectedRevision: value.revision,
+      );
+    },
+  );
 
-  Future<void> prepareManagement(GatewaySummary value) => _command((id) async {
-    final launch = await gateway.requestManagementLaunch(
-      commandId: id,
-      gatewayRef: value.gatewayRef,
-      expectedRevision: value.revision,
-    );
-    if (_acceptCommandResult) launchAction = launch;
-  });
+  Future<void> prepareManagement(GatewaySummary value) => _command(
+    'management:${value.gatewayRef}',
+    'Gateway management',
+    (id) async {
+      final launch = await gateway.requestManagementLaunch(
+        commandId: id,
+        gatewayRef: value.gatewayRef,
+        expectedRevision: value.revision,
+      );
+      if (_acceptCommandResult) launchAction = launch;
+    },
+  );
 
-  Future<void> prepareIntegration(IntegrationSummary value) =>
-      _command((id) async {
-        final review = await gateway.prepareIntegrationReview(
-          commandId: id,
-          integrationRef: value.integrationRef,
-          expectedRevision: value.revision,
-        );
-        if (_acceptCommandResult) {
-          integrationReview = review;
-          _integrationRevision = value.revision;
-        }
-      });
+  Future<void> prepareIntegration(IntegrationSummary value) => _command(
+    'prepareIntegration:${value.integrationRef}',
+    'integration review',
+    (id) async {
+      final review = await gateway.prepareIntegrationReview(
+        commandId: id,
+        integrationRef: value.integrationRef,
+        expectedRevision: value.revision,
+      );
+      if (_acceptCommandResult) {
+        integrationReview = review;
+        _integrationRevision = value.revision;
+      }
+    },
+  );
 
   Future<void> startIntegration(IntegrationReview review) {
     final expectedRevision = _integrationRevision;
     if (expectedRevision == null) return Future<void>.value();
-    return _command((id) async {
-      _setOperation(
-        await gateway.startIntegration(
-          commandId: id,
-          integrationRef: review.integrationRef,
-          reviewedSelectionRef: review.reviewRef,
-          expectedRevision: expectedRevision,
-        ),
-      );
-      if (_acceptCommandResult) {
-        integrationReview = null;
-        operationLabel = review.displayName;
-      }
-    });
+    return _command(
+      'startIntegration:${review.integrationRef}',
+      'integration connection',
+      (id) async {
+        _setOperation(
+          await gateway.startIntegration(
+            commandId: id,
+            integrationRef: review.integrationRef,
+            reviewedSelectionRef: review.reviewRef,
+            expectedRevision: expectedRevision,
+          ),
+        );
+        if (_acceptCommandResult) {
+          integrationReview = null;
+          operationLabel = review.displayName;
+        }
+      },
+    );
   }
 
-  Future<void> prepareSource(SourceSummary value) => _command((id) async {
-    final review = await gateway.prepareSourceReview(
-      commandId: id,
-      sourceRef: value.sourceRef,
-      expectedRevision: value.revision,
-    );
-    if (_acceptCommandResult) sourceReview = review;
-  });
+  Future<void> prepareSource(SourceSummary value) =>
+      _command('prepareSource:${value.sourceRef}', 'source review', (id) async {
+        final review = await gateway.prepareSourceReview(
+          commandId: id,
+          sourceRef: value.sourceRef,
+          expectedRevision: value.revision,
+        );
+        if (_acceptCommandResult) sourceReview = review;
+      });
 
   Future<void> configureSource(
     SourceReview review,
     List<ResourceRef> selected,
   ) {
     final selection = List<ResourceRef>.unmodifiable(selected);
-    return _command((id) async {
-      await gateway.configureSource(
-        commandId: id,
-        sourceRef: review.sourceRef,
-        reviewRef: review.reviewRef,
-        selectedResourceRefs: selection,
-        expectedRevision: review.sourceRevision,
-      );
-      if (_acceptCommandResult) sourceReview = null;
-    });
+    return _command(
+      'configureSource:${review.sourceRef}',
+      'source configuration',
+      (id) async {
+        await gateway.configureSource(
+          commandId: id,
+          sourceRef: review.sourceRef,
+          reviewRef: review.reviewRef,
+          selectedResourceRefs: selection,
+          expectedRevision: review.sourceRevision,
+        );
+        if (_acceptCommandResult) sourceReview = null;
+      },
+    );
   }
 
   Future<void> prepareObserve(
     SourceSummary value,
     SourceProcessing processing,
-  ) => _command((id) async {
+  ) => _command('prepareObserve:${value.sourceRef}', 'processing review', (
+    id,
+  ) async {
     final review = await gateway.prepareObserveReview(
       commandId: id,
       sourceRef: value.sourceRef,
@@ -370,41 +414,56 @@ final class ConnectionsController extends ChangeNotifier {
     if (_acceptCommandResult) observeReview = review;
   });
 
-  Future<void> allowObserve(ObserveReview review) => _command((id) async {
-    await gateway.setObserve(
-      commandId: id,
-      sourceRef: review.sourceRef,
-      enabled: true,
-      reviewRef: review.reviewRef,
-      expectedRevision: review.sourceRevision,
-    );
-    if (_acceptCommandResult) observeReview = null;
-  });
+  Future<void> allowObserve(ObserveReview review) => _command(
+    'allowObserve:${review.sourceRef}',
+    'processing approval',
+    (id) async {
+      await gateway.setObserve(
+        commandId: id,
+        sourceRef: review.sourceRef,
+        enabled: true,
+        reviewRef: review.reviewRef,
+        expectedRevision: review.sourceRevision,
+      );
+      if (_acceptCommandResult) observeReview = null;
+    },
+  );
 
-  Future<void> pauseObserve(SourceSummary value) => _command((id) async {
-    await gateway.setObserve(
-      commandId: id,
-      sourceRef: value.sourceRef,
-      enabled: false,
-      expectedRevision: value.revision,
-    );
-  });
-
-  Future<void> disconnectSource(SourceSummary value) => _command((id) async {
-    _setOperation(
-      await gateway.disconnectSource(
+  Future<void> pauseObserve(SourceSummary value) => _command(
+    'pauseObserve:${value.sourceRef}',
+    'observation pause',
+    (id) async {
+      await gateway.setObserve(
         commandId: id,
         sourceRef: value.sourceRef,
+        enabled: false,
         expectedRevision: value.revision,
-      ),
-    );
-    if (_acceptCommandResult) operationLabel = value.displayLabels.join(' · ');
-  });
+      );
+    },
+  );
+
+  Future<void> disconnectSource(SourceSummary value) => _command(
+    'disconnect:${value.sourceRef}',
+    'source disconnection',
+    (id) async {
+      _setOperation(
+        await gateway.disconnectSource(
+          commandId: id,
+          sourceRef: value.sourceRef,
+          expectedRevision: value.revision,
+        ),
+      );
+      if (_acceptCommandResult)
+        operationLabel = value.displayLabels.join(' · ');
+    },
+  );
 
   Future<void> cancelOperation() async {
     final current = operation;
     if (current == null) return;
     await _command(
+      'cancelOperation:${current.operationRef}',
+      'operation cancellation',
       (id) async => _setOperation(
         await gateway.cancelOperation(
           commandId: id,
@@ -515,4 +574,12 @@ String _failureMessage(Object error, String fallback) {
     return '$message\nError ID: ${error.errorId}\nRequest: ${error.requestId}';
   }
   return message;
+}
+
+final class _PendingCommand {
+  _PendingCommand(this.id, this.label, this.action);
+  final String id;
+  final String label;
+  final Future<void> Function() action;
+  bool wasUncertain = false;
 }

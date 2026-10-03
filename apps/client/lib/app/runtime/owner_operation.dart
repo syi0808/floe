@@ -45,6 +45,28 @@ final class OwnerOperationObserver {
   bool _observing = false;
   bool get hasPendingOperation => _pending != null;
 
+  Future<T> resume<T>({required String scope}) async {
+    if (_observing) throw const AgentVaultException('conflict');
+    final pending = _pending;
+    if (pending == null || pending.scope != scope) {
+      throw const AgentVaultException('conflict');
+    }
+    _observing = true;
+    try {
+      return await _finish(pending) as T;
+    } on NativeTransportException catch (error) {
+      throw AgentVaultException.fromAppWire(
+        error.metadata['reason_code'] ?? error.code,
+        requestId: pending.correlation.id,
+        stage: pending.correlation.stage,
+        metadata: error.metadata,
+        ownerFailure: error.ownerFailure,
+      );
+    } finally {
+      _observing = false;
+    }
+  }
+
   Future<T> observe<T>({
     required String scope,
     required String intent,
@@ -100,9 +122,18 @@ final class OwnerOperationObserver {
       pending.started = true;
       late Map<String, dynamic> result;
       try {
-        result = wasStarted
-            ? await pending.read(pending.correlation.id, false)
-            : await pending.start(pending.correlation.id);
+        if (!wasStarted) {
+          result = await pending.start(pending.correlation.id);
+        } else {
+          try {
+            result = await pending.read(pending.correlation.id, false);
+          } on NativeTransportException catch (error) {
+            if (error.code != 'not_found') rethrow;
+            // Absence is not non-admission. Rejoin through the exact immutable
+            // command ID; the owner checks active and archived receipts first.
+            result = await pending.start(pending.correlation.id);
+          }
+        }
       } on NativeTransportException catch (error) {
         if (!wasStarted &&
             error.commandDisposition == NativeCommandDisposition.notAdmitted) {

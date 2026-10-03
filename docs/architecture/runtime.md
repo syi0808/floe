@@ -240,3 +240,6 @@ The shared Transform protocol has associated input/output types. HealthTransform
 
 
 Feature requests that encounter an intrinsic VaultUnavailable/VaultLocked failure retain the Vault lifecycle owner's readiness/recovery projection through AppWire. Generic provider/storage errors are not relabeled as Vault failures. This lets the shared client controller retire its displayed readiness and expose the owner-approved reopen action after a sealed generation, rather than leaving each feature permanently gated behind a generic error.
+
+
+Vault status is a pure query and never occupies a command-receipt observer slot. Recovery first rejoins any pending immutable lifecycle command, then reads current status. A sealed published generation is reported as Locked; Unlock retires and drains it on the sole lifecycle queue before reopening. Released lifecycle results are archived as exact physical receipts in the plain store before they leave the bounded memory cache. Replaying an archived ID only returns its original outcome and never executes or retires the current generation. Unreleased/in-flight work remains bounded; an archival failure retains the in-memory receipt.

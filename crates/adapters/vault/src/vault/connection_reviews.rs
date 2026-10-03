@@ -1,8 +1,9 @@
 use super::*;
 use floe_access::{
-    ConnectionReview, GrantAbort, GrantAbortOutcome, GrantAbortReceipt, GrantCommit,
-    GrantCommitKind, GrantCommitReceipt, GrantOperationIdentity, GrantOperationReceipt,
-    GrantReceiptQuery, GrantRepository, GrantResult, GrantSnapshot, ReviewRef, validate_commit,
+    validate_commit, ConnectionReview, GrantAbort, GrantAbortOutcome, GrantAbortReceipt,
+    GrantCommit, GrantCommitKind, GrantCommitReceipt, GrantOperationIdentity,
+    GrantOperationReceipt, GrantReceiptQuery, GrantRepository, GrantResult, GrantSnapshot,
+    ReviewRef,
 };
 use floe_context_contract::GrantSourceBinding;
 use floe_execution::BoxFuture;
@@ -110,6 +111,9 @@ impl<Keys: VaultKeyProvider> GrantRepository for EncryptedAgentVault<Keys> {
                 .await
                 .map_err(storage)?;
             let result = async {
+                if super::gateway_authority::command_rejection_on(&transaction, self.person_id, review.command_id).await?.is_some() {
+                    return Err(AgentFailure::Conflict);
+                }
                 let mut rows = transaction.query("SELECT payload FROM access_connection_reviews WHERE person_id = ? AND command_id = ?", (self.person_id.to_string(), review.command_id.to_string())).await.map_err(storage)?;
                 if let Some(row) = rows.next().await.map_err(storage)? {
                     let existing: ConnectionReview = decode(row.get::<String>(0).map_err(storage)?)?;

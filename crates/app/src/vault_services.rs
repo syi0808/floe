@@ -64,13 +64,27 @@ impl VaultLifecycleResult {
             .map(|failure| crate::vault_lifecycle::project_failure(failure, &self.stage))
     }
 }
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+pub enum VaultLifecycleCommandFailure {
+    #[error("Vault command was not admitted: {0:?}")]
+    NotAdmitted(AgentFailure),
+    #[error("Vault command admission is uncertain: {0:?}")]
+    Indeterminate(AgentFailure),
+}
+impl VaultLifecycleCommandFailure {
+    pub fn into_failure(self) -> AgentFailure {
+        match self {
+            Self::NotAdmitted(failure) | Self::Indeterminate(failure) => failure,
+        }
+    }
+}
 pub trait VaultLifecycleCommands {
     fn vault_command(
         &self,
         caller: &CallerContext,
         operation_id: Uuid,
         command: VaultLifecycleCommand,
-    ) -> Result<VaultLifecycleResult, AgentFailure>;
+    ) -> Result<VaultLifecycleResult, VaultLifecycleCommandFailure>;
 }
 pub trait VaultLifecycleQueries {
     fn vault_status(
@@ -91,7 +105,7 @@ impl VaultLifecycleCommands for AppComposition {
         caller: &CallerContext,
         operation_id: Uuid,
         command: VaultLifecycleCommand,
-    ) -> Result<VaultLifecycleResult, AgentFailure> {
+    ) -> Result<VaultLifecycleResult, VaultLifecycleCommandFailure> {
         let intent = match command {
             VaultLifecycleCommand::Create => VaultLifecycleIntent::Create,
             VaultLifecycleCommand::Unlock => VaultLifecycleIntent::Unlock,
@@ -126,5 +140,6 @@ impl VaultLifecycleQueries for AppComposition {
     ) -> Result<VaultLifecycleResult, AgentFailure> {
         self.agent_vault
             .request(caller, operation_id, None, release)
+            .map_err(VaultLifecycleCommandFailure::into_failure)
     }
 }

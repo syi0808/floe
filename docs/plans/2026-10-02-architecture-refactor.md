@@ -637,3 +637,18 @@ The review accepted exact pairing rejection receipts, monotonic admission, late 
 - Source-operation-only commands and their existing owner journals remain under separate semantic audit; a product-record absence proof must never be used to erase an uncertain source operation.
 
 All changes in this follow-up batch still require a coherent Rust/Dart gate and targeted behavior probes. No permanent S3 suite, real user credential operation or data cleanup is included.
+
+
+Source-journal audit found the same pre-admission uncertainty issue at its own reserve boundary. The closure is storage-local: source apply/pause/disconnect resolve failed admission through a plain source-command rejection fence serialized with `source_operations` reservation. This adds a mandatory plain-layout declaration but no migration or fallback. It does not consult product-record absence or clear an existing source fence. The shared command identity value is reused, while proof remains with the corresponding storage owner.
+
+
+The next lifecycle review exposed a query/receipt mismatch: even successful `vault.status` had been passed through a worker-result release route. Status now bypasses the mutation observer; unknown lifecycle admission rejoins the exact command after an absent readback. Sealed-generation recovery is owned by Unlock's queue, not by query-driven activation. Pre-enqueue failures carry explicit NotAdmitted evidence. Released outcomes move to an immutable storage archive rather than being discarded or counted forever against the active receipt cap; an old archived error must not retire a newer generation. These lifecycle changes are not yet qualified and still need dedicated gateway/queue probes.
+
+
+### Lifecycle/source-command closure qualification (2026-10-04)
+
+Root directly implemented the latest review findings. The production Rust workspace build passed after typed lifecycle-error caller updates and source cancellation admission. Seven isolated Flutter gateway/controller probes passed: pure status; retry after query timeout; exact-ID resubmission after absent admission; lost release acknowledgement without command re-execution; shared readiness failure revision; per-target pending recovery; and whole-command NotApplied resolution. Flutter analysis reports zero errors/warnings and 138 informational lints, not a clean default analyzer exit.
+
+A fresh plain-store AppHost probe processed 80 real Lock-only queue commands, released/archived outcomes, replayed the oldest command and rejected a changed intent under that ID. It did not create/unlock an encrypted Vault or access a real key provider. Fake-key storage probes additionally passed late Start-after-Forget retention, terminal authority fences and separate source/product negative receipts. These disposable probes remain outside the committed application/test suite. Actual sealed-generation key-provider recovery and Apple runtime qualification remain pending; no existing user profile or private UI has been operated.
+
+The cancellation worker and per-target recovery changes require final same-snapshot qualification and another narrowly scoped Opus review. Main remains held at the last diagnostic-qualified snapshot. Mac command-only validation is waiting for the user's explicit exception to the no-delegation instruction.

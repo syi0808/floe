@@ -97,10 +97,11 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
         ],
         if (current.failure != null) SelectableText(current.failure!),
         if (current.hasUncertainCommand)
-          FloeButton.outlined(
-            onPressed: current.retryPendingCommand,
-            child: const Text('Recover the same request'),
-          ),
+          for (final request in current.pendingRequests)
+            FloeButton.outlined(
+              onPressed: () => current.retryPendingCommand(request.commandId),
+              child: Text('Recover ${request.label}'),
+            ),
         GatewayConnectionPanel(controller: current),
         if ((current.ready ? current.operation : null)
             case final operation?) ...[

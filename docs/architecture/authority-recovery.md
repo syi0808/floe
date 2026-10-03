@@ -142,6 +142,16 @@ A known native acknowledgement settles a committed effect even if a later observ
 
 A succeeded effect and its pending Day collection ticket commit together. Day records the exact execution ID, receipt digest and normalized collection intent with its projection change, checking current source revision, incarnation and resource membership. Repeated collection rejoins that receipt. Collection failure leaves the Action succeeded with collection pending; one native acknowledgement does not mark whole-calendar coverage fresh.
 
+## Lifecycle and Connections command recovery
+
+App owns the physical Vault queue and published readiness. Status is a pure query, not a queued mutation or releasable receipt. Unlock retires a sealed generation before opening another; no query or feature controller activates storage. Lifecycle admission distinguishes a rejected enqueue from uncertain admitted execution. A released outcome is archived immutably in the plain host store before its in-memory job is evicted. Exact archived replay checks Person, device, runtime epoch and intent and cannot retire a newer generation.
+
+Connections failure resolution follows the command's actual first durable admission. Product commands use the encrypted product journal; source apply/pause/disconnect use the plain source-operation journal. Each negative receipt is serialized with that journal's admission and fences late insertion. Access review preparation shares the encrypted rejection fence and counts as admission even before the product review record exists. Absence in the wrong journal never proves NotApplied.
+
+Cancellation has its own exact-intent product admission before modifying either an integration or source operation. Its registered owner job applies the monotonic cancellation direction and records a snapshot receipt; startup rejoins pending intents. An earlier Access commit remains authoritative over cancellation. A revision advancing during uncertain delivery cannot make the same admitted cancellation become a fresh rejected command.
+
+The app-lifetime Connections controller retains unresolved exact requests separately by action and target. It prevents a changed decision from borrowing an unresolved command identity, while allowing unrelated targets and explicit repair actions. Each pending request has its own replay control. Observation, readiness changes and successful commands for other targets cannot erase that evidence.
+
 ## Cancellation
 
 Cancellation flows from the owning Run/Task/execution scope. Query, preview, observer timeout, route refresh or screen disposal are not implicit cancellation of durable work.
@@ -163,3 +173,6 @@ Pairing command resolution is durable: Start, Confirm and Cancel atomically comm
 
 
 Product-record Connections commands resolve uncertainty by checking their exact admitted record and committing a negative receipt when absent. Both first insertion and atomic Forget honor that fence. Preparatory native source construction is pure; the admitted NativeSetup operation materializes it before any OS prompt. Source-operation journals are not inferred absent from a missing product record. Enrollment receipt readback contains only identity/digest metadata, never a newly minted owner signature. RevocationPending and Forgotten pairing snapshots are terminal and cannot advertise live Gateway authority.
+
+
+Source-operation command rejection is resolved inside the plain source journal, against the exact source reservation identity. It never uses absence from the encrypted product store as evidence. The source reservation transaction checks the journal's immutable rejection fence before its first write. Existing Reserved/Committed/RepairRequired source operations remain admitted and fenced, even if a separate grant receipt is unreadable. Thus rejection can settle a genuinely unadmitted source request without treating a missing cross-store receipt as an abort.

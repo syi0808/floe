@@ -39,3 +39,6 @@ pub use expert_registry::VaultExpertRegistryRepository;
 
 #[cfg(unix)]
 pub use knowledge::VaultKnowledgeRepository;
+
+mod lifecycle_receipts;
+pub use lifecycle_receipts::StoredVaultLifecycleReceipt;

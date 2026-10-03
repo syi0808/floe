@@ -337,6 +337,10 @@ pub enum ConnectionsPayload {
         source: SourceConnection,
         dispatched: bool,
     },
+    CancellationIntent {
+        operation_ref: Uuid,
+        expected_revision: u64,
+    },
     SourceCancellation(ConnectionOperationSnapshot),
     ObserveReview {
         reference: ReviewRef,
@@ -471,6 +475,14 @@ impl ConnectionsRecord {
                     return Err(AgentFailure::InvalidInput);
                 }
             }
+            ConnectionsPayload::CancellationIntent {
+                operation_ref,
+                expected_revision,
+            } => {
+                if operation_ref.is_nil() || *expected_revision == 0 {
+                    return Err(AgentFailure::InvalidInput);
+                }
+            }
             ConnectionsPayload::SourceCancellation(snapshot) => {
                 if snapshot.operation_ref.is_nil() || snapshot.revision == 0 {
                     return Err(AgentFailure::InvalidInput);
@@ -516,6 +528,15 @@ impl ConnectionsRecord {
             return Err(AgentFailure::Conflict);
         }
         match (&self.payload, &next.payload) {
+            (
+                ConnectionsPayload::CancellationIntent {
+                    operation_ref,
+                    expected_revision,
+                },
+                ConnectionsPayload::SourceCancellation(snapshot),
+            ) if snapshot.operation_ref == *operation_ref
+                && snapshot.revision >= *expected_revision => {}
+
             (
                 ConnectionsPayload::NativeSetup {
                     reviewed: old,
@@ -618,10 +639,18 @@ fn validate_operation(
     }
 }
 
-/// Identity of a product command whose first business commit is a product record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionsCommandJournal {
+    Product,
+    SourceOperation,
+}
+
+/// Immutable command identity within its owning storage admission journal.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionsCommandIdentity {
+    pub journal: ConnectionsCommandJournal,
     pub record_ref: Uuid,
     pub person_id: PersonId,
     pub device_id: String,

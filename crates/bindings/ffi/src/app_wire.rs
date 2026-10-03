@@ -149,7 +149,14 @@ pub(crate) fn command(
             let result = host_request
                 .services()
                 .vault_command(host_request.caller(), command_id, command)
-                .map_err(agent_failure)?;
+                .map_err(|failure| match failure {
+                    floe_app::VaultLifecycleCommandFailure::NotAdmitted(reason) => {
+                        AppCommandFailure::NotAdmitted(agent_failure(reason))
+                    }
+                    floe_app::VaultLifecycleCommandFailure::Indeterminate(reason) => {
+                        AppCommandFailure::Indeterminate(agent_failure(reason))
+                    }
+                })?;
             if result.operation_id != command_id {
                 return Err(internal_error().into());
             }

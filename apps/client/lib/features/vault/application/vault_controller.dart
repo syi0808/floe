@@ -37,6 +37,9 @@ final class VaultController extends ChangeNotifier {
   Future<void> open() => _opening ??= _run(_open);
 
   Future<AgentVaultState> _open() async {
+    if (gateway.hasPendingOperation) {
+      await gateway.resumePendingOperation(personId);
+    }
     final current = await gateway.vaultStatus(personId);
     if (_closing || _disposed) return current;
     return switch (current) {

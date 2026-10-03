@@ -387,7 +387,7 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                     (target.to_string(), self.person_id.to_string()),
                 )
                 .await
-                .map_err(|_| PairingError::StorageUnavailable)?;
+                .map_err(pairing_database)?;
             let record: Option<GatewaySetupRecord> = rows
                 .next()
                 .await
@@ -421,7 +421,7 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(|_| PairingError::StorageUnavailable)?;
+                .map_err(pairing_database)?;
             let result = async {
                 let mut rows = tx.query("SELECT payload FROM gateway_setup_receipts WHERE target_ref=? OR (person_id=? AND command_id=?)",
                     (record.setup.target_ref.to_string(), record.person_id.to_string(), record.command_id.to_string())).await.map_err(storage)?;
@@ -465,7 +465,7 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(|_| PairingError::StorageUnavailable)?;
+                .map_err(pairing_database)?;
             let result = async {
                 let mut rows = tx.query("SELECT payload FROM gateway_pairing_command_receipts WHERE person_id=? AND command_id=?",
                     (command.person_id.to_string(), command.command_id.to_string())).await.map_err(storage)?;
@@ -516,7 +516,7 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(|_| PairingError::StorageUnavailable)?;
+                .map_err(pairing_database)?;
             let result = async {
                 let current = pairing_on(&tx, self.person_id, next.operation_id)
                     .await?
@@ -558,7 +558,7 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(|_| PairingError::StorageUnavailable)?;
+                .map_err(pairing_database)?;
             let result = async {
                 let current = pairing_on(&tx, self.person_id, started.challenge.handle.operation_id).await?.ok_or(AgentFailure::Conflict)?;
                 let private = private_on(&tx, &current).await?;
@@ -611,7 +611,7 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(|_| PairingError::StorageUnavailable)?;
+                .map_err(pairing_database)?;
             let result = async {
                 let current = pairing_on(&tx, self.person_id, approval.handle.operation_id).await?.ok_or(AgentFailure::Conflict)?;
                 let private = private_on(&tx, &current).await?;
@@ -700,7 +700,7 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Deferred)
                 .await
-                .map_err(|_| PairingError::StorageUnavailable)?;
+                .map_err(pairing_database)?;
             let result = async {
                 let GatewayCredentialExpectation::Pending { operation_id } =
                     expectation_on(&tx).await?
@@ -743,7 +743,7 @@ impl<K: VaultKeyProvider> GatewayPrivateReader for EncryptedAgentVault<K> {
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Deferred)
                 .await
-                .map_err(|_| PairingError::StorageUnavailable)?;
+                .map_err(pairing_database)?;
             let result = async {
                 let record = pairing_on(&tx, person, operation)
                     .await?
@@ -778,7 +778,7 @@ impl<K: VaultKeyProvider> GatewayPrivateReader for EncryptedAgentVault<K> {
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Deferred)
                 .await
-                .map_err(|_| PairingError::StorageUnavailable)?;
+                .map_err(pairing_database)?;
             let result = async {
                 let expectation = expectation_on(&tx).await?;
                 let (operation_id, generation) = match expectation {
@@ -859,7 +859,7 @@ impl<K: VaultKeyProvider> GatewayRegistry for EncryptedAgentVault<K> {
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Deferred)
                 .await
-                .map_err(|_| PairingError::StorageUnavailable)?;
+                .map_err(pairing_database)?;
             let result = async {
                 let expectation = expectation_on(&tx).await?;
                 let operation_id = match expectation {
@@ -942,7 +942,7 @@ impl<K: VaultKeyProvider> GatewayRegistry for EncryptedAgentVault<K> {
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(|_| PairingError::StorageUnavailable)?;
+                .map_err(pairing_database)?;
             let result = async {
                 if super::gateway_authority::command_rejection_on(&tx, receipt.person_id, receipt.command_id).await?.is_some() {
                     return Err(AgentFailure::Conflict);
@@ -999,5 +999,12 @@ impl<K: VaultKeyProvider> GatewayRegistry for EncryptedAgentVault<K> {
                 .await
                 .map_err(pairing_storage)
         })
+    }
+}
+
+fn pairing_database(error: turso::Error) -> PairingError {
+    match error {
+        turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => PairingError::Conflict,
+        _ => PairingError::StorageUnavailable,
     }
 }

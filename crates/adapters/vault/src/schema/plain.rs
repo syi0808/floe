@@ -2,6 +2,14 @@
 use super::SchemaObject;
 
 pub(super) const OBJECTS: &[SchemaObject] = &[
+    SchemaObject::table(
+        "vault_lifecycle_receipts",
+        "CREATE TABLE vault_lifecycle_receipts(operation_id TEXT PRIMARY KEY,payload TEXT NOT NULL)",
+    ),
+    SchemaObject::table(
+        "source_command_rejections",
+        "CREATE TABLE source_command_rejections(person_id TEXT NOT NULL,command_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(person_id,command_id))",
+    ),
     SchemaObject::marker(
         "floe_source_schema",
         1,

@@ -2,8 +2,8 @@
 //! source policy belong to Connections and Access, respectively.
 use super::authority_keys::{decode_canonical, decode_exact};
 use super::gateway_pairing_store::pairing_state;
-use super::{EncryptedAgentVault, VaultKeyProvider, storage};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use super::{storage, EncryptedAgentVault, VaultKeyProvider};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use floe_access::{
     AssistantAuthorizationSigningCommand, AuthorizationSignature, AuthorizationSigner,
     AuthorizationSigningCommand, GatewayTrustReader, ProductCalendarChallenge,
@@ -1144,7 +1144,10 @@ pub(super) async fn command_rejection_on(
     let rejection: ConnectionsCommandRejection =
         bounded_decode(&row.get::<String>(0).map_err(storage)?)?;
     rejection.identity.validate()?;
-    if rejection.identity.person_id != person || rejection.identity.command_id != command_id {
+    if rejection.identity.person_id != person
+        || rejection.identity.command_id != command_id
+        || rejection.identity.journal != ConnectionsCommandJournal::Product
+    {
         return Err(AgentFailure::VaultUnavailable);
     }
     Ok(Some(rejection))
@@ -1157,7 +1160,9 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
     ) -> BoxFuture<'a, Result<Option<AgentFailure>, AgentFailure>> {
         Box::pin(async move {
             identity.validate()?;
-            if identity.person_id != self.person_id {
+            if identity.person_id != self.person_id
+                || identity.journal != ConnectionsCommandJournal::Product
+            {
                 return Err(AgentFailure::PolicyDenied);
             }
             let rejection =
@@ -1178,7 +1183,9 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
     ) -> BoxFuture<'a, Result<ConnectionsCommandResolution, AgentFailure>> {
         Box::pin(async move {
             identity.validate()?;
-            if identity.person_id != self.person_id {
+            if identity.person_id != self.person_id
+                || identity.journal != ConnectionsCommandJournal::Product
+            {
                 return Err(AgentFailure::PolicyDenied);
             }
             let mut connection = self.connection()?;
@@ -1196,6 +1203,12 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
                     return Ok(ConnectionsCommandResolution::Admitted);
                 }
                 drop(rows);
+                let mut reviews = tx.query("SELECT review_id FROM access_connection_reviews WHERE person_id=? AND command_id=?",
+                    (identity.person_id.to_string(), identity.command_id.to_string())).await.map_err(storage)?;
+                if reviews.next().await.map_err(storage)?.is_some() {
+                    return Ok(ConnectionsCommandResolution::Admitted);
+                }
+                drop(reviews);
                 if let Some(rejection) = command_rejection_on(&tx, identity.person_id, identity.command_id).await? {
                     if rejection.identity != identity { return Err(AgentFailure::Conflict); }
                     return Ok(ConnectionsCommandResolution::NotApplied(rejection.reason));

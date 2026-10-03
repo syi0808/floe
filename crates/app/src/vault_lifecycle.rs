@@ -7,8 +7,8 @@ use crate::local_context::LocalContextHost;
 use crate::owner_handles::ReadyOwners;
 use crate::ready_generation::ReadyGeneration;
 use crate::{
-    CallerContext, FloeCore, VaultLifecycleFailureProjection, VaultLifecycleRecovery,
-    VaultLifecycleResult, VaultState,
+    CallerContext, FloeCore, VaultLifecycleCommandFailure, VaultLifecycleFailureProjection,
+    VaultLifecycleRecovery, VaultLifecycleResult, VaultState,
 };
 use floe_execution::{CancelReason, Cancellation};
 use floe_kernel::{
@@ -72,7 +72,9 @@ pub(crate) fn project_failure(
 ) -> VaultLifecycleFailureProjection {
     // Lock closes admission before draining. Other failures seal the client only
     // when the lifecycle has retired the generation; recovery never replays work.
-    let seal_session = stage == "lock" || requires_retirement(failure);
+    let seal_session = stage == "lock"
+        || requires_retirement(failure)
+        || (stage == "unlock" && failure == AgentFailure::Conflict);
     let category = match failure {
         AgentFailure::VaultLocked | AgentFailure::NotFound | AgentFailure::ConsentRequired => {
             AgentFailureCategory::UserConfiguration
@@ -205,12 +207,15 @@ impl VaultBridge {
                     return Err(AgentFailure::PolicyDenied);
                 }
                 let owners = generation.owners();
-                owners.check(&caller.owner_actor())?;
-                if let Err(failure) = generation.check_access() {
+                if owners.check(&caller.owner_actor()).is_err()
+                    || generation.check_access().is_err()
+                {
                     let gateway = self.core.product_gateway.lock();
                     let close = owners.close_admission();
                     gateway.and(close)?;
-                    return Err(failure);
+                    // No usable published generation remains. Unlock owns
+                    // retirement/drain on the lifecycle queue before reopening.
+                    return Ok(VaultState::Locked);
                 }
                 Ok(VaultState::Ready)
             }
@@ -224,27 +229,33 @@ impl VaultBridge {
         id: Uuid,
         intent: Option<VaultLifecycleIntent>,
         release: bool,
-    ) -> Result<VaultLifecycleResult, AgentFailure> {
-        caller.owner_actor().validate()?;
-        if id.is_nil() {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let mut state = self.state.lock().map_err(|_| AgentFailure::Interrupted)?;
-        if state.closing {
-            return Err(AgentFailure::Interrupted);
-        }
-        if state.worker.is_none() {
-            state.worker = Some(Worker::new(
-                self.root.clone(),
-                self.core.clone(),
-                self.local_context.clone(),
-                self.published.clone(),
-            )?);
-        }
+    ) -> Result<VaultLifecycleResult, VaultLifecycleCommandFailure> {
+        let state = (|| -> Result<_, AgentFailure> {
+            caller.owner_actor().validate()?;
+            if id.is_nil() {
+                return Err(AgentFailure::InvalidInput);
+            }
+            let mut state = self.state.lock().map_err(|_| AgentFailure::Interrupted)?;
+            if state.closing {
+                return Err(AgentFailure::Interrupted);
+            }
+            if state.worker.is_none() {
+                state.worker = Some(Worker::new(
+                    self.root.clone(),
+                    self.core.clone(),
+                    self.local_context.clone(),
+                    self.published.clone(),
+                )?);
+            }
+            Ok(state)
+        })()
+        .map_err(VaultLifecycleCommandFailure::NotAdmitted)?;
         state
             .worker
             .as_ref()
-            .ok_or(AgentFailure::Interrupted)?
+            .ok_or(VaultLifecycleCommandFailure::NotAdmitted(
+                AgentFailure::Interrupted,
+            ))?
             .request(caller, id, intent, release)
     }
 
@@ -305,10 +316,16 @@ struct Job {
     intent: VaultLifecycleIntent,
     cancellation: Cancellation,
     result: Mutex<Option<Result<VaultState, AgentFailure>>>,
+    release_queued: AtomicBool,
+    archived: AtomicBool,
+}
+enum WorkerMessage {
+    Execute(Arc<Job>),
+    Release(Arc<Job>),
 }
 struct Worker {
-    sender: Option<mpsc::SyncSender<Arc<Job>>>,
-    jobs: Mutex<HashMap<Uuid, Arc<Job>>>,
+    sender: Option<mpsc::SyncSender<WorkerMessage>>,
+    jobs: Arc<Mutex<HashMap<Uuid, Arc<Job>>>>,
     closing: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<Result<(), AgentFailure>>>,
     failure: Option<AgentFailure>,
@@ -325,9 +342,11 @@ impl Worker {
             .enable_all()
             .build()
             .map_err(|_| AgentFailure::VaultUnavailable)?;
-        let (sender, receiver) = mpsc::sync_channel::<Arc<Job>>(MAX_PENDING);
+        let (sender, receiver) = mpsc::sync_channel::<WorkerMessage>(MAX_PENDING);
         let closing = Arc::new(AtomicBool::new(false));
         let worker_closing = closing.clone();
+        let jobs = Arc::new(Mutex::new(HashMap::<Uuid, Arc<Job>>::new()));
+        let worker_jobs = jobs.clone();
         let thread = std::thread::Builder::new()
             .name("floe-vault-lifecycle".into())
             .stack_size(8 * 1024 * 1024)
@@ -337,7 +356,32 @@ impl Worker {
                 let mut shutdown_failure = None;
                 // This receiver blocks only the dedicated queue thread; the
                 // runtime workers remain available for admitted owner work.
-                while let Ok(job) = receiver.recv() {
+                while let Ok(message) = receiver.recv() {
+                    let job = match message {
+                        WorkerMessage::Execute(job) => job,
+                        WorkerMessage::Release(job) => {
+                            let result = job.result.lock().ok().and_then(|value| *value);
+                            if let Some(result) = result {
+                                let receipt = stored_receipt(&job, result);
+                                if job.archived.load(Ordering::Acquire)
+                                    || runtime
+                                        .block_on(
+                                            core.store.archive_vault_lifecycle_receipt(receipt),
+                                        )
+                                        .is_ok()
+                                {
+                                    if let Ok(mut jobs) = worker_jobs.lock() {
+                                        jobs.remove(&job.id);
+                                    }
+                                } else {
+                                    job.release_queued.store(false, Ordering::Release);
+                                }
+                            } else {
+                                job.release_queued.store(false, Ordering::Release);
+                            }
+                            continue;
+                        }
+                    };
                     let outcome = if worker_closing.load(Ordering::Acquire) {
                         Err(AgentFailure::Interrupted)
                     } else if let Some(failure) = fatal {
@@ -345,6 +389,15 @@ impl Worker {
                     } else {
                         match catch_unwind(AssertUnwindSafe(|| {
                             runtime.block_on(async {
+                                if let Some(receipt) = core
+                                    .store
+                                    .load_vault_lifecycle_receipt(job.id)
+                                    .await
+                                    .map_err(|_| AgentFailure::StorageUnavailable)?
+                                {
+                                    job.archived.store(true, Ordering::Release);
+                                    return receipt_outcome(&job, receipt);
+                                }
                                 tokio::time::timeout(
                                     LIFECYCLE_TIMEOUT,
                                     execute(
@@ -373,10 +426,11 @@ impl Worker {
                             .unwrap_or_else(|poisoned| poisoned.into_inner());
                         slot.failure = Some(failure);
                     }
-                    if outcome
-                        .as_ref()
-                        .err()
-                        .is_some_and(|failure| requires_retirement(*failure))
+                    if !job.archived.load(Ordering::Acquire)
+                        && outcome
+                            .as_ref()
+                            .err()
+                            .is_some_and(|failure| requires_retirement(*failure))
                     {
                         if let Err(failure) =
                             retire(&runtime, &core, &published, &mut current, job.id)
@@ -412,7 +466,7 @@ impl Worker {
             .map_err(|_| AgentFailure::VaultUnavailable)?;
         Ok(Self {
             sender: Some(sender),
-            jobs: Mutex::new(HashMap::new()),
+            jobs,
             closing,
             thread: Some(thread),
             failure: None,
@@ -425,67 +479,93 @@ impl Worker {
         id: Uuid,
         intent: Option<VaultLifecycleIntent>,
         release: bool,
-    ) -> Result<VaultLifecycleResult, AgentFailure> {
-        if self.closing.load(Ordering::Acquire) {
-            return Err(AgentFailure::Interrupted);
-        }
-        let mut jobs = self.jobs.lock().map_err(|_| AgentFailure::Interrupted)?;
-        if let Some(intent) = intent {
-            if let Some(prior) = jobs.get(&id) {
-                if prior.caller != *caller || prior.intent != intent {
-                    return Err(AgentFailure::Conflict);
+    ) -> Result<VaultLifecycleResult, VaultLifecycleCommandFailure> {
+        let mut admitted = false;
+        let result = (|| -> Result<VaultLifecycleResult, AgentFailure> {
+            if self.closing.load(Ordering::Acquire) {
+                return Err(AgentFailure::Interrupted);
+            }
+            let mut jobs = self.jobs.lock().map_err(|_| AgentFailure::Interrupted)?;
+            if let Some(intent) = intent {
+                if let Some(prior) = jobs.get(&id) {
+                    if prior.caller != *caller || prior.intent != intent {
+                        return Err(AgentFailure::Conflict);
+                    }
+                } else {
+                    if jobs.len() >= MAX_RECEIPTS {
+                        return Err(AgentFailure::BudgetExceeded);
+                    }
+                    let pending = jobs.values().try_fold(0usize, |count, job| {
+                        let result = job.result.lock().map_err(|_| AgentFailure::Interrupted)?;
+                        Ok::<_, AgentFailure>(count + usize::from(result.is_none()))
+                    })?;
+                    if pending >= MAX_PENDING {
+                        return Err(AgentFailure::BudgetExceeded);
+                    }
+                    let job = Arc::new(Job {
+                        caller: caller.clone(),
+                        id,
+                        intent,
+                        cancellation: Cancellation::new(),
+                        result: Mutex::new(None),
+                        release_queued: AtomicBool::new(false),
+                        archived: AtomicBool::new(false),
+                    });
+                    self.sender
+                        .as_ref()
+                        .ok_or(AgentFailure::Interrupted)?
+                        .try_send(WorkerMessage::Execute(job.clone()))
+                        .map_err(|error| match error {
+                            mpsc::TrySendError::Full(_) => AgentFailure::BudgetExceeded,
+                            mpsc::TrySendError::Disconnected(_) => AgentFailure::Interrupted,
+                        })?;
+                    jobs.insert(id, job);
                 }
-            } else {
-                if jobs.len() >= MAX_RECEIPTS {
-                    return Err(AgentFailure::BudgetExceeded);
-                }
-                let pending = jobs.values().try_fold(0usize, |count, job| {
-                    let result = job.result.lock().map_err(|_| AgentFailure::Interrupted)?;
-                    Ok::<_, AgentFailure>(count + usize::from(result.is_none()))
-                })?;
-                if pending >= MAX_PENDING {
-                    return Err(AgentFailure::BudgetExceeded);
-                }
-                let job = Arc::new(Job {
-                    caller: caller.clone(),
-                    id,
-                    intent,
-                    cancellation: Cancellation::new(),
-                    result: Mutex::new(None),
-                });
-                self.sender
+            }
+            admitted = intent.is_some();
+            let job = jobs.get(&id).ok_or(AgentFailure::NotFound)?;
+            if job.caller != *caller {
+                return Err(AgentFailure::NotFound);
+            }
+            let result = job.result.lock().map_err(|_| AgentFailure::Interrupted)?;
+            if release && result.is_none() {
+                return Err(AgentFailure::Conflict);
+            }
+            // Only acknowledged results leave RAM, and only after the queue has
+            // durably archived the exact receipt. Replayed IDs are checked against
+            // that archive before execution; cache eviction cannot make them fresh.
+            if release && !job.release_queued.swap(true, Ordering::AcqRel) {
+                if self
+                    .sender
                     .as_ref()
                     .ok_or(AgentFailure::Interrupted)?
-                    .try_send(job.clone())
-                    .map_err(|error| match error {
-                        mpsc::TrySendError::Full(_) => AgentFailure::BudgetExceeded,
-                        mpsc::TrySendError::Disconnected(_) => AgentFailure::Interrupted,
-                    })?;
-                jobs.insert(id, job);
+                    .try_send(WorkerMessage::Release(job.clone()))
+                    .is_err()
+                {
+                    job.release_queued.store(false, Ordering::Release);
+                    return Err(AgentFailure::BudgetExceeded);
+                }
             }
-        }
-        let job = jobs.get(&id).ok_or(AgentFailure::NotFound)?;
-        if job.caller != *caller {
-            return Err(AgentFailure::NotFound);
-        }
-        let result = job.result.lock().map_err(|_| AgentFailure::Interrupted)?;
-        if release && result.is_none() {
-            return Err(AgentFailure::Conflict);
-        }
-        // Release ends observation only. The immutable admission and outcome
-        // remain among the bounded receipts; the same Create ID is never fresh.
-        Ok(VaultLifecycleResult {
-            operation_id: id,
-            stage: job.intent.stage().into(),
-            done: result.is_some(),
-            state: result
-                .as_ref()
-                .and_then(|value| value.as_ref().ok())
-                .copied(),
-            failure: result
-                .as_ref()
-                .and_then(|value| value.as_ref().err())
-                .copied(),
+            Ok(VaultLifecycleResult {
+                operation_id: id,
+                stage: job.intent.stage().into(),
+                done: result.is_some(),
+                state: result
+                    .as_ref()
+                    .and_then(|value| value.as_ref().ok())
+                    .copied(),
+                failure: result
+                    .as_ref()
+                    .and_then(|value| value.as_ref().err())
+                    .copied(),
+            })
+        })();
+        result.map_err(|failure| {
+            if intent.is_some() && !admitted {
+                VaultLifecycleCommandFailure::NotAdmitted(failure)
+            } else {
+                VaultLifecycleCommandFailure::Indeterminate(failure)
+            }
         })
     }
 
@@ -543,8 +623,22 @@ async fn execute(
     }
     match job.intent {
         VaultLifecycleIntent::Create | VaultLifecycleIntent::Unlock => {
-            if current.is_some() {
-                return Err(AgentFailure::Conflict);
+            if let Some((_, generation)) = current.as_ref() {
+                if job.intent == VaultLifecycleIntent::Create {
+                    return Err(AgentFailure::Conflict);
+                }
+                if generation.owners().check(&job.caller.owner_actor()).is_ok()
+                    && generation.check_access().is_ok()
+                {
+                    return Ok(VaultState::Ready);
+                }
+                let fence = close_published(published, core, false);
+                let (_, generation) = current.take().ok_or(AgentFailure::Conflict)?;
+                let drain = tokio::time::timeout(DRAIN_TIMEOUT, generation.shutdown(job.id))
+                    .await
+                    .map_err(|_| AgentFailure::DeadlineExceeded)?;
+                fence.and(drain)?;
+                drop(generation);
             }
             let person = PersonId(job.caller.person_id());
             let vault = if job.intent == VaultLifecycleIntent::Create {
@@ -586,7 +680,7 @@ async fn execute(
                 None => Ok(()),
             };
             fence.and(drain)?;
-            Ok(VaultState::Locked)
+            stored_vault_state(root, PersonId(job.caller.person_id()))
         }
     }
 }
@@ -647,5 +741,51 @@ fn stored_vault_state(root: &Path, person: PersonId) -> Result<VaultState, Agent
     match floe_vault::inspect_vault_presence(root, person)? {
         floe_vault::VaultPresence::Missing => Ok(VaultState::Missing),
         floe_vault::VaultPresence::Existing => Ok(VaultState::Locked),
+    }
+}
+
+fn stored_receipt(
+    job: &Job,
+    outcome: Result<VaultState, AgentFailure>,
+) -> floe_vault::StoredVaultLifecycleReceipt {
+    floe_vault::StoredVaultLifecycleReceipt {
+        operation_id: job.id,
+        person_id: PersonId(job.caller.person_id()),
+        device_id: job.caller.device_id().into(),
+        runtime_epoch: job.caller.runtime_epoch(),
+        intent: job.intent.stage().into(),
+        state: outcome.ok().map(|state| {
+            match state {
+                VaultState::Missing => "missing",
+                VaultState::Locked => "locked",
+                VaultState::Ready => "ready",
+                VaultState::Unavailable => "unavailable",
+            }
+            .into()
+        }),
+        failure: outcome.err(),
+    }
+}
+fn receipt_outcome(
+    job: &Job,
+    receipt: floe_vault::StoredVaultLifecycleReceipt,
+) -> Result<VaultState, AgentFailure> {
+    if receipt.operation_id != job.id
+        || receipt.person_id.0 != job.caller.person_id()
+        || receipt.device_id != job.caller.device_id()
+        || receipt.runtime_epoch != job.caller.runtime_epoch()
+        || receipt.intent != job.intent.stage()
+    {
+        return Err(AgentFailure::Conflict);
+    }
+    if let Some(failure) = receipt.failure {
+        return Err(failure);
+    }
+    match receipt.state.as_deref() {
+        Some("missing") => Ok(VaultState::Missing),
+        Some("locked") => Ok(VaultState::Locked),
+        Some("ready") => Ok(VaultState::Ready),
+        Some("unavailable") => Ok(VaultState::Unavailable),
+        _ => Err(AgentFailure::StorageUnavailable),
     }
 }

@@ -300,6 +300,71 @@ async fn finish_source_transaction<T>(
     }
 }
 impl SourceOperationRepository for TursoStore {
+    fn rejected_operation_command<'a>(
+        &'a self,
+        identity: floe_connections::ConnectionsCommandIdentity,
+    ) -> BoxFuture<'a, Result<Option<floe_kernel::AgentFailure>, SourceRepositoryError>> {
+        Box::pin(async move {
+            identity
+                .validate()
+                .map_err(|_| SourceRepositoryError::Conflict)?;
+            if identity.journal != floe_connections::ConnectionsCommandJournal::SourceOperation {
+                return Err(SourceRepositoryError::Conflict);
+            }
+            let connection = self.connection().await.map_err(storage_error)?;
+            match source_command_rejection_on(&connection, identity.person_id, identity.command_id)
+                .await?
+            {
+                Some(receipt) if receipt.identity == identity => Ok(Some(receipt.reason)),
+                Some(_) => Err(SourceRepositoryError::Conflict),
+                None => Ok(None),
+            }
+        })
+    }
+    fn reject_unadmitted_operation_command<'a>(
+        &'a self,
+        identity: floe_connections::ConnectionsCommandIdentity,
+        reason: floe_kernel::AgentFailure,
+    ) -> BoxFuture<'a, Result<floe_connections::ConnectionsCommandResolution, SourceRepositoryError>>
+    {
+        Box::pin(async move {
+            use floe_connections::{ConnectionsCommandRejection, ConnectionsCommandResolution};
+            identity
+                .validate()
+                .map_err(|_| SourceRepositoryError::Conflict)?;
+            if identity.journal != floe_connections::ConnectionsCommandJournal::SourceOperation {
+                return Err(SourceRepositoryError::Conflict);
+            }
+            let connection = self.connection().await.map_err(storage_error)?;
+            connection
+                .execute("BEGIN IMMEDIATE", ())
+                .await
+                .map_err(storage_error)?;
+            let result=async {
+                let mut rows=connection.query("SELECT operation_id,command_id,person_id,connection_id,revision,fence,payload FROM source_operations WHERE operation_id=? OR (person_id=? AND command_id=?)",
+                    (identity.record_ref.to_string(),identity.person_id.to_string(),identity.command_id.to_string())).await.map_err(storage_error)?;
+                if let Some(row)=rows.next().await.map_err(storage_error)? {
+                    let operation=decode_operation(&row)?;
+                    if operation.operation_id != identity.record_ref || operation.command_id != identity.command_id
+                        || operation.expected.source.person_id() != identity.person_id || operation.device_id != identity.device_id
+                        || operation.request_digest != identity.intent_digest { return Err(SourceRepositoryError::Conflict); }
+                    return Ok(ConnectionsCommandResolution::Admitted);
+                }
+                drop(rows);
+                if let Some(receipt)=source_command_rejection_on(&connection,identity.person_id,identity.command_id).await? {
+                    if receipt.identity != identity { return Err(SourceRepositoryError::Conflict); }
+                    return Ok(ConnectionsCommandResolution::NotApplied(receipt.reason));
+                }
+                let receipt=ConnectionsCommandRejection{identity,reason};
+                let payload=serde_json::to_string(&receipt).map_err(|_|SourceRepositoryError::Corrupt)?;
+                if payload.len()>MAX_OPERATION_BYTES {return Err(SourceRepositoryError::Corrupt);}
+                connection.execute("INSERT INTO source_command_rejections VALUES(?,?,?)",(receipt.identity.person_id.to_string(),receipt.identity.command_id.to_string(),payload)).await.map_err(storage_error)?;
+                Ok(ConnectionsCommandResolution::NotApplied(reason))
+            }.await;
+            finish_source_transaction(&connection, result).await
+        })
+    }
+
     fn reserve<'a>(
         &'a self,
         request: SourceOperationReservation,
@@ -316,6 +381,9 @@ impl SourceOperationRepository for TursoStore {
                 .await
                 .map_err(storage_error)?;
             let result = async {
+            if source_command_rejection_on(&connection,requested.expected.source.person_id(),requested.command_id).await?.is_some() {
+                return Err(SourceRepositoryError::Conflict);
+            }
             let mut replay_rows = connection.query("SELECT operation_id, command_id, person_id, connection_id, revision, fence, payload FROM source_operations WHERE operation_id = ? OR (person_id = ? AND command_id = ?)",
                 (requested.operation_id.to_string(), requested.expected.source.person_id().to_string(), requested.command_id.to_string())).await.map_err(storage_error)?;
             if let Some(row) = replay_rows.next().await.map_err(storage_error)? {
@@ -455,4 +523,38 @@ impl SourceOperationRepository for TursoStore {
             fenced_on(&connection, person_id, connection_id).await
         })
     }
+}
+
+async fn source_command_rejection_on(
+    connection: &turso::Connection,
+    person: PersonId,
+    command_id: Uuid,
+) -> Result<Option<floe_connections::ConnectionsCommandRejection>, SourceRepositoryError> {
+    let mut rows = connection
+        .query(
+            "SELECT payload FROM source_command_rejections WHERE person_id=? AND command_id=?",
+            (person.to_string(), command_id.to_string()),
+        )
+        .await
+        .map_err(storage_error)?;
+    let Some(row) = rows.next().await.map_err(storage_error)? else {
+        return Ok(None);
+    };
+    let payload = row.get::<String>(0).map_err(storage_error)?;
+    if payload.len() > MAX_OPERATION_BYTES {
+        return Err(SourceRepositoryError::Corrupt);
+    }
+    let receipt: floe_connections::ConnectionsCommandRejection =
+        serde_json::from_str(&payload).map_err(|_| SourceRepositoryError::Corrupt)?;
+    receipt
+        .identity
+        .validate()
+        .map_err(|_| SourceRepositoryError::Corrupt)?;
+    if receipt.identity.person_id != person
+        || receipt.identity.command_id != command_id
+        || receipt.identity.journal != floe_connections::ConnectionsCommandJournal::SourceOperation
+    {
+        return Err(SourceRepositoryError::Corrupt);
+    }
+    Ok(Some(receipt))
 }

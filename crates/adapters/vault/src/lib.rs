@@ -29,3 +29,5 @@ pub use vault::{VaultAuthorizationSigner, VaultEnrollmentSigner};
 
 #[cfg(unix)]
 pub use repositories::{VaultExpertBindingReviewRepository, VaultExpertRegistryRepository};
+
+pub use repositories::StoredVaultLifecycleReceipt;
