@@ -32,9 +32,6 @@ class CalendarEventActions extends StatelessWidget {
     final selected = await showFloeContextMenu<String>(
       context: context,
       anchor: anchor,
-      explanation: onEdit == null
-          ? 'Editing unavailable. Refresh your calendar or check its permissions.'
-          : null,
       entries: [
         const FloeMenuEntry(
           value: 'open',

@@ -50,3 +50,8 @@ Only the affected workspace Rust check remains pending for G1; unchanged example
 Workspace `cargo check --workspace --lib --bins --keep-going` passed on `42b2d92adeaef9002ece13191b43c68678ae891d` after the supplied final one-file formatter adjustment. That exact adjustment is integrated. The three App examples passed on `58f9c321`; their inputs did not change. Go internal packages and fifteen Apple compiler-only phases retain their first-pass success. Dart analysis passed on `3a698d76` with zero warnings/errors and 107 informational lints; its inputs did not change.
 
 G1 is complete at its stated compiler-only scope. Remaining compiler warnings are visible in saved logs and are not behavioral proof. Full application/build gates and tests have not run. Authorized S2 remaining-owner structural implementation now begins; its completed boundary is G2, followed by S3 test reconstruction and G3 qualification.
+
+
+## Public author correction
+
+On 2026-10-03 the user requested their own Git identity for recent and future commits. The parent rewrote the 18 public commits after `76ebaa27` with an exact force-with-lease, preserving every tree, message and timestamp. [The old-to-new commit mapping](2026-10-03-public-author-rewrite.json) preserves the provenance of these historical compiler logs. In particular, the passed workspace input `42b2d92` maps to `9e2a8055`, and G1 closure `665df6b3` maps to `229b468f`. This changes authorship/history only and does not expand G1 coverage to subsequent S2 source.

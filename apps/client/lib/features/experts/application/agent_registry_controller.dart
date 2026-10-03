@@ -1,266 +1,309 @@
 import 'package:flutter/foundation.dart';
 
-import 'package:floe_client/features/experts/domain/agent_registry.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/features/experts/domain/agent_registry.dart';
 
 final class AgentRegistryController extends ChangeNotifier {
   AgentRegistryController({
     required this.gateway,
-    required this.personId,
     required this.canOperate,
     required this.onFatalFailure,
   });
 
   final AgentRegistryGateway? gateway;
-  final String personId;
   final bool Function() canOperate;
   final void Function(AgentVaultException failure) onFatalFailure;
 
-  AgentRegistryView? registry;
+  int _operationGeneration = 0;
+  bool _disposed = false;
+
+  AgentDirectorySnapshot? directory;
+  AgentBindingInspection? inspection;
+  AgentBindingReview? review;
   String? failure;
+  String? reviewFailure;
   bool loaded = false;
   bool busy = false;
-  AgentCandidateCatalog? candidateCatalog;
-  String? candidateFailure;
-  bool candidateBusy = false;
 
   bool get available => gateway != null;
-  bool get canManage => available && !busy && canOperate();
+  AgentRegistryCommandKind? get pendingCommandKind =>
+      gateway?.pendingCommandKind;
+  bool get canRead => available && !busy && canOperate();
+  bool get canManage =>
+      available && !busy && canOperate() && pendingCommandKind == null;
+  bool get canRetryPending =>
+      available && !busy && canOperate() && pendingCommandKind != null;
 
-  Future<void> loadCandidates(
-    String assignmentId,
-    String requirementKey,
-  ) async {
-    if (!canManage || candidateBusy) return;
-    candidateBusy = true;
-    candidateFailure = null;
-    notifyListeners();
+  Future<void> load() async {
+    final generation = _operationGeneration;
+    if (!_isCurrent(generation) || !canRead) return;
+    busy = true;
+    failure = null;
+    _notifyIfCurrent(generation);
     try {
-      final result = await gateway!.readCandidates(
-        personId,
-        assignmentId: assignmentId,
-        requirementKey: requirementKey,
-      );
-      if (!canOperate()) return;
-      if (result.assignmentId != assignmentId ||
-          result.requirementKey != requirementKey) {
-        throw const FormatException('Expert candidate scope mismatch');
-      }
-      candidateCatalog = result;
+      final loadedDirectory = await gateway!.readDirectory();
+      if (!_isCurrent(generation)) return;
+      directory = loadedDirectory;
+      loaded = true;
     } on Object catch (error) {
-      if (!canOperate()) return;
-      candidateCatalog = null;
-      candidateFailure = error is AgentVaultException
-          ? error.failure
-          : 'storage_unavailable';
-      if (error is AgentVaultException &&
-          (error.reloadRequired == true || error.sealSession == true)) {
-        onFatalFailure(error);
-      }
+      if (!_isCurrent(generation)) return;
+      directory = null;
+      loaded = false;
+      failure = _failure(error);
+      _reportFatal(error, generation);
     } finally {
-      candidateBusy = false;
-      notifyListeners();
+      if (_isCurrent(generation, requireCanOperate: false)) {
+        busy = false;
+        notifyListeners();
+      }
     }
   }
 
-  Future<void> replaceSelection(
+  Future<void> setInstallationEnabled(
     AgentInstallation installation,
-    AgentExpertDefinition definition,
-    AgentAssignment assignment,
-    AgentSourceRequirement requirement,
-    List<String> candidateIds,
-  ) async {
-    if (!canManage || candidateBusy) return;
-    final current = candidateCatalog;
-    if ((candidateIds.isNotEmpty && current == null) ||
-        (current != null &&
-            (current.assignmentId != assignment.id ||
-                current.requirementKey != requirement.key ||
-                current.bindingRevision != assignment.bindingRevision)) ||
-        candidateIds.length > requirement.maximumSources ||
-        candidateIds.toSet().length != candidateIds.length ||
-        candidateIds.any(
-          (id) => !current!.candidates.any(
-            (candidate) =>
-                candidate.id == id && candidate.availability == 'available',
-          ),
-        )) {
-      candidateFailure = 'conflict';
-      notifyListeners();
-      return;
-    }
-    candidateBusy = true;
-    candidateFailure = null;
-    notifyListeners();
-    try {
-      final result = await gateway!.replaceSelection(
-        personId,
-        installation: installation,
-        definition: definition,
-        assignment: assignment,
-        requirement: requirement,
-        candidateIds: candidateIds,
-      );
-      if (!canOperate()) return;
-      if (result.assignmentId != assignment.id ||
-          result.requirementKey != requirement.key ||
-          result.bindingRevision != assignment.bindingRevision + 1) {
-        throw const FormatException('Expert binding result mismatch');
-      }
-      candidateCatalog = result;
-      try {
-        registry = await gateway!.readRegistry(personId);
-        loaded = true;
-      } on Object {
-        registry = null;
-        loaded = false;
-      }
-    } on Object catch (error) {
-      if (!canOperate()) return;
-      candidateCatalog = null;
-      candidateFailure = error is AgentVaultException
-          ? error.failure
-          : 'storage_unavailable';
-      try {
-        registry = await gateway!.readRegistry(personId);
-        loaded = true;
-      } on Object {
-        registry = null;
-        loaded = false;
-      }
-      if (error is AgentVaultException &&
-          (error.reloadRequired == true || error.sealSession == true)) {
-        onFatalFailure(error);
-      }
-    } finally {
-      candidateBusy = false;
-      notifyListeners();
-    }
-  }
-
-  Future<void> load() => _operation(null);
-
-  Future<void> configure(
-    AgentRegistryTarget target,
-    String id,
     bool enabled,
   ) async {
-    final current = registry;
-    final registryGateway = gateway;
-    if (current == null || registryGateway == null) return;
-    await _operation(
-      () => registryGateway.configureRegistry(
-        current,
-        target: target,
-        id: id,
+    final generation = _operationGeneration;
+    final current = directory;
+    if (!_isCurrent(generation) || !canManage || current == null) return;
+    await _run(generation, (operationGeneration) async {
+      final result = await gateway!.setInstallationEnabled(
+        installationRef: installation.installationRef,
+        expectedRevision: current.revision,
         enabled: enabled,
-      ),
-    );
-  }
-
-  Future<bool> configureCapability(String installationId, bool enabled) async {
-    final current = registry;
-    final registryGateway = gateway;
-    if (current == null || registryGateway == null) return false;
-    final installation = current.installations
-        .where((entry) => entry.id == installationId)
-        .singleOrNull;
-    if (installation == null) return false;
-    final assignments = current.assignments
-        .where((entry) => entry.installationId == installationId)
-        .toList();
-    final changes = <(AgentRegistryTarget, String)>[
-      if (enabled && !installation.enabled)
-        (AgentRegistryTarget.installation, installation.id),
-      if (enabled)
-        for (final assignment in assignments)
-          if (!assignment.enabled)
-            (AgentRegistryTarget.assignment, assignment.id),
-      if (!enabled)
-        for (final assignment in assignments)
-          if (assignment.enabled)
-            (AgentRegistryTarget.assignment, assignment.id),
-      if (!enabled && installation.enabled)
-        (AgentRegistryTarget.installation, installation.id),
-    ];
-    if (changes.isEmpty) return false;
-    await _operation(() async {
-      var next = current;
-      for (final (target, id) in changes) {
-        final configured = await registryGateway.configureRegistry(
-          next,
-          target: target,
-          id: id,
-          enabled: enabled,
-        );
-        if (configured.instanceId != next.instanceId ||
-            configured.revision != next.revision + 1) {
-          throw const FormatException('Registry configuration mismatch');
-        }
-        next = configured;
+      );
+      if (!_isCurrent(operationGeneration)) return;
+      final updated = result.installations
+          .where((entry) => entry.installationRef == installation.installationRef)
+          .singleOrNull;
+      if (updated == null || updated.enabled != enabled) {
+        throw const FormatException('Installation result scope mismatch.');
       }
-      return next;
-    }, expectedChanges: changes.length);
-    return failure == null;
+      directory = result;
+      loaded = true;
+    });
   }
 
-  void replace(AgentRegistryView value) {
-    registry = value;
-    failure = null;
-    loaded = true;
-    notifyListeners();
+  Future<void> inspectBinding(
+    AgentAssignment assignment,
+    AgentSourceRequirement requirement,
+  ) async {
+    final generation = _operationGeneration;
+    if (!_isCurrent(generation) || !canRead) return;
+    await _run(generation, (operationGeneration) async {
+      final result = await gateway!.inspectBinding(
+        assignmentRef: assignment.assignmentRef,
+        requirementRef: requirement.requirementRef,
+      );
+      if (!_isCurrent(operationGeneration)) return;
+      if (result.assignmentRef != assignment.assignmentRef ||
+          result.requirementRef != requirement.requirementRef) {
+        throw const FormatException('Expert binding scope mismatch.');
+      }
+      inspection = result;
+    }, reviewOperation: true);
+  }
+
+  Future<void> prepareReview(
+    AgentAssignment assignment,
+    AgentSourceRequirement requirement,
+  ) async {
+    final generation = _operationGeneration;
+    if (!_isCurrent(generation) || !canManage) return;
+    await _run(generation, (operationGeneration) async {
+      final currentBinding = await gateway!.inspectBinding(
+        assignmentRef: assignment.assignmentRef,
+        requirementRef: requirement.requirementRef,
+      );
+      if (!_isCurrent(operationGeneration)) return;
+      if (currentBinding.assignmentRef != assignment.assignmentRef ||
+          currentBinding.requirementRef != requirement.requirementRef) {
+        throw const FormatException('Expert binding scope mismatch.');
+      }
+      inspection = currentBinding;
+      final prepared = await gateway!.prepareBindingReview(
+        assignmentRef: assignment.assignmentRef,
+        requirementRef: requirement.requirementRef,
+        expectedBindingRevision: currentBinding.bindingRevision,
+      );
+      if (!_isCurrent(operationGeneration)) return;
+      if (prepared.assignmentRef != assignment.assignmentRef ||
+          prepared.requirementRef != requirement.requirementRef ||
+          prepared.bindingRevision != currentBinding.bindingRevision) {
+        throw const FormatException('Expert binding review scope mismatch.');
+      }
+      review = prepared;
+    }, reviewOperation: true);
+  }
+
+  Future<void> loadReview(AgentBindingReviewRef reviewRef) async {
+    final generation = _operationGeneration;
+    if (!_isCurrent(generation) || !canRead) return;
+    await _run(generation, (operationGeneration) async {
+      final loadedReview = await gateway!.inspectBindingReview(reviewRef);
+      if (!_isCurrent(operationGeneration)) return;
+      if (!loadedReview.reviewRef.matches(reviewRef)) {
+        throw const FormatException('Expert review reference mismatch.');
+      }
+      review = loadedReview;
+    }, reviewOperation: true);
+  }
+
+  void usePreparedReview(AgentBindingReview preparedReview) {
+    final generation = _operationGeneration;
+    if (!_isCurrent(generation)) return;
+    review = preparedReview;
+    inspection = null;
+    _notifyIfCurrent(generation);
+  }
+
+  Future<void> refreshReview(
+    AgentAssignment assignment,
+    AgentSourceRequirement requirement,
+  ) async {
+    final generation = _operationGeneration;
+    final currentReview = review;
+    if (!_isCurrent(generation) ||
+        !canManage ||
+        currentReview == null ||
+        !currentReview.canRefresh) {
+      return;
+    }
+    await prepareReview(assignment, requirement);
+    if (!_isCurrent(generation)) return;
+  }
+
+  Future<bool> replaceBinding(Set<String> candidateRefs) async {
+    final generation = _operationGeneration;
+    final currentReview = review;
+    if (!_isCurrent(generation) ||
+        !canManage ||
+        currentReview == null ||
+        !currentReview.canReplace) {
+      return false;
+    }
+    final assignment = directory?.assignments
+        .where((entry) => entry.assignmentRef == currentReview.assignmentRef)
+        .singleOrNull;
+    final requirement = assignment?.requirements
+        .where((entry) => entry.requirementRef == currentReview.requirementRef)
+        .singleOrNull;
+    if (requirement == null || candidateRefs.length > 16) {
+      if (!_isCurrent(generation)) return false;
+      reviewFailure = 'conflict';
+      _notifyIfCurrent(generation);
+      return false;
+    }
+    return _run(generation, (operationGeneration) async {
+      final updated = await gateway!.replaceBinding(
+        review: currentReview,
+        candidateRefs: candidateRefs.toList()..sort(),
+      );
+      if (!_isCurrent(operationGeneration)) return;
+      if (!updated.assignments.any(
+        (entry) => entry.assignmentRef == currentReview.assignmentRef,
+      )) {
+        throw const FormatException('Assignment missing from owner reply.');
+      }
+      directory = updated;
+      loaded = true;
+      review = null;
+      inspection = null;
+    }, reviewOperation: true);
+  }
+
+  Future<AgentRegistryCommandResult?> retryPendingCommand() async {
+    final generation = _operationGeneration;
+    if (!_isCurrent(generation) || !canRetryPending) return null;
+    AgentRegistryCommandResult? result;
+    final succeeded = await _run(generation, (operationGeneration) async {
+      final retried = await gateway!.retryPendingCommand();
+      if (!_isCurrent(operationGeneration)) return;
+      result = retried;
+      switch (retried) {
+        case AgentDirectoryCommandResult(:final directory, :final kind):
+          this.directory = directory;
+          loaded = true;
+          if (kind == AgentRegistryCommandKind.bindingReplace) {
+            review = null;
+            inspection = null;
+          }
+        case AgentBindingReviewCommandResult(:final review):
+          this.review = review;
+      }
+    }, reviewOperation: true);
+    if (!_isCurrent(generation) || !succeeded) return null;
+    return result;
   }
 
   void clear() {
-    registry = null;
+    _operationGeneration++;
+    if (_disposed) return;
+    directory = null;
+    inspection = null;
+    review = null;
     failure = null;
+    reviewFailure = null;
     loaded = false;
-    candidateCatalog = null;
-    candidateFailure = null;
+    busy = false;
     notifyListeners();
   }
 
-  Future<void> _operation(
-    Future<AgentRegistryView> Function()? change, {
-    int expectedChanges = 1,
+  @override
+  void dispose() {
+    _operationGeneration++;
+    _disposed = true;
+    super.dispose();
+  }
+
+  Future<bool> _run(
+    int generation,
+    Future<void> Function(int generation) operation, {
+    bool reviewOperation = false,
   }) async {
-    if (!canManage) return;
-    final previous = registry;
-    final registryGateway = gateway!;
+    if (!_isCurrent(generation) || busy) return false;
     busy = true;
     failure = null;
-    notifyListeners();
+    reviewFailure = null;
+    _notifyIfCurrent(generation);
     try {
-      final result = change == null
-          ? await registryGateway.readRegistry(personId)
-          : await change();
-      if (!canOperate()) return;
-      if (result != null && result.personId != personId) {
-        throw const FormatException('Registry Person mismatch');
-      }
-      if (change != null &&
-          (result == null ||
-              previous == null ||
-              result.instanceId != previous.instanceId ||
-              result.revision != previous.revision + expectedChanges)) {
-        throw const FormatException('Registry configuration mismatch');
-      }
-      registry = result;
-      loaded = true;
+      await operation(generation);
+      return _isCurrent(generation);
     } on Object catch (error) {
-      if (!canOperate()) return;
-      registry = null;
-      loaded = false;
-      failure = error is AgentVaultException
-          ? error.failure
-          : 'storage_unavailable';
-      if (error is AgentVaultException &&
-          (error.reloadRequired == true || error.sealSession == true)) {
-        onFatalFailure(error);
+      if (!_isCurrent(generation)) return false;
+      final message = _failure(error);
+      if (reviewOperation) {
+        reviewFailure = message;
+      } else {
+        failure = message;
       }
+      _reportFatal(error, generation);
+      return false;
     } finally {
-      busy = false;
-      notifyListeners();
+      if (_isCurrent(generation, requireCanOperate: false)) {
+        busy = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  String _failure(Object error) =>
+      error is AgentVaultException ? error.failure : 'storage_unavailable';
+
+  bool _isCurrent(int generation, {bool requireCanOperate = true}) =>
+      !_disposed &&
+      generation == _operationGeneration &&
+      (!requireCanOperate || canOperate());
+
+  void _notifyIfCurrent(int generation) {
+    if (_isCurrent(generation)) notifyListeners();
+  }
+
+  void _reportFatal(Object error, int generation) {
+    if (error is AgentVaultException &&
+        (error.reloadRequired == true || error.sealSession == true) &&
+        _isCurrent(generation)) {
+      onFatalFailure(error);
     }
   }
 }

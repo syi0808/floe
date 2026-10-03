@@ -1,8 +1,4 @@
-import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 import 'package:floe_client/features/connections/presentation/connections_controller.dart';
-import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
-import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
-import 'package:floe_client/features/connections/domain/source_connection.dart';
 import 'package:intl/intl.dart';
 
 import 'dart:async';
@@ -21,7 +17,6 @@ import 'package:floe_client/app/floe_mascot.dart';
 import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/floe_motion.dart';
 import 'package:floe_client/app/floe_primitives.dart';
-import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/app/floe_toast.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
@@ -66,17 +61,13 @@ class PersonalDayScreen extends StatefulWidget {
     super.key,
     required this.gateway,
     required this.query,
-    this.calendarSourceGateway,
     this.calendarActions,
-    this.dayRefreshGateway,
     this.agentGateway,
     this.connectionsController,
     this.ownerGateways = const LocalOwnerGateways(),
   });
   final DayGateway gateway;
-  final CalendarSourceGateway? calendarSourceGateway;
-  final CalendarActionExecutionGateway? calendarActions;
-  final DayRefreshGateway? dayRefreshGateway;
+  final CalendarActionGateway? calendarActions;
   final DayQuery query;
   final AgentConversationGateway? agentGateway;
   final ConnectionsController? connectionsController;
@@ -88,31 +79,12 @@ class PersonalDayScreen extends StatefulWidget {
 class _PersonalDayScreenState extends State<PersonalDayScreen>
     with WidgetsBindingObserver {
   late final PersonalDayController controller;
-  SourceConnection? nativeCalendarSource;
-  List<SourceConnection> remoteCalendarSources = const [];
-  SourceConnection? get calendarSource {
-    final mirrorId = controller.snapshot?.calendar?.sourceConnectionId;
-    for (final source in remoteCalendarSources) {
-      if (source.connectionId == mirrorId) return source;
-    }
-    if (nativeCalendarSource?.connectionId == mirrorId) {
-      return nativeCalendarSource;
-    }
-    if (remoteCalendarSources.length == 1) return remoteCalendarSources.single;
-    return nativeCalendarSource;
-  }
-
-  CalendarConnectionView? get calendarConnection => calendarSource == null
-      ? null
-      : CalendarConnectionView.compose(
-          calendarSource!,
-          controller.snapshot?.calendar,
-        );
   CalendarActionController? actionController;
   ConversationController? agentController;
   bool assistantOpen = false;
   bool openDeviceCalendarDetail = false;
   AgentExpertBindingTarget? expertBindingTarget;
+  Future<void> Function()? onBindingReplaced;
   final assistantEntryFocus = FocusNode();
   late final Listenable screenState;
   _DestinationView destination = _DestinationView.today;
@@ -125,15 +97,11 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     controller = PersonalDayController(
       gateway: widget.gateway,
       query: widget.query,
-      refreshGateway: widget.dayRefreshGateway,
     );
-    _loadCalendar();
-    if (widget.calendarActions case final gateway?
-        when widget.dayRefreshGateway != null) {
+    unawaited(controller.load());
+    if (widget.calendarActions case final gateway?) {
       actionController = CalendarActionController(
         gateway: gateway,
-        personId: widget.query.personId,
-        collect: _collectAction,
       )..load();
     }
     screenState = Listenable.merge([controller, ?actionController]);
@@ -156,80 +124,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     agentController?.dispose();
     assistantEntryFocus.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadCalendar() async {
-    await controller.load();
-    await _inspectCalendarSource();
-  }
-
-  Future<void> _inspectCalendarSource() async {
-    final gateway = widget.calendarSourceGateway;
-    final native = gateway == null
-        ? null
-        : await gateway.inspectNative(widget.query.personId);
-    final remote = gateway == null
-        ? <SourceConnection>[]
-        : await gateway.inspectRemote(widget.query.personId);
-    if (mounted) {
-      setState(() {
-        nativeCalendarSource = native;
-        remoteCalendarSources = remote;
-      });
-    }
-  }
-
-  Future<void> _collectAction(CalendarAction action) async {
-    final gateway = widget.dayRefreshGateway;
-    if (gateway == null) throw StateError('Day acquisition is not available.');
-    final start = action.startsAt.toLocal();
-    final end = action.endsAt
-        .subtract(const Duration(microseconds: 1))
-        .toLocal();
-    var day = DateTime(start.year, start.month, start.day);
-    final last = DateTime(end.year, end.month, end.day);
-    var matched = false;
-    while (!day.isAfter(last)) {
-      final refresh = await gateway.refreshDay(
-        commandId: newAgentRequestId(),
-        query: DayQuery.local(
-          personId: action.personId,
-          date: day,
-          now: DateTime.now(),
-        ),
-      );
-      final snapshot = await awaitDayRefresh(gateway, refresh);
-      await _inspectCalendarSource();
-      final source = calendarSource;
-      if (source == null ||
-          snapshot.calendar?.sourceConnectionId != source.connectionId) {
-        throw StateError('Calendar collection source changed');
-      }
-      final connection = CalendarConnectionView.compose(
-        source,
-        snapshot.calendar,
-      );
-      if (connection.error != null ||
-          connection.calendars.any(
-            (calendar) =>
-                calendar.id == action.calendarId && calendar.error != null,
-          )) {
-        throw StateError('Calendar collection failed');
-      }
-      matched =
-          matched ||
-          snapshot.items.whereType<EventItem>().any(
-            (event) =>
-                event.externalId == action.externalId &&
-                event.calendarId == action.calendarId,
-          );
-      day = DateTime(day.year, day.month, day.day + 1);
-    }
-    if (mounted) await controller.load();
-    final deleting = action.mutation?['delete'] == true;
-    if (deleting ? matched : !matched) {
-      throw StateError('Calendar change has not been collected yet');
-    }
   }
 
   @override
@@ -290,6 +184,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         actionController: actionController,
         agentController: agentController,
         expertBindingTarget: expertBindingTarget,
+        onBindingReplaced: onBindingReplaced,
         platform: defaultTargetPlatform,
       );
     }
@@ -297,10 +192,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       final actions = actionController;
       return actions == null
           ? const Text('Activity is available in the native Floe app.')
-          : ActivityPanel(
-              controller: actions,
-              connection: () => calendarConnection,
-            );
+          : ActivityPanel(controller: actions);
     }
     if (controller.loadState == DayLoadState.failure) {
       return _FailureDay(
@@ -342,43 +234,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                   _DayToolbar(
                     controller,
                     narrow: narrow,
-                    onCreateEvent:
-                        actionController?.canDirect == true &&
-                            calendarConnection?.isServing == true
-                        ? () => _openCalendarEditor()
-                        : null,
+                    onCreateEvent: actionController == null
+                        ? null
+                        : () => _openCalendarEditor(),
                   ),
-                  if (snapshot.calendar?.error != null)
-                    Padding(
-                      padding: EdgeInsets.only(bottom: 16),
-                      child: FloeSquircle(
-                        fill: FloePalette.amber50,
-                        padding: EdgeInsets.all(FloeSpace.base),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              snapshot.calendar!.lastSuccessAt == null
-                                  ? AppLocalizations.of(context)
-                                        .calendarCouldNotBeCollectedCheckAccess
-                                  : AppLocalizations.of(
-                                      context,
-                                    ).showingSavedEventsCalendarChangesCouldNot,
-                              style: FloeType.bodySmall.copyWith(
-                                color: FloePalette.neutral600,
-                              ),
-                            ),
-                            FloeTextLink(
-                              label: AppLocalizations.of(context)
-                                  .manageConnection,
-                              onPressed: () => _selectDestination(
-                                _DestinationView.connections,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
                   Expanded(child: _content(narrow, snapshot)),
                 ],
               ),
@@ -408,22 +267,24 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   Widget _content(bool narrow, DaySnapshot snapshot) {
     final actions = actionController;
     final showReviews =
-        actions != null && actions.actions.any((action) => action.needsReview);
+        actions != null && actions.actions.any((action) =>
+          action.allowedActions.contains(ActionAllowedAction.approve) ||
+          action.allowedActions.contains(ActionAllowedAction.reject) ||
+          action.allowedActions.contains(ActionAllowedAction.cancel));
     final primary = CalendarAgenda(
       key: PageStorageKey('calendar-agenda'),
       snapshot: snapshot,
+      query: controller.query,
       loading: controller.loadState == DayLoadState.loading,
       onConnections: () => _selectDestination(_DestinationView.connections),
-      onCreateEvent:
-          actionController?.canDirect == true &&
-              calendarConnection?.isServing == true
-          ? (startsAt) => _openCalendarEditor(startsAt)
-          : null,
+      onRefresh: controller.canRefresh ? controller.refresh : null,
+      onCreateEvent: actionController == null
+          ? null
+          : (startsAt) => _openCalendarEditor(startsAt),
       draftStartsAt: draftEventStart,
-      canModify: (event) => actionController?.canModify(event) == true,
-      onEditEvent: (event) => _editCalendarEvent(event),
-      onDeleteEvent: _deleteCalendarEvent,
-      onMoveEvent: _moveCalendarEvent,
+      onEditEvent: actionController == null ? null : _editCalendarEvent,
+      onDeleteEvent: actionController == null ? null : _deleteCalendarEvent,
+      onMoveEvent: actionController == null ? null : _moveCalendarEvent,
     );
     final rail = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -431,14 +292,12 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         if (showReviews) ...[
           ReviewRequestPanel(
             controller: actions,
-            connection: () => controller.loadState == DayLoadState.ready
-                ? calendarConnection
-                : null,
           ),
           SizedBox(height: FloeSpace.lg),
         ],
         CalendarContextRail(
           snapshot: snapshot,
+          query: controller.query,
           disabled: controller.commandPending,
           complete: _setTaskCompleted,
           onTasks: () => _selectDestination(_DestinationView.tasks),
@@ -536,7 +395,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     final agent = agentController;
     final actions = actionController;
     if (agent?.vaultState == AgentVaultState.ready &&
-        actions?.authorityFailure != null &&
+        actions?.error != null &&
         !actions!.busy) {
       unawaited(actions.load());
     }
@@ -571,23 +430,15 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     );
   }
 
-  Future<void> _openAgentAction(String actionId) async {
+  Future<void> _openAgentAction(String actionRef) async {
     final actions = actionController;
-    final agent = agentController;
-    if (actions == null ||
-        agent == null ||
-        actions.personId != agent.personId) {
-      return;
-    }
+    if (actions == null) return;
     unawaited(actions.load());
     await showFloeDialog<void>(
       context,
       (_) => ActionReviewDialog(
         controller: actions,
-        actionId: actionId,
-        connection: () => controller.loadState == DayLoadState.ready
-            ? calendarConnection
-            : null,
+        actionRef: actionRef,
       ),
     );
   }
@@ -599,11 +450,17 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     _selectDestination(_DestinationView.connections, openCalendarDetail: true);
   }
 
-  void _openExpertSettings(AgentExpertBindingTarget target) {
+  void _openExpertSettings(
+    AgentExpertBindingTarget target,
+    Future<void> Function() onReplaced,
+  ) {
     if (MediaQuery.sizeOf(context).width <= 960) {
       Navigator.of(context).maybePop();
     }
-    setState(() => expertBindingTarget = target);
+    setState(() {
+      expertBindingTarget = target;
+      onBindingReplaced = onReplaced;
+    });
     _selectDestination(_DestinationView.settings);
   }
 
@@ -618,49 +475,43 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   }
 
   Future<void> _openCalendarEditor([DateTime? startsAt]) async {
+    await _showCalendarComposer(initialStart: startsAt);
+  }
+
+  Future<void> _showCalendarComposer({
+    DateTime? initialStart,
+    EventItem? event,
+  }) async {
     final actions = actionController;
-    final connection = calendarConnection;
-    if (actions == null ||
-        !actions.canDirect ||
-        connection?.isServing != true) {
-      return;
-    }
+    if (actions == null) return;
     final date = controller.query.date;
     final now = DateTime.now();
-    final initialStart =
-        startsAt ??
+    final createStart =
+        initialStart ??
         (DateUtils.isSameDay(date, now)
             ? DateTime(now.year, now.month, now.day, now.hour + 1)
             : DateTime(date.year, date.month, date.day, 9));
-    setState(() => draftEventStart = initialStart);
+    if (event == null) setState(() => draftEventStart = createStart);
     await showFloeDialog<void>(
       context,
       (_) => CalendarEventComposer(
         controller: actions,
-        connection: () => calendarConnection,
-        initialStart: initialStart,
+        initialStart: event == null ? createStart : initialStart,
+        event: event,
       ),
     );
-    if (mounted && draftEventStart == initialStart) {
+    if (event == null && mounted && draftEventStart == createStart) {
       setState(() => draftEventStart = null);
     }
   }
 
   Future<void> _editCalendarEvent(EventItem event) async {
-    final actions = actionController;
-    if (actions == null || !actions.canModify(event)) return;
-    await showFloeDialog<void>(
-      context,
-      (_) => CalendarEventComposer(
-        controller: actions,
-        connection: () => calendarConnection,
-        event: event,
-      ),
-    );
+    if (event.actionTarget == null) return;
+    await _showCalendarComposer(event: event);
   }
 
   Future<void> _moveCalendarEvent(EventItem event, DateTime start) =>
-      _changeCalendarEvent(event, start: start);
+      _showCalendarComposer(initialStart: start, event: event);
 
   Future<void> _deleteCalendarEvent(EventItem event) async {
     final confirmed = await showFloeDialog<bool>(
@@ -669,7 +520,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         title: 'Delete event?',
         children: [
           Text(
-            '“${event.title}” will be removed from ${event.calendarName ?? 'your calendar'}.',
+            '“${event.title}” will be removed from ${event.calendarLabel ?? 'its Calendar source'}.',
           ),
           const SizedBox(height: FloeSpace.base),
           Row(
@@ -690,55 +541,74 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       ),
     );
     if (confirmed == true && mounted) {
-      await _changeCalendarEvent(event, delete: true);
+      await _deleteCalendarEventAtOwner(event);
     }
   }
 
-  Future<void> _changeCalendarEvent(
-    EventItem event, {
-    DateTime? start,
-    bool delete = false,
-  }) async {
+  Future<void> _deleteCalendarEventAtOwner(EventItem event) async {
     final actions = actionController;
-    if (actions == null || !actions.canModify(event)) return;
-    final startsAt = (start ?? event.startsAt).toLocal();
-    final result = await actions.direct(
-      calendarId: event.calendarId!,
-      title: event.title,
-      startsAt: startsAt,
-      endsAt: startsAt.add(event.endsAt.difference(event.startsAt)),
-      timezone: calendarStorageTimezone(startsAt.timeZoneOffset),
-      eventId: event.id,
-      eventRevision: event.revision,
-      delete: delete,
-    );
+    final target = event.actionTarget;
+    if (actions == null || target == null) return;
+    try {
+      final result = await actions.submit(
+        DirectDelete(
+          eventRef: target.eventId,
+          expectedRevision: target.expectedRevision,
+        ),
+      );
+      _showCalendarActionOutcome(result, success: 'Event deleted');
+    } on Object {
+      _showCalendarActionOutcome(null, success: 'Event deleted');
+    }
+  }
+
+  void _showCalendarActionOutcome(
+    CalendarAction? action, {
+    required String success,
+  }) {
     if (!mounted) return;
+    final controller = actionController;
+    final title = switch (action?.status.state) {
+      CalendarActionState.succeeded =>
+        action?.status.collection == ActionCollectionStatus.pending
+            ? '$success. Day update is pending; check Activity.'
+            : success,
+      CalendarActionState.blocked =>
+        'Blocked: ${action?.status.blockedReason?.name ?? 'The action owner blocked this request.'}',
+      CalendarActionState.unknown =>
+        'Unknown outcome: ${action?.status.unknownReason?.name ?? 'Reconcile this action in Activity.'}',
+      CalendarActionState.failed =>
+        'Not applied: ${action?.status.failedReason?.name ?? 'Check Activity.'}',
+      null => controller?.error?.message ??
+          'The action outcome was not confirmed. Check Activity.',
+      final status => 'Action status: ${status.name}. Check Activity.',
+    };
     FloeToastHost.of(context).show(
-      title: result != null && actions.collection[result.id] == 'failed'
-          ? 'Saved. Calendar refresh failed; retry in Activity.'
-          : result?.status == CalendarActionStatus.succeeded
-          ? (delete ? 'Event deleted' : 'Event moved')
-          : 'Change not confirmed. Check Activity and reload your calendar.',
+      title: title,
     );
   }
 
   Future<void> _setTaskCompleted(TaskItem task, bool completed) async {
-    await controller.setTaskCompleted(task, completed);
-    if (!mounted || controller.errorMessage != null) return;
+    final acknowledged = await controller.setTaskCompleted(task, completed);
+    if (!mounted || acknowledged == null) return;
+    final changedTask = _taskById(acknowledged, task.id);
     FloeToastHost.of(context).show(
       title: completed
           ? AppLocalizations.of(context).taskCompleted
           : AppLocalizations.of(context).taskMarkedIncomplete,
-      actionLabel: AppLocalizations.of(context).undo,
-      onAction: () {
-        if (mounted) controller.setTaskCompleted(task, !completed);
+      actionLabel: changedTask == null ? null : AppLocalizations.of(context).undo,
+      onAction: changedTask == null ? null : () {
+        if (mounted) controller.setTaskCompleted(changedTask, !completed);
       },
     );
   }
 
   Future<bool> _createNote(String content) async {
     if (controller.commandPending) return false;
-    if (!await controller.submitCapture(content)) return false;
+    // Retain an acknowledged capture when classification acknowledgement is
+    // lost, so Save retries classification instead of creating another capture.
+    if (controller.pendingCapture?.originalInput != content &&
+        !await controller.submitCapture(content)) return false;
     final saved = await controller.classify(NoteDraft(content: content));
     if (saved && mounted) {
       FloeToastHost.of(context)

@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:intl/intl.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -11,50 +10,59 @@ import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_feedback.dart';
 import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/floe_squircle.dart';
-import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
-import 'package:floe_client/features/experts/presentation/agent_capability_label.dart';
 import 'package:floe_client/features/actions/application/calendar_action_controller.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
-import 'package:floe_client/features/actions/application/calendar_action_gateway.dart';
+import 'package:floe_client/l10n/app_localizations.dart';
 
-String _status(AppLocalizations strings, CalendarActionStatus status) =>
-    switch (status) {
-      CalendarActionStatus.pending => strings.actionPending,
-      CalendarActionStatus.approved => strings.actionApproved,
-      CalendarActionStatus.rejected => strings.actionRejected,
-      CalendarActionStatus.executing => strings.actionExecuting,
-      CalendarActionStatus.blocked => strings.actionBlocked,
-      CalendarActionStatus.unknown => strings.actionUnknown,
-      CalendarActionStatus.succeeded => strings.actionSucceeded,
+String _statusLabel(AppLocalizations strings, CalendarAction action) =>
+    switch (action.status.state) {
+      CalendarActionState.pendingReview => strings.actionPending,
+      CalendarActionState.approved => strings.actionApproved,
+      CalendarActionState.rejected => strings.actionRejected,
+      CalendarActionState.cancelled => 'Cancelled',
+      CalendarActionState.expired => 'Expired',
+      CalendarActionState.executing => strings.actionExecuting,
+      CalendarActionState.blocked => strings.actionBlocked,
+      CalendarActionState.failed => 'Not applied',
+      CalendarActionState.unknown => strings.actionUnknown,
+      CalendarActionState.succeeded => switch (action.effect) {
+        CreateActionEffect() => strings.actionSucceeded,
+        UpdateActionEffect() => 'Updated in Calendar.',
+        DeleteActionEffect() => 'Deleted from Calendar.',
+      },
     };
 
-FloeBadgeTone _statusTone(CalendarActionStatus status) => switch (status) {
-  CalendarActionStatus.succeeded ||
-  CalendarActionStatus.approved => FloeBadgeTone.success,
-  CalendarActionStatus.rejected ||
-  CalendarActionStatus.blocked => FloeBadgeTone.danger,
-  CalendarActionStatus.pending ||
-  CalendarActionStatus.executing ||
-  CalendarActionStatus.unknown => FloeBadgeTone.info,
+FloeBadgeTone _statusTone(CalendarAction action) => switch (
+  action.status.state
+) {
+  CalendarActionState.succeeded => FloeBadgeTone.success,
+  CalendarActionState.rejected ||
+  CalendarActionState.cancelled ||
+  CalendarActionState.expired ||
+  CalendarActionState.blocked ||
+  CalendarActionState.failed => FloeBadgeTone.danger,
+  CalendarActionState.pendingReview ||
+  CalendarActionState.approved ||
+  CalendarActionState.executing ||
+  CalendarActionState.unknown => FloeBadgeTone.info,
 };
 
+bool _hasDecision(CalendarAction action) =>
+    action.allowedActions.contains(ActionAllowedAction.approve) ||
+    action.allowedActions.contains(ActionAllowedAction.reject) ||
+    action.allowedActions.contains(ActionAllowedAction.cancel);
+
 class ReviewRequestPanel extends StatelessWidget {
-  const ReviewRequestPanel({
-    super.key,
-    required this.controller,
-    required this.connection,
-  });
+  const ReviewRequestPanel({super.key, required this.controller});
+
   final CalendarActionController controller;
-  final CalendarConnectionView? Function() connection;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: controller,
     builder: (context, _) {
       final strings = AppLocalizations.of(context);
-      final requests = controller.actions
-          .where((action) => action.needsReview)
-          .toList(growable: false);
+      final requests = controller.actions.where(_hasDecision).toList();
       return FloeSquircle(
         padding: const EdgeInsets.all(24),
         child: FloeLoadingOverlay(
@@ -66,8 +74,14 @@ class ReviewRequestPanel extends StatelessWidget {
             children: [
               Text(strings.calendarProposals, style: FloeType.title),
               const SizedBox(height: 12),
-              if (controller.failed) Text(strings.actionReloadRequired),
-              if (!controller.busy && !controller.failed && requests.isEmpty)
+              if (controller.error case final error?)
+                Text(error.isVaultLocked ? 'Vault locked. Unlock to review Actions.' : error.message),
+              if (!controller.loaded && !controller.busy && controller.error == null)
+                const Text('Load Actions to see requests for review.'),
+              if (controller.loaded &&
+                  !controller.busy &&
+                  controller.error == null &&
+                  requests.isEmpty)
                 Text(strings.actionEmpty),
               for (final action in requests)
                 Padding(
@@ -79,19 +93,23 @@ class ReviewRequestPanel extends StatelessWidget {
                       Align(
                         alignment: AlignmentDirectional.centerStart,
                         child: FloeBadge(
-                          label: _status(strings, action.status),
-                          tone: _statusTone(action.status),
+                          label: _statusLabel(strings, action),
+                          tone: _statusTone(action),
                         ),
                       ),
                       FloeButton.text(
                         onPressed: () {
-                          controller.load();
+                          unawaited(
+                            controller.inspect(action.actionRef).then<void>(
+                              (_) {},
+                              onError: (Object _) {},
+                            ),
+                          );
                           showFloeDialog<void>(
                             context,
                             (_) => ActionReviewDialog(
                               controller: controller,
-                              actionId: action.id,
-                              connection: connection,
+                              actionRef: action.actionRef,
                             ),
                           );
                         },
@@ -113,14 +131,9 @@ class ReviewRequestPanel extends StatelessWidget {
 }
 
 class ActivityPanel extends StatelessWidget {
-  const ActivityPanel({
-    super.key,
-    required this.controller,
-    required this.connection,
-  });
+  const ActivityPanel({super.key, required this.controller});
 
   final CalendarActionController controller;
-  final CalendarConnectionView? Function() connection;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -128,7 +141,7 @@ class ActivityPanel extends StatelessWidget {
     builder: (context, _) {
       final strings = AppLocalizations.of(context);
       final history = controller.actions
-          .where((action) => !action.needsReview)
+          .where((action) => !_hasDecision(action))
           .toList(growable: false);
       return FloeLoadingOverlay(
         loading: controller.busy,
@@ -148,12 +161,16 @@ class ActivityPanel extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 10),
-            const Text(
-              'Automatic actions, decisions, and completed reviews appear here.',
-            ),
+            const Text('Actions submitted by you or Experts appear here.'),
             const SizedBox(height: 28),
-            if (controller.failed) Text(strings.actionReloadRequired),
-            if (!controller.busy && !controller.failed && history.isEmpty)
+            if (controller.error case final error?)
+              Text(error.isVaultLocked ? 'Vault locked. Unlock to load Activity.' : error.message),
+            if (!controller.loaded && !controller.busy && controller.error == null)
+              const Text('Load Actions to see Activity.'),
+            if (controller.loaded &&
+                !controller.busy &&
+                controller.error == null &&
+                history.isEmpty)
               const Text('No activity yet.'),
             for (final action in history)
               Padding(
@@ -168,15 +185,19 @@ class ActivityPanel extends StatelessWidget {
                           children: [
                             Text(action.title, style: FloeType.controlLabel),
                             const SizedBox(height: 4),
+                            Text(action.destinationLabel),
+                            const SizedBox(height: 4),
                             FloeBadge(
-                              label:
-                                  action.direct &&
-                                      action.status ==
-                                          CalendarActionStatus.succeeded
-                                  ? '${action.operation} · By you'
-                                  : _status(strings, action.status),
-                              tone: _statusTone(action.status),
+                              label: _statusLabel(strings, action),
+                              tone: _statusTone(action),
                             ),
+                            if (action.status.state ==
+                                    CalendarActionState.succeeded &&
+                                action.status.collection ==
+                                    ActionCollectionStatus.pending) ...[
+                              const SizedBox(height: 6),
+                              const Text('Calendar change succeeded; Day collection is pending.'),
+                            ],
                           ],
                         ),
                       ),
@@ -185,8 +206,7 @@ class ActivityPanel extends StatelessWidget {
                           context,
                           (_) => ActionReviewDialog(
                             controller: controller,
-                            actionId: action.id,
-                            connection: connection,
+                            actionRef: action.actionRef,
                           ),
                         ),
                         child: const Text('View details'),
@@ -195,6 +215,11 @@ class ActivityPanel extends StatelessWidget {
                   ),
                 ),
               ),
+            if (controller.nextCursor != null)
+              FloeButton.text(
+                onPressed: controller.busy ? null : controller.loadMore,
+                child: const Text('Load more'),
+              ),
           ],
         ),
       );
@@ -202,47 +227,26 @@ class ActivityPanel extends StatelessWidget {
   );
 }
 
-class ActionReviewDialog extends StatefulWidget {
+class ActionReviewDialog extends StatelessWidget {
   const ActionReviewDialog({
     super.key,
     required this.controller,
-    required this.actionId,
-    required this.connection,
+    required this.actionRef,
   });
+
   final CalendarActionController controller;
-  final String actionId;
-  final CalendarConnectionView? Function() connection;
-
-  @override
-  State<ActionReviewDialog> createState() => _ActionReviewDialogState();
-}
-
-class _ActionReviewDialogState extends State<ActionReviewDialog> {
-  late final Timer _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) => setState(() {}));
-  }
-
-  @override
-  void dispose() {
-    _timer.cancel();
-    super.dispose();
-  }
+  final String actionRef;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: widget.controller,
+    animation: controller,
     builder: (context, _) {
       final strings = AppLocalizations.of(context);
-      final controller = widget.controller;
-      final action = controller.find(widget.actionId);
+      final action = controller.find(actionRef);
       final locale = Localizations.localeOf(context).toLanguageTag();
       String localDateTime(DateTime value) =>
           DateFormat.yMMMd(locale).add_jm().format(value.toLocal());
-      String localInterval(CalendarAction value) {
+      String localInterval(ActionSchedule value) {
         final start = value.startsAt.toLocal();
         final end = value.endsAt.toLocal();
         final sameDay =
@@ -252,11 +256,8 @@ class _ActionReviewDialogState extends State<ActionReviewDialog> {
         return '${localDateTime(start)} – ${sameDay ? DateFormat.jm(locale).format(end) : localDateTime(end)}';
       }
 
-      final canApprove =
-          action != null &&
-          controller.canApprove(action, widget.connection(), DateTime.now());
       return FloeDetailDialog(
-        title: action?.direct == true
+        title: action?.origin == CalendarActionOrigin.direct
             ? 'Calendar activity'
             : strings.actionReview,
         loading: controller.busy,
@@ -266,166 +267,119 @@ class _ActionReviewDialogState extends State<ActionReviewDialog> {
             Text(strings.actionMissing)
           else ...[
             Text(action.title, style: FloeType.titleLarge),
-            if (action.agentOrigin != null) ...[
+            if (action.origin == CalendarActionOrigin.expert) ...[
               const SizedBox(height: 8),
               Text(strings.actionSuggestedByFloe),
             ],
             const SizedBox(height: 16),
             Text(strings.actionDestination, style: FloeType.controlLabel),
-            Text(action.calendarName),
+            Text(action.destinationLabel),
             const SizedBox(height: 12),
             Text(strings.actionWhen, style: FloeType.controlLabel),
-            Text(localInterval(action)),
-            const SizedBox(height: 12),
-            Text(
-              action.direct && action.mutation != null
-                  ? 'Existing alerts are preserved. No guest or recurrence changes.'
-                  : strings.actionNoExtras,
-            ),
+            Text(localInterval(action.schedule)),
+            if (action.effect case UpdateActionEffect(:final previousTitle)) ...[
+              const SizedBox(height: 12),
+              const Text('Current event title', style: FloeType.controlLabel),
+              Text(previousTitle),
+            ],
+            if (action.effect case DeleteActionEffect()) ...[
+              const SizedBox(height: 12),
+              Text(strings.actionNoExtras),
+            ],
             const SizedBox(height: 16),
-            if (!action.status.canDecide)
-              Semantics(
-                liveRegion: true,
-                child: Align(
-                  alignment: AlignmentDirectional.centerStart,
-                  child: FloeBadge(
-                    label: _status(strings, action.status),
-                    tone: _statusTone(action.status),
-                  ),
+            Semantics(
+              liveRegion: true,
+              child: Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: FloeBadge(
+                  label: _statusLabel(strings, action),
+                  tone: _statusTone(action),
                 ),
               ),
-            if (action.status == CalendarActionStatus.blocked)
-              Text(switch (action.reason) {
-                'schedule_conflict' => strings.actionConflictReason,
-                'expired' => strings.actionExpiredReason,
-                'permission_denied' => strings.actionPermissionReason,
-                'calendar_changed' => strings.actionChangedReason,
-                'invalid_timezone' => strings.actionTimezoneReason,
-                _ => strings.actionUnavailableReason,
-              }),
-            const SizedBox(height: 12),
-            if (!controller.writesEnabled) Text(strings.actionWriteDisabled),
-            if (controller.phase case final phase?)
-              Text(switch (phase) {
-                'executing' =>
-                  action.direct
-                      ? 'Checking and saving calendar changes…'
-                      : strings.actionCheckingCreating,
-                'recovering' => strings.actionLookingUp,
-                _ => strings.actionCollecting,
-              }),
-            if (controller.collection[action.id] case final collected?)
+            ),
+            if (action.status.state == CalendarActionState.blocked)
+              Text(_blockedMessage(strings, action.status.blockedReason)),
+            if (action.status.state == CalendarActionState.failed)
+              Text(_notAppliedMessage(action.status.failedReason)),
+            if (action.status.state == CalendarActionState.unknown)
+              Text(strings.actionUnknown),
+            if (action.status.state == CalendarActionState.succeeded &&
+                action.status.collection == ActionCollectionStatus.pending) ...[
+              const SizedBox(height: 8),
+              const Text('Calendar change succeeded; Day collection is pending.'),
+            ],
+            if (action.status.state == CalendarActionState.succeeded &&
+                action.status.collection == ActionCollectionStatus.collected) ...[
+              const SizedBox(height: 8),
+              Text(strings.actionCollected),
+            ],
+            if (controller.error case final error?) ...[
+              const SizedBox(height: 12),
               Text(
-                collected == 'collected'
-                    ? strings.actionCollected
-                    : collected == 'failed'
-                    ? strings.actionReadFailed
-                    : strings.actionCollecting,
+                error.isVaultLocked
+                    ? 'Vault locked. Unlock it to continue.'
+                    : error.message,
               ),
-            if (action.status == CalendarActionStatus.approved &&
-                controller.writesEnabled)
+            ],
+            const SizedBox(height: 12),
+            if (action.allowedActions.contains(ActionAllowedAction.approve))
               FloeButton.filled(
-                onPressed:
-                    controller.canApprove(
-                      action,
-                      widget.connection(),
-                      DateTime.now(),
-                      approved: true,
-                    )
-                    ? () => controller.run(
-                        action.id,
-                        connection: widget.connection(),
-                      )
-                    : null,
-                child: Text(
-                  action.direct
-                      ? 'Complete calendar change'
-                      : strings.actionExecuteApproved,
-                ),
-              ),
-            if ((action.status == CalendarActionStatus.unknown ||
-                    action.status == CalendarActionStatus.executing) &&
-                controller.gateway is CalendarActionExecutionGateway)
-              FloeButton.outlined(
-                onPressed: controller.busy || controller.needsReload
+                onPressed: controller.busy
                     ? null
-                    : () => controller.run(action.id, recover: true),
-                child: Text(strings.actionCheckCalendar),
+                    : () => _decide(
+                        controller,
+                        action,
+                        CalendarActionDecision.approve,
+                      ),
+                child: Text(strings.actionApproveCreate),
               ),
-            if (action.status == CalendarActionStatus.succeeded)
+            if (action.allowedActions.contains(ActionAllowedAction.reject))
               FloeButton.outlined(
                 onPressed: controller.busy
                     ? null
-                    : () => controller.retryRead(action.id),
-                child: Text(strings.actionRetryRead),
+                    : () => _decide(
+                        controller,
+                        action,
+                        CalendarActionDecision.reject,
+                      ),
+                child: Text(strings.actionDecline),
               ),
-            if (action.status.canDecide && !canApprove) ...[
-              const SizedBox(height: 12),
-              Text(
-                !DateTime.now().isBefore(action.expiresAt)
-                    ? strings.actionExpiredReason
-                    : strings.actionApprovalUnavailable,
+            if (action.allowedActions.contains(ActionAllowedAction.cancel))
+              FloeButton.outlined(
+                onPressed: controller.busy
+                    ? null
+                    : () => _decide(
+                        controller,
+                        action,
+                        CalendarActionDecision.cancel,
+                      ),
+                child: const Text('Cancel Action'),
               ),
-            ],
-            if (action.status.canDecide) ...[
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: [
-                  FloeButton.outlined(
-                    onPressed: controller.busy || controller.needsReload
-                        ? null
-                        : () => controller.decide(
-                            action.id,
-                            CalendarActionDecision.reject,
-                            widget.connection(),
-                            DateTime.now(),
-                          ),
-                    child: Text(strings.actionDecline),
-                  ),
-                  FloeButton.filled(
-                    onPressed: canApprove
-                        ? () => controller.decide(
-                            action.id,
-                            CalendarActionDecision.approve,
-                            widget.connection(),
-                            DateTime.now(),
-                          )
-                        : null,
-                    child: Text(
-                      controller.writesEnabled
-                          ? strings.actionApproveCreate
-                          : strings.actionSaveApproval,
-                    ),
-                  ),
-                ],
+            if (action.allowedActions.contains(ActionAllowedAction.reconcile))
+              FloeButton.outlined(
+                onPressed: controller.busy
+                    ? null
+                    : () => _reconcile(controller, action),
+                child: Text(strings.actionCheckCalendar),
               ),
-            ],
             ExpansionTile(
               title: Text(strings.actionTechnicalDetails),
               tilePadding: EdgeInsets.zero,
               children: [
                 for (final entry in <String, String>{
-                  strings.actionProvider: action.provider,
-                  strings.actionCalendarId: action.calendarId,
-                  strings.actionStart: localDateTime(action.startsAt),
-                  strings.actionEnd: localDateTime(action.endsAt),
-                  strings.actionPerson: action.personId,
-                  strings.actionExpires: localDateTime(action.expiresAt),
-                  strings.actionProposalId: action.id,
-                  strings.actionExecutionId: action.executionId,
-                  if (action.agentOrigin case final origin?) ...{
-                    strings.actionExpert: agentCapabilityTitle(origin.expertId),
-                    strings.actionConversationId: origin.sessionId,
-                    strings.actionExpertCallId: origin.invocationId,
-                  },
-                  if (action.approvedAt != null)
-                    strings.actionApprovedAt: localDateTime(action.approvedAt!),
-                  if (action.externalId != null)
-                    strings.actionExternalId: action.externalId!,
-                  if (action.reason != null)
-                    strings.actionReason: action.reason!,
+                  strings.actionProposalId: action.actionRef,
+                  'Review reference': action.reviewRef.id,
+                  'Revision': action.revision.toString(),
+                  if (action.effect case UpdateActionEffect(:final eventRef))
+                    'Event reference': eventRef,
+                  if (action.effect case DeleteActionEffect(:final eventRef))
+                    'Event reference': eventRef,
+                  if (action.status.blockedReason case final reason?)
+                    'Blocked reason': reason.name,
+                  if (action.status.failedReason case final reason?)
+                    'Not applied reason': reason.name,
+                  if (action.status.unknownReason case final reason?)
+                    'Unconfirmed reason': reason.name,
                 }.entries)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 12),
@@ -440,16 +394,72 @@ class _ActionReviewDialogState extends State<ActionReviewDialog> {
               ],
             ),
           ],
-          if (controller.failed) ...[
-            const SizedBox(height: 16),
-            Text(strings.actionReloadRequired),
-          ],
           FloeButton.text(
-            onPressed: controller.busy ? null : controller.load,
+            onPressed: controller.busy
+                ? null
+                : () => unawaited(
+                    controller.inspect(actionRef).then<void>(
+                      (_) {},
+                      onError: (Object _) {},
+                    ),
+                  ),
             child: Text(strings.actionReload),
           ),
         ],
       );
     },
+  );
+}
+
+String _blockedMessage(
+  AppLocalizations strings,
+  ActionBlockedReason? reason,
+) => switch (reason) {
+  ActionBlockedReason.permissionDenied => strings.actionPermissionReason,
+  ActionBlockedReason.policyDenied => 'Blocked by the current Actions policy.',
+  ActionBlockedReason.sourceChanged => 'The Calendar source changed. Review a new Action.',
+  ActionBlockedReason.executorUnavailable => 'The Calendar action executor is unavailable.',
+  ActionBlockedReason.scheduleConflict => strings.actionConflictReason,
+  null => strings.actionUnavailableReason,
+};
+
+String _notAppliedMessage(ActionNotAppliedReason? reason) => switch (reason) {
+  ActionNotAppliedReason.permissionDenied =>
+    'The owner confirmed the change was not applied because write permission was denied.',
+  ActionNotAppliedReason.providerRejected =>
+    'The owner confirmed the provider rejected the change before it was applied.',
+  ActionNotAppliedReason.providerUnavailable =>
+    'The owner confirmed the provider was unavailable before the change was applied.',
+  ActionNotAppliedReason.sourceChanged =>
+    'The Calendar source changed before this action. No change was applied.',
+  ActionNotAppliedReason.cancelled =>
+    'Cancelled before any Calendar change was made.',
+  ActionNotAppliedReason.timeout =>
+    'Timed out before any Calendar change was made.',
+  null => 'The owner confirmed this change was not applied.',
+};
+
+void _decide(
+  CalendarActionController controller,
+  CalendarAction action,
+  CalendarActionDecision decision,
+) {
+  unawaited(
+    controller.decide(action, decision).then<void>(
+      (_) {},
+      onError: (Object _) {},
+    ),
+  );
+}
+
+void _reconcile(
+  CalendarActionController controller,
+  CalendarAction action,
+) {
+  unawaited(
+    controller.reconcile(action).then<void>(
+      (_) {},
+      onError: (Object _) {},
+    ),
   );
 }

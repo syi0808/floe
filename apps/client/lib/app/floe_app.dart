@@ -1,6 +1,5 @@
 import 'package:floe_client/features/connections/presentation/connections_controller.dart';
 import 'package:floe_client/features/connections/application/connections_gateway.dart';
-import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
 
 import 'dart:async';
 
@@ -24,7 +23,6 @@ class FloeApp extends StatefulWidget {
     required this.personId,
     this.calendarActions,
     this.dayRefreshGateway,
-    this.calendarSourceGateway,
     this.query,
     this.agentGateway,
     this.connectionsGateway,
@@ -38,9 +36,8 @@ class FloeApp extends StatefulWidget {
   final String personId;
 
   /// Proposal, approval and execution of calendar actions.
-  final CalendarActionExecutionGateway? calendarActions;
+  final CalendarActionGateway? calendarActions;
   final DayRefreshGateway? dayRefreshGateway;
-  final CalendarSourceGateway? calendarSourceGateway;
 
   final DayQuery? query;
   final AgentConversationGateway? agentGateway;
@@ -95,7 +92,6 @@ class _FloeAppState extends State<FloeApp> {
     final home = FloeToastHost(
       child: PersonalDayScreen(
         gateway: widget.gateway,
-        calendarSourceGateway: widget.calendarSourceGateway,
         calendarActions: widget.calendarActions,
         dayRefreshGateway: widget.dayRefreshGateway,
         query: effectiveQuery,

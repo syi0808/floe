@@ -3,17 +3,19 @@ import 'package:flutter/material.dart';
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_squircle.dart';
-import 'package:floe_client/features/conversation/application/conversation_controller.dart';
+import 'package:floe_client/features/knowledge/application/agent_memory_controller.dart';
 import 'package:floe_client/features/knowledge/domain/memory_review.dart';
 
 final class AgentMemoryReviewSettings extends StatelessWidget {
   const AgentMemoryReviewSettings({super.key, required this.controller});
 
-  final ConversationController controller;
+  final AgentMemoryController controller;
 
   @override
-  Widget build(BuildContext context) {
-    final candidates = controller.memoryCandidates;
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller,
+    builder: (context, _) {
+    final candidates = controller.candidates;
     return FloeSquircle(
       padding: const EdgeInsets.all(FloeSpace.lg),
       child: Column(
@@ -26,7 +28,7 @@ final class AgentMemoryReviewSettings extends StatelessWidget {
             style: FloeType.body.copyWith(color: FloePalette.neutral600),
           ),
           const SizedBox(height: FloeSpace.md),
-          if (controller.memoryReviewFailure != null)
+          if (controller.reviewFailure != null)
             Text(
               'Memory review is temporarily unavailable.',
               style: FloeType.body.copyWith(color: FloePalette.error600),
@@ -47,16 +49,39 @@ final class AgentMemoryReviewSettings extends StatelessWidget {
               if (candidate != candidates.last)
                 const SizedBox(height: FloeSpace.sm),
             ],
+          if (controller.acknowledgement case final acknowledgement?) ...[
+            const SizedBox(height: FloeSpace.sm),
+            Text(
+              'Confirmed ${acknowledgement.decision.name} · '
+              '${acknowledgement.committedAt.toLocal()}',
+              key: const ValueKey('memory-decision-acknowledgement'),
+              style: FloeType.bodySmall.copyWith(
+                color: FloePalette.neutral600,
+              ),
+            ),
+          ],
+          if (controller.canRetryDecision) ...[
+            const SizedBox(height: FloeSpace.sm),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FloeButton.outlined(
+                key: const ValueKey('memory-decision-retry'),
+                onPressed: controller.retryPendingDecision,
+                child: const Text('Retry pending decision'),
+              ),
+            ),
+          ],
         ],
       ),
     );
-  }
+    },
+  );
 }
 
 final class _Candidate extends StatelessWidget {
   const _Candidate({required this.controller, required this.candidate});
 
-  final ConversationController controller;
+  final AgentMemoryController controller;
   final AgentMemoryCandidate candidate;
 
   @override
@@ -70,7 +95,7 @@ final class _Candidate extends StatelessWidget {
         Text(candidate.statement, style: FloeType.body),
         const SizedBox(height: FloeSpace.xs),
         Text(
-          '${candidate.memoryKind} · ${candidate.epistemicStatus} · '
+          '${candidate.operation} · ${candidate.memoryKind} · ${candidate.epistemicStatus} · '
           '${candidate.sourceCount} source${candidate.sourceCount == 1 ? '' : 's'}',
           style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
         ),
@@ -81,8 +106,11 @@ final class _Candidate extends StatelessWidget {
             FloeButton.filled(
               key: ValueKey('memory-approve-${candidate.id}'),
               size: FloeButtonSize.compact,
-              onPressed: controller.canReviewMemory
-                  ? () => controller.decideMemoryCandidate(
+              onPressed: controller.canReview &&
+                      candidate.allowedActions.contains(
+                        AgentMemoryDecision.approve,
+                      )
+                  ? () => controller.decide(
                       candidate.id,
                       AgentMemoryDecision.approve,
                     )
@@ -92,8 +120,11 @@ final class _Candidate extends StatelessWidget {
             FloeButton.text(
               key: ValueKey('memory-reject-${candidate.id}'),
               size: FloeButtonSize.compact,
-              onPressed: controller.canReviewMemory
-                  ? () => controller.decideMemoryCandidate(
+              onPressed: controller.canReview &&
+                      candidate.allowedActions.contains(
+                        AgentMemoryDecision.reject,
+                      )
+                  ? () => controller.decide(
                       candidate.id,
                       AgentMemoryDecision.reject,
                     )

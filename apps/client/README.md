@@ -107,9 +107,10 @@ target and operation; it never authorizes TCC reset or unrelated Calendar edits.
 
 The legacy client, native-package and Runner test suites have been removed in T0.
 Their [behavior ledger](../../docs/plans/t0-client-behavior-ledger.md) preserves the
-observed safety, failure and recovery cases for review. Shared JSON fixtures and
-the [fixture builder](../../docs/development/test-performance.md) remain available;
-private profiles and copied native host bundles must remain isolated. The ledger
+observed safety, failure and recovery cases for review. Shared JSON fixtures remain
+available. The old shared fixture builder was also removed in T0; any replacement
+follows the [S3 reconstruction policy](../../docs/development/test-performance.md#shared-cross-language-fixtures).
+Private profiles and copied native host bundles must remain isolated. The ledger
 does not claim the old behavior passed or that a replacement suite exists.
 
 To start the local server and macOS client together from the repository root:
@@ -121,11 +122,12 @@ To start the local server and macOS client together from the repository root:
 Pass Flutter run arguments to target another Apple device, for example
 `./scripts/run-local.sh -d <apple-device>`. Stopping either process stops the other.
 
-During S1, the app composes Conversation and Connections. Day exposes cached reads
-and local CRUD. The prepared `DayRefreshGateway` is deliberately not supplied to
-the UI until S2 assembles its durable acquisition owner; refresh and dependent
-Action controls are absent at this intermediate boundary. The old Dart evidence
-publication, mirror import and periodic acquisition policy remain removed.
+The app supplies `AppWireDayGateway` for Day reads, local mutations and explicit
+owner-backed refresh, and `CalendarActionFacade` for the Actions flow. Rust owns
+acquisition, authority, durable operation identity and reconciliation. Dart does
+not publish source evidence, import mirrors or run a separate acquisition policy.
+This is the current S2 source composition; G2 build and S3 behavioral validation
+remain separate gates.
 
 ## Localization
 
@@ -208,7 +210,7 @@ Run this command from the repository root. Logs are written under `.floe-debug/`
 filtered with `FLOE_LOG`, for example `FLOE_LOG=debug ./scripts/run-agent-debug.sh`.
 
 The macOS build compiles `floe-ffi`, embeds `libfloe_ffi.dylib`, and starts a
-dedicated FFI isolate. `NativeDayGateway` exchanges admitted Day command/query envelopes with
+dedicated product FFI isolate and native callback isolate. `AppWireDayGateway` exchanges admitted Day command/query envelopes with
 the Rust core, which owns all Turso reads and writes. Local data is stored under
 the app's Application Support directory.
 
@@ -219,15 +221,18 @@ actual bounded EventKit labels and handles; the owner validates selection, sourc
 revision and the current native subject before granting access. Permission requests,
 resource configuration and Observe remain separate explicit steps.
 
-Day mirror refresh and Calendar Action composition are S2 work. S1 displays cached
-Day content and does not expose refresh or dependent Action controls. Retained native
-Action code and diagnostics are unconnected to the S1 product flow. Legacy raw
-SourceConnection mutation/query adapters are removed from the running client.
+Day refresh uses the distinct product Calendar read permit and retains mirror
+coverage and resource failures from the owner. Calendar Actions use typed preview,
+approval, execution and exact receipt recovery through the Actions owner. An
+assistant Observe grant and a product refresh permit are separate authorities.
+Legacy raw SourceConnection mutation/query adapters are removed from the running
+client.
 
 ## Validation commands
 
-The `/focus` Calendar proposal and Action validation flow resumes after S2 reconnects
-its owner-backed Day acquisition and action presentation. It is not an S1 verification path.
+Calendar proposal and Action diagnostics must use the current owner-backed Day and
+Actions contracts at their authorized gate. No retained diagnostic command is
+evidence that the current S2 product flow has passed validation.
 
 Follow the [architecture refactor verification gates](../../docs/plans/2026-10-02-architecture-refactor.md#8-verification-policy-and-final-evidence):
 
@@ -241,5 +246,5 @@ Follow the [architecture refactor verification gates](../../docs/plans/2026-10-0
   G3 then includes `flutter analyze`, `flutter test` and final Apple/FFI builds.
 
 The direct `flutter_test` dependency and old native test targets are absent at T0.
-The lockfile remains unchanged until an authorized package-resolution phase; its retained
-entries are not evidence of a runnable old or new suite. `flutter_lints` remains in use.
+Dependency resolution follows its authorized gate; retained lockfile entries are
+not evidence of a runnable old or new suite. `flutter_lints` remains in use.

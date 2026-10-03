@@ -1,7 +1,9 @@
 # Agent debugging
 
-Agent failures are correlated across Flutter, the JSON/C ABI, the vault worker,
-Experts, and model attempts with the vault `request_id`. Diagnostic output must not
+AppWire calls carry `request_id` across Flutter and the JSON/C ABI. Retain the
+returned owner command, Run, Task or operation identity when following durable work
+across later observations. The Vault queue handles lifecycle operations; domain
+owners drive their own work. Diagnostic output must not
 contain prompt text, model responses, calendar content, credentials, or Person IDs.
 
 ## Capture a failure
@@ -32,15 +34,19 @@ Find the error's `request_id` in the exported bundle, then filter the combined l
 rg 'REQUEST_ID' .floe-debug/agent-*.log
 ```
 
-Expected Rust stages are `agent_job_started`, optional `model_attempt_*` and
-`expert_invocation_*` events, followed by `agent_job_completed` or
-`agent_job_failed`. Flutter records include `component`, `operation`, `failure`,
-`request_id`, `session_id`, `elapsed_ms`, and a locally generated `error_id`.
+Flutter records include `component`, `operation`, optional `failure`,
+`request_id`, `session_id`, `invocation_id`, `elapsed_ms`, and an `error_id`.
+Owner failures also carry domain/category, reason code, incident identity and safe
+actions when supplied by the owner. Rust FFI panic diagnostics emit
+`rust_core_panicked` at `ffi_boundary` with an `error_id`. The removed vault-worker
+`agent_job_*` stage sequence is not emitted by the current owner path. Use the
+owner's command lookup, Run receipt and event cursor to establish durable status;
+a missing log event does not prove that work was never admitted or completed.
 
 ## Failure boundaries
 
 - Envelope errors preserve Rust `code`, `field`, and `metadata` in Dart.
-- Agent result failures preserve their exact `AgentFailure`, request ID, and action stage.
+- Owner failures preserve their typed failure projection and correlation identity.
 - Rust panics are caught at the FFI boundary and receive an `error_id`; panic payloads
   are not returned or logged.
 - Uncaught Flutter framework, platform, and asynchronous errors enter the same local

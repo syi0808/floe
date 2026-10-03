@@ -5,7 +5,7 @@ import 'dart:async';
 import 'package:floe_client/app/runtime/local_profile_selection.dart';
 import 'package:floe_client/features/knowledge/infrastructure/app_wire_memory_gateway.dart';
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_gateway.dart';
-import 'package:floe_client/features/actions/infrastructure/app_wire_proposal_gateway.dart';
+import 'package:floe_client/features/actions/application/calendar_action_facade.dart';
 import 'package:floe_client/features/experts/infrastructure/app_wire_registry_gateway.dart';
 import 'package:floe_client/features/vault/infrastructure/app_wire_vault_gateway.dart';
 import 'package:floe_client/infrastructure/native/native_context_host_transport.dart';
@@ -61,13 +61,13 @@ final class AppRuntime {
   late final registry = AppWireRegistryGateway(_transport);
   late final memory = AppWireMemoryGateway(_transport);
   late final connections = AppWireConnectionsGateway(_transport);
-  late final proposals = AppWireProposalGateway(_transport);
+  late final actions = CalendarActionFacade(this);
   late final owners = LocalOwnerGateways(
     vault: vault,
     registry: registry,
     memory: memory,
     memoryReview: memory,
-    proposals: proposals,
+    actions: actions,
   );
   late final NativeContextHostTransport nativeHostTransport =
       AppWireNativeContextHostTransport(_transport.nativeCallbacks);

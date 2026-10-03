@@ -41,21 +41,26 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   }
 
   void _controllerChanged() {
+    if (controller.vaultState != AgentVaultState.ready) {
+      memoryRequested = false;
+      savedMemoryRequested = false;
+      return;
+    }
     if (!controller.busy) _load();
   }
 
   Future<void> _load() async {
-    if (controller.hasMemoryReview &&
+    if (controller.memoryController.hasReview &&
         !memoryRequested &&
-        controller.canReviewMemory) {
+        controller.memoryController.canReadReview) {
       memoryRequested = true;
-      await controller.loadMemoryReview();
+      await controller.memoryController.loadReview();
     }
-    if (controller.hasMemory &&
+    if (controller.memoryController.hasMemory &&
         !savedMemoryRequested &&
-        controller.canReadMemory) {
+        controller.memoryController.canRead) {
       savedMemoryRequested = true;
-      await controller.loadMemory();
+      await controller.memoryController.load();
     }
   }
 
@@ -88,10 +93,10 @@ class _DataPrivacyState extends State<_DataPrivacy> {
           key: ValueKey('connections-privacy-navigation'),
           text: 'Open Connections to connect sources, choose resources, or change Use with Floe.',
         ),
-        if (controller.hasMemory) ...[
+        if (controller.memoryController.hasMemory) ...[
           const SizedBox(height: FloeSpace.lg),
           AgentMemorySettingsCard(
-            controller: controller,
+            controller: controller.memoryController,
             onManage: widget.onManageMemory,
           ),
         ],

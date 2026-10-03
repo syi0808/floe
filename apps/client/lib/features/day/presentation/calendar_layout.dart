@@ -5,9 +5,16 @@ import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 
 class CalendarDayAxis {
-  CalendarDayAxis(DateTime date, int offsetSeconds) {
+  CalendarDayAxis(
+    DateTime date,
+    int offsetSeconds, {
+    int? endOffsetSeconds,
+  }) {
     final local = DateTime(date.year, date.month, date.day);
-    usesLocalZone = local.timeZoneOffset.inSeconds == offsetSeconds;
+    final localEnd = DateTime(date.year, date.month, date.day + 1);
+    usesLocalZone = local.timeZoneOffset.inSeconds == offsetSeconds &&
+        (endOffsetSeconds == null ||
+            localEnd.timeZoneOffset.inSeconds == endOffsetSeconds);
     start = usesLocalZone
         ? local.toUtc()
         : DateTime.utc(
@@ -15,8 +22,11 @@ class CalendarDayAxis {
             date.month,
             date.day,
           ).subtract(Duration(seconds: offsetSeconds));
-    end = usesLocalZone
-        ? DateTime(date.year, date.month, date.day + 1).toUtc()
+    end = endOffsetSeconds != null
+        ? DateTime.utc(date.year, date.month, date.day + 1)
+            .subtract(Duration(seconds: endOffsetSeconds))
+        : usesLocalZone
+        ? localEnd.toUtc()
         : start.add(Duration(days: 1));
     offset = offsetSeconds;
   }
@@ -53,9 +63,14 @@ class CalendarPlacement {
 List<CalendarPlacement> layoutCalendarEvents(
   List<EventItem> events,
   DateTime date,
-  int offsetSeconds,
-) {
-  final axis = CalendarDayAxis(date, offsetSeconds);
+  int offsetSeconds, {
+  int? endOffsetSeconds,
+}) {
+  final axis = CalendarDayAxis(
+    date,
+    offsetSeconds,
+    endOffsetSeconds: endOffsetSeconds,
+  );
   double minute(DateTime value) => axis.minute(value);
   final sorted =
       events

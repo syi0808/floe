@@ -43,9 +43,9 @@ Future<DaySnapshot> awaitDayRefresh(
       case CompletedDayRefresh(:final day):
         return day;
       case FailedDayRefresh(:final failure):
-        throw StateError('Day refresh failed: ${failure.reason}');
+        throw StateError('Day refresh failed: ${failure.name}');
       case InterruptedDayRefresh(:final failure):
-        throw StateError('Day refresh interrupted: ${failure.reason}');
+        throw StateError('Day refresh interrupted: ${failure.name}');
       case PendingDayRefresh():
       case RunningDayRefresh():
         break;
@@ -55,7 +55,10 @@ Future<DaySnapshot> awaitDayRefresh(
     await Future<void>.delayed(const Duration(milliseconds: 100));
     final next = await gateway.observeDayRefresh(current.operationRef);
     if (next.operationRef != current.operationRef ||
-        next.revision < current.revision) {
+        next.revision < current.revision ||
+        (next.revision == current.revision &&
+            next.runtimeType != current.runtimeType) ||
+        (current is RunningDayRefresh && next is PendingDayRefresh)) {
       throw const FormatException(
         'Day refresh observation changed identity or regressed.',
       );

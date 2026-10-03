@@ -12,10 +12,6 @@ import 'package:floe_client/features/conversation/application/agent_conversation
 import 'package:floe_client/features/conversation/application/agent_interaction_gateway.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
-import 'package:floe_client/features/knowledge/domain/memory_review.dart';
-import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
-import 'package:floe_client/features/actions/domain/agent_proposal.dart';
-import 'package:floe_client/features/experts/domain/agent_registry.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:floe_client/app/runtime/owner_failure.dart';
@@ -54,7 +50,6 @@ final class ConversationController extends ChangeNotifier {
       ..addListener(_notify);
     registryController = AgentRegistryController(
       gateway: owners.registry,
-      personId: personId,
       canOperate: () =>
           !_busy &&
           !_sealed &&
@@ -110,27 +105,10 @@ final class ConversationController extends ChangeNotifier {
   Completer<void>? _operationDone;
   Future<void>? _locking;
   late final AgentRegistryController registryController;
-  AgentRegistryView? get registry => registryController.registry;
-  String? get registryFailure => registryController.failure;
-  bool get registryLoaded => registryController.loaded;
   late final AgentMemoryController memoryController;
-  List<AgentMemoryCandidate>? get memoryCandidates =>
-      memoryController.candidates;
-  String? get memoryReviewFailure => memoryController.reviewFailure;
-  AgentMemoryOverview? get memoryOverview => memoryController.overview;
-  set memoryOverview(AgentMemoryOverview? value) {
-    memoryController.overview = value;
-  }
-
-  String? get memoryFailure => memoryController.failure;
-  final Map<String, AgentProposalInspection> _proposals = {};
-  final Map<String, String> _proposalFailures = {};
   final Map<String, AgentInteractionSnapshot> _interactions = {};
   final Set<String> _interactionBusy = {};
   final Map<String, String> _interactionFailures = {};
-
-  AgentProposalInspection? proposalFor(String callId) => _proposals[callId];
-  String? proposalFailureFor(String callId) => _proposalFailures[callId];
 
   AgentInteractionSnapshot? interactionFor(String interactionId) =>
       _interactions[interactionId];
@@ -419,124 +397,6 @@ final class ConversationController extends ChangeNotifier {
     _interactionFailures.clear();
   }
 
-  bool canInspectProposal(AgentCapabilityMessage message) =>
-      usesVault &&
-      owners.proposals != null &&
-      !busy &&
-      !_sealed &&
-      !_disposed &&
-      _locking == null &&
-      !needsReload &&
-      !needsRecovery &&
-      vaultState == AgentVaultState.ready &&
-      session?.personId == personId &&
-      message.isDelegation &&
-      session!.messages
-              .whereType<AgentCapabilityMessage>()
-              .where((saved) => identical(saved, message))
-              .length ==
-          1 &&
-      message.hasArtifactMediaType(
-        'application/vnd.floe.actions.calendar-proposal+json;version=1',
-      );
-
-  Future<void> inspectProposal(AgentCapabilityMessage message) async {
-    if (!canInspectProposal(message)) return;
-    final original = session!;
-    _begin();
-    _proposals.remove(message.callId);
-    _proposalFailures.remove(message.callId);
-    _notify();
-    try {
-      final result = await owners.proposals!.inspectProposal(
-        personId: personId,
-        sessionId: original.id,
-        invocationId: message.callId,
-      );
-      if (_sealed || _disposed || session?.id != original.id) return;
-      if (result.personId != personId ||
-          result.sessionId != original.id ||
-          result.invocationId != message.callId) {
-        throw const FormatException('Proposal inspection scope mismatch');
-      }
-      _proposals[message.callId] = result;
-    } on Object catch (error) {
-      if (_sealed || _disposed) return;
-      final reason = error is AgentVaultException
-          ? error.failure
-          : 'storage_unavailable';
-      _proposalFailures[message.callId] = reason;
-      if (error is AgentVaultException &&
-          (error.reloadRequired == true || error.sealSession == true)) {
-        _failFromError(error, reason);
-      }
-    } finally {
-      _end();
-      _notify();
-    }
-  }
-
-  void _clearProposals() {
-    _proposals.clear();
-    _proposalFailures.clear();
-  }
-
-  bool get hasRegistryManagement => usesVault && registryController.available;
-
-  bool get hasMemoryReview => usesVault && memoryController.hasReview;
-  bool get hasMemory => usesVault && memoryController.hasMemory;
-  bool get canReadMemory => hasMemory && memoryController.canRead;
-
-  Future<void> loadMemory() => memoryController.load();
-
-  bool get canReviewMemory => hasMemoryReview && memoryController.canReview;
-
-  Future<void> loadMemoryReview() => memoryController.loadReview();
-
-  Future<void> decideMemoryCandidate(
-    String candidateId,
-    AgentMemoryDecision decision,
-  ) => memoryController.decide(candidateId, decision);
-
-  bool get canManageRegistry =>
-      hasRegistryManagement && registryController.canManage;
-
-  Future<void> loadRegistry() => registryController.load();
-
-  AgentCandidateCatalog? get expertCandidates =>
-      registryController.candidateCatalog;
-  String? get expertCandidateFailure => registryController.candidateFailure;
-  bool get expertCandidateBusy => registryController.candidateBusy;
-
-  Future<void> loadExpertCandidates(
-    String assignmentId,
-    String requirementKey,
-  ) => registryController.loadCandidates(assignmentId, requirementKey);
-
-  Future<void> replaceExpertSelection(
-    AgentInstallation installation,
-    AgentExpertDefinition definition,
-    AgentAssignment assignment,
-    AgentSourceRequirement requirement,
-    List<String> candidateIds,
-  ) => registryController.replaceSelection(
-    installation,
-    definition,
-    assignment,
-    requirement,
-    candidateIds,
-  );
-
-  Future<void> configureRegistry(
-    AgentRegistryTarget target,
-    String id,
-    bool enabled,
-  ) => registryController.configure(target, id, enabled);
-
-  Future<void> configureCapability(String installationId, bool enabled) async {
-    await registryController.configureCapability(installationId, enabled);
-  }
-
   bool get usesVault => owners.vault != null;
   bool get isGeneralConversation => session != null;
   bool get isConnectedConversation => isGeneralConversation;
@@ -789,7 +649,6 @@ final class ConversationController extends ChangeNotifier {
     if (saved.personId != personId) {
       throw const FormatException('Agent Person mismatch.');
     }
-    _clearProposals();
     _clearInteractions();
     session = saved;
     messages = List.of(saved.messages);
@@ -872,7 +731,6 @@ final class ConversationController extends ChangeNotifier {
 
   Future<void> _lock() async {
     _sealed = true;
-    _clearProposals();
     _clearInteractions();
     registryController.clear();
     memoryController.clear();
@@ -976,7 +834,6 @@ final class ConversationController extends ChangeNotifier {
     bool? reloadRequired,
     bool? sealSession,
   }) {
-    _clearProposals();
     if (sealSession ?? false) _clearInteractions();
     failure = reason;
     this.recoveryAction = recoveryAction;

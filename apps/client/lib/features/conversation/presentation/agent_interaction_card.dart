@@ -30,7 +30,11 @@ final class AgentInteractionCard extends StatefulWidget {
   final AgentInteractionMessage message;
   final VoidCallback? onOpenSourceReview;
   final VoidCallback? onOpenConnections;
-  final void Function(AgentExpertBindingTarget target)? onOpenExpertSettings;
+  final void Function(
+    AgentExpertBindingTarget target,
+    Future<void> Function() reconcileAfterReplacement,
+  )?
+  onOpenExpertSettings;
 
   @override
   State<AgentInteractionCard> createState() => _AgentInteractionCardState();
@@ -192,16 +196,20 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
     AgentNavigationTarget(:final sourceLabel) => [
       _row(strings.agentInteractionSource, sourceLabel),
     ],
-    AgentExpertBindingTarget(
-      :final packageId,
-      :final requirementKey,
-      :final capability,
-    ) =>
-      [
-        _row(strings.agentInteractionSource, packageId),
-        _row(strings.agentInteractionNextStep, requirementKey),
-        _row(strings.agentInteractionPurpose, capability),
-      ],
+    AgentExpertBindingTarget(:final review) => [
+      _row(strings.agentInteractionNextStep, review.requirementRef),
+      _row(
+        'Selected sources',
+        review.candidates
+            .where((candidate) => candidate.selected)
+            .map((candidate) => candidate.label)
+            .join(', '),
+      ),
+      _row(
+        'Reviewed options',
+        review.candidates.map((candidate) => candidate.label).join(', '),
+      ),
+    ],
   };
 
   Widget _row(String label, String value) => Padding(
@@ -273,7 +281,10 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
             AgentInteractionAction.openExpertSettings => () {
               final target = snapshot.target;
               if (target is AgentExpertBindingTarget) {
-                widget.onOpenExpertSettings?.call(target);
+                widget.onOpenExpertSettings?.call(
+                  target,
+                  () => controller.refreshInteraction(snapshot),
+                );
               }
             },
           };

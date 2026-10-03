@@ -23,9 +23,11 @@ FakeDayGateway calendarPreviewGateway() => FakeDayGateway(
         startsAt: calendarPreviewDate,
         endsAt: calendarPreviewDate.add(const Duration(days: 1)),
         isAllDay: true,
-        calendarName: entry.$3,
-        externalId: 'fixture:${entry.$1}',
-        provider: 'fixture',
+        source: CalendarDayItemSource(
+          sourceRef: 'preview-calendar-source',
+          calendarRef: 'preview:${entry.$3}',
+          calendarLabel: entry.$3,
+        ),
         timezone: 'UTC',
       ),
     for (final entry in [
@@ -43,9 +45,11 @@ FakeDayGateway calendarPreviewGateway() => FakeDayGateway(
         createdAt: calendarPreviewDate,
         startsAt: calendarPreviewDate.add(Duration(minutes: entry.$3)),
         endsAt: calendarPreviewDate.add(Duration(minutes: entry.$4)),
-        calendarName: entry.$5,
-        externalId: 'fixture:${entry.$1}',
-        provider: 'fixture',
+        source: CalendarDayItemSource(
+          sourceRef: 'preview-calendar-source',
+          calendarRef: 'preview:${entry.$5}',
+          calendarLabel: entry.$5,
+        ),
         timezone: 'UTC',
       ),
     TaskItem(

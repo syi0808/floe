@@ -236,13 +236,18 @@ class _DayToolbar extends StatelessWidget {
                 await controller.refresh();
                 if (!context.mounted ||
                     controller.loadState != DayLoadState.ready ||
-                    controller.snapshot?.calendar?.error != null) {
+                    controller.errorMessage != null ||
+                    controller.snapshot == null) {
                   return;
                 }
+                final complete = hasCompleteCalendarCoverage(
+                  controller.snapshot!,
+                  controller.query,
+                );
                 FloeToastHost.of(context).show(
-                  title: AppLocalizations.of(context).calendarsRefreshed,
-                  description: AppLocalizations.of(context)
-                      .localTasksAndNotesUnchanged,
+                  title: complete
+                      ? AppLocalizations.of(context).calendarsRefreshed
+                      : 'Refresh completed; Calendar coverage remains incomplete for this date.',
                 );
               },
               icon: Icon(LucideIcons.refreshCw, size: 18),

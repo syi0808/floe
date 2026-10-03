@@ -5,7 +5,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_squircle.dart';
-import 'package:floe_client/features/conversation/application/conversation_controller.dart';
+import 'package:floe_client/features/knowledge/application/agent_memory_controller.dart';
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
 import 'package:floe_client/features/settings/presentation/agent_memory_review_settings.dart';
 
@@ -16,12 +16,14 @@ final class AgentMemorySettingsCard extends StatelessWidget {
     required this.onManage,
   });
 
-  final ConversationController controller;
+  final AgentMemoryController controller;
   final VoidCallback onManage;
 
   @override
-  Widget build(BuildContext context) {
-    final overview = controller.memoryOverview;
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller,
+    builder: (context, _) {
+    final overview = controller.overview;
     return FloeSquircle(
       padding: const EdgeInsets.all(FloeSpace.lg),
       child: Column(
@@ -34,7 +36,7 @@ final class AgentMemorySettingsCard extends StatelessWidget {
             style: FloeType.body.copyWith(color: FloePalette.neutral600),
           ),
           const SizedBox(height: FloeSpace.md),
-          if (controller.memoryFailure != null)
+          if (controller.failure != null)
             Text(
               'Memory is temporarily unavailable.',
               style: FloeType.body.copyWith(color: FloePalette.error600),
@@ -59,7 +61,8 @@ final class AgentMemorySettingsCard extends StatelessWidget {
         ],
       ),
     );
-  }
+    },
+  );
 }
 
 final class AgentMemorySettings extends StatelessWidget {
@@ -69,12 +72,14 @@ final class AgentMemorySettings extends StatelessWidget {
     required this.onBack,
   });
 
-  final ConversationController controller;
+  final AgentMemoryController controller;
   final VoidCallback onBack;
 
   @override
-  Widget build(BuildContext context) {
-    final overview = controller.memoryOverview;
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller,
+    builder: (context, _) {
+    final overview = controller.overview;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -94,7 +99,7 @@ final class AgentMemorySettings extends StatelessWidget {
           'These are the personal details Floe can use to make future conversations more useful.',
           style: FloeType.body.copyWith(color: FloePalette.neutral600),
         ),
-        if (controller.hasMemoryReview) ...[
+        if (controller.hasReview) ...[
           const SizedBox(height: FloeSpace.lg),
           AgentMemoryReviewSettings(controller: controller),
         ],
@@ -111,7 +116,7 @@ final class AgentMemorySettings extends StatelessWidget {
                 style: FloeType.body.copyWith(color: FloePalette.neutral600),
               ),
               const SizedBox(height: FloeSpace.md),
-              if (controller.memoryFailure != null)
+              if (controller.failure != null)
                 Text(
                   'Saved memories are temporarily unavailable.',
                   style: FloeType.body.copyWith(color: FloePalette.error600),
@@ -148,7 +153,8 @@ final class AgentMemorySettings extends StatelessWidget {
         ),
       ],
     );
-  }
+    },
+  );
 }
 
 final class _MemoryRow extends StatelessWidget {

@@ -1,464 +1,455 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 
-import 'package:floe_client/app/floe_loading.dart';
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
-
-import 'package:floe_client/features/actions/domain/calendar_action.dart';
-import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
-import 'package:floe_client/features/day/domain/day_models.dart';
+import 'package:floe_client/app/runtime/app_runtime.dart';
 import 'package:floe_client/features/actions/application/calendar_action_gateway.dart';
+import 'package:floe_client/features/actions/domain/calendar_action.dart';
+import 'package:floe_client/features/actions/application/action_command_replay.dart';
 
+enum CalendarActionErrorKind {
+  vaultLocked,
+  vaultUnavailable,
+  conflict,
+  unavailable,
+  other,
+}
+
+final class CalendarActionError {
+  const CalendarActionError({required this.kind, required this.code});
+
+  factory CalendarActionError.from(Object error) {
+    final code = error is AppRuntimeException ? error.code : 'internal';
+    final kind = switch (code) {
+      'vault_locked' => CalendarActionErrorKind.vaultLocked,
+      'vault_unavailable' || 'storage_unavailable' =>
+        CalendarActionErrorKind.vaultUnavailable,
+      'conflict' => CalendarActionErrorKind.conflict,
+      'unavailable' || 'deadline_exceeded' || 'timeout' =>
+        CalendarActionErrorKind.unavailable,
+      _ => CalendarActionErrorKind.other,
+    };
+    return CalendarActionError(kind: kind, code: code);
+  }
+
+  final CalendarActionErrorKind kind;
+  final String code;
+
+  bool get isVaultLocked => kind == CalendarActionErrorKind.vaultLocked;
+
+  String get message => switch (kind) {
+    CalendarActionErrorKind.vaultLocked =>
+      'Unlock your Floe vault to review or change Actions.',
+    CalendarActionErrorKind.vaultUnavailable =>
+      'Actions are unavailable while the Floe vault is unavailable.',
+    CalendarActionErrorKind.conflict =>
+      'The Action changed. Refresh it before making another decision.',
+    CalendarActionErrorKind.unavailable =>
+      'The Action result could not be confirmed. Refresh or reconcile the same Action.',
+    CalendarActionErrorKind.other =>
+      'The Action could not be confirmed. Refresh before trying again.',
+  };
+}
+
+/// UI state for the single Actions owner. Disposing this controller stops only
+/// its scheduled observations; it never cancels work owned by Rust.
 final class CalendarActionController extends ChangeNotifier {
-  CalendarActionController({
-    required this.gateway,
-    required this.personId,
-    this.collect,
-  });
+  CalendarActionController({required this.gateway})
+      : _commands = ActionCommandReplay.forGateway(gateway);
 
   final CalendarActionGateway gateway;
-  final String personId;
-  final Future<void> Function(CalendarAction)? collect;
-  bool writesEnabled = false;
-  ActionAuthority authority = const ActionAuthority(
-    calendarCreate: ActionAuthorityMode.ask,
-  );
-  String? phase;
-  final Map<String, String> collection = {};
-  List<CalendarAction> actions = const [];
-  bool busy = false;
-  bool needsReload = true;
-  bool failed = false;
-  String? authorityFailure;
+  List<CalendarAction> _actions = const [];
+  ActionAuthority? _authority;
+  List<ActionDestinationChoice> _destinations = const [];
+  String? _nextCursor;
+  CalendarActionError? _error;
+  bool _busy = false;
+  bool _loaded = false;
   bool _disposed = false;
+  final ActionCommandReplay _commands;
+  CalendarActionError? _destinationsError;
+  bool _destinationsLoaded = false;
+  final Map<String, Timer> _observations = {};
 
-  CalendarAction? find(String id) {
-    for (final action in actions) {
-      if (action.id == id) return action;
+  List<CalendarAction> get actions => _actions;
+  ActionAuthority? get authority => _authority;
+  List<ActionDestinationChoice> get destinations => _destinations;
+  String? get nextCursor => _nextCursor;
+  CalendarActionError? get error => _error;
+  CalendarActionError? get destinationsError => _destinationsError;
+  bool get destinationsLoaded => _destinationsLoaded;
+  bool get busy => _busy;
+  bool get loaded => _loaded;
+
+  CalendarAction? find(String actionRef) {
+    for (final action in _actions) {
+      if (action.actionRef == actionRef) return action;
     }
     return null;
   }
 
-  bool canApprove(
-    CalendarAction action,
-    CalendarConnectionView? connection,
-    DateTime now, {
-    bool approved = false,
-  }) =>
-      !busy &&
-      !needsReload &&
-      action.personId == personId &&
-      (approved
-          ? action.status == CalendarActionStatus.approved
-          : action.status.canDecide) &&
-      !now.isBefore(action.createdAt) &&
-      now.isBefore(action.expiresAt) &&
-      connection != null &&
-      connection.isServing &&
-      connection.error == null &&
-      connection.lastSuccessAt != null &&
-      connection.provider == action.provider &&
-      (action.agentOrigin != null ||
-          connection.revision == action.connectionRevision) &&
-      connection.selectedCalendarIds.contains(action.calendarId) &&
-      !connection.calendars.any(
-        (calendar) =>
-            calendar.id == action.calendarId &&
-            (calendar.error != null || calendar.lastSuccessAt == null),
-      );
-
   Future<void> load() async {
-    if (busy || _disposed) return;
-    busy = true;
-    final minimum = FloeLoading.minimumVisibility();
-    failed = false;
-    authorityFailure = null;
+    if (_busy || _disposed) return;
+    _busy = true;
+    _error = null;
     notifyListeners();
     try {
-      final result = await gateway.loadCalendarActions(personId);
-      final enabled = gateway is CalendarActionExecutionGateway
-          ? await (gateway as CalendarActionExecutionGateway)
-                .calendarWritesEnabled(personId)
-          : false;
+      // Reading durable history/authority must not depend on native Calendar
+      // destination discovery succeeding.
+      final page = await gateway.list();
       if (_disposed) return;
-      writesEnabled = enabled;
-      final loadedAuthority = gateway is CalendarActionExecutionGateway
-          ? await (gateway as CalendarActionExecutionGateway)
-                .loadActionAuthority(personId)
-          : authority;
+      _mergePage(page, replace: true);
+      _loaded = true;
+      final authority = await gateway.loadAuthority();
       if (_disposed) return;
-      if (result.any((action) => action.personId != personId)) {
-        throw StateError('Unexpected proposal owner');
-      }
-      actions = List.unmodifiable(result);
-      writesEnabled = enabled;
-      authority = loadedAuthority;
-      needsReload = false;
-    } on Object catch (error) {
-      if (_disposed) return;
-      failed = true;
-      if (error is AgentVaultException &&
-          error.failure == 'vault_unavailable') {
-        authorityFailure = 'Open and unlock the agent vault to review or change action permissions.';
-      }
-      needsReload = true;
-    } finally {
-      await minimum;
-      if (!_disposed) {
-        busy = false;
-        phase = null;
-        notifyListeners();
-      }
-    }
-  }
-
-  Future<void> decide(
-    String id,
-    CalendarActionDecision decision,
-    CalendarConnectionView? connection,
-    DateTime now,
-  ) async {
-    final action = find(id);
-    if (_disposed ||
-        busy ||
-        needsReload ||
-        action == null ||
-        !action.status.canDecide) {
-      return;
-    }
-    if (decision == CalendarActionDecision.approve &&
-        !canApprove(action, connection, now)) {
-      return;
-    }
-    busy = true;
-    final minimum = FloeLoading.minimumVisibility();
-    failed = false;
-    notifyListeners();
-    try {
-      final result = await gateway.decideCalendarAction(
-        personId: personId,
-        actionId: id,
-        decision: decision,
-      );
-      if (_disposed) return;
-      if (result.id != id ||
-          result.personId != personId ||
-          result.executionId != action.executionId) {
-        throw StateError('Unexpected proposal result');
-      }
-      actions = List.unmodifiable(
-        actions.map((entry) => entry.id == id ? result : entry),
-      );
-      if (decision == CalendarActionDecision.approve &&
-          writesEnabled &&
-          result.status == CalendarActionStatus.approved) {
-        phase = 'executing';
-        notifyListeners();
-        final executed = await (gateway as CalendarActionExecutionGateway)
-            .executeCalendarAction(personId, id);
+      _acceptAuthority(authority);
+      try {
+        final destinations = await gateway.loadDestinations();
         if (_disposed) return;
-        _replace(executed, action);
-        if (executed.status == CalendarActionStatus.succeeded) {
-          await _collect(executed);
-        }
+        _destinations = List.unmodifiable(destinations);
+        _destinationsLoaded = true;
+        _destinationsError = null;
+      } on Object catch (error) {
+        if (_disposed) return;
+        _destinations = const [];
+        _destinationsLoaded = false;
+        _destinationsError = CalendarActionError.from(error);
       }
-    } on Object {
+      _error = null;
+    } on Object catch (error) {
+      if (!_disposed) _error = CalendarActionError.from(error);
+    } finally {
+      if (!_disposed) {
+        _busy = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<void> loadMore() async {
+    final cursor = _nextCursor;
+    if (_busy || _disposed || cursor == null) return;
+    _busy = true;
+    _error = null;
+    notifyListeners();
+    try {
+      final page = await gateway.list(cursor: cursor);
       if (_disposed) return;
-      failed = true;
-      needsReload = true;
+      _mergePage(page);
+      _error = null;
+    } on Object catch (error) {
+      if (!_disposed) _error = CalendarActionError.from(error);
     } finally {
-      await minimum;
       if (!_disposed) {
-        busy = false;
-        phase = null;
+        _busy = false;
         notifyListeners();
       }
     }
   }
 
-  bool get canPropose =>
-      gateway is CalendarActionExecutionGateway &&
-      authority.calendarCreate != ActionAuthorityMode.deny &&
-      !busy &&
-      !needsReload &&
-      !actions.any(
-        (action) =>
-            action.status == CalendarActionStatus.unknown ||
-            action.status == CalendarActionStatus.executing,
-      );
-
-  bool get canDirect => canDirectFor(null);
-
-  bool canDirectFor(String? eventId) =>
-      gateway is CalendarDirectActionGateway &&
-      gateway is CalendarActionExecutionGateway &&
-      writesEnabled &&
-      !busy &&
-      !needsReload &&
-      !actions.any(
-        (action) =>
-            (action.status == CalendarActionStatus.unknown ||
-                action.status == CalendarActionStatus.executing) &&
-            (action.mutation?['original'] as Map?)?['id'] == eventId,
-      );
-
-  bool canModify(EventItem event) =>
-      canDirectFor(event.id) &&
-      event.canModify &&
-      !event.isAllDay &&
-      event.provider == 'event_kit' &&
-      event.calendarId != null &&
-      event.externalId?.endsWith('|') == true;
-
-  Future<CalendarAction?> direct({
-    required String calendarId,
-    required String title,
-    required DateTime startsAt,
-    required DateTime endsAt,
-    required String timezone,
-    String? eventId,
-    int? eventRevision,
-    bool delete = false,
-  }) async {
-    if (!canDirectFor(eventId) || _disposed) return null;
-    busy = true;
-    failed = false;
-    final minimum = FloeLoading.minimumVisibility();
-    notifyListeners();
+  Future<CalendarAction> inspect(String actionRef) async {
     try {
-      final action = await (gateway as CalendarDirectActionGateway)
-          .submitDirectCalendarAction(
-            personId: personId,
-            calendarId: calendarId,
-            title: title,
-            startsAt: startsAt,
-            endsAt: endsAt,
-            timezone: timezone,
-            eventId: eventId,
-            eventRevision: eventRevision,
-            delete: delete,
-          );
-      if (_disposed) return null;
-      if (action.personId != personId ||
-          !action.direct ||
-          action.status != CalendarActionStatus.approved) {
-        throw StateError('Unexpected direct action');
+      final result = await gateway.inspect(actionRef);
+      if (_disposed) return result;
+      if (result.actionRef != actionRef) {
+        throw StateError('Actions inspect returned another reference.');
       }
-      actions = List.unmodifiable([action, ...actions]);
-      phase = 'executing';
+      _acceptSnapshot(result);
+      _error = null;
       notifyListeners();
-      final executed = await (gateway as CalendarActionExecutionGateway)
-          .executeCalendarAction(personId, action.id);
-      if (_disposed) return null;
-      _replace(executed, action);
-      if (executed.status == CalendarActionStatus.succeeded) {
-        await _collect(executed);
-      }
-      return executed;
-    } on Object {
-      if (!_disposed) {
-        failed = true;
-        needsReload = true;
-      }
-      return null;
-    } finally {
-      await minimum;
-      if (!_disposed) {
-        busy = false;
-        phase = null;
-        notifyListeners();
-      }
-    }
-  }
-
-  Future<CalendarAction?> propose({
-    required String calendarId,
-    required String title,
-    required DateTime startsAt,
-    required DateTime endsAt,
-    required String timezone,
-  }) async {
-    if (!canPropose || _disposed) return null;
-    busy = true;
-    final minimum = FloeLoading.minimumVisibility();
-    failed = false;
-    notifyListeners();
-    try {
-      final result = await (gateway as CalendarActionExecutionGateway)
-          .proposeCalendarAction(
-            personId: personId,
-            calendarId: calendarId,
-            title: title,
-            startsAt: startsAt,
-            endsAt: endsAt,
-            timezone: timezone,
-          );
-      if (_disposed) return null;
-      if (result.personId != personId ||
-          result.status != CalendarActionStatus.pending) {
-        throw StateError('Unexpected proposal');
-      }
-      actions = List.unmodifiable([result, ...actions]);
-      if (authority.calendarCreate == ActionAuthorityMode.allow &&
-          writesEnabled) {
-        final approved = await (gateway as CalendarActionExecutionGateway)
-            .decideCalendarAction(
-              personId: personId,
-              actionId: result.id,
-              decision: CalendarActionDecision.approve,
-            );
-        _replace(approved, result);
-        phase = 'executing';
-        notifyListeners();
-        final executed = await (gateway as CalendarActionExecutionGateway)
-            .executeCalendarAction(personId, result.id);
-        _replace(executed, approved);
-        if (executed.status == CalendarActionStatus.succeeded) {
-          await _collect(executed);
-        }
-        return executed;
-      }
-      return result;
-    } on Object {
-      if (!_disposed) {
-        failed = true;
-        needsReload = true;
-      }
-      return null;
-    } finally {
-      await minimum;
-      if (!_disposed) {
-        busy = false;
-        phase = null;
-        notifyListeners();
-      }
-    }
-  }
-
-  Future<void> setCalendarCreateAuthority(ActionAuthorityMode mode) async {
-    if (_disposed || busy || gateway is! CalendarActionExecutionGateway) return;
-    busy = true;
-    final minimum = FloeLoading.minimumVisibility();
-    failed = false;
-    authorityFailure = null;
-    notifyListeners();
-    try {
-      authority = await (gateway as CalendarActionExecutionGateway)
-          .setCalendarCreateAuthority(personId, mode);
+      return find(actionRef) ?? result;
     } on Object catch (error) {
       if (!_disposed) {
-        failed = true;
-        if (error is AgentVaultException &&
-            error.failure == 'vault_unavailable') {
-          authorityFailure = 'Open and unlock the agent vault to review or change action permissions.';
-        }
-      }
-    } finally {
-      await minimum;
-      if (!_disposed) {
-        busy = false;
+        _error = CalendarActionError.from(error);
         notifyListeners();
       }
+      rethrow;
     }
   }
 
-  void _replace(CalendarAction result, CalendarAction original) {
-    if (result.id != original.id ||
-        result.personId != personId ||
-        result.direct != original.direct ||
-        result.executionId != original.executionId) {
-      throw StateError('Unexpected execution result');
-    }
-    actions = List.unmodifiable(
-      actions.map((entry) => entry.id == result.id ? result : entry),
+  Future<CalendarAction> submit(ActionIntent intent) async {
+    final command = <String, Object?>{
+      'kind': 'actions.submit',
+      'intent': intent.toJson(),
+    };
+    return _mutateAction(
+      command,
+      (commandId) => gateway.submit(commandId: commandId, intent: intent),
+      validate: (action) => _validateSubmittedAction(action, intent),
     );
-    notifyListeners();
   }
 
-  Future<void> run(
-    String id, {
-    bool recover = false,
-    CalendarConnectionView? connection,
+  Future<CalendarAction> decide(
+    CalendarAction action,
+    CalendarActionDecision decision,
+  ) async {
+    final current = _requireCurrent(action);
+    final allowed = switch (decision) {
+      CalendarActionDecision.approve => ActionAllowedAction.approve,
+      CalendarActionDecision.reject => ActionAllowedAction.reject,
+      CalendarActionDecision.cancel => ActionAllowedAction.cancel,
+    };
+    if (!current.allowedActions.contains(allowed)) {
+      _error = const CalendarActionError(kind: CalendarActionErrorKind.conflict, code: 'conflict');
+      if (!_disposed) notifyListeners();
+      throw StateError('The owner does not allow this Action decision.');
+    }
+    final command = <String, Object?>{
+      'kind': 'actions.decide',
+      'action_ref': current.actionRef,
+      'review_ref': current.reviewRef.toJson(),
+      'decision': decision.name,
+      'expected_revision': current.revision,
+    };
+    return _mutateAction(
+      command,
+      (commandId) => gateway.decide(
+        commandId: commandId,
+        action: current,
+        decision: decision,
+      ),
+      validate: (result) => _validateActionAdvance(result, current),
+    );
+  }
+
+  Future<CalendarAction> reconcile(CalendarAction action) async {
+    final current = _requireCurrent(action);
+    if (!current.allowedActions.contains(ActionAllowedAction.reconcile)) {
+      _error = const CalendarActionError(kind: CalendarActionErrorKind.conflict, code: 'conflict');
+      if (!_disposed) notifyListeners();
+      throw StateError('The owner does not allow Action reconciliation.');
+    }
+    final command = <String, Object?>{
+      'kind': 'actions.reconcile',
+      'action_ref': current.actionRef,
+      'expected_revision': current.revision,
+    };
+    return _mutateAction(
+      command,
+      (commandId) => gateway.reconcile(commandId: commandId, action: current),
+      validate: (result) => _validateActionAdvance(result, current),
+    );
+  }
+
+  Future<ActionAuthority> setAuthority(ActionAuthorityMode mode) async {
+    final current = _authority;
+    if (current == null) {
+      throw StateError('Actions authority is unavailable until it is loaded.');
+    }
+    final command = <String, Object?>{
+      'kind': 'actions.authority.set_calendar_create',
+      'mode': mode.name,
+      'expected_revision': current.revision,
+    };
+    final key = jsonEncode(command);
+    return _mutate<ActionAuthority>(
+      key,
+      (commandId) => gateway.setAuthority(
+        commandId: commandId,
+        mode: mode,
+        expectedRevision: current.revision,
+      ),
+      validate: (result) {
+        if (result.calendarCreate != mode ||
+            result.revision < current.revision ||
+            (mode != current.calendarCreate &&
+                result.revision == current.revision)) {
+          throw StateError('Actions authority snapshot did not match the request.');
+        }
+        _authority = result;
+      },
+    );
+  }
+
+  Future<T> _mutate<T>(
+    String commandKey,
+    Future<T> Function(String commandId) send, {
+    required void Function(T result) validate,
   }) async {
-    final action = find(id);
-    if (_disposed ||
-        busy ||
-        needsReload ||
-        action == null ||
-        gateway is! CalendarActionExecutionGateway) {
-      return;
-    }
-    if (recover) {
-      if (action.status != CalendarActionStatus.executing &&
-          action.status != CalendarActionStatus.unknown) {
-        return;
-      }
-    } else if (!writesEnabled ||
-        !canApprove(action, connection, DateTime.now(), approved: true)) {
-      return;
-    }
-    busy = true;
-    final minimum = FloeLoading.minimumVisibility();
-    failed = false;
-    phase = recover ? 'recovering' : 'executing';
+    if (_disposed) throw StateError('Actions controller is disposed.');
+    if (_busy) throw StateError('Another Actions request is in progress.');
+    _busy = true;
+    _error = null;
     notifyListeners();
     try {
-      final executor = gateway as CalendarActionExecutionGateway;
-      final result = recover
-          ? await executor.recoverCalendarAction(personId, id)
-          : await executor.executeCalendarAction(personId, id);
-      if (_disposed) return;
-      _replace(result, action);
-      if (result.status == CalendarActionStatus.succeeded) {
-        await _collect(result);
-      }
-    } on Object {
-      if (!_disposed) {
-        failed = true;
-        needsReload = true;
-      }
+      final commandId = _commands.retain(commandKey);
+      final result = await send(commandId);
+      validate(result);
+      _commands.acknowledge(commandKey, commandId);
+      _error = null;
+      return result;
+    } on Object catch (error) {
+      _error = CalendarActionError.from(error);
+      rethrow;
     } finally {
-      await minimum;
       if (!_disposed) {
-        busy = false;
-        phase = null;
+        _busy = false;
         notifyListeners();
       }
     }
   }
 
-  Future<void> _collect(CalendarAction action) async {
-    collection[action.id] = 'collecting';
-    phase = 'collecting';
-    notifyListeners();
-    try {
-      if (collect == null) throw StateError('Calendar read unavailable');
-      await collect!(action);
-      if (!_disposed) collection[action.id] = 'collected';
-    } on Object {
-      if (!_disposed) collection[action.id] = 'failed';
+  Future<CalendarAction> _mutateAction(
+    Map<String, Object?> command,
+    Future<CalendarAction> Function(String commandId) send, {
+    required void Function(CalendarAction result) validate,
+  }) {
+    final commandKey = jsonEncode(command);
+    return _mutate<CalendarAction>(
+      commandKey,
+      send,
+      validate: (result) {
+        validate(result);
+        _acceptSnapshot(result);
+      },
+    );
+  }
+
+  CalendarAction _requireCurrent(CalendarAction action) {
+    final current = find(action.actionRef);
+    if (current == null || current.revision != action.revision ||
+        !current.hasSameImmutableIdentity(action)) {
+      _error = const CalendarActionError(kind: CalendarActionErrorKind.conflict, code: 'conflict');
+      if (!_disposed) notifyListeners();
+      throw StateError('Refresh the Action before making a decision.');
+    }
+    return current;
+  }
+
+  void _validateSubmittedAction(CalendarAction result, ActionIntent intent) {
+    final matchesIntent = switch (intent) {
+      DirectCreate(:final title, :final schedule) =>
+            result.origin == CalendarActionOrigin.direct &&
+            result.effect is CreateActionEffect &&
+            (result.effect as CreateActionEffect).title == title &&
+            _sameSchedule(
+              (result.effect as CreateActionEffect).schedule,
+              schedule,
+            ),
+      DirectUpdate(:final eventRef, :final expectedRevision, :final title, :final schedule) =>
+        result.origin == CalendarActionOrigin.direct &&
+            result.effect is UpdateActionEffect &&
+            (result.effect as UpdateActionEffect).eventRef == eventRef &&
+            (result.effect as UpdateActionEffect).expectedRevision == expectedRevision &&
+            (result.effect as UpdateActionEffect).title == title &&
+            _sameSchedule(
+              (result.effect as UpdateActionEffect).schedule,
+              schedule,
+            ),
+      DirectDelete(:final eventRef, :final expectedRevision) =>
+        result.origin == CalendarActionOrigin.direct &&
+            result.effect is DeleteActionEffect &&
+            (result.effect as DeleteActionEffect).eventRef == eventRef &&
+            (result.effect as DeleteActionEffect).expectedRevision == expectedRevision,
+      ExpertProposal() => result.origin == CalendarActionOrigin.expert,
+    };
+    if (!matchesIntent) {
+      throw StateError('Actions submit returned a mismatched Action.');
+    }
+    final previous = find(result.actionRef);
+    if (previous != null && !result.isOlderObservationThan(previous)) {
+      _validateActionAdvance(result, previous);
     }
   }
 
-  Future<void> retryRead(String id) async {
-    final action = find(id);
-    if (_disposed || busy || action?.status != CalendarActionStatus.succeeded) {
-      return;
+  bool _sameSchedule(ActionSchedule owner, ActionSchedule intent) =>
+      owner.startsAt == intent.startsAt &&
+      owner.endsAt == intent.endsAt &&
+      owner.timezone == intent.timezone;
+
+  void _validateActionAdvance(CalendarAction result, CalendarAction previous) {
+    if (!result.follows(previous)) {
+      throw StateError('Actions returned a mismatched or regressed snapshot.');
     }
-    busy = true;
-    final minimum = FloeLoading.minimumVisibility();
-    notifyListeners();
-    await _collect(action!);
-    await minimum;
-    if (!_disposed) {
-      busy = false;
-      phase = null;
+  }
+
+  void _acceptAuthority(ActionAuthority value) {
+    final current = _authority;
+    if (current != null &&
+        (value.revision < current.revision ||
+            (value.revision == current.revision &&
+                value.calendarCreate != current.calendarCreate))) {
+      throw StateError('Actions authority revision regressed.');
+    }
+    _authority = value;
+  }
+
+  void _acceptSnapshot(CalendarAction value) {
+    final current = find(value.actionRef);
+    if (current != null && value.isOlderObservationThan(current)) return;
+    if (current != null) _validateActionAdvance(value, current);
+    _actions = List.unmodifiable([
+      if (current == null) value,
+      for (final action in _actions)
+        if (action.actionRef == value.actionRef) value else action,
+    ]);
+    _scheduleObservation(value);
+  }
+
+  void _mergePage(ActionsPage page, {bool replace = false}) {
+    final previous = {for (final action in _actions) action.actionRef: action};
+    final next = <String, CalendarAction>{
+      if (!replace)
+        for (final action in _actions) action.actionRef: action,
+    };
+    for (final action in page.actions) {
+      final current = previous[action.actionRef] ?? next[action.actionRef];
+      if (current != null && action.isOlderObservationThan(current)) {
+        next[action.actionRef] = current;
+      } else {
+        if (current != null) _validateActionAdvance(action, current);
+        next[action.actionRef] = action;
+      }
+    }
+    _actions = List.unmodifiable(next.values);
+    _nextCursor = page.nextCursor;
+    for (final action in page.actions) {
+      _scheduleObservation(next[action.actionRef]!);
+    }
+    if (replace) {
+      final pageRefs = page.actions.map((action) => action.actionRef).toSet();
+      for (final action in previous.values) {
+        if (!pageRefs.contains(action.actionRef)) _cancelObservation(action.actionRef);
+      }
+    }
+  }
+
+  void _scheduleObservation(CalendarAction action) {
+    _cancelObservation(action.actionRef);
+    final delay = action.nextObservationAfterMs;
+    if (_disposed || delay == null || delay <= 0 || delay > 60000) return;
+    _observations[action.actionRef] = Timer(
+      Duration(milliseconds: delay),
+      () {
+        _observations.remove(action.actionRef);
+        unawaited(_observeAfterDelay(action.actionRef));
+      },
+    );
+  }
+
+  Future<void> _observeAfterDelay(String actionRef) async {
+    if (_disposed) return;
+    try {
+      await inspect(actionRef);
+    } on Object catch (error) {
+      if (_disposed) return;
+      _error = CalendarActionError.from(error);
       notifyListeners();
     }
+  }
+
+  void _cancelObservation(String actionRef) {
+    _observations.remove(actionRef)?.cancel();
   }
 
   @override
   void dispose() {
     _disposed = true;
+    for (final timer in _observations.values) {
+      timer.cancel();
+    }
+    _observations.clear();
     super.dispose();
   }
 }

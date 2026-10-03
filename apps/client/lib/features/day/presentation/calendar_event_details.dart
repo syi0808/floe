@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:floe_client/app/design_tokens.dart';
-import 'package:floe_client/app/floe_feedback.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/features/day/presentation/calendar_layout.dart';
@@ -34,11 +33,10 @@ class CalendarEventDetails extends StatelessWidget {
         children: [
           Expanded(
             child: Text(
-              event.calendarName ?? AppLocalizations.of(context).savedInFloe,
+              event.calendarLabel ?? AppLocalizations.of(context).savedInFloe,
               style: FloeType.body.copyWith(color: FloePalette.neutral600),
             ),
           ),
-          if (event.externalId != null && !event.canModify) FloeReadOnlyPill(),
         ],
       ),
       SizedBox(height: FloeSpace.lg),
@@ -83,11 +81,7 @@ class CalendarEventDetails extends StatelessWidget {
       ),
       SizedBox(height: FloeSpace.lg),
       for (final entry in <String, String>{
-        if (snapshot.calendar?.lastSuccessAt != null)
-          AppLocalizations.of(context).lastCollected: formatTimestamp(
-            context,
-            snapshot.calendar!.lastSuccessAt!,
-          ),
+        if (event.timezone != null) 'Timezone': event.timezone!,
         if (event.isAllDay)
           AppLocalizations.of(context)
               .allDayBoundary: AppLocalizations.of(context).exclusiveDate(
@@ -118,76 +112,6 @@ class CalendarEventDetails extends StatelessWidget {
             ],
           ),
         ),
-      if (event.externalId != null && !event.canModify) ...[
-        SizedBox(height: FloeSpace.lg),
-        FloeInfoNote(
-          icon: LucideIcons.lockKeyhole,
-          text: AppLocalizations.of(context)
-              .manageThisEventInItsOriginalCalendar,
-        ),
-        SizedBox(height: FloeSpace.base),
-        Theme(
-          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-          child: ExpansionTile(
-            tilePadding: EdgeInsets.zero,
-            title: Text(
-              AppLocalizations.of(context).sourceDetails,
-              style: FloeType.bodySmall.copyWith(fontSize: 12),
-            ),
-            children: [
-              FloeSquircle(
-                size: FloeSquircleSize.md,
-                fill: FloePalette.neutral50,
-                borderWidth: 0,
-                padding: EdgeInsets.all(FloeSpace.base),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    for (final entry in <String, String>{
-                      AppLocalizations.of(context).connectionPerson:
-                          '${event.calendarId ?? '—'} / ${snapshot.personId}',
-                      AppLocalizations.of(context).externalOccurrenceId:
-                          event.externalId!,
-                      AppLocalizations.of(context).revision:
-                          '${event.revision}',
-                      AppLocalizations.of(context).integration:
-                          event.provider ??
-                          AppLocalizations.of(context).calendar,
-                    }.entries)
-                      Padding(
-                        padding: EdgeInsets.only(
-                          top:
-                              entry.key ==
-                                  AppLocalizations.of(context).connectionPerson
-                              ? 0
-                              : 12,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              entry.key,
-                              style: FloeType.caption.copyWith(
-                                color: FloePalette.neutral600,
-                              ),
-                            ),
-                            SizedBox(height: 5),
-                            Text(
-                              entry.value,
-                              style: FloeType.micro.copyWith(
-                                fontFamily: 'monospace',
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
     ],
   );
 }

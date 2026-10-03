@@ -51,7 +51,9 @@ pub(super) async fn finish_transaction<T>(
             }
         }
         Err(error) => {
-            let _ = connection.execute("ROLLBACK", ()).await;
+            // A definite rejection is returned only after its transaction is
+            // known to have rolled back. Otherwise clients retain uncertainty.
+            connection.execute("ROLLBACK", ()).await.map_err(storage_error)?;
             Err(error)
         }
     }

@@ -12,37 +12,63 @@ class _ActionPermissions extends StatefulWidget {
 }
 
 class _ActionPermissionsState extends State<_ActionPermissions> {
-  late _ActionPermissionPreset preset;
-
   CalendarActionController get controller => widget.controller;
+  late _ActionPermissionPreset? _selectedPreset;
 
   @override
   void initState() {
     super.initState();
-    preset = controller.authority.calendarCreate == ActionAuthorityMode.allow
-        ? _ActionPermissionPreset.all
-        : _ActionPermissionPreset.customize;
+    _selectedPreset = _presetFor(controller.authority?.calendarCreate);
   }
 
   @override
   void didUpdateWidget(_ActionPermissions oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != controller) {
-      preset = controller.authority.calendarCreate == ActionAuthorityMode.allow
-          ? _ActionPermissionPreset.all
-          : _ActionPermissionPreset.customize;
+      _selectedPreset = _presetFor(controller.authority?.calendarCreate);
     }
   }
 
+  _ActionPermissionPreset? _presetFor(ActionAuthorityMode? mode) =>
+      mode == null
+          ? null
+          : mode == ActionAuthorityMode.allow
+          ? _ActionPermissionPreset.all
+          : _ActionPermissionPreset.customize;
+
+  _ActionPermissionPreset? get preset =>
+      _selectedPreset ?? _presetFor(controller.authority?.calendarCreate);
+
   Future<void> selectPreset(_ActionPermissionPreset? nextPreset) async {
-    if (nextPreset == null || controller.busy) return;
-    setState(() => preset = nextPreset);
+    if (nextPreset == null ||
+        controller.busy ||
+        controller.authority == null ||
+        controller.error != null) {
+      return;
+    }
+    setState(() => _selectedPreset = nextPreset);
     if (nextPreset == _ActionPermissionPreset.all) {
-      await controller.setCalendarCreateAuthority(ActionAuthorityMode.allow);
-      if (mounted &&
-          controller.authority.calendarCreate != ActionAuthorityMode.allow) {
-        setState(() => preset = _ActionPermissionPreset.customize);
+      try {
+        await controller.setAuthority(ActionAuthorityMode.allow);
+      } on Object {
+        if (mounted) {
+          setState(() => _selectedPreset = _ActionPermissionPreset.customize);
+        }
       }
+    }
+  }
+
+  Future<void> selectMode(ActionAuthorityMode? mode) async {
+    if (mode == null ||
+        controller.busy ||
+        controller.authority == null ||
+        controller.error != null) {
+      return;
+    }
+    try {
+      await controller.setAuthority(mode);
+    } on Object {
+      // The controller retains the owner failure for this view.
     }
   }
 
@@ -59,7 +85,7 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
             const Text('Action permissions', style: FloeType.titleLarge),
             const SizedBox(height: FloeSpace.sm),
             Text(
-              'Choose when Floe must ask before changing an external service. OS and connector permissions still apply.',
+              'Choose whether Floe can create Calendar events suggested by Experts. Calendar permissions still apply.',
               style: FloeType.body.copyWith(color: FloePalette.neutral600),
             ),
             const SizedBox(height: 20),
@@ -71,67 +97,71 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
                 children: [
                   FloeRadioTile<_ActionPermissionPreset>(
                     value: _ActionPermissionPreset.all,
-                    enabled:
-                        !controller.busy && controller.authorityFailure == null,
-                    title: const Text('Allow all supported actions'),
+                    enabled: !controller.busy &&
+                        controller.authority != null &&
+                        controller.error == null,
+                    title: const Text('Allow Calendar event creation'),
                   ),
                   FloeRadioTile<_ActionPermissionPreset>(
                     value: _ActionPermissionPreset.customize,
-                    enabled:
-                        !controller.busy && controller.authorityFailure == null,
+                    enabled: !controller.busy &&
+                        controller.authority != null &&
+                        controller.error == null,
                     title: const Text('Customize permissions'),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: FloeSpace.base),
-            FloeSelect<ActionAuthorityMode>(
-              label: 'Create Calendar events',
-              value: controller.authority.calendarCreate,
-              enabled:
-                  preset == _ActionPermissionPreset.customize &&
-                  !controller.busy &&
-                  controller.authorityFailure == null,
-              options: const [
-                FloeSelectOption(
-                  value: ActionAuthorityMode.allow,
-                  label: 'Allow automatically',
-                ),
-                FloeSelectOption(
-                  value: ActionAuthorityMode.ask,
-                  label: 'Ask every time',
-                ),
-                FloeSelectOption(
-                  value: ActionAuthorityMode.deny,
-                  label: 'Do not allow',
-                ),
-              ],
-              onChanged: (value) {
-                if (value != null) {
-                  controller.setCalendarCreateAuthority(value);
-                }
-              },
-            ),
+            if (controller.authority case final authority?)
+              FloeSelect<ActionAuthorityMode>(
+                label: 'Create Calendar events',
+                value: authority.calendarCreate,
+                enabled:
+                    preset == _ActionPermissionPreset.customize &&
+                    !controller.busy &&
+                    controller.error == null,
+                options: const [
+                  FloeSelectOption(
+                    value: ActionAuthorityMode.allow,
+                    label: 'Allow automatically',
+                  ),
+                  FloeSelectOption(
+                    value: ActionAuthorityMode.ask,
+                    label: 'Ask every time',
+                  ),
+                  FloeSelectOption(
+                    value: ActionAuthorityMode.deny,
+                    label: 'Do not allow',
+                  ),
+                ],
+                onChanged: selectMode,
+              )
+            else
+              Text(
+                controller.error?.message ??
+                    (controller.loaded
+                        ? 'Calendar creation authority is unavailable.'
+                        : 'Load Actions to view Calendar creation authority.'),
+              ),
             const SizedBox(height: FloeSpace.sm),
             Text(
-              'Currently this preset covers Calendar event creation only. It never bypasses macOS permission or safety checks.',
+              'This setting covers Expert suggestions. Changes you request directly still use your current Calendar permissions.',
               style: FloeType.body.copyWith(
                 color: FloePalette.neutral600,
                 height: 1.4,
               ),
             ),
-            const SizedBox(height: FloeSpace.md),
-            Text(
-              controller.writesEnabled
-                  ? 'Calendar writing is available in this build.'
-                  : 'Calendar writing is unavailable in this build.',
-              style: FloeType.body.copyWith(color: FloePalette.neutral600),
-            ),
-            if (controller.failed) ...[
-              const SizedBox(height: FloeSpace.sm),
+            if (controller.error case final error?) ...[
+              const SizedBox(height: FloeSpace.md),
               Text(
-                controller.authorityFailure ??
-                    'The permission could not be saved. Try again.',
+                error.isVaultLocked
+                    ? 'Vault locked. Unlock it to view or change Action permissions.'
+                    : error.message,
+              ),
+              TextButton(
+                onPressed: controller.busy ? null : controller.load,
+                child: const Text('Reload Actions'),
               ),
             ],
           ],

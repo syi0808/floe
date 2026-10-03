@@ -33,6 +33,7 @@ class SettingsScreen extends StatefulWidget {
     this.actionController,
     this.agentController,
     this.expertBindingTarget,
+    this.onBindingReplaced,
     this.platform,
   });
 
@@ -40,6 +41,7 @@ class SettingsScreen extends StatefulWidget {
   final CalendarActionController? actionController;
   final ConversationController? agentController;
   final AgentExpertBindingTarget? expertBindingTarget;
+  final Future<void> Function()? onBindingReplaced;
   final TargetPlatform? platform;
 
   @override
@@ -91,11 +93,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       onManageMemory: () => setState(() => selectedPage = _SettingsPage.memory),
     ),
     _SettingsPage.experts => AgentRegistrySettings(
-      controller: widget.agentController!,
+      controller: widget.agentController!.registryController,
       focus: widget.expertBindingTarget,
+      onBindingReplaced: widget.onBindingReplaced,
     ),
     _SettingsPage.memory => AgentMemorySettings(
-      controller: widget.agentController!,
+      controller: widget.agentController!.memoryController,
       onBack: () => setState(() => selectedPage = _SettingsPage.dataPrivacy),
     ),
     _SettingsPage.remoteServer => ConnectorScreen(

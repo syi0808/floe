@@ -26,21 +26,23 @@ class CalendarAgenda extends StatefulWidget {
   const CalendarAgenda({
     super.key,
     required this.snapshot,
+    required this.query,
     required this.onConnections,
+    required this.onRefresh,
     this.onCreateEvent,
     this.draftStartsAt,
     this.loading = false,
-    this.canModify,
     this.onMoveEvent,
     this.onEditEvent,
     this.onDeleteEvent,
   });
   final DaySnapshot snapshot;
+  final DayQuery query;
   final VoidCallback onConnections;
+  final VoidCallback? onRefresh;
   final ValueChanged<DateTime>? onCreateEvent;
   final DateTime? draftStartsAt;
   final bool loading;
-  final bool Function(EventItem)? canModify;
   final void Function(EventItem, DateTime)? onMoveEvent;
   final ValueChanged<EventItem>? onEditEvent;
   final ValueChanged<EventItem>? onDeleteEvent;
@@ -93,6 +95,8 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
     final axis = CalendarDayAxis(
       widget.snapshot.date,
       widget.snapshot.timezoneOffsetSeconds,
+      endOffsetSeconds: widget.query.endTimezoneOffsetSeconds ??
+          widget.query.timezoneOffsetSeconds,
     );
     final minutes =
         axis.minute(event.startsAt) +
@@ -155,25 +159,25 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
         start != null &&
         !start.isAtSameMomentAs(event.startsAt) &&
         !widget.loading &&
-        widget.canModify?.call(event) == true) {
+        event.actionTarget != null) {
       widget.onMoveEvent?.call(event, start);
     }
   }
 
   Widget interactiveEvent(EventItem event, Widget child) {
-    final editable = !widget.loading && widget.canModify?.call(event) == true;
+    final hasActionTarget = !widget.loading && event.actionTarget != null;
     final actions = CalendarEventActions(
       event: event,
       snapshot: widget.snapshot,
-      onEdit: editable && widget.onEditEvent != null
+      onEdit: hasActionTarget && widget.onEditEvent != null
           ? () => widget.onEditEvent!(event)
           : null,
-      onDelete: editable && widget.onDeleteEvent != null
+      onDelete: hasActionTarget && widget.onDeleteEvent != null
           ? () => widget.onDeleteEvent!(event)
           : null,
       child: child,
     );
-    if (!editable || widget.onMoveEvent == null || event.isAllDay) {
+    if (!hasActionTarget || widget.onMoveEvent == null || event.isAllDay) {
       return actions;
     }
     return Listener(
@@ -255,13 +259,18 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
       events,
       snapshot.date,
       snapshot.timezoneOffsetSeconds,
+      endOffsetSeconds: widget.query.endTimezoneOffsetSeconds ??
+          widget.query.timezoneOffsetSeconds,
     );
     final empty = events.isEmpty && !widget.loading;
     final confirmedEmpty =
-        empty &&
-        snapshot.calendar?.error == null &&
-        snapshot.calendar?.lastSuccessAt != null;
-    final axis = CalendarDayAxis(snapshot.date, snapshot.timezoneOffsetSeconds);
+        empty && hasCompleteCalendarCoverage(snapshot, widget.query);
+    final axis = CalendarDayAxis(
+      snapshot.date,
+      snapshot.timezoneOffsetSeconds,
+      endOffsetSeconds: widget.query.endTimezoneOffsetSeconds ??
+          widget.query.timezoneOffsetSeconds,
+    );
     final currentMinute = axis.minute(snapshot.generatedAt);
     final sameDay = currentMinute >= 0 && currentMinute < axis.minutes;
     return FloeSquircle(
@@ -328,7 +337,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                             ),
                                           ),
                                           label:
-                                              '${event.title}${event.calendarName == null ? '' : '   ${event.calendarName}'}',
+                                              '${event.title}${event.calendarLabel == null ? '' : '   ${event.calendarLabel}'}',
                                           onPressed: () => openCalendarEvent(
                                             context,
                                             event,
@@ -664,7 +673,6 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                             ),
                           if (empty &&
                               widget.draftStartsAt == null &&
-                              snapshot.calendar?.error == null &&
                               !confirmedEmpty)
                             Positioned(
                               top: FloeSpace.base,
@@ -672,6 +680,11 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                               right: FloeSpace.lg,
                               child: _EmptyDayStatus(
                                 onConnections: widget.onConnections,
+                                onRefresh: widget.onRefresh,
+                                hasSources:
+                                    snapshot.calendarCoverage?.sources
+                                        .isNotEmpty ==
+                                    true,
                               ),
                             ),
                         ],
@@ -696,9 +709,15 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
 }
 
 class _EmptyDayStatus extends StatelessWidget {
-  const _EmptyDayStatus({required this.onConnections});
+  const _EmptyDayStatus({
+    required this.onConnections,
+    required this.onRefresh,
+    required this.hasSources,
+  });
 
   final VoidCallback onConnections;
+  final VoidCallback? onRefresh;
+  final bool hasSources;
 
   @override
   Widget build(BuildContext context) {
@@ -719,12 +738,16 @@ class _EmptyDayStatus extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    strings.yourDayIsStillEmpty,
+                    hasSources
+                        ? 'Calendar coverage is incomplete for this date'
+                        : 'No Calendar coverage was returned for this date',
                     style: FloeType.controlLabel,
                   ),
                   const SizedBox(height: FloeSpace.xxs),
                   Text(
-                    strings.emptyDayConnectHint,
+                    hasSources
+                        ? 'Refresh this date to observe the sources again.'
+                        : strings.emptyDayConnectHint,
                     style: FloeType.bodySmall.copyWith(
                       fontSize: 12,
                       color: FloePalette.neutral600,
@@ -733,9 +756,16 @@ class _EmptyDayStatus extends StatelessWidget {
                 ],
               ),
             ),
-            FloeTextLink(
-              label: strings.viewConnectedCalendars,
-              onPressed: onConnections,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                if (onRefresh != null)
+                  FloeTextLink(label: 'Refresh date', onPressed: onRefresh),
+                FloeTextLink(
+                  label: strings.viewConnectedCalendars,
+                  onPressed: onConnections,
+                ),
+              ],
             ),
           ],
         ),
@@ -885,10 +915,10 @@ class CalendarEventCard extends StatelessWidget {
                               ),
                             ],
                             if (height >= 58 * textScale &&
-                                event.calendarName != null) ...[
+                                event.calendarLabel != null) ...[
                               SizedBox(height: 3),
                               Text(
-                                event.calendarName!,
+                                event.calendarLabel!,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: FloeType.micro.copyWith(

@@ -6,7 +6,7 @@ The product is not an agent framework, automation builder, chat wrapper, or dash
 
 ## Current work
 
-Current engineering focus is **macOS stability and product quality** on top of the converged modular-monolith architecture. iOS/iPad validation resumes with active platform development; Android remains outside the current implementation scope unless explicitly requested.
+Current engineering focus is **macOS stability and product quality** while completing the modular-monolith ownership refactor. Apple build validation follows the active staged plan; Android remains outside the current implementation scope unless explicitly requested.
 
 Current source and manifests define implementation reality. Use the architecture documents for semantic ownership and the nearest component runbook for build/validation commands. Create a task-specific execution plan only when a change is large enough to require caller migration or multiple checkpoints.
 
@@ -36,7 +36,9 @@ Use the repository's pinned toolchain inputs and [AGENTS.md](AGENTS.md). Rust re
 
 Rust validation phases, Cargo profile policy, test-layout guidance and performance-measurement rules live in [test performance](docs/development/test-performance.md) and the repo-local code-change verification skill. Cargo is the maintained Rust test runner; use the affected-crate loop during iteration and the documented workspace gate once the covered Rust changes are complete. Turso's FTS feature remains disabled because Floe does not use FTS SQL.
 
-During structural work, check the affected module and boundaries rather than starting the app or running every suite after each edit:
+During the active [architecture refactor](docs/plans/2026-10-02-architecture-refactor.md#8-verification-policy-and-final-evidence), executable checks run only at the authorized complete-slice gates. S2 implementation waits for full structural closure before G2 builds; S3 reconstructs behavioral tests before G3 qualification. Do not treat the removed old suites or an earlier compiler pass as validation of the current source.
+
+Outside that staged work, the normal affected-module loop includes:
 
 ```sh
 cargo check -p floe-conversation
@@ -50,7 +52,7 @@ The final structure review includes workspace type/compile checks, actual depend
 
 Keep inspectable, source-backed memory, explicit action approval, verified Gateway identity, source-owned processing authority, key identity, provenance, CAS, durable pre-dispatch intent, cancellation direction and uncertain-write recovery. Query, preview and screen disposal are not implicit conversation cancellation.
 
-[ADR 0034](docs/decisions/0034-gateway-reasoning-and-source-processing-authority.md) replaces exact model-recipient approval with source/connection processing policy and purpose-based Gateway reasoning. Its Gateway-primary/local-fallback and mandatory Health-local-transform rules are accepted architecture targets, not a statement that the current runtime has completed the cutover. The [convergence plan](docs/development/plans/reasoning-source-processing-convergence.md) owns implementation order and evidence.
+[ADR 0034](docs/decisions/0034-gateway-reasoning-and-source-processing-authority.md) replaces exact model-recipient approval with source/connection processing policy and purpose-based Gateway reasoning. Its Gateway-primary/local-fallback and mandatory Health-local-transform rules define the authority boundary. The [architecture refactor plan](docs/plans/2026-10-02-architecture-refactor.md) owns current implementation order and gate evidence; current ownership is documented in [runtime architecture](docs/architecture/runtime.md).
 
 Floe is pre-stable, so internal backward compatibility is not a default goal unless an external protocol or durable user-data requirement makes it one. Do not add parallel v2/v3 implementations merely to preserve obsolete local callers. A fixed schema/version number does not make old binaries or data compatible: build the client and bundled library together, and explicitly select fresh Floe development data when stored meaning changes. Never automatically replace keys or delete data on an access error.
 

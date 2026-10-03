@@ -18,6 +18,8 @@ class _DayRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final task = item is TaskItem ? item as TaskItem : null;
+    final isCalendarEvent =
+        item is EventItem && item.source is CalendarDayItemSource;
     final overdue =
         task != null &&
         !task.isCompleted &&
@@ -80,12 +82,8 @@ class _DayRow extends StatelessWidget {
             color: overdue ? FloePalette.warning600 : FloePalette.neutral500,
           ),
         ),
-        trailing: item is EventItem && (item as EventItem).externalId != null
-            ? FloeTooltip(
-                message: AppLocalizations.of(context)
-                    .readOnlyEventManagedInItsOriginal,
-                child: Icon(Icons.lock_outline, size: 18),
-              )
+        trailing: isCalendarEvent
+            ? const SizedBox(width: 40)
             : FloeButton.icon(
                 tooltip: AppLocalizations.of(context)
                     .deleteItemLabel(item.title),

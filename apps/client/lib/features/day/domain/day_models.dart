@@ -1,5 +1,3 @@
-import 'package:floe_client/app/runtime/owner_failure.dart';
-
 enum DayItemKind { event, task, note }
 
 enum TaskPriority { low, normal, high }
@@ -13,6 +11,7 @@ final class DayQuery {
     this.endTimezoneOffsetSeconds,
   });
 
+  /// The local expected owner identity. It is not part of the wire query.
   final String personId;
   final DateTime date;
   final DateTime now;
@@ -40,10 +39,47 @@ final class DayQuery {
     date.month,
     date.day,
   ).subtract(Duration(seconds: timezoneOffsetSeconds));
-  DateTime get endsAt =>
-      DateTime.utc(date.year, date.month, date.day + 1).subtract(
-        Duration(seconds: endTimezoneOffsetSeconds ?? timezoneOffsetSeconds),
-      );
+
+  DateTime get endsAt => DateTime.utc(
+    date.year,
+    date.month,
+    date.day + 1,
+  ).subtract(
+    Duration(seconds: endTimezoneOffsetSeconds ?? timezoneOffsetSeconds),
+  );
+}
+
+sealed class DayItemSource {
+  const DayItemSource();
+}
+
+final class ManualDayItemSource extends DayItemSource {
+  const ManualDayItemSource();
+}
+
+final class CaptureDayItemSource extends DayItemSource {
+  const CaptureDayItemSource({required this.captureId});
+
+  final String captureId;
+}
+
+final class CalendarDayItemSource extends DayItemSource {
+  const CalendarDayItemSource({
+    required this.sourceRef,
+    required this.calendarRef,
+    required this.calendarLabel,
+  });
+
+  final String sourceRef;
+  final String calendarRef;
+  final String calendarLabel;
+}
+
+final class DayEventTarget {
+  const DayEventTarget({required this.eventId, required this.expectedRevision});
+
+  final String eventId;
+  final int expectedRevision;
 }
 
 sealed class DayItem {
@@ -52,12 +88,14 @@ sealed class DayItem {
     required this.title,
     required this.revision,
     required this.createdAt,
+    this.source = const ManualDayItemSource(),
   });
 
   final String id;
   final String title;
   final int revision;
   final DateTime createdAt;
+  final DayItemSource source;
   DayItemKind get kind;
 }
 
@@ -67,29 +105,25 @@ final class EventItem extends DayItem {
     required super.title,
     required super.revision,
     required super.createdAt,
+    super.source,
     required this.startsAt,
     required this.endsAt,
     this.isAllDay = false,
-    this.calendarName,
-    this.calendarId,
-    this.externalId,
-    this.provider,
     this.timezone,
-    this.canModify = false,
+    this.actionTarget,
   });
 
   final DateTime startsAt;
   final DateTime endsAt;
   final bool isAllDay;
-  final String? calendarName;
-  final String? calendarId;
-  final String? externalId;
-  final String? provider;
   final String? timezone;
-  final bool canModify;
-  String get sourceLabel => calendarName == null
-      ? ''
-      : '${provider == 'fixture' ? 'Fixture' : 'Calendar'} · $calendarName';
+  final DayEventTarget? actionTarget;
+
+  String? get calendarLabel => switch (source) {
+    CalendarDayItemSource(:final calendarLabel) => calendarLabel,
+    _ => null,
+  };
+
   @override
   DayItemKind get kind => DayItemKind.event;
 }
@@ -100,6 +134,7 @@ final class TaskItem extends DayItem {
     required super.title,
     required super.revision,
     required super.createdAt,
+    super.source,
     this.deadline,
     this.completedAt,
     this.priority = TaskPriority.normal,
@@ -119,6 +154,7 @@ final class NoteItem extends DayItem {
     required super.title,
     required super.revision,
     required super.createdAt,
+    super.source,
   });
 
   @override
@@ -135,8 +171,7 @@ final class DaySnapshot {
     this.nowEventId,
     this.nextEventId,
     this.overdueTaskCount = 0,
-    this.calendar,
-    this.calendarMirrorRevision,
+    this.calendarCoverage,
   });
 
   final String personId;
@@ -147,34 +182,146 @@ final class DaySnapshot {
   final String? nowEventId;
   final String? nextEventId;
   final int overdueTaskCount;
-  final CalendarMirrorState? calendar;
-  final int? calendarMirrorRevision;
+  final DayCalendarCoverage? calendarCoverage;
 }
 
-final class CalendarSyncStatus {
-  const CalendarSyncStatus({this.error, this.lastSuccessAt});
+enum DayCoverageState { current, stale, partial, unavailable, pending }
 
-  final String? error;
-  final DateTime? lastSuccessAt;
+enum DayCalendarFailure {
+  permission_denied,
+  calendar_unavailable,
+  provider_unavailable,
+  source_changed,
+  source_fenced,
+  vault_locked,
+  budget_exceeded,
+  deadline_exceeded,
+  cancelled,
 }
 
-final class CalendarMirrorState {
-  const CalendarMirrorState({
-    required this.sourceConnectionId,
-    required this.provider,
-    required this.sourceStatuses,
-    this.lastSuccessAt,
-    this.error,
-    this.rangeStart,
-    this.rangeEnd,
+final class DayCalendarRange {
+  const DayCalendarRange({
+    required this.startDate,
+    required this.endDateExclusive,
+    required this.timezoneOffsetSeconds,
+    this.endTimezoneOffsetSeconds,
   });
-  final String sourceConnectionId;
-  final String provider;
-  final Map<String, CalendarSyncStatus> sourceStatuses;
+
+  final DateTime startDate;
+  final DateTime endDateExclusive;
+  final int timezoneOffsetSeconds;
+  final int? endTimezoneOffsetSeconds;
+
+  DateTime get startsAt => DateTime.utc(
+    startDate.year,
+    startDate.month,
+    startDate.day,
+  ).subtract(Duration(seconds: timezoneOffsetSeconds));
+
+  DateTime get endsAt => DateTime.utc(
+    endDateExclusive.year,
+    endDateExclusive.month,
+    endDateExclusive.day,
+  ).subtract(
+    Duration(
+      seconds: endTimezoneOffsetSeconds ?? timezoneOffsetSeconds,
+    ),
+  );
+
+  /// Presentation-only coverage test against the selected Day query.
+  bool covers(DayQuery query) {
+    final queryDate = DateTime(query.date.year, query.date.month, query.date.day);
+    final queryEndDate = DateTime(
+      query.date.year,
+      query.date.month,
+      query.date.day + 1,
+    );
+    final rangeStartsNoLater =
+        !DateTime(startDate.year, startDate.month, startDate.day).isAfter(
+          queryDate,
+        );
+    final rangeEndsNoEarlier =
+        !DateTime(
+          endDateExclusive.year,
+          endDateExclusive.month,
+          endDateExclusive.day,
+        ).isBefore(queryEndDate);
+    return rangeStartsNoLater &&
+        rangeEndsNoEarlier &&
+        !startsAt.isAfter(query.startsAt) &&
+        !endsAt.isBefore(query.endsAt);
+  }
+}
+
+final class DayCalendarResourceCoverage {
+  const DayCalendarResourceCoverage({
+    required this.resourceRef,
+    required this.label,
+    required this.state,
+    this.lastSuccessAt,
+    this.lastRange,
+    this.failure,
+    this.failureAt,
+  });
+
+  final String resourceRef;
+  final String label;
+  final DayCoverageState state;
   final DateTime? lastSuccessAt;
-  final String? error;
-  final String? rangeStart;
-  final String? rangeEnd;
+  final DayCalendarRange? lastRange;
+  final DayCalendarFailure? failure;
+  final DateTime? failureAt;
+}
+
+final class DayCalendarSourceCoverage {
+  const DayCalendarSourceCoverage({
+    required this.sourceRef,
+    required this.label,
+    required this.state,
+    required this.resources,
+    this.lastSuccessAt,
+    this.lastRange,
+    this.failure,
+    this.failureAt,
+  });
+
+  final String sourceRef;
+  final String label;
+  final DayCoverageState state;
+  final DateTime? lastSuccessAt;
+  final DayCalendarRange? lastRange;
+  final DayCalendarFailure? failure;
+  final DateTime? failureAt;
+  final List<DayCalendarResourceCoverage> resources;
+}
+
+final class DayCalendarCoverage {
+  const DayCalendarCoverage({required this.sources});
+
+  final List<DayCalendarSourceCoverage> sources;
+}
+
+/// True only when the owner returned current complete coverage for this query.
+/// This derives display wording from the immutable owner snapshot; it does not
+/// cache or revise the returned coverage.
+bool hasCompleteCalendarCoverage(DaySnapshot snapshot, DayQuery query) {
+  final coverage = snapshot.calendarCoverage;
+  if (coverage == null || coverage.sources.isEmpty) return false;
+  for (final source in coverage.sources) {
+    if (source.state != DayCoverageState.current ||
+        source.lastRange?.covers(query) != true ||
+        source.resources.isEmpty) {
+      return false;
+    }
+    for (final resource in source.resources) {
+      if (resource.state != DayCoverageState.current ||
+          resource.failure != null ||
+          resource.lastRange?.covers(query) != true) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 final class CaptureReceipt {
@@ -215,6 +362,19 @@ final class TaskDraft extends ClassificationDraft {
 final class NoteDraft extends ClassificationDraft {
   const NoteDraft({required this.content});
   final String content;
+}
+
+enum DayRefreshFailure {
+  source_changed,
+  permission_denied,
+  unavailable,
+  vault_locked,
+  budget_exceeded,
+  deadline_exceeded,
+  cancelled,
+  host_interrupted,
+  storage_unavailable,
+  invalid_acquisition,
 }
 
 sealed class DayRefreshSnapshot {
@@ -259,7 +419,7 @@ final class FailedDayRefresh extends DayRefreshSnapshot {
     required super.revision,
     required this.failure,
   });
-  final OwnerFailure failure;
+  final DayRefreshFailure failure;
 }
 
 final class InterruptedDayRefresh extends DayRefreshSnapshot {
@@ -268,5 +428,5 @@ final class InterruptedDayRefresh extends DayRefreshSnapshot {
     required super.revision,
     required this.failure,
   });
-  final OwnerFailure failure;
+  final DayRefreshFailure failure;
 }

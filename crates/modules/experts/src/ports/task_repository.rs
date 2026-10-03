@@ -36,10 +36,15 @@ pub trait TaskRepository: Send + Sync {
     /// Activation must not race an unfenced, still-running previous executor.
     fn activate<'a>(&'a self) -> BoxFuture<'a, Result<TaskActivation, AgentFailure>>;
 
+    /// Called only by a retained Task owner after its active reservation is
+    /// registered. An error may follow commit; exact readback distinguishes
+    /// that case without creating another execution or endpoint handoff.
     fn admit<'a>(&'a self, proposed: TaskRecord)
         -> BoxFuture<'a, Result<TaskAdmission, AgentFailure>>;
 
     /// Only Submitted -> Working. Terminal state requires journal-bound settlement.
+    /// The owner retains this future past observer cancellation and may rejoin
+    /// the exact Working row after an uncertain acknowledgement.
     fn compare_and_swap<'a>(
         &'a self,
         task_id: TaskId,

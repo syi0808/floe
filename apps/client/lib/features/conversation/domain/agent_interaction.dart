@@ -1,4 +1,5 @@
 import 'package:floe_client/features/connections/domain/connection_models.dart';
+import 'package:floe_client/features/experts/domain/agent_registry.dart';
 
 enum AgentInteractionKind { sourceAccess, expertBinding }
 
@@ -85,14 +86,17 @@ sealed class AgentInteractionTarget {
           sourceLabel: field('source_label'),
         );
       case 'expert_binding':
-        if (json.length != 6)
+        if (json.length != 2 || !json.containsKey('review'))
           throw const FormatException('Invalid Expert binding target.');
+        final reviewJson = json['review'];
+        if (reviewJson is! Map ||
+            reviewJson.keys.any((key) => key is! String)) {
+          throw const FormatException('Invalid Expert binding review.');
+        }
         return AgentExpertBindingTarget(
-          assignmentId: field('assignment_id'),
-          packageId: field('package_id'),
-          packageVersion: field('package_version'),
-          requirementKey: field('requirement_key'),
-          capability: field('capability'),
+          review: AgentBindingReview.fromJson(
+            Map<String, dynamic>.from(reviewJson),
+          ),
         );
       default:
         throw const FormatException('Unknown interaction target.');
@@ -115,19 +119,9 @@ final class AgentNavigationTarget extends AgentInteractionTarget {
 }
 
 final class AgentExpertBindingTarget extends AgentInteractionTarget {
-  const AgentExpertBindingTarget({
-    required this.assignmentId,
-    required this.packageId,
-    required this.packageVersion,
-    required this.requirementKey,
-    required this.capability,
-  });
+  const AgentExpertBindingTarget({required this.review});
 
-  final String assignmentId;
-  final String packageId;
-  final String packageVersion;
-  final String requirementKey;
-  final String capability;
+  final AgentBindingReview review;
 }
 
 final class AgentInteractionSnapshot {

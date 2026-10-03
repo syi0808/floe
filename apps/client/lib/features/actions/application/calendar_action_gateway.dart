@@ -1,51 +1,33 @@
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
 
-abstract interface class CalendarDirectActionGateway {
-  Future<CalendarAction> submitDirectCalendarAction({
-    required String personId,
-    required String calendarId,
-    required String title,
-    required DateTime startsAt,
-    required DateTime endsAt,
-    required String timezone,
-    String? eventId,
-    int? eventRevision,
-    bool delete = false,
-  });
-}
-
 abstract interface class CalendarActionGateway {
-  Future<List<CalendarAction>> loadCalendarActions(String personId);
+  Future<List<ActionDestinationChoice>> loadDestinations();
 
-  Future<CalendarAction> decideCalendarAction({
-    required String personId,
-    required String actionId,
+  Future<ActionAuthority> loadAuthority();
+
+  Future<ActionAuthority> setAuthority({
+    required String commandId,
+    required ActionAuthorityMode mode,
+    required int expectedRevision,
+  });
+
+  Future<CalendarAction> submit({
+    required String commandId,
+    required ActionIntent intent,
+  });
+
+  Future<CalendarAction> decide({
+    required String commandId,
+    required CalendarAction action,
     required CalendarActionDecision decision,
   });
-}
 
-abstract interface class CalendarActionExecutionGateway
-    implements CalendarActionGateway {
-  Future<ActionAuthority> loadActionAuthority(String personId);
-  Future<ActionAuthority> setCalendarCreateAuthority(
-    String personId,
-    ActionAuthorityMode mode,
-  );
-  Future<bool> calendarWritesEnabled(String personId);
-  Future<CalendarAction> executeCalendarAction(
-    String personId,
-    String actionId,
-  );
-  Future<CalendarAction> recoverCalendarAction(
-    String personId,
-    String actionId,
-  );
-  Future<CalendarAction> proposeCalendarAction({
-    required String personId,
-    required String calendarId,
-    required String title,
-    required DateTime startsAt,
-    required DateTime endsAt,
-    required String timezone,
+  Future<CalendarAction> reconcile({
+    required String commandId,
+    required CalendarAction action,
   });
+
+  Future<CalendarAction> inspect(String actionRef);
+
+  Future<ActionsPage> list({String? cursor, int limit = 100});
 }

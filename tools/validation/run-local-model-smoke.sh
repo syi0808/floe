@@ -1,10 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-[[ "$#" == 1 ]] || exit 2
-case "$1" in
-  --availability|--exercise|--exercise-optional-memory|--exercise-learner|--exercise-learner-expiry|--exercise-manager-guidance|--exercise-manager-guidance-server) ;;
-  *) printf '%s\n' 'Use --availability, --exercise, --exercise-optional-memory, --exercise-learner, --exercise-learner-expiry, --exercise-manager-guidance, or --exercise-manager-guidance-server (synthetic only).' >&2; exit 2 ;;
+case "${1:-}" in
+  --exercise-learner|--exercise-learner-expiry)
+    [[ "$#" == 1 || ( "$#" == 3 && "$2" == --profile && -n "$3" ) ]] || exit 2 ;;
+  --availability|--exercise|--exercise-optional-memory|--exercise-manager-guidance|--exercise-manager-guidance-server)
+    [[ "$#" == 1 ]] || exit 2 ;;
+  *) printf '%s\n' 'Use --availability, --exercise, --exercise-optional-memory, --exercise-learner [--profile PATH], --exercise-learner-expiry [--profile PATH], --exercise-manager-guidance, or --exercise-manager-guidance-server (synthetic only).' >&2; exit 2 ;;
 esac
 case "$1" in
   --exercise-manager-guidance|--exercise-manager-guidance-server)
@@ -27,4 +29,4 @@ install_name_tool -id '@rpath/libfloe_local_model.dylib' "$library"
 codesign --force --sign - "$library"
 codesign --force --sign - "$bundle"
 codesign --verify --deep --strict "$bundle"
-"$bundle/Contents/MacOS/FloeLocalModelSmoke" "$1"
+"$bundle/Contents/MacOS/FloeLocalModelSmoke" "$@"

@@ -582,7 +582,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
                 }
             }
             if self.dependencies.clock.now_unix_ms() >= descriptor.expires_at_unix_ms {
-                return Err(AgentFailure::DeadlineExceeded);
+                return Err(AgentFailure::StaleContext);
             }
 
             let admission = crate::ExpertAdmissionIdentity {
@@ -662,7 +662,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
             let next = registry.snapshot();
             let committed_at_unix_ms = self.dependencies.clock.now_unix_ms();
             if committed_at_unix_ms >= descriptor.expires_at_unix_ms {
-                return Err(AgentFailure::DeadlineExceeded);
+                return Err(AgentFailure::StaleContext);
             }
             let receipt = scope
                 .run(

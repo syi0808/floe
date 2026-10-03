@@ -19,7 +19,7 @@ final class FakeDayGateway implements DayGateway {
       id: 'capture-${_nextId++}',
       originalInput: value,
       capturedAt: query.now,
-      revision: 0,
+      revision: 1,
     );
   }
 
@@ -34,7 +34,7 @@ final class FakeDayGateway implements DayGateway {
       EventDraft(:final title, :final startsAt, :final endsAt) => EventItem(
         id: id,
         title: _required(title),
-        revision: 0,
+        revision: 1,
         createdAt: query.now,
         startsAt: startsAt,
         endsAt: endsAt,
@@ -42,14 +42,14 @@ final class FakeDayGateway implements DayGateway {
       TaskDraft(:final title, :final deadline) => TaskItem(
         id: id,
         title: _required(title),
-        revision: 0,
+        revision: 1,
         createdAt: query.now,
         deadline: deadline,
       ),
       NoteDraft(:final content) => NoteItem(
         id: id,
         title: _required(content),
-        revision: 0,
+        revision: 1,
         createdAt: query.now,
       ),
     };
@@ -69,6 +69,7 @@ final class FakeDayGateway implements DayGateway {
       title: task.title,
       revision: task.revision + 1,
       createdAt: task.createdAt,
+      source: task.source,
       deadline: task.deadline,
       completedAt: completed ? query.now : null,
       priority: task.priority,

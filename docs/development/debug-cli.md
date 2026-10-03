@@ -35,8 +35,9 @@ target/cli/FloeDebugCLI.app/Contents/MacOS/floe_cli --database "$database" --pro
 Every launch creates a separate conversation session unless `--session UUID` is
 supplied. It persists normal conversations and Runs in the selected profile.
 `--inspect --session UUID` prints a stored session's answers and execution trace
-without starting a turn. `--profile ID` selects an existing model profile; omitted
-selection uses the same automatic policy as the client.
+without starting a turn. Model planning uses the same purpose-based
+Gateway-primary/local-fallback policy as the client. The CLI has no model-profile
+selection option.
 
 ## Diagnose and review
 
@@ -57,15 +58,16 @@ Interactive commands:
   its displayed revision and target digest. There is no automatic approval.
 - `/refresh ID`: reconcile a displayed interaction after changing settings in
   the client. Quit the CLI before reopening the client on this profile.
-- `/resume ID`: explicitly admit a fresh linked Run for that interaction's origin.
 - `/cancel`: explicitly cancel the currently observed Run. Other input during a
   Run is rejected, not submitted or queued as another turn.
 - `/quit`: exit when idle. Piped input is also supported.
 
-Inline review and exact model-recipient consent remain host-owned. Navigation-only
-and Expert-binding requirements must be configured in the client; CLI approval
-cannot choose a binding or substitute for OS permission. No Action execution or
-connector setup command is exposed. Model-produced Action proposals remain proposals.
+Source-processing review belongs to Connections/Access; interaction resolution and
+eligible linked resume belong to Conversation. The CLI observes the linked Run
+returned by the owner and has no `/resume` command. Navigation-only and
+Expert-binding requirements must be configured in the client; CLI approval cannot
+choose a binding or substitute for OS permission. No Action execution or connector
+setup command is exposed. Model-produced Action proposals remain proposals.
 
 The CLI waits for the canonical Run to settle; it has no observer timeout that
 silently cancels work. EOF does not cancel an admitted Run. Use `/cancel` for
@@ -80,36 +82,61 @@ for a CLI/profile/observation error. A failure is not a synthetic answer.
 
 ## Platform scope
 
-Saved server connectors and macOS Calendar reads use the existing owner paths.
-The CLI bundle has its own OS code identity: the client's EventKit permission
-does not necessarily authorize this process. Permission denial is a real blocked
-read, never an empty calendar or synthetic fallback. The CLI does not request or
-modify OS permissions automatically.
-
-Flutter-only live Attention/Contacts host publication is not provided by this
-minimal CLI. Experts requiring it may report unavailable evidence. Server-backed
-sources and intrinsic local Tasks/Memory do not need that publication.
+Saved Gateway connectors use the existing owner paths. This minimal CLI does not
+register Calendar, Attention or Personal acquisition pumps. Native-source reads
+that require those pumps report unavailable evidence; embedding the EventKit
+library does not establish a registered host or OS permission. The CLI does not
+request or modify OS permissions automatically. Gateway-backed sources and
+intrinsic local Tasks/Memory do not need native acquisition registration.
 
 ## Verification
 
-```sh
-cargo test -p floe-app --example floe_cli
-./scripts/floe-cli.sh --help
-```
+The [active refactor gates](../plans/2026-10-02-architecture-refactor.md#8-verification-policy-and-final-evidence)
+control compilation, build and behavioral exercises. At the authorized build gate,
+compile this retained example with `cargo build -p floe-app --example floe_cli`.
+`./scripts/floe-cli.sh --help` also builds and signs its native bundle before
+printing help; it is not a read-only source check. The removed example test suite
+is reconstructed only in S3.
 
 Use a configured local testing profile for live reads. Approve only the exact
-source and model recipient disclosed by the host. Never reset a profile after an
+source-processing decision disclosed by its owner. Never reset a profile after an
 open or key-access error.
 
 ## Synthetic Manager guidance evaluation
 
-The separate signed local-model smoke executable can evaluate Manager choice and synthesis without opening a product profile or reading connected sources:
+The separate signed local-model smoke executable evaluates Manager choice and
+synthesis over a synthetic corpus without reading connected source payloads. The
+Foundation mode creates an isolated encrypted diagnostic profile; the server mode
+uses the explicitly selected existing profile described below.
 
 ```sh
 ./tools/validation/run-local-model-smoke.sh --exercise-manager-guidance
 ./tools/validation/run-local-model-smoke.sh --exercise-manager-guidance-server
 ```
 
-Both modes require `FLOE_MANAGER_EVAL_APPROVED=1`. The server mode additionally requires an explicitly supplied private `FLOE_MANAGER_EVAL_CONNECTION_FILE`, the exact approved `FLOE_MANAGER_EVAL_RECIPIENT`, and a verified configuration label in `FLOE_MANAGER_EVAL_MODEL_ID`. It does not discover, export or modify credentials, pair an account, or approve product source access. Never commit the connection file or print its contents.
+Both modes require `FLOE_MANAGER_EVAL_APPROVED=1`. The server mode additionally
+requires `FLOE_MANAGER_EVAL_DATABASE` naming an existing absolute product-profile
+database with verified Person/device identity and an available existing encrypted
+Vault. It reads the profile's existing verified Gateway credential through the
+normal adapter; it does not import a connection file, pair an account, replace
+credentials or approve source access. Quit other hosts using that profile first.
+`FLOE_MANAGER_EVAL_MODEL_ID` is an optional bounded recording label, not a routing
+choice. `FLOE_MANAGER_EVAL_STAGE` accepts `baseline`, `native`, `manager` or `card`
+and defaults to `baseline`.
+
+The separate Learner modes require an explicitly selected isolated prepared
+profile to perform an exercise:
+
+```sh
+./tools/validation/run-local-model-smoke.sh --exercise-learner --profile /absolute/path/to/isolated/people/PERSON/floe.db
+./tools/validation/run-local-model-smoke.sh --exercise-learner-expiry --profile /absolute/path/to/isolated/people/PERSON/floe.db
+```
+
+Without `--profile`, these modes report `SKIPPED` and exit unsuccessfully. They
+do not create a profile, replace keys or configure external accounts. The selected
+profile must have an existing Vault, no configured source connections or active
+Gateway, and no existing session, pending memory candidate or confirmed memory.
+The exercise retains its synthetic conversation and pending memory candidate for
+inspection; it does not approve the candidate.
 
 The versioned corpus is `fixtures/manager-guidance/corpus.json`. Record the tested commit, prompt and Card hashes, provider/model configuration, all repetitions, and the fixed case rubrics. Shape checks alone are not behavioral acceptance. Synthetic result replay tests model behavior, not real Expert execution or source correctness. Missing live prerequisites remain unverified; do not retune prompts or relax expectations while implementing the execution plan.

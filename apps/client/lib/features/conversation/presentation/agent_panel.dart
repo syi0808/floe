@@ -35,7 +35,7 @@ class AgentPanel extends StatefulWidget {
   final Future<void> Function(String actionId)? onOpenAction;
   final VoidCallback? onOpenSourceReview;
   final VoidCallback? onOpenConnections;
-  final void Function(AgentExpertBindingTarget target)? onOpenExpertSettings;
+  final void Function(AgentExpertBindingTarget target, Future<void> Function() onBindingReplaced)? onOpenExpertSettings;
 
   @override
   State<AgentPanel> createState() => _AgentPanelState();
@@ -273,8 +273,9 @@ class _AgentPanelState extends State<AgentPanel> {
               ),
             ),
             if (message.hasArtifactMediaType(
-              'application/vnd.floe.actions.calendar-proposal+json;version=1',
-            )) ...[
+                  'application/vnd.floe.actions.calendar-proposal+json;version=1',
+                ) &&
+                message.executionReceipt != null) ...[
               const SizedBox(height: FloeSpace.md),
               AgentProposalCard(
                 controller: widget.controller,

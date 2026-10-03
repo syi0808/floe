@@ -1,9 +1,10 @@
 import 'dart:convert';
 
 import 'package:floe_client/app/runtime/owner_failure.dart';
+import 'package:floe_client/features/actions/domain/calendar_action.dart';
 
-/// Safe Conversation owner projection. No execution scope or raw Task payload
-/// crosses this boundary.
+/// Safe Conversation owner projection. Task receipts remain references and
+/// artifacts remain metadata; no raw Task payload crosses this boundary.
 final class AgentSession {
   AgentSession.fromJson(Map<String, Object?> json)
     : id = _id(json['id']),
@@ -44,6 +45,8 @@ final class AgentSession {
     }
     final usage = _object(json['usage']);
     _keys(usage, {
+      'unknown_token_attempts',
+      'unknown_cost_attempts',
       'model_attempts',
       'estimated_tokens',
       'iterations',
@@ -52,6 +55,11 @@ final class AgentSession {
       'cost_micros',
       'estimated_cost_micros',
     });
+    final modelAttempts = _revision(usage['model_attempts']);
+    if (_revision(usage['unknown_token_attempts']) > modelAttempts ||
+        _revision(usage['unknown_cost_attempts']) > modelAttempts) {
+      throw const FormatException('Invalid Conversation usage counters.');
+    }
     for (final counter in usage.values) {
       _revision(counter);
     }
@@ -161,6 +169,7 @@ final class AgentCapabilityMessage extends AgentMessage {
     required this.capabilityId,
     required this.output,
     required this.failure,
+    required this.executionReceipt,
     required this.artifacts,
     required this.isDelegation,
   });
@@ -181,6 +190,7 @@ final class AgentCapabilityMessage extends AgentMessage {
     return AgentCapabilityMessage._(
       _id(json['message_id']),
       _id(json['turn_id']),
+      executionReceipt: null,
       callId: _id(json['call_id']),
       capabilityId: _text(json['capability_id'], maximum: 256),
       output: result.containsKey('Ok') ? _text(result['Ok']) : null,
@@ -197,13 +207,20 @@ final class AgentCapabilityMessage extends AgentMessage {
     final task = _object(json['task']);
     _keys(
       task,
-      {'task_id', 'agent_id', 'state', 'artifacts'},
+      {
+        'execution_receipt',
+        'task_id',
+        'agent_id',
+        'state',
+        'artifacts',
+      },
       {'result', 'issue'},
     );
     final state = task['state'];
     if (!{
       'submitted',
       'working',
+      'blocked',
       'completed',
       'failed',
       'cancelled',
@@ -239,9 +256,29 @@ final class AgentCapabilityMessage extends AgentMessage {
           );
         })
         .toList(growable: false);
+    final taskId = _id(task['task_id']);
+    final receiptJson = task['execution_receipt'];
+    final executionReceipt = receiptJson == null
+        ? null
+        : TaskExecutionReceiptReference.fromJson(
+            Map<String, dynamic>.from(_object(receiptJson)),
+          );
+    if (executionReceipt == null) {
+      if (state != 'rejected' ||
+          task['issue'] == null ||
+          artifacts.isNotEmpty) {
+        throw const FormatException('Invalid rejected Task receipt.');
+      }
+    } else {
+      final execution = _object(executionReceipt.toJson()['execution']);
+      if (_id(execution['task_id']) != taskId) {
+        throw const FormatException('Task execution receipt mismatch.');
+      }
+    }
     return AgentCapabilityMessage._(
       _id(json['message_id']),
       _id(json['turn_id']),
+      executionReceipt: executionReceipt,
       callId: _id(task['task_id']),
       capabilityId: _text(task['agent_id'], maximum: 256),
       output: output,
@@ -254,6 +291,7 @@ final class AgentCapabilityMessage extends AgentMessage {
   AgentMessageKind get kind => AgentMessageKind.capability;
   final String callId;
   final String capabilityId;
+  final TaskExecutionReceiptReference? executionReceipt;
   final List<AgentArtifact> artifacts;
   final bool isDelegation;
   final String? output;
