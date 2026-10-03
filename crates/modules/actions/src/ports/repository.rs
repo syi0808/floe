@@ -15,6 +15,7 @@ pub enum ActionStoreError {
     #[error("Action changed")] Conflict,
     #[error("Action record is invalid")] InvalidRecord,
     #[error("Action record is corrupt")] CorruptRecord,
+    #[error("Pending Expert Action capacity is exhausted")] BudgetExceeded,
 }
 
 impl From<ActionStoreError> for floe_kernel::AgentFailure {
@@ -26,6 +27,7 @@ impl From<ActionStoreError> for floe_kernel::AgentFailure {
             ActionStoreError::NotFound=>Self::NotFound,
             ActionStoreError::Conflict=>Self::Conflict,
             ActionStoreError::InvalidRecord=>Self::InvalidInput,
+            ActionStoreError::BudgetExceeded=>Self::BudgetExceeded,
         }
     }
 }

@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 pub type ActionDigest = [u8; 32];
 pub const MAX_ACTION_BYTES: usize = 65_536;
+pub const MAX_PENDING_EXPERT_ACTIONS: usize = 4_096;
 
 pub fn action_digest<T: Serialize>(domain: &[u8], value: &T) -> Result<ActionDigest, AgentFailure> {
     let bytes = serde_json::to_vec(value).map_err(|_| AgentFailure::InvalidInput)?;

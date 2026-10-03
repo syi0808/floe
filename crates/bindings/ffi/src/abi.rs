@@ -127,7 +127,10 @@ pub unsafe extern "C" fn floe_string_free(value: *mut c_char) {
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn floe_core_free(handle: *mut FloeHandle) {
     if !handle.is_null() {
-        unsafe { drop(Box::from_raw(handle)) };
+        // The host's retirement worker retains service state after a failed or
+        // timed-out drain. No borrowed core pointer enters that worker.
+        let result = catch_unwind(AssertUnwindSafe(|| unsafe { drop(Box::from_raw(handle)) }));
+        if let Err(payload) = result { report_free_panic(payload); }
     }
 }
 
@@ -238,7 +241,15 @@ pub unsafe extern "C" fn floe_native_host_free(lane: *mut FloeNativeHostLane) {
     if !lane.is_null() {
         let result = catch_unwind(AssertUnwindSafe(|| unsafe { drop(Box::from_raw(lane)) }));
         if let Err(payload) = result {
-            let _ = diagnostics::panic_error(payload);
+            report_free_panic(payload);
         }
     }
+}
+
+fn report_free_panic(payload: Box<dyn std::any::Any + Send>) {
+    // Diagnostics records only a type and incident ID. Its own sink, or a
+    // custom panic payload destructor, must not unwind across an extern ABI.
+    if let Err(secondary) = catch_unwind(AssertUnwindSafe(|| {
+        let _ = diagnostics::panic_error(payload);
+    })) { std::mem::forget(secondary); }
 }

@@ -19,7 +19,7 @@ pub trait LocalIdentityProvider {
     fn verified_local_identity(&self) -> Result<LocalIdentityClaim, HostError>;
 }
 
-pub trait HostServices {
+pub trait HostServices: Send + Sync + 'static {
     fn shutdown(&self) -> Result<(), HostError>;
 }
 

@@ -9,6 +9,7 @@ pub(crate) fn reconcile_refresh(request: &CalendarRefreshRequest, acquisition: &
 }
 fn reconcile(expectation: MirrorExpectation, acquisition: &CalendarAcquisition, previous: Option<&CalendarMirror>) -> Result<CalendarMirror, DayError> {
     let now = acquisition.completed_at;
+    let next_mirror_revision = expectation.next_revision()?;
     if MirrorExpectation::of(previous)? != expectation { return Err(DayError::conflict("calendar mirror changed")); }
     let mut events = previous.map(|mirror| mirror.events.clone()).unwrap_or_default();
     // Reconfigured/removed source data cannot return through a failed refresh.
@@ -26,7 +27,7 @@ fn reconcile(expectation: MirrorExpectation, acquisition: &CalendarAcquisition, 
                 for batch in batches {
                     match batch {
                         CalendarResourceOutcome::Complete { calendar_id, records, observed_at } => {
-                            reconcile_resource(&mut events, source, calendar_id, records, &acquisition.range, acquisition.person_id, now)?;
+                            reconcile_resource(&mut events, source, calendar_id, records, &acquisition.range, acquisition.person_id, now, next_mirror_revision)?;
                             state.calendar_statuses.insert(calendar_id.clone(), CalendarSyncStatus { last_success_at: Some(*observed_at), last_range: Some(acquisition.range.clone()), error: None, error_at: None });
                         }
                         CalendarResourceOutcome::Failed { calendar_id, reason, observed_at } => { let status = state.calendar_statuses.entry(calendar_id.clone()).or_insert_with(empty_status); status.error = Some(*reason); status.error_at = Some(*observed_at); }
@@ -39,10 +40,10 @@ fn reconcile(expectation: MirrorExpectation, acquisition: &CalendarAcquisition, 
         }
         states.push(state);
     }
-    Ok(CalendarMirror { mirror_revision: expectation.next_revision()?, state: CalendarMirrorState { sources: states }, events })
+    Ok(CalendarMirror { mirror_revision: next_mirror_revision, state: CalendarMirrorState { sources: states }, events })
 }
 fn empty_status() -> CalendarSyncStatus { CalendarSyncStatus { last_success_at: None, last_range: None, error: None, error_at: None } }
-fn reconcile_resource(events: &mut Vec<Event>, source: &CalendarSourceVersion, calendar_id: &str, records: &[CalendarRecord], range: &crate::CalendarRange, person_id: floe_kernel::PersonId, now: DateTime<Utc>) -> Result<(), DayError> {
+fn reconcile_resource(events: &mut Vec<Event>, source: &CalendarSourceVersion, calendar_id: &str, records: &[CalendarRecord], range: &crate::CalendarRange, person_id: floe_kernel::PersonId, now: DateTime<Utc>, next_mirror_revision: u64) -> Result<(), DayError> {
     let calendar = source.calendars.iter().find(|calendar| calendar.calendar_id == calendar_id).ok_or_else(|| DayError::validation("unselected calendar batch"))?;
     let mut seen = BTreeSet::new(); let mut imported = Vec::with_capacity(records.len());
     for record in records {
@@ -52,6 +53,8 @@ fn reconcile_resource(events: &mut Vec<Event>, source: &CalendarSourceVersion, c
         let origin = CalendarSource { can_modify: record.can_modify, connection_id: source.source.connection_id(), provider: source.provider, calendar_id: calendar_id.to_owned(), calendar_name: calendar.calendar_name.clone(), external_id: record.external_id.clone(), external_revision: record.external_revision.clone() };
         let mut event = Event::observed_calendar(person_id, record.title.clone(), record.schedule.clone(), origin, now)?;
         event.id = crate::domain::action_collection::calendar_event_id(source, calendar_id, &record.external_id)?;
+        // A reappearing cache item must not reuse an old public CAS revision.
+        event.revision = floe_kernel::Revision(next_mirror_revision);
         if let Some(previous) = events.iter().find(|event| matches!(&event.source, SourceRef::Calendar(origin) if origin.connection_id == source.source.connection_id() && origin.provider == source.provider && origin.calendar_id == calendar_id && origin.external_id == record.external_id)) {
             event.id = previous.id; event.created_at = previous.created_at; event.revision = previous.revision;
             if event.title == previous.title && event.schedule == previous.schedule && event.source == previous.source { event.updated_at = previous.updated_at; } else { event.revision = floe_kernel::Revision(previous.revision.0.checked_add(1).filter(|value| *value <= i64::MAX as u64).ok_or_else(|| DayError::conflict("event revision exhausted"))?); }

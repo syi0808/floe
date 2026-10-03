@@ -47,14 +47,24 @@ pub(super) fn decode_task_proposal(record:&TaskRecord,reference:&TaskExecutionRe
         return Err(AgentFailure::PolicyDenied);
     }
     let DependencyCoverage::Dependent{dependencies}=&trusted.artifact.coverage else{return Err(AgentFailure::PolicyDenied)};
-    let [dependency]=dependencies.as_slice() else{return Err(AgentFailure::PolicyDenied)};
-    if dependency.person_id()!=person_id || dependency.observation_id()!=proposal.evidence_id
-        || dependency.consumer().identifier()!=proposal.package.id || dependency.source().connector().as_str()!="calendar.event_kit"
-        || !trusted.selection.requirements.iter().any(|requirement|requirement.capability=="calendar.timeline" && requirement.selected.iter().any(|selected|
+    // The artifact may retain more context than its direct Calendar input.
+    // Select only an exact authenticated contributor; never infer provenance
+    // from the proposal JSON or substitute another Calendar observation.
+    let mut contributors=dependencies.iter().filter(|dependency|
+        dependency.person_id()==person_id && dependency.observation_id()==proposal.evidence_id
+        && dependency.consumer().identifier()==proposal.package.id
+        && dependency.source().connector().as_str()=="calendar.event_kit"
+        && dependency.operation()==floe_context_contract::GrantOperation::Read
+        && dependency.purpose()==floe_context_contract::GrantPurpose::Assistant
+        && trusted.selection.requirements.iter().any(|requirement|requirement.capability=="calendar.timeline" && requirement.selected.iter().any(|selected|
             selected.connector_id==*dependency.source().connector() && selected.connection_id==dependency.source().connection_id()
-            && selected.execution_owner_id==*dependency.source().execution_owner() && dependency.resources().contains(&selected.resource))) {
-        return Err(AgentFailure::PolicyDenied);
-    }
-    Ok(ExpertProposalEvidence{receipt:reference.clone(),artifact_id,proposal,dependency:dependency.clone(),installation_id:trusted.admission.installation_id,
+            && selected.execution_owner_id==*dependency.source().execution_owner() && dependency.resources().contains(&selected.resource))));
+    let dependency=contributors.next().ok_or(AgentFailure::PolicyDenied)?;
+    if contributors.next().is_some(){return Err(AgentFailure::PolicyDenied);}
+    let coverage=trusted.receipt.snapshot.coverage.clone();
+    coverage.validate().map_err(|_|AgentFailure::StorageUnavailable)?;
+    let DependencyCoverage::Dependent{dependencies:all}=&coverage else{return Err(AgentFailure::PolicyDenied)};
+    if !all.contains(dependency) || all.iter().any(|entry|entry.person_id()!=person_id){return Err(AgentFailure::PolicyDenied);}
+    Ok(ExpertProposalEvidence{receipt:reference.clone(),artifact_id,proposal,dependency:dependency.clone(),coverage,installation_id:trusted.admission.installation_id,
         assignment_id:trusted.admission.assignment_id,definition_revision:trusted.admission.definition_revision,invocation_id:trusted.invocation_key.as_uuid()})
 }

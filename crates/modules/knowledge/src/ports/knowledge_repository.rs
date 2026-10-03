@@ -2,7 +2,8 @@ use chrono::{DateTime, Utc};
 use floe_agent_contract::{AgentFailure, BoxFuture, CommandId, ExecutionScope, OwnerActor};
 use uuid::Uuid;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MemoryStageOrigin {
     User,
     Learner { claim: crate::LearnerClaimRef, journal_revision: u64, journal_digest: [u8; 32] },

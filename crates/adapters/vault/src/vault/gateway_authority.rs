@@ -1422,6 +1422,7 @@ async fn validate_product_credential_in_transaction(
         || enrollment_command.issuer.public_key != owner.public_key
         || enrollment_command.producer != *producer
         || enrollment_command.challenge_id.is_nil()
+        || enrollment_command.challenge_id.to_string() != expected.enrollment_id
         || enrollment_command.canonical_bytes.is_empty()
         || enrollment_command.producer_signature.len() != 64
         || enrollment_command.request_digest

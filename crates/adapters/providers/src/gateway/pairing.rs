@@ -647,7 +647,7 @@ impl GatewayEnrollmentPort for GatewayPairingAdapter {
                     producer_instance: wire.producer.instance_id.clone(),
                     producer_key_fingerprint: wire.producer.fingerprint.clone(),
                     producer_audience: wire.producer.audience.clone(),
-                    enrollment_id: wire.pairing_id.clone(),
+                    enrollment_id: wire.challenge_id.clone(),
                     credential_generation: generation,
                 },
                 issuer: wire.issuer.key(),
@@ -714,7 +714,7 @@ impl GatewayCredentialCommit for GatewayPairingAdapter {
                         || wire.producer.instance_id != expected.binding.producer_instance
                         || wire.producer.fingerprint != expected.binding.producer_key_fingerprint
                         || wire.producer.audience != expected.binding.producer_audience
-                        || expected.binding.enrollment_id != wire.pairing_id
+                        || expected.binding.enrollment_id != wire.challenge_id
                         || next_generation != expected.binding.credential_generation
                     {
                         return Err(GatewayCredentialError::Conflict);

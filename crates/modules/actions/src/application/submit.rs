@@ -70,7 +70,13 @@ impl ActionsService {
                 let origin=ActionOrigin::Expert{task_id:proposal.task_id,invocation_id:evidence.invocation_id,package:proposal.package.clone(),
                     installation_id:evidence.installation_id,assignment_id:evidence.assignment_id,definition_revision:evidence.definition_revision,
                     evidence_ref:receipt,artifact_id};
-                let expiry=(now+chrono::Duration::minutes(15)).min(proposal_expiry).min(dependency.expires_at()).min(starts_at);
+                evidence.coverage.validate().map_err(|_|AgentFailure::PolicyDenied)?;
+                let floe_agent_contract::DependencyCoverage::Dependent{dependencies}=&evidence.coverage else{return Err(AgentFailure::PolicyDenied)};
+                if !dependencies.contains(dependency) || dependencies.iter().any(|entry|entry.person_id()!=actor.person_id || entry.observed_at()>now) {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                let coverage_expiry=dependencies.iter().map(|entry|entry.expires_at()).min().ok_or(AgentFailure::PolicyDenied)?;
+                let expiry=(now+chrono::Duration::minutes(15)).min(proposal_expiry).min(coverage_expiry).min(starts_at);
                 (effect,origin,Some(evidence.dependency),expiry)
             }
         };

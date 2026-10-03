@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, sync::atomic::Ordering};
 
-use floe_access::{ContextDependency, DependencyCoverage};
+use floe_access::DependencyCoverage;
 use floe_actions::{
     ActionAdmission, ActionDecision, ActionDigest, ActionOrigin, ActionPage, ActionRecord,
     ActionReconciliation, ActionState, ActionStoreError, ActionsAuthority, AuthorityChange,
@@ -232,10 +232,19 @@ fn invalid_record(error: AgentFailure) -> ActionStoreError {
         AgentFailure::UnsupportedVersion => {
             ActionStoreError::CorruptRecord
         }
-        AgentFailure::InvalidInput | AgentFailure::BudgetExceeded | AgentFailure::PolicyDenied => {
+        AgentFailure::BudgetExceeded => ActionStoreError::BudgetExceeded,
+        AgentFailure::InvalidInput | AgentFailure::PolicyDenied => {
             ActionStoreError::InvalidRecord
         }
         _ => ActionStoreError::Unavailable,
+    }
+}
+
+fn historical_action_error(error:AgentFailure)->ActionStoreError{
+    match error {
+        AgentFailure::VaultLocked=>ActionStoreError::VaultLocked,
+        AgentFailure::StorageUnavailable|AgentFailure::VaultUnavailable=>ActionStoreError::Unavailable,
+        _=>ActionStoreError::CorruptRecord,
     }
 }
 
@@ -519,6 +528,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(Some(action))
     }
 
+    async fn pending_expert_count(&self,transaction:&Transaction<'_>)->Result<usize,ActionStoreError>{
+        let mut rows=transaction.query("SELECT count(*) FROM actions_records WHERE person_id = ? AND origin_kind = 'expert' AND state IN ('pending_review', 'approved')",(self.person_id.to_string(),)).await.map_err(sql_error)?;
+        let row=rows.next().await.map_err(sql_error)?.ok_or(ActionStoreError::CorruptRecord)?;
+        let count=usize::try_from(row.get::<i64>(0).map_err(|_|ActionStoreError::CorruptRecord)?).map_err(|_|ActionStoreError::CorruptRecord)?;
+        if count>floe_actions::MAX_PENDING_EXPERT_ACTIONS{return Err(ActionStoreError::BudgetExceeded);}
+        Ok(count)
+    }
+
     async fn insert_action(
         &self,
         transaction: &Transaction<'_>,
@@ -527,6 +544,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     ) -> Result<(), ActionStoreError> {
         if record.person_id != self.person_id || dispatch_revision.is_some() {
             return Err(ActionStoreError::InvalidRecord);
+        }
+        if matches!(record.origin,ActionOrigin::Expert{..}) && matches!(record.state,ActionState::PendingReview|ActionState::Approved)
+            && self.pending_expert_count(transaction).await? >= floe_actions::MAX_PENDING_EXPERT_ACTIONS {
+            return Err(ActionStoreError::BudgetExceeded);
         }
         let payload = record_payload(record)?;
         let changed = transaction
@@ -833,14 +854,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(())
     }
 
-    async fn validate_current_dependency(
+    async fn validate_current_action_coverage(
         &self,
         transaction: &Transaction<'_>,
-        dependency: &ContextDependency,
+        coverage: &DependencyCoverage,
     ) -> Result<(), ActionStoreError> {
-        let coverage = DependencyCoverage::dependent(dependency.clone())
-            .map_err(|_| ActionStoreError::InvalidRecord)?;
-        self.validate_context_dependency_coverage_in_transaction(transaction, &coverage)
+        coverage.validate().map_err(|_|ActionStoreError::InvalidRecord)?;
+        if !matches!(coverage,DependencyCoverage::Dependent{..}){return Err(ActionStoreError::InvalidRecord);}
+        self.validate_context_dependency_coverage_in_transaction(transaction, coverage)
             .await
             .map_err(|error| match error {
                 AgentFailure::Conflict => ActionStoreError::Conflict,
@@ -917,76 +938,46 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.ensure_actions_schema(transaction)
             .await
             .map_err(AgentFailure::from)?;
-        let grant_key = format!(
-            "{}:{}:{}",
-            grant_id.as_uuid(),
-            authority.incarnation(),
-            authority.access_epoch().get()
-        );
+        self.pending_expert_count(transaction).await.map_err(AgentFailure::from)?;
+        let mut scanned=0usize;
         let mut cursor: Option<String> = None;
         loop {
+            // The Calendar index alone cannot cover inherited Task context.
+            // Authenticate each pending Expert's immutable receipt instead.
             let query = if cursor.is_some() {
-                format!("{ACTION_SELECT} WHERE person_id = ? AND grant_key = ? AND state IN ('pending_review', 'approved') AND action_id > ? ORDER BY action_id COLLATE BINARY LIMIT 100")
+                format!("{ACTION_SELECT} WHERE person_id = ? AND origin_kind = 'expert' AND state IN ('pending_review', 'approved') AND action_id > ? ORDER BY action_id COLLATE BINARY LIMIT 100")
             } else {
-                format!("{ACTION_SELECT} WHERE person_id = ? AND grant_key = ? AND state IN ('pending_review', 'approved') ORDER BY action_id COLLATE BINARY LIMIT 100")
+                format!("{ACTION_SELECT} WHERE person_id = ? AND origin_kind = 'expert' AND state IN ('pending_review', 'approved') ORDER BY action_id COLLATE BINARY LIMIT 100")
             };
             let mut rows = if let Some(cursor) = cursor.as_ref() {
-                transaction
-                    .query(
-                        &query,
-                        (self.person_id.to_string(), grant_key.clone(), cursor.clone()),
-                    )
-                    .await
-                    .map_err(sql_error)
-                    .map_err(AgentFailure::from)?
+                transaction.query(&query,(self.person_id.to_string(),cursor.clone())).await
             } else {
-                transaction
-                    .query(&query, (self.person_id.to_string(), grant_key.clone()))
-                    .await
-                    .map_err(sql_error)
-                    .map_err(AgentFailure::from)?
-            };
+                transaction.query(&query,(self.person_id.to_string(),)).await
+            }.map_err(sql_error).map_err(AgentFailure::from)?;
             let mut page = Vec::with_capacity(100);
-            while let Some(row) = rows
-                .next()
-                .await
-                .map_err(sql_error)
-                .map_err(AgentFailure::from)?
-            {
+            while let Some(row) = rows.next().await.map_err(sql_error).map_err(AgentFailure::from)? {
                 let stored = stored_action_from_row!(row).map_err(AgentFailure::from)?;
                 if stored.record.person_id != self.person_id
-                    || action_grant_key(&stored.record) != grant_key
+                    || !matches!(stored.record.origin,ActionOrigin::Expert{..})
                     || !matches!(stored.record.state, ActionState::PendingReview | ActionState::Approved)
                     || stored.dispatch_revision.is_some()
-                {
-                    return Err(AgentFailure::from(ActionStoreError::CorruptRecord));
-                }
+                { return Err(AgentFailure::from(ActionStoreError::CorruptRecord)); }
                 page.push(stored);
             }
             drop(rows);
             let page_len = page.len();
-            let Some(last) = page.last() else {
-                return Ok(());
-            };
+            scanned=scanned.checked_add(page_len).ok_or(AgentFailure::BudgetExceeded)?;
+            if scanned>floe_actions::MAX_PENDING_EXPERT_ACTIONS{return Err(AgentFailure::BudgetExceeded);}
+            let Some(last) = page.last() else { return Ok(()); };
             cursor = Some(last.record.id.to_string());
             for current in page {
-                let Some(next) = invalidate_action_dependency(
-                    &current.record,
-                    grant_id,
-                    authority,
-                )
-                .map_err(invalid_record)
-                .map_err(AgentFailure::from)?
-                else {
-                    return Err(AgentFailure::from(ActionStoreError::CorruptRecord));
-                };
-                self.update_action(transaction, &current, &next, current.dispatch_revision)
-                    .await
-                    .map_err(AgentFailure::from)?;
+                let evidence=self.expert_action_evidence_in_transaction(transaction,&current.record).await
+                    .map_err(AgentFailure::from)?.ok_or(AgentFailure::StorageUnavailable)?;
+                let Some(next)=invalidate_action_dependency(&current.record,&evidence,grant_id,authority)
+                    .map_err(invalid_record).map_err(AgentFailure::from)? else {continue;};
+                self.update_action(transaction,&current,&next,current.dispatch_revision).await.map_err(AgentFailure::from)?;
             }
-            if page_len < 100 {
-                return Ok(());
-            }
+            if page_len < 100 { return Ok(()); }
         }
     }
 
@@ -995,26 +986,40 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         transaction: &Transaction<'_>,
         record: &ActionRecord,
     ) -> Result<(), ActionStoreError> {
+        if let Some(evidence)=self.expert_action_evidence_in_transaction(transaction,record).await? {
+            self.validate_current_action_coverage(transaction,&evidence.coverage).await?;
+        }
+        Ok(())
+    }
+
+    /// Historical receipt authentication is also usable after a grant is
+    /// revoked; live grant checks belong only to new admission/dispatch.
+    async fn expert_action_evidence_in_transaction(
+        &self,
+        transaction:&Transaction<'_>,
+        record:&ActionRecord,
+    )->Result<Option<floe_actions::ExpertProposalEvidence>,ActionStoreError>{
         let ActionOrigin::Expert { task_id,evidence_ref,artifact_id,.. } = &record.origin else {
-            return Ok(());
+            return Ok(None);
         };
         let task_id = floe_agent_contract::TaskId::from_uuid(*task_id)
             .ok_or(ActionStoreError::InvalidRecord)?;
         let task = self
             .task_on(transaction, task_id)
             .await
-            .map_err(invalid_record)?
-            .ok_or(ActionStoreError::NotFound)?;
-        let receipt=self.read_execution_receipt_on(transaction,evidence_ref).await.map_err(access_error)?;
+            .map_err(historical_action_error)?
+            .ok_or(ActionStoreError::CorruptRecord)?;
+        let receipt=self.read_execution_receipt_on(transaction,evidence_ref).await.map_err(historical_action_error)?;
         if task.snapshot.task_id != task_id
             || task.snapshot.principal != self.person_id.to_string()
             || task.snapshot.state != floe_agent_contract::TaskState::Completed
             || task.receipt.as_ref()!=Some(&receipt)
         {
-            return Err(ActionStoreError::Conflict);
+            return Err(ActionStoreError::CorruptRecord);
         }
-        let evidence=super::expert_actions::decode_task_proposal(&task,evidence_ref,*artifact_id,record.person_id,&record.device_id).map_err(invalid_record)?;
-        floe_actions::validate_expert_action_evidence(record,&evidence).map_err(invalid_record)
+        let evidence=super::expert_actions::decode_task_proposal(&task,evidence_ref,*artifact_id,record.person_id,&record.device_id).map_err(historical_action_error)?;
+        floe_actions::validate_expert_action_evidence(record,&evidence).map_err(historical_action_error)?;
+        Ok(Some(evidence))
     }
 
     async fn settlement_receipt(
@@ -1373,6 +1378,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .record
                 .validate()
                 .map_err(|_| ActionStoreError::InvalidRecord)?;
+            // The original submit command is the sole replay authority. A new
+            // command for an already retained proposal remains a conflict,
+            // including when pending admission capacity is exhausted.
+            if self.action_by_id(&transaction,self.person_id,admission.record.id).await?.is_some(){
+                return Err(ActionStoreError::Conflict);
+            }
             let authority = self
                 .authority_in_transaction(&transaction, self.person_id)
                 .await?;
@@ -1380,10 +1391,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .map_err(invalid_record)?;
             self.validate_expert_task_in_transaction(&transaction, &admission.record)
                 .await?;
-            if let Some(dependency) = admission.record.dependency.as_ref() {
-                self.validate_current_dependency(&transaction, dependency)
-                    .await?;
-            }
             self.insert_action(&transaction, &admission.record, None)
                 .await?;
             self.insert_command_receipt(
@@ -1605,13 +1612,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             self.validate_expert_task_in_transaction(&transaction, &current.record)
                 .await?;
-            if let Some(dependency) = current.record.dependency.as_ref() {
-                if dependency.expires_at() <= request.now {
-                    return Err(ActionStoreError::Conflict);
-                }
-                self.validate_current_dependency(&transaction, dependency)
-                    .await?;
-            }
             let authority = self
                 .authority_in_transaction(&transaction, self.person_id)
                 .await?;

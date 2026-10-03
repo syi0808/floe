@@ -69,7 +69,7 @@ pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
         #[cfg(unix)]
         agent_vault: vault_lifecycle::VaultBridge::new(path, core, local_context),
     };
-    Ok(AppHost::with_caller(services, caller))
+    AppHost::with_caller(services, caller).map_err(AppOpenError::Host)
 }
 
 #[derive(Clone, Debug)]

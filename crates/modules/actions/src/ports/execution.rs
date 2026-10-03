@@ -1,4 +1,4 @@
-use floe_agent_contract::TaskExecutionReceiptRef;
+use floe_agent_contract::{DependencyCoverage, TaskExecutionReceiptRef};
 use floe_connections::SourceConnection;
 use floe_context_contract::{ConnectionId, ContextDependency};
 use floe_day::Event;
@@ -28,7 +28,10 @@ pub struct ExpertProposalEvidence {
     pub receipt:TaskExecutionReceiptRef,
     pub artifact_id:Uuid,
     pub proposal:ExpertCalendarProposal,
+    /// The exact Calendar contributor claimed by the proposal artifact.
     pub dependency:ContextDependency,
+    /// Full authenticated terminal Task coverage, including inherited context.
+    pub coverage:DependencyCoverage,
     pub installation_id:Uuid,
     pub assignment_id:Uuid,
     pub definition_revision:u64,

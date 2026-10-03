@@ -17,7 +17,7 @@ impl<Services: HostServices> AppHost<Services> {
         identity: crate::LocalIdentityClaim,
     ) -> Result<Self, HostError> {
         let caller = CallerContext::verified(identity, runtime_epoch())?;
-        Ok(Self::with_caller(services, caller))
+        Self::with_caller(services, caller)
     }
 }
 

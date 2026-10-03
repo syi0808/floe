@@ -46,6 +46,7 @@ impl DayCollectionCommit {
         self.validate()?;
         if inventory.len() > crate::MAX_REFRESH_SOURCES || inventory.windows(2).any(|pair| pair[0].source.connection_id() >= pair[1].source.connection_id()) || inventory.iter().map(|source| source.calendars.len()).sum::<usize>() > crate::MAX_REFRESH_CALENDARS { return Err(DayError::validation("invalid collection inventory")); }
         for source in inventory { source.validate(self.person_id)?; }
+        let next_mirror_revision = MirrorExpectation::of(previous)?.next_revision()?;
         let expected = self.collection.source();
         let source = inventory.iter().find(|source| source.source.connection_id() == expected.connection_id).ok_or_else(|| DayError::conflict("collection source is unavailable"))?;
         if source.revision.0 != expected.connection_revision || source.authority != expected.source_authority || source.provider != expected.provider || !source.calendars.iter().any(|calendar| calendar.calendar_id == expected.calendar_id) { return Err(DayError::conflict("collection source changed")); }
@@ -68,6 +69,7 @@ impl DayCollectionCommit {
                 let origin = CalendarSource { can_modify: record.can_modify, connection_id: expected.connection_id.clone(), provider: expected.provider, calendar_id: expected.calendar_id.clone(), calendar_name: expected.calendar_name.clone(), external_id: record.external_id.clone(), external_revision: record.external_revision.clone() };
                 let mut event = Event::observed_calendar(self.person_id, record.title.clone(), record.schedule.clone(), origin, self.collected_at)?;
                 event.id = calendar_event_id(source, &record.calendar_id, &record.external_id)?;
+                event.revision = Revision(next_mirror_revision);
                 if let Some(index) = existing {
                     let old = &events[index]; event.id = old.id; event.created_at = old.created_at; event.revision = old.revision;
                     if old.title == event.title && old.schedule == event.schedule && old.source == event.source { event.updated_at = old.updated_at; } else { event.revision = Revision(old.revision.0.checked_add(1).filter(|revision| *revision <= i64::MAX as u64).ok_or_else(|| DayError::conflict("event revision exhausted"))?); }
@@ -77,7 +79,7 @@ impl DayCollectionCommit {
         }
         let sources = inventory.iter().map(|source| previous.and_then(|mirror| mirror.state.source_state(source.source.connection_id().as_str())).filter(|state| state.source == *source).cloned().unwrap_or_else(|| CalendarMirrorSourceState { source: source.clone(), last_success_at: None, last_range: None, error: None, error_at: None, calendar_statuses: Default::default() })).collect();
         // A single causal event is not complete Calendar interval coverage.
-        let mirror = CalendarMirror { mirror_revision: MirrorExpectation::of(previous)?.next_revision()?, state: CalendarMirrorState { sources }, events };
+        let mirror = CalendarMirror { mirror_revision: next_mirror_revision, state: CalendarMirrorState { sources }, events };
         let receipt = DayCollectionReceipt { execution_id: self.execution_id, receipt_digest: self.receipt_digest, day_projection_ref: format!("day.collection:{}", self.execution_id) };
         Ok((mirror, receipt))
     }

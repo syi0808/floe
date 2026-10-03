@@ -132,10 +132,12 @@ pub fn acknowledge_action_collection(record:&ActionRecord,ack:&CollectionAck)->R
 }
 
 /// Access revocation invalidates only work that has not crossed dispatch.
-pub fn invalidate_action_dependency(record:&ActionRecord,grant:floe_context_contract::GrantId,authority:floe_context_contract::GrantAuthority)->Result<Option<ActionRecord>,AgentFailure>{
+pub fn invalidate_action_dependency(record:&ActionRecord,evidence:&crate::ExpertProposalEvidence,grant:floe_context_contract::GrantId,authority:floe_context_contract::GrantAuthority)->Result<Option<ActionRecord>,AgentFailure>{
     record.validate()?;
-    if record.execution.is_some() || !matches!(record.state,ActionState::PendingReview|ActionState::Approved)
-        || !record.dependency.as_ref().is_some_and(|dependency|dependency.grant_id()==grant && dependency.grant_authority()==authority) {return Ok(None);}
+    if record.execution.is_some() || !matches!(record.state,ActionState::PendingReview|ActionState::Approved) {return Ok(None);}
+    crate::validate_expert_action_evidence(record,evidence)?;
+    let floe_agent_contract::DependencyCoverage::Dependent{dependencies}=&evidence.coverage else{return Err(AgentFailure::PolicyDenied)};
+    if !dependencies.iter().any(|dependency|dependency.grant_id()==grant && dependency.grant_authority()==authority){return Ok(None);}
     let mut updated=next(record)?;
     updated.state=ActionState::Blocked{reason:ActionBlockedReason::PolicyDenied};
     updated.validate()?;

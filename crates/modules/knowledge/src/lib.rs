@@ -66,8 +66,8 @@ pub use application::review::{
     validate_review_actor, validate_review_candidate,
 };
 
-pub use application::storage_policy::{MemoryStageIdentity, MemoryStagePlan, MemoryContextFact,
-    knowledge_content_hash, memory_stage_identity, plan_memory_stage, project_memory_context,
+pub use application::storage_policy::{MemoryStageIdentity, MemoryStagePlan, MemoryStageReceipt, MemoryContextFact,
+    knowledge_content_hash, memory_stage_identity, memory_stage_receipt, validate_memory_stage_replay, plan_memory_stage, project_memory_context,
     learner_job_key, new_learner_job};
 pub use application::learner_journal::{LearnerClaimJournal, LearnerJournalHead,
     advance_learner_journal, validate_learner_journal, validate_learner_budget, recover_learner_claim, validate_learner_stage, validate_learner_settlement};

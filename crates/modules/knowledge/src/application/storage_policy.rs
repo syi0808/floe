@@ -135,3 +135,67 @@ pub fn new_learner_job(mut input: LearnerReviewInput, available_at: DateTime<Utc
         state: LearnerJobState::Queued, attempts: 0, available_at, claimed_at: None,
         finished_at: None, candidate_id: None, last_failure: None, blocked: None, claimed_device_id: None })
 }
+
+/// Original stage admission. Candidate keys deliberately omit payload/revision/time,
+/// so an exact replay proves these values from this immutable receipt.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryStageReceipt {
+    pub person_id: PersonId,
+    pub device_id: String,
+    pub origin: MemoryStageOrigin,
+    pub request: StageMemoryCandidate,
+    pub candidate_id: Uuid,
+    pub observation_id: Uuid,
+}
+
+pub fn memory_stage_receipt(request: &MemoryStageRequest, plan: &MemoryStagePlan)
+    -> Result<MemoryStageReceipt, AgentFailure>
+{
+    let receipt = MemoryStageReceipt { person_id: request.actor.person_id,
+        device_id: request.actor.device_id.clone(), origin: request.origin.clone(),
+        request: request.request.clone(), candidate_id: plan.candidate.id,
+        observation_id: plan.observation.id };
+    validate_memory_stage_replay(request, &receipt, &plan.observation, &plan.candidate)?;
+    Ok(receipt)
+}
+
+pub fn validate_memory_stage_replay(request: &MemoryStageRequest, receipt: &MemoryStageReceipt,
+    observation: &LearningObservation, candidate: &KnowledgeCandidate) -> Result<(), AgentFailure>
+{
+    request.actor.validate()?;
+    let identity = memory_stage_identity(request.actor.person_id, &request.request)?;
+    if receipt.person_id != request.actor.person_id || receipt.device_id != request.actor.device_id
+        || receipt.origin != request.origin || receipt.request != request.request
+        || receipt.candidate_id != candidate.id || receipt.observation_id != observation.id
+    { return Err(AgentFailure::Conflict); }
+    match &receipt.origin {
+        MemoryStageOrigin::User if receipt.request.actor != KnowledgeActor::User => return Err(AgentFailure::PolicyDenied),
+        MemoryStageOrigin::Learner { claim, journal_revision, journal_digest } => {
+            claim.validate()?;
+            if receipt.request.actor != (KnowledgeActor::Learner { run_id: claim.job_id })
+                || *journal_revision == 0 || *journal_digest == [0; 32]
+            { return Err(AgentFailure::PolicyDenied); }
+        }
+        MemoryStageOrigin::User => {}
+    }
+    if candidate.schema_version != KNOWLEDGE_VERSION || candidate.person_id != receipt.person_id
+        || candidate.kind != KnowledgeKind::Memory || candidate.id.is_nil() || observation.id.is_nil()
+        || candidate.observation_id != observation.id || candidate.idempotency_key != identity.candidate_key
+        || candidate.actor != receipt.request.actor || candidate.base_revision != receipt.request.base_revision
+        || candidate.payload != (KnowledgePayload::Memory { value: receipt.request.value.clone() })
+        || candidate.extractor_version != receipt.request.extractor_version.trim()
+        || candidate.prompt_version != receipt.request.prompt_version.trim()
+        || candidate.created_at != receipt.request.created_at || candidate.source_refs != identity.source_refs
+        || observation.schema_version != KNOWLEDGE_VERSION || observation.person_id != receipt.person_id
+        || observation.session_id != receipt.request.session_id || observation.evidence != identity.source_refs
+        || observation.kind != receipt.request.observation_kind || observation.digest != receipt.request.digest.trim()
+        || observation.outcome != LearningOutcome::Completed || observation.content_hash != identity.observation_hash
+        || match receipt.request.target_id {
+            Some(target) => candidate.operation != KnowledgeOperation::Revise || candidate.target_id != Some(target),
+            None => candidate.operation != KnowledgeOperation::Create
+                || (candidate.state != KnowledgeCandidateState::Approved && candidate.target_id.is_some()),
+        }
+    { return Err(AgentFailure::StorageUnavailable); }
+    Ok(())
+}

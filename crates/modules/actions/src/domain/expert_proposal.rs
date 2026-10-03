@@ -59,6 +59,10 @@ pub fn validate_expert_action_evidence(record:&crate::ActionRecord,evidence:&cra
         else{return Err(AgentFailure::PolicyDenied)};
     let proposal=&evidence.proposal;
     let dependency=record.dependency.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+    evidence.coverage.validate().map_err(|_|AgentFailure::PolicyDenied)?;
+    let DependencyCoverage::Dependent{dependencies}=&evidence.coverage else{return Err(AgentFailure::PolicyDenied)};
+    if !dependencies.contains(dependency) || dependencies.iter().any(|entry|entry.person_id()!=record.person_id
+        || entry.observed_at()>record.created_at || record.expires_at>entry.expires_at()) {return Err(AgentFailure::PolicyDenied);}
     if evidence_ref!=&evidence.receipt || artifact_id!=&evidence.artifact_id || task_id!=&proposal.task_id
         || invocation_id!=&evidence.invocation_id || proposal.invocation_id!=evidence.invocation_id
         || package!=&proposal.package || installation_id!=&evidence.installation_id || assignment_id!=&evidence.assignment_id
