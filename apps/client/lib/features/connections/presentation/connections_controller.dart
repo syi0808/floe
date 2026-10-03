@@ -227,7 +227,7 @@ final class ConnectionsController extends ChangeNotifier {
     final current = pairing;
     if (current == null) return;
     await _command(
-      'confirmPairing:${current.operationRef}',
+      'confirmPairing:${current.operationRef.value}',
       'pairing confirmation',
       (id) async => _setPairing(
         await gateway.confirmPairing(
@@ -243,7 +243,7 @@ final class ConnectionsController extends ChangeNotifier {
     final current = pairing;
     if (current == null) return;
     await _command(
-      'cancelPairing:${current.operationRef}',
+      'cancelPairing:${current.operationRef.value}',
       'pairing cancellation',
       (id) async => _setPairing(
         await gateway.cancelPairing(
@@ -305,7 +305,7 @@ final class ConnectionsController extends ChangeNotifier {
   }
 
   Future<void> forgetGateway(GatewaySummary value) => _command(
-    'forgetGateway:${value.gatewayRef}',
+    'forgetGateway:${value.gatewayRef.value}',
     'Gateway removal',
     (id) async {
       await gateway.forgetGateway(
@@ -317,7 +317,7 @@ final class ConnectionsController extends ChangeNotifier {
   );
 
   Future<void> prepareManagement(GatewaySummary value) => _command(
-    'management:${value.gatewayRef}',
+    'management:${value.gatewayRef.value}',
     'Gateway management',
     (id) async {
       final launch = await gateway.requestManagementLaunch(
@@ -330,7 +330,7 @@ final class ConnectionsController extends ChangeNotifier {
   );
 
   Future<void> prepareIntegration(IntegrationSummary value) => _command(
-    'prepareIntegration:${value.integrationRef}',
+    'prepareIntegration:${value.integrationRef.value}',
     'integration review',
     (id) async {
       final review = await gateway.prepareIntegrationReview(
@@ -349,7 +349,7 @@ final class ConnectionsController extends ChangeNotifier {
     final expectedRevision = _integrationRevision;
     if (expectedRevision == null) return Future<void>.value();
     return _command(
-      'startIntegration:${review.integrationRef}',
+      'startIntegration:${review.integrationRef.value}',
       'integration connection',
       (id) async {
         _setOperation(
@@ -369,7 +369,7 @@ final class ConnectionsController extends ChangeNotifier {
   }
 
   Future<void> prepareSource(SourceSummary value) =>
-      _command('prepareSource:${value.sourceRef}', 'source review', (id) async {
+      _command('prepareSource:${value.sourceRef.value}', 'source review', (id) async {
         final review = await gateway.prepareSourceReview(
           commandId: id,
           sourceRef: value.sourceRef,
@@ -384,7 +384,7 @@ final class ConnectionsController extends ChangeNotifier {
   ) {
     final selection = List<ResourceRef>.unmodifiable(selected);
     return _command(
-      'configureSource:${review.sourceRef}',
+      'configureSource:${review.sourceRef.value}',
       'source configuration',
       (id) async {
         await gateway.configureSource(
@@ -402,7 +402,7 @@ final class ConnectionsController extends ChangeNotifier {
   Future<void> prepareObserve(
     SourceSummary value,
     SourceProcessing processing,
-  ) => _command('prepareObserve:${value.sourceRef}', 'processing review', (
+  ) => _command('prepareObserve:${value.sourceRef.value}', 'processing review', (
     id,
   ) async {
     final review = await gateway.prepareObserveReview(
@@ -415,7 +415,7 @@ final class ConnectionsController extends ChangeNotifier {
   });
 
   Future<void> allowObserve(ObserveReview review) => _command(
-    'allowObserve:${review.sourceRef}',
+    'allowObserve:${review.sourceRef.value}',
     'processing approval',
     (id) async {
       await gateway.setObserve(
@@ -430,7 +430,7 @@ final class ConnectionsController extends ChangeNotifier {
   );
 
   Future<void> pauseObserve(SourceSummary value) => _command(
-    'pauseObserve:${value.sourceRef}',
+    'pauseObserve:${value.sourceRef.value}',
     'observation pause',
     (id) async {
       await gateway.setObserve(
@@ -443,7 +443,7 @@ final class ConnectionsController extends ChangeNotifier {
   );
 
   Future<void> disconnectSource(SourceSummary value) => _command(
-    'disconnect:${value.sourceRef}',
+    'disconnect:${value.sourceRef.value}',
     'source disconnection',
     (id) async {
       _setOperation(
@@ -462,7 +462,7 @@ final class ConnectionsController extends ChangeNotifier {
     final current = operation;
     if (current == null) return;
     await _command(
-      'cancelOperation:${current.operationRef}',
+      'cancelOperation:${current.operationRef.value}',
       'operation cancellation',
       (id) async => _setOperation(
         await gateway.cancelOperation(
