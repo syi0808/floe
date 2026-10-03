@@ -99,7 +99,7 @@ impl NativeCalendarGrantReader for NativeGrants<'_> {
             person,
             connection.connection_id().as_str(),
             floe_context_contract::CalendarProvider::EventKit,
-            connection.execution_owner_id().as_str(),
+            connection.execution_owner_id(),
             &consumer,
         )
         .await?;

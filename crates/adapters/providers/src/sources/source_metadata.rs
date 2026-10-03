@@ -431,7 +431,7 @@ fn validate_source(actor: &OwnerActor, source: &SourceConnection) -> Result<(), 
     actor.validate()?;
     source.validate().map_err(|_| AgentFailure::InvalidInput)?;
     let expected_owner = match source.connector_id().as_str() {
-        "calendar.event_kit" => actor.device_id.clone(),
+        "calendar.event_kit" => floe_access::apple_execution_owner(&actor.device_id),
         "contacts.apple" | "health.apple" => format!("apple:{}", actor.device_id),
         "attention.macos" => format!("macos:{}", actor.device_id),
         _ => return Err(AgentFailure::CapabilityUnavailable),

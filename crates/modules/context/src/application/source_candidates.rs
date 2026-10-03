@@ -161,10 +161,11 @@ pub fn discover_source_candidates(
             }
         }
         "calendar.timeline" => {
+            let native_owner = floe_access::apple_execution_owner(request.device_id);
             for connection in request.source_connections {
                 let connector = connection.connector_id().as_str();
                 let expected_owner = if connector == "calendar.event_kit" {
-                    Some(request.device_id)
+                    Some(native_owner.as_str())
                 } else {
                     request.remote_execution_owner
                 };

@@ -20,8 +20,6 @@ use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tokio::time::Instant;
 
-// Retains the conservative admission bound of the existing device reasoning path.
-const MIN_REASONING_TOKEN_RESERVATION: u64 = 4096;
 static DEVICE_MODEL: floe_native::ByteCall =
     floe_native::ByteCall::new(floe_native::NativeLibrary {
         relative_path: "Frameworks/libfloe_local_model.dylib",
@@ -240,9 +238,6 @@ impl PreparedDeviceTransport {
                 return Err(AgentFailure::VaultUnavailable);
             }
             _ => {}
-        }
-        if request.remaining_tokens < MIN_REASONING_TOKEN_RESERVATION {
-            return Err(AgentFailure::BudgetExceeded);
         }
         check_deadline(&request)?;
         let encoded = super::agent_codec::encode_agent_input(&request)?;

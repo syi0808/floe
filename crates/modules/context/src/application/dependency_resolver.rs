@@ -74,7 +74,12 @@ impl DependencyResolver for ContextDependencyResolver {
                     floe_access::validate_grant_dependency(grant, dependency)?;
                     let connector = dependency.source().connector().as_str();
                     if matches!(connector, "calendar.event_kit" | "calendar.android") {
-                        if dependency.source().execution_owner().as_str() != self.actor.device_id {
+                        let execution_owner = if connector == "calendar.event_kit" {
+                            floe_access::apple_execution_owner(&self.actor.device_id)
+                        } else {
+                            self.actor.device_id.clone()
+                        };
+                        if dependency.source().execution_owner().as_str() != execution_owner {
                             return Err(AgentFailure::PolicyDenied);
                         }
                         let connection_id = dependency.source().connection_id();
@@ -105,6 +110,7 @@ impl DependencyResolver for ContextDependencyResolver {
                             &source,
                             &NativeGrants(self.grants.as_ref()),
                             &self.leases,
+                            &self.actor.device_id,
                             dependency,
                             &RemoteCallWindow {
                                 deadline: request.deadline,

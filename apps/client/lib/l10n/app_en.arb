@@ -88,7 +88,7 @@
   "agentTransportUnavailable": "Floe could not reach the selected model adapter. Check the server connection or restart Floe.",
   "agentConnectedBudget": "This response reached its limit. You can make another Calendar request.",
   "agentConnectedSoftStop": "The Manager paused at its execution limit. Progress is saved; Continue resumes this request with a 1.75× larger budget.",
-  "agentConnectedStalled": "The Calendar read repeated without progress, so Floe stopped it.",
+  "agentConnectedStalled": "Floe could not complete a response within this run. Please try again.",
   "agentConnectedStale": "Calendar context is no longer current. Reload and try again.",
   "agentContextRefreshRequired": "Context is no longer current. Refresh context before trying again.",
   "agentAccessReviewRequired": "Calendar access needs your review. Open Connections, choose your Calendar connection, and save the calendars Floe may read, then reload the conversation.",

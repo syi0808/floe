@@ -295,7 +295,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get agentConnectedStalled =>
-      'The Calendar read repeated without progress, so Floe stopped it.';
+      'Floe could not complete a response within this run. Please try again.';
 
   @override
   String get agentConnectedStale =>

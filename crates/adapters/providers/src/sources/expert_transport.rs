@@ -62,7 +62,8 @@ impl ExpertSourceAdapter {
         actor.validate()?;
         source.validate().map_err(|_| AgentFailure::InvalidInput)?;
         if source.person_id() != actor.person_id
-            || source.execution_owner_id().as_str() != actor.device_id
+            || source.execution_owner_id().as_str()
+                != floe_access::apple_execution_owner(&actor.device_id)
             || source.connector_id().as_str() != "calendar.event_kit"
         {
             return Err(AgentFailure::PolicyDenied);

@@ -309,7 +309,11 @@ fn validate_source_device(
     {
         return Err(AgentFailure::InvalidInput);
     }
-    if crate::is_device_local_source(source.connector().as_str())
+    if source.connector().as_str() == "calendar.event_kit" {
+        if source.execution_owner().as_str() != crate::apple_execution_owner(device_id) {
+            return Err(AgentFailure::PolicyDenied);
+        }
+    } else if crate::is_device_local_source(source.connector().as_str())
         && source.execution_owner().as_str() != device_id
         && source.execution_owner().as_str() != crate::apple_execution_owner(device_id)
         && !(source.connector().as_str() == "attention.macos"

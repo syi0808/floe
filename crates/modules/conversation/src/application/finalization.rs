@@ -162,10 +162,7 @@ pub(super) async fn finalize_exhausted_run<
                 validator: ports.validator,
             },
         )
-        .await;
-    let Ok(outcome) = outcome else {
-        return Ok(FinalizationOutcome::AttemptedWithoutReply);
-    };
+        .await?;
     match outcome {
         EngineOutcome::Blocked(blocked) => {
             let prior = match issue {

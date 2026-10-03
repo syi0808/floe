@@ -167,11 +167,14 @@ pub async fn read_native_calendar_view(
     Ok((view, dependency))
 }
 
+/// Reauthorize using the admitted device ID independently of source ownership.
+#[allow(clippy::too_many_arguments)]
 pub async fn authorize_native_calendar_dependency(
     connections: &impl CalendarConnectionReader,
     source: &impl CalendarSource,
     grants: &impl NativeCalendarGrantReader,
     leases: &SourceLeaseRegistry,
+    device_id: &str,
     dependency: &ContextDependency,
     window: &RemoteCallWindow,
 ) -> Result<(), AgentFailure> {
@@ -191,7 +194,7 @@ pub async fn authorize_native_calendar_dependency(
         source,
         grants,
         dependency.person_id(),
-        dependency.source().execution_owner().as_str(),
+        device_id,
         dependency.consumer().identifier(),
         window,
     )

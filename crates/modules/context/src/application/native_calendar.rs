@@ -80,9 +80,14 @@ pub async fn admit_current_native_calendar_read(
     if !is_native_calendar(provider) {
         return Err(AgentFailure::CapabilityUnavailable);
     }
+    let execution_owner = if provider == CalendarProvider::EventKit {
+        floe_access::apple_execution_owner(device_id)
+    } else {
+        device_id.to_owned()
+    };
     if !connection.is_serving()
         || connection.person_id() != person_id
-        || connection.execution_owner_id().as_str() != device_id
+        || connection.execution_owner_id().as_str() != execution_owner
         || connection.revision() == 0
         || !connection.source_authority().is_valid()
         || connection.native_subject_fingerprint().is_none()

@@ -43,7 +43,12 @@ impl ContextSourceReview {
     ) -> Result<String, AgentFailure> {
         let (before, after) =
             if floe_access::native_calendar_provider(source.connector_id().as_str()).is_some() {
-                if source.execution_owner_id().as_str() != actor.device_id {
+                let execution_owner = if source.connector_id().as_str() == "calendar.event_kit" {
+                    floe_access::apple_execution_owner(&actor.device_id)
+                } else {
+                    actor.device_id.clone()
+                };
+                if source.execution_owner_id().as_str() != execution_owner {
                     return Err(AgentFailure::PolicyDenied);
                 }
                 let observed = self

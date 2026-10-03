@@ -109,11 +109,16 @@ pub fn admits_native_calendar_read(
     let connector = super::native_calendar::native_calendar_connector(provider)
         .ok_or(AgentFailure::CapabilityUnavailable)?;
     let logical_resource = native_calendar_resource(connection_id)?;
+    let execution_owner = if provider == CalendarProvider::EventKit {
+        crate::apple_execution_owner(device_id)
+    } else {
+        device_id.to_owned()
+    };
     if admission.person_id != person_id
         || admission.source.person_id() != person_id
         || admission.source.connection_id().as_str() != connection_id
         || admission.source.connector().as_str() != connector
-        || admission.source.execution_owner().as_str() != device_id
+        || admission.source.execution_owner().as_str() != execution_owner
         || admission.source_authority != source_authority
         || admission.scope.resources() != [logical_resource]
         || admission.scope.categories().len() != 2
@@ -172,12 +177,13 @@ pub fn admission_matches_dependency(
 /// Resolve the exact current native Calendar grant through the Access repository.
 /// Source lifecycle and native subject are independently checked by Connections
 /// and the acquisition host before and after the actual read.
+/// `execution_owner` is the complete source identity, not the admitted device ID.
 pub async fn current_native_calendar_grant(
     repository: &(impl crate::GrantRepository + ?Sized),
     person_id: PersonId,
     connection_id: &str,
     provider: CalendarProvider,
-    device_id: &str,
+    execution_owner: &floe_context_contract::ExecutionOwnerId,
     consumer: &GrantConsumer,
 ) -> Result<crate::DataAccessGrant, AgentFailure> {
     let connector = super::native_calendar::native_calendar_connector(provider)
@@ -188,8 +194,7 @@ pub async fn current_native_calendar_grant(
             .map_err(|_| AgentFailure::InvalidInput)?,
         floe_context_contract::ConnectorId::try_new(connector)
             .map_err(|_| AgentFailure::InvalidInput)?,
-        floe_context_contract::ExecutionOwnerId::try_new(device_id)
-            .map_err(|_| AgentFailure::InvalidInput)?,
+        execution_owner.clone(),
     )
     .map_err(|_| AgentFailure::InvalidInput)?;
     let snapshot = repository.snapshot(source.clone()).await?;

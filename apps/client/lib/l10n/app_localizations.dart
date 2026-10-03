@@ -607,7 +607,7 @@ abstract class AppLocalizations {
   /// No description provided for @agentConnectedStalled.
   ///
   /// In en, this message translates to:
-  /// **'The Calendar read repeated without progress, so Floe stopped it.'**
+  /// **'Floe could not complete a response within this run. Please try again.'**
   String get agentConnectedStalled;
 
   /// No description provided for @agentConnectedStale.
