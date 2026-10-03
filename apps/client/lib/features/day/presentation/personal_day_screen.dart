@@ -102,9 +102,16 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     final vault = widget.ownerGateways.vault;
     final actionGateway = widget.calendarActions;
     if (actionGateway != null && vault != null) {
-      actionController = CalendarActionController(gateway: actionGateway, vault: vault);
+      actionController = CalendarActionController(
+        gateway: actionGateway,
+        vault: vault,
+      );
     }
-    screenState = Listenable.merge([controller, ?actionController, ?widget.ownerGateways.vault]);
+    screenState = Listenable.merge([
+      controller,
+      ?actionController,
+      ?widget.ownerGateways.vault,
+    ]);
     final agentGateway = widget.agentGateway;
     if (agentGateway != null) {
       agentController = ConversationController(

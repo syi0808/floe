@@ -203,6 +203,7 @@ pub enum PairingStateDto {
     Starting,
     AwaitingLocalConfirmation,
     AwaitingGatewayApproval,
+    Cancelling,
     Connected,
     Rejected,
     Expired,

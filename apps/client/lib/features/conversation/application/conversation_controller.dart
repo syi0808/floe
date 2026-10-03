@@ -43,7 +43,9 @@ final class ConversationController extends ChangeNotifier {
   ) {
     final vault = owners.vault;
     if (vault == null || vault.personId != personId) {
-      throw ArgumentError('Conversation requires the admitted Person’s shared Vault readiness.');
+      throw ArgumentError(
+        'Conversation requires the admitted Person’s shared Vault readiness.',
+      );
     }
     vaultController = vault..addListener(_vaultChanged);
     _conversationRuntime.readModel.addListener(_notify);
@@ -411,9 +413,12 @@ final class ConversationController extends ChangeNotifier {
       final conversation = gateway;
       final resumed = newSession
           ? null
-          : await conversation.resumeConversation(personId).timeout(loadTimeout);
+          : await conversation
+                .resumeConversation(personId)
+                .timeout(loadTimeout);
       if (_sealed || _disposed) return;
-      final saved = resumed ??
+      final saved =
+          resumed ??
           await conversation.startConversation(personId).timeout(loadTimeout);
       if (_sealed || _disposed || !vaultController.ready) return;
       _acceptSession(saved);
@@ -681,9 +686,9 @@ final class ConversationController extends ChangeNotifier {
 
   void _applyOwnerFailure(OwnerFailure owner) {
     if (!_sealed && vaultController.ready) {
-      vaultController.reportFailure(AgentVaultException.fromAppWire(
-        owner.reason, ownerFailure: owner,
-      ));
+      vaultController.reportFailure(
+        AgentVaultException.fromAppWire(owner.reason, ownerFailure: owner),
+      );
     }
     _fail(
       owner.reason,

@@ -80,11 +80,17 @@ class _AgentPanelState extends State<AgentPanel> {
     final ready = controller.vaultController.ready;
     if (_wasReady && !ready) _sessionRequested = false;
     _wasReady = ready;
-    if (!ready || controller.busy || _sessionRequested || controller.session != null) return;
+    if (!ready ||
+        controller.busy ||
+        _sessionRequested ||
+        controller.session != null)
+      return;
     _sessionRequested = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && identical(controller, widget.controller) &&
-          controller.vaultController.ready && controller.session == null &&
+      if (mounted &&
+          identical(controller, widget.controller) &&
+          controller.vaultController.ready &&
+          controller.session == null &&
           !controller.busy) {
         controller.load();
       }
@@ -324,8 +330,7 @@ class _AgentPanelState extends State<AgentPanel> {
     ConversationController controller,
   ) {
     final status = _status(strings, controller);
-    final storageLocked =
-        !controller.vaultController.ready;
+    final storageLocked = !controller.vaultController.ready;
     final label = storageLocked
         ? strings.agentReload
         : controller.running

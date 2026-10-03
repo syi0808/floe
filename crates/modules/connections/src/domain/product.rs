@@ -15,6 +15,8 @@ use uuid::Uuid;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConnectionsCommandFailure {
     NotAdmitted(AgentFailure),
+    /// Durable exact-command rejection, including all earlier deliveries.
+    NotApplied(AgentFailure),
     Admitted(AgentFailure),
     Indeterminate(AgentFailure),
 }
@@ -23,9 +25,10 @@ impl ConnectionsCommandFailure {
     /// the reason. Product transports must preserve the admission variant.
     pub fn into_failure(self) -> AgentFailure {
         match self {
-            Self::NotAdmitted(failure) | Self::Admitted(failure) | Self::Indeterminate(failure) => {
-                failure
-            }
+            Self::NotApplied(failure)
+            | Self::NotAdmitted(failure)
+            | Self::Admitted(failure)
+            | Self::Indeterminate(failure) => failure,
         }
     }
 }

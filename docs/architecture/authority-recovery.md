@@ -157,3 +157,6 @@ Do not hold a global Vault transaction across model or provider I/O.
 - [ADR 0027 — Connection authority and observation](../decisions/0027-connection-authority-and-observation.md) (accepted; standing Observe semantics amended by ADR 0031)
 - [ADR 0031 — Connection-owned source scope and logical standing Observe](../decisions/0031-connection-owned-source-scope-and-logical-observe.md)
 - [ADR 0034 — Gateway reasoning and source-owned processing authority](../decisions/0034-gateway-reasoning-and-source-processing-authority.md)
+
+
+Pairing command resolution is durable: Start, Confirm and Cancel atomically commit the exact immutable intent with either its safe success snapshot or a terminal rejection. `NotApplied` means that stored whole-command decision; it is not inferred from a Conflict error or from a missing read response. Replays cannot turn that rejection into later execution. Attempt-local `NotAdmitted` remains distinct and cannot erase prior uncertainty. A monotonic admission generation survives restoration of a prior credential expectation. Cancelling is a nonterminal workflow phase; late exact remote responses are retained without reversing local Cancel/Forget or publishing retired authority.

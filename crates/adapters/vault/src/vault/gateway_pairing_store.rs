@@ -24,6 +24,7 @@ pub(super) fn pairing_state(state: PairingState) -> &'static str {
         PairingState::Pending => "pending",
         PairingState::AwaitingLocalConfirmation => "awaiting_local_confirmation",
         PairingState::AwaitingApproval => "awaiting_approval",
+        PairingState::Cancelling => "cancelling",
         PairingState::Paired => "paired",
         PairingState::Rejected => "rejected",
         PairingState::Expired => "expired",
@@ -237,6 +238,139 @@ fn pending_for(expectation: &GatewayCredentialExpectation, operation: Uuid) -> b
         }
 }
 
+async fn execute_pairing_command_on(
+    tx: &Connection,
+    command: &PairingMutation,
+) -> Result<Result<PairingSnapshot, PairingError>, AgentFailure> {
+    match &command.action {
+        PairingMutationAction::Start {
+            operation_id,
+            setup,
+        } => {
+            if operation_id.is_nil() || setup.validate().is_err() {
+                return Ok(Err(PairingError::InvalidInput));
+            }
+            if pairing_on(tx, command.person_id, *operation_id)
+                .await?
+                .is_some()
+            {
+                // Successful admission and its command receipt are indivisible.
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            let mut rows = tx
+                .query(
+                    "SELECT payload FROM gateway_setup_receipts WHERE target_ref=? AND person_id=?",
+                    (setup.target_ref.to_string(), command.person_id.to_string()),
+                )
+                .await
+                .map_err(storage)?;
+            let Some(row) = rows.next().await.map_err(storage)? else {
+                return Ok(Err(PairingError::InvalidInput));
+            };
+            let prepared: GatewaySetupRecord =
+                bounded_decode(&row.get::<String>(0).map_err(storage)?)?;
+            drop(rows);
+            if prepared.setup != *setup
+                || prepared.device_id != command.device_id
+                || prepared.person_id != command.person_id
+            {
+                return Ok(Err(PairingError::ForeignIdentity));
+            }
+            if setup.expires_at <= chrono::Utc::now() {
+                return Ok(Err(PairingError::Expired));
+            }
+            let prior = expectation_on(tx).await?;
+            let mut generations = tx
+                .query(
+                    "SELECT generation FROM gateway_pairing_generation WHERE id=1",
+                    (),
+                )
+                .await
+                .map_err(storage)?;
+            let high_water = generations
+                .next()
+                .await
+                .map_err(storage)?
+                .ok_or(AgentFailure::VaultUnavailable)?
+                .get::<i64>(0)
+                .map_err(storage)?;
+            drop(generations);
+            let Some(generation) = high_water.checked_add(1).filter(|value| *value > 0) else {
+                return Ok(Err(PairingError::Conflict));
+            };
+            let record = match PairingRecord::admit(
+                PairingAdmission {
+                    operation_id: *operation_id,
+                    command_id: command.command_id,
+                    person_id: command.person_id,
+                    device_id: command.device_id.clone(),
+                    setup: setup.clone(),
+                },
+                prior,
+                generation as u64,
+            ) {
+                Ok(record) => record,
+                Err(error) => return Ok(Err(error)),
+            };
+            let mut proof = Zeroizing::new([0u8; 32]);
+            getrandom::fill(proof.as_mut()).map_err(|_| AgentFailure::StorageUnavailable)?;
+            tx.execute(
+                "UPDATE gateway_pairing_generation SET generation=? WHERE id=1",
+                (generation,),
+            )
+            .await
+            .map_err(storage)?;
+            tx.execute(
+                "INSERT INTO gateway_pairing_operations VALUES(?,?,?,?,?,?)",
+                (
+                    record.operation_id.to_string(),
+                    record.person_id.to_string(),
+                    record.command_id.to_string(),
+                    record.revision as i64,
+                    pairing_state(record.state),
+                    bounded_encode(&record)?,
+                ),
+            )
+            .await
+            .map_err(storage)?;
+            tx.execute(
+                "INSERT INTO gateway_pairing_private(operation_id,proof) VALUES(?,?)",
+                (record.operation_id.to_string(), proof.as_slice()),
+            )
+            .await
+            .map_err(storage)?;
+            set_expectation_on(
+                tx,
+                &GatewayCredentialExpectation::Pending {
+                    operation_id: record.operation_id,
+                },
+            )
+            .await?;
+            Ok(Ok(record.snapshot()))
+        }
+        PairingMutationAction::Confirm { operation_id, .. }
+        | PairingMutationAction::Cancel { operation_id, .. } => {
+            let Some(current) = pairing_on(tx, command.person_id, *operation_id).await? else {
+                return Ok(Err(PairingError::InvalidInput));
+            };
+            if !pending_for(&expectation_on(tx).await?, *operation_id) {
+                return Ok(Err(PairingError::Conflict));
+            }
+            let next = match current.decide_command(command) {
+                Ok(next) => next,
+                Err(error) => return Ok(Err(error)),
+            };
+            if next.state == PairingState::Cancelled
+                && next.start_phase == PairingStartPhase::Staged
+            {
+                set_expectation_on(tx, &current.prior_credential_expectation).await?;
+            }
+            write_pairing_on(tx, current.revision, &next).await?;
+            Ok(Ok(next.snapshot()))
+        }
+    }
+}
+
 impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
     fn setup<'a>(
         &'a self,
@@ -313,15 +447,15 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                 .map_err(pairing_storage)
         })
     }
-    fn insert<'a>(
+    fn execute_command<'a>(
         &'a self,
-        intent: PairingAdmission,
-    ) -> BoxFuture<'a, Result<PairingRecord, PairingError>> {
+        command: PairingMutation,
+    ) -> BoxFuture<'a, Result<PairingMutationReceipt, PairingError>> {
         Box::pin(async move {
-            intent.setup.validate()?;
-            if intent.person_id != self.person_id
-                || intent.operation_id.is_nil()
-                || intent.command_id.is_nil()
+            if command.person_id != self.person_id
+                || command.command_id.is_nil()
+                || command.device_id.is_empty()
+                || command.device_id.len() > 256
             {
                 return Err(PairingError::ForeignIdentity);
             }
@@ -331,36 +465,25 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                 .await
                 .map_err(|_| PairingError::StorageUnavailable)?;
             let result = async {
-                if let Some(existing) = pairing_on(&tx, self.person_id, intent.operation_id).await? {
-                    if existing.command_id != intent.command_id || existing.device_id != intent.device_id || existing.setup != intent.setup {
-                        return Err(AgentFailure::Conflict);
-                    }
-                    private_on(&tx, &existing).await?;
-                    return Ok(existing);
+                let mut rows = tx.query("SELECT payload FROM gateway_pairing_command_receipts WHERE person_id=? AND command_id=?",
+                    (command.person_id.to_string(), command.command_id.to_string())).await.map_err(storage)?;
+                if let Some(row) = rows.next().await.map_err(storage)? {
+                    let receipt: PairingMutationReceipt = bounded_decode(&row.get::<String>(0).map_err(storage)?)?;
+                    if receipt.command != command { return Err(AgentFailure::Conflict); }
+                    self.check_access()?;
+                    return Ok(receipt);
                 }
-                let mut rows = tx.query("SELECT payload FROM gateway_setup_receipts WHERE target_ref=? AND person_id=?",
-                    (intent.setup.target_ref.to_string(), intent.person_id.to_string())).await.map_err(storage)?;
-                let setup: GatewaySetupRecord = bounded_decode(&rows.next().await.map_err(storage)?
-                    .ok_or(AgentFailure::Conflict)?.get::<String>(0).map_err(storage)?)?;
                 drop(rows);
-                if setup.setup != intent.setup || setup.device_id != intent.device_id
-                    || setup.person_id != intent.person_id || setup.setup.expires_at <= chrono::Utc::now() {
-                    return Err(AgentFailure::Conflict);
-                }
-                let prior = expectation_on(&tx).await?;
-                let record = PairingRecord::admit(intent, prior).map_err(|_| AgentFailure::Conflict)?;
-                let mut proof = Zeroizing::new([0u8; 32]);
-                getrandom::fill(proof.as_mut()).map_err(|_| AgentFailure::StorageUnavailable)?;
-                tx.execute("INSERT INTO gateway_pairing_operations VALUES(?,?,?,?,?,?)", (
-                    record.operation_id.to_string(), record.person_id.to_string(), record.command_id.to_string(),
-                    record.revision as i64, pairing_state(record.state), bounded_encode(&record)?,
+                let outcome = execute_pairing_command_on(&tx, &command).await?;
+                let receipt = PairingMutationReceipt { command, outcome };
+                tx.execute("INSERT INTO gateway_pairing_command_receipts VALUES(?,?,?)", (
+                    receipt.command.person_id.to_string(), receipt.command.command_id.to_string(), bounded_encode(&receipt)?,
                 )).await.map_err(storage)?;
-                tx.execute("INSERT INTO gateway_pairing_private(operation_id,proof) VALUES(?,?)",
-                    (record.operation_id.to_string(), proof.as_slice())).await.map_err(storage)?;
-                set_expectation_on(&tx, &GatewayCredentialExpectation::Pending { operation_id: record.operation_id }).await?;
                 self.check_access()?;
-                Ok(record)
+                Ok(receipt)
             }.await;
+            // Only a successfully committed exact receipt can resolve earlier
+            // uncertainty. Rollback/commit/access errors never fabricate one.
             self.finish_access_grant_transaction(tx, result)
                 .await
                 .map_err(pairing_storage)
@@ -444,7 +567,11 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                     && private.enrollment.as_ref() == Some(&started.enrollment) {
                     return Ok(current);
                 }
-                if current.revision != expected || !pending_for(&expectation_on(&tx).await?, current.operation_id) {
+                if expected > current.revision || (current.revision != expected
+                    && current.cancellation_command.is_none() && current.forgotten_command.is_none()) {
+                    return Err(AgentFailure::Conflict);
+                }
+                if current.forgotten_command.is_none() && !pending_for(&expectation_on(&tx).await?, current.operation_id) {
                     return Err(AgentFailure::Conflict);
                 }
                 // Validate cryptographic material at the storage admission as
@@ -459,7 +586,7 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                     (bounded_encode(&started.enrollment)?, current.operation_id.to_string())).await.map_err(storage)? != 1 {
                     return Err(AgentFailure::Conflict);
                 }
-                write_pairing_on(&tx, expected, &next).await?;
+                write_pairing_on(&tx, current.revision, &next).await?;
                 self.check_access()?;
                 Ok(next)
             }.await;
@@ -498,7 +625,7 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                 let expectation = expectation_on(&tx).await?;
                 if let Some(existing) = &private.credential {
                     if existing.as_bytes() != approval.credential.as_bytes() { return Err(AgentFailure::PolicyDenied); }
-                    if current.forgotten_command.is_some() || current.cancellation_command.is_some() {
+                    if current.forgotten_command.is_some() || current.cancellation_command.is_some() || current.state != PairingState::Paired {
                         return Ok(PairingActivationResult::HistoricalRevocationEvidence(current));
                     }
                     if current.state == PairingState::Paired
@@ -509,12 +636,10 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                     }
                     return Err(AgentFailure::Conflict);
                 }
-                if current.forgotten_command.is_some() || current.cancellation_command.is_some() {
+                if current.forgotten_command.is_some() || current.cancellation_command.is_some()
+                    || matches!(current.state, PairingState::Rejected | PairingState::Expired | PairingState::Cancelled) {
                     // Approval may have won remotely while local cancellation
                     // or Forget won. Retain recovery evidence, never authority.
-                    if current.forgotten_command.is_none() && !pending_for(&expectation, current.operation_id) {
-                        return Err(AgentFailure::Conflict);
-                    }
                     let mut historical = current.clone();
                     historical.revision = historical.revision.checked_add(1).ok_or(AgentFailure::Conflict)?;
                     historical.state = PairingState::RepairRequired;

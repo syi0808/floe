@@ -393,8 +393,11 @@ final class AppWireConnectionsGateway implements ConnectionsGateway {
       }
       if (decoded is ObserveReview &&
           input['requested_processing'] != null &&
-          decoded.processingDisclosure.views.any((view) =>
-              view.requested?.processing.wire != input['requested_processing'])) {
+          decoded.processingDisclosure.views.any(
+            (view) =>
+                view.requested?.processing.wire !=
+                input['requested_processing'],
+          )) {
         throw const FormatException('Source processing choice changed.');
       }
       return decoded;
@@ -427,7 +430,9 @@ final class AppWireConnectionsGateway implements ConnectionsGateway {
           reason: reason,
           requestId: requestId,
           commandId: commandId,
-          disposition: native?.commandDisposition ?? NativeCommandDisposition.indeterminate,
+          disposition:
+              native?.commandDisposition ??
+              NativeCommandDisposition.indeterminate,
           errorId: errorId,
           ownerFailure: owner,
         );

@@ -47,9 +47,9 @@ final class ConnectionsController extends ChangeNotifier {
       _ => null,
     };
     if (owner != null) {
-      vault.reportFailure(AgentVaultException.fromAppWire(
-        owner.reason, ownerFailure: owner,
-      ));
+      vault.reportFailure(
+        AgentVaultException.fromAppWire(owner.reason, ownerFailure: owner),
+      );
     }
   }
 
@@ -107,7 +107,8 @@ final class ConnectionsController extends ChangeNotifier {
   String? _pendingCommandId;
   bool _pendingWasUncertain = false;
 
-  bool get hasUncertainCommand => _pendingCommand != null && !_commandBusy && ready;
+  bool get hasUncertainCommand =>
+      _pendingCommand != null && !_commandBusy && ready;
 
   Future<void> load() async {
     if (_disposed || !ready) return;
@@ -162,9 +163,11 @@ final class ConnectionsController extends ChangeNotifier {
     } on Object catch (error) {
       if (_disposed || !ready || generation != _readinessGeneration) return;
       // A later rejection cannot erase uncertainty from an earlier handoff.
-      if (!wasUncertain && error is ConnectionsCommandFailure &&
+      if (error is ConnectionsCommandFailure &&
           error.commandId == _pendingCommandId &&
-          error.disposition == NativeCommandDisposition.notAdmitted) {
+          (error.disposition == NativeCommandDisposition.notApplied ||
+              (!wasUncertain &&
+                  error.disposition == NativeCommandDisposition.notAdmitted))) {
         _pendingCommand = null;
         _pendingCommandId = null;
         _pendingWasUncertain = false;

@@ -2,6 +2,14 @@
 use super::SchemaObject;
 
 pub(super) const GATEWAY_OBJECTS: &[SchemaObject] = &[
+    SchemaObject::table(
+        "gateway_pairing_command_receipts",
+        "CREATE TABLE gateway_pairing_command_receipts(person_id TEXT NOT NULL,command_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(person_id,command_id))",
+    ),
+    SchemaObject::table(
+        "gateway_pairing_generation",
+        "CREATE TABLE gateway_pairing_generation(id INTEGER PRIMARY KEY CHECK(id=1),generation INTEGER NOT NULL CHECK(generation>=0))",
+    ),
     SchemaObject::marker(
         "remote_authority_schema",
         2,

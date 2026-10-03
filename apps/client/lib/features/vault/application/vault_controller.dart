@@ -16,10 +16,15 @@ final class VaultController extends ChangeNotifier {
   bool get busy => _busy;
   bool _disposed = false;
   bool _closing = false;
+  int _failureRevision = 0;
   Future<void>? _opening;
   Future<AgentVaultState> Function()? _failedOperation;
-  bool get ready => !_disposed && !_closing && !busy && state == AgentVaultState.ready;
-  bool get canRecover => !_disposed && !_closing && !busy &&
+  bool get ready =>
+      !_disposed && !_closing && !busy && state == AgentVaultState.ready;
+  bool get canRecover =>
+      !_disposed &&
+      !_closing &&
+      !busy &&
       (gateway.hasPendingOperation ||
           failure?.safeActions.contains('reopen_vault') == true ||
           (failure?.retryPolicy != 'never' &&
@@ -60,8 +65,12 @@ final class VaultController extends ChangeNotifier {
   /// cannot repair, reopen or otherwise mutate the physical Vault itself.
   void reportFailure(AgentVaultException error) {
     final domain = error.ownerFailure?.domain ?? error.domain;
-    if (_disposed || _closing || domain != 'vault' ||
-        (error.reloadRequired != true && error.sealSession != true)) return;
+    if (_disposed ||
+        _closing ||
+        domain != 'vault' ||
+        (error.reloadRequired != true && error.sealSession != true))
+      return;
+    _failureRevision++;
     _state = AgentVaultState.unavailable;
     _failure = error;
     notifyListeners();
@@ -69,12 +78,13 @@ final class VaultController extends ChangeNotifier {
 
   Future<void> _run(Future<AgentVaultState> Function() operation) async {
     if (_disposed || _closing || busy) return;
+    final failureRevision = _failureRevision;
     _busy = true;
     _failure = null;
     notifyListeners();
     try {
       final value = await operation();
-      if (!_disposed && !_closing) {
+      if (!_disposed && !_closing && failureRevision == _failureRevision) {
         _state = value;
         _failedOperation = null;
       }
@@ -82,7 +92,7 @@ final class VaultController extends ChangeNotifier {
       final typed = error is AgentVaultException
           ? error
           : const AgentVaultException('storage_unavailable');
-      if (!_disposed && !_closing) {
+      if (!_disposed && !_closing && failureRevision == _failureRevision) {
         _failure = typed;
         _state = AgentVaultState.unavailable;
         _failedOperation = operation;
@@ -90,7 +100,9 @@ final class VaultController extends ChangeNotifier {
       AppDiagnostics.error(
         component: 'vault',
         operation: typed.stage ?? 'open',
-        error: StateError('Local secure storage failed: ${_safeToken(typed.reasonCode ?? typed.failure) ?? 'storage_unavailable'}'),
+        error: StateError(
+          'Local secure storage failed: ${_safeToken(typed.reasonCode ?? typed.failure) ?? 'storage_unavailable'}',
+        ),
         stackTrace: stackTrace,
         failure: _safeToken(typed.failure),
         reasonCode: _safeToken(typed.reasonCode),
@@ -121,4 +133,5 @@ final class VaultController extends ChangeNotifier {
 
 String? _safeToken(String? value) =>
     value != null && RegExp(r'^[a-zA-Z0-9_.:-]{1,128}$').hasMatch(value)
-        ? value : null;
+    ? value
+    : null;

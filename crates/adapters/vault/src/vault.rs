@@ -188,7 +188,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 std::io::ErrorKind::AlreadyExists => AgentFailure::Conflict,
                 _ => AgentFailure::VaultUnavailable,
             })?;
-        let host_lock = lock_directory(&directory)?;
+        let host_lock = lock_directory(&directory, true)?;
         let vault_id = Uuid::new_v4();
         let pending_creation = creation::PendingCreation::begin(&directory, person_id, vault_id)?;
         let mut marker = private_file()
@@ -246,7 +246,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         private_directory(root)?;
         let directory = root.join(person_id.to_string());
         private_directory(&directory)?;
-        let host_lock = lock_directory(&directory)?;
+        let host_lock = lock_directory(&directory, false)?;
         creation::ensure_complete(&directory, person_id)?;
         let mut marker = String::new();
         private_file()
@@ -691,9 +691,9 @@ fn private_file() -> OpenOptions {
     options
 }
 
-fn lock_directory(directory: &Path) -> Result<File, AgentFailure> {
+fn lock_directory(directory: &Path, creating: bool) -> Result<File, AgentFailure> {
     let lock = private_file()
-        .create(true)
+        .create_new(creating)
         .truncate(false)
         .open(directory.join("host.lock"))
         .map_err(unavailable)?;

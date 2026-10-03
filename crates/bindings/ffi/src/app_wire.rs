@@ -12,6 +12,7 @@ pub(crate) type AppCommandResult<T> = Result<T, AppCommandFailure>;
 /// A command error carries admission evidence independently of its cause.
 pub(crate) enum AppCommandFailure {
     NotAdmitted(AppWireErrorDto),
+    NotApplied(AppWireErrorDto),
     Admitted(AppWireErrorDto),
     Indeterminate(AppWireErrorDto),
 }
@@ -25,6 +26,7 @@ impl From<AppWireErrorDto> for AppCommandFailure {
 impl AppCommandFailure {
     pub(crate) fn into_parts(self) -> (AppCommandDispositionDto, AppWireErrorDto) {
         match self {
+            Self::NotApplied(error) => (AppCommandDispositionDto::NotApplied, error),
             Self::NotAdmitted(error) => (AppCommandDispositionDto::NotAdmitted, error),
             Self::Admitted(error) => (AppCommandDispositionDto::Admitted, error),
             Self::Indeterminate(error) => (AppCommandDispositionDto::Indeterminate, error),

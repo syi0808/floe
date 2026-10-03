@@ -13,6 +13,7 @@ pub enum PairingState {
     AwaitingLocalConfirmation,
     #[serde(rename = "awaiting_gateway_approval")]
     AwaitingApproval,
+    Cancelling,
     #[serde(rename = "connected")]
     Paired,
     Rejected,
@@ -58,7 +59,7 @@ pub struct PairingRecord {
     pub cancellation_command: Option<Uuid>,
     pub forgotten_command: Option<Uuid>,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PairingAdmission {
     pub operation_id: Uuid,
     pub command_id: Uuid,
@@ -70,14 +71,8 @@ impl PairingRecord {
     pub fn admit(
         intent: PairingAdmission,
         prior: floe_access::GatewayCredentialExpectation,
+        generation: u64,
     ) -> Result<Self, PairingError> {
-        let generation = match prior {
-            floe_access::GatewayCredentialExpectation::Unpaired => 1,
-            floe_access::GatewayCredentialExpectation::Forgotten { generation, .. } => {
-                generation.checked_add(1).ok_or(PairingError::Conflict)?
-            }
-            _ => return Err(PairingError::Conflict),
-        };
         let record = Self {
             operation_id: intent.operation_id,
             command_id: intent.command_id,
@@ -125,7 +120,7 @@ impl PairingRecord {
             } if !operation_id.is_nil() && generation > 0 => generation,
             _ => return Err(PairingError::Conflict),
         };
-        if prior_generation.checked_add(1) != Some(self.generation)
+        if self.generation <= prior_generation
             || self.handle.as_ref().is_some_and(|h| {
                 h.operation_id != self.operation_id
                     || h.generation != self.generation
@@ -138,6 +133,7 @@ impl PairingRecord {
             ) && self.handle.is_none())
             || (self.state == PairingState::Paired)
                 != (self.gateway.is_some() && self.enrollment.is_some())
+            || (self.state == PairingState::Cancelling && self.cancellation_command.is_none())
             || self.confirmation_command.is_some_and(|id| id.is_nil())
             || self.cancellation_command.is_some_and(|id| id.is_nil())
             || self.forgotten_command.is_some_and(|id| id.is_nil())
@@ -191,6 +187,11 @@ impl PairingRecord {
         {
             return Err(PairingError::Conflict);
         }
+        if next.state == PairingState::Cancelling
+            && (next.cancellation_command.is_none() || next.handle.is_none())
+        {
+            return Err(PairingError::Conflict);
+        }
         if next.state == PairingState::Paired {
             return Err(PairingError::Conflict);
         } // activate is the sole atomic publication path
@@ -206,7 +207,8 @@ impl PairingRecord {
         ) && next.state != self.state
             && !matches!(
                 next.state,
-                PairingState::Rejected
+                PairingState::Cancelling
+                    | PairingState::Rejected
                     | PairingState::Expired
                     | PairingState::Cancelled
                     | PairingState::RepairRequired
@@ -219,9 +221,11 @@ impl PairingRecord {
     pub fn accept_started(&self, started: &StartedPairing) -> Result<Self, PairingError> {
         let c = &started.challenge;
         let e = &started.enrollment;
-        if self.state != PairingState::Pending
+        if !(self.state == PairingState::Pending
+            || (self.state == PairingState::RepairRequired
+                && (self.cancellation_command.is_some() || self.forgotten_command.is_some())))
+            || self.handle.is_some()
             || self.start_phase != PairingStartPhase::Dispatched
-            || self.forgotten_command.is_some()
             || c.handle.operation_id != self.operation_id
             || c.handle.generation != self.generation
             || e.operation_id != self.operation_id
@@ -242,9 +246,17 @@ impl PairingRecord {
         next.reviewed = Some(c.reviewed.clone());
         next.display_code = Some(c.display_code.clone());
         next.expires_at_unix_ms = Some(c.expires_at_unix_ms);
-        next.state = PairingState::AwaitingLocalConfirmation;
+        next.state = if self.forgotten_command.is_some() {
+            PairingState::RepairRequired
+        } else if self.cancellation_command.is_some() {
+            PairingState::Cancelling
+        } else {
+            PairingState::AwaitingLocalConfirmation
+        };
         next.last_failure = None;
-        self.validate_successor(&next, self.revision)?;
+        // A late exact Start response adds recovery evidence. It never grants
+        // confirmation or reverses cancellation/Forget.
+        next.validate()?;
         Ok(next)
     }
     pub fn validate_approval(
@@ -347,6 +359,7 @@ impl PairingRecord {
                 PairingState::Pending | PairingState::AwaitingApproval => {
                     vec![ConnectionAction::Cancel, ConnectionAction::Reobserve]
                 }
+                PairingState::Cancelling => vec![ConnectionAction::Reobserve],
                 PairingState::RepairRequired if self.can_reconcile_repair() => {
                     vec![ConnectionAction::Cancel, ConnectionAction::Reobserve]
                 }
@@ -397,6 +410,89 @@ pub struct GatewaySetupRecord {
     pub address_digest: [u8; 32],
     pub setup: GatewaySetup,
 }
+/// Immutable owner intent; a stored terminal rejection fences every later replay.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PairingMutation {
+    pub command_id: Uuid,
+    pub person_id: floe_kernel::PersonId,
+    pub device_id: String,
+    pub action: PairingMutationAction,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PairingMutationAction {
+    Start {
+        operation_id: Uuid,
+        setup: GatewaySetup,
+    },
+    Confirm {
+        operation_id: Uuid,
+        expected_revision: u64,
+    },
+    Cancel {
+        operation_id: Uuid,
+        expected_revision: u64,
+    },
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PairingMutationReceipt {
+    pub command: PairingMutation,
+    pub outcome: Result<PairingSnapshot, PairingError>,
+}
+impl PairingRecord {
+    pub fn decide_command(&self, command: &PairingMutation) -> Result<Self, PairingError> {
+        if self.person_id != command.person_id || self.device_id != command.device_id {
+            return Err(PairingError::ForeignIdentity);
+        }
+        let (operation_id, expected, cancelling) = match command.action {
+            PairingMutationAction::Confirm {
+                operation_id,
+                expected_revision,
+            } => (operation_id, expected_revision, false),
+            PairingMutationAction::Cancel {
+                operation_id,
+                expected_revision,
+            } => (operation_id, expected_revision, true),
+            PairingMutationAction::Start { .. } => return Err(PairingError::InvalidInput),
+        };
+        if operation_id != self.operation_id
+            || self.revision != expected
+            || self.forgotten_command.is_some()
+        {
+            return Err(PairingError::Conflict);
+        }
+        let mut next = self.clone();
+        next.revision = self.revision.checked_add(1).ok_or(PairingError::Conflict)?;
+        if cancelling {
+            if self.state.terminal() && !self.can_reconcile_repair() {
+                return Err(PairingError::Conflict);
+            }
+            if self.cancellation_command.is_some() {
+                return Err(PairingError::Conflict);
+            }
+            next.cancellation_command = Some(command.command_id);
+            if self.start_phase == PairingStartPhase::Staged {
+                next.state = PairingState::Cancelled;
+            } else if self.handle.is_some() {
+                next.state = PairingState::Cancelling;
+            }
+            next.last_failure = None;
+        } else {
+            if self.state != PairingState::AwaitingLocalConfirmation
+                || self.confirmation_command.is_some()
+                || self.cancellation_command.is_some()
+            {
+                return Err(PairingError::Conflict);
+            }
+            next.confirmation_command = Some(command.command_id);
+            next.state = PairingState::AwaitingApproval;
+        }
+        self.validate_successor(&next, self.revision)?;
+        Ok(next)
+    }
+}
 pub trait PairingRepository: Send + Sync {
     fn setup<'a>(
         &'a self,
@@ -406,10 +502,12 @@ pub trait PairingRepository: Send + Sync {
         &'a self,
         record: GatewaySetupRecord,
     ) -> BoxFuture<'a, Result<GatewaySetupRecord, PairingError>>;
-    fn insert<'a>(
+    /// Both success and semantic rejection are committed with this exact intent.
+    /// An outer error means the receipt cannot be established, not a rejection.
+    fn execute_command<'a>(
         &'a self,
-        intent: PairingAdmission,
-    ) -> BoxFuture<'a, Result<PairingRecord, PairingError>>;
+        command: PairingMutation,
+    ) -> BoxFuture<'a, Result<PairingMutationReceipt, PairingError>>;
     fn load<'a>(
         &'a self,
         operation: Uuid,
@@ -438,6 +536,7 @@ pub trait PairingRepository: Send + Sync {
 pub struct GatewayPairingService {
     repository: Arc<dyn PairingRepository>,
     transport: Arc<dyn GatewayPairingPort>,
+    reconciling: std::sync::Mutex<std::collections::HashSet<Uuid>>,
 }
 impl GatewayPairingService {
     pub fn new(
@@ -447,6 +546,7 @@ impl GatewayPairingService {
         Self {
             repository,
             transport,
+            reconciling: Default::default(),
         }
     }
     pub async fn pending(
@@ -516,18 +616,6 @@ impl GatewayPairingService {
             actor.person_id,
             command,
         );
-        if let Some(saved) = self
-            .repository
-            .load(operation)
-            .await
-            .map_err(indeterminate)?
-        {
-            authorize(actor, &saved).map_err(not_admitted)?;
-            if saved.command_id != command || saved.setup.target_ref != target {
-                return Err(not_admitted(PairingError::Conflict));
-            }
-            return Ok(saved.snapshot());
-        }
         let setup = self
             .repository
             .setup(target)
@@ -537,22 +625,39 @@ impl GatewayPairingService {
         if setup.person_id != actor.person_id || setup.device_id != actor.device_id {
             return Err(not_admitted(PairingError::ForeignIdentity));
         }
-        if setup.setup.expires_at <= chrono::Utc::now() {
-            return Err(not_admitted(PairingError::Expired));
-        }
-        check(actor, scope).map_err(not_admitted)?;
-        Ok(self
-            .repository
-            .insert(PairingAdmission {
+        self.execute_command(
+            actor,
+            command,
+            PairingMutationAction::Start {
                 operation_id: operation,
-                command_id: command,
-                person_id: actor.person_id,
-                device_id: actor.device_id.clone(),
                 setup: setup.setup,
-            })
+            },
+        )
+        .await
+    }
+    async fn execute_command(
+        &self,
+        actor: &OwnerActor,
+        command: Uuid,
+        action: PairingMutationAction,
+    ) -> Result<PairingSnapshot, ConnectionsCommandFailure> {
+        let intent = PairingMutation {
+            command_id: command,
+            person_id: actor.person_id,
+            device_id: actor.device_id.clone(),
+            action,
+        };
+        let receipt = self
+            .repository
+            .execute_command(intent.clone())
             .await
-            .map_err(indeterminate)?
-            .snapshot())
+            .map_err(indeterminate)?;
+        if receipt.command != intent {
+            return Err(indeterminate(PairingError::Conflict));
+        }
+        receipt.outcome.map_err(|error| {
+            ConnectionsCommandFailure::NotApplied(super::product::pairing_error(error))
+        })
     }
     pub async fn confirm_pairing(
         &self,
@@ -563,22 +668,18 @@ impl GatewayPairingService {
         scope: &OperationScope,
     ) -> Result<PairingSnapshot, ConnectionsCommandFailure> {
         check(actor, scope).map_err(not_admitted)?;
-        let mut r = self.current(actor, id).await.map_err(indeterminate)?;
-        if r.confirmation_command == Some(command) {
-            return Ok(r.snapshot());
+        if command.is_nil() {
+            return Err(not_admitted(PairingError::InvalidInput));
         }
-        if command.is_nil()
-            || r.revision != expected
-            || r.state != PairingState::AwaitingLocalConfirmation
-            || r.confirmation_command.is_some()
-            || r.cancellation_command.is_some()
-            || r.forgotten_command.is_some()
-        {
-            return Err(not_admitted(PairingError::Conflict));
-        }
-        r.confirmation_command = Some(command);
-        r.state = PairingState::AwaitingApproval;
-        Ok(self.save(r).await.map_err(indeterminate)?.snapshot())
+        self.execute_command(
+            actor,
+            command,
+            PairingMutationAction::Confirm {
+                operation_id: id,
+                expected_revision: expected,
+            },
+        )
+        .await
     }
     pub async fn cancel_pairing(
         &self,
@@ -589,23 +690,18 @@ impl GatewayPairingService {
         scope: &OperationScope,
     ) -> Result<PairingSnapshot, ConnectionsCommandFailure> {
         check(actor, scope).map_err(not_admitted)?;
-        let mut r = self.current(actor, id).await.map_err(indeterminate)?;
-        if r.cancellation_command == Some(command) {
-            return Ok(r.snapshot());
+        if command.is_nil() {
+            return Err(not_admitted(PairingError::InvalidInput));
         }
-        if command.is_nil()
-            || r.revision != expected
-            || (r.state.terminal() && !r.can_reconcile_repair())
-            || r.forgotten_command.is_some()
-        {
-            return Err(not_admitted(PairingError::Conflict));
-        }
-        r.cancellation_command = Some(command);
-        if r.start_phase == PairingStartPhase::Staged {
-            r.state = PairingState::Cancelled;
-            r.last_failure = None;
-        }
-        Ok(self.save(r).await.map_err(indeterminate)?.snapshot())
+        self.execute_command(
+            actor,
+            command,
+            PairingMutationAction::Cancel {
+                operation_id: id,
+                expected_revision: expected,
+            },
+        )
+        .await
     }
     pub async fn get_pairing(
         &self,
@@ -624,6 +720,19 @@ impl GatewayPairingService {
     ) -> Result<PairingSnapshot, PairingError> {
         check(actor, scope)?;
         let mut r = self.current(actor, id).await?;
+        let _flight = {
+            let mut active = self
+                .reconciling
+                .lock()
+                .map_err(|_| PairingError::StorageUnavailable)?;
+            if !active.insert(id) {
+                return Ok(r.snapshot());
+            }
+            PairingReconcileGuard {
+                active: &self.reconciling,
+                id,
+            }
+        };
         if r.forgotten_command.is_some() || (r.state.terminal() && !r.can_reconcile_repair()) {
             return Ok(r.snapshot());
         }
@@ -633,6 +742,7 @@ impl GatewayPairingService {
                 r.last_failure = Some(PairingError::Indeterminate);
                 return Ok(self.save(r).await?.snapshot());
             }
+            check(actor, scope)?;
             if r.start_phase == PairingStartPhase::Staged {
                 r.start_phase = PairingStartPhase::Dispatched;
                 r = self.save(r).await?;
@@ -643,6 +753,9 @@ impl GatewayPairingService {
                 Err(e) => return self.record_failure(r, e).await,
             };
             r = self.repository.accept_started(r.revision, started).await?;
+            if r.forgotten_command.is_some() {
+                return Ok(r.snapshot());
+            }
         }
         let handle = r.handle.clone().ok_or(PairingError::RepairRequired)?;
         let observed = if r.cancellation_command.is_some() {
@@ -708,6 +821,9 @@ impl GatewayPairingService {
                 r.last_failure = None;
                 r.state = match outcome {
                     PairingOutcome::AwaitingLocalConfirmation => return Ok(r.snapshot()),
+                    PairingOutcome::AwaitingApproval if r.cancellation_command.is_some() => {
+                        PairingState::Cancelling
+                    }
                     PairingOutcome::AwaitingApproval => PairingState::AwaitingApproval,
                     PairingOutcome::Rejected => PairingState::Rejected,
                     PairingOutcome::Expired => PairingState::Expired,
@@ -837,4 +953,17 @@ fn pairing_failure_projection(record: &PairingRecord) -> Option<crate::Connectio
             vec![]
         },
     })
+}
+
+// Serializes observation/dispatch for one operation, not owner decisions or DB transactions.
+struct PairingReconcileGuard<'a> {
+    active: &'a std::sync::Mutex<std::collections::HashSet<Uuid>>,
+    id: Uuid,
+}
+impl Drop for PairingReconcileGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.active.lock() {
+            active.remove(&self.id);
+        }
+    }
 }

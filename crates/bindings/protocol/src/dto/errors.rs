@@ -61,6 +61,8 @@ pub enum AppResponseOutcomeDto<T> {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppCommandDispositionDto {
+    /// Durable identity-bound terminal rejection, not an attempt-local failure.
+    NotApplied,
     NotAdmitted,
     Admitted,
     Indeterminate,

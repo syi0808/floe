@@ -13,7 +13,12 @@ import 'package:floe_client/infrastructure/native/native_context_host_transport.
 
 const nativeProtocolVersion = 1;
 
-enum NativeCommandDisposition { notAdmitted, admitted, indeterminate }
+enum NativeCommandDisposition {
+  notApplied,
+  notAdmitted,
+  admitted,
+  indeterminate,
+}
 
 enum _NativeResponseKind { command, ordinary }
 
@@ -32,6 +37,7 @@ final class NativeTransportException implements Exception {
   final String? field;
   final Map<String, String> metadata;
   final OwnerFailure? ownerFailure;
+
   /// Null only for open, query, event and native-callback failures.
   /// Product command admission is never inferred from an error code.
   final NativeCommandDisposition? commandDisposition;
@@ -66,7 +72,12 @@ final class NativeTransportException implements Exception {
 }
 
 final class NativeTransport implements AppWireTransport {
-  NativeTransport._(this._commands, this._nativeCallbacks, this.personId, this.deviceId) {
+  NativeTransport._(
+    this._commands,
+    this._nativeCallbacks,
+    this.personId,
+    this.deviceId,
+  ) {
     _disposal = _NativeTransportDisposal(_commands, _nativeCallbacks._commands);
     _finalizer.attach(this, _disposal, detach: this);
   }
@@ -86,12 +97,20 @@ final class NativeTransport implements AppWireTransport {
   static Future<NativeTransport> open({
     required String libraryPath,
     required String databasePath,
-  }) => _open(libraryPath: libraryPath, path: databasePath, defaultInstallation: false);
+  }) => _open(
+    libraryPath: libraryPath,
+    path: databasePath,
+    defaultInstallation: false,
+  );
 
   static Future<NativeTransport> openDefault({
     required String libraryPath,
     required String supportDirectory,
-  }) => _open(libraryPath: libraryPath, path: supportDirectory, defaultInstallation: true);
+  }) => _open(
+    libraryPath: libraryPath,
+    path: supportDirectory,
+    defaultInstallation: true,
+  );
 
   static Future<NativeTransport> _open({
     required String libraryPath,
@@ -117,7 +136,12 @@ final class NativeTransport implements AppWireTransport {
         libraryPath,
         result['native_lane_address']! as int,
       );
-      return NativeTransport._(commands, callbacks, result['person_id']! as String, result['device_id']! as String);
+      return NativeTransport._(
+        commands,
+        callbacks,
+        result['person_id']! as String,
+        result['device_id']! as String,
+      );
     } on Object {
       await _closeNativePort(commands);
       rethrow;
@@ -175,7 +199,13 @@ final class NativeTransport implements AppWireTransport {
       }
       throw StateError('NativeTransport is already closed.');
     }
-    return _sendNativeWire(_commands, operation, request, timeout, responseKind);
+    return _sendNativeWire(
+      _commands,
+      operation,
+      request,
+      timeout,
+      responseKind,
+    );
   }
 
   @override
@@ -284,7 +314,11 @@ final class _NativeCallbackTransport implements NativeHostWireTransport {
       );
     }
     return _sendNativeWire(
-      _commands, operation, request, timeout, _NativeResponseKind.ordinary,
+      _commands,
+      operation,
+      request,
+      timeout,
+      _NativeResponseKind.ordinary,
     );
   }
 }
@@ -304,8 +338,9 @@ Future<Map<String, dynamic>> _sendNativeWire(
     if (request['schema_version'] != appWireProtocolVersion ||
         requestId is! String ||
         requestId.isEmpty ||
-        isCommand && (request['command_id'] is! String ||
-            (request['command_id'] as String).isEmpty)) {
+        isCommand &&
+            (request['command_id'] is! String ||
+                (request['command_id'] as String).isEmpty)) {
       throw const FormatException('Invalid app-wire request envelope.');
     }
     final encoded = jsonEncode(request);
@@ -375,7 +410,13 @@ Map<String, dynamic> _commandResponse(Map<String, dynamic> envelope) {
   final status = envelope['status'];
   final expectedKeys = status == 'ok'
       ? const {'schema_version', 'request_id', 'status', 'result'}
-      : const {'schema_version', 'request_id', 'status', 'disposition', 'error'};
+      : const {
+          'schema_version',
+          'request_id',
+          'status',
+          'disposition',
+          'error',
+        };
   if (envelope.length != expectedKeys.length ||
       !envelope.keys.toSet().containsAll(expectedKeys)) {
     throw const FormatException('Invalid command response envelope.');
@@ -387,6 +428,7 @@ Map<String, dynamic> _commandResponse(Map<String, dynamic> envelope) {
     throw const FormatException('Invalid command response outcome.');
   }
   final disposition = switch (envelope['disposition']) {
+    'not_applied' => NativeCommandDisposition.notApplied,
     'not_admitted' => NativeCommandDisposition.notAdmitted,
     'admitted' => NativeCommandDisposition.admitted,
     'indeterminate' => NativeCommandDisposition.indeterminate,
@@ -395,17 +437,28 @@ Map<String, dynamic> _commandResponse(Map<String, dynamic> envelope) {
   final error = envelope['error'];
   const errorKeys = {'code', 'message', 'field', 'metadata', 'owner_failure'};
   const codes = {
-    'validation', 'unsupported_version', 'command_id_conflict', 'session_busy',
-    'conflict', 'not_found', 'access_denied', 'unavailable', 'internal',
+    'validation',
+    'unsupported_version',
+    'command_id_conflict',
+    'session_busy',
+    'conflict',
+    'not_found',
+    'access_denied',
+    'unavailable',
+    'internal',
   };
   if (error is! Map ||
       error.keys.any((key) => !errorKeys.contains(key)) ||
       !codes.contains(error['code']) ||
       error['message'] is! String ||
-      error.containsKey('field') && error['field'] != null && error['field'] is! String ||
-      error.containsKey('metadata') && (error['metadata'] is! Map ||
-          (error['metadata'] as Map).entries.any((entry) =>
-              entry.key is! String || entry.value is! String))) {
+      error.containsKey('field') &&
+          error['field'] != null &&
+          error['field'] is! String ||
+      error.containsKey('metadata') &&
+          (error['metadata'] is! Map ||
+              (error['metadata'] as Map).entries.any(
+                (entry) => entry.key is! String || entry.value is! String,
+              ))) {
     throw const FormatException('Invalid command error.');
   }
   // The typed error and optional owner projection must decode successfully
@@ -512,7 +565,8 @@ Future<void> _nativeWorkerMain(Map<String, Object?> configuration) async {
       calloc.free(path);
     }
     final identityPointer = bindings.identity(handle);
-    if (identityPointer == nullptr) throw StateError('Native host identity is unavailable.');
+    if (identityPointer == nullptr)
+      throw StateError('Native host identity is unavailable.');
     try {
       final envelope = _asMap(jsonDecode(identityPointer.toDartString()));
       if (envelope['schema_version'] != nativeProtocolVersion) {
@@ -524,11 +578,18 @@ Future<void> _nativeWorkerMain(Map<String, Object?> configuration) async {
       final device = identity['device_id'];
       final epoch = identity['runtime_epoch'];
       if (person is! String ||
-          !RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$').hasMatch(person) ||
+          !RegExp(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+          ).hasMatch(person) ||
           person == '00000000-0000-0000-0000-000000000000' ||
-          device is! String || device.isEmpty || utf8.encode(device).length > 128 ||
-          device.trim() != device || RegExp(r'[\x00-\x1f\x7f]').hasMatch(device) ||
-          epoch is! int || epoch <= 0 || epoch > 0x7fffffffffffffff) {
+          device is! String ||
+          device.isEmpty ||
+          utf8.encode(device).length > 128 ||
+          device.trim() != device ||
+          RegExp(r'[\x00-\x1f\x7f]').hasMatch(device) ||
+          epoch is! int ||
+          epoch <= 0 ||
+          epoch > 0x7fffffffffffffff) {
         throw const FormatException('Invalid admitted native identity.');
       }
       personId = person;

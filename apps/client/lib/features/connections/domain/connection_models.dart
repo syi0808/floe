@@ -490,6 +490,7 @@ final class PairingSnapshot {
         'starting',
         'awaiting_local_confirmation',
         'awaiting_gateway_approval',
+        'cancelling',
         'connected',
         'rejected',
         'expired',
@@ -534,11 +535,17 @@ final class ProcessingScope {
     final processing = SourceProcessing.parse(tagged['kind']);
     if (processing == SourceProcessing.deviceOnly) {
       connectionObject(value, {'kind'});
-      return const ProcessingScope(processing: SourceProcessing.deviceOnly, categories: []);
+      return const ProcessingScope(
+        processing: SourceProcessing.deviceOnly,
+        categories: [],
+      );
     }
     final j = connectionObject(value, {'kind', 'categories'});
-    final categories = _list(j['categories'],
-        (v) => _choice(v, {'metadata', 'content', 'derived'}), 3);
+    final categories = _list(
+      j['categories'],
+      (v) => _choice(v, {'metadata', 'content', 'derived'}),
+      3,
+    );
     if (categories.isEmpty || categories.toSet().length != categories.length) {
       throw const FormatException('Invalid processing categories.');
     }
@@ -552,22 +559,41 @@ final class ProcessingScope {
 }
 
 final class ViewProcessingDisclosure {
-  const ViewProcessingDisclosure({required this.viewId, required this.dataClass,
-    required this.dataCategories, required this.current, required this.requested});
+  const ViewProcessingDisclosure({
+    required this.viewId,
+    required this.dataClass,
+    required this.dataCategories,
+    required this.current,
+    required this.requested,
+  });
   factory ViewProcessingDisclosure.fromJson(Object? value) {
-    final j = connectionObject(value, {'view_id', 'data_class', 'data_categories', 'current', 'requested'});
-    final categories = _list(j['data_categories'],
-        (v) => _choice(v, {'metadata', 'content', 'derived'}), 3);
+    final j = connectionObject(value, {
+      'view_id',
+      'data_class',
+      'data_categories',
+      'current',
+      'requested',
+    });
+    final categories = _list(
+      j['data_categories'],
+      (v) => _choice(v, {'metadata', 'content', 'derived'}),
+      3,
+    );
     if (categories.toSet().length != categories.length ||
-        categories.isEmpty != (j['current'] == null && j['requested'] == null)) {
+        categories.isEmpty !=
+            (j['current'] == null && j['requested'] == null)) {
       throw const FormatException('Invalid reviewed data categories.');
     }
     return ViewProcessingDisclosure(
       viewId: _text(j['view_id']),
       dataClass: _choice(j['data_class'], {'personal', 'highly_sensitive'}),
       dataCategories: categories,
-      current: j['current'] == null ? null : ProcessingScope.fromJson(j['current']),
-      requested: j['requested'] == null ? null : ProcessingScope.fromJson(j['requested']),
+      current: j['current'] == null
+          ? null
+          : ProcessingScope.fromJson(j['current']),
+      requested: j['requested'] == null
+          ? null
+          : ProcessingScope.fromJson(j['requested']),
     );
   }
   final String viewId;
@@ -575,18 +601,27 @@ final class ViewProcessingDisclosure {
   final List<String> dataCategories;
   final ProcessingScope? current;
   final ProcessingScope? requested;
-  String get dataClassLabel => dataClass == 'highly_sensitive' ? 'Highly sensitive' : 'Personal';
-  bool get isDerivedHealth => viewId == 'wellbeing.derived' &&
-      dataClass == 'highly_sensitive' && dataCategories.length == 1 &&
+  String get dataClassLabel =>
+      dataClass == 'highly_sensitive' ? 'Highly sensitive' : 'Personal';
+  bool get isDerivedHealth =>
+      viewId == 'wellbeing.derived' &&
+      dataClass == 'highly_sensitive' &&
+      dataCategories.length == 1 &&
       dataCategories.single == 'derived';
-  bool get expandsGateway => requested?.processing == SourceProcessing.gatewayAllowed &&
+  bool get expandsGateway =>
+      requested?.processing == SourceProcessing.gatewayAllowed &&
       (current?.processing != SourceProcessing.gatewayAllowed ||
-          requested!.categories.any((category) => !current!.categories.contains(category)));
+          requested!.categories.any(
+            (category) => !current!.categories.contains(category),
+          ));
 }
 
 final class ProcessingDisclosure {
   const ProcessingDisclosure({required this.views});
-  factory ProcessingDisclosure.fromJson(Object? value, {required bool observe}) {
+  factory ProcessingDisclosure.fromJson(
+    Object? value, {
+    required bool observe,
+  }) {
     final j = connectionObject(value, {'views'});
     final views = _list(j['views'], ViewProcessingDisclosure.fromJson, 64);
     if (views.map((view) => view.viewId).toSet().length != views.length ||
@@ -666,7 +701,10 @@ final class ObserveReview {
       'allowed_actions',
     }, {});
     final members = _list(j['display_members'], _text, 64);
-    final disclosure = ProcessingDisclosure.fromJson(j['processing_disclosure'], observe: true);
+    final disclosure = ProcessingDisclosure.fromJson(
+      j['processing_disclosure'],
+      observe: true,
+    );
     if (members.length != disclosure.views.length ||
         members.toSet().length != members.length ||
         disclosure.views.any((view) => !members.contains(view.viewId))) {

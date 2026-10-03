@@ -606,3 +606,21 @@ Use isolated stores and fake ports/keys; no real user data, Keychain, source gra
 ### Direct-owner implementation checkpoint (2026-10-04)
 
 At the user's instruction, delegated writers stopped and the primary assistant took over research and implementation directly. The unfinished tree was preserved before further edits. Gateway's OS credential record and write workers are removed; the provider now reads private Vault snapshots while Pairing admission, activation and Forget use encrypted transactions. The original proof and retired credential material are preserved as evidence. A private `creation.pending` marker records exact Person/Vault/layout identity before key insertion; a surviving valid marker produces `IncompleteCreation` and is not automatically reset or resumed. Empty databases without such proof stay unavailable rather than being classified as unsupported schema. These source changes still await the coherent compiler, isolated-failure and adversarial-review gates; no user data or credential operation has been executed.
+
+
+### Adversarial-review closure refinement (2026-10-04)
+
+The initial root-owned source snapshot passed the full Rust production build, DAG and isolated fake-key owner/storage probes. It is held on a review branch, not main. Independent source review identified additional failure interleavings; those findings reopen closure before another coherent qualification batch.
+
+- Cancellation after a recoverable failure needs an explicit nonterminal Cancelling phase. This is a workflow state, not a second credential authority; remote Approved still produces historical evidence only.
+- A delayed exact Start reply may add its handle/enrollment after local Cancel or Forget. It must preserve those decisions and never restore current authority. Reconciliation is single-flight per operation within the existing owner instance; no database transaction spans HTTP.
+- Any exact late Approved after a terminal observation retains historical revocation evidence without changing a newer expectation or pin.
+- Pairing admission consumes a monotonically increasing durable generation. Restoring a previous expectation does not restore the high-water mark.
+- Assistant and product authorization signing share a transaction-level current-credential fence; a surviving historical producer pin is not active Gateway authority.
+- Existing open must not create a missing host lock. Unclassified partial creation remains unavailable and never authorizes key replacement. A failed durability barrier is not a successful creation merely because bytes are visible.
+- Command rejection requires a causal storage outcome and an identity-bound resolution. A generic Conflict name is not evidence of rollback; conversely a proven rollback must not fabricate commit uncertainty. Pairing Start/Confirm/Cancel now commit an immutable exact-intent success or rejection receipt in the same transaction as their state change. The NotApplied response is a terminal proof for the whole command, distinct from attempt-local NotAdmitted, and can resolve sticky client uncertainty. Commit/read failure still cannot produce that proof. Other mutation paths remain under audit; aggregate qualification is pending.
+
+Real Apple runtime, Flutter aggregate analysis, the expanded failure probes and reviewed final source qualification remain pending. These refinements do not authorize user data/key cleanup or reconstruction of the full S3 test suites.
+
+
+Readiness review clarification: Registry and Memory already fence callbacks with their operation generation and reset it on readiness transitions; their stale-report premise did not include those source files. A failure revision now additionally prevents an in-flight Vault presentation update from overwriting a newer failure report. No second physical Vault generation is introduced.

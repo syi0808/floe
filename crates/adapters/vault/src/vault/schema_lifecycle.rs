@@ -25,6 +25,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 "INSERT INTO agent_conversation_executor(id,generation) VALUES(1,0)",
                 "INSERT INTO agent_task_executor(id,generation) VALUES(1,0)",
                 "INSERT INTO remote_authority_clock(id,last_now_unix_ms) VALUES(1,0)",
+                "INSERT INTO gateway_pairing_generation(id,generation) VALUES(1,0)",
             ] { transaction.execute(statement, ()).await.map_err(storage)?; }
             transaction.execute("INSERT INTO gateway_credential_expectation(id,payload) VALUES(1,?)", (expectation,))
                 .await.map_err(storage)?;

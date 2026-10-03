@@ -58,16 +58,12 @@ class _DataPrivacyState extends State<_DataPrivacy> {
 
   Future<void> _load() async {
     if (!mounted || !widget.vault.ready) return;
-    if (controller.hasReview &&
-        !memoryRequested &&
-        controller.canReadReview) {
+    if (controller.hasReview && !memoryRequested && controller.canReadReview) {
       memoryRequested = true;
       await controller.loadReview();
     }
     if (!mounted || !widget.vault.ready) return;
-    if (controller.hasMemory &&
-        !savedMemoryRequested &&
-        controller.canRead) {
+    if (controller.hasMemory && !savedMemoryRequested && controller.canRead) {
       savedMemoryRequested = true;
       await controller.load();
     }

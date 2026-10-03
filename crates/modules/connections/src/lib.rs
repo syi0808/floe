@@ -41,7 +41,8 @@ pub use application::source_operation::{
 };
 
 pub use application::gateway_pairing::{
-    GatewayPairingService, GatewaySetupRecord, PairingAdmission, PairingRecord, PairingRepository,
+    GatewayPairingService, GatewaySetupRecord, PairingAdmission, PairingMutation,
+    PairingMutationAction, PairingMutationReceipt, PairingRecord, PairingRepository,
     PairingSnapshot, PairingStartPhase, PairingState,
 };
 pub use ports::gateway_pairing::*;

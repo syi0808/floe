@@ -105,18 +105,27 @@ final class CalendarActionController extends ChangeNotifier {
   ActionAuthority? get authority => _authority;
   List<ActionDestinationChoice> get destinations => _destinations;
   String? get nextCursor => _nextCursor;
-  CalendarActionError? get error => vault.ready ? _error : CalendarActionError(
-    kind: vault.state == AgentVaultState.locked
-        ? CalendarActionErrorKind.vaultLocked : CalendarActionErrorKind.vaultUnavailable,
-    code: vault.reasonCode ?? (vault.state == AgentVaultState.locked
-        ? 'vault_locked' : 'storage_unavailable'),
-  );
+  CalendarActionError? get error => vault.ready
+      ? _error
+      : CalendarActionError(
+          kind: vault.state == AgentVaultState.locked
+              ? CalendarActionErrorKind.vaultLocked
+              : CalendarActionErrorKind.vaultUnavailable,
+          code:
+              vault.reasonCode ??
+              (vault.state == AgentVaultState.locked
+                  ? 'vault_locked'
+                  : 'storage_unavailable'),
+        );
   void _reportStorageFailure(Object error) {
     final owner = error is AppRuntimeException ? error.ownerFailure : null;
     if (owner != null) {
-      vault.reportFailure(AgentVaultException.fromAppWire(owner.reason, ownerFailure: owner));
+      vault.reportFailure(
+        AgentVaultException.fromAppWire(owner.reason, ownerFailure: owner),
+      );
     }
   }
+
   CalendarActionError? get destinationsError => _destinationsError;
   bool get destinationsLoaded => _destinationsLoaded;
 
@@ -177,7 +186,8 @@ final class CalendarActionController extends ChangeNotifier {
       if (!_disposed) {
         _busy = false;
         notifyListeners();
-        if (vault.ready && generation != _readinessGeneration) unawaited(load());
+        if (vault.ready && generation != _readinessGeneration)
+          unawaited(load());
       }
     }
   }
@@ -203,13 +213,15 @@ final class CalendarActionController extends ChangeNotifier {
       if (!_disposed) {
         _busy = false;
         notifyListeners();
-        if (vault.ready && generation != _readinessGeneration) unawaited(load());
+        if (vault.ready && generation != _readinessGeneration)
+          unawaited(load());
       }
     }
   }
 
   Future<CalendarAction> inspect(String actionRef) async {
-    if (_disposed || !vault.ready) throw StateError('Actions storage is unavailable.');
+    if (_disposed || !vault.ready)
+      throw StateError('Actions storage is unavailable.');
     final generation = _readinessGeneration;
     try {
       final result = await gateway.inspect(actionRef);
@@ -350,7 +362,9 @@ final class CalendarActionController extends ChangeNotifier {
       final commandId = _commands.retain(commandKey);
       final result = await send(commandId);
       if (!_current(generation)) {
-        throw StateError('The Actions observation belongs to a retired storage generation.');
+        throw StateError(
+          'The Actions observation belongs to a retired storage generation.',
+        );
       }
       validate(result);
       _commands.acknowledge(commandKey, commandId);
@@ -366,7 +380,8 @@ final class CalendarActionController extends ChangeNotifier {
       if (!_disposed) {
         _busy = false;
         notifyListeners();
-        if (vault.ready && generation != _readinessGeneration) unawaited(load());
+        if (vault.ready && generation != _readinessGeneration)
+          unawaited(load());
       }
     }
   }
@@ -511,7 +526,12 @@ final class CalendarActionController extends ChangeNotifier {
   void _scheduleObservation(CalendarAction action) {
     _cancelObservation(action.actionRef);
     final delay = action.nextObservationAfterMs;
-    if (_disposed || !vault.ready || delay == null || delay <= 0 || delay > 60000) return;
+    if (_disposed ||
+        !vault.ready ||
+        delay == null ||
+        delay <= 0 ||
+        delay > 60000)
+      return;
     _observations[action.actionRef] = Timer(Duration(milliseconds: delay), () {
       _observations.remove(action.actionRef);
       unawaited(_observeAfterDelay(action.actionRef));

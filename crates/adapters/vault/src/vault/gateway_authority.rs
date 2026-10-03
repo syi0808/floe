@@ -50,11 +50,19 @@ impl<K: VaultKeyProvider> EncryptedAgentVault<K> {
     pub(super) async fn remote_pinned_producer(
         &self,
     ) -> Result<RemoteProducerIdentity, AgentFailure> {
-        let pin = self
-            .current_pin_record()
-            .await?
-            .ok_or(AgentFailure::PolicyDenied)?;
-        Ok(pin.producer)
+        let owner = self.remote_owner_public_key().await?;
+        let mut connection = self.connection()?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await
+            .map_err(storage)?;
+        let result = async {
+            let (_, pin) = current_credential_in_transaction(&tx, self.person_id, &owner).await?;
+            self.check_access()?;
+            Ok(pin.producer)
+        }
+        .await;
+        self.finish_access_grant_transaction(tx, result).await
     }
     async fn current_pin_record(&self) -> Result<Option<GatewayPin>, AgentFailure> {
         self.validate_owner_key().await?;
@@ -441,26 +449,12 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
             if command.expires_at_unix_ms <= now {
                 return Err(AgentFailure::PolicyDenied);
             }
-            let mut pins = tx
-                .query(
-                    "SELECT identity_json FROM remote_authority_producer WHERE id=1",
-                    (),
-                )
-                .await
-                .map_err(storage)?;
-            let pinned: RemoteProducerIdentity = bounded_decode(
-                &pins
-                    .next()
-                    .await
-                    .map_err(storage)?
-                    .ok_or(AgentFailure::PolicyDenied)?
-                    .get::<String>(0)
-                    .map_err(storage)?,
-            )?;
-            if pinned != command.producer {
+            let (binding, pin) = current_credential_in_transaction(&tx, self.vault.person_id, &owner).await?;
+            if pin.producer != command.producer
+                || binding.client_id != command.expected.client_id
+                || binding.device_id != command.expected.device_id {
                 return Err(AgentFailure::PolicyDenied);
             }
-            drop(pins);
             let grant = self
                 .vault
                 .read_data_access_grant_in_transaction(&tx, grant_id)
@@ -665,14 +659,10 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
             }
             validate_producer(&current_producer)?;
             drop(pin_rows);
-            validate_product_credential_in_transaction(
-                &tx,
-                &binding,
-                &owner,
-                &supplied_producer,
-                pin.revision,
-            )
-            .await?;
+            let (current_binding, current_pin) = current_credential_in_transaction(&tx, self.vault.person_id, &owner).await?;
+            if current_binding != binding || current_pin.producer != supplied_producer || current_pin.revision != pin.revision {
+                return Err(AgentFailure::PolicyDenied);
+            }
 
             let mut existing_rows = tx
                 .query(
@@ -968,13 +958,30 @@ fn verify_owner_receipt_signature(
         .map_err(|_| AgentFailure::VaultUnavailable)
 }
 
-async fn validate_product_credential_in_transaction(
+async fn current_credential_in_transaction(
     tx: &Transaction<'_>,
-    expected: &VerifiedGatewayBinding,
+    person: floe_kernel::PersonId,
     owner: &floe_access::RemoteOwnerPublicKey,
-    producer: &RemoteProducerIdentity,
-    pin_revision: u64,
-) -> Result<(), AgentFailure> {
+) -> Result<(VerifiedGatewayBinding, GatewayPin), AgentFailure> {
+    let mut pins = tx
+        .query(
+            "SELECT identity_json,revision FROM remote_authority_producer WHERE id=1",
+            (),
+        )
+        .await
+        .map_err(storage)?;
+    let row = pins
+        .next()
+        .await
+        .map_err(storage)?
+        .ok_or(AgentFailure::PolicyDenied)?;
+    let producer: RemoteProducerIdentity = bounded_decode(&row.get::<String>(0).map_err(storage)?)?;
+    let pin_revision = row.get::<i64>(1).map_err(storage)?;
+    if pin_revision <= 0 {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    validate_producer(&producer)?;
+    drop(pins);
     let mut expectation_rows = tx
         .query(
             "SELECT payload FROM gateway_credential_expectation WHERE id=1",
@@ -995,7 +1002,7 @@ async fn validate_product_credential_in_transaction(
         floe_access::GatewayCredentialExpectation::Committed {
             operation_id,
             generation,
-        } if generation == expected.credential_generation => (operation_id, generation),
+        } if generation > 0 => (operation_id, generation),
         _ => return Err(AgentFailure::PolicyDenied),
     };
     drop(expectation_rows);
@@ -1003,7 +1010,7 @@ async fn validate_product_credential_in_transaction(
     let mut pairing_rows = tx
         .query(
             "SELECT revision,state,payload FROM gateway_pairing_operations WHERE operation_id=? AND person_id=?",
-            (operation_id.to_string(), expected.person_id.clone()),
+            (operation_id.to_string(), person.to_string()),
         )
         .await
         .map_err(storage)?;
@@ -1019,9 +1026,10 @@ async fn validate_product_credential_in_transaction(
         || revision as u64 != pairing.revision
         || state != pairing_state(pairing.state)
         || pairing.operation_id != operation_id
-        || pairing.person_id.to_string() != expected.person_id
-        || pairing.device_id != expected.device_id
+        || pairing.person_id != person
         || pairing.state != PairingState::Paired
+        || pairing.cancellation_command.is_some()
+        || pairing.forgotten_command.is_some()
     {
         return Err(AgentFailure::PolicyDenied);
     }
@@ -1030,16 +1038,22 @@ async fn validate_product_credential_in_transaction(
         .enrollment
         .as_ref()
         .ok_or(AgentFailure::PolicyDenied)?;
+    let expected = &enrollment.binding;
     enrollment
         .binding
         .validate()
         .map_err(|_| AgentFailure::PolicyDenied)?;
     let gateway = pairing.gateway.as_ref().ok_or(AgentFailure::PolicyDenied)?;
     if enrollment.operation_id != operation_id
-        || enrollment.binding != *expected
+        || expected.person_id != person.to_string()
+        || expected.device_id != pairing.device_id
+        || expected.credential_generation != generation
+        || expected.producer_instance != producer.instance_id
+        || expected.producer_key_fingerprint != producer.fingerprint
+        || expected.producer_audience != producer.audience
         || enrollment.issuer.key_id != owner.key_id
         || enrollment.issuer.public_key != owner.public_key
-        || enrollment.pin_revision != pin_revision
+        || enrollment.pin_revision != pin_revision as u64
         || gateway.gateway_ref != operation_id
         || gateway.revision != generation
         || gateway.state != GatewayState::Paired
@@ -1070,7 +1084,7 @@ async fn validate_product_credential_in_transaction(
         || enrollment_command.client_id != expected.client_id
         || enrollment_command.issuer.key_id != owner.key_id
         || enrollment_command.issuer.public_key != owner.public_key
-        || enrollment_command.producer != *producer
+        || enrollment_command.producer != producer
         || enrollment_command.challenge_id.is_nil()
         || enrollment_command.challenge_id.to_string() != expected.enrollment_id
         || enrollment_command.canonical_bytes.is_empty()
@@ -1085,7 +1099,32 @@ async fn validate_product_credential_in_transaction(
         &enrollment_command.canonical_bytes,
         &enrollment_command.producer_signature,
     )?;
-    Ok(())
+    drop(enrollment_rows);
+    let mut private = tx.query("SELECT enrollment_json, length(credential) FROM gateway_pairing_private WHERE operation_id=?", (operation_id.to_string(),)).await.map_err(storage)?;
+    let row = private
+        .next()
+        .await
+        .map_err(storage)?
+        .ok_or(AgentFailure::PolicyDenied)?;
+    let admitted: EnrollmentSigningCommand = bounded_decode(
+        &row.get::<Option<String>>(0)
+            .map_err(storage)?
+            .ok_or(AgentFailure::PolicyDenied)?,
+    )?;
+    let length = row
+        .get::<Option<i64>>(1)
+        .map_err(storage)?
+        .ok_or(AgentFailure::PolicyDenied)?;
+    if admitted != enrollment_command || !(32..=256).contains(&length) {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok((
+        expected.clone(),
+        GatewayPin {
+            producer,
+            revision: pin_revision as u64,
+        },
+    ))
 }
 
 impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K> {

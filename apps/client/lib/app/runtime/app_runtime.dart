@@ -69,9 +69,14 @@ final class AppRuntime {
   late final memory = AppWireMemoryGateway(_transport);
   late final connections = AppWireConnectionsGateway(_transport);
   late final actions = CalendarActionFacade(this);
-  late final connectionsController = ConnectionsController(connections, vault: vaultController);
-  late final vaultController = VaultController(gateway: vault, personId: personId)
-    ..addListener(_readinessChanged);
+  late final connectionsController = ConnectionsController(
+    connections,
+    vault: vaultController,
+  );
+  late final vaultController = VaultController(
+    gateway: vault,
+    personId: personId,
+  )..addListener(_readinessChanged);
   late final registryController = AgentRegistryController(
     gateway: registry,
     canOperate: () => vaultController.ready,
@@ -93,6 +98,7 @@ final class AppRuntime {
     }
     _wasReady = ready;
   }
+
   late final owners = LocalOwnerGateways(
     vault: vaultController,
     registry: registryController,

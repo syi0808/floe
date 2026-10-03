@@ -44,6 +44,9 @@ pub(crate) fn handles_query(query: &dto::AppProductQueryDto) -> bool {
 
 fn command_failure(failure: owner::ConnectionsCommandFailure) -> AppCommandFailure {
     match failure {
+        owner::ConnectionsCommandFailure::NotApplied(reason) => {
+            AppCommandFailure::NotApplied(agent_failure(reason))
+        }
         owner::ConnectionsCommandFailure::NotAdmitted(reason) => {
             AppCommandFailure::NotAdmitted(agent_failure(reason))
         }
@@ -549,6 +552,7 @@ fn pairing(value: owner::PairingSnapshot) -> AppWireResult<dto::PairingSnapshotD
                 dto::PairingStateDto::AwaitingLocalConfirmation
             }
             owner::PairingState::AwaitingApproval => dto::PairingStateDto::AwaitingGatewayApproval,
+            owner::PairingState::Cancelling => dto::PairingStateDto::Cancelling,
             owner::PairingState::Paired => dto::PairingStateDto::Connected,
             owner::PairingState::Rejected => dto::PairingStateDto::Rejected,
             owner::PairingState::Expired => dto::PairingStateDto::Expired,

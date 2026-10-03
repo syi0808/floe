@@ -97,7 +97,9 @@ Future<void> _start() async {
         reader: (request) async {
           final mode = request['mode'];
           final deviceId = request['device_id'];
-          if (mode is! String || deviceId is! String || deviceId != runtime.deviceId) {
+          if (mode is! String ||
+              deviceId is! String ||
+              deviceId != runtime.deviceId) {
             throw PlatformException(code: 'permission_denied');
           }
           final before = await attentionGateway.inspectAttentionSubject(

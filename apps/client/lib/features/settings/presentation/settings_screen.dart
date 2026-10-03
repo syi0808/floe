@@ -62,8 +62,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   List<_SettingsPage> get _availablePages => [
     if (widget.actionController != null) _SettingsPage.actions,
-    if (widget.memoryController != null && widget.vault != null) _SettingsPage.dataPrivacy,
-    if (widget.registryController != null && widget.vault != null) _SettingsPage.experts,
+    if (widget.memoryController != null && widget.vault != null)
+      _SettingsPage.dataPrivacy,
+    if (widget.registryController != null && widget.vault != null)
+      _SettingsPage.experts,
     _SettingsPage.remoteServer,
   ];
 

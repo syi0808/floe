@@ -82,11 +82,16 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
           if (current.vault.canRecover)
             FloeButton.outlined(
               onPressed: current.vault.recover,
-              child: Text(current.vault.gateway.hasPendingOperation
-                  ? 'Check the same storage request'
-                  : current.vault.failure?.safeActions.contains('reopen_vault') == true
-                  ? 'Reopen local storage'
-                  : 'Retry local storage'),
+              child: Text(
+                current.vault.gateway.hasPendingOperation
+                    ? 'Check the same storage request'
+                    : current.vault.failure?.safeActions.contains(
+                            'reopen_vault',
+                          ) ==
+                          true
+                    ? 'Reopen local storage'
+                    : 'Retry local storage',
+              ),
             ),
           const SizedBox(height: FloeSpace.sm),
         ],
@@ -128,15 +133,18 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
   }
 
   Widget _connections(BuildContext context, ConnectionsController current) {
-    final integrations = current.overview?.integrations ?? const <IntegrationSummary>[];
+    final integrations =
+        current.overview?.integrations ?? const <IntegrationSummary>[];
     final sources = current.overview?.sources ?? const <SourceSummary>[];
     if (selectedIntegration != null || selectedSource != null) {
       final integration = integrations
           .where((value) => value.integrationRef == selectedIntegration)
           .firstOrNull;
-      final source = integration?.source ?? sources
-          .where((value) => value.sourceRef == selectedSource)
-          .firstOrNull;
+      final source =
+          integration?.source ??
+          sources
+              .where((value) => value.sourceRef == selectedSource)
+              .firstOrNull;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -153,7 +161,10 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
           ),
           const SizedBox(height: FloeSpace.lg),
           if (integration != null)
-            IntegrationDetailPanel(controller: current, integration: integration),
+            IntegrationDetailPanel(
+              controller: current,
+              integration: integration,
+            ),
           if (source != null) ...[
             if (integration != null) const SizedBox(height: FloeSpace.lg),
             _SourceCard(
@@ -163,9 +174,11 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
             ),
           ],
           if (integration == null && source == null)
-            Text(current.ready
-                ? 'This connection is no longer in the current list. Refresh Connections.'
-                : current.storageMessage),
+            Text(
+              current.ready
+                  ? 'This connection is no longer in the current list. Refresh Connections.'
+                  : current.storageMessage,
+            ),
         ],
       );
     }
@@ -176,16 +189,20 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
     };
     final available = <Widget>[
       for (final integration in integrations)
-        if (integration.state != 'unavailable') _integrationCard(context, integration),
+        if (integration.state != 'unavailable')
+          _integrationCard(context, integration),
       for (final source in sources)
-        if (!linkedSources.contains(source.sourceRef) && source.availability != 'unavailable')
+        if (!linkedSources.contains(source.sourceRef) &&
+            source.availability != 'unavailable')
           _sourceCard(source),
     ];
     final unavailable = <Widget>[
       for (final integration in integrations)
-        if (integration.state == 'unavailable') _integrationCard(context, integration),
+        if (integration.state == 'unavailable')
+          _integrationCard(context, integration),
       for (final source in sources)
-        if (!linkedSources.contains(source.sourceRef) && source.availability == 'unavailable')
+        if (!linkedSources.contains(source.sourceRef) &&
+            source.availability == 'unavailable')
           _sourceCard(source),
     ];
     return Column(
@@ -217,15 +234,21 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
     name: source.displayLabels.join(' · '),
     description: 'Manage the resources and access reviewed for this source.',
     status: source.availability.replaceAll('_', ' '),
-    tone: source.availability == 'available' ? FloeBadgeTone.success : FloeBadgeTone.neutral,
+    tone: source.availability == 'available'
+        ? FloeBadgeTone.success
+        : FloeBadgeTone.neutral,
     onPressed: () => setState(() => selectedSource = source.sourceRef),
   );
 
-  Widget _integrationCard(BuildContext context, IntegrationSummary integration) {
+  Widget _integrationCard(
+    BuildContext context,
+    IntegrationSummary integration,
+  ) {
     final strings = AppLocalizations.of(context);
     // Platform affects display copy only; existence, status and actions are
     // taken from the current owner's integration projection.
-    final macCalendar = integration.category == 'calendar' &&
+    final macCalendar =
+        integration.category == 'calendar' &&
         integration.displayName == 'Calendar' &&
         defaultTargetPlatform == TargetPlatform.macOS;
     return _ConnectionCard(
@@ -238,13 +261,15 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
         _ => LucideIcons.plug,
       },
       name: macCalendar ? strings.macosCalendar : integration.displayName,
-      description: macCalendar ? strings.calendarsAlreadyOnThisMac : switch (integration.category) {
-        'calendar' => 'Manage the calendars available to Floe.',
-        'contacts' => 'Choose the contacts available to Floe.',
-        'health' => 'Use a derived wellbeing summary from Apple Health.',
-        'attention' => 'Manage coarse device attention signals.',
-        _ => 'Manage this service and its reviewed access.',
-      },
+      description: macCalendar
+          ? strings.calendarsAlreadyOnThisMac
+          : switch (integration.category) {
+              'calendar' => 'Manage the calendars available to Floe.',
+              'contacts' => 'Choose the contacts available to Floe.',
+              'health' => 'Use a derived wellbeing summary from Apple Health.',
+              'attention' => 'Manage coarse device attention signals.',
+              _ => 'Manage this service and its reviewed access.',
+            },
       status: switch (integration.state) {
         'connected' => 'Connected',
         'connecting' => 'Connecting',
@@ -259,7 +284,8 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
         'available' => FloeBadgeTone.info,
         _ => FloeBadgeTone.neutral,
       },
-      onPressed: () => setState(() => selectedIntegration = integration.integrationRef),
+      onPressed: () =>
+          setState(() => selectedIntegration = integration.integrationRef),
     );
   }
 }
@@ -306,7 +332,9 @@ final class _ConnectionCard extends StatelessWidget {
                 child: Icon(icon, size: 26, color: FloePalette.primary600),
               ),
               const SizedBox(width: FloeSpace.sm),
-              Flexible(child: FloeBadge(label: status, tone: tone, compact: true)),
+              Flexible(
+                child: FloeBadge(label: status, tone: tone, compact: true),
+              ),
             ],
           ),
           const SizedBox(height: 20),
@@ -314,7 +342,10 @@ final class _ConnectionCard extends StatelessWidget {
           const SizedBox(height: FloeSpace.sm),
           Text(
             description,
-            style: FloeType.bodySmall.copyWith(height: 1.6, color: FloePalette.neutral600),
+            style: FloeType.bodySmall.copyWith(
+              height: 1.6,
+              color: FloePalette.neutral600,
+            ),
           ),
         ],
       ),
@@ -337,7 +368,9 @@ final class _ConnectionCardGrid extends StatelessWidget {
       return Wrap(
         spacing: FloeSpace.lg,
         runSpacing: FloeSpace.lg,
-        children: [for (final card in cards) SizedBox(width: width, child: card)],
+        children: [
+          for (final card in cards) SizedBox(width: width, child: card),
+        ],
       );
     },
   );
@@ -464,12 +497,18 @@ final class _SourceCardState extends State<_SourceCard> {
           if (review != null) ...[
             const SizedBox(height: FloeSpace.base),
             for (final view in review.processingDisclosure.views) ...[
-              Text('${view.viewId}: ${view.current?.label ?? 'No Observe permission'}.'),
+              Text(
+                '${view.viewId}: ${view.current?.label ?? 'No Observe permission'}.',
+              ),
               Text('Sensitivity: ${view.dataClassLabel}.'),
               if (view.dataCategories.isNotEmpty)
-                Text('Currently permitted data: ${view.dataCategories.join(', ')}.'),
+                Text(
+                  'Currently permitted data: ${view.dataCategories.join(', ')}.',
+                ),
             ],
-            const Text('Saving source resources creates no Observe permission. Review access again after changing resources.'),
+            const Text(
+              'Saving source resources creates no Observe permission. Review access again after changing resources.',
+            ),
             for (final choice in review.permittedChoices)
               CheckboxListTile(
                 title: Text(choice.label),
@@ -506,12 +545,18 @@ final class _SourceCardState extends State<_SourceCard> {
               Text(view.viewId),
               Text('Sensitivity: ${view.dataClassLabel}.'),
               Text('Reviewed data: ${view.dataCategories.join(', ')}.'),
-              Text('Current reviewed scope: ${view.current?.label ?? 'No Observe permission'}.'),
+              Text(
+                'Current reviewed scope: ${view.current?.label ?? 'No Observe permission'}.',
+              ),
               Text('Requested processing: ${view.requested!.label}.'),
               if (view.expandsGateway)
-                const Text('This view gains or expands Gateway processing permission.'),
+                const Text(
+                  'This view gains or expands Gateway processing permission.',
+                ),
             ],
-            if (observe.processingDisclosure.views.any((view) => view.isDerivedHealth))
+            if (observe.processingDisclosure.views.any(
+              (view) => view.isDerivedHealth,
+            ))
               const Text(
                 'This includes highly sensitive data. Only locally transformed derived Health data may reach the Gateway; raw Health data stays on this device.',
               ),

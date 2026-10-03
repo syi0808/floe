@@ -110,7 +110,9 @@ final class OwnerOperationObserver {
           // admission. Prior admitted/unknown operations always retain identity.
           _pending = null;
           throw AgentVaultException.fromAppWire(
-            error.metadata['reason_code'] ?? error.metadata['agent_failure'] ?? error.code,
+            error.metadata['reason_code'] ??
+                error.metadata['agent_failure'] ??
+                error.code,
             requestId: pending.correlation.id,
             stage: pending.correlation.stage,
             metadata: error.metadata,
