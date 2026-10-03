@@ -1210,6 +1210,8 @@ private func notAppliedReason(_ error: NativeFailure) -> String {
   switch error.reason {
   case "permission_denied": return "permission_denied"
   case "source_changed": return "source_changed"
+  case "cancelled": return "cancelled"
+  case "timeout": return "timeout"
   case "provider_unavailable": return "provider_unavailable"
   default: return "provider_rejected"
   }
@@ -1252,8 +1254,8 @@ private func actionDispatch(_ request: [String: Any]) throws -> [String: Any] {
     let outcome: [String: Any]
     do {
       guard Date() < deadline, Date() < preparation.expiresAt,
-            Date() < preparation.authorizationExpiresAt,
-            intent.authorizationExpiresAtRaw == preparation.authorizationExpiresAtRaw else {
+            Date() < preparation.authorizationExpiresAt else { throw NativeFailure("timeout") }
+      guard intent.authorizationExpiresAtRaw == preparation.authorizationExpiresAtRaw else {
         throw NativeFailure("provider_rejected")
       }
       try requirePermission()
@@ -1282,11 +1284,10 @@ private func actionDispatch(_ request: [String: Any]) throws -> [String: Any] {
         }
       }
       try requirePermission()
+      guard Date() < deadline, Date() < preparation.expiresAt,
+            Date() < preparation.authorizationExpiresAt else { throw NativeFailure("timeout") }
       guard try verifyNativeSubject(store, intent.source) == fingerprint,
-            generation == calendarViewGeneration.value(), Date() < deadline,
-            Date() < preparation.expiresAt, Date() < preparation.authorizationExpiresAt else {
-        throw NativeFailure("provider_rejected")
-      }
+            generation == calendarViewGeneration.value() else { throw NativeFailure("source_changed") }
       let finalCalendar = try nativeCalendar(store, intent.effect.destination)
       let finalTarget = try nativeTargetEvent(store, intent.effect)
       if intent.effect.kind == "create", let schedule = intent.effect.schedule {
@@ -1296,11 +1297,11 @@ private func actionDispatch(_ request: [String: Any]) throws -> [String: Any] {
         }
       }
       try requirePermission()
+      guard Date() < deadline, Date() < preparation.expiresAt,
+            Date() < preparation.authorizationExpiresAt else { throw NativeFailure("timeout") }
       guard try verifyNativeSubject(store, intent.source) == fingerprint,
-            Date() < deadline, Date() < preparation.expiresAt,
-            Date() < preparation.authorizationExpiresAt,
             finalCalendar.allowsContentModifications, !finalCalendar.isSubscribed else {
-        throw NativeFailure("provider_rejected")
+        throw NativeFailure("source_changed")
       }
       // EventKit exposes no atomic compare-and-write; the final target/source checks still have a check-to-write race.
       if intent.effect.kind == "delete" {
@@ -1327,11 +1328,11 @@ private func actionDispatch(_ request: [String: Any]) throws -> [String: Any] {
           event.alarms = nil
         }
         try requirePermission()
+        guard Date() < deadline, Date() < preparation.expiresAt,
+              Date() < preparation.authorizationExpiresAt else { throw NativeFailure("timeout") }
         guard try verifyNativeSubject(store, intent.source) == fingerprint,
-              Date() < deadline, Date() < preparation.expiresAt,
-              Date() < preparation.authorizationExpiresAt,
               finalCalendar.allowsContentModifications, !finalCalendar.isSubscribed else {
-          throw NativeFailure("provider_rejected")
+          throw NativeFailure("source_changed")
         }
         crossedBoundary = true
         try store.save(event, span: .thisEvent, commit: true)

@@ -244,7 +244,7 @@ async fn fenced_on(
     Ok(operation.phase.holds_fence())
 }
 fn decode_operation(row: &Row) -> Result<SourceOperationRecord, SourceRepositoryError> {
-    let payload: String = row.get(6).map_err(storage_error)?;
+    let payload: String = row.get(6).map_err(|_| SourceRepositoryError::Corrupt)?;
     if payload.len() > MAX_OPERATION_BYTES {
         return Err(SourceRepositoryError::Corrupt);
     }
@@ -423,7 +423,7 @@ impl SourceOperationRepository for TursoStore {
                 let mut rows=connection.query("SELECT operation_id, command_id, person_id, connection_id, revision, fence, CASE WHEN length(CAST(payload AS BLOB)) <= 16384 THEN payload ELSE NULL END FROM source_operations WHERE connection_id = ? ORDER BY rowid DESC LIMIT 1",(connection_id.as_str(),)).await.map_err(storage_error)?;
                 let latest=rows.next().await.map_err(storage_error)?.as_ref().map(decode_operation).transpose()?;
                 drop(rows);
-                let mut rows=connection.query("SELECT operation_id, command_id, person_id, connection_id, revision, fence, payload FROM source_operations WHERE connection_id = ? AND fence = 1",(connection_id.as_str(),)).await.map_err(storage_error)?;
+                let mut rows=connection.query("SELECT operation_id, command_id, person_id, connection_id, revision, fence, CASE WHEN length(CAST(payload AS BLOB)) <= 16384 THEN payload ELSE NULL END FROM source_operations WHERE connection_id = ? AND fence = 1",(connection_id.as_str(),)).await.map_err(storage_error)?;
                 let active=rows.next().await.map_err(storage_error)?.as_ref().map(decode_operation).transpose()?;
                 if rows.next().await.map_err(storage_error)?.is_some(){return Err(SourceRepositoryError::Corrupt);}
                 let fence=match latest {

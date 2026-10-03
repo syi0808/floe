@@ -56,7 +56,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
         receipt: &BindingReplacementReceipt, scope: &ExecutionScope)
         -> Result<BindingMutationReceipt, AgentFailure>
     {
-        let descriptor = self.dependencies.binding_reviews.get(actor, receipt.review_ref.clone(), scope).await?;
+        let descriptor = self.dependencies.binding_reviews.get(actor, receipt.review_ref.clone(), scope).await.map_err(committed_followup_failure)?;
         if descriptor.identity.person_id != actor.person_id || descriptor.identity.device_id != actor.device_id {
             return Err(AgentFailure::PolicyDenied);
         }
@@ -123,11 +123,11 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
         acknowledged: &RegistrySnapshot,
         scope: &ExecutionScope,
     ) -> Result<(), AgentFailure> {
-        let latest = self.read_registry(actor, scope).await?;
+        let latest = self.read_registry(actor, scope).await.map_err(committed_followup_failure)?;
         if latest.instance_id != acknowledged.instance_id || latest.revision < acknowledged.revision {
             return Err(AgentFailure::StorageUnavailable);
         }
-        self.republish(&latest)
+        self.republish(&latest).map_err(committed_followup_failure)
     }
 
     async fn prepare_review(
@@ -158,10 +158,10 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
             .run(self.dependencies.binding_reviews.prepare(descriptor, scope))
             .await?;
         if stored.identity != identity {
-            return Err(AgentFailure::Conflict);
+            return Err(AgentFailure::StorageUnavailable);
         }
         validate_stored_descriptor(&stored)?;
-        self.project_stored_review(actor, &stored, scope).await
+        self.project_stored_review(actor, &stored, scope).await.map_err(committed_followup_failure)
     }
 
     async fn replay_prepared_review(
@@ -184,7 +184,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
         if stored.identity != *identity {
             return Err(AgentFailure::Conflict);
         }
-        self.project_stored_review(actor, &stored, scope).await.map(Some)
+        self.project_stored_review(actor, &stored, scope).await.map_err(committed_followup_failure).map(Some)
     }
 
     async fn read_task_record(
@@ -296,7 +296,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
                     expected_revision,
                 )?;
                 self.republish_latest(actor, &receipt.snapshot, scope).await?;
-                return project_expert_directory(&receipt.snapshot, actor.person_id);
+                return project_expert_directory(&receipt.snapshot, actor.person_id).map_err(committed_followup_failure);
             }
 
             let current = self.read_registry(actor, scope).await?;
@@ -330,10 +330,10 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
                 command_id,
                 request_digest,
                 expected_revision,
-            )?;
+            ).map_err(committed_followup_failure)?;
             if receipt.snapshot != next { return Err(AgentFailure::StorageUnavailable); }
             self.republish_latest(actor, &receipt.snapshot, scope).await?;
-            project_expert_directory(&receipt.snapshot, actor.person_id)
+            project_expert_directory(&receipt.snapshot, actor.person_id).map_err(committed_followup_failure)
         })
     }
 
@@ -539,7 +539,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
                 return project_expert_directory(
                     &receipt.registry.snapshot,
                     actor.person_id,
-                );
+                ).map_err(committed_followup_failure);
             }
 
             if expected_binding_revision == 0
@@ -690,14 +690,14 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
                 command_id,
                 &review_ref,
                 request_digest,
-            )?;
+            ).map_err(committed_followup_failure)?;
             self.project_stored_replacement(actor, &receipt, scope).await?;
             if receipt.registry.snapshot != next || receipt.committed_at_unix_ms != committed_at_unix_ms {
                 return Err(AgentFailure::StorageUnavailable);
             }
             self.republish_latest(actor, &receipt.registry.snapshot, scope)
                 .await?;
-            project_expert_directory(&receipt.registry.snapshot, actor.person_id)
+            project_expert_directory(&receipt.registry.snapshot, actor.person_id).map_err(committed_followup_failure)
         })
     }
 
@@ -1448,4 +1448,14 @@ fn valid_device_id(value: &str) -> bool {
         && value.len() <= 128
         && value.trim() == value
         && !value.chars().any(char::is_control)
+}
+
+/// A stored command has already committed. Followup publication/readback failure
+/// must not be mistaken by product callers for a definite precommit rejection.
+fn committed_followup_failure(failure: AgentFailure) -> AgentFailure {
+    match failure {
+        AgentFailure::Conflict | AgentFailure::NotFound | AgentFailure::InvalidInput
+        | AgentFailure::StaleContext => AgentFailure::StorageUnavailable,
+        other => other,
+    }
 }

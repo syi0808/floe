@@ -48,6 +48,7 @@ pub fn project_conversation_failure(
         | F::Stalled
         | F::StaleContext => AgentFailureCategory::UserConfiguration,
         F::StorageUnavailable
+        | F::VaultLocked
         | F::ModelUnavailable
         | F::LocalModelUnavailable
         | F::ServerModelUnavailable
@@ -71,6 +72,12 @@ pub fn project_conversation_failure(
             true,
             ConversationRecovery::Reopen,
             vec![AgentFailureSafeAction::ReopenVault],
+        ),
+        F::VaultLocked => (
+            true,
+            true,
+            ConversationRecovery::Unlock,
+            vec![],
         ),
         _ => (false, false, ConversationRecovery::None, vec![]),
     };

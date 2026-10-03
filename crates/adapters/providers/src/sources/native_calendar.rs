@@ -509,9 +509,9 @@ async fn require_dependency_sources(sources:&dyn floe_connections::ConnectionsRe
     for expected in dependencies {
         expected.validate(actor.person_id)?;
         let id=expected.source.connection_id();
-        let before=sources.read_reservation_fence(actor.person_id,id).await.map_err(|_|AgentFailure::StaleContext)?;
-        let current=sources.load(actor.person_id,id).await.map_err(|_|AgentFailure::StaleContext)?;
-        let after=sources.read_reservation_fence(actor.person_id,id).await.map_err(|_|AgentFailure::StaleContext)?;
+        let before=sources.read_reservation_fence(actor.person_id,id).await.map_err(|_|AgentFailure::StorageUnavailable)?;
+        let current=sources.load(actor.person_id,id).await.map_err(|_|AgentFailure::StorageUnavailable)?;
+        let after=sources.read_reservation_fence(actor.person_id,id).await.map_err(|_|AgentFailure::StorageUnavailable)?;
         if before!=expected.reservation || after!=expected.reservation || current.as_ref()!=Some(&expected.source){return Err(AgentFailure::StaleContext);}
     }
     Ok(())
@@ -606,6 +606,24 @@ impl ActionCalendarExecutor for NativeCalendarExecutor {
     }
 }
 
+impl NativePreparedCalendarEffect {
+    fn not_invoked(&self,intent:&ExecutionIntent,reason:floe_actions::ActionNotAppliedReason)->CalendarEffectOutcome {
+        CalendarEffectOutcome::NotApplied{proof:floe_actions::NotAppliedProof{
+            identity:intent.identity(),host_epoch:self.host_epoch,invocation_id:self.preparation_id,reason,rejected_at:Utc::now()}}
+    }
+}
+
+fn prewrite_reason(error:AgentFailure)->floe_actions::ActionNotAppliedReason {
+    use floe_actions::ActionNotAppliedReason as Reason;
+    match error {
+        AgentFailure::Cancelled|AgentFailure::Interrupted=>Reason::Cancelled,
+        AgentFailure::DeadlineExceeded=>Reason::Timeout,
+        AgentFailure::StaleContext|AgentFailure::PolicyDenied|AgentFailure::NotFound=>Reason::SourceChanged,
+        AgentFailure::StorageUnavailable|AgentFailure::VaultUnavailable|AgentFailure::VaultLocked|AgentFailure::CapabilityUnavailable=>Reason::ProviderUnavailable,
+        _=>Reason::ProviderRejected,
+    }
+}
+
 impl PreparedCalendarEffect for NativePreparedCalendarEffect {
     fn executor_generation(&self)->u64{self.actor.runtime_epoch}
     fn dispatch(self:Box<Self>,admission:DispatchAdmission,scope:ExecutionScope)->BoxFuture<'static,CalendarEffectOutcome>{
@@ -613,27 +631,27 @@ impl PreparedCalendarEffect for NativePreparedCalendarEffect {
             let intent=&admission.intent;
             if !admission.dispatch_required || intent.identity()!=self.identity || intent.effect!=self.record.effect || intent.source!=self.record.source
                 || self.record.authorization.as_ref()!=Some(&intent.authorization) || intent.action_id!=self.record.id
-                || intent.prepared_at>=self.record.expires_at || Utc::now()>=self.expires_at {
+                || intent.prepared_at>=self.record.expires_at {
                 return unknown(intent,ActionUnknownReason::InvalidReceipt);
             }
-            if scope.cancellation().is_cancelled(){return unknown(intent,ActionUnknownReason::CancelledAfterDispatch);}
+            if scope.cancellation().is_cancelled(){return self.not_invoked(intent,floe_actions::ActionNotAppliedReason::Cancelled);}
+            if Utc::now()>=self.expires_at{return self.not_invoked(intent,floe_actions::ActionNotAppliedReason::Timeout);}
             let source_check=scope.run(async {
                 require_action_source(self.sources.as_ref(),&self.actor,&intent.effect,&intent.source).await?;
                 require_dependency_sources(self.sources.as_ref(),&self.actor,&self.dependencies).await
             }).await;
-            if source_check.is_err(){
+            if let Err(failure)=source_check {
                 // This unique live capability has not called action_native.
                 // Executing is durable, but non-invocation is positive evidence.
-                return CalendarEffectOutcome::NotApplied{proof:floe_actions::NotAppliedProof{
-                    identity:intent.identity(),host_epoch:self.host_epoch,invocation_id:self.preparation_id,
-                    reason:floe_actions::ActionNotAppliedReason::SourceChanged,rejected_at:Utc::now()}};
+                return self.not_invoked(intent,prewrite_reason(failure));
             }
-            let Ok(deadline)=native_action_deadline(&scope) else{return unknown(intent,ActionUnknownReason::Timeout)};
+            let deadline=match native_action_deadline(&scope) {
+                Ok(value)=>value,Err(failure)=>return self.not_invoked(intent,prewrite_reason(failure)),
+            };
             let request=json!({"schema_version":1,"operation":"action_dispatch","admission":intent,"preparation_id":self.preparation_id,"host_epoch":self.host_epoch,"deadline":deadline});
             let result:CalendarEffectOutcome=match action_native(request,&scope,false).await{
                 Ok(value)=>value,
-                Err(NativeActionTransportError::NotInvoked(reason))=>return CalendarEffectOutcome::NotApplied{proof:floe_actions::NotAppliedProof{
-                    identity:intent.identity(),host_epoch:self.host_epoch,invocation_id:self.preparation_id,reason,rejected_at:Utc::now()}},
+                Err(NativeActionTransportError::NotInvoked(reason))=>return self.not_invoked(intent,reason),
                 Err(NativeActionTransportError::Unknown(AgentFailure::Cancelled))=>return unknown(intent,ActionUnknownReason::CancelledAfterDispatch),
                 Err(NativeActionTransportError::Unknown(AgentFailure::DeadlineExceeded))=>return unknown(intent,ActionUnknownReason::Timeout),
                 Err(_)=>return unknown(intent,ActionUnknownReason::ResponseLost),
@@ -666,8 +684,8 @@ impl From<AgentFailure> for NativeActionTransportError{fn from(value:AgentFailur
 async fn action_native<T:DeserializeOwned+serde::Serialize+Send+'static>(request:Value,scope:&ExecutionScope,readback:bool)->Result<T,NativeActionTransportError>{
     let input=serde_json::to_string(&request).map_err(|_|NativeActionTransportError::NotInvoked(floe_actions::ActionNotAppliedReason::ProviderRejected))?;
     if input.len()>floe_actions::MAX_ACTION_BYTES{return Err(NativeActionTransportError::NotInvoked(floe_actions::ActionNotAppliedReason::ProviderRejected));}
-    if scope.cancellation().is_cancelled(){return Err(AgentFailure::Cancelled.into());}
-    if Instant::now()>=scope.deadline(){return Err(AgentFailure::DeadlineExceeded.into());}
+    if scope.cancellation().is_cancelled(){return Err(NativeActionTransportError::NotInvoked(floe_actions::ActionNotAppliedReason::Cancelled));}
+    if Instant::now()>=scope.deadline(){return Err(NativeActionTransportError::NotInvoked(floe_actions::ActionNotAppliedReason::Timeout));}
     let task=tokio::task::spawn_blocking(move||{
         let bridge=if readback{&EVENT_KIT_RECEIPTS}else{&EVENT_KIT};
         // These three driver errors are returned strictly before invoke().

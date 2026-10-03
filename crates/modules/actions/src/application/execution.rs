@@ -51,6 +51,10 @@ impl ActionsService {
         let unchanged_source=self.observe_source(actor,&record.effect).await.is_ok_and(|current|current==source);
         let unchanged_events=self.current_events(actor,&record.effect,scope).await.is_ok_and(|current|current==events);
         let unchanged_dependencies=self.revalidate_dependency_sources(actor,&dependencies,scope).await.is_ok();
+        // These asynchronous observations may overlap shutdown or expiry.
+        // Fence the actual owner/job again before durable dispatch admission.
+        if self.closed.load(Ordering::Acquire)||scope.cancellation().is_cancelled(){return self.stop(&record,PreDispatchState::Cancelled).await;}
+        if Instant::now()>=scope.deadline(){return self.stop(&record,PreDispatchState::Blocked{reason:ActionBlockedReason::ExecutorUnavailable}).await;}
         if !unchanged_source || !unchanged_events || !unchanged_dependencies {
             return self.stop(&record,PreDispatchState::Blocked{reason:ActionBlockedReason::SourceChanged}).await;
         }
