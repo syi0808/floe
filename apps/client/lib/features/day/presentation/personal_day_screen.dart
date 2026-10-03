@@ -436,8 +436,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   void _syncConnectionReadiness() {
     final agent = agentController;
     final ready = agent?.vaultState == AgentVaultState.ready;
-    final opening = agent != null &&
-        (agent.vaultController.busy || (!ready && agent.busy));
+    final opening =
+        agent != null && (agent.vaultController.busy || (!ready && agent.busy));
     widget.connectionsController?.updateStorage(
       state: agent?.vaultState,
       opening: opening,

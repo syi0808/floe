@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "Userconfirmedplainstartupresolved;2e97Applebuildpass. Fake-keyencryptedreproconfirmsKnowledgeDDLspacingfailure. Allfourencryptedcomparatorfamilies nowshareproventokencomparator; Connections observesexistingVaultreadinessandretains typeddiagnostics. Newcoherentbatch unverified pendingfake-keypositive/negative, formatting, analyzerandbuild. No realKeychain/pairing/userreset.",
+  "verification": "Exact2e7 fakekeyencryptedcreate/reopenPASS and changedLearningCHECKrejected; Rustfmtzerodelta. Dartanalyzerpassed0errors0warnings132infos; capturedfivefileformatdelta integrated, lockunchanged. Formatterexit1onlypostwriteanalyticsmetadata denial, no retry. Applebuildpending; no realKeychain/userdata/pairing.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "f055ee39d8f728a4fbb57425b91ca1c93ec10f64",
+  "current_correction_source_commit": "385134549631265c52c6bcdabcfbbb2372b6340f",
   "current_status_document": "docs/plans/t0-execution-status.json"
 }

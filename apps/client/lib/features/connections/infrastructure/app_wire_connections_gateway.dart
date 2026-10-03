@@ -364,7 +364,10 @@ final class AppWireConnectionsGateway implements ConnectionsGateway {
         SourceSummary() => ('source_ref', decoded.sourceRef.value),
         SourceReview() => ('source_ref', decoded.sourceRef.value),
         ObserveReview() => ('source_ref', decoded.sourceRef.value),
-        IntegrationReview() => ('integration_ref', decoded.integrationRef.value),
+        IntegrationReview() => (
+          'integration_ref',
+          decoded.integrationRef.value,
+        ),
         _ => null,
       };
       if (expected != null &&
@@ -399,8 +402,10 @@ final class AppWireConnectionsGateway implements ConnectionsGateway {
       final native = error is NativeTransportException ? error : null;
       final owner = native?.ownerFailure;
       final code = _safeFailureToken(native?.code) ?? 'invalid_response';
-      final reason = _safeFailureToken(owner?.reason) ??
-          _safeFailureToken(native?.metadata['reason_code']) ?? code;
+      final reason =
+          _safeFailureToken(owner?.reason) ??
+          _safeFailureToken(native?.metadata['reason_code']) ??
+          code;
       final requestId = request['request_id']! as String;
       final errorId = AppDiagnostics.error(
         component: 'connections',
@@ -430,5 +435,5 @@ final class AppWireConnectionsGateway implements ConnectionsGateway {
 
 String? _safeFailureToken(String? value) =>
     value != null && RegExp(r'^[a-zA-Z0-9_.:-]{1,128}$').hasMatch(value)
-        ? value
-        : null;
+    ? value
+    : null;

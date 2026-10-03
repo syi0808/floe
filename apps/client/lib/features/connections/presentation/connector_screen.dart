@@ -83,7 +83,8 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
             child: const Text('Recover the same request'),
           ),
         GatewayConnectionPanel(controller: current),
-        if ((current.ready ? current.operation : null) case final operation?) ...[
+        if ((current.ready ? current.operation : null)
+            case final operation?) ...[
           const SizedBox(height: FloeSpace.base),
           Text(
             current.operationLabel ?? 'Connection operation',

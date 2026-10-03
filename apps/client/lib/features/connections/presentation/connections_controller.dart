@@ -33,8 +33,8 @@ final class ConnectionsController extends ChangeNotifier {
 
   bool get ready => _vaultState == AgentVaultState.ready && !storageOpening;
   bool get busy => _commandBusy || !ready;
-  bool get _acceptCommandResult => !_disposed && ready &&
-      _activeCommandGeneration == _readinessGeneration;
+  bool get _acceptCommandResult =>
+      !_disposed && ready && _activeCommandGeneration == _readinessGeneration;
 
   String get storageMessage {
     if (storageOpening) return 'Opening local secure storage…';
@@ -59,8 +59,11 @@ final class ConnectionsController extends ChangeNotifier {
     if (_disposed) return;
     final reason = _safeToken(failureReason);
     final incident = _safeToken(incidentId);
-    if (_vaultState == state && storageOpening == opening &&
-        storageFailure == reason && storageIncidentId == incident) return;
+    if (_vaultState == state &&
+        storageOpening == opening &&
+        storageFailure == reason &&
+        storageIncidentId == incident)
+      return;
     final wasReady = ready;
     _vaultState = state;
     storageOpening = opening;
@@ -94,6 +97,7 @@ final class ConnectionsController extends ChangeNotifier {
     if (_disposed || !ready || generation != _readinessGeneration) return;
     await observeOperation();
   }
+
   bool _disposed = false;
   int _loadGeneration = 0;
   Timer? _pairingObservation;
@@ -113,7 +117,10 @@ final class ConnectionsController extends ChangeNotifier {
       if (_pendingCommand == null) failure = null;
     } on Object catch (error) {
       if (!_disposed && ready && generation == _loadGeneration) {
-        failure = _failureMessage(error, 'Connection status could not be loaded.');
+        failure = _failureMessage(
+          error,
+          'Connection status could not be loaded.',
+        );
       }
     }
     _notify();
@@ -150,8 +157,11 @@ final class ConnectionsController extends ChangeNotifier {
       };
       // Preserve the existing terminal/uncertain rule. Readiness changes above
       // never release a retained command or create a replacement command ID.
-      if (code != null && code != 'timeout' && code != 'ffi' &&
-          code != 'invalid_response') _pendingCommand = null;
+      if (code != null &&
+          code != 'timeout' &&
+          code != 'ffi' &&
+          code != 'invalid_response')
+        _pendingCommand = null;
       failure = _failureMessage(
         error,
         'The result is not confirmed. Check status or recover the same request.',
@@ -220,22 +230,29 @@ final class ConnectionsController extends ChangeNotifier {
       final value = await gateway.observePairing(
         operationRef: current.operationRef,
       );
-      if (_disposed || !ready || generation != _readinessGeneration ||
-          pairing?.operationRef != current.operationRef) return;
+      if (_disposed ||
+          !ready ||
+          generation != _readinessGeneration ||
+          pairing?.operationRef != current.operationRef)
+        return;
       _setPairing(value);
       await load();
     } on Object catch (error) {
       if (_disposed || !ready || generation != _readinessGeneration) return;
       failure = _failureMessage(
-        error, 'Pairing status is unavailable. The operation is still retained.',
+        error,
+        'Pairing status is unavailable. The operation is still retained.',
       );
       _notify();
     }
   }
 
   void _setPairing(PairingSnapshot value) {
-    if (_disposed || !ready || (_activeCommandGeneration != null &&
-        _activeCommandGeneration != _readinessGeneration)) return;
+    if (_disposed ||
+        !ready ||
+        (_activeCommandGeneration != null &&
+            _activeCommandGeneration != _readinessGeneration))
+      return;
     final previous = pairing;
     if (previous?.operationRef == value.operationRef &&
         value.revision < previous!.revision)
@@ -285,19 +302,19 @@ final class ConnectionsController extends ChangeNotifier {
     final expectedRevision = _integrationRevision;
     if (expectedRevision == null) return Future<void>.value();
     return _command((id) async {
-        _setOperation(
-          await gateway.startIntegration(
-            commandId: id,
-            integrationRef: review.integrationRef,
-            reviewedSelectionRef: review.reviewRef,
-            expectedRevision: expectedRevision,
-          ),
-        );
-        if (_acceptCommandResult) {
-          integrationReview = null;
-          operationLabel = review.displayName;
-        }
-      });
+      _setOperation(
+        await gateway.startIntegration(
+          commandId: id,
+          integrationRef: review.integrationRef,
+          reviewedSelectionRef: review.reviewRef,
+          expectedRevision: expectedRevision,
+        ),
+      );
+      if (_acceptCommandResult) {
+        integrationReview = null;
+        operationLabel = review.displayName;
+      }
+    });
   }
 
   Future<void> prepareSource(SourceSummary value) => _command((id) async {
@@ -389,22 +406,29 @@ final class ConnectionsController extends ChangeNotifier {
       final value = await gateway.observeOperation(
         operationRef: current.operationRef,
       );
-      if (_disposed || !ready || generation != _readinessGeneration ||
-          operation?.operationRef != current.operationRef) return;
+      if (_disposed ||
+          !ready ||
+          generation != _readinessGeneration ||
+          operation?.operationRef != current.operationRef)
+        return;
       _setOperation(value);
       await load();
     } on Object catch (error) {
       if (_disposed || !ready || generation != _readinessGeneration) return;
       failure = _failureMessage(
-        error, 'Connection status is unavailable. Check it again.',
+        error,
+        'Connection status is unavailable. Check it again.',
       );
       _notify();
     }
   }
 
   void _setOperation(ConnectionOperationSnapshot value) {
-    if (_disposed || !ready || (_activeCommandGeneration != null &&
-        _activeCommandGeneration != _readinessGeneration)) return;
+    if (_disposed ||
+        !ready ||
+        (_activeCommandGeneration != null &&
+            _activeCommandGeneration != _readinessGeneration))
+      return;
     final previous = operation;
     if (previous?.operationRef == value.operationRef &&
         value.revision < previous!.revision)
@@ -447,21 +471,23 @@ final class ConnectionsController extends ChangeNotifier {
 
 String? _safeToken(String? value) =>
     value != null && RegExp(r'^[a-zA-Z0-9_.:-]{1,128}$').hasMatch(value)
-        ? value
-        : null;
+    ? value
+    : null;
 
 String _failureMessage(Object error, String fallback) {
   final reason = switch (error) {
     ConnectionsRequestFailure() => error.reason,
-    NativeTransportException() => _safeToken(error.ownerFailure?.reason) ??
-        _safeToken(error.metadata['reason_code']) ?? _safeToken(error.code),
+    NativeTransportException() =>
+      _safeToken(error.ownerFailure?.reason) ??
+          _safeToken(error.metadata['reason_code']) ??
+          _safeToken(error.code),
     _ => null,
   };
   if (reason == null) return fallback;
   final message = switch (reason) {
     'vault_locked' => 'Local secure storage is locked.',
-    'vault_unavailable' || 'storage_unavailable' =>
-      'Local secure storage is unavailable ($reason).',
+    'vault_unavailable' ||
+    'storage_unavailable' => 'Local secure storage is unavailable ($reason).',
     'unsupported_version' => 'Local secure storage has an unsupported format.',
     _ => 'The connection request could not complete ($reason).',
   };

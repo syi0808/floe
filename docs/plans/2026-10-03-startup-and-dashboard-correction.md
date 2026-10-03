@@ -58,3 +58,10 @@ All four encrypted DDL comparator families (Knowledge, Actions, Gateway receipt 
 Settings previously started the existing Vault/Conversation load asynchronously while Connections rendered active controls and discarded typed errors. The client now observes that same lifecycle, disables Connections commands until actual Vault Ready, refreshes after readiness and fences late presentation completions. It creates no separate Vault workflow and does not require a successful Conversation Session once Vault is ready. Correlated diagnostic records contain only safe typed error fields/request IDs and sanitized summaries; displayed errors retain their Error ID. Existing uncertain command IDs survive readiness changes. The pre-existing terminal-versus-uncertain classification of individual native errors is unchanged.
 
 Dashboard login was separately confirmed by the user after deleting stale browser cookies. The proposed compatibility-cookie source change was cancelled and reverted before any commit. No cookie cleanup code or agent credential action was published.
+
+
+## Encrypted correction proof on 2e7d2983
+
+Scratch encrypted Vault create/drop/reopen passed with the in-memory fake key provider. A copied scratch profile with Learning CHECK changed from version=1 to version>=0, retaining marker(1,1), was rejected as UnsupportedVersion. All four consumers use the shared comparator; no duplicate text normalizers remain. Rust formatting produced no delta. No OS Keychain/user-data/pairing operations were involved.
+
+Dart analysis passed with zero errors, zero warnings and 132 informational diagnostics. One formatting pass changed five of eight targeted files; the formatter completed writes then returned1 on denied analytics-session metadata access, with no retry. The exact captured formatting-only patch is integrated; lockfile remained unchanged. Full app builds await this formatted checkpoint.
