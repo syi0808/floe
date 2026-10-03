@@ -89,6 +89,7 @@ pub struct BindingMutationReceipt {
     pub assignment_ref: Uuid,
     pub binding_revision: u64,
     pub registry_revision: u64,
+    pub committed_at_unix_ms: i64,
 }
 
 pub trait ExpertClock: Send + Sync { fn now_unix_ms(&self) -> i64; }
@@ -127,5 +128,7 @@ pub trait ExpertsOwner: Send + Sync {
         candidate_ids: Vec<Uuid>, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<ExpertDirectorySnapshot, AgentFailure>>;
     fn binding_operation_receipt<'a>(&'a self, actor: &'a OwnerActor, command_id: CommandId,
+        scope: &'a ExecutionScope) -> BoxFuture<'a, Result<Option<BindingMutationReceipt>, AgentFailure>>;
+    fn binding_review_receipt<'a>(&'a self, actor: &'a OwnerActor, review_ref: crate::BindingReviewRef,
         scope: &'a ExecutionScope) -> BoxFuture<'a, Result<Option<BindingMutationReceipt>, AgentFailure>>;
 }

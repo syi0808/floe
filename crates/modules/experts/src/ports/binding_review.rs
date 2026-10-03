@@ -52,6 +52,7 @@ pub struct BindingReviewDescriptor {
 pub struct BindingReplacementReceipt {
     pub review_ref: BindingReviewRef,
     pub registry: crate::RegistryCommitReceipt,
+    pub committed_at_unix_ms: i64,
 }
 
 pub struct ReviewedBindingReplacement {
@@ -71,6 +72,8 @@ pub trait BindingReviewRepository: Send + Sync {
         -> BoxFuture<'a, Result<BindingReviewDescriptor, AgentFailure>>;
     fn find_replacement<'a>(&'a self, actor: &'a OwnerActor, command_id: CommandId, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<Option<BindingReplacementReceipt>, AgentFailure>>;
+    fn find_review_replacement<'a>(&'a self, actor: &'a OwnerActor, reference: BindingReviewRef,
+        scope: &'a ExecutionScope) -> BoxFuture<'a, Result<Option<BindingReplacementReceipt>, AgentFailure>>;
     fn commit_replacement<'a>(&'a self, replacement: ReviewedBindingReplacement, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<BindingReplacementReceipt, AgentFailure>>;
 }

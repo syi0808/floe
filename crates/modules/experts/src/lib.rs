@@ -45,7 +45,7 @@ pub use ports::candidate_catalog::{Candidate, CandidateAvailability, CandidateCa
     CandidateQuery, CandidateSnapshot, CandidateSourceExpectation};
 pub use ports::registry_repository::{RegistryCommit, RegistryCommitReceipt, RegistryRepository};
 pub use program::{ExpertFinalOutput, ExpertProgram, ExpertProgramRequest, ExpertProgramSpec,
-    ExpertToolObservation, ExpertToolSpec};
+    ExpertSourceObservation, ExpertToolObservation, ExpertToolSpec};
 pub use ports::source::{ExpertProjectionPort, ExpertProjectionRequest, ExpertSourcePort,
     ExpertSourceRead, ExpertSourceRequest};
 

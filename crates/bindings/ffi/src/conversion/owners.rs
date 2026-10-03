@@ -95,7 +95,7 @@ fn classify_failure(failure: &AgentFailure, stage: &str) -> FailureClassificatio
             | "remote_connection_observe_review"
     );
     let (domain, category, reason_code) = match failure {
-        AgentFailure::VaultUnavailable | AgentFailure::StorageUnavailable => (
+        AgentFailure::VaultUnavailable | AgentFailure::VaultLocked | AgentFailure::StorageUnavailable => (
             AgentFailureDomain::Vault,
             AgentFailureCategory::Transient,
             reason_code.clone(),
@@ -204,7 +204,7 @@ fn classify_failure(failure: &AgentFailure, stage: &str) -> FailureClassificatio
     };
 
     let mut safe_actions = match failure {
-        AgentFailure::VaultUnavailable | AgentFailure::StorageUnavailable => {
+        AgentFailure::VaultUnavailable | AgentFailure::VaultLocked | AgentFailure::StorageUnavailable => {
             vec![AgentFailureSafeAction::ReopenVault]
         }
         _ if stage == "conversation_session" => {
@@ -301,7 +301,7 @@ fn seal_session(failure: &AgentFailure, recovery: AgentVaultRecoveryActionDto) -
     matches!(recovery, AgentVaultRecoveryActionDto::ReopenVault)
         || matches!(
             failure,
-            AgentFailure::VaultUnavailable
+            AgentFailure::VaultUnavailable | AgentFailure::VaultLocked
                 | AgentFailure::StorageUnavailable
                 | AgentFailure::Interrupted
         )
@@ -343,7 +343,7 @@ fn recovery_action(failure: &AgentFailure, stage: &str) -> AgentVaultRecoveryAct
         {
             AgentVaultRecoveryActionDto::ReviewSource
         }
-        AgentFailure::VaultUnavailable | AgentFailure::StorageUnavailable => {
+        AgentFailure::VaultUnavailable | AgentFailure::VaultLocked | AgentFailure::StorageUnavailable => {
             AgentVaultRecoveryActionDto::ReopenVault
         }
         _ => AgentVaultRecoveryActionDto::None,

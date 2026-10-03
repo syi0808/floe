@@ -32,8 +32,21 @@ pub struct ExpertProgramSpec {
 pub struct ExpertToolObservation {
     pub call: ToolCall,
     pub requirement_key: String,
-    pub payload: Value,
-    pub coverage: floe_agent_contract::DependencyCoverage,
+    pub outcome: ExpertSourceObservation,
+}
+
+#[derive(Clone, Debug)]
+pub enum ExpertSourceObservation {
+    Ready { payload: Value, coverage: floe_agent_contract::DependencyCoverage },
+    Unavailable { reason: floe_context_contract::SourceUnavailable },
+}
+impl ExpertToolObservation {
+    pub fn coverage(&self) -> floe_agent_contract::DependencyCoverage {
+        match &self.outcome {
+            ExpertSourceObservation::Ready { coverage, .. } => coverage.clone(),
+            ExpertSourceObservation::Unavailable { .. } => floe_agent_contract::DependencyCoverage::Independent,
+        }
+    }
 }
 
 pub struct ExpertFinalOutput {

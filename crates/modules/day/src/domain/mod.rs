@@ -3,12 +3,14 @@ mod capture;
 mod entity;
 mod projection;
 mod refresh;
+mod product;
 
 pub use calendar::{
     CalendarBatch, CalendarExternalRevision, CalendarFailure, CalendarMirror, CalendarMirrorState, CalendarMirrorSourceState,
     CalendarRange, CalendarRecord, CalendarSelection, CalendarSource, CalendarSyncStatus,
 };
 pub use refresh::*;
+pub use product::*;
 pub use capture::{Capture, CaptureProcessing, CaptureSource, DomainRef};
 pub use entity::{
     AllDaySchedule, DomainError, Event, EventSchedule, Note, Priority, SourceRef, Task,

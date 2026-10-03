@@ -38,6 +38,7 @@ pub(crate) fn service_failure(failure: floe_kernel::AgentFailure) -> crate::Serv
         | AgentFailure::AccessReviewRequired => ServiceError::AccessDenied,
         AgentFailure::StorageUnavailable
         | AgentFailure::VaultUnavailable
+        | AgentFailure::VaultLocked
         | AgentFailure::ModelUnavailable
         | AgentFailure::LocalModelUnavailable
         | AgentFailure::ServerModelUnavailable

@@ -644,6 +644,7 @@ pub(crate) fn agent_failure(failure: AgentFailure) -> AppWireErrorDto {
         | AgentFailure::AccessReviewRequired => AppWireErrorCodeDto::AccessDenied,
         AgentFailure::StorageUnavailable
         | AgentFailure::VaultUnavailable
+        | AgentFailure::VaultLocked
         | AgentFailure::ModelUnavailable
         | AgentFailure::LocalModelUnavailable
         | AgentFailure::ServerModelUnavailable

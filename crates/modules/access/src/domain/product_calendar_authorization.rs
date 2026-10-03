@@ -118,6 +118,7 @@ impl ProductCalendarChallenge {
 pub struct ProductCalendarSigningCommand<'a> {
     pub permit: &'a ProductCalendarReadPermit,
     pub scope: &'a floe_execution::ExecutionScope,
+    pub producer: crate::RemoteProducerIdentity,
     pub expected: ProductCalendarChallenge,
     pub canonical_bytes: Vec<u8>,
     pub producer_signature: Vec<u8>,
@@ -128,7 +129,7 @@ impl ProductCalendarSigningCommand<'_> {
         self.validate_claims(claims, person_id, owner_key_id, self.permit.clock.now())
     }
     pub fn validate_claims(&self, claims: &ProductCalendarChallenge, person_id: floe_kernel::PersonId, owner_key_id: &str, now: DateTime<Utc>) -> Result<(), AgentFailure> {
-        if self.canonical_bytes.is_empty() || self.canonical_bytes.len() > 64 * 1024 || self.producer_signature.len() != 64 || claims != &self.expected || claims.claims().person_id != person_id.to_string() || claims.key_id() != owner_key_id { return Err(AgentFailure::PolicyDenied); }
+        if self.canonical_bytes.is_empty() || self.canonical_bytes.len() > 64 * 1024 || self.producer_signature.len() != 64 || claims != &self.expected || claims.claims().person_id != person_id.to_string() || claims.key_id() != owner_key_id || self.producer.schema_version != 1 || self.producer.instance_id != claims.claims().producer_instance || self.producer.fingerprint != claims.claims().producer_key_fingerprint || self.producer.audience != claims.claims().audience || self.producer.execution_owner != claims.claims().source.execution_owner { return Err(AgentFailure::PolicyDenied); }
         claims.validate_permit(self.permit, now)
     }
 }

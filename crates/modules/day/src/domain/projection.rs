@@ -2,7 +2,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use floe_kernel::{EventId, PersonId};
 use serde::{Deserialize, Serialize};
 
-use super::{CalendarMirrorState, Event, EventSchedule, Note, Task};
+use super::{DayCalendarCoverage, DayTimelineItem, Event, EventSchedule, Note, Task};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum TimelineItem {
@@ -20,9 +20,9 @@ pub struct DaySnapshot {
     pub now_event_id: Option<EventId>,
     pub next_event_id: Option<EventId>,
     pub overdue_task_count: usize,
-    pub items: Vec<TimelineItem>,
+    pub items: Vec<DayTimelineItem>,
     #[serde(default)]
-    pub calendar: Option<CalendarMirrorState>,
+    pub calendar: Option<DayCalendarCoverage>,
     pub calendar_mirror_revision: Option<u64>,
 }
 
@@ -162,6 +162,6 @@ pub fn project_day_with_end_offset(
         now_event_id,
         next_event_id,
         overdue_task_count,
-        items,
+        items: items.into_iter().map(|item| match item { TimelineItem::Event(event) => DayTimelineItem::Event(super::project_event(&event)), TimelineItem::Task(task) => DayTimelineItem::Task(super::project_task(&task)), TimelineItem::Note(note) => DayTimelineItem::Note(super::project_note(&note)) }).collect(),
     }
 }

@@ -138,7 +138,16 @@ func (client *Client) Calendar(ctx context.Context, rangeStart, rangeEnd time.Ti
 
 func (client *Client) get(ctx context.Context, path string, output any) error {
 	token, err := client.tokens.Token(ctx)
-	if err != nil || !validOpaque(token, 16_384) {
+	if err != nil {
+		if contextErr := contextReadError(ctx, err); contextErr != nil {
+			return contextErr
+		}
+		return ErrCredentialExpired
+	}
+	if contextErr := contextReadError(ctx, nil); contextErr != nil {
+		return contextErr
+	}
+	if !validOpaque(token, 16_384) {
 		return ErrCredentialExpired
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.baseURL+path, nil)
@@ -149,6 +158,9 @@ func (client *Client) get(ctx context.Context, path string, output any) error {
 	request.Header.Set("Prefer", `outlook.timezone="UTC"`)
 	response, err := client.http.Do(request)
 	if err != nil {
+		if contextErr := contextReadError(ctx, err); contextErr != nil {
+			return contextErr
+		}
 		return ErrUnavailable
 	}
 	defer response.Body.Close()
@@ -166,6 +178,19 @@ func (client *Client) get(ctx context.Context, path string, output any) error {
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponse+1))
 	if err != nil || len(data) > maxResponse || json.Unmarshal(data, output) != nil {
 		return ErrInvalidResponse
+	}
+	return nil
+}
+
+func contextReadError(ctx context.Context, err error) error {
+	if contextErr := ctx.Err(); contextErr != nil {
+		return contextErr
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
 	}
 	return nil
 }
@@ -209,7 +234,7 @@ func parseEventTime(value eventDateTime) (time.Time, error) {
 	if !validOpaque(value.DateTime, 64) || !strings.EqualFold(value.TimeZone, "UTC") {
 		return time.Time{}, ErrInvalidResponse
 	}
-	if strings.HasSuffix(value.DateTime, "Z") || strings.ContainsAny(value.DateTime[10:], "+-") {
+	if strings.HasSuffix(value.DateTime, "Z") || len(value.DateTime) >= 10 && strings.ContainsAny(value.DateTime[10:], "+-") {
 		return time.Parse(time.RFC3339Nano, value.DateTime)
 	}
 	return time.ParseInLocation("2006-01-02T15:04:05.9999999", value.DateTime, time.UTC)

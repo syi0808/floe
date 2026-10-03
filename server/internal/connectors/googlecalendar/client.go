@@ -129,6 +129,9 @@ func (client *Client) Calendar(ctx context.Context, rangeStart, rangeEnd time.Ti
 
 func (client *Client) get(ctx context.Context, path string, output any) error {
 	token, err := client.tokens.Token(ctx)
+	if contextErr := contextFailure(ctx, err); contextErr != nil {
+		return contextErr
+	}
 	if err != nil || !validOpaque(token, 16_384) {
 		return ErrCredentialExpired
 	}
@@ -139,6 +142,9 @@ func (client *Client) get(ctx context.Context, path string, output any) error {
 	request.Header.Set("Authorization", "Bearer "+token)
 	response, err := client.http.Do(request)
 	if err != nil {
+		if contextErr := contextFailure(ctx, err); contextErr != nil {
+			return contextErr
+		}
 		return ErrUnavailable
 	}
 	defer response.Body.Close()
@@ -154,8 +160,24 @@ func (client *Client) get(ctx context.Context, path string, output any) error {
 		return ErrUnavailable
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponse+1))
+	if contextErr := contextFailure(ctx, err); contextErr != nil {
+		return contextErr
+	}
 	if err != nil || len(data) > maxResponse || json.Unmarshal(data, output) != nil {
 		return ErrInvalidResponse
+	}
+	return nil
+}
+
+func contextFailure(ctx context.Context, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
 	}
 	return nil
 }

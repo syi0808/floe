@@ -133,6 +133,7 @@ pub enum AgentFailure {
     Conflict,
     StorageUnavailable,
     VaultUnavailable,
+    VaultLocked,
     PolicyDenied,
     ConsentRequired,
     ModelUnavailable,

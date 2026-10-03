@@ -51,7 +51,7 @@ impl TaskEvidence {
     }
     fn coverage(&self) -> Result<DependencyCoverage, AgentFailure> {
         self.observations()?.iter().try_fold(DependencyCoverage::Independent, |coverage, read|
-            coverage.merge(&read.coverage).map_err(|_| AgentFailure::PolicyDenied))
+            coverage.merge(&read.coverage()).map_err(|_| AgentFailure::PolicyDenied))
     }
 }
 
@@ -86,7 +86,9 @@ impl ToolPort for ExpertTools<'_> {
                         coverage: read.coverage.clone(), issue: None };
                     result.validate(call.call_id, maximum)?;
                     let observation = ExpertToolObservation { call, requirement_key: requirement.key.clone(),
-                        payload: read.payload.clone(), coverage: read.coverage.clone() };
+                        outcome: crate::ExpertSourceObservation::Ready {
+                            payload: read.payload.clone(), coverage: read.coverage.clone(),
+                        } };
                     let mut reads = self.evidence.reads.lock().map_err(|_| AgentFailure::StorageUnavailable)?;
                     if reads.len() >= 32 || reads.iter().any(|prior| prior.observation.call.call_id == observation.call.call_id)
                     { return Err(AgentFailure::BudgetExceeded); }
@@ -96,7 +98,23 @@ impl ToolPort for ExpertTools<'_> {
                 }
                 SourceReadOutcome::NeedsUserAction(blockers) =>
                     Ok(ToolInvocationOutcome::NeedsSourceReview { call_id: call.call_id, blockers }),
-                SourceReadOutcome::Unavailable(_) => Err(AgentFailure::CapabilityUnavailable),
+                SourceReadOutcome::Unavailable(reason) => {
+                    let mut reads = self.evidence.reads.lock().map_err(|_| AgentFailure::StorageUnavailable)?;
+                    if reads.len() >= 32 || reads.iter().any(|prior| prior.observation.call.call_id == call.call_id)
+                    { return Err(AgentFailure::BudgetExceeded); }
+                    let call_id = call.call_id;
+                    reads.push(CapturedRead { observation: ExpertToolObservation {
+                        call, requirement_key: requirement.key.clone(),
+                        outcome: crate::ExpertSourceObservation::Unavailable { reason },
+                    } });
+                    Ok(ToolInvocationOutcome::Completed(ToolResult {
+                        call_id, text: "Source is unavailable for this read.".into(), artifacts: vec![],
+                        coverage: DependencyCoverage::Independent,
+                        issue: Some(floe_agent_contract::OutcomeIssue {
+                            failure: AgentFailure::CapabilityUnavailable, retryable: false,
+                        }),
+                    }))
+                }
             }
         })
     }
