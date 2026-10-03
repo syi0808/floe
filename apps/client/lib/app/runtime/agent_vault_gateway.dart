@@ -38,7 +38,7 @@ class AgentVaultException implements Exception {
     recoveryAction: ownerFailure?.recovery,
     domain: ownerFailure?.domain,
     category: ownerFailure?.category,
-    reasonCode: ownerFailure?.reason,
+    reasonCode: ownerFailure?.reason ?? metadata['reason_code'],
     safeActions: ownerFailure?.safeActions.toList(growable: false) ?? const [],
     incidentId: ownerFailure?.incidentId,
     correlationRequestId: ownerFailure?.correlationId,

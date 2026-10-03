@@ -25,14 +25,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 (),
             )
             .await
-            .map_err(|_| AgentFailure::UnsupportedVersion)?;
+            .map_err(storage)?;
         connection
             .query(
                 "SELECT operation_id FROM access_grant_operations LIMIT 1",
                 (),
             )
             .await
-            .map_err(|_| AgentFailure::UnsupportedVersion)?;
+            .map_err(storage)?;
         Ok(())
     }
     async fn operation_on(

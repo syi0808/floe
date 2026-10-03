@@ -134,29 +134,31 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     [*name],
                 )
                 .await
-                .map_err(|_| AgentFailure::UnsupportedVersion)?;
+                .map_err(storage)?;
             let row = rows
                 .next()
                 .await
                 .map_err(storage)?
                 .ok_or(AgentFailure::UnsupportedVersion)?;
             let actual = row.get::<String>(0).map_err(storage)?;
-            let normalize = |sql: &str| {
-                sql.split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    .to_ascii_lowercase()
-            };
-            if rows.next().await.map_err(storage)?.is_some()
-                || normalize(&actual) != normalize(expected)
-            {
+            if rows.next().await.map_err(storage)?.is_some() {
                 return Err(AgentFailure::UnsupportedVersion);
+            }
+            match crate::schema_sql::compare(&actual, expected) {
+                crate::schema_sql::Comparison::Equivalent => {}
+                crate::schema_sql::Comparison::Different
+                | crate::schema_sql::Comparison::InvalidStored => {
+                    return Err(AgentFailure::UnsupportedVersion);
+                }
+                crate::schema_sql::Comparison::InvalidExpected => {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
             }
         }
         let mut rows = connection
             .query("SELECT id, version FROM knowledge_store_schema", ())
             .await
-            .map_err(|_| AgentFailure::UnsupportedVersion)?;
+            .map_err(storage)?;
         let row = rows
             .next()
             .await

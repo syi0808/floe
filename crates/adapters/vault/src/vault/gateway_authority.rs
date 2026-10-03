@@ -1611,17 +1611,18 @@ async fn validate_product_receipt_schema(tx: &Transaction<'_>) -> Result<(), Age
             .ok_or(AgentFailure::UnsupportedVersion)?
             .get(0)
             .map_err(storage)?;
-        let canonical = |value: &str| {
-            value
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .to_ascii_lowercase()
-        };
-        if canonical(&actual) != canonical(expected)
-            || rows.next().await.map_err(storage)?.is_some()
-        {
+        if rows.next().await.map_err(storage)?.is_some() {
             return Err(AgentFailure::UnsupportedVersion);
+        }
+        match crate::schema_sql::compare(&actual, expected) {
+            crate::schema_sql::Comparison::Equivalent => {}
+            crate::schema_sql::Comparison::Different
+            | crate::schema_sql::Comparison::InvalidStored => {
+                return Err(AgentFailure::UnsupportedVersion);
+            }
+            crate::schema_sql::Comparison::InvalidExpected => {
+                return Err(AgentFailure::StorageUnavailable);
+            }
         }
     }
     Ok(())

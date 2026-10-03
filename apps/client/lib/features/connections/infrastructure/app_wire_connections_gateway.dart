@@ -1,4 +1,6 @@
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
+import 'package:floe_client/app/runtime/native_transport.dart';
+import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 import 'package:floe_client/features/connections/application/connections_gateway.dart';
 import 'package:floe_client/features/connections/domain/connection_models.dart';
@@ -341,56 +343,92 @@ final class AppWireConnectionsGateway implements ConnectionsGateway {
       if (commandId != null) 'command_id': commandId,
       commandId == null ? 'query' : 'command': {'kind': kind, ...fields},
     };
-    final value = commandId == null
-        ? await _transport.queryV2(request)
-        : await _transport.commandV2(request);
-    final result = connectionObject(value, {'kind', key});
-    if (result['kind'] != resultKind)
-      throw const FormatException('Mismatched Connections reply.');
-    final decoded = decode(result[key]);
-    final input = fields['mutation'] is Map
-        ? Map<String, Object?>.from(fields['mutation']! as Map)
-        : fields;
-    final expected = switch (decoded) {
-      GatewaySummary() => ('gateway_ref', decoded.gatewayRef.value),
-      PairingSnapshot() => ('operation_ref', decoded.operationRef.value),
-      ConnectionOperationSnapshot() => (
-        'operation_ref',
-        decoded.operationRef.value,
-      ),
-      SourceSummary() => ('source_ref', decoded.sourceRef.value),
-      SourceReview() => ('source_ref', decoded.sourceRef.value),
-      ObserveReview() => ('source_ref', decoded.sourceRef.value),
-      IntegrationReview() => ('integration_ref', decoded.integrationRef.value),
-      _ => null,
-    };
-    if (expected != null &&
-        input[expected.$1] != null &&
-        input[expected.$1] != expected.$2) {
-      throw const FormatException('Connections identity changed.');
-    }
-    final review = switch (decoded) {
-      SourceReview() => decoded.reviewRef,
-      ObserveReview() => decoded.reviewRef,
-      IntegrationReview() => decoded.reviewRef,
-      _ => null,
-    };
-    final expectedReview = input['review_ref'];
-    if (review != null &&
-        expectedReview is Map &&
-        (review.id != expectedReview['id'] ||
-            review.revision != expectedReview['revision'] ||
-            review.digest != expectedReview['digest'])) {
-      throw const FormatException(
-        'Reviewed meaning changed during inspection.',
+    try {
+      final value = commandId == null
+          ? await _transport.queryV2(request)
+          : await _transport.commandV2(request);
+      final result = connectionObject(value, {'kind', key});
+      if (result['kind'] != resultKind)
+        throw const FormatException('Mismatched Connections reply.');
+      final decoded = decode(result[key]);
+      final input = fields['mutation'] is Map
+          ? Map<String, Object?>.from(fields['mutation']! as Map)
+          : fields;
+      final expected = switch (decoded) {
+        GatewaySummary() => ('gateway_ref', decoded.gatewayRef.value),
+        PairingSnapshot() => ('operation_ref', decoded.operationRef.value),
+        ConnectionOperationSnapshot() => (
+          'operation_ref',
+          decoded.operationRef.value,
+        ),
+        SourceSummary() => ('source_ref', decoded.sourceRef.value),
+        SourceReview() => ('source_ref', decoded.sourceRef.value),
+        ObserveReview() => ('source_ref', decoded.sourceRef.value),
+        IntegrationReview() => ('integration_ref', decoded.integrationRef.value),
+        _ => null,
+      };
+      if (expected != null &&
+          input[expected.$1] != null &&
+          input[expected.$1] != expected.$2) {
+        throw const FormatException('Connections identity changed.');
+      }
+      final review = switch (decoded) {
+        SourceReview() => decoded.reviewRef,
+        ObserveReview() => decoded.reviewRef,
+        IntegrationReview() => decoded.reviewRef,
+        _ => null,
+      };
+      final expectedReview = input['review_ref'];
+      if (review != null &&
+          expectedReview is Map &&
+          (review.id != expectedReview['id'] ||
+              review.revision != expectedReview['revision'] ||
+              review.digest != expectedReview['digest'])) {
+        throw const FormatException(
+          'Reviewed meaning changed during inspection.',
+        );
+      }
+      if (decoded is ObserveReview &&
+          input['requested_processing'] != null &&
+          decoded.processingDisclosure.requested.wire !=
+              input['requested_processing']) {
+        throw const FormatException('Source processing choice changed.');
+      }
+      return decoded;
+    } on Object catch (error, stackTrace) {
+      final native = error is NativeTransportException ? error : null;
+      final owner = native?.ownerFailure;
+      final code = _safeFailureToken(native?.code) ?? 'invalid_response';
+      final reason = _safeFailureToken(owner?.reason) ??
+          _safeFailureToken(native?.metadata['reason_code']) ?? code;
+      final requestId = request['request_id']! as String;
+      final errorId = AppDiagnostics.error(
+        component: 'connections',
+        operation: kind,
+        error: StateError('Connections request failed: $reason'),
+        stackTrace: stackTrace,
+        failure: code,
+        failureDomain: _safeFailureToken(owner?.domain),
+        failureCategory: _safeFailureToken(owner?.category),
+        reasonCode: reason,
+        incidentId: _safeFailureToken(owner?.incidentId),
+        safeActions: owner?.safeActions.toList(growable: false) ?? const [],
+        requestId: requestId,
+        invocationId: commandId,
+      );
+      throw ConnectionsRequestFailure(
+        code: code,
+        reason: reason,
+        requestId: requestId,
+        commandId: commandId,
+        errorId: errorId,
+        ownerFailure: owner,
       );
     }
-    if (decoded is ObserveReview &&
-        input['requested_processing'] != null &&
-        decoded.processingDisclosure.requested.wire !=
-            input['requested_processing']) {
-      throw const FormatException('Source processing choice changed.');
-    }
-    return decoded;
   }
 }
+
+String? _safeFailureToken(String? value) =>
+    value != null && RegExp(r'^[a-zA-Z0-9_.:-]{1,128}$').hasMatch(value)
+        ? value
+        : null;

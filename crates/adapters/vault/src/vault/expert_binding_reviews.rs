@@ -166,10 +166,18 @@ pub(crate) async fn ensure_expert_binding_tables_on(
             .map_err(storage)?
             .ok_or(AgentFailure::VaultUnavailable)?;
         let actual = row.get::<String>(0).map_err(storage)?;
-        if normalize_schema(&actual) != normalize_schema(statement)
-            || rows.next().await.map_err(storage)?.is_some()
-        {
+        if rows.next().await.map_err(storage)?.is_some() {
             return Err(AgentFailure::VaultUnavailable);
+        }
+        match crate::schema_sql::compare(&actual, statement) {
+            crate::schema_sql::Comparison::Equivalent => {}
+            crate::schema_sql::Comparison::Different
+            | crate::schema_sql::Comparison::InvalidStored => {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            crate::schema_sql::Comparison::InvalidExpected => {
+                return Err(AgentFailure::StorageUnavailable);
+            }
         }
     }
     let mut rows=connection.query("SELECT name FROM sqlite_schema WHERE type IN ('trigger', 'view') AND (name GLOB 'agent_expert_binding_*' OR name GLOB 'agent_expert_command_*' OR name = 'agent_expert_registry_receipts' OR tbl_name GLOB 'agent_expert_binding_*' OR tbl_name GLOB 'agent_expert_command_*' OR tbl_name = 'agent_expert_registry_receipts')",()).await.map_err(storage)?;
@@ -179,14 +187,6 @@ pub(crate) async fn ensure_expert_binding_tables_on(
     drop(rows);
     count_expert_command_admissions_on(connection).await?;
     Ok(())
-}
-
-fn normalize_schema(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| !character.is_whitespace() && *character != ';')
-        .flat_map(char::to_lowercase)
-        .collect()
 }
 
 pub(crate) async fn expert_binding_tables_on(connection: &Connection) -> Result<i64, AgentFailure> {

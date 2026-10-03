@@ -277,13 +277,6 @@ fn sql_error(error: turso::Error) -> ActionStoreError {
     }
 }
 
-fn normalize_schema_sql(sql: &str) -> String {
-    sql.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase()
-}
-
 fn record_payload(record: &ActionRecord) -> Result<String, ActionStoreError> {
     record
         .validate()
@@ -415,10 +408,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         let mut expected = BTreeMap::new();
         for (name, statement) in ACTIONS_TABLES {
-            expected.insert((*name).to_owned(), normalize_schema_sql(statement));
+            expected.insert((*name).to_owned(), *statement);
         }
         for (name, statement) in ACTIONS_INDEXES {
-            expected.insert((*name).to_owned(), normalize_schema_sql(statement));
+            expected.insert((*name).to_owned(), *statement);
         }
         let mut rows = transaction
             .query(
@@ -435,11 +428,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let sql = row
                 .get::<String>(1)
                 .map_err(|_| ActionStoreError::CorruptRecord)?;
-            actual.insert(name, normalize_schema_sql(&sql));
+            if actual.insert(name, sql).is_some() {
+                return Err(ActionStoreError::CorruptRecord);
+            }
         }
         drop(rows);
-        if actual != expected {
+        if actual.len() != expected.len() {
             return Err(ActionStoreError::CorruptRecord);
+        }
+        for (name, expected) in expected {
+            let actual = actual.get(&name).ok_or(ActionStoreError::CorruptRecord)?;
+            match crate::schema_sql::compare(actual, expected) {
+                crate::schema_sql::Comparison::Equivalent => {}
+                crate::schema_sql::Comparison::Different
+                | crate::schema_sql::Comparison::InvalidStored => {
+                    return Err(ActionStoreError::CorruptRecord);
+                }
+                crate::schema_sql::Comparison::InvalidExpected => {
+                    return Err(ActionStoreError::Unavailable);
+                }
+            }
         }
         let mut marker = transaction
             .query("SELECT id, version FROM actions_schema", ())

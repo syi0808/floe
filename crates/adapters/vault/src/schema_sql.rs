@@ -6,7 +6,7 @@ const MAX_TOKENS: usize = 4096;
 const MAX_DEPTH: usize = 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Comparison {
+pub(crate) enum Comparison {
     Equivalent,
     Different,
     InvalidStored,
@@ -22,7 +22,7 @@ enum Token {
     Symbol(String),
 }
 
-pub(super) fn compare(stored: &str, expected: &str) -> Comparison {
+pub(crate) fn compare(stored: &str, expected: &str) -> Comparison {
     let Some(expected) = tokenize(expected) else {
         return Comparison::InvalidExpected;
     };

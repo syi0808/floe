@@ -24,8 +24,8 @@ final class _GatewayConnectionPanelState extends State<GatewayConnectionPanel> {
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
-    final pairing = controller.pairing;
-    final setup = controller.setup;
+    final pairing = controller.ready ? controller.pairing : null;
+    final setup = controller.ready ? controller.setup : null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -77,7 +77,7 @@ final class _GatewayConnectionPanelState extends State<GatewayConnectionPanel> {
                   child: const Text('Cancel pairing'),
                 ),
               FloeButton.text(
-                onPressed: controller.observePairing,
+                onPressed: controller.ready ? controller.observePairing : null,
                 child: const Text('Check status'),
               ),
             ],

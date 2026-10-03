@@ -79,7 +79,8 @@ final class OwnerOperationObserver {
       return await _finish(pending) as T;
     } on NativeTransportException catch (error) {
       throw AgentVaultException.fromAppWire(
-        error.metadata['agent_failure'] ?? error.code,
+        error.metadata['reason_code'] ??
+            error.metadata['agent_failure'] ?? error.code,
         requestId: _pending?.correlation.id,
         stage: stage,
         metadata: error.metadata,

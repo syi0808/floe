@@ -3,10 +3,7 @@ use turso::core::{Clock, IO};
 
 use turso::{Builder, Connection};
 
-use crate::{StoreError, StoreErrorCode};
-
-#[path = "schema_sql.rs"]
-mod schema_sql;
+use crate::{StoreError, StoreErrorCode, schema_sql};
 
 pub struct TursoStore {
     database: turso::Database,

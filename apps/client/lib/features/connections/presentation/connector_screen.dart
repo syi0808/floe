@@ -59,20 +59,31 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
               child: Text('Connections', style: FloeType.headline),
             ),
             FloeButton.text(
-              onPressed: current.load,
+              onPressed: current.ready ? current.load : null,
               child: const Text('Refresh'),
             ),
           ],
         ),
         const SizedBox(height: FloeSpace.base),
-        if (current.failure != null) Text(current.failure!),
+        if (!current.ready) ...[
+          Text(current.storageMessage),
+          if (current.storageIncidentId case final incident?)
+            SelectableText('Incident: $incident'),
+          if (!current.storageOpening && current.prepareStorage != null)
+            FloeButton.outlined(
+              onPressed: current.prepareStorage,
+              child: const Text('Retry local storage'),
+            ),
+          const SizedBox(height: FloeSpace.sm),
+        ],
+        if (current.failure != null) SelectableText(current.failure!),
         if (current.hasUncertainCommand)
           FloeButton.outlined(
             onPressed: current.retryPendingCommand,
             child: const Text('Recover the same request'),
           ),
         GatewayConnectionPanel(controller: current),
-        if (current.operation case final operation?) ...[
+        if ((current.ready ? current.operation : null) case final operation?) ...[
           const SizedBox(height: FloeSpace.base),
           Text(
             current.operationLabel ?? 'Connection operation',
@@ -86,7 +97,7 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
           if (operation.launchAction case final launch?)
             ManagementLaunchButton(action: launch),
           FloeButton.text(
-            onPressed: current.observeOperation,
+            onPressed: current.ready ? current.observeOperation : null,
             child: const Text('Check status'),
           ),
           if (operation.allowedActions.contains('cancel'))
