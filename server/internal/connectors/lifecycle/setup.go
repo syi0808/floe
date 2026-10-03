@@ -135,8 +135,8 @@ type secretSetup struct {
 	ready   bool
 }
 
-func NewSecret(v credentials.Store, b integrations.CredentialBinding) integrations.Setup {
-	value, err := v.Get(b.Slot)
+func NewSecret(ctx context.Context, v credentials.Store, b integrations.CredentialBinding) integrations.Setup {
+	value, err := v.Get(ctx, b.Slot)
 	return &secretSetup{binding: b, ready: err == nil && value != ""}
 }
 func (s *secretSetup) Begin(ctx context.Context, b integrations.CredentialBinding) (integrations.AuthorizationProgress, error) {

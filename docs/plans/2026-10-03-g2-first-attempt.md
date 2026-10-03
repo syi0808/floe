@@ -24,3 +24,7 @@ The exact ChatGPT conversation `6abf3540-abf8-83ee-8882-6c013495822a` contains a
 The read-only proposal is a concrete SDK-free WellbeingHealthTransform, an abstract typed structured-model executor with a FoundationModels implementation, a separate Apple acquisition mapper, and a native host retaining the existing independent ABI and single-use provenance receipts. No generic transform framework or Android implementation is proposed. Packaging choices and implementation scope remain pending; no Health code changes belong to this compiler correction batch.
 
 G2 remains failed and full structural closure remains open. Automated test reconstruction is held while the next sequence is resolved: complete builds, jointly scoped isolated behavior verification, necessary structural fixes, then sequential tests.
+
+## Go diagnostic follow-up
+
+A normal independent clone of the same source, retaining VCS stamping and the same formatting patch, reached the Go compiler. The linked-worktree environment had selected an empty parent .git directory; this was an executor problem, not a reason to disable provenance. The first actual compile failure was NewSecret calling Store.Get without context. The correction forwards the existing openIntegration caller context through NewSecret to the bounded credential observer, preserving cancellation and fail-closed credential handling. No local check or new build was run for this correction.

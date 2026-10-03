@@ -103,7 +103,7 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 		if e != nil {
 			return out, e
 		}
-		out.Setup = lifecycle.NewSecret(vault, c.Binding)
+		out.Setup = lifecycle.NewSecret(ctx, vault, c.Binding)
 		out.Snapshot = service
 		return registeredRuntime(out, homeconnector.ConnectorDescriptor(), service), nil
 	default:

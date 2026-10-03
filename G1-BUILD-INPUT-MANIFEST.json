@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "G2 first attempt on e826ed2d failed. Known manifest, exact DAG policy and Dart compiler fixes plus returned formatting are integrated but not rerun. Go VCS diagnosis and iOS platform installation are pending. Missing Health transform/model executor separation reopens whole-structure closure; Health implementation scope is pending. No tests or behavior checks ran. See docs/plans/2026-10-03-g2-first-attempt.md.",
+  "verification": "G2 first attempt on e826ed2d failed. Known manifest, exact DAG policy and Dart compiler fixes plus returned formatting are integrated but not rerun. Go VCS environment diagnosis is resolved by an independent clone; its first actual compiler error is corrected by forwarding the integration context to credential observation. iOS platform installation remains pending. Missing Health transform/model executor separation reopens whole-structure closure; Health implementation scope is pending. No tests or behavior checks ran. See docs/plans/2026-10-03-g2-first-attempt.md.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "1d7220a2b3555506e6ed7d41ece9172d6da96a57",
+  "current_correction_source_commit": "2423f4428373856f470252158943f6758cb92da8",
   "current_status_document": "docs/plans/t0-execution-status.json"
 }
