@@ -1,0 +1,92 @@
+# DeviceModel contract and reasoning cutover
+
+This is the implementation contract for the user-approved 2026-10-03 Transform/DeviceModel correction. The common reasoning selector remains remote Primary with device Fallback only after verified Primary absence. Health transformation uses DeviceModel directly and never has remote fallback. FoundationModels is the first implementation; no second backend is included. This document supplements the Health separation proposal with the exact shared model boundary.
+
+## Owners and dependencies
+
+- `crates/contracts/model` (`floe-model-contract`) owns pure neutral schema, output-format and device wire values. It uses serde, serde_json and uuid, and imports no Agent, Context, Access, provider or platform module. Agent-contract and provider adapters may depend on it.
+- `apps/client/native/FloeNative/Sources/FloeModelExecution` owns the matching SDK-free Swift values, strict JSON/schema validation and DeviceModel protocol. Swift values are Codable/Sendable with closed coding keys and a recursive JSONValue enum; `[String: Any]` never crosses an asynchronous boundary.
+- The Apple FoundationModels backend implements that protocol and owns SDK availability, conversion and error mapping only.
+- The generic native DeviceModel host owns bounded start/poll/cancel/release transport jobs for Rust callers. It receives one immutable DeviceModel instance by composition. The Health host receives the same instance directly and retains its independent source operation/receipt lifecycle.
+- Rust device reasoning adapter owns Agent envelope rendering, advertised tool/delegation schemas and mapping inert generic output into ModelStep. Domain output schemas come from domain owners. The Foundation backend has no Agent/Learner/Health branch.
+
+## Portable schema
+
+`ModelSchema` is a validated transparent JSON Schema object. Its root is a nonnullable object. Its complete supported vocabulary is:
+
+- `type`: object, array, string, integer, number, boolean, null; or exactly `[base,"null"]`, where base is one non-null type. No other unions.
+- object: `properties` object, `required` array (may be a subset), and explicit `additionalProperties:false`. Unknown output properties are rejected. An absent optional property differs from a present null: null requires a nullable type. Required nullable properties must be present, even when null.
+- array: `items`, optional `minItems`/`maxItems`.
+- string: optional string-only nonempty `enum`, `minLength`/`maxLength`.
+- integer/number: optional inclusive `minimum`/`maximum`.
+- scalar `const` (string/number/boolean/null), including a standalone const node; if a type is also supplied, the constant must satisfy it.
+- optional `description` on a schema node, at most 2048 UTF-8 bytes.
+
+No `$ref`, definitions, format, pattern, additionalProperties:true, arbitrary union/composition or unknown keyword is accepted. Duplicate object keys are rejected before decoding, including schemas and model JSON. Duplicate required names and enum entries are rejected. Every required name must exist in properties. The common schema object must state type except for a standalone scalar const node. Type-specific keyword applicability is checked. Schema size is at most 16 KiB, node count at most 256, root depth zero and maximum depth eight, at most 64 properties per object and 64 enum choices. Names are nonempty, at most 128 UTF-8 bytes, no control characters. Length/item bounds are nonnegative integers up to 32768; lower cannot exceed upper. String lengths count Unicode scalar values. All JSON numeric values are finite with absolute value at most 9007199254740991; integer values and integer-schema bounds are integral. Fractional number bounds are allowed. Integer semantics use mathematical value, so 1.0 and 1e0 are integers when integral within the safe range. Keyword applicability is enforced by type. Const/enum constraints intersect the declared type. Null bypasses type-specific constraints only for a declared nullable node.
+
+SDK generation guidance may be less expressive than final validation. The adapter must still validate the exact portable schema before returning success; it must not fill absent required fields, convert absence into null, drop unknown fields, clamp numbers or accept unstructured text as JSON success. Unsupported schema capability fails before model generation. SDK API availability must be confirmed against the installed SDK, without inventing null-schema APIs.
+
+## Shared output and operation values
+
+`ModelOutputFormat` is the exact tagged wire union `{kind:"text"}` or `{kind:"json",schema:ModelSchema}`. JSON output is one object matching its schema. Device tool proposals are inert descriptions of desired calls, never executable callbacks or authorization.
+
+The SDK-free Swift port is:
+
+```
+public protocol DeviceModel: Sendable {
+    func prepare(_ requirements: DeviceModelRequirements) throws -> DeviceModelObservation
+    func generate(_ request: DeviceModelRequest) async throws -> DeviceModelResponse
+}
+```
+
+`DeviceModelRequirements { capabilities:[DeviceModelCapability] }`. Capabilities are sorted lexically by wire name, unique nonempty enum values `text`, `structured_output`, `tool_proposals`. Structured output promises the exact portable subset above. Observation is `{status:"available",binding_id:Hex64,capabilities:[...],limits:DeviceModelLimits}` or `{status:"unavailable",reason:DeviceModelUnavailable}`. Unavailable reasons: unsupported, disabled, not_ready. Operational errors are typed DeviceModelFailure, not absence. `binding_id` is a nonsecret digest of the selected immutable backend/configuration identity and supported contract; it grants no source/model authority. Preparation is a bounded synchronous local observation with no network, loading, waiting or job allocation; composition initializes the backend, and an unready model reports not_ready. This also serves the preserved synchronous Health availability ABI. The admitted operation observes again and generate revalidates. Preparation never creates a durable receipt.
+
+`DeviceModelLimits {max_input_bytes,max_instructions_bytes,max_output_bytes,max_response_tokens,max_deadline_milliseconds}`. Global ceilings: input 16384 bytes, instructions 9216 bytes, output 32768 bytes, response tokens 4096, duration 30000 ms. A backend may expose smaller limits and must reject requests beyond them. Foundation initially exposes response tokens 1024 and its actual supported limits.
+
+`DeviceModelRequest {operation_id:Uuid,binding_id:Hex64,instructions:String,input:JSONValue,output_format:ModelOutputFormat,tools:[DeviceTool],max_response_tokens:u32,max_output_bytes:u32,deadline_milliseconds:u32}`. Input is a JSON object; request bytes are at most 131072. `DeviceTool {name:String,description:String,input_schema:ModelSchema}`; unique names use ASCII `[A-Za-z0-9_-]`, 1..64 bytes, descriptions 1..2048 bytes, at most 64 tools. Json format requires empty tools in this slice. Text can return text or one tool proposal. Every returned proposal names exactly one advertised tool and has an object input matching its schema. No tool execution occurs in the backend. Rust retains the original catalog for final tool/delegation identity and revision checks.
+
+`DeviceModelResponse {operation_id:Uuid,binding_id:Hex64,output:DeviceModelOutput,usage:DeviceModelUsage}`. Output is `{kind:"text",text:String}`, `{kind:"json",value:JSONValue}`, `{kind:"tool_proposal",name:String,input:JSONValue}`, or `{kind:"failure",failure:DeviceModelFailure}`. A completed attempt with known usage retains that usage even when output/schema validation fails; errors before a trustworthy response can throw. A failure output never becomes success or a retry signal. Usage is `{tokens:UInt|null,cost_micros:UInt|null}` with explicit nulls and safe integer bounds; unknown is never converted to zero. Foundation returns tokens:null and cost_micros:0 on known success. Output serialized bytes obey the requested bound. Empty/whitespace text is invalid. Response envelope maximum is 65536 bytes.
+
+Failures are closed: unsupported, disabled, not_ready, unavailable, invalid_input, invalid_output, deadline_exceeded, cancelled, policy_denied, quota_exceeded, busy, conflict, not_found. Generic model failures carry no raw SDK text. No failure invokes a different backend or remote transport.
+
+The same immutable backend object must serve prepare and generate. Generate rechecks exact binding/capabilities/readiness before work. Changing native composition or model configuration invalidates an observed binding; it never redirects a request. Each generate invocation creates an independent SDK session and obeys Task cancellation plus the immutable admitted monotonic deadline. Output may not escape after either fence fails.
+
+## Native ABI and independent lifetimes
+
+Replace the Agent-specific `floe_local_model` ABI with `floe_device_model` / `floe_device_model_free`. JSON commands have schema_version 1 and closed operation tags:
+
+- prepare: `{schema_version,operation:"prepare",requirements}` returns an observation; no job.
+- start: `{schema_version,operation:"start",request:DeviceModelRequest}`.
+- poll/cancel/release: `{schema_version,operation,operation_id}`.
+
+Replies are `{schema_version,status:"observation",observation}`, `{schema_version,status:"pending",operation_id}`, `{schema_version,status:"done",response}`, `{schema_version,status:"error",operation_id:Uuid|null,failure}`, or `{schema_version,status:"released",operation_id}`. Outer fields are exact for each tag.
+
+The generic ABI host retains at most eight concurrent jobs. Exact same operation ID plus exact request rejoins; changed request conflicts. Admission starts one immutable monotonic deadline covering observation, preparation and generation. The host retains the original request unchanged for duplicate-identity comparison, and passes only the remaining milliseconds in an internal generation copy after preparation. It rejects an exhausted deadline before generation. Polling never extends it. Cancellation/release reaches only that job. An abandoned worker keeps its capacity until it physically returns; it cannot publish output or collide with a replacement job. Released operation IDs remain tombstones for 30 seconds after physical worker completion, with a maximum of 256 retained tombstones; expired entries may be removed, unexpired entries cannot be evicted to admit new work. No new job may reuse those identities during that horizon. Capacity exhaustion returns busy before dispatch. This host is transport/lifetime only: no Health receipt, Agent journal, prompt classification or backend selector.
+
+Health uses the injected DeviceModel directly under its own existing ten-second operation host, passing an operation UUID and remaining immutable deadline into a per-operation HealthTransform instance. It requests structured_output, no tools, 64 response tokens and bounded JSON output. Its source host independently validates domain output and mints the existing consume-once source proof. The shared model backend cannot mint that proof. Native composition supplies one backend object to both hosts inside the existing dylib; sharing the backend does not merge their operation state.
+
+## Reasoning contract and preparation
+
+Agent `RoleSpec` and `RunInstructions` gain required `output_format:ModelOutputFormat`. It is part of the exact projection/envelope and must remain equal to the admitted role; no backend classifies prompt purpose to recover it. Manager and existing Expert roles explicitly use Text. Knowledge provides its candidate JSON schema and deep_work purpose, with consumer knowledge.learner. The schema includes explicit nullable proposal/target/revision/validity fields and does not relax domain validation or provenance.
+
+`ModelCapability` becomes Chat, StructuredOutput, ToolProposals (serialized chat, structured_output, tool_proposals). Sets are sorted, unique, nonempty and include Chat. Engine derives required capabilities before preparation from output_format and admitted catalog. Json adds StructuredOutput and requires empty tools/cards. A nonempty Text catalog adds ToolProposals. ModelRequest validates the same required capabilities against the prepared plan; Context copies and validates exact output_format. A selected Primary that cannot meet requirements fails; lack of a required capability is not Primary absence. Correction retains the same selected object and schema.
+
+Device provider preparation converts the required set to the neutral local capabilities. Its prepared Rust transport retains the exact observation/binding and maps an admitted authorized request to DeviceModel. Input rendering and generic tool aliases live above the backend. It never lets ModelRequest override backend identity or skip Access.
+
+## Gateway same-snapshot impact
+
+`/v1/agent` adds required top-level output_format with the exact union above; it is also present in the run frame. Rust and Go verify those two declarations agree. Text preserves existing native Agent/tool handling. Json requires empty tools and returns exactly one Answer step containing the serialized, strictly schema-validated object, with no calls/preambles. The Go provider boundary separates native Agent input mode from output-format mode; adding a schema must not switch to the operator structured-input interpretation. Provider usage and capability revision fences remain unchanged.
+
+Purpose inventory reports actual chat/structured_output/tool_proposals support. Rust no longer replaces observed capabilities with a hardcoded Chat-only value. The existing `/v1/generate` operator schema/API is not widened or reused as a Learner route. No model profile/recipient permission or role-specific selector is restored.
+
+## Implementation ownership
+
+The coordinator owns the single `apps/client/native/FloeNative/Package.swift` and native/Xcode build wiring. The dynamic library product remains `floe_local_model`; the host target alone exports live C ABI and owns runtime/receipt singletons. SDK-free products can be linked to the connector without duplicating host state. Native model owner owns this contract, Rust pure values/schema validator, Agent/Engine/Knowledge/Context propagation and device reasoning adapter plus its provider construction. Coordinator owns final architecture/ADR updates and publication. Go owner owns the Gateway capability and output-format boundary. Health owner owns Transform/Health/acquisition/mapper/receipt host and package composition.
+
+Bounded cloud work after this contract is published:
+
+1. Swift neutral contract: only new `apps/client/native/FloeNative/Sources/FloeModelExecution/{DeviceModel.swift,ModelSchema.swift,JSONValue.swift}`. Implement exact values, protocol, strict validation and JSON codec. No package manifest or backend. Public Swift APIs use conventional camelCase properties with exact snake_case CodingKeys. `JSONValue` cases are object([String:JSONValue]), array([JSONValue]), string(String), number(Double), bool(Bool), null. `ModelSchema.init(json:) throws` validates and stores its public `json:JSONValue`; `validate(_ value:JSONValue) throws` validates a result. `ModelOutputFormat` cases are text and json(schema:ModelSchema). Observation cases are available(DeviceModelProfile) and unavailable(DeviceModelUnavailable); profile contains bindingID/capabilities/limits. Device output cases are text(String), json(JSONValue), toolProposal(name:String,input:JSONValue), failure(DeviceModelFailure). All required value initializers are public; validation is explicit and performed at every boundary. The strict JSON decoder rejects duplicates before any ordinary Codable decode.
+2. Foundation backend: only new `apps/client/native/FloeNative/Sources/FloeFoundationModels/FoundationModelsDeviceModel.swift`. Consume the frozen neutral public API; availability/schema conversion/session execution/error mapping only. No host, domain codec, Health/Agent/Learner branch, package edits or second backend.
+3. Device native job host: only new `apps/client/native/FloeNative/Sources/FloeNativeHost/DeviceModelHost.swift`. Implement injected backend, exact generic ABI/lifetimes/bounds. No global production backend construction; native composition wires it. No Health receipt changes.
+
+No compiler, formatter, tests, build or runtime operation runs until the complete coordinated correction is ready for the next agreed gate. Source-level review and integration precede that gate.
