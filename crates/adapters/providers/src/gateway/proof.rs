@@ -312,7 +312,8 @@ impl floe_access::AuthorizationProofVerifier for GatewayProofVerifier {
         &self,
         command: &floe_access::ProductCalendarSigningCommand<'_>,
     ) -> Result<floe_access::ProductCalendarChallenge, AgentFailure> {
-        if command.canonical_bytes.is_empty() || command.canonical_bytes.len() > MAX_CHALLENGE_BYTES {
+        if command.canonical_bytes.is_empty() || command.canonical_bytes.len() > MAX_CHALLENGE_BYTES
+        {
             return Err(AgentFailure::InvalidInput);
         }
         strict_json_bytes(&command.canonical_bytes, MAX_CHALLENGE_BYTES)?;

@@ -144,8 +144,10 @@ pub(crate) fn decode_agent_step(
             capability_id,
             input,
         } => {
-            let value = strict_object(&input).map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
-            let input = serde_json::to_string(&value).map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
+            let value =
+                strict_object(&input).map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
+            let input = serde_json::to_string(&value)
+                .map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
             let descriptor = catalog
                 .tools
                 .iter()
@@ -190,7 +192,8 @@ fn rewrite_tool_calls(message: &mut serde_json::Value) -> Result<(), AgentFailur
 }
 
 fn strict_object(raw: &str) -> Result<serde_json::Value, AgentFailure> {
-    let value = floe_model_contract::strict_json(raw.as_bytes(), 32768).map_err(|_| AgentFailure::InvalidInput)?;
+    let value = floe_model_contract::strict_json(raw.as_bytes(), 32768)
+        .map_err(|_| AgentFailure::InvalidInput)?;
     if !value.is_object() {
         return Err(AgentFailure::InvalidInput);
     }
@@ -232,8 +235,7 @@ fn validate_input(input: &serde_json::Value) -> Result<(), AgentFailure> {
                     }
                     for call in calls {
                         let id = call["id"].as_str().ok_or(AgentFailure::InvalidInput)?;
-                        if !valid_call_id(id) || !used.insert(id.to_owned())
-                        {
+                        if !valid_call_id(id) || !used.insert(id.to_owned()) {
                             return Err(AgentFailure::InvalidInput);
                         }
                         pending.insert(id.to_owned());
@@ -287,4 +289,3 @@ pub(crate) fn valid_alias(value: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
-

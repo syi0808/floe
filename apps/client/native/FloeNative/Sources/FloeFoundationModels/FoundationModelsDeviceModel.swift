@@ -707,8 +707,8 @@ public struct FoundationModelsDeviceModel: DeviceModel, Sendable {
         guard case .array(let values) = value else {
             throw DeviceModelFailure.unsupported
         }
-        let strings = values.compactMap {
-            guard case .string(let text) = $0 else { return nil }
+        let strings: [String] = values.compactMap { item -> String? in
+            guard case .string(let text) = item else { return nil }
             return text
         }
         guard strings.count == values.count else {
@@ -721,8 +721,8 @@ public struct FoundationModelsDeviceModel: DeviceModel, Sendable {
         _ value: JSONValue?
     ) -> [String]? {
         guard case .array(let choices)? = value else { return nil }
-        let strings = choices.compactMap {
-            guard case .string(let value) = $0 else { return nil }
+        let strings: [String] = choices.compactMap { item -> String? in
+            guard case .string(let value) = item else { return nil }
             return value
         }
         guard strings.count == choices.count, !strings.isEmpty else { return nil }

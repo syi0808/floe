@@ -30,7 +30,17 @@ impl GatewayHttpTransport {
         deadline: Instant,
         cancellation: &Cancellation,
     ) -> Result<(u16, Vec<u8>), AgentFailure> {
-        self.request_bounded(endpoint, token, method, path, body, deadline, cancellation, MAX_RESPONSE_BYTES).await
+        self.request_bounded(
+            endpoint,
+            token,
+            method,
+            path,
+            body,
+            deadline,
+            cancellation,
+            MAX_RESPONSE_BYTES,
+        )
+        .await
     }
     /// A real transport caller supplies its already admitted response ceiling.
     /// Ordinary inference/source calls retain the existing default limit.
@@ -45,7 +55,9 @@ impl GatewayHttpTransport {
         cancellation: &Cancellation,
         max_response_bytes: usize,
     ) -> Result<(u16, Vec<u8>), AgentFailure> {
-        if max_response_bytes == 0 || max_response_bytes > 1024 * 1024 + 1024 { return Err(AgentFailure::BudgetExceeded); }
+        if max_response_bytes == 0 || max_response_bytes > 1024 * 1024 + 1024 {
+            return Err(AgentFailure::BudgetExceeded);
+        }
         if !valid_endpoint(endpoint)
             || !path.starts_with('/')
             || path.contains('?')

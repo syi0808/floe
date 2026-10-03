@@ -5,8 +5,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 use chrono::{DateTime, NaiveDate, Utc};
 use floe_access::{
     ProductCalendarDispatchFence, ProductCalendarPermission, ProductCalendarReadPermit,
-    ProductCalendarResultBinding, ProductSourceObservation,
-    SourceExpectation,
+    ProductCalendarResultBinding, ProductSourceObservation, SourceExpectation,
 };
 use floe_connections::SourceConnection;
 use floe_context::{CalendarProductReadResult, CalendarProductTransport};
@@ -18,16 +17,14 @@ use floe_day::{
 use floe_execution::{BoxFuture, ExecutionScope};
 use floe_kernel::{AgentFailure, OwnerActor};
 use floe_native::{
-    CalendarAcquisitionMode, CalendarAcquisitionRequest, CalendarAcquisitionResult,
-    CalendarBroker, NativeCalendarFailure, NativeCalendarBatch,
+    CalendarAcquisitionMode, CalendarAcquisitionRequest, CalendarAcquisitionResult, CalendarBroker,
+    NativeCalendarBatch, NativeCalendarFailure,
 };
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::gateway::{
-    ProductGatewayLeaseRegistry, calendar_mirror::GatewayCalendarMirrorClient,
-};
+use crate::gateway::{ProductGatewayLeaseRegistry, calendar_mirror::GatewayCalendarMirrorClient};
 
 const MAX_NATIVE_CALL: Duration = Duration::from_secs(30);
 const MAX_CALENDAR_RESOURCES: usize = 256;
@@ -42,14 +39,8 @@ pub struct CalendarProductAdapter {
 }
 
 impl CalendarProductAdapter {
-    pub fn new(
-        broker: Arc<CalendarBroker>,
-        gateway: Arc<ProductGatewayLeaseRegistry>,
-        ) -> Self {
-        Self {
-            broker,
-            gateway,
-        }
+    pub fn new(broker: Arc<CalendarBroker>, gateway: Arc<ProductGatewayLeaseRegistry>) -> Self {
+        Self { broker, gateway }
     }
 
     async fn observe_native(
@@ -109,7 +100,11 @@ impl CalendarProductAdapter {
         scope: &ExecutionScope,
     ) -> Result<ProductSourceObservation, AgentFailure> {
         validate_source_for_actor(actor, source)?;
-        let lease = self.gateway.acquire_optional(actor, scope).await?.ok_or(AgentFailure::CapabilityUnavailable)?;
+        let lease = self
+            .gateway
+            .acquire_optional(actor, scope)
+            .await?
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
         GatewayCalendarMirrorClient::new(lease)
             .observe_source(actor, source, scope)
             .await
@@ -202,7 +197,9 @@ impl CalendarProductAdapter {
         }
 
         let observed_at = Utc::now();
-        let native_payload_bytes = serde_json::to_vec(&read.batches).map_err(|_| AgentFailure::InvalidInput)?.len();
+        let native_payload_bytes = serde_json::to_vec(&read.batches)
+            .map_err(|_| AgentFailure::InvalidInput)?
+            .len();
         let batches = normalize_native_batches(read.batches, &calendar_ids, observed_at)?;
         let bytes = serde_json::to_vec(&batches).map_err(|_| AgentFailure::InvalidInput)?;
         let record_count = batches.iter().fold(0usize, |count, batch| match batch {
@@ -213,7 +210,10 @@ impl CalendarProductAdapter {
         });
         let record_count = u32::try_from(record_count).map_err(|_| AgentFailure::BudgetExceeded)?;
         let byte_count = u32::try_from(bytes.len()).map_err(|_| AgentFailure::BudgetExceeded)?;
-        if record_count > request.limits.max_records || byte_count > request.limits.max_bytes || native_payload_bytes > request.limits.max_bytes as usize {
+        if record_count > request.limits.max_records
+            || byte_count > request.limits.max_bytes
+            || native_payload_bytes > request.limits.max_bytes as usize
+        {
             return Err(AgentFailure::BudgetExceeded);
         }
         let expires_at = permit.expires_at();
@@ -223,7 +223,8 @@ impl CalendarProductAdapter {
         permit.revalidate(scope).await?;
         Ok(CalendarProductReadResult {
             consumed_records: record_count,
-            consumed_bytes: u32::try_from(native_payload_bytes.max(bytes.len())).map_err(|_| AgentFailure::BudgetExceeded)?,
+            consumed_bytes: u32::try_from(native_payload_bytes.max(bytes.len()))
+                .map_err(|_| AgentFailure::BudgetExceeded)?,
             batches,
             binding: ProductCalendarResultBinding {
                 read_operation_id: request.read_operation_id,
@@ -271,7 +272,8 @@ impl CalendarProductTransport for CalendarProductAdapter {
                         .ok_or(AgentFailure::PolicyDenied)?;
                     let lease = self
                         .gateway
-                        .acquire(&permit.request().actor, generation, scope).await?;
+                        .acquire(&permit.request().actor, generation, scope)
+                        .await?;
                     GatewayCalendarMirrorClient::new(lease)
                         .acquire(permit, scope)
                         .await
@@ -408,10 +410,15 @@ async fn native_call(
         range_start_unix_ms: fence.range_start_unix_ms,
         range_end_unix_ms: fence.range_end_unix_ms,
         deadline_unix_ms,
-        expected_native_subject_fingerprint: (mode == CalendarAcquisitionMode::ReadEvents).then(|| fence.expected_native_subject.to_owned()),
+        expected_native_subject_fingerprint: (mode == CalendarAcquisitionMode::ReadEvents)
+            .then(|| fence.expected_native_subject.to_owned()),
     };
     let response = broker
-        .submit(request, Utc::now().timestamp_millis(), scope.cancellation().clone())
+        .submit(
+            request,
+            Utc::now().timestamp_millis(),
+            scope.cancellation().clone(),
+        )
         .await?;
     if scope.cancellation().is_cancelled() {
         return Err(AgentFailure::Cancelled);
@@ -472,7 +479,10 @@ fn validate_native_read(
         || response.batches.len() != fence.calendar_ids.len()
         || response.batches.iter().any(|batch| {
             !fence.calendar_ids.contains(&batch.calendar_id)
-                || batch.records.iter().any(|record| record.calendar_id != batch.calendar_id)
+                || batch
+                    .records
+                    .iter()
+                    .any(|record| record.calendar_id != batch.calendar_id)
         })
     {
         return Err(AgentFailure::StaleContext);
@@ -541,15 +551,23 @@ pub(super) fn normalize_native_batches(
             return Err(AgentFailure::InvalidInput);
         }
     }
-    if by_id.keys().map(String::as_str).ne(expected_ids.iter().map(String::as_str)) {
+    if by_id
+        .keys()
+        .map(String::as_str)
+        .ne(expected_ids.iter().map(String::as_str))
+    {
         return Err(AgentFailure::CapabilityUnavailable);
     }
     let mut output = Vec::with_capacity(expected_ids.len());
     let mut total_records = 0usize;
     for calendar_id in expected_ids {
-        let batch = by_id.remove(calendar_id).ok_or(AgentFailure::CapabilityUnavailable)?;
+        let batch = by_id
+            .remove(calendar_id)
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
         if let Some(failure) = batch.failure {
-            if !batch.records.is_empty() { return Err(AgentFailure::InvalidInput); }
+            if !batch.records.is_empty() {
+                return Err(AgentFailure::InvalidInput);
+            }
             output.push(CalendarResourceOutcome::Failed {
                 calendar_id: calendar_id.clone(),
                 reason: native_calendar_failure(failure),
@@ -580,11 +598,10 @@ pub(super) fn normalize_native_batches(
                 {
                     return Err(AgentFailure::InvalidInput);
                 }
-                let external_revision =
-                    CalendarExternalRevision::from_observation_fingerprint_hex(
-                        &record.external_revision,
-                    )
-                    .ok_or(AgentFailure::InvalidInput)?;
+                let external_revision = CalendarExternalRevision::from_observation_fingerprint_hex(
+                    &record.external_revision,
+                )
+                .ok_or(AgentFailure::InvalidInput)?;
                 let schedule = native_schedule(record.schedule)?;
                 Ok(CalendarRecord {
                     can_modify: record.can_modify,
@@ -638,9 +655,8 @@ fn native_schedule(
         } => {
             let start_date = NaiveDate::parse_from_str(&start_date, "%Y-%m-%d")
                 .map_err(|_| AgentFailure::InvalidInput)?;
-            let end_date_exclusive =
-                NaiveDate::parse_from_str(&end_date_exclusive, "%Y-%m-%d")
-                    .map_err(|_| AgentFailure::InvalidInput)?;
+            let end_date_exclusive = NaiveDate::parse_from_str(&end_date_exclusive, "%Y-%m-%d")
+                .map_err(|_| AgentFailure::InvalidInput)?;
             AllDaySchedule::new(start_date, end_date_exclusive)
                 .map(EventSchedule::AllDay)
                 .map_err(|_| AgentFailure::InvalidInput)

@@ -36,8 +36,6 @@ impl ModelFrames {
         messages.extend(self.current_turn);
         messages
     }
-
-
 }
 
 pub fn embedded_json(value: &str) -> Value {

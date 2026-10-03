@@ -423,7 +423,7 @@ struct ClaimProjection<'a> {
     claim: LearnerClaimRef,
     budget: LearnerBudget,
     evidence_refs: Vec<crate::LearningEvidenceRef>,
-    expires_at: chrono::DateTime<Utc>,
+    expires_at: chrono::DateTime<chrono::Utc>,
 }
 impl ModelProjectionPort for ClaimProjection<'_> {
     fn project<'a>(

@@ -109,7 +109,8 @@ impl TaskEvidence {
             coverage
                 .as_ref()
                 .unwrap_or(&DependencyCoverage::Independent)
-                .merge(observed)?,
+                .merge(observed)
+                .map_err(|_| AgentFailure::StorageUnavailable)?,
         );
         Ok(())
     }

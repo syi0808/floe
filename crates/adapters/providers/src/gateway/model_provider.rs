@@ -30,7 +30,10 @@ pub enum PreparedCompositeTransport {
 }
 impl PreparedModelTransport for PreparedCompositeTransport {
     fn validate_request(&self, request: &CanonicalModelRequest) -> Result<(), AgentFailure> {
-        match self { Self::Gateway(transport) => transport.validate_request(request), Self::Device(transport) => transport.validate_request(request) }
+        match self {
+            Self::Gateway(transport) => transport.validate_request(request),
+            Self::Device(transport) => transport.validate_request(request),
+        }
     }
     fn dispatch_target(&self) -> floe_access::ModelDispatchTarget {
         match self {
@@ -75,11 +78,7 @@ impl ModelProvider for CompositeModelProvider {
     ) -> BoxFuture<'a, Result<LocalObservation<Self::Prepared>, ModelObservationError>> {
         Box::pin(async move {
             Ok(
-                match self
-                    .device
-                    .observe_local_fallback(request, scope)
-                    .await?
-                {
+                match self.device.observe_local_fallback(request, scope).await? {
                     LocalObservation::Available(profile) => {
                         LocalObservation::Available(PreparedModelProfile {
                             capability: profile.capability,

@@ -4,9 +4,9 @@
 //! generation, retain it for an operation, and observe its cancellation fence.
 use std::sync::{Arc, Mutex, Weak};
 
+use super::credentials::{GatewayCredentialError, GatewayCredentialStore};
 use crate::control::PreparedServerSource;
 use floe_access::{AuthorizationSigner, GatewayTrustReader};
-use super::credentials::{GatewayCredentialStore, GatewayCredentialError};
 use floe_execution::{Cancellation, ExecutionScope};
 use floe_kernel::{AgentFailure, OwnerActor};
 
@@ -120,8 +120,14 @@ impl ProductGatewayLeaseRegistry {
     /// Retire only the exact generation whose owner is shutting down. A stale
     /// retained owner cannot close a newer unlock or reopen a closed host.
     pub fn retire(&self, expected_generation: u64) -> Result<(), AgentFailure> {
-        if expected_generation == 0 { return Err(AgentFailure::InvalidInput); }
-        let mut state = self.core.state.lock().map_err(|_| AgentFailure::Interrupted)?;
+        if expected_generation == 0 {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut state = self
+            .core
+            .state
+            .lock()
+            .map_err(|_| AgentFailure::Interrupted)?;
         if let RegistryPhase::Ready(current) = &state.phase {
             if current.generation == expected_generation {
                 current.cancellation.cancel();
@@ -180,7 +186,11 @@ impl ProductGatewayLeaseRegistry {
     ) -> Result<Option<ProductGatewayLease>, AgentFailure> {
         actor.validate()?;
         let retained = {
-            let state = self.core.state.lock().map_err(|_| AgentFailure::Interrupted)?;
+            let state = self
+                .core
+                .state
+                .lock()
+                .map_err(|_| AgentFailure::Interrupted)?;
             match &state.phase {
                 RegistryPhase::Locked => return Err(AgentFailure::VaultLocked),
                 RegistryPhase::Closed => return Err(AgentFailure::CapabilityUnavailable),
@@ -196,7 +206,11 @@ impl ProductGatewayLeaseRegistry {
         ensure_generation(&self.core, &retained)?;
         let person = actor.person_id.to_string();
         let load = scope.run(async {
-            retained.credentials.load(&person, &actor.device_id).await.map_err(credential_failure)
+            retained
+                .credentials
+                .load(&person, &actor.device_id)
+                .await
+                .map_err(credential_failure)
         });
         let connection = tokio::select! {
             biased;
@@ -204,16 +218,18 @@ impl ProductGatewayLeaseRegistry {
             result = load => result?,
         };
         ensure_generation(&self.core, &retained)?;
-        let Some(connection) = connection else { return Ok(None); };
+        let Some(connection) = connection else {
+            return Ok(None);
+        };
         connection.binding.validate()?;
-        let credentials = PreparedServerSource::new(connection, retained.credentials.as_ref().clone());
+        let credentials =
+            PreparedServerSource::new(connection, retained.credentials.as_ref().clone());
         Ok(Some(ProductGatewayLease {
             registry: Arc::downgrade(&self.core),
             retained,
             credentials,
         }))
     }
-
 }
 
 impl Default for ProductGatewayLeaseRegistry {
@@ -269,11 +285,17 @@ impl ProductGatewayLease {
     }
 }
 
-fn ensure_generation(registry: &RegistryCore, retained: &Arc<GatewayGeneration>) -> Result<(), AgentFailure> {
+fn ensure_generation(
+    registry: &RegistryCore,
+    retained: &Arc<GatewayGeneration>,
+) -> Result<(), AgentFailure> {
     if retained.cancellation.is_cancelled() {
         return Err(AgentFailure::Cancelled);
     }
-    let state = registry.state.lock().map_err(|_| AgentFailure::Interrupted)?;
+    let state = registry
+        .state
+        .lock()
+        .map_err(|_| AgentFailure::Interrupted)?;
     match &state.phase {
         RegistryPhase::Ready(current) if Arc::ptr_eq(current, retained) => Ok(()),
         _ => Err(AgentFailure::StaleContext),
@@ -286,6 +308,8 @@ fn credential_failure(error: GatewayCredentialError) -> AgentFailure {
         GatewayCredentialError::Timeout => AgentFailure::DeadlineExceeded,
         GatewayCredentialError::Unavailable => AgentFailure::CapabilityUnavailable,
         GatewayCredentialError::Conflict => AgentFailure::Conflict,
-        GatewayCredentialError::Malformed | GatewayCredentialError::Unverified | GatewayCredentialError::ForeignIdentity => AgentFailure::PolicyDenied,
+        GatewayCredentialError::Malformed
+        | GatewayCredentialError::Unverified
+        | GatewayCredentialError::ForeignIdentity => AgentFailure::PolicyDenied,
     }
 }

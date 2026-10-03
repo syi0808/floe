@@ -2,15 +2,15 @@
 //! It returns only normalized Day batches and never creates an Access permit.
 use std::collections::{BTreeMap, HashSet};
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, NaiveDate, Utc};
 use floe_access::{
     AuthorizationProofVerifier, AuthorizationSignature, AuthorizationSigningCommand,
-    ProductCalendarChallenge, ProductCalendarClaims,
+    CalendarProductWirePurpose, ProductCalendarChallenge, ProductCalendarClaims,
     ProductCalendarPageQuery, ProductCalendarPermission, ProductCalendarReadPermit,
     ProductCalendarResultKind, ProductCalendarSigningCommand, ProductCalendarSourceClaims,
-    ProductCalendarSourcePreview, CalendarProductWirePurpose, ProductSourceObservation,
-    RemoteProducerIdentity, SourceExpectation,
+    ProductCalendarSourcePreview, ProductSourceObservation, RemoteProducerIdentity,
+    SourceExpectation,
 };
 use floe_connections::SourceConnection;
 use floe_context::{CalendarProductPage, CalendarProductPageOutcome};
@@ -22,14 +22,17 @@ use floe_day::{
 use floe_execution::ExecutionScope;
 use floe_kernel::{AgentFailure, OwnerActor};
 use reqwest::Method;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::{
-    http::GatewayHttpTransport, json::strict_json_bytes, proof, product_lease::ProductGatewayLease,
-    views::{access_producer_identity, ProducerIdentityResponse},
+    http::GatewayHttpTransport,
+    json::strict_json_bytes,
+    product_lease::ProductGatewayLease,
+    proof,
+    views::{ProducerIdentityResponse, access_producer_identity},
 };
 
 const MAX_PREVIEW_BYTES: usize = 65_536;
@@ -133,9 +136,16 @@ struct RawCalendarPage {
 #[derive(Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 enum RawCalendarPageOutcome {
-    Complete { records: Vec<RawCalendarRecord> },
-    More { records: Vec<RawCalendarRecord>, cursor: String },
-    Failed { reason: CalendarFailure },
+    Complete {
+        records: Vec<RawCalendarRecord>,
+    },
+    More {
+        records: Vec<RawCalendarRecord>,
+        cursor: String,
+    },
+    Failed {
+        reason: CalendarFailure,
+    },
 }
 
 #[derive(Deserialize)]
@@ -212,7 +222,8 @@ impl GatewayCalendarMirrorClient {
             self.lease.credentials().binding(),
             source.execution_owner_id().as_str(),
         )?;
-        let descriptor_bytes = proof::decode_canonical(&response.descriptor_b64url, MAX_PREVIEW_BYTES)?;
+        let descriptor_bytes =
+            proof::decode_canonical(&response.descriptor_b64url, MAX_PREVIEW_BYTES)?;
         strict_json_bytes(&descriptor_bytes, MAX_PREVIEW_BYTES)?;
         let descriptor: ProductCalendarSourcePreview =
             serde_json::from_slice(&descriptor_bytes).map_err(|_| AgentFailure::InvalidInput)?;
@@ -322,7 +333,10 @@ impl GatewayCalendarMirrorClient {
                     received_total_bytes,
                 )
                 .await?;
-            received_total_bytes = received_total_bytes.checked_add(result.received_bytes).filter(|bytes| *bytes <= request.limits.max_bytes as usize).ok_or(AgentFailure::BudgetExceeded)?;
+            received_total_bytes = received_total_bytes
+                .checked_add(result.received_bytes)
+                .filter(|bytes| *bytes <= request.limits.max_bytes as usize)
+                .ok_or(AgentFailure::BudgetExceeded)?;
             received_total = received_total
                 .checked_add(result.received_records)
                 .ok_or(AgentFailure::BudgetExceeded)?;
@@ -346,9 +360,7 @@ impl GatewayCalendarMirrorClient {
                     reason,
                     observed_at: result.observed_at,
                 },
-                CalendarProductPageOutcome::More { .. } => {
-                    return Err(AgentFailure::InvalidInput)
-                }
+                CalendarProductPageOutcome::More { .. } => return Err(AgentFailure::InvalidInput),
             };
             batches.push(outcome);
         }
@@ -366,14 +378,17 @@ impl GatewayCalendarMirrorClient {
         self.lease.ensure_current()?;
         permit.revalidate(scope).await?;
         Ok(floe_context::CalendarProductReadResult {
-            consumed_records: u32::try_from(received_total).map_err(|_| AgentFailure::BudgetExceeded)?,
-            consumed_bytes: u32::try_from(received_total_bytes.max(bytes.len())).map_err(|_| AgentFailure::BudgetExceeded)?,
+            consumed_records: u32::try_from(received_total)
+                .map_err(|_| AgentFailure::BudgetExceeded)?,
+            consumed_bytes: u32::try_from(received_total_bytes.max(bytes.len()))
+                .map_err(|_| AgentFailure::BudgetExceeded)?,
             batches,
             binding: floe_access::ProductCalendarResultBinding {
                 read_operation_id: request.read_operation_id,
                 source: observation.expectation.clone(),
                 payload_digest: Sha256::digest(&bytes).into(),
-                record_count: u32::try_from(successful_total).map_err(|_| AgentFailure::BudgetExceeded)?,
+                record_count: u32::try_from(successful_total)
+                    .map_err(|_| AgentFailure::BudgetExceeded)?,
                 byte_count: u32::try_from(bytes.len()).map_err(|_| AgentFailure::BudgetExceeded)?,
                 observed_at,
                 expires_at,
@@ -437,7 +452,12 @@ impl GatewayCalendarMirrorClient {
                 device_id: request.actor.device_id.clone(),
                 audience: self.lease.credentials().binding().producer_audience.clone(),
                 producer_instance: self.lease.credentials().binding().producer_instance.clone(),
-                producer_key_fingerprint: self.lease.credentials().binding().producer_key_fingerprint.clone(),
+                producer_key_fingerprint: self
+                    .lease
+                    .credentials()
+                    .binding()
+                    .producer_key_fingerprint
+                    .clone(),
                 enrollment_id: self.lease.credentials().binding().enrollment_id.clone(),
                 credential_generation: self.lease.credentials().binding().credential_generation,
                 purpose: CalendarProductWirePurpose::DayRefresh,
@@ -452,9 +472,7 @@ impl GatewayCalendarMirrorClient {
                 limits: request.limits,
             };
             claims.validate_permit(permit)?;
-            let admission = self
-                .admit_and_sign(permit, scope, &claims)
-                .await?;
+            let admission = self.admit_and_sign(permit, scope, &claims).await?;
             self.lease.ensure_current()?;
             permit.revalidate(scope).await?;
             let release = self
@@ -463,9 +481,15 @@ impl GatewayCalendarMirrorClient {
             self.lease.ensure_current()?;
             permit.revalidate(scope).await?;
             let signature = self
-                .sign_challenge(permit, scope, &claims, release, ChallengeKind::Release {
-                    admission_id: admission.challenge.challenge_id(),
-                })
+                .sign_challenge(
+                    permit,
+                    scope,
+                    &claims,
+                    release,
+                    ChallengeKind::Release {
+                        admission_id: admission.challenge.challenge_id(),
+                    },
+                )
                 .await?;
             self.lease.ensure_current()?;
             permit.revalidate(scope).await?;
@@ -479,12 +503,7 @@ impl GatewayCalendarMirrorClient {
             };
             let body = serde_json::to_vec(&proof).map_err(|_| AgentFailure::InvalidInput)?;
             let raw_response = self
-                .post_bytes(
-                    "/v1/calendar/mirror/release",
-                    body,
-                    scope,
-                    Some(permit),
-                )
+                .post_bytes("/v1/calendar/mirror/release", body, scope, Some(permit))
                 .await?;
             // Deserialize only the outer envelope first. RawValue preserves the
             // exact staged page bytes so the signed digest is checked before the
@@ -495,15 +514,23 @@ impl GatewayCalendarMirrorClient {
             let release_response: RawReleaseResponse =
                 serde_json::from_slice(&raw_response).map_err(|_| AgentFailure::InvalidInput)?;
             if release_response.schema_version != 1
-                || hex_sha256(release_response.page.get().as_bytes())
-                    != signature.result_sha256
+                || hex_sha256(release_response.page.get().as_bytes()) != signature.result_sha256
             {
                 return Err(AgentFailure::PolicyDenied);
             }
             let raw_page_bytes = release_response.page.get().as_bytes();
-            if raw_page_bytes.len() > request.limits.max_page_bytes as usize { return Err(AgentFailure::BudgetExceeded); }
-            received_bytes = received_bytes.checked_add(raw_page_bytes.len()).ok_or(AgentFailure::BudgetExceeded)?;
-            if bytes_before.checked_add(received_bytes).is_none_or(|bytes| bytes > request.limits.max_bytes as usize) { return Err(AgentFailure::BudgetExceeded); }
+            if raw_page_bytes.len() > request.limits.max_page_bytes as usize {
+                return Err(AgentFailure::BudgetExceeded);
+            }
+            received_bytes = received_bytes
+                .checked_add(raw_page_bytes.len())
+                .ok_or(AgentFailure::BudgetExceeded)?;
+            if bytes_before
+                .checked_add(received_bytes)
+                .is_none_or(|bytes| bytes > request.limits.max_bytes as usize)
+            {
+                return Err(AgentFailure::BudgetExceeded);
+            }
             strict_json_bytes(raw_page_bytes, MAX_PAGE_BYTES)?;
             let raw_page: RawCalendarPage = serde_json::from_str(release_response.page.get())
                 .map_err(|_| AgentFailure::InvalidInput)?;
@@ -513,8 +540,7 @@ impl GatewayCalendarMirrorClient {
             self.lease.ensure_current()?;
             self.lease.revalidate().await?;
             permit.revalidate(scope).await?;
-            let (page_observed, page_expires) =
-                validate_page(&page, &claims, permit, calendar_id)?;
+            let (page_observed, page_expires) = validate_page(&page, &claims, permit, calendar_id)?;
             latest_observed = latest_observed.max(page_observed);
             earliest_expiry = earliest_expiry.min(page_expires);
 
@@ -534,7 +560,8 @@ impl GatewayCalendarMirrorClient {
             if page_records.len() > limit as usize {
                 return Err(AgentFailure::BudgetExceeded);
             }
-            let record_bytes = serde_json::to_vec(page_records).map_err(|_| AgentFailure::InvalidInput)?;
+            let record_bytes =
+                serde_json::to_vec(page_records).map_err(|_| AgentFailure::InvalidInput)?;
             if record_bytes.len() > request.limits.max_page_bytes as usize
                 || record_bytes.len() > MAX_PAGE_BYTES
             {
@@ -652,9 +679,15 @@ impl GatewayCalendarMirrorClient {
             .post_bytes_json("/v1/calendar/mirror/read", body, scope, Some(permit))
             .await?;
         let verified = self
-            .verify_response(permit, scope, claims, response, ChallengeKind::Release {
-                admission_id: admission.challenge.challenge_id(),
-            })
+            .verify_response(
+                permit,
+                scope,
+                claims,
+                response,
+                ChallengeKind::Release {
+                    admission_id: admission.challenge.challenge_id(),
+                },
+            )
             .await?;
         match &verified.challenge {
             ProductCalendarChallenge::Release { .. } => Ok(verified.response),
@@ -670,7 +703,9 @@ impl GatewayCalendarMirrorClient {
         response: ChallengeResponse,
         kind: ChallengeKind,
     ) -> Result<SignedChallenge, AgentFailure> {
-        let verified = self.verify_response(permit, scope, claims, response, kind).await?;
+        let verified = self
+            .verify_response(permit, scope, claims, response, kind)
+            .await?;
         self.lease.ensure_current()?;
         self.lease.revalidate().await?;
         permit.revalidate(scope).await?;
@@ -718,7 +753,8 @@ impl GatewayCalendarMirrorClient {
         response: ChallengeResponse,
         kind: ChallengeKind,
     ) -> Result<SignedChallenge, AgentFailure> {
-        self.sign_challenge(permit, scope, claims, response, kind).await
+        self.sign_challenge(permit, scope, claims, response, kind)
+            .await
     }
 
     async fn verify_response(
@@ -739,8 +775,8 @@ impl GatewayCalendarMirrorClient {
         )?;
         let canonical_bytes = proof::decode_canonical(&response.challenge_b64url, 65_536)?;
         strict_json_bytes(&canonical_bytes, 65_536)?;
-        let challenge: ProductCalendarChallenge = serde_json::from_slice(&canonical_bytes)
-            .map_err(|_| AgentFailure::InvalidInput)?;
+        let challenge: ProductCalendarChallenge =
+            serde_json::from_slice(&canonical_bytes).map_err(|_| AgentFailure::InvalidInput)?;
         let producer_signature = proof::decode_exact(&response.producer_signature, 64)?;
         proof::verify_signature(&producer, &canonical_bytes, &producer_signature)?;
         if challenge.claims() != claims {
@@ -821,7 +857,11 @@ impl GatewayCalendarMirrorClient {
             return Err(AgentFailure::DeadlineExceeded);
         }
         let http = GatewayHttpTransport::new()?;
-        let response_limit = if path == "/v1/calendar/mirror/release" { MAX_PAGE_BYTES + 1024 } else { 128 * 1024 };
+        let response_limit = if path == "/v1/calendar/mirror/release" {
+            MAX_PAGE_BYTES + 1024
+        } else {
+            128 * 1024
+        };
         let call = http.request_bounded(
             self.lease.credentials().base_url(),
             Some(self.lease.credentials().bearer_token()),
@@ -946,7 +986,11 @@ fn validate_preview(
         || descriptor.source.identity_generation == 0
         || descriptor.source.provider_identity.is_empty()
         || descriptor.source.provider_identity.len() > 256
-        || descriptor.source.provider_identity.chars().any(char::is_control)
+        || descriptor
+            .source
+            .provider_identity
+            .chars()
+            .any(char::is_control)
         || descriptor.resources != resource_ids
         || handles.len() != descriptor.resources.len()
         || producer.execution_owner != descriptor.source.execution_owner
@@ -988,7 +1032,9 @@ fn source_claims(
         connection_id: source.connection_id().as_str().to_owned(),
         execution_owner: source.execution_owner().as_str().to_owned(),
         local_revision: expectation.revision.ok_or(AgentFailure::StaleContext)?,
-        provider_revision: expectation.provider_revision.ok_or(AgentFailure::StaleContext)?,
+        provider_revision: expectation
+            .provider_revision
+            .ok_or(AgentFailure::StaleContext)?,
         incarnation: expectation.authority.incarnation(),
         epoch: expectation.authority.epoch().get(),
         provider_identity: expectation.subject_fingerprint.clone(),

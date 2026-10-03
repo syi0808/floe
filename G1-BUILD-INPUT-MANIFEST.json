@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "G2 retry40e64 passed Go packages/executable, dependency policy and whitespace with captured formatting. Rust/Dart/Swift failed; returned format/lock patches and coherent known compiler corrections are integrated but not rerun. Obsolete capability executor/Session replay caches are removed; canonical journal recovery remains. iOS tools are now recognized, unsigned device exit255 still needs diagnostic. Next affected Rust and Apple/Dart batch is READY, NOT RUN. No tests/model calls.",
+  "verification": "G2 aa2756 retained Go/DAG passes with input proof; Dart analysis and direct Health device/simulator compilation passed. Full Rust/model-product/app builds failed at four compiler sites; captured formatting and those bounded corrections are integrated but not rerun. iOS destinations now work; simulator opaque status255 needs verbose next attempt. No tests or model calls. Next affected full build batch is ready.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "a1e6ad3d6594efe7f439af9f93162279dacd4161",
+  "current_correction_source_commit": "c80d557db06bde15dd322b1255460bbc1b0da321",
   "current_status_document": "docs/plans/t0-execution-status.json"
 }

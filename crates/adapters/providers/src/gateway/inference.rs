@@ -1,13 +1,11 @@
-use crate::models::agent_codec::WireStep;
 use super::{
     credentials::{GatewayConnection, GatewayCredentialError, GatewayCredentialStore},
     http::GatewayHttpTransport,
     inference_wire::{self, AgentResponse, Inventory, PurposeCapability},
 };
+use crate::models::agent_codec::WireStep;
 use floe_access::ModelDispatchTarget;
-use floe_agent_contract::{
-    AgentFailure, BoxFuture, ModelPlanRequest, ProcessingBoundary,
-};
+use floe_agent_contract::{AgentFailure, BoxFuture, ModelPlanRequest, ProcessingBoundary};
 use floe_execution::{
     ExecutionScope,
     limits::{CallLimiter, CallLimits},
@@ -88,14 +86,15 @@ impl GatewayModelProvider {
             }
             PurposeCapability::Available {
                 capability_revision,
-                capabilities
+                capabilities,
             } => Ok(PrimaryObservation::Available(PreparedModelProfile {
                 capability: ObservedModelCapability {
                     purpose: ModelPurpose::new(request.purpose.clone())
                         .ok_or(ModelObservationError::InvalidIdentity)?,
                     consumer: ModelConsumer::new(request.consumer.clone())
                         .ok_or(ModelObservationError::InvalidIdentity)?,
-                    capabilities: inference_wire::model_capabilities(&capabilities).map_err(|_| ModelObservationError::InvalidInventory)?,
+                    capabilities: inference_wire::model_capabilities(&capabilities)
+                        .map_err(|_| ModelObservationError::InvalidInventory)?,
                     boundary: ProcessingBoundary::Gateway,
                     binding_digest: connection.binding_digest(),
                 },
@@ -119,7 +118,9 @@ pub struct PreparedGatewayTransport {
     http: GatewayHttpTransport,
 }
 impl PreparedModelTransport for PreparedGatewayTransport {
-    fn validate_request(&self, request: &CanonicalModelRequest) -> Result<(),AgentFailure> { self.render_request(request).map(|_| ()) }
+    fn validate_request(&self, request: &CanonicalModelRequest) -> Result<(), AgentFailure> {
+        self.render_request(request).map(|_| ())
+    }
     fn dispatch_target(&self) -> ModelDispatchTarget {
         ModelDispatchTarget::Gateway {
             expected: self.connection.binding.clone(),
@@ -161,7 +162,13 @@ impl PreparedModelTransport for PreparedGatewayTransport {
                 )
                 .await?;
             if status != 200 {
-                return inference_wire::inference_failure(status, &bytes, request.attempt_id, &self.purpose, &self.capability_revision);
+                return inference_wire::inference_failure(
+                    status,
+                    &bytes,
+                    request.attempt_id,
+                    &self.purpose,
+                    &self.capability_revision,
+                );
             }
             let envelope: AgentResponse = inference_wire::decode(&bytes)?;
             if envelope.schema_version != 2
@@ -218,7 +225,9 @@ impl PreparedGatewayTransport {
             "max_output_bytes": request.max_output_bytes.min(16_384),
         }))
         .map_err(|_| AgentFailure::InvalidInput)?;
-        if body.len() > inference_wire::MAX_REQUEST_BYTES { return Err(AgentFailure::BudgetExceeded); }
+        if body.len() > inference_wire::MAX_REQUEST_BYTES {
+            return Err(AgentFailure::BudgetExceeded);
+        }
         Ok(body)
     }
     async fn current(&self) -> Result<GatewayConnection, AgentFailure> {
@@ -283,7 +292,9 @@ fn decode_output(
     }
     if ids.len() != calls
         || ids.iter().collect::<BTreeSet<_>>().len() != calls
-        || ids.iter().any(|id| !crate::models::agent_codec::valid_call_id(id))
+        || ids
+            .iter()
+            .any(|id| !crate::models::agent_codec::valid_call_id(id))
     {
         return Err(AgentFailure::ServerModelInvalidOutput);
     }
