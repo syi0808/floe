@@ -3,6 +3,13 @@ mod authority;
 mod envelope;
 mod expert_proposal;
 mod origin;
+pub(crate) mod record;
+mod product;
+mod transitions;
+
+pub use record::*;
+pub use product::*;
+pub use transitions::*;
 
 pub use action::{
     ActionBlockReason, ActionFailure, CalendarAction, CalendarActionPolicy, CalendarActionState,
