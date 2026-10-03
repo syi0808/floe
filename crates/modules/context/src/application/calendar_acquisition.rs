@@ -80,6 +80,7 @@ impl CalendarAcquisitionPort for ContextCalendarAcquisition {
             if current != inventory { return Err(DayRefreshFailure::SourceChanged); }
             for result in &outcomes { if result.has_success() && self.core.sources.source_is_fenced(request.actor.person_id, &result.source().source.connection_id()).await.map_err(|_| DayRefreshFailure::StorageUnavailable)? { return Err(DayRefreshFailure::SourceChanged); } }
             let acquisition = CalendarAcquisition { refresh_operation_id: request.refresh_operation_id, person_id: request.actor.person_id, device_id: request.actor.device_id.clone(), range, inventory, sources: outcomes, completed_at: self.core.clock.now() };
+            if serde_json::to_vec(&acquisition).map_err(|_| DayRefreshFailure::InvalidAcquisition)?.len() > MAX_REFRESH_BYTES { return Err(DayRefreshFailure::BudgetExceeded); }
             acquisition.validate(&request, self.core.clock.now()).map_err(|_| DayRefreshFailure::InvalidAcquisition)?; check(scope)?; Ok(acquisition)
         })
     }

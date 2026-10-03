@@ -149,6 +149,7 @@ pub enum AgentMessage {
     Delegation {
         turn_id: Uuid,
         task: floe_agent_contract::TaskSnapshot,
+        execution_receipt: Option<floe_agent_contract::TaskExecutionReceiptRef>,
     },
     Interaction {
         turn_id: Uuid,

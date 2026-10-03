@@ -74,14 +74,14 @@ impl DayService {
             self.admit_actor(&actor)?; check_scope(&scope)?;
             let previous = self.repository.calendar_mirror(actor.person_id).await?;
             let mirror = super::observations::reconcile_refresh(&request, &acquisition, previous.as_ref(), self.clock.now())?;
-            let mut events = self.repository.list_events(actor.person_id).await?; events.extend(mirror.events.clone());
-            let mut day = crate::project_day_with_end_offset(actor.person_id, running.query.date, running.query.timezone_offset_seconds, running.query.end_timezone_offset_seconds, running.query.now, events, self.repository.list_tasks(actor.person_id).await?, self.repository.list_notes(actor.person_id).await?)?;
-            day.calendar = Some(crate::project_calendar_coverage(&mirror.state, running.query.now)); day.calendar_mirror_revision = Some(mirror.mirror_revision); day.validate_bounds()?;
+            let (mut events, tasks, notes) = self.selected_day_items(actor.person_id, &running.query).await?; events.extend(mirror.events.clone());
+            let mut day = crate::project_day_with_end_offset(actor.person_id, running.query.date, running.query.timezone_offset_seconds, running.query.end_timezone_offset_seconds, running.query.now, events, tasks, notes)?;
+            day.calendar = Some(crate::project_calendar_coverage(&mirror.state, &running.query.range()?, running.query.now)); day.calendar_mirror_revision = Some(mirror.mirror_revision); day.validate_bounds()?;
             self.admit_actor(&actor)?; check_scope(&scope)?;
             let next = running.transition(DayRefreshState::Completed { day }, self.clock.now())?;
             self.repository.commit_refresh(RefreshCommit { previous: running.clone(), next, acquisition, mirror }).await?; Ok::<(), DayError>(())
         }.await;
-        if let Err(error) = result { let failure = if self.lifecycle.closing.load(Ordering::Acquire) { DayRefreshFailure::HostInterrupted } else { match error.code { DayErrorCode::Conflict => DayRefreshFailure::SourceChanged, DayErrorCode::Storage => DayRefreshFailure::StorageUnavailable, _ => DayRefreshFailure::InvalidAcquisition } }; self.finish_current_failure(&running, failure, failure == DayRefreshFailure::HostInterrupted).await?; }
+        if let Err(error) = result { let failure = if self.lifecycle.closing.load(Ordering::Acquire) { DayRefreshFailure::HostInterrupted } else if error.metadata.get("reason_code").map(String::as_str) == Some("budget_exceeded") { DayRefreshFailure::BudgetExceeded } else { match error.code { DayErrorCode::Conflict => DayRefreshFailure::SourceChanged, DayErrorCode::Storage => DayRefreshFailure::StorageUnavailable, _ => DayRefreshFailure::InvalidAcquisition } }; self.finish_current_failure(&running, failure, failure == DayRefreshFailure::HostInterrupted).await?; }
         Ok(())
     }
     async fn finish_current_failure(&self, record: &RefreshRecord, failure: DayRefreshFailure, interrupted: bool) -> Result<(), DayError> {
@@ -115,8 +115,11 @@ impl DayService {
     pub async fn events_for_action(&self, actor: &OwnerActor, starts_at: chrono::DateTime<chrono::Utc>, ends_at: chrono::DateTime<chrono::Utc>, scope: &ExecutionScope) -> Result<Vec<Event>, DayError> {
         self.admit_actor(actor)?; check_scope(scope)?;
         if starts_at >= ends_at || ends_at.signed_duration_since(starts_at) > chrono::Duration::days(32) { return Err(DayError::validation("invalid action event range")); }
-        let mut events = self.repository.list_events(actor.person_id).await?; if let Some(mirror) = self.repository.calendar_mirror(actor.person_id).await? { events.extend(mirror.events); }
-        events.retain(|event| event.person_id == actor.person_id && event.deleted_at.is_none() && match &event.schedule { EventSchedule::Timed(value) => value.starts_at < ends_at && value.ends_at > starts_at, EventSchedule::AllDay(value) => value.start_date.and_hms_opt(0, 0, 0).and_then(|start| start.and_utc().checked_sub_signed(chrono::Duration::hours(14))).zip(value.end_date_exclusive.and_hms_opt(0, 0, 0).and_then(|end| end.and_utc().checked_add_signed(chrono::Duration::hours(14)))).is_none_or(|(start, end)| start < ends_at && end > starts_at) });
+        let query = crate::DayReadQuery { person_id: actor.person_id, selection: crate::DayReadSelection::ActionWindow { starts_at, ends_at }, max_items: crate::MAX_DAY_SNAPSHOT_ITEMS, max_bytes: crate::MAX_DAY_SNAPSHOT_BYTES };
+        let mut events = Vec::new();
+        for item in self.repository.read_items(query.clone()).await? { if let crate::TimelineItem::Event(value) = item { events.push(value); } else { return Err(DayError::storage("invalid Action event selection")); } }
+        if let Some(mirror) = self.repository.calendar_mirror(actor.person_id).await? { for event in mirror.events { if query.selects(&crate::TimelineItem::Event(event.clone()))? { events.push(event); } } }
+
         if events.len() > crate::MAX_REFRESH_RECORDS { return Err(DayError::validation("action event range budget")); } Ok(events)
     }
 }

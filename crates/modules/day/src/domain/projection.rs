@@ -124,8 +124,8 @@ pub fn project_day_with_end_offset(
             task.completed_at.is_none() && task.deadline.is_some_and(|deadline| deadline < now)
         })
         .count();
-    let total = events.len().checked_add(tasks.len()).and_then(|count| count.checked_add(notes.len())).ok_or_else(|| crate::DayError::validation("Day snapshot item budget"))?;
-    if total > MAX_DAY_SNAPSHOT_ITEMS { return Err(crate::DayError::validation("Day snapshot item budget")); }
+    let total = events.len().checked_add(tasks.len()).and_then(|count| count.checked_add(notes.len())).ok_or_else(|| crate::DayError::budget("Day snapshot item budget"))?;
+    if total > MAX_DAY_SNAPSHOT_ITEMS { return Err(crate::DayError::budget("Day snapshot item budget")); }
     let mut items = Vec::with_capacity(total);
     items.extend(events.into_iter().map(TimelineItem::Event));
     items.extend(tasks.into_iter().map(TimelineItem::Task));
@@ -175,7 +175,7 @@ pub fn project_day_with_end_offset(
 
 impl DaySnapshot {
     pub fn validate_bounds(&self) -> Result<(), crate::DayError> {
-        if self.items.len() > MAX_DAY_SNAPSHOT_ITEMS || self.calendar.as_ref().is_some_and(|calendar| calendar.sources.len() > crate::MAX_REFRESH_SOURCES || calendar.sources.iter().map(|source| source.resources.len()).sum::<usize>() > crate::MAX_REFRESH_CALENDARS) { return Err(crate::DayError::validation("Day snapshot item budget")); }
+        if self.items.len() > MAX_DAY_SNAPSHOT_ITEMS || self.calendar.as_ref().is_some_and(|calendar| calendar.sources.len() > crate::MAX_REFRESH_SOURCES || calendar.sources.iter().map(|source| source.resources.len()).sum::<usize>() > crate::MAX_REFRESH_CALENDARS) { return Err(crate::DayError::budget("Day snapshot item budget")); }
         struct Counter(usize);
         impl std::io::Write for Counter {
             fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -185,6 +185,6 @@ impl DaySnapshot {
             fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
         }
         // Reserve bounded product envelope metadata (including schema version).
-        serde_json::to_writer(Counter(64), self).map_err(|_| crate::DayError::validation("Day snapshot byte budget"))
+        serde_json::to_writer(Counter(64), self).map_err(|_| crate::DayError::budget("Day snapshot byte budget"))
     }
 }

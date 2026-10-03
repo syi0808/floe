@@ -84,6 +84,7 @@ impl DayService {
         self.admit_actor(actor)?;
         if request.command_id.is_nil() { return Err(DayError::validation("invalid command identity")); }
         request.day.range()?;
+        request.mutation.validate_bounds()?;
         if scope.cancellation().is_cancelled() || tokio::time::Instant::now() >= scope.deadline() { return Err(DayError::storage("Day command expired")); }
         let person = actor.person_id;
         let mut changed_item = None;
@@ -260,4 +261,19 @@ impl DayService {
 }
 fn check_person(actual: Option<PersonId>, expected: PersonId) -> Result<(), DayError> {
     if actual == Some(expected) { Ok(()) } else { Err(DayError::not_found("Day item", "requested identity")) }
+}
+
+impl DayMutation {
+    fn validate_bounds(&self) -> Result<(), DayError> {
+        let text = |value: &str| if value.len() <= 1024 * 1024 { Ok(()) } else { Err(DayError::budget("Day command text budget")) };
+        let schedule = |value: &EventSchedule| if let EventSchedule::Timed(value) = value { text(&value.timezone) } else { Ok(()) };
+        match self {
+            Self::SubmitCapture { input, .. } => text(input),
+            Self::CreateEvent { title, schedule: value, .. } | Self::UpdateEvent { title, schedule: value, .. } => { text(title)?; schedule(value) },
+            Self::CreateTask { title, .. } | Self::UpdateTask { title, .. } => text(title),
+            Self::CreateNote { content, .. } | Self::UpdateNote { content, .. } => text(content),
+            Self::ClassifyCapture { classification, .. } => match classification { Classification::Event { title, schedule: value } => { text(title)?; schedule(value) }, Classification::Task { title, .. } => text(title), Classification::Note { content } => text(content) },
+            _ => Ok(()),
+        }
+    }
 }

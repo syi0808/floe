@@ -698,12 +698,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         floe_conversation::validate_terminal_steps(&terminal, &journal)?;
         let (next, next_session) =
             floe_conversation::apply_terminal(&current, &session, &terminal, &journal)?;
-        for message in floe_conversation::terminal_messages(run_id, &terminal)? {
-            if let AgentMessage::Delegation { turn_id, task } = message {
-                transaction.execute("INSERT INTO agent_task_delegations (task_id, session_id, turn_id) VALUES (?, ?, ?)",
-                    (task.task_id.to_string(), session.id.to_string(), turn_id.to_string())).await.map_err(|_| AgentFailure::Conflict)?;
-            }
-        }
         let changed = transaction
             .execute(
                 "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",

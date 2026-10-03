@@ -192,6 +192,10 @@ pub fn terminal_messages(
                 messages.push(AgentMessage::Delegation {
                     turn_id: run_id.as_uuid(),
                     task: receipt.snapshot.clone(),
+                    execution_receipt: match &receipt.execution {
+                        floe_agent_contract::TaskExecutionEvidence::Admitted(value) => Some(value.reference.clone()),
+                        floe_agent_contract::TaskExecutionEvidence::Unadmitted => None,
+                    },
                 });
             }
             EngineStep::Tool(_) => {}

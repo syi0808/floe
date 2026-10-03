@@ -62,6 +62,7 @@ pub enum SessionMessage {
 }
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct TaskSummary {
+    pub execution_receipt: Option<floe_agent_contract::TaskExecutionReceiptRef>,
     pub task_id: TaskId,
     pub agent_id: String,
     pub state: TaskState,
@@ -144,8 +145,14 @@ pub(super) fn project_session_snapshot(
                     result: result.clone(),
                 }
             }
-            AgentMessage::Delegation { task, .. } => {
+            AgentMessage::Delegation { task, execution_receipt, .. } => {
                 task.validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
+                match execution_receipt {
+                    Some(reference) => { reference.validate()?; if reference.execution.task_id != task.task_id { return Err(AgentFailure::StorageUnavailable); } }
+                    None if task.state == TaskState::Rejected && task.issue.is_some() && task.artifacts.is_empty()
+                        && task.coverage == floe_agent_contract::DependencyCoverage::Independent => {},
+                    None => return Err(AgentFailure::StorageUnavailable),
+                }
                 bounded(&task.agent_id, 256, &mut bytes)?;
                 if let Some(text) = &task.result {
                     bounded(text, floe_agent_contract::MAX_OUTPUT_BYTES, &mut bytes)?;
@@ -175,6 +182,7 @@ pub(super) fn project_session_snapshot(
                     message_id: task.task_id.as_uuid(),
                     turn_id,
                     task: TaskSummary {
+                        execution_receipt: execution_receipt.clone(),
                         task_id: task.task_id,
                         agent_id: task.agent_id.clone(),
                         state: task.state,

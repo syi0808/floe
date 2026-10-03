@@ -64,6 +64,7 @@ pub struct ConversationSessionArtifactDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationSessionTaskDto {
+    pub execution_receipt: Option<super::TaskExecutionReceiptRefDto>,
     pub task_id: TaskRefDto,
     pub agent_id: String,
     pub state: ConversationTaskStateDto,
@@ -177,6 +178,11 @@ impl ConversationSessionMessageDto {
 impl ConversationSessionTaskDto {
     fn validate(&self) -> Result<(), &'static str> {
         validate_metadata(&self.agent_id, "agent_id")?;
+        match &self.execution_receipt {
+            Some(reference) => { reference.validate()?; if reference.execution.task_id != self.task_id { return Err("conversation.session.task.execution_receipt"); } }
+            None if self.state == ConversationTaskStateDto::Rejected && self.issue.is_some() && self.artifacts.is_empty() => {},
+            None => return Err("conversation.session.task.execution_receipt"),
+        }
         if self.artifacts.len() > MAX_SESSION_ARTIFACTS
             || self.artifacts.iter().any(|artifact| {
                 !valid_metadata(&artifact.name)

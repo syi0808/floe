@@ -58,7 +58,9 @@ fn reconcile_resource(events: &mut Vec<Event>, source: &CalendarSourceVersion, c
         }
         imported.push(event);
     }
-    events.retain(|event| !matches!(&event.source, SourceRef::Calendar(origin) if origin.connection_id == source.source.connection_id() && origin.provider == source.provider && origin.calendar_id == calendar_id && (range.contains(&event.schedule) || seen.contains(&origin.external_id))));
+    // One resource retains exactly its latest complete interval. A failed
+    // batch never reaches this replacement and preserves its prior interval.
+    events.retain(|event| !matches!(&event.source, SourceRef::Calendar(origin) if origin.connection_id == source.source.connection_id() && origin.provider == source.provider && origin.calendar_id == calendar_id));
     events.extend(imported); Ok(())
 }
 
@@ -71,7 +73,7 @@ impl crate::RefreshCommit {
         let crate::DayRefreshState::Completed { day } = &self.next.state else { return Err(DayError::conflict("refresh commit requires completion")); };
         self.acquisition.validate_record(&self.previous, now)?;
         let expected = reconcile(self.previous.expected_mirror_revision, &self.acquisition, current)?;
-        if expected != self.mirror || day.person_id != self.previous.person_id || day.date != self.previous.query.date || day.generated_at != self.previous.query.now || day.timezone_offset_seconds != self.previous.query.timezone_offset_seconds || day.calendar_mirror_revision != Some(self.mirror.mirror_revision) || day.calendar != Some(crate::project_calendar_coverage(&self.mirror.state, self.previous.query.now)) { return Err(DayError::validation("completed refresh does not match acquired mirror")); }
+        if expected != self.mirror || day.person_id != self.previous.person_id || day.date != self.previous.query.date || day.generated_at != self.previous.query.now || day.timezone_offset_seconds != self.previous.query.timezone_offset_seconds || day.calendar_mirror_revision != Some(self.mirror.mirror_revision) || day.calendar != Some(crate::project_calendar_coverage(&self.mirror.state, &self.previous.query.range()?, self.previous.query.now)) { return Err(DayError::validation("completed refresh does not match acquired mirror")); }
         Ok(())
     }
 }

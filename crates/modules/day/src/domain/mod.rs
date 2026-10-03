@@ -20,3 +20,6 @@ pub use entity::{
 };
 pub use floe_kernel::{CaptureId, EventId, NoteId, PersonId, Revision, TaskId};
 pub use projection::{MAX_DAY_SNAPSHOT_ITEMS, MAX_DAY_SNAPSHOT_BYTES, DaySnapshot, TimelineItem, project_day, project_day_with_end_offset};
+
+mod read;
+pub use read::{DayReadQuery, DayReadSelection};

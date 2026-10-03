@@ -36,6 +36,7 @@ impl DayError {
     pub fn validation(message: impl Into<String>) -> Self {
         Self::new(DayErrorCode::Validation, message)
     }
+    pub fn budget(message: impl Into<String>) -> Self { Self::validation(message).with_metadata("reason_code", "budget_exceeded") }
     pub fn not_found(kind: impl Display, id: impl Display) -> Self {
         Self::new(DayErrorCode::NotFound, format!("{kind} not found"))
             .with_metadata("id", id.to_string())
@@ -66,9 +67,7 @@ pub trait DayRepository: super::refresh_repository::DayRefreshRepository + Send 
     fn get_event<'a>(&'a self, id: EventId) -> floe_execution::BoxFuture<'a, Result<Option<Event>, DayError>>;
     fn get_task<'a>(&'a self, id: TaskId) -> floe_execution::BoxFuture<'a, Result<Option<Task>, DayError>>;
     fn get_note<'a>(&'a self, id: NoteId) -> floe_execution::BoxFuture<'a, Result<Option<Note>, DayError>>;
-    fn list_events<'a>(&'a self, person_id: PersonId) -> floe_execution::BoxFuture<'a, Result<Vec<Event>, DayError>>;
-    fn list_tasks<'a>(&'a self, person_id: PersonId) -> floe_execution::BoxFuture<'a, Result<Vec<Task>, DayError>>;
-    fn list_notes<'a>(&'a self, person_id: PersonId) -> floe_execution::BoxFuture<'a, Result<Vec<Note>, DayError>>;
+    fn read_items<'a>(&'a self, query: crate::DayReadQuery) -> floe_execution::BoxFuture<'a, Result<Vec<TimelineItem>, DayError>>;
     fn classify<'a>(&'a self, capture: &'a Capture, item: &'a TimelineItem) -> floe_execution::BoxFuture<'a, Result<(), DayError>>;
     fn calendar_mirror<'a>(&'a self, person_id: PersonId) -> floe_execution::BoxFuture<'a, Result<Option<CalendarMirror>, DayError>>;
 }

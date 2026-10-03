@@ -59,21 +59,25 @@ pub fn project_item_source(person_id: PersonId, source: &SourceRef) -> DayItemSo
 pub fn project_event(event: &Event) -> DayEvent { DayEvent { id: event.id, person_id: event.person_id, title: event.title.clone(), schedule: event.schedule.clone(), source: project_item_source(event.person_id, &event.source), created_at: event.created_at, updated_at: event.updated_at, revision: event.revision, deleted_at: event.deleted_at, action_target: matches!(&event.source, SourceRef::Calendar(_)).then_some(DayEventTarget { event_id: event.id, expected_revision: event.revision }) } }
 pub fn project_task(task: &Task) -> DayTask { DayTask { id: task.id, person_id: task.person_id, title: task.title.clone(), deadline: task.deadline, priority: task.priority, completed_at: task.completed_at, source: project_item_source(task.person_id, &task.source), created_at: task.created_at, updated_at: task.updated_at, revision: task.revision, deleted_at: task.deleted_at } }
 pub fn project_note(note: &Note) -> DayNote { DayNote { id: note.id, person_id: note.person_id, content: note.content.clone(), source: project_item_source(note.person_id, &note.source), created_at: note.created_at, updated_at: note.updated_at, revision: note.revision, deleted_at: note.deleted_at } }
-pub fn project_calendar_coverage(mirror: &CalendarMirrorState, now: DateTime<Utc>) -> DayCalendarCoverage {
+pub fn project_calendar_coverage(mirror: &CalendarMirrorState, requested: &CalendarRange, now: DateTime<Utc>) -> DayCalendarCoverage {
     let sources = mirror.sources.iter().map(|source| {
         let person = source.source.source.person_id(); let connection = source.source.source.connection_id();
         let resources = source.source.calendars.iter().map(|calendar| {
             let status = source.calendar_statuses.get(&calendar.calendar_id);
-            DayCalendarResourceCoverage { resource_ref: display_reference(person, connection.as_str(), &calendar.calendar_id), label: calendar.calendar_name.clone(), state: coverage_state(status.and_then(|status| status.last_success_at), status.and_then(|status| status.error), now), last_success_at: status.and_then(|status| status.last_success_at), last_range: status.and_then(|status| status.last_range.clone()), failure: status.and_then(|status| status.error), failure_at: status.and_then(|status| status.error_at) }
+            DayCalendarResourceCoverage { resource_ref: display_reference(person, connection.as_str(), &calendar.calendar_id), label: calendar.calendar_name.clone(), state: coverage_state(status.and_then(|status| status.last_success_at), status.and_then(|status| status.error), status.and_then(|status| status.last_range.as_ref()).is_some_and(|range| covers(range, requested)), now), last_success_at: status.and_then(|status| status.last_success_at), last_range: status.and_then(|status| status.last_range.clone()), failure: status.and_then(|status| status.error), failure_at: status.and_then(|status| status.error_at) }
         }).collect::<Vec<_>>();
         let current = resources.iter().filter(|resource| resource.state == DayCoverageState::Current).count();
-        let state = if current > 0 && current < resources.len() { DayCoverageState::Partial } else { coverage_state(source.last_success_at, source.error, now) };
+        let state = if current > 0 && current < resources.len() { DayCoverageState::Partial } else { coverage_state(source.last_success_at, source.error, source.last_range.as_ref().is_some_and(|range| covers(range, requested)), now) };
         let label = match source.source.provider { floe_context_contract::CalendarProvider::EventKit => "Apple Calendar", floe_context_contract::CalendarProvider::Google => "Google Calendar", floe_context_contract::CalendarProvider::Microsoft => "Microsoft Calendar", floe_context_contract::CalendarProvider::Fixture => "Example Calendar", floe_context_contract::CalendarProvider::Android => "Calendar" }.to_owned();
         DayCalendarSourceCoverage { source_ref: display_reference(person, connection.as_str(), ""), label, state, last_success_at: source.last_success_at, last_range: source.last_range.clone(), failure: source.error, failure_at: source.error_at, resources }
     }).collect(); DayCalendarCoverage { sources }
 }
-fn coverage_state(success: Option<DateTime<Utc>>, failure: Option<CalendarFailure>, now: DateTime<Utc>) -> DayCoverageState { if failure.is_some() { DayCoverageState::Unavailable } else { match success { Some(success) if success <= now && now.signed_duration_since(success) < chrono::Duration::minutes(5) => DayCoverageState::Current, Some(_) => DayCoverageState::Stale, None => DayCoverageState::Pending } } }
+fn coverage_state(success: Option<DateTime<Utc>>, failure: Option<CalendarFailure>, covered: bool, now: DateTime<Utc>) -> DayCoverageState { if failure.is_some() { DayCoverageState::Unavailable } else { match success { Some(success) if covered && success <= now && now.signed_duration_since(success) < chrono::Duration::minutes(5) => DayCoverageState::Current, Some(_) => DayCoverageState::Stale, None => DayCoverageState::Pending } } }
 fn display_reference(person: PersonId, connection: &str, resource: &str) -> Uuid {
     let mut hash = Sha256::new(); for value in ["floe.day.display", &person.to_string(), connection, resource] { hash.update((value.len() as u64).to_be_bytes()); hash.update(value.as_bytes()); }
     let digest = hash.finalize(); let mut bytes = [0; 16]; bytes.copy_from_slice(&digest[..16]); bytes[6] = (bytes[6] & 15) | 80; bytes[8] = (bytes[8] & 63) | 128; Uuid::from_bytes(bytes)
+}
+
+fn covers(cached: &CalendarRange, requested: &CalendarRange) -> bool {
+    cached.start_date <= requested.start_date && cached.end_date_exclusive >= requested.end_date_exclusive && crate::range_bounds(cached).ok().zip(crate::range_bounds(requested).ok()).is_some_and(|((start, end), (requested_start, requested_end))| start <= requested_start && end >= requested_end)
 }

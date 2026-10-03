@@ -278,6 +278,13 @@ impl DayService {
         Ok(())
     }
 
+    pub(crate) async fn selected_day_items(&self, person_id: PersonId, query: &crate::DayQuery) -> Result<(Vec<Event>, Vec<Task>, Vec<Note>), DayError> {
+        let values = self.repository.read_items(crate::DayReadQuery::display(person_id, query)?).await?;
+        let mut events = Vec::new(); let mut tasks = Vec::new(); let mut notes = Vec::new();
+        for item in values { match item { TimelineItem::Event(value) => events.push(value), TimelineItem::Task(value) => tasks.push(value), TimelineItem::Note(value) => notes.push(value) } }
+        Ok((events, tasks, notes))
+    }
+
     pub(crate) async fn day_snapshot(
         &self,
         person_id: PersonId,
@@ -312,28 +319,19 @@ impl DayService {
             return Err(DayError::validation("invalid day offsets"));
         }
         let mirror = self.repository.calendar_mirror(person_id).await?;
-        let mut events = self.repository.list_events(person_id).await?;
-        if let Some(mirror) = &mirror {
-            events.extend(mirror.events.clone());
-        }
-        let mut snapshot = project_day_with_end_offset(
-            person_id,
-            date,
-            timezone_offset_seconds,
-            end_timezone_offset_seconds,
-            now,
-            events,
-            self.repository.list_tasks(person_id).await?,
-            self.repository.list_notes(person_id).await?,
-        )?;
+        let query = crate::DayQuery { date, timezone_offset_seconds, end_timezone_offset_seconds, now };
+        let (mut events, tasks, notes) = self.selected_day_items(person_id, &query).await?;
+        if let Some(mirror) = &mirror { events.extend(mirror.events.clone()); }
+        let mut snapshot = project_day_with_end_offset(person_id, date, timezone_offset_seconds, end_timezone_offset_seconds, now, events, tasks, notes)?;
         snapshot.calendar_mirror_revision = mirror.as_ref().map(|mirror| mirror.mirror_revision);
-        snapshot.calendar = mirror.map(|mirror| crate::project_calendar_coverage(&mirror.state, now));
+        snapshot.calendar = mirror.map(|mirror| crate::project_calendar_coverage(&mirror.state, &range, now));
         snapshot.validate_bounds()?;
         Ok(snapshot)
     }
 }
 
 fn ensure_revision(actual: Revision, expected: Revision) -> Result<(), DayError> {
+    if actual.0 == 0 || actual.0 >= i64::MAX as u64 || expected.0 == 0 { return Err(DayError::conflict("Day revision unavailable or exhausted")); }
     if actual == expected {
         Ok(())
     } else {

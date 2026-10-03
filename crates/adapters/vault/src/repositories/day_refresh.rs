@@ -137,7 +137,7 @@ pub(super) async fn persist_mirror_on(
     mirror: &CalendarMirror,
     payload: String,
 ) -> Result<(), DayError> {
-    if payload.len() > floe_day::MAX_DAY_SNAPSHOT_BYTES || mirror.events.len() > floe_day::MAX_DAY_SNAPSHOT_ITEMS { return Err(DayError::validation("Day mirror budget")); }
+    if payload.len() > floe_day::MAX_DAY_SNAPSHOT_BYTES || mirror.events.len() > floe_day::MAX_DAY_SNAPSHOT_ITEMS { return Err(DayError::budget("Day mirror budget")); }
     if mirror.mirror_revision == 0 {
         return Err(DayError::validation("invalid calendar mirror revision"));
     }
