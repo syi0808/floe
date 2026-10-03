@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "G2 first attempt failed. Generic DeviceModel and Health hosts now retain operations until observed physical worker return and fence callbacks by private admission identity. Rust review corrections preserve trusted failure usage, strict schema decoding and numeric precision. Pure Swift contract and Foundation backend review/final native wiring remain in progress. No new executable checks or model calls ran; this is not structural closure or build qualification.",
+  "verification": "Approved Transform/DeviceModel structural refinement is integrated and statically reviewed. Obsolete Swift monoliths are removed; one SwiftPM image owns both independent hosts and Foundation is the first neutral backend. G2 retry is READY, NOT RUN, on this exact published snapshot using docs/plans/s2-g2-command-sheet.md. Prior G2 failed. iOS full app destination remains blocked unless resolved; direct SwiftPM builds cover only named native targets. No new executable checks/model calls ran. Joint isolated behavior verification precedes S3 tests.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "83e8e6573147feefc78254a591b63af815acb6aa",
+  "current_correction_source_commit": "5a136900cdfc3ca7cd3149b9b2c938f460d7658b",
   "current_status_document": "docs/plans/t0-execution-status.json"
 }

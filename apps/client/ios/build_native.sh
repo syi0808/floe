@@ -3,8 +3,6 @@ set -euo pipefail
 
 source "${SRCROOT}/../apple/native_build.sh"
 FRAMEWORKS_DIRECTORY="${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}"
-MODEL_SOURCE="${SRCROOT}/../macos/LocalModel/LocalModel.swift"
-HEALTH_TRANSFORM_SOURCE="${SRCROOT}/../apple/FloeAppleHealth/Sources/FloeAppleHealth/HealthPrivacyTransform.swift"
 MODEL_LIBRARIES=()
 TARGETS=()
 for architecture in ${(s: :)ARCHS}; do
@@ -38,10 +36,7 @@ for target in ${(u)TARGETS}; do
       ;;
   esac
   MODEL_LIBRARY="${NATIVE_CACHE_DIRECTORY}/libfloe_local_model_${target}.dylib"
-  floe_native_artifact "${MODEL_LIBRARY}" swift -emit-library -swift-version 6 -warnings-as-errors \
-    -sdk "${IOS_SDK}" -target "${SWIFT_TARGET}" \
-    -Xlinker -weak_framework -Xlinker FoundationModels \
-    "${MODEL_SOURCE}" "${HEALTH_TRANSFORM_SOURCE}"
+  floe_native_model_package "${MODEL_LIBRARY}" "${SWIFT_TARGET}" "${IOS_SDK}"
   MODEL_LIBRARIES+=("${MODEL_LIBRARY}")
 done
 

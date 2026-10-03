@@ -41,6 +41,35 @@ floe_native_artifact() {
   if {
     case "${operation}" in
       swift) xcrun swiftc "$@" -o "${temporary}" ;;
+      swift-package)
+        local package_root="$1"
+        local target_triple="$2"
+        local target_sdk="$3"
+        local package_scratch="${NATIVE_CACHE_DIRECTORY}/swiftpm-${target_triple}"
+        local -a package_options=(
+          --package-path "${package_root}"
+          --scratch-path "${package_scratch}"
+          --cache-path "${NATIVE_CACHE_DIRECTORY}/swiftpm-cache"
+          --config-path "${NATIVE_CACHE_DIRECTORY}/swiftpm-config"
+          --security-path "${NATIVE_CACHE_DIRECTORY}/swiftpm-security"
+          --configuration debug
+          --triple "${target_triple}"
+          --sdk "${target_sdk}"
+          --product floe_local_model
+          -Xswiftc -warnings-as-errors
+          -Xswiftc -module-cache-path
+          -Xswiftc "${NATIVE_CACHE_DIRECTORY}/module-cache"
+          -Xlinker -weak_framework
+          -Xlinker FoundationModels
+        )
+        local package_bin
+        if xcrun swift build "${package_options[@]}" \
+          && package_bin="$(xcrun swift build "${package_options[@]}" --show-bin-path)"; then
+          cp "${package_bin}/libfloe_local_model.dylib" "${temporary}"
+        else
+          false
+        fi
+        ;;
       embed)
         if (( $# == 1 )); then
           cp "$1" "${temporary}"
@@ -60,4 +89,19 @@ floe_native_artifact() {
   fi
   rm -rf "${temporary_directory}"
   return "${build_status}"
+}
+
+# Every transitive source of the local native package participates in the cache
+# key. Live hosts are linked only into this dynamic product, never into Runner.
+floe_native_model_package() {
+  local destination="$1"
+  local target_triple="$2"
+  local target_sdk="$3"
+  local package_root="${SRCROOT}/../native/FloeNative"
+  local -a package_inputs=(
+    "${package_root}/Package.swift"
+    "${package_root}"/Sources/**/*.swift(N.)
+  )
+  floe_native_artifact "${destination}" swift-package \
+    "${package_root}" "${target_triple}" "${target_sdk}" "${package_inputs[@]}"
 }

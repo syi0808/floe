@@ -1,36 +1,42 @@
 # Floe Apple Health
 
-HealthKit reads only sleep analysis, steps and Apple exercise time over a bounded
-36-hour window. The raw aggregate stays inside the native source provider.
+FloeAppleHealth owns HealthKit acquisition and permission facts: sleep analysis,
+steps and exercise time over a bounded 36-hour window. It returns numeric
+acquisition values and never invokes a model or publishes a Wellbeing View.
 
-Every read requires the independent local FoundationModels privacy transform.
-`HealthPrivacyTransform.swift` owns its strict input/output contract, independent
-job slot, 10-second deadline, 64-token response budget and bounded native ABI.
-Input is limited to finite, nonnegative sleep hours (≤36), steps (≤1,000,000) and
-exercise minutes (≤2,160), with at least one signal. Invalid input is rejected.
-The model returns only closed capacity and recovery categories. There is no
-Agent prompt, tool access, remote fallback or deterministic threshold fallback.
+FloeAppleWellbeing maps those values into HealthTransform input, invokes the
+bundled Health operation, and constructs the sanitized source envelope only
+after validated success. Its cache retains the existing freshness and permission
+semantics. Raw aggregates stay inside this native pipeline.
 
-Production `HealthKitWellbeingProvider.currentHostProvider(sourceHandle:transformer:)`
-requires `BundledHealthPrivacyTransformer`. It loads the same bundled
-`libfloe_local_model.dylib` image that Rust uses to verify a one-time native
-transform receipt. The receipt binds the original acquisition request, host
-epoch, Person, device and native subject to the output digest and freshness.
-A caller-provided boolean or copied View cannot replace that receipt.
+The shared Transform interface and concrete HealthTransform live in the
+FloeNative package. HealthTransform depends on the backend-neutral DeviceModel
+contract. FoundationModels is the first device backend, with SDK handling
+isolated from Health domain policy. Health receives no Agent context or tools,
+and has no remote or deterministic semantic fallback. Input remains finite and
+nonnegative: sleep hours at most 36, steps at most 1,000,000, exercise minutes at
+most 2,160, with at least one signal. Output is the closed capacity/recovery pair.
 
-After valid transform success, source code constructs the coarse
-`wellbeing.derived` View, 30-minute expiry, confidence and opaque evidence handle.
-Both categories unknown produces zero confidence and no evidence handle.
-Failure does not refresh or substitute a cached projection. The result remains
-HighlySensitive; a valid transform never grants source-processing permission.
+The dynamic libfloe_local_model.dylib owns separate DeviceModel and Health job
+hosts using one injected backend. Runner links only stateless contract/bridge
+and source modules. The Health ABI retains its ten-second deadline, 64-token
+budget, one-use receipts and completion-anchored replay retention. Rust consumes
+the receipt from that same image and verifies acquisition request, host epoch,
+Person, device, native subject, output digest and freshness. A copied View or
+caller boolean cannot replace that proof.
 
-HealthKit does not reveal whether read access was denied. Authorization-request
-completion is not reported as confirmed read access. Empty data and restricted
+After success, source code constructs wellbeing.derived, 30-minute expiry,
+confidence and an opaque evidence handle. Both categories unknown produces
+zero confidence and no evidence handle. Failure cannot refresh cached evidence.
+HighlySensitive classification and source-processing permission remain separate
+from transformation; transformation grants no authority.
+
+HealthKit does not reveal whether read access was denied. Completed permission
+prompts are not reported as confirmed read access. Empty data and restricted
 read access remain indistinguishable. Mac Catalyst and unavailable Health stores
 are unsupported; iPad requires iPadOS 17 or later.
 
-Both macOS/iOS native build scripts and Xcode source inputs include the same
-Health transform source alongside the local-model dylib source. FoundationModels
-is weak-linked, and actual model readiness is checked before any transform.
-Compilation and behavioral validation follow the repository's staged refactor
-gates; this source change does not claim those gates have run.
+Both native build scripts build the same SwiftPM dynamic product and retain
+weak FoundationModels linkage and runtime availability checks. Build and behavior
+qualification remain separate staged gates; this source change does not claim
+those gates have passed.

@@ -87,7 +87,7 @@ pub enum DeviceModelUnavailable { Unsupported, Disabled, NotReady }
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceModelFailure { Unsupported, Disabled, NotReady, Unavailable, InvalidInput, InvalidOutput,
-    DeadlineExceeded, Cancelled, PolicyDenied, QuotaExceeded, Busy, Conflict, NotFound }
+    DeadlineExceeded, Cancelled, PolicyDenied, QuotaExceeded, BudgetExceeded, Busy, Conflict, NotFound }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

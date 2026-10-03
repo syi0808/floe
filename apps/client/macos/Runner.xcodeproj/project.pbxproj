@@ -257,8 +257,7 @@
 			inputPaths = (
 				"$(SRCROOT)/build_native.sh",
 				"$(SRCROOT)/../apple/native_build.sh",
-				"$(SRCROOT)/LocalModel/LocalModel.swift",
-				"$(SRCROOT)/../apple/FloeAppleHealth/Sources/FloeAppleHealth/HealthPrivacyTransform.swift",
+				"$(SRCROOT)/../native/FloeNative",
 				"$(SRCROOT)/CalendarActions/EventKitActions.swift",
 			);
 			name = "Build Swift Libraries";

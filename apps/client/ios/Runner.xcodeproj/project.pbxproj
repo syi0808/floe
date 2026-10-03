@@ -14,7 +14,7 @@
 		A10000010000000000000001 /* AppleContextChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000001 /* AppleContextChannel.swift */; };
 		A10000210000000000000001 /* CalendarChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000220000000000000001 /* CalendarChannel.swift */; };
 		A10000030000000000000001 /* FloeAppleContacts in Frameworks */ = {isa = PBXBuildFile; productRef = A10000110000000000000001 /* FloeAppleContacts */; };
-		A10000050000000000000001 /* FloeAppleHealth in Frameworks */ = {isa = PBXBuildFile; productRef = A10000130000000000000001 /* FloeAppleHealth */; };
+		A10000050000000000000001 /* FloeAppleWellbeing in Frameworks */ = {isa = PBXBuildFile; productRef = A10000130000000000000001 /* FloeAppleWellbeing */; };
 		A10000060000000000000001 /* FloeScreenTimeGate in Frameworks */ = {isa = PBXBuildFile; productRef = A10000140000000000000001 /* FloeScreenTimeGate */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
@@ -65,7 +65,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000030000000000000001 /* FloeAppleContacts in Frameworks */,
-				A10000050000000000000001 /* FloeAppleHealth in Frameworks */,
+				A10000050000000000000001 /* FloeAppleWellbeing in Frameworks */,
 				A10000060000000000000001 /* FloeScreenTimeGate in Frameworks */,
 				78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */,
 			);
@@ -146,7 +146,7 @@
 			packageProductDependencies = (
 				78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */,
 				A10000110000000000000001 /* FloeAppleContacts */,
-				A10000130000000000000001 /* FloeAppleHealth */,
+				A10000130000000000000001 /* FloeAppleWellbeing */,
 				A10000140000000000000001 /* FloeScreenTimeGate */,
 			);
 			productName = Runner;
@@ -216,8 +216,7 @@
 			inputPaths = (
 				"$(SRCROOT)/build_native.sh",
 				"$(SRCROOT)/../apple/native_build.sh",
-				"$(SRCROOT)/../macos/LocalModel/LocalModel.swift",
-				"$(SRCROOT)/../apple/FloeAppleHealth/Sources/FloeAppleHealth/HealthPrivacyTransform.swift",
+				"$(SRCROOT)/../native/FloeNative",
 			);
 			name = "Build Swift Libraries";
 			outputPaths = (
@@ -606,10 +605,10 @@
 			package = A10000070000000000000001 /* XCLocalSwiftPackageReference "../apple/FloeAppleContacts" */;
 			productName = FloeAppleContacts;
 		};
-		A10000130000000000000001 /* FloeAppleHealth */ = {
+		A10000130000000000000001 /* FloeAppleWellbeing */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = A10000090000000000000001 /* XCLocalSwiftPackageReference "../apple/FloeAppleHealth" */;
-			productName = FloeAppleHealth;
+			productName = FloeAppleWellbeing;
 		};
 		A10000140000000000000001 /* FloeScreenTimeGate */ = {
 			isa = XCSwiftPackageProductDependency;

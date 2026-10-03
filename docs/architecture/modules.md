@@ -11,6 +11,7 @@ Direct Day display has a separate Access product-read admission over the configu
 | Layer | Package / path | Owns |
 |---|---|---|
 | Contract | `floe-kernel` — `crates/contracts/kernel` | IDs and small shared values |
+| Contract | `floe-model-contract` — `crates/contracts/model` | backend-neutral bounded schema, output format and DeviceModel wire values; no domain or authority dependencies |
 | Contract | `floe-context-contract` — `crates/contracts/context` | source views, grants, processing restrictions, provenance, coverage and Health-transform evidence values |
 | Contract | `floe-agent-contract` — `crates/contracts/agent` | prepared-model, canonical journal, Tool/Delegate, immutable Task receipt, blockage and artifact contracts |
 | Runtime | `floe-execution` — `crates/runtime/execution` | scoped cancellation, monotonic budget leases, dispatch facts and immutable per-attempt accounting |

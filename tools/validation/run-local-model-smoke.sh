@@ -21,12 +21,10 @@ mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Frameworks"
 cp target/debug/examples/local_model_smoke "$bundle/Contents/MacOS/FloeLocalModelSmoke"
 cp tools/validation/local-model-smoke-Info.plist "$bundle/Contents/Info.plist"
 library="$bundle/Contents/Frameworks/libfloe_local_model.dylib"
-xcrun swiftc -emit-library -swift-version 6 -warnings-as-errors \
-  -target "$(uname -m)-apple-macosx12.0" \
-  apps/client/apple/FloeAppleHealth/Sources/FloeAppleHealth/HealthPrivacyTransform.swift \
-  apps/client/macos/LocalModel/LocalModel.swift -o "$library"
-install_name_tool -id '@rpath/libfloe_local_model.dylib' "$library"
-codesign --force --sign - "$library"
+SRCROOT="$PWD/apps/client/macos" DERIVED_FILE_DIR="$PWD/target/validation/native" \
+  zsh -c 'source "$SRCROOT/../apple/native_build.sh"
+    floe_native_model_package "$1" "$(uname -m)-apple-macosx12.0" "$(xcrun --sdk macosx --show-sdk-path)"' \
+    floe-native-diagnostic "$library"
 codesign --force --sign - "$bundle"
 codesign --verify --deep --strict "$bundle"
 "$bundle/Contents/MacOS/FloeLocalModelSmoke" "$@"

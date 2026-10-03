@@ -43,6 +43,7 @@ fn failure(failure: DeviceModelFailure) -> AgentFailure {
         DeviceModelFailure::Cancelled => AgentFailure::Cancelled,
         DeviceModelFailure::PolicyDenied => AgentFailure::PolicyDenied,
         DeviceModelFailure::QuotaExceeded | DeviceModelFailure::Busy => AgentFailure::QuotaExceeded,
+        DeviceModelFailure::BudgetExceeded => AgentFailure::BudgetExceeded,
         DeviceModelFailure::Conflict => AgentFailure::Conflict,
         DeviceModelFailure::NotFound => AgentFailure::NotFound,
     }

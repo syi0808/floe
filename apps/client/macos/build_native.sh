@@ -8,8 +8,5 @@ SWIFT_TARGET="$(uname -m)-apple-macosx${MACOSX_DEPLOYMENT_TARGET}"
 floe_native_artifact "${FRAMEWORKS_DIRECTORY}/libfloe_eventkit.dylib" swift \
   -emit-library -warnings-as-errors -target "${SWIFT_TARGET}" \
   "${SRCROOT}/CalendarActions/EventKitActions.swift"
-floe_native_artifact "${FRAMEWORKS_DIRECTORY}/libfloe_local_model.dylib" swift \
-  -emit-library -swift-version 6 -warnings-as-errors -target "${SWIFT_TARGET}" \
-  -Xlinker -weak_framework -Xlinker FoundationModels \
-  "${SRCROOT}/LocalModel/LocalModel.swift" \
-  "${SRCROOT}/../apple/FloeAppleHealth/Sources/FloeAppleHealth/HealthPrivacyTransform.swift"
+floe_native_model_package "${FRAMEWORKS_DIRECTORY}/libfloe_local_model.dylib" \
+  "${SWIFT_TARGET}" "$(xcrun --sdk macosx --show-sdk-path)"

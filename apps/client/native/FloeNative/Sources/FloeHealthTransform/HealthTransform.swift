@@ -130,7 +130,7 @@ public struct HealthTransform: Transform, Sendable {
     }
 
     private func makeInputValue(_ input: HealthTransformInput) -> JSONValue {
-        var fields: [String: JSONValue] = [:]
+        var fields = JSONObject()
         if let sleepHours = input.sleepHours {
             fields["sleep_hours"] = .number(sleepHours)
         }

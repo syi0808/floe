@@ -1,6 +1,8 @@
 import CryptoKit
 import FloeAppleContacts
 import FloeAppleHealth
+import FloeAppleWellbeing
+import FloeHealthTransformBridge
 import FloeScreenTimeGate
 import Flutter
 import Foundation
@@ -15,7 +17,7 @@ final class AppleContextChannel {
   private let channel: FlutterMethodChannel
   private let contacts: AppleContactsProvider
   private let nativeSubjectKey: SymmetricKey
-  private let health: HealthKitWellbeingProvider
+  private let health: AppleWellbeingSource
   private var contactsLastView: [String: Any]?
   private var contactsLastSuccess: Int64?
   private var healthLastView: [String: Any]?
@@ -27,8 +29,10 @@ final class AppleContextChannel {
     let handleSecret = try Self.contactsHandleSecret()
     nativeSubjectKey = SymmetricKey(data: handleSecret)
     contacts = try AppleContactsProvider(handleSecret: handleSecret)
-    health = HealthKitWellbeingProvider.currentHostProvider(
-      sourceHandle: "wellbeing:apple-health", transformer: try BundledHealthPrivacyTransformer()
+    health = AppleWellbeingSource(
+      acquisition: HealthKitWellbeingProvider.currentHostProvider(),
+      transform: try BundledHealthTransformClient(),
+      sourceHandle: "wellbeing:apple-health"
     )
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self else {
@@ -86,7 +90,7 @@ final class AppleContextChannel {
       result(FlutterError(code: failure.code, message: failure.message, details: nil))
     } catch let failure as AppleContactsProviderError {
       result(FlutterError(code: contactsErrorCode(failure), message: "Apple Contacts source failed.", details: nil))
-    } catch let failure as HealthKitWellbeingFailure {
+    } catch let failure as AppleWellbeingFailure {
       result(FlutterError(code: healthErrorCode(failure), message: "Apple Health source failed.", details: nil))
     } catch {
       result(FlutterError(code: "unavailable", message: "Apple context source is unavailable.", details: nil))
@@ -114,7 +118,7 @@ final class AppleContextChannel {
       do {
         _ = try await health.requestReadAuthorization()
         outcome = "request_completed"
-      } catch HealthKitWellbeingFailure.unsupported {
+      } catch AppleWellbeingFailure.unsupported {
         outcome = "unavailable"
       } catch {
         outcome = "unavailable"
@@ -352,7 +356,7 @@ final class AppleContextChannel {
     }
   }
 
-  private func healthErrorCode(_ failure: HealthKitWellbeingFailure) -> String {
+  private func healthErrorCode(_ failure: AppleWellbeingFailure) -> String {
     switch failure {
     case .unsupported: "unsupported"
     case .permissionRequired: "permission_denied"

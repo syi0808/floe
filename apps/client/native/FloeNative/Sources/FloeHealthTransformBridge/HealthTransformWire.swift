@@ -315,11 +315,13 @@ public enum HealthTransformWireCodec {
         guard case .number(let version)? = fields["schema_version"], version == 1,
               case .string(let operation)? = fields["operation"],
               let expectedKeys = HealthTransformWireValidation.commandFields[operation],
+              fields.count == expectedKeys.count,
               Set(fields.keys) == expectedKeys else {
             throw HealthTransformFailure.invalidInput
         }
         if operation == "start" {
             guard case .object(let inputFields)? = fields["input"],
+                  inputFields.count == Set(inputFields.keys).count,
                   Set(inputFields.keys).isSubset(of: HealthTransformWireValidation.inputFields) else {
                 throw HealthTransformFailure.invalidInput
             }
@@ -363,7 +365,7 @@ public enum HealthTransformWireCodec {
         let validKeys = status == "error"
             ? HealthTransformWireValidation.replyKeySet(fields: fields, status: status)
             : actualKeys == expectedKeys
-        guard validKeys else {
+        guard fields.count == actualKeys.count, validKeys else {
             throw HealthTransformFailure.invalidOutput
         }
         if status == "error" {
@@ -466,7 +468,7 @@ private enum HealthTransformWireValidation {
         "receipt": ["schema_version", "status", "request_id", "output", "binding", "output_sha256", "transformed_at_unix_ms", "expires_at_unix_ms"]
     ]
 
-    static func object(_ value: JSONValue, failure: HealthTransformFailure) throws -> [String: JSONValue] {
+    static func object(_ value: JSONValue, failure: HealthTransformFailure) throws -> JSONObject {
         guard case .object(let fields) = value else { throw failure }
         return fields
     }
@@ -476,7 +478,8 @@ private enum HealthTransformWireValidation {
         exact expected: Set<String>,
         failure: HealthTransformFailure
     ) throws {
-        guard let value, case .object(let fields) = value, Set(fields.keys) == expected else {
+        guard let value, case .object(let fields) = value,
+              fields.count == expected.count, Set(fields.keys) == expected else {
             throw failure
         }
     }
@@ -487,13 +490,14 @@ private enum HealthTransformWireValidation {
         }
     }
 
-    static func replyKeySet(fields: [String: JSONValue], status: String) -> Bool {
+    static func replyKeySet(fields: JSONObject, status: String) -> Bool {
         guard status == "error" else { return true }
         let base: Set<String> = ["schema_version", "status", "failure"]
         let withRequest: Set<String> = base.union(["request_id"])
         let withAvailability: Set<String> = withRequest.union(["availability"])
         let keys = Set(fields.keys)
-        return keys == base || keys == withRequest || keys == withAvailability
+        return fields.count == keys.count &&
+            (keys == base || keys == withRequest || keys == withAvailability)
     }
 }
 
