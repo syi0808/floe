@@ -119,6 +119,24 @@ pub enum ActionOrigin {
         assignment_id: Uuid, definition_revision: u64, evidence_ref: TaskExecutionReceiptRef, artifact_id: Uuid },
 }
 
+impl ActionOrigin {
+    pub fn identity_seed(&self,person_id:PersonId)->Result<Uuid,AgentFailure>{
+        match self {
+            Self::Direct{command_id,..}=>Ok(*command_id),
+            Self::Expert{evidence_ref,artifact_id,..}=>{
+                evidence_ref.validate()?;
+                if artifact_id.is_nil(){return Err(AgentFailure::InvalidInput);}
+                let digest=action_digest(b"floe.actions.expert-proposal.v1\0",&(person_id,evidence_ref,artifact_id))?;
+                let mut bytes=[0;16];
+                bytes.copy_from_slice(&digest[..16]);
+                bytes[6]=(bytes[6]&15)|0x50;
+                bytes[8]=(bytes[8]&63)|0x80;
+                Ok(Uuid::from_bytes(bytes))
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ActionSourceFence {
@@ -374,6 +392,10 @@ impl ActionRecord {
                 && self.expires_at<=dependency.expires_at()=>{dependency.validate().map_err(|_|AgentFailure::InvalidInput)?;},
             _=>return Err(AgentFailure::PolicyDenied),
         }
+        let identity_seed=self.origin.identity_seed(self.person_id)?;
+        if self.id!=action_uuid(b"floe.actions.action.v1\0",self.person_id,identity_seed)
+            || self.execution_id!=action_uuid(b"floe.actions.execution.v1\0",self.person_id,identity_seed)
+            || self.review.id!=action_uuid(b"floe.actions.review.v1\0",self.person_id,identity_seed) {return Err(AgentFailure::InvalidInput);}
         if let Some(intent)=&self.execution {
             if intent.action_id!=self.id || intent.person_id!=self.person_id || intent.device_id!=self.device_id
                 || intent.execution_id!=self.execution_id || intent.effect_digest!=self.effect_digest || intent.effect!=self.effect

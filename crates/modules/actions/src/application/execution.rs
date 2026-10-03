@@ -83,6 +83,7 @@ impl ActionsService {
         let ticket=record.collection.as_ref().ok_or(AgentFailure::StorageUnavailable)?;
         let destination=record.effect.destination();
         let source=floe_day::ActionCollectionSource{connection_id:destination.connection_id.clone(),connection_revision:destination.connection_revision,
+            source_authority:record.source.authority,
             provider:destination.provider,calendar_id:destination.calendar_id.clone(),calendar_name:destination.calendar_name.clone()};
         let calendar_record=|event:&CalendarWriteResult|floe_day::CalendarRecord{can_modify:event.can_modify,calendar_id:destination.calendar_id.clone(),external_id:event.external_id.clone(),
             external_revision:event.external_revision.clone(),title:event.title.clone(),schedule:floe_day::EventSchedule::Timed(event.schedule.clone())};

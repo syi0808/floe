@@ -60,10 +60,13 @@ impl ActionsService {
             if dependency.source_authority()!=source.authority || dependency.source().execution_owner().as_str()!=source.execution_owner
                 || resources!=source.resources {return Err(AgentFailure::PolicyDenied);}
         }
-        let id=action_uuid(b"floe.actions.action.v1\0",actor.person_id,command_id);
-        let execution_id=action_uuid(b"floe.actions.execution.v1\0",actor.person_id,command_id);
+        // One admitted Expert artifact can name only one external execution.
+        // A new product command cannot turn a retained proposal into a retry.
+        let identity_seed=origin.identity_seed(actor.person_id)?;
+        let id=action_uuid(b"floe.actions.action.v1\0",actor.person_id,identity_seed);
+        let execution_id=action_uuid(b"floe.actions.execution.v1\0",actor.person_id,identity_seed);
         let effect_digest=effect.digest()?;
-        let review=ActionReviewRef{id:action_uuid(b"floe.actions.review.v1\0",actor.person_id,command_id),action_id:id,effect_digest,
+        let review=ActionReviewRef{id:action_uuid(b"floe.actions.review.v1\0",actor.person_id,identity_seed),action_id:id,effect_digest,
             source_digest:source.digest()?,authority_revision:authority.revision,expires_at};
         let (state,authorization)=match &origin {
             ActionOrigin::Direct{..}=>(ActionState::Approved,Some(ActionAuthorization::DirectInstruction{command_id,person_id:actor.person_id,
