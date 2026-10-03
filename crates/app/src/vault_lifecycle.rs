@@ -21,7 +21,6 @@ use floe_vault::KeyringVaultKeys as PlatformVaultKeys;
 use std::{
     collections::HashMap,
     fs,
-    io::Read,
     os::unix::fs::DirBuilderExt,
     panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
@@ -78,9 +77,10 @@ pub(crate) fn project_failure(
         AgentFailure::VaultLocked | AgentFailure::NotFound | AgentFailure::ConsentRequired => {
             AgentFailureCategory::UserConfiguration
         }
-        AgentFailure::Conflict | AgentFailure::StaleContext | AgentFailure::UnsupportedVersion => {
-            AgentFailureCategory::Integrity
-        }
+        AgentFailure::IncompleteCreation
+        | AgentFailure::Conflict
+        | AgentFailure::StaleContext
+        | AgentFailure::UnsupportedVersion => AgentFailureCategory::Integrity,
         AgentFailure::PolicyDenied | AgentFailure::CapabilityDenied => {
             AgentFailureCategory::Security
         }
@@ -644,35 +644,8 @@ fn retire(
 }
 
 fn stored_vault_state(root: &Path, person: PersonId) -> Result<VaultState, AgentFailure> {
-    for directory in [root.to_path_buf(), root.join(person.to_string())] {
-        match fs::symlink_metadata(&directory) {
-            Ok(metadata) if metadata.is_dir() => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(VaultState::Missing);
-            }
-            _ => return Err(AgentFailure::VaultUnavailable),
-        }
+    match floe_vault::inspect_vault_presence(root, person)? {
+        floe_vault::VaultPresence::Missing => Ok(VaultState::Missing),
+        floe_vault::VaultPresence::Existing => Ok(VaultState::Locked),
     }
-    let directory = root.join(person.to_string());
-    let marker = directory.join("vault.id");
-    let metadata = fs::symlink_metadata(&marker).map_err(|_| AgentFailure::VaultUnavailable)?;
-    if !metadata.is_file() || metadata.len() != 36 {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    let mut value = String::new();
-    fs::File::open(marker)
-        .map_err(|_| AgentFailure::VaultUnavailable)?
-        .take(37)
-        .read_to_string(&mut value)
-        .map_err(|_| AgentFailure::VaultUnavailable)?;
-    let id = Uuid::parse_str(&value).map_err(|_| AgentFailure::VaultUnavailable)?;
-    if value.len() != 36 || id.is_nil() {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    let database = fs::symlink_metadata(directory.join("sessions.db"))
-        .map_err(|_| AgentFailure::VaultUnavailable)?;
-    if !database.is_file() || database.len() == 0 {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    Ok(VaultState::Locked)
 }

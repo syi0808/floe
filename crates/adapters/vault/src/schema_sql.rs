@@ -36,6 +36,16 @@ pub(crate) fn compare(stored: &str, expected: &str) -> Comparison {
     }
 }
 
+/// Verify a compiled declaration's identity before any fresh-store mutation.
+/// Catalog object names are fixed unquoted ASCII identifiers.
+pub(crate) fn declares_object(sql: &str, kind: &str, name: &str) -> bool {
+    let Some(tokens) = tokenize(sql) else {
+        return false;
+    };
+    let kind_index = if word(tokens.get(1), "unique") { 2 } else { 1 };
+    word(tokens.get(kind_index), kind) && word(tokens.get(kind_index + 1), name)
+}
+
 fn tokenize(sql: &str) -> Option<Vec<Token>> {
     if sql.is_empty() || sql.len() > MAX_SQL_BYTES {
         return None;

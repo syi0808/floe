@@ -3,7 +3,7 @@
 use crate::*;
 use chrono::{Duration, Utc};
 use floe_access::{ReviewRef, SourceObserveStatus, SourceProcessingChoice};
-use floe_context_contract::{GrantSourceBinding, ProcessingRestriction};
+use floe_context_contract::GrantSourceBinding;
 use floe_execution::ExecutionScope;
 use floe_kernel::{AgentFailure, OwnerActor, PersonId};
 use serde::Serialize;
@@ -17,13 +17,13 @@ impl ConnectionsService {
         command_id: Uuid,
         address: &str,
         scope: &ExecutionScope,
-    ) -> Result<GatewaySetup, AgentFailure> {
-        self.ensure_open()?;
-        check(actor, scope)?;
+    ) -> Result<GatewaySetup, ConnectionsCommandFailure> {
+        self.ensure_open()
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        check(actor, scope).map_err(ConnectionsCommandFailure::NotAdmitted)?;
         self.pairing
             .prepare_gateway_setup(actor, command_id, address, scope)
             .await
-            .map_err(pairing_error)
     }
     pub async fn start_pairing(
         &self,
@@ -31,21 +31,22 @@ impl ConnectionsService {
         command_id: Uuid,
         target_ref: Uuid,
         scope: &ExecutionScope,
-    ) -> Result<PairingSnapshot, AgentFailure> {
-        self.ensure_open()?;
-        check(actor, scope)?;
+    ) -> Result<PairingSnapshot, ConnectionsCommandFailure> {
+        self.ensure_open()
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        check(actor, scope).map_err(ConnectionsCommandFailure::NotAdmitted)?;
         let result = self
             .pairing
             .start_pairing(actor, command_id, target_ref, scope)
-            .await
-            .map_err(pairing_error);
+            .await?;
         let id = super::source_operation::derived_id(
             b"floe.pairing.operation.v1",
             actor.person_id,
             command_id,
         );
-        self.spawn_pairing(actor.clone(), id, scope)?;
-        result
+        self.spawn_pairing(actor.clone(), id, scope)
+            .map_err(ConnectionsCommandFailure::Admitted)?;
+        Ok(result)
     }
     pub async fn confirm_pairing(
         &self,
@@ -54,16 +55,17 @@ impl ConnectionsService {
         operation_ref: Uuid,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<PairingSnapshot, AgentFailure> {
-        self.ensure_open()?;
-        check(actor, scope)?;
+    ) -> Result<PairingSnapshot, ConnectionsCommandFailure> {
+        self.ensure_open()
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        check(actor, scope).map_err(ConnectionsCommandFailure::NotAdmitted)?;
         let result = self
             .pairing
             .confirm_pairing(actor, command_id, operation_ref, expected_revision, scope)
-            .await
-            .map_err(pairing_error);
-        self.spawn_pairing(actor.clone(), operation_ref, scope)?;
-        result
+            .await?;
+        self.spawn_pairing(actor.clone(), operation_ref, scope)
+            .map_err(ConnectionsCommandFailure::Admitted)?;
+        Ok(result)
     }
     pub async fn get_pairing(
         &self,
@@ -84,16 +86,17 @@ impl ConnectionsService {
         operation_ref: Uuid,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<PairingSnapshot, AgentFailure> {
-        self.ensure_open()?;
-        check(actor, scope)?;
+    ) -> Result<PairingSnapshot, ConnectionsCommandFailure> {
+        self.ensure_open()
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        check(actor, scope).map_err(ConnectionsCommandFailure::NotAdmitted)?;
         let result = self
             .pairing
             .cancel_pairing(actor, command_id, operation_ref, expected_revision, scope)
-            .await
-            .map_err(pairing_error);
-        self.spawn_pairing(actor.clone(), operation_ref, scope)?;
-        result
+            .await?;
+        self.spawn_pairing(actor.clone(), operation_ref, scope)
+            .map_err(ConnectionsCommandFailure::Admitted)?;
+        Ok(result)
     }
     pub async fn reconcile_pairing(
         &self,
@@ -147,86 +150,81 @@ impl ConnectionsService {
         gateway_ref: Uuid,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<GatewaySummary, AgentFailure> {
-        self.ensure_open()?;
-        check(actor, scope)?;
-        let intent = digest(&("forget_gateway", gateway_ref, expected_revision))?;
-        let id = command_ref(actor.person_id, command_id);
-        if let Some(record) = self.command(actor, id, command_id, intent).await? {
-            return match record.payload {
-                ConnectionsPayload::GatewayForgotten(summary) => Ok(summary),
-                _ => Err(AgentFailure::Conflict),
-            };
-        }
-        if let Some(summary) = self.gateways.forgotten(id).await.map_err(pairing_error)? {
-            if summary.gateway_ref != gateway_ref
-                || summary.revision
-                    != expected_revision
-                        .checked_add(1)
-                        .ok_or(AgentFailure::Conflict)?
+    ) -> Result<GatewaySummary, ConnectionsCommandFailure> {
+        let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
+            ConnectionsCommandFailure::NotAdmitted;
+        let result: Result<GatewaySummary, AgentFailure> = async {
+            self.ensure_open()?;
+            check(actor, scope)?;
+            let intent = digest(&("forget_gateway", gateway_ref, expected_revision))?;
+            let id = command_ref(actor.person_id, command_id);
+            if let Some(record) = self.command(actor, id, command_id, intent).await? {
+                classify = ConnectionsCommandFailure::Admitted;
+                return match record.payload {
+                    ConnectionsPayload::GatewayForgotten(summary) => Ok(summary),
+                    _ => Err(AgentFailure::Conflict),
+                };
+            }
+            let observed = self
+                .gateways
+                .current(actor.person_id, &actor.device_id)
+                .await
+                .map_err(pairing_error)?
+                .ok_or(AgentFailure::NotFound)?;
+            if observed.summary().gateway_ref != gateway_ref
+                || observed.summary().revision != expected_revision
             {
                 return Err(AgentFailure::Conflict);
             }
-            self.products
-                .insert(record(
-                    actor,
-                    id,
-                    command_id,
-                    intent,
-                    ConnectionsPayload::GatewayForgotten(summary.clone()),
-                ))
-                .await?;
-            return Ok(summary);
-        }
-        let observed = self
-            .gateways
-            .current(actor.person_id, &actor.device_id)
-            .await
-            .map_err(pairing_error)?
-            .ok_or(AgentFailure::NotFound)?;
-        if observed.summary().gateway_ref != gateway_ref
-            || observed.summary().revision != expected_revision
-        {
-            return Err(AgentFailure::Conflict);
-        }
-        let expected = match observed {
-            GatewayObservation::Paired { binding, .. } => GatewayForgetExpectation::Paired(binding),
-            GatewayObservation::RepairRequired {
-                slot_digest,
-                expectation,
-                ..
-            } => GatewayForgetExpectation::Unreadable {
+            let observed_summary = observed.summary();
+            let summary = GatewaySummary {
                 gateway_ref,
-                revision: expected_revision,
-                slot_digest,
-                expectation,
-            },
-        };
-        let _ = self
-            .gateways
-            .forget(id, expected)
-            .await
-            .map_err(pairing_error)?;
-        *self
-            .catalog_gateway
-            .lock()
-            .map_err(|_| AgentFailure::StorageUnavailable)? = None;
-        let summary = self
-            .gateways
-            .forgotten(id)
-            .await
-            .map_err(pairing_error)?
-            .ok_or(AgentFailure::StorageUnavailable)?;
-        self.products
-            .insert(record(
-                actor,
-                id,
-                command_id,
-                intent,
-                ConnectionsPayload::GatewayForgotten(summary.clone()),
-            ))
-            .await?;
-        Ok(summary)
+                revision: expected_revision
+                    .checked_add(1)
+                    .ok_or(AgentFailure::Conflict)?,
+                display_name: observed_summary.display_name.clone(),
+                state: GatewayState::Forgotten,
+                remote_revocation_pending: observed_summary.state == GatewayState::Paired
+                    || observed_summary.remote_revocation_pending,
+                allowed_actions: vec![ConnectionAction::Pair],
+                failure: None,
+            };
+            let expected = match observed {
+                GatewayObservation::Paired { binding, .. } => {
+                    GatewayForgetExpectation::Paired(binding)
+                }
+                GatewayObservation::RepairRequired { expectation, .. } => {
+                    GatewayForgetExpectation::RepairRequired {
+                        gateway_ref,
+                        revision: expected_revision,
+                        expectation,
+                    }
+                }
+            };
+            classify = ConnectionsCommandFailure::Indeterminate;
+            let summary = self
+                .gateways
+                .forget(
+                    record(
+                        actor,
+                        id,
+                        command_id,
+                        intent,
+                        ConnectionsPayload::GatewayForgotten(summary),
+                    ),
+                    expected,
+                )
+                .await
+                .map_err(pairing_error)?;
+            classify = ConnectionsCommandFailure::Admitted;
+            *self
+                .catalog_gateway
+                .lock()
+                .map_err(|_| AgentFailure::StorageUnavailable)? = None;
+            Ok(summary)
+        }
+        .await;
+        result.map_err(classify)
     }
     pub async fn overview(
         &self,
@@ -412,68 +410,76 @@ impl ConnectionsService {
         integration_ref: Uuid,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<IntegrationReview, AgentFailure> {
-        self.ensure_open()?;
-        check(actor, scope)?;
-        let intent = digest(&("integration_review", integration_ref, expected_revision))?;
-        let id = command_ref(actor.person_id, command_id);
-        if let Some(record) = self.command(actor, id, command_id, intent).await? {
-            return match record.payload {
-                ConnectionsPayload::IntegrationReview(value) => {
-                    Ok(project_integration_review(value.summary))
-                }
-                _ => Err(AgentFailure::Conflict),
-            };
-        }
-        let integration = match self.products.load(actor.person_id, integration_ref).await? {
-            Some(stored) => {
-                let ConnectionsPayload::Integration(integration) = stored.payload else {
-                    return Err(AgentFailure::InvalidInput);
+    ) -> Result<IntegrationReview, ConnectionsCommandFailure> {
+        let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
+            ConnectionsCommandFailure::NotAdmitted;
+        let result: Result<IntegrationReview, AgentFailure> = async {
+            self.ensure_open()?;
+            check(actor, scope)?;
+            let intent = digest(&("integration_review", integration_ref, expected_revision))?;
+            let id = command_ref(actor.person_id, command_id);
+            if let Some(record) = self.command(actor, id, command_id, intent).await? {
+                classify = ConnectionsCommandFailure::Admitted;
+                return match record.payload {
+                    ConnectionsPayload::IntegrationReview(value) => {
+                        Ok(project_integration_review(value.summary))
+                    }
+                    _ => Err(AgentFailure::Conflict),
                 };
-                integration
             }
-            None => self
-                .native_integration(actor, integration_ref)
-                .await?
-                .ok_or(AgentFailure::NotFound)?,
-        };
-        if integration.revision != expected_revision
-            || !integration.descriptor.available
-            || integration.descriptor.connected
-        {
-            return Err(AgentFailure::Conflict);
+            let integration = match self.products.load(actor.person_id, integration_ref).await? {
+                Some(stored) => {
+                    let ConnectionsPayload::Integration(integration) = stored.payload else {
+                        return Err(AgentFailure::InvalidInput);
+                    };
+                    integration
+                }
+                None => self
+                    .native_integration(actor, integration_ref)
+                    .await?
+                    .ok_or(AgentFailure::NotFound)?,
+            };
+            if integration.revision != expected_revision
+                || !integration.descriptor.available
+                || integration.descriptor.connected
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            self.require_integration_current(actor, &integration, scope)
+                .await?;
+            let mut summary = IntegrationReview {
+                review_ref: ReviewRef {
+                    id,
+                    revision: 1,
+                    digest: [0; 32],
+                },
+                integration_ref,
+                catalog_revision: integration.descriptor.catalog_revision,
+                target: integration.target.public_target(),
+                display_name: integration.descriptor.display_name.clone(),
+                setup_kind: integration.descriptor.setup_kind,
+                expires_at: Utc::now() + Duration::minutes(15),
+                allowed_actions: vec![ConnectionAction::Start],
+            };
+            summary.review_ref.digest = digest(&(id, &integration, summary.expires_at))?;
+            let descriptor = IntegrationReviewDescriptor {
+                summary: summary.clone(),
+                integration,
+            };
+            classify = ConnectionsCommandFailure::Indeterminate;
+            self.products
+                .insert(record(
+                    actor,
+                    id,
+                    command_id,
+                    intent,
+                    ConnectionsPayload::IntegrationReview(descriptor),
+                ))
+                .await?;
+            Ok(summary)
         }
-        self.require_integration_current(actor, &integration, scope)
-            .await?;
-        let mut summary = IntegrationReview {
-            review_ref: ReviewRef {
-                id,
-                revision: 1,
-                digest: [0; 32],
-            },
-            integration_ref,
-            catalog_revision: integration.descriptor.catalog_revision,
-            target: integration.target.public_target(),
-            display_name: integration.descriptor.display_name.clone(),
-            setup_kind: integration.descriptor.setup_kind,
-            expires_at: Utc::now() + Duration::minutes(15),
-            allowed_actions: vec![ConnectionAction::Start],
-        };
-        summary.review_ref.digest = digest(&(id, &integration, summary.expires_at))?;
-        let descriptor = IntegrationReviewDescriptor {
-            summary: summary.clone(),
-            integration,
-        };
-        self.products
-            .insert(record(
-                actor,
-                id,
-                command_id,
-                intent,
-                ConnectionsPayload::IntegrationReview(descriptor),
-            ))
-            .await?;
-        Ok(summary)
+        .await;
+        result.map_err(classify)
     }
     pub async fn inspect_integration_review(
         &self,
@@ -500,37 +506,87 @@ impl ConnectionsService {
         review_ref: ReviewRef,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<ConnectionOperationSnapshot, AgentFailure> {
-        self.ensure_open()?;
-        check(actor, scope)?;
-        let intent = digest(&(
-            "integration_start",
-            integration_ref,
-            &review_ref,
-            expected_revision,
-        ))?;
-        let id = command_ref(actor.person_id, command_id);
-        if let Some(record) = self.command(actor, id, command_id, intent).await? {
-            return match record.payload {
-                ConnectionsPayload::IntegrationOperation(value) => Ok(value.snapshot),
-                ConnectionsPayload::NativeSetup { snapshot, .. } => Ok(snapshot),
-                _ => Err(AgentFailure::Conflict),
+    ) -> Result<ConnectionOperationSnapshot, ConnectionsCommandFailure> {
+        let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
+            ConnectionsCommandFailure::NotAdmitted;
+        let result: Result<ConnectionOperationSnapshot, AgentFailure> = async {
+            self.ensure_open()?;
+            check(actor, scope)?;
+            let intent = digest(&(
+                "integration_start",
+                integration_ref,
+                &review_ref,
+                expected_revision,
+            ))?;
+            let id = command_ref(actor.person_id, command_id);
+            if let Some(record) = self.command(actor, id, command_id, intent).await? {
+                classify = ConnectionsCommandFailure::Admitted;
+                return match record.payload {
+                    ConnectionsPayload::IntegrationOperation(value) => Ok(value.snapshot),
+                    ConnectionsPayload::NativeSetup { snapshot, .. } => Ok(snapshot),
+                    _ => Err(AgentFailure::Conflict),
+                };
+            }
+            let review = self.product(actor, review_ref.id).await?;
+            let ConnectionsPayload::IntegrationReview(review) = review.payload else {
+                return Err(AgentFailure::InvalidInput);
             };
-        }
-        let review = self.product(actor, review_ref.id).await?;
-        let ConnectionsPayload::IntegrationReview(review) = review.payload else {
-            return Err(AgentFailure::InvalidInput);
-        };
-        if review.summary.review_ref != review_ref
-            || review.summary.expires_at <= Utc::now()
-            || review.integration.integration_ref != integration_ref
-            || review.integration.revision != expected_revision
-        {
-            return Err(AgentFailure::Conflict);
-        }
-        self.require_integration_current(actor, &review.integration, scope)
-            .await?;
-        if matches!(review.integration.target, IntegrationBinding::Device { .. }) {
+            if review.summary.review_ref != review_ref
+                || review.summary.expires_at <= Utc::now()
+                || review.integration.integration_ref != integration_ref
+                || review.integration.revision != expected_revision
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            self.require_integration_current(actor, &review.integration, scope)
+                .await?;
+            if matches!(review.integration.target, IntegrationBinding::Device { .. }) {
+                let snapshot = ConnectionOperationSnapshot {
+                    operation_ref: id,
+                    revision: 1,
+                    state: ConnectionOperationState::Pending,
+                    launch_action: None,
+                    display_code: None,
+                    source: None,
+                    allowed_actions: vec![ConnectionAction::Reobserve],
+                    failure: None,
+                    next_observation_after_ms: Some(2000),
+                };
+                classify = ConnectionsCommandFailure::Indeterminate;
+                let pending = self
+                    .products
+                    .insert(record(
+                        actor,
+                        id,
+                        command_id,
+                        intent,
+                        ConnectionsPayload::NativeSetup {
+                            snapshot,
+                            source: self
+                                .prepare_native_pending(actor, &review.integration)
+                                .await?,
+                            reviewed: review,
+                            dispatched: false,
+                        },
+                    ))
+                    .await?;
+                classify = ConnectionsCommandFailure::Admitted;
+                let ConnectionsPayload::NativeSetup { snapshot, .. } = &pending.payload else {
+                    return Err(AgentFailure::Conflict);
+                };
+                let snapshot = snapshot.clone();
+                self.spawn_integration(actor.clone(), pending, true, scope)?;
+                return Ok(snapshot);
+            }
+            let (gateway_ref, binding) = review.integration.target.gateway()?;
+            let remote = IntegrationOperationRef {
+                operation_id: id,
+                gateway_ref,
+                expected: binding.clone(),
+                connector_id: review.integration.descriptor.connector_id.clone(),
+                remote_operation_ref: id,
+                remote_revision: 0,
+            };
             let snapshot = ConnectionOperationSnapshot {
                 operation_ref: id,
                 revision: 1,
@@ -542,6 +598,14 @@ impl ConnectionsService {
                 failure: None,
                 next_observation_after_ms: Some(2000),
             };
+            let operation = IntegrationOperationRecord {
+                snapshot,
+                remote,
+                reviewed: review,
+                connection_id: None,
+                cancellation_command: None,
+            };
+            classify = ConnectionsCommandFailure::Indeterminate;
             let pending = self
                 .products
                 .insert(record(
@@ -549,66 +613,19 @@ impl ConnectionsService {
                     id,
                     command_id,
                     intent,
-                    ConnectionsPayload::NativeSetup {
-                        snapshot,
-                        source: self
-                            .prepare_native_pending(actor, &review.integration)
-                            .await?,
-                        reviewed: review,
-                        dispatched: false,
-                    },
+                    ConnectionsPayload::IntegrationOperation(operation),
                 ))
                 .await?;
-            let ConnectionsPayload::NativeSetup { snapshot, .. } = &pending.payload else {
+            classify = ConnectionsCommandFailure::Admitted;
+            let ConnectionsPayload::IntegrationOperation(operation) = &pending.payload else {
                 return Err(AgentFailure::Conflict);
             };
-            let snapshot = snapshot.clone();
+            let snapshot = operation.snapshot.clone();
             self.spawn_integration(actor.clone(), pending, true, scope)?;
-            return Ok(snapshot);
+            Ok(snapshot)
         }
-        let (gateway_ref, binding) = review.integration.target.gateway()?;
-        let remote = IntegrationOperationRef {
-            operation_id: id,
-            gateway_ref,
-            expected: binding.clone(),
-            connector_id: review.integration.descriptor.connector_id.clone(),
-            remote_operation_ref: id,
-            remote_revision: 0,
-        };
-        let snapshot = ConnectionOperationSnapshot {
-            operation_ref: id,
-            revision: 1,
-            state: ConnectionOperationState::Pending,
-            launch_action: None,
-            display_code: None,
-            source: None,
-            allowed_actions: vec![ConnectionAction::Reobserve],
-            failure: None,
-            next_observation_after_ms: Some(2000),
-        };
-        let operation = IntegrationOperationRecord {
-            snapshot,
-            remote,
-            reviewed: review,
-            connection_id: None,
-            cancellation_command: None,
-        };
-        let pending = self
-            .products
-            .insert(record(
-                actor,
-                id,
-                command_id,
-                intent,
-                ConnectionsPayload::IntegrationOperation(operation),
-            ))
-            .await?;
-        let ConnectionsPayload::IntegrationOperation(operation) = &pending.payload else {
-            return Err(AgentFailure::Conflict);
-        };
-        let snapshot = operation.snapshot.clone();
-        self.spawn_integration(actor.clone(), pending, true, scope)?;
-        Ok(snapshot)
+        .await;
+        result.map_err(classify)
     }
     pub async fn get_operation(
         &self,
@@ -670,85 +687,98 @@ impl ConnectionsService {
         operation_ref: Uuid,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<ConnectionOperationSnapshot, AgentFailure> {
-        self.ensure_open()?;
-        check(actor, scope)?;
-        let cancel_intent = digest(&("cancel_operation", operation_ref, expected_revision))?;
-        let cancel_ref = command_ref(actor.person_id, command_id);
-        if let Some(record) = self
-            .command(actor, cancel_ref, command_id, cancel_intent)
-            .await?
-        {
-            if let ConnectionsPayload::SourceCancellation(snapshot) = record.payload {
+    ) -> Result<ConnectionOperationSnapshot, ConnectionsCommandFailure> {
+        let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
+            ConnectionsCommandFailure::NotAdmitted;
+        let result: Result<ConnectionOperationSnapshot, AgentFailure> = async {
+            self.ensure_open()?;
+            check(actor, scope)?;
+            let cancel_intent = digest(&("cancel_operation", operation_ref, expected_revision))?;
+            let cancel_ref = command_ref(actor.person_id, command_id);
+            if let Some(record) = self
+                .command(actor, cancel_ref, command_id, cancel_intent)
+                .await?
+            {
+                classify = ConnectionsCommandFailure::Admitted;
+                if let ConnectionsPayload::SourceCancellation(snapshot) = record.payload {
+                    return Ok(snapshot);
+                }
+                return Err(AgentFailure::Conflict);
+            }
+            if self
+                .products
+                .load(actor.person_id, operation_ref)
+                .await?
+                .is_none()
+            {
+                let operation = self
+                    .sources
+                    .load_operation(operation_ref)
+                    .await
+                    .map_err(source_error)?
+                    .ok_or(AgentFailure::NotFound)?;
+                if operation.device_id != actor.device_id
+                    || operation.expected.source.person_id() != actor.person_id
+                    || operation.revision != expected_revision
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                classify = ConnectionsCommandFailure::Indeterminate;
+                let operation = self
+                    .reconcile(
+                        actor,
+                        operation_ref,
+                        Some(SourceAbortReason::Cancelled),
+                        scope,
+                    )
+                    .await?;
+                // Reconciliation may return an already terminal source operation.
+                // This cancellation is acknowledged only by its own command receipt.
+                let snapshot = self
+                    .source_operation_snapshot(actor, &operation, scope)
+                    .await?;
+                self.products
+                    .insert(record(
+                        actor,
+                        cancel_ref,
+                        command_id,
+                        cancel_intent,
+                        ConnectionsPayload::SourceCancellation(snapshot.clone()),
+                    ))
+                    .await?;
                 return Ok(snapshot);
             }
-            return Err(AgentFailure::Conflict);
-        }
-        if self
-            .products
-            .load(actor.person_id, operation_ref)
-            .await?
-            .is_none()
-        {
-            let operation = self
-                .sources
-                .load_operation(operation_ref)
-                .await
-                .map_err(source_error)?
-                .ok_or(AgentFailure::NotFound)?;
-            if operation.device_id != actor.device_id
-                || operation.expected.source.person_id() != actor.person_id
-                || operation.revision != expected_revision
+            let mut stored = self.product(actor, operation_ref).await?;
+            let ConnectionsPayload::IntegrationOperation(mut operation) = stored.payload.clone()
+            else {
+                return Err(AgentFailure::InvalidInput);
+            };
+            if operation.cancellation_command == Some(command_id) {
+                return Ok(operation.snapshot);
+            }
+            if command_id.is_nil()
+                || stored.revision != expected_revision
+                || matches!(
+                    operation.snapshot.state,
+                    ConnectionOperationState::Completed
+                        | ConnectionOperationState::Cancelled
+                        | ConnectionOperationState::Failed
+                )
             {
                 return Err(AgentFailure::Conflict);
             }
-            let operation = self
-                .reconcile(
-                    actor,
-                    operation_ref,
-                    Some(SourceAbortReason::Cancelled),
-                    scope,
-                )
-                .await?;
-            let snapshot = self
-                .source_operation_snapshot(actor, &operation, scope)
-                .await?;
-            self.products
-                .insert(record(
-                    actor,
-                    cancel_ref,
-                    command_id,
-                    cancel_intent,
-                    ConnectionsPayload::SourceCancellation(snapshot.clone()),
-                ))
-                .await?;
-            return Ok(snapshot);
+            operation.cancellation_command = Some(command_id);
+            let previous = stored.revision;
+            stored.revision += 1;
+            operation.snapshot.revision = stored.revision;
+            stored.payload = ConnectionsPayload::IntegrationOperation(operation);
+            classify = ConnectionsCommandFailure::Indeterminate;
+            let stored = self.products.compare_and_swap(previous, stored).await?;
+            classify = ConnectionsCommandFailure::Admitted;
+            self.drive_integration(actor, stored, false, scope).await
         }
-        let mut stored = self.product(actor, operation_ref).await?;
-        let ConnectionsPayload::IntegrationOperation(mut operation) = stored.payload.clone() else {
-            return Err(AgentFailure::InvalidInput);
-        };
-        if operation.cancellation_command == Some(command_id) {
-            return Ok(operation.snapshot);
-        }
-        if command_id.is_nil()
-            || stored.revision != expected_revision
-            || matches!(
-                operation.snapshot.state,
-                ConnectionOperationState::Completed
-                    | ConnectionOperationState::Cancelled
-                    | ConnectionOperationState::Failed
-            )
-        {
-            return Err(AgentFailure::Conflict);
-        }
-        operation.cancellation_command = Some(command_id);
-        let previous = stored.revision;
-        stored.revision += 1;
-        operation.snapshot.revision = stored.revision;
-        stored.payload = ConnectionsPayload::IntegrationOperation(operation);
-        let stored = self.products.compare_and_swap(previous, stored).await?;
-        self.drive_integration(actor, stored, false, scope).await
+        .await;
+        result.map_err(classify)
     }
     async fn drive_integration(
         &self,
@@ -908,121 +938,134 @@ impl ConnectionsService {
         source_ref: Uuid,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<SourceReview, AgentFailure> {
-        self.ensure_open()?;
-        check(actor, scope)?;
-        let intent = digest(&("source_review", source_ref, expected_revision))?;
-        let id = command_ref(actor.person_id, command_id);
-        if let Some(record) = self.command(actor, id, command_id, intent).await? {
-            return match record.payload {
-                ConnectionsPayload::SourceReview(value) => Ok(project_source_review(value.summary)),
-                _ => Err(AgentFailure::Conflict),
+    ) -> Result<SourceReview, ConnectionsCommandFailure> {
+        let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
+            ConnectionsCommandFailure::NotAdmitted;
+        let result: Result<SourceReview, AgentFailure> = async {
+            self.ensure_open()?;
+            check(actor, scope)?;
+            let intent = digest(&("source_review", source_ref, expected_revision))?;
+            let id = command_ref(actor.person_id, command_id);
+            if let Some(record) = self.command(actor, id, command_id, intent).await? {
+                classify = ConnectionsCommandFailure::Admitted;
+                return match record.payload {
+                    ConnectionsPayload::SourceReview(value) => {
+                        Ok(project_source_review(value.summary))
+                    }
+                    _ => Err(AgentFailure::Conflict),
+                };
+            }
+            let source = self.resolve_source(actor, source_ref).await?;
+            if source.revision() != expected_revision || !native_source(&source) {
+                return Err(AgentFailure::Conflict);
+            }
+            if self
+                .sources
+                .source_is_fenced(actor.person_id, source.connection_id())
+                .await
+                .map_err(source_error)?
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            let expected = if source.state() == SourceState::Pending {
+                None
+            } else {
+                Some(self.evidence.observe(actor, &source, scope).await?)
             };
-        }
-        let source = self.resolve_source(actor, source_ref).await?;
-        if source.revision() != expected_revision || !native_source(&source) {
-            return Err(AgentFailure::Conflict);
-        }
-        if self
-            .sources
-            .source_is_fenced(actor.person_id, source.connection_id())
-            .await
-            .map_err(source_error)?
-        {
-            return Err(AgentFailure::Conflict);
-        }
-        let expected = if source.state() == SourceState::Pending {
-            None
-        } else {
-            Some(self.evidence.observe(actor, &source, scope).await?)
-        };
-        let catalog = self.source_catalog.inspect(actor, &source, scope).await?;
-        if catalog.source != source
-            || !catalog.catalog_complete
-            || catalog.resources.len() > 256
-            || catalog.catalog_digest == [0; 32]
-        {
-            return Err(AgentFailure::CapabilityUnavailable);
-        }
-        let mut resources = Vec::new();
-        let mut permitted = Vec::new();
-        for resource in catalog.resources {
-            let reference =
-                resource_ref(actor.person_id, source.connection_id(), resource.handle())?;
-            permitted.push(PermittedResource {
-                resource_ref: reference,
-                label: resource.label().to_owned(),
-                selected: source
-                    .resources()
-                    .iter()
-                    .any(|selected| selected.handle() == resource.handle()),
-            });
-            resources.push((reference, resource));
-        }
-        let source_binding = GrantSourceBinding::try_new(
-            actor.person_id,
-            source.connection_id().clone(),
-            source.connector_id().clone(),
-            source.execution_owner_id().clone(),
-        )
-        .map_err(|_| AgentFailure::InvalidInput)?;
-        let current = self
-            .access
-            .source_observe_state(actor, &source_binding, scope)
-            .await?;
-        let processing = if current.views.iter().all(|view| {
-            view.processing.as_ref().is_some_and(|processing| {
-                matches!(processing, ProcessingRestriction::GatewayAllowed { .. })
-            })
-        }) {
-            ProcessingChoice::GatewayAllowed
-        } else {
-            ProcessingChoice::DeviceOnly
-        };
-        let mut summary = SourceReview {
-            review_ref: ReviewRef {
+            let catalog = self.source_catalog.inspect(actor, &source, scope).await?;
+            if catalog.source != source
+                || !catalog.catalog_complete
+                || catalog.resources.len() > 256
+                || catalog.catalog_digest == [0; 32]
+            {
+                return Err(AgentFailure::CapabilityUnavailable);
+            }
+            let mut resources = Vec::new();
+            let mut permitted = Vec::new();
+            for resource in catalog.resources {
+                let reference =
+                    resource_ref(actor.person_id, source.connection_id(), resource.handle())?;
+                permitted.push(PermittedResource {
+                    resource_ref: reference,
+                    label: resource.label().to_owned(),
+                    selected: source
+                        .resources()
+                        .iter()
+                        .any(|selected| selected.handle() == resource.handle()),
+                });
+                resources.push((reference, resource));
+            }
+            let source_binding = GrantSourceBinding::try_new(
+                actor.person_id,
+                source.connection_id().clone(),
+                source.connector_id().clone(),
+                source.execution_owner_id().clone(),
+            )
+            .map_err(|_| AgentFailure::InvalidInput)?;
+            let current = self
+                .access
+                .source_observe_state(actor, &source_binding, scope)
+                .await?;
+            let processing_views = current
+                .views
+                .into_iter()
+                .map(|view| {
+                    ViewProcessingDisclosure {
+                        view_id: view.view_id,
+                        data_class: view.data_class,
+                        data_categories: view.categories,
+                        current: view.processing,
+                        // Resource configuration invalidates old Observe grants; it
+                        // cannot create or expand a processing permission.
+                        requested: None,
+                    }
+                })
+                .collect();
+            let mut summary = SourceReview {
+                review_ref: ReviewRef {
+                    id,
+                    revision: 1,
+                    digest: [0; 32],
+                },
+                source_ref,
+                source_revision: source.revision(),
+                labels: vec![source_label(source.connector_id().as_str()).into()],
+                permitted_choices: permitted,
+                processing_disclosure: ProcessingDisclosure {
+                    views: processing_views,
+                },
+                expires_at: Utc::now() + Duration::minutes(15),
+                allowed_actions: vec![ConnectionAction::Configure],
+            };
+            summary.review_ref.digest = digest(&(
                 id,
-                revision: 1,
-                digest: [0; 32],
-            },
-            source_ref,
-            source_revision: source.revision(),
-            labels: vec![source_label(source.connector_id().as_str()).into()],
-            permitted_choices: permitted,
-            processing_disclosure: ProcessingDisclosure {
-                current: processing,
-                requested: processing,
-                categories: vec![],
-                scope_labels: vec![],
-            },
-            expires_at: Utc::now() + Duration::minutes(15),
-            allowed_actions: vec![ConnectionAction::Configure],
-        };
-        summary.review_ref.digest = digest(&(
-            id,
-            &source,
-            &expected,
-            &resources,
-            catalog.catalog_digest,
-            summary.expires_at,
-        ))?;
-        let descriptor = SourceReviewDescriptor {
-            summary: summary.clone(),
-            source,
-            expected,
-            resources,
-            catalog_digest: catalog.catalog_digest,
-        };
-        self.products
-            .insert(record(
-                actor,
-                id,
-                command_id,
-                intent,
-                ConnectionsPayload::SourceReview(descriptor),
-            ))
-            .await?;
-        Ok(summary)
+                &source,
+                &expected,
+                &resources,
+                catalog.catalog_digest,
+                summary.expires_at,
+            ))?;
+            let descriptor = SourceReviewDescriptor {
+                summary: summary.clone(),
+                source,
+                expected,
+                resources,
+                catalog_digest: catalog.catalog_digest,
+            };
+            classify = ConnectionsCommandFailure::Indeterminate;
+            self.products
+                .insert(record(
+                    actor,
+                    id,
+                    command_id,
+                    intent,
+                    ConnectionsPayload::SourceReview(descriptor),
+                ))
+                .await?;
+            Ok(summary)
+        }
+        .await;
+        result.map_err(classify)
     }
     pub async fn inspect_source_review(
         &self,
@@ -1050,124 +1093,134 @@ impl ConnectionsService {
         selected_resources: Vec<Uuid>,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<SourceSummary, AgentFailure> {
-        self.ensure_open()?;
-        check(actor, scope)?;
-        let intent = digest(&(
-            "source_configure",
-            source_ref,
-            &reference,
-            &selected_resources,
-            expected_revision,
-        ))?;
-        let id = command_ref(actor.person_id, command_id);
-        if let Some(record) = self.command(actor, id, command_id, intent).await? {
-            return match record.payload.clone() {
-                ConnectionsPayload::SourceMutation { summary, .. } => Ok(summary),
-                ConnectionsPayload::SourceConfiguration { .. } => {
-                    self.drive_source_configuration(actor, record, scope).await
-                }
-                _ => Err(AgentFailure::Conflict),
+    ) -> Result<SourceSummary, ConnectionsCommandFailure> {
+        let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
+            ConnectionsCommandFailure::NotAdmitted;
+        let result: Result<SourceSummary, AgentFailure> = async {
+            self.ensure_open()?;
+            check(actor, scope)?;
+            let intent = digest(&(
+                "source_configure",
+                source_ref,
+                &reference,
+                &selected_resources,
+                expected_revision,
+            ))?;
+            let id = command_ref(actor.person_id, command_id);
+            if let Some(record) = self.command(actor, id, command_id, intent).await? {
+                classify = ConnectionsCommandFailure::Admitted;
+                return match record.payload.clone() {
+                    ConnectionsPayload::SourceMutation { summary, .. } => Ok(summary),
+                    ConnectionsPayload::SourceConfiguration { .. } => {
+                        self.drive_source_configuration(actor, record, scope).await
+                    }
+                    _ => Err(AgentFailure::Conflict),
+                };
+            }
+            let reviewed = self.product(actor, reference.id).await?;
+            let ConnectionsPayload::SourceReview(descriptor) = reviewed.payload else {
+                return Err(AgentFailure::InvalidInput);
             };
-        }
-        let reviewed = self.product(actor, reference.id).await?;
-        let ConnectionsPayload::SourceReview(descriptor) = reviewed.payload else {
-            return Err(AgentFailure::InvalidInput);
-        };
-        if descriptor.summary.review_ref != reference
-            || descriptor.summary.source_ref != source_ref
-            || descriptor.summary.source_revision != expected_revision
-            || descriptor.summary.expires_at <= Utc::now()
-        {
-            return Err(AgentFailure::Conflict);
-        }
-        let source = self.resolve_source(actor, source_ref).await?;
-        if source.revision() != expected_revision || !native_source(&source) {
-            return Err(AgentFailure::Conflict);
-        }
-        if source != descriptor.source {
-            return Err(AgentFailure::Conflict);
-        }
-        if let Some(expected) = &descriptor.expected {
-            if &self.evidence.observe(actor, &source, scope).await? != expected {
+            if descriptor.summary.review_ref != reference
+                || descriptor.summary.source_ref != source_ref
+                || descriptor.summary.source_revision != expected_revision
+                || descriptor.summary.expires_at <= Utc::now()
+            {
                 return Err(AgentFailure::Conflict);
             }
-        }
-        let catalog = self.source_catalog.inspect(actor, &source, scope).await?;
-        if !catalog.catalog_complete || catalog.catalog_digest != descriptor.catalog_digest {
-            return Err(AgentFailure::Conflict);
-        }
-        if selected_resources.is_empty()
-            || selected_resources.len() > 256
-            || selected_resources
-                .iter()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                != selected_resources.len()
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let resources = selected_resources
-            .iter()
-            .map(|id| {
-                descriptor
-                    .resources
+            let source = self.resolve_source(actor, source_ref).await?;
+            if source.revision() != expected_revision || !native_source(&source) {
+                return Err(AgentFailure::Conflict);
+            }
+            if source != descriptor.source {
+                return Err(AgentFailure::Conflict);
+            }
+            if let Some(expected) = &descriptor.expected {
+                if &self.evidence.observe(actor, &source, scope).await? != expected {
+                    return Err(AgentFailure::Conflict);
+                }
+            }
+            let catalog = self.source_catalog.inspect(actor, &source, scope).await?;
+            if !catalog.catalog_complete || catalog.catalog_digest != descriptor.catalog_digest {
+                return Err(AgentFailure::Conflict);
+            }
+            if selected_resources.is_empty()
+                || selected_resources.len() > 256
+                || selected_resources
                     .iter()
-                    .find(|(reference, _)| reference == id)
-                    .map(|(_, resource)| resource.clone())
-                    .ok_or(AgentFailure::PolicyDenied)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let fingerprint = self
-            .evidence
-            .inspect_selection(actor, &source, &resources, scope)
-            .await?;
-        let mut successor = source.clone();
-        let changed = successor
-            .configure_reviewed_native(
-                expected_revision,
-                source.resource_mode(),
-                resources,
-                fingerprint,
-            )
-            .map_err(|_| AgentFailure::Conflict)?;
-        if !changed {
-            let summary = self.source_summary(actor, &source, scope).await?;
-            self.products
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    != selected_resources.len()
+            {
+                return Err(AgentFailure::InvalidInput);
+            }
+            let resources = selected_resources
+                .iter()
+                .map(|id| {
+                    descriptor
+                        .resources
+                        .iter()
+                        .find(|(reference, _)| reference == id)
+                        .map(|(_, resource)| resource.clone())
+                        .ok_or(AgentFailure::PolicyDenied)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let fingerprint = self
+                .evidence
+                .inspect_selection(actor, &source, &resources, scope)
+                .await?;
+            let mut successor = source.clone();
+            let changed = successor
+                .configure_reviewed_native(
+                    expected_revision,
+                    source.resource_mode(),
+                    resources,
+                    fingerprint,
+                )
+                .map_err(|_| AgentFailure::Conflict)?;
+            if !changed {
+                let summary = self.source_summary(actor, &source, scope).await?;
+                classify = ConnectionsCommandFailure::Indeterminate;
+                self.products
+                    .insert(record(
+                        actor,
+                        id,
+                        command_id,
+                        intent,
+                        ConnectionsPayload::SourceMutation {
+                            source,
+                            summary: summary.clone(),
+                        },
+                    ))
+                    .await?;
+                return Ok(summary);
+            }
+            let operation_id = super::source_operation::derived_id(
+                b"floe.source.operation.v1",
+                actor.person_id,
+                command_id,
+            );
+            classify = ConnectionsCommandFailure::Indeterminate;
+            let pending = self
+                .products
                 .insert(record(
                     actor,
                     id,
                     command_id,
                     intent,
-                    ConnectionsPayload::SourceMutation {
-                        source,
-                        summary: summary.clone(),
+                    ConnectionsPayload::SourceConfiguration {
+                        descriptor,
+                        selected_resources,
+                        successor,
+                        operation_id,
                     },
                 ))
                 .await?;
-            return Ok(summary);
+            classify = ConnectionsCommandFailure::Admitted;
+            self.drive_source_configuration(actor, pending, scope).await
         }
-        let operation_id = super::source_operation::derived_id(
-            b"floe.source.operation.v1",
-            actor.person_id,
-            command_id,
-        );
-        let pending = self
-            .products
-            .insert(record(
-                actor,
-                id,
-                command_id,
-                intent,
-                ConnectionsPayload::SourceConfiguration {
-                    descriptor,
-                    selected_resources,
-                    successor,
-                    operation_id,
-                },
-            ))
-            .await?;
-        self.drive_source_configuration(actor, pending, scope).await
+        .await;
+        result.map_err(classify)
     }
     async fn drive_source_configuration(
         &self,
@@ -1225,7 +1278,8 @@ impl ConnectionsService {
                 configuration_expectation(&descriptor, &successor)?,
                 SourceOperationKind::ConnectionConfigure,
             )
-            .await?
+            .await
+            .map_err(ConnectionsCommandFailure::into_failure)?
             .0
             .record
         };
@@ -1314,40 +1368,84 @@ impl ConnectionsService {
         expected_revision: u64,
         requested_processing: ProcessingChoice,
         scope: &ExecutionScope,
-    ) -> Result<ObserveReview, AgentFailure> {
-        self.ensure_open()?;
-        check(actor, scope)?;
-        let intent = digest(&(
-            "observe_review",
-            source_ref,
-            expected_revision,
-            requested_processing,
-        ))?;
-        let id = command_ref(actor.person_id, command_id);
-        if let Some(record) = self.command(actor, id, command_id, intent).await? {
-            return match record.payload {
-                ConnectionsPayload::ObserveReview { reference, .. } => {
-                    self.inspect_observe_review(actor, reference, scope).await
-                }
-                _ => Err(AgentFailure::Conflict),
-            };
-        }
-        let choice = match requested_processing {
-            ProcessingChoice::DeviceOnly => SourceProcessingChoice::DeviceOnly,
-            ProcessingChoice::GatewayAllowed => SourceProcessingChoice::GatewayAllowed,
-        };
-        if let Some(review) = self
-            .access
-            .find_source_processing_review(
-                actor,
-                command_id,
+    ) -> Result<ObserveReview, ConnectionsCommandFailure> {
+        let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
+            ConnectionsCommandFailure::NotAdmitted;
+        let result: Result<ObserveReview, AgentFailure> = async {
+            self.ensure_open()?;
+            check(actor, scope)?;
+            let intent = digest(&(
+                "observe_review",
                 source_ref,
                 expected_revision,
-                choice,
-                scope,
-            )
-            .await?
-        {
+                requested_processing,
+            ))?;
+            let id = command_ref(actor.person_id, command_id);
+            if let Some(record) = self.command(actor, id, command_id, intent).await? {
+                classify = ConnectionsCommandFailure::Admitted;
+                return match record.payload {
+                    ConnectionsPayload::ObserveReview { reference, .. } => {
+                        self.inspect_observe_review(actor, reference, scope).await
+                    }
+                    _ => Err(AgentFailure::Conflict),
+                };
+            }
+            let choice = match requested_processing {
+                ProcessingChoice::DeviceOnly => SourceProcessingChoice::DeviceOnly,
+                ProcessingChoice::GatewayAllowed => SourceProcessingChoice::GatewayAllowed,
+            };
+            if let Some(review) = self
+                .access
+                .find_source_processing_review(
+                    actor,
+                    command_id,
+                    source_ref,
+                    expected_revision,
+                    choice,
+                    scope,
+                )
+                .await?
+            {
+                classify = ConnectionsCommandFailure::Admitted;
+                self.products
+                    .insert(record(
+                        actor,
+                        id,
+                        command_id,
+                        intent,
+                        ConnectionsPayload::ObserveReview {
+                            reference: review.reference.clone(),
+                            source_ref,
+                            source_revision: expected_revision,
+                            choice: requested_processing,
+                        },
+                    ))
+                    .await?;
+                return self.project_observe(actor, review, scope).await;
+            }
+            let source = self.resolve_source(actor, source_ref).await?;
+            if source.revision() != expected_revision
+                || self
+                    .sources
+                    .source_is_fenced(actor.person_id, source.connection_id())
+                    .await
+                    .map_err(source_error)?
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            let expected = self.evidence.observe(actor, &source, scope).await?;
+            let choice = match requested_processing {
+                ProcessingChoice::DeviceOnly => SourceProcessingChoice::DeviceOnly,
+                ProcessingChoice::GatewayAllowed => SourceProcessingChoice::GatewayAllowed,
+            };
+            classify = ConnectionsCommandFailure::Indeterminate;
+            let review = self
+                .access
+                .prepare_source_processing_review(
+                    actor, command_id, source_ref, expected, choice, scope,
+                )
+                .await?;
+            classify = ConnectionsCommandFailure::Admitted;
             self.products
                 .insert(record(
                     actor,
@@ -1362,44 +1460,10 @@ impl ConnectionsService {
                     },
                 ))
                 .await?;
-            return self.project_observe(actor, review, scope).await;
+            self.project_observe(actor, review, scope).await
         }
-        let source = self.resolve_source(actor, source_ref).await?;
-        if source.revision() != expected_revision
-            || self
-                .sources
-                .source_is_fenced(actor.person_id, source.connection_id())
-                .await
-                .map_err(source_error)?
-        {
-            return Err(AgentFailure::Conflict);
-        }
-        let expected = self.evidence.observe(actor, &source, scope).await?;
-        let choice = match requested_processing {
-            ProcessingChoice::DeviceOnly => SourceProcessingChoice::DeviceOnly,
-            ProcessingChoice::GatewayAllowed => SourceProcessingChoice::GatewayAllowed,
-        };
-        let review = self
-            .access
-            .prepare_source_processing_review(
-                actor, command_id, source_ref, expected, choice, scope,
-            )
-            .await?;
-        self.products
-            .insert(record(
-                actor,
-                id,
-                command_id,
-                intent,
-                ConnectionsPayload::ObserveReview {
-                    reference: review.reference.clone(),
-                    source_ref,
-                    source_revision: expected_revision,
-                    choice: requested_processing,
-                },
-            ))
-            .await?;
-        self.project_observe(actor, review, scope).await
+        .await;
+        result.map_err(classify)
     }
     pub async fn inspect_observe_review(
         &self,
@@ -1421,30 +1485,41 @@ impl ConnectionsService {
         reference: ReviewRef,
         _decision: ObserveDecision,
         scope: &ExecutionScope,
-    ) -> Result<SourceSummary, AgentFailure> {
+    ) -> Result<SourceSummary, ConnectionsCommandFailure> {
+        self.ensure_open()
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        check(actor, scope).map_err(ConnectionsCommandFailure::NotAdmitted)?;
         let reviewed = self
             .access
             .inspect_review(actor, reference.clone(), scope)
-            .await?;
-        if crate::source_ref(actor.person_id, &reviewed.source.source.connection_id())?
+            .await
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        if crate::source_ref(actor.person_id, &reviewed.source.source.connection_id())
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?
             != source_ref
             || reviewed.source.revision != Some(expected_revision)
         {
-            return Err(AgentFailure::Conflict);
+            return Err(ConnectionsCommandFailure::NotAdmitted(
+                AgentFailure::Conflict,
+            ));
         }
         let operation = self
             .apply_source_review(actor, command_id, reference, scope)
             .await?;
-        if !matches!(operation.phase, SourceOperationPhase::Completed { .. }) {
-            return Err(AgentFailure::AccessReviewRequired);
+        let result: Result<SourceSummary, AgentFailure> = async {
+            if !matches!(operation.phase, SourceOperationPhase::Completed { .. }) {
+                return Err(AgentFailure::AccessReviewRequired);
+            }
+            let source = self
+                .sources
+                .load(actor.person_id, &operation.expected.source.connection_id())
+                .await
+                .map_err(source_error)?
+                .ok_or(AgentFailure::NotFound)?;
+            self.source_summary(actor, &source, scope).await
         }
-        let source = self
-            .sources
-            .load(actor.person_id, &operation.expected.source.connection_id())
-            .await
-            .map_err(source_error)?
-            .ok_or(AgentFailure::NotFound)?;
-        self.source_summary(actor, &source, scope).await
+        .await;
+        result.map_err(ConnectionsCommandFailure::Admitted)
     }
     pub async fn pause_observe(
         &self,
@@ -1453,8 +1528,14 @@ impl ConnectionsService {
         source_ref: Uuid,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<SourceSummary, AgentFailure> {
-        let source = self.resolve_source(actor, source_ref).await?;
+    ) -> Result<SourceSummary, ConnectionsCommandFailure> {
+        self.ensure_open()
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        check(actor, scope).map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        let source = self
+            .resolve_source(actor, source_ref)
+            .await
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
         let operation = self
             .pause_observe_operation(
                 actor,
@@ -1464,16 +1545,20 @@ impl ConnectionsService {
                 scope,
             )
             .await?;
-        if !matches!(operation.phase, SourceOperationPhase::Completed { .. }) {
-            return Err(AgentFailure::AccessReviewRequired);
+        let result: Result<SourceSummary, AgentFailure> = async {
+            if !matches!(operation.phase, SourceOperationPhase::Completed { .. }) {
+                return Err(AgentFailure::AccessReviewRequired);
+            }
+            let current = self
+                .sources
+                .load(actor.person_id, source.connection_id())
+                .await
+                .map_err(source_error)?
+                .ok_or(AgentFailure::NotFound)?;
+            self.source_summary(actor, &current, scope).await
         }
-        let current = self
-            .sources
-            .load(actor.person_id, source.connection_id())
-            .await
-            .map_err(source_error)?
-            .ok_or(AgentFailure::NotFound)?;
-        self.source_summary(actor, &current, scope).await
+        .await;
+        result.map_err(ConnectionsCommandFailure::Admitted)
     }
     pub async fn disconnect(
         &self,
@@ -1482,8 +1567,14 @@ impl ConnectionsService {
         source_ref: Uuid,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<ConnectionOperationSnapshot, AgentFailure> {
-        let source = self.resolve_source(actor, source_ref).await?;
+    ) -> Result<ConnectionOperationSnapshot, ConnectionsCommandFailure> {
+        self.ensure_open()
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        check(actor, scope).map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        let source = self
+            .resolve_source(actor, source_ref)
+            .await
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
         let operation = self
             .disconnect_source_operation(
                 actor,
@@ -1493,8 +1584,12 @@ impl ConnectionsService {
                 scope,
             )
             .await?;
-        self.source_operation_snapshot(actor, &operation, scope)
-            .await
+        let result: Result<ConnectionOperationSnapshot, AgentFailure> = async {
+            self.source_operation_snapshot(actor, &operation, scope)
+                .await
+        }
+        .await;
+        result.map_err(ConnectionsCommandFailure::Admitted)
     }
     pub async fn request_management_launch(
         &self,
@@ -1503,48 +1598,58 @@ impl ConnectionsService {
         gateway_ref: Uuid,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<ValidatedManagementLaunch, AgentFailure> {
-        self.ensure_open()?;
-        check(actor, scope)?;
-        let intent = digest(&("management_launch", gateway_ref, expected_revision))?;
-        let id = command_ref(actor.person_id, command_id);
-        if let Some(record) = self.command(actor, id, command_id, intent).await? {
-            return match record.payload {
-                ConnectionsPayload::Launch(action) => Ok(action),
-                _ => Err(AgentFailure::Conflict),
-            };
+    ) -> Result<ValidatedManagementLaunch, ConnectionsCommandFailure> {
+        let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
+            ConnectionsCommandFailure::NotAdmitted;
+        let result: Result<ValidatedManagementLaunch, AgentFailure> = async {
+            self.ensure_open()?;
+            check(actor, scope)?;
+            let intent = digest(&("management_launch", gateway_ref, expected_revision))?;
+            let id = command_ref(actor.person_id, command_id);
+            if let Some(record) = self.command(actor, id, command_id, intent).await? {
+                classify = ConnectionsCommandFailure::Admitted;
+                return match record.payload {
+                    ConnectionsPayload::Launch(action) => Ok(action),
+                    _ => Err(AgentFailure::Conflict),
+                };
+            }
+            let (gateway, binding) = self.current_gateway(actor, gateway_ref).await?;
+            if gateway.revision != expected_revision {
+                return Err(AgentFailure::Conflict);
+            }
+            // The port only derives a launch action from current verified
+            // connection metadata. It does not launch a browser or persist it.
+            let action = self
+                .remote_integrations
+                .management_launch(
+                    ManagementLaunchRequest {
+                        operation_id: id,
+                        gateway_ref,
+                        expected: binding,
+                        expected_binding_generation: expected_revision,
+                        purpose: LaunchPurpose::ManageGateway,
+                    },
+                    scope,
+                )
+                .await
+                .map_err(integration_error)?;
+            if action.action_ref != id || action.purpose != LaunchPurpose::ManageGateway {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            classify = ConnectionsCommandFailure::Indeterminate;
+            self.products
+                .insert(record(
+                    actor,
+                    id,
+                    command_id,
+                    intent,
+                    ConnectionsPayload::Launch(action.clone()),
+                ))
+                .await?;
+            Ok(action)
         }
-        let (gateway, binding) = self.current_gateway(actor, gateway_ref).await?;
-        if gateway.revision != expected_revision {
-            return Err(AgentFailure::Conflict);
-        }
-        let action = self
-            .remote_integrations
-            .management_launch(
-                ManagementLaunchRequest {
-                    operation_id: id,
-                    gateway_ref,
-                    expected: binding,
-                    expected_binding_generation: expected_revision,
-                    purpose: LaunchPurpose::ManageGateway,
-                },
-                scope,
-            )
-            .await
-            .map_err(integration_error)?;
-        if action.action_ref != id || action.purpose != LaunchPurpose::ManageGateway {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        self.products
-            .insert(record(
-                actor,
-                id,
-                command_id,
-                intent,
-                ConnectionsPayload::Launch(action.clone()),
-            ))
-            .await?;
-        Ok(action)
+        .await;
+        result.map_err(classify)
     }
     fn operation_scope(&self, scope: &ExecutionScope) -> ExecutionScope {
         ExecutionScope::root(
@@ -2423,54 +2528,38 @@ impl ConnectionsService {
         scope: &ExecutionScope,
     ) -> Result<ObserveReview, AgentFailure> {
         check(actor, scope)?;
-        let current = if review.views.iter().any(|view| {
-            view.current_processing.as_ref().is_some_and(|policy| {
-                matches!(policy, ProcessingRestriction::GatewayAllowed { .. })
+        // Product Observe reviews target a configured, stored source. Native
+        // setup has already persisted its Pending row before configuration;
+        // generic Access source absence is not a product revision.
+        let source_revision = review
+            .source
+            .revision
+            .filter(|revision| *revision > 0)
+            .ok_or(AgentFailure::Conflict)?;
+        let processing_views = review
+            .views
+            .iter()
+            .map(|view| ViewProcessingDisclosure {
+                view_id: view.view_id.clone(),
+                data_class: view.data_class,
+                data_categories: view.categories.clone(),
+                current: view.current_processing.clone(),
+                requested: Some(view.requested_processing.clone()),
             })
-        }) {
-            ProcessingChoice::GatewayAllowed
-        } else {
-            ProcessingChoice::DeviceOnly
-        };
-        let requested = if review.views.iter().any(|view| {
-            matches!(
-                view.requested_processing,
-                ProcessingRestriction::GatewayAllowed { .. }
-            )
-        }) {
-            ProcessingChoice::GatewayAllowed
-        } else {
-            ProcessingChoice::DeviceOnly
-        };
-        let mut categories = Vec::new();
+            .collect();
         let mut members = Vec::new();
         for view in &review.views {
             members.push(view.view_id.clone());
-            for category in &view.categories {
-                let _ = category;
-                let name = if review.source.source.connector().as_str() == "health.apple" {
-                    "highly_sensitive"
-                } else {
-                    "personal"
-                };
-                if !categories.iter().any(|existing| existing == name) {
-                    categories.push(name.to_owned())
-                }
-            }
         }
-        categories.sort();
         members.sort();
         members.dedup();
         Ok(ObserveReview {
             review_ref: review.reference,
             source_ref: source_ref(actor.person_id, &review.source.source.connection_id())?,
-            source_revision: review.source.revision.unwrap_or(1),
+            source_revision,
             display_members: members.clone(),
             processing_disclosure: ProcessingDisclosure {
-                current,
-                requested,
-                categories,
-                scope_labels: members,
+                views: processing_views,
             },
             expires_at: review.expires_at,
             allowed_actions: if review.expires_at > Utc::now() {
@@ -2580,7 +2669,7 @@ fn check(actor: &OwnerActor, scope: &ExecutionScope) -> Result<(), AgentFailure>
 fn source_error(error: SourceRepositoryError) -> AgentFailure {
     super::source_operation::source_error(error)
 }
-fn pairing_error(error: PairingError) -> AgentFailure {
+pub(crate) fn pairing_error(error: PairingError) -> AgentFailure {
     match error {
         PairingError::ForeignIdentity
         | PairingError::ChangedProducer
@@ -2590,9 +2679,9 @@ fn pairing_error(error: PairingError) -> AgentFailure {
         PairingError::Cancelled => AgentFailure::Cancelled,
         PairingError::DeadlineExceeded => AgentFailure::DeadlineExceeded,
         PairingError::InvalidInput => AgentFailure::InvalidInput,
-        PairingError::StorageUnavailable | PairingError::CredentialUnavailable => {
-            AgentFailure::StorageUnavailable
-        }
+        PairingError::StorageUnavailable
+        | PairingError::CredentialUnavailable
+        | PairingError::Indeterminate => AgentFailure::StorageUnavailable,
         PairingError::TransportUnavailable => AgentFailure::CapabilityUnavailable,
     }
 }

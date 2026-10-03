@@ -51,12 +51,15 @@ class _AgentPanelState extends State<AgentPanel> {
   final _messageFocus = FocusNode();
   final _composerText = TextEditingController();
   bool _wasBusy = false;
+  bool _wasReady = false;
+  bool _sessionRequested = false;
 
   @override
   void initState() {
     super.initState();
     _wasBusy = widget.controller.busy;
     widget.controller.addListener(_changed);
+    _ensureConversationWhenReady();
   }
 
   @override
@@ -66,10 +69,30 @@ class _AgentPanelState extends State<AgentPanel> {
       oldWidget.controller.removeListener(_changed);
       widget.controller.addListener(_changed);
       _wasBusy = widget.controller.busy;
+      _wasReady = false;
+      _sessionRequested = false;
+      _ensureConversationWhenReady();
     }
   }
 
+  void _ensureConversationWhenReady() {
+    final controller = widget.controller;
+    final ready = controller.vaultController.ready;
+    if (_wasReady && !ready) _sessionRequested = false;
+    _wasReady = ready;
+    if (!ready || controller.busy || _sessionRequested || controller.session != null) return;
+    _sessionRequested = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && identical(controller, widget.controller) &&
+          controller.vaultController.ready && controller.session == null &&
+          !controller.busy) {
+        controller.load();
+      }
+    });
+  }
+
   void _changed() {
+    _ensureConversationWhenReady();
     final restoreFocus = _wasBusy && !widget.controller.busy;
     _wasBusy = widget.controller.busy;
     final follow = !_scroll.hasClients || _scroll.position.extentAfter < 64;
@@ -302,7 +325,7 @@ class _AgentPanelState extends State<AgentPanel> {
   ) {
     final status = _status(strings, controller);
     final storageLocked =
-        controller.usesVault && controller.vaultState != AgentVaultState.ready;
+        !controller.vaultController.ready;
     final label = storageLocked
         ? strings.agentReload
         : controller.running
@@ -320,9 +343,9 @@ class _AgentPanelState extends State<AgentPanel> {
         ? LucideIcons.rotateCcw
         : LucideIcons.arrowUp;
     final VoidCallback? action = storageLocked
-        ? controller.busy
-              ? null
-              : () => controller.load()
+        ? controller.vaultController.canRecover
+              ? controller.vaultController.recover
+              : null
         : controller.running
         ? controller.progress == AgentProgress.stopping
               ? null
@@ -477,9 +500,14 @@ class _AgentPanelState extends State<AgentPanel> {
         _ => strings.agentPreparing,
       };
     }
-    if (controller.usesVault &&
-        controller.vaultState != AgentVaultState.ready) {
-      return switch (controller.vaultState) {
+    if (!controller.vaultController.ready) {
+      final reason = controller.vaultController.reasonCode;
+      if (reason != null) {
+        final incident = controller.vaultController.incidentId;
+        return 'Local secure storage is unavailable ($reason).'
+            '${incident == null ? '' : ' Incident: $incident'}';
+      }
+      return switch (controller.vaultController.state) {
         AgentVaultState.missing => strings.agentStorageMissing,
         AgentVaultState.locked => strings.agentStorageLocked,
         _ => strings.agentStorageUnavailable,

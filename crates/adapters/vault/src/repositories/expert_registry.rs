@@ -223,7 +223,7 @@ impl<Keys: VaultKeyProvider> RegistryRepository for VaultExpertRegistryRepositor
                                 self.vault.person_id(),
                             )?;
                             self.vault
-                                .initialize_expert_registry_on(&transaction, &commit.next)
+                                .install_expert_registry_on(&transaction, &commit.next)
                                 .await?;
                         }
                     }

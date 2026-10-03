@@ -13,6 +13,10 @@ import 'package:floe_client/infrastructure/native/native_context_host_transport.
 
 const nativeProtocolVersion = 1;
 
+enum NativeCommandDisposition { notAdmitted, admitted, indeterminate }
+
+enum _NativeResponseKind { command, ordinary }
+
 final class NativeTransportException implements Exception {
   const NativeTransportException(
     this.code,
@@ -20,6 +24,7 @@ final class NativeTransportException implements Exception {
     this.field,
     this.metadata = const {},
     this.ownerFailure,
+    this.commandDisposition,
   });
 
   final String code;
@@ -27,8 +32,14 @@ final class NativeTransportException implements Exception {
   final String? field;
   final Map<String, String> metadata;
   final OwnerFailure? ownerFailure;
+  /// Null only for open, query, event and native-callback failures.
+  /// Product command admission is never inferred from an error code.
+  final NativeCommandDisposition? commandDisposition;
 
-  factory NativeTransportException.fromEnvelope(Map<String, dynamic> envelope) {
+  factory NativeTransportException.fromEnvelope(
+    Map<String, dynamic> envelope, {
+    NativeCommandDisposition? commandDisposition,
+  }) {
     final error = envelope['error'] is Map
         ? _asMap(envelope['error'])
         : envelope;
@@ -36,6 +47,7 @@ final class NativeTransportException implements Exception {
       error['code']?.toString() ?? 'internal',
       error['message']?.toString() ?? 'Could not open Rust core.',
       field: error['field']?.toString(),
+      commandDisposition: commandDisposition,
       ownerFailure: error['owner_failure'] == null
           ? null
           : OwnerFailure.fromJson(error['owner_failure']),
@@ -150,8 +162,20 @@ final class NativeTransport implements AppWireTransport {
     Map<String, dynamic> request,
     Duration timeout,
   ) async {
-    if (_closed) throw StateError('NativeTransport is already closed.');
-    return _sendNativeWire(_commands, operation, request, timeout);
+    final responseKind = operation == 'command_v2'
+        ? _NativeResponseKind.command
+        : _NativeResponseKind.ordinary;
+    if (_closed) {
+      if (responseKind == _NativeResponseKind.command) {
+        throw const NativeTransportException(
+          'unavailable',
+          'NativeTransport is already closed.',
+          commandDisposition: NativeCommandDisposition.notAdmitted,
+        );
+      }
+      throw StateError('NativeTransport is already closed.');
+    }
+    return _sendNativeWire(_commands, operation, request, timeout, responseKind);
   }
 
   @override
@@ -259,7 +283,9 @@ final class _NativeCallbackTransport implements NativeHostWireTransport {
         'Only native host callbacks may use this lane.',
       );
     }
-    return _sendNativeWire(_commands, operation, request, timeout);
+    return _sendNativeWire(
+      _commands, operation, request, timeout, _NativeResponseKind.ordinary,
+    );
   }
 }
 
@@ -268,22 +294,32 @@ Future<Map<String, dynamic>> _sendNativeWire(
   String operation,
   Map<String, dynamic> request,
   Duration timeout,
+  _NativeResponseKind responseKind,
 ) async {
+  final isCommand = responseKind == _NativeResponseKind.command;
   final requestId = request['request_id'];
-  if (request['schema_version'] != appWireProtocolVersion ||
-      requestId is! String ||
-      requestId.isEmpty) {
-    throw const FormatException('Invalid app-wire request envelope.');
-  }
-  final reply = ReceivePort();
-  commands.send({
-    'operation': operation,
-    'request': jsonEncode(request),
-    'reply': reply.sendPort,
-  });
+  ReceivePort? reply;
+  var handedOff = false;
   try {
+    if (request['schema_version'] != appWireProtocolVersion ||
+        requestId is! String ||
+        requestId.isEmpty ||
+        isCommand && (request['command_id'] is! String ||
+            (request['command_id'] as String).isEmpty)) {
+      throw const FormatException('Invalid app-wire request envelope.');
+    }
+    final encoded = jsonEncode(request);
+    final responsePort = ReceivePort();
+    reply = responsePort;
+    // From this point onward a failed observer cannot prove non-admission.
+    handedOff = true;
+    commands.send({
+      'operation': operation,
+      'request': encoded,
+      'reply': responsePort.sendPort,
+    });
     final result = _asMap(
-      await reply.first.timeout(
+      await responsePort.first.timeout(
         timeout,
         onTimeout: () => throw const NativeTransportException(
           'timeout',
@@ -301,14 +337,83 @@ Future<Map<String, dynamic>> _sendNativeWire(
         envelope['request_id'] != requestId) {
       throw const FormatException('Mismatched app-wire response envelope.');
     }
+    if (isCommand) return _commandResponse(envelope);
     if (envelope['status'] == 'error')
       throw NativeTransportException.fromEnvelope(envelope);
     if (envelope['status'] != 'ok' || envelope['result'] is! Map)
       throw const FormatException('Invalid app-wire response envelope.');
     return _asMap(envelope['result']);
+  } on NativeTransportException catch (error) {
+    if (!isCommand || error.commandDisposition != null) rethrow;
+    throw NativeTransportException(
+      error.code,
+      error.message,
+      field: error.field,
+      metadata: error.metadata,
+      ownerFailure: error.ownerFailure,
+      commandDisposition: handedOff
+          ? NativeCommandDisposition.indeterminate
+          : NativeCommandDisposition.notAdmitted,
+    );
+  } on Object {
+    if (!isCommand) rethrow;
+    throw NativeTransportException(
+      handedOff ? 'invalid_response' : 'validation',
+      handedOff
+          ? 'The command acknowledgement could not be verified.'
+          : 'The command was rejected before native handoff.',
+      commandDisposition: handedOff
+          ? NativeCommandDisposition.indeterminate
+          : NativeCommandDisposition.notAdmitted,
+    );
   } finally {
-    reply.close();
+    reply?.close();
   }
+}
+
+Map<String, dynamic> _commandResponse(Map<String, dynamic> envelope) {
+  final status = envelope['status'];
+  final expectedKeys = status == 'ok'
+      ? const {'schema_version', 'request_id', 'status', 'result'}
+      : const {'schema_version', 'request_id', 'status', 'disposition', 'error'};
+  if (envelope.length != expectedKeys.length ||
+      !envelope.keys.toSet().containsAll(expectedKeys)) {
+    throw const FormatException('Invalid command response envelope.');
+  }
+  if (status == 'ok' && envelope['result'] is Map) {
+    return _asMap(envelope['result']);
+  }
+  if (status != 'command_error') {
+    throw const FormatException('Invalid command response outcome.');
+  }
+  final disposition = switch (envelope['disposition']) {
+    'not_admitted' => NativeCommandDisposition.notAdmitted,
+    'admitted' => NativeCommandDisposition.admitted,
+    'indeterminate' => NativeCommandDisposition.indeterminate,
+    _ => throw const FormatException('Invalid command disposition.'),
+  };
+  final error = envelope['error'];
+  const errorKeys = {'code', 'message', 'field', 'metadata', 'owner_failure'};
+  const codes = {
+    'validation', 'unsupported_version', 'command_id_conflict', 'session_busy',
+    'conflict', 'not_found', 'access_denied', 'unavailable', 'internal',
+  };
+  if (error is! Map ||
+      error.keys.any((key) => !errorKeys.contains(key)) ||
+      !codes.contains(error['code']) ||
+      error['message'] is! String ||
+      error.containsKey('field') && error['field'] != null && error['field'] is! String ||
+      error.containsKey('metadata') && (error['metadata'] is! Map ||
+          (error['metadata'] as Map).entries.any((entry) =>
+              entry.key is! String || entry.value is! String))) {
+    throw const FormatException('Invalid command error.');
+  }
+  // The typed error and optional owner projection must decode successfully
+  // before a NotAdmitted proof is exposed to a command observer.
+  throw NativeTransportException.fromEnvelope(
+    envelope,
+    commandDisposition: disposition,
+  );
 }
 
 Future<void> _nativeCallbackWorkerMain(

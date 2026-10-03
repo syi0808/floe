@@ -1,5 +1,4 @@
 import 'package:floe_client/features/connections/presentation/connections_controller.dart';
-import 'package:floe_client/features/connections/application/connections_gateway.dart';
 
 import 'dart:async';
 
@@ -24,7 +23,7 @@ class FloeApp extends StatefulWidget {
     this.calendarActions,
     this.query,
     this.agentGateway,
-    this.connectionsGateway,
+    this.connectionsController,
     this.ownerGateways = const LocalOwnerGateways(),
     this.onDisposeGateway,
     this.locale = const Locale('en'),
@@ -39,7 +38,7 @@ class FloeApp extends StatefulWidget {
 
   final DayQuery? query;
   final AgentConversationGateway? agentGateway;
-  final ConnectionsGateway? connectionsGateway;
+  final ConnectionsController? connectionsController;
   final LocalOwnerGateways ownerGateways;
   final Future<void> Function()? onDisposeGateway;
   final TransitionBuilder? builder;
@@ -49,29 +48,8 @@ class FloeApp extends StatefulWidget {
 }
 
 class _FloeAppState extends State<FloeApp> {
-  ConnectionsController? connectionsController;
-  @override
-  void initState() {
-    super.initState();
-    final gateway = widget.connectionsGateway;
-    if (gateway != null) connectionsController = ConnectionsController(gateway);
-  }
-
-  @override
-  void didUpdateWidget(FloeApp oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.connectionsGateway != widget.connectionsGateway) {
-      connectionsController?.dispose();
-      final gateway = widget.connectionsGateway;
-      connectionsController = gateway == null
-          ? null
-          : ConnectionsController(gateway);
-    }
-  }
-
   @override
   void dispose() {
-    connectionsController?.dispose();
     final onDisposeGateway = widget.onDisposeGateway;
     if (onDisposeGateway != null) unawaited(onDisposeGateway());
     super.dispose();
@@ -93,7 +71,7 @@ class _FloeAppState extends State<FloeApp> {
         calendarActions: widget.calendarActions,
         query: effectiveQuery,
         agentGateway: widget.agentGateway,
-        connectionsController: connectionsController,
+        connectionsController: widget.connectionsController,
         ownerGateways: widget.ownerGateways,
       ),
     );

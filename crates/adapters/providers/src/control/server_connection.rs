@@ -35,7 +35,7 @@ impl PreparedServerSource {
         &self.connection.endpoint
     }
     pub(crate) fn bearer_token(&self) -> &str {
-        &self.connection.bearer
+        self.connection.bearer.as_str()
     }
     pub(crate) async fn revalidate(&self) -> Result<(), AgentFailure> {
         let current = self
@@ -46,7 +46,7 @@ impl PreparedServerSource {
             .ok_or(AgentFailure::PolicyDenied)?;
         if current.binding != self.connection.binding
             || current.endpoint != self.connection.endpoint
-            || current.bearer != self.connection.bearer
+            || current.bearer.as_str() != self.connection.bearer.as_str()
         {
             return Err(AgentFailure::PolicyDenied);
         }

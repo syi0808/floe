@@ -9,32 +9,6 @@ use floe_execution::BoxFuture;
 use turso::transaction::{Transaction, TransactionBehavior};
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    pub(super) async fn initialize_connection_reviews(
-        &self,
-        create: bool,
-    ) -> Result<(), AgentFailure> {
-        let connection = self.connection()?;
-        if create {
-            connection.execute("CREATE TABLE access_connection_reviews (review_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, command_id TEXT NOT NULL, intent_digest TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(person_id, command_id))", ()).await.map_err(storage)?;
-            connection.execute("CREATE TABLE access_grant_operations (operation_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, payload TEXT NOT NULL)", ()).await.map_err(storage)?;
-        }
-        // Missing tables on open are unsupported stored meaning, never an implicit migration.
-        connection
-            .query(
-                "SELECT review_id FROM access_connection_reviews LIMIT 1",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        connection
-            .query(
-                "SELECT operation_id FROM access_grant_operations LIMIT 1",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        Ok(())
-    }
     async fn operation_on(
         &self,
         transaction: &Transaction<'_>,

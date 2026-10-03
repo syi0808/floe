@@ -43,8 +43,27 @@ pub struct AppResponseDto<T> {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum AppResponseOutcomeDto<T> {
-    Ok { result: T },
-    Error { error: AppWireErrorDto },
+    Ok {
+        result: T,
+    },
+    Error {
+        error: AppWireErrorDto,
+    },
+    CommandError {
+        disposition: AppCommandDispositionDto,
+        error: AppWireErrorDto,
+    },
+}
+
+/// Admission evidence for this delivery of the exact command.
+/// A later rejection does not erase an earlier indeterminate delivery.
+/// Error categories and recovery hints never supply this evidence.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppCommandDispositionDto {
+    NotAdmitted,
+    Admitted,
+    Indeterminate,
 }
 
 impl<T> AppResponseDto<T> {
@@ -61,6 +80,18 @@ impl<T> AppResponseDto<T> {
             schema_version: APP_WIRE_VERSION,
             request_id,
             outcome: AppResponseOutcomeDto::Error { error },
+        }
+    }
+
+    pub fn command_error(
+        request_id: Uuid,
+        disposition: AppCommandDispositionDto,
+        error: AppWireErrorDto,
+    ) -> Self {
+        Self {
+            schema_version: APP_WIRE_VERSION,
+            request_id,
+            outcome: AppResponseOutcomeDto::CommandError { disposition, error },
         }
     }
 }

@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import 'package:floe_client/app/runtime/app_runtime.dart';
+import 'package:floe_client/features/vault/application/vault_controller.dart';
+import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/actions/application/calendar_action_gateway.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
 import 'package:floe_client/features/actions/application/action_command_replay.dart';
@@ -55,8 +57,35 @@ final class CalendarActionError {
 /// UI state for the single Actions owner. Disposing this controller stops only
 /// its scheduled observations; it never cancels work owned by Rust.
 final class CalendarActionController extends ChangeNotifier {
-  CalendarActionController({required this.gateway})
-    : _commands = ActionCommandReplay.forGateway(gateway);
+  CalendarActionController({required this.gateway, required this.vault})
+    : _commands = ActionCommandReplay.forGateway(gateway) {
+    vault.addListener(_readinessChanged);
+    _readinessChanged();
+  }
+  final VaultController vault;
+  bool _wasReady = false;
+  int _readinessGeneration = 0;
+  bool _current(int generation) =>
+      !_disposed && vault.ready && generation == _readinessGeneration;
+
+  void _readinessChanged() {
+    if (_disposed || _wasReady == vault.ready) return;
+    _wasReady = vault.ready;
+    _readinessGeneration++;
+    for (final timer in _observations.values) {
+      timer.cancel();
+    }
+    _observations.clear();
+    _actions = const [];
+    _authority = null;
+    _destinations = const [];
+    _nextCursor = null;
+    _loaded = false;
+    _destinationsLoaded = false;
+    _destinationsError = null;
+    notifyListeners();
+    if (vault.ready && !_busy) unawaited(load());
+  }
 
   final CalendarActionGateway gateway;
   List<CalendarAction> _actions = const [];
@@ -76,17 +105,29 @@ final class CalendarActionController extends ChangeNotifier {
   ActionAuthority? get authority => _authority;
   List<ActionDestinationChoice> get destinations => _destinations;
   String? get nextCursor => _nextCursor;
-  CalendarActionError? get error => _error;
+  CalendarActionError? get error => vault.ready ? _error : CalendarActionError(
+    kind: vault.state == AgentVaultState.locked
+        ? CalendarActionErrorKind.vaultLocked : CalendarActionErrorKind.vaultUnavailable,
+    code: vault.reasonCode ?? (vault.state == AgentVaultState.locked
+        ? 'vault_locked' : 'storage_unavailable'),
+  );
+  void _reportStorageFailure(Object error) {
+    final owner = error is AppRuntimeException ? error.ownerFailure : null;
+    if (owner != null) {
+      vault.reportFailure(AgentVaultException.fromAppWire(owner.reason, ownerFailure: owner));
+    }
+  }
   CalendarActionError? get destinationsError => _destinationsError;
   bool get destinationsLoaded => _destinationsLoaded;
 
   /// Display availability observed from the owner. Every submitted command
   /// still needs the owner's current target and permission admission.
   bool get calendarChangesAvailable =>
+      vault.ready &&
       _destinationsLoaded &&
       _destinationsError == null &&
       _destinations.isNotEmpty;
-  bool get busy => _busy;
+  bool get busy => _busy || !vault.ready;
   bool get loaded => _loaded;
 
   CalendarAction? find(String actionRef) {
@@ -97,7 +138,8 @@ final class CalendarActionController extends ChangeNotifier {
   }
 
   Future<void> load() async {
-    if (_busy || _disposed) return;
+    if (busy || _disposed) return;
+    final generation = _readinessGeneration;
     _busy = true;
     _error = null;
     _destinationsLoaded = false;
@@ -107,60 +149,73 @@ final class CalendarActionController extends ChangeNotifier {
       // Reading durable history/authority must not depend on native Calendar
       // destination discovery succeeding.
       final page = await gateway.list();
-      if (_disposed) return;
+      if (!_current(generation)) return;
       _mergePage(page, replace: true);
       _loaded = true;
       final authority = await gateway.loadAuthority();
-      if (_disposed) return;
+      if (!_current(generation)) return;
       _acceptAuthority(authority);
       try {
         final destinations = await gateway.loadDestinations();
-        if (_disposed) return;
+        if (!_current(generation)) return;
         _destinations = List.unmodifiable(destinations);
         _destinationsLoaded = true;
         _destinationsError = null;
       } on Object catch (error) {
-        if (_disposed) return;
+        if (!_current(generation)) return;
         _destinations = const [];
         _destinationsLoaded = false;
         _destinationsError = CalendarActionError.from(error);
       }
       _error = null;
     } on Object catch (error) {
-      if (!_disposed) _error = CalendarActionError.from(error);
+      if (_current(generation)) {
+        _reportStorageFailure(error);
+        _error = CalendarActionError.from(error);
+      }
     } finally {
       if (!_disposed) {
         _busy = false;
         notifyListeners();
+        if (vault.ready && generation != _readinessGeneration) unawaited(load());
       }
     }
   }
 
   Future<void> loadMore() async {
     final cursor = _nextCursor;
-    if (_busy || _disposed || cursor == null) return;
+    if (busy || _disposed || cursor == null) return;
+    final generation = _readinessGeneration;
     _busy = true;
     _error = null;
     notifyListeners();
     try {
       final page = await gateway.list(cursor: cursor);
-      if (_disposed) return;
+      if (!_current(generation)) return;
       _mergePage(page);
       _error = null;
     } on Object catch (error) {
-      if (!_disposed) _error = CalendarActionError.from(error);
+      if (_current(generation)) {
+        _reportStorageFailure(error);
+        _error = CalendarActionError.from(error);
+      }
     } finally {
       if (!_disposed) {
         _busy = false;
         notifyListeners();
+        if (vault.ready && generation != _readinessGeneration) unawaited(load());
       }
     }
   }
 
   Future<CalendarAction> inspect(String actionRef) async {
+    if (_disposed || !vault.ready) throw StateError('Actions storage is unavailable.');
+    final generation = _readinessGeneration;
     try {
       final result = await gateway.inspect(actionRef);
-      if (_disposed) return result;
+      if (!_current(generation)) {
+        throw StateError('The Action observation belongs to retired storage.');
+      }
       if (result.actionRef != actionRef) {
         throw StateError('Actions inspect returned another reference.');
       }
@@ -169,7 +224,8 @@ final class CalendarActionController extends ChangeNotifier {
       notifyListeners();
       return find(actionRef) ?? result;
     } on Object catch (error) {
-      if (!_disposed) {
+      if (_current(generation)) {
+        _reportStorageFailure(error);
         _error = CalendarActionError.from(error);
         notifyListeners();
       }
@@ -285,24 +341,32 @@ final class CalendarActionController extends ChangeNotifier {
     required void Function(T result) validate,
   }) async {
     if (_disposed) throw StateError('Actions controller is disposed.');
-    if (_busy) throw StateError('Another Actions request is in progress.');
+    if (busy) throw StateError('Actions storage or request is unavailable.');
+    final generation = _readinessGeneration;
     _busy = true;
     _error = null;
     notifyListeners();
     try {
       final commandId = _commands.retain(commandKey);
       final result = await send(commandId);
+      if (!_current(generation)) {
+        throw StateError('The Actions observation belongs to a retired storage generation.');
+      }
       validate(result);
       _commands.acknowledge(commandKey, commandId);
       _error = null;
       return result;
     } on Object catch (error) {
-      _error = CalendarActionError.from(error);
+      if (_current(generation)) {
+        _reportStorageFailure(error);
+        _error = CalendarActionError.from(error);
+      }
       rethrow;
     } finally {
       if (!_disposed) {
         _busy = false;
         notifyListeners();
+        if (vault.ready && generation != _readinessGeneration) unawaited(load());
       }
     }
   }
@@ -447,7 +511,7 @@ final class CalendarActionController extends ChangeNotifier {
   void _scheduleObservation(CalendarAction action) {
     _cancelObservation(action.actionRef);
     final delay = action.nextObservationAfterMs;
-    if (_disposed || delay == null || delay <= 0 || delay > 60000) return;
+    if (_disposed || !vault.ready || delay == null || delay <= 0 || delay > 60000) return;
     _observations[action.actionRef] = Timer(Duration(milliseconds: delay), () {
       _observations.remove(action.actionRef);
       unawaited(_observeAfterDelay(action.actionRef));
@@ -455,11 +519,12 @@ final class CalendarActionController extends ChangeNotifier {
   }
 
   Future<void> _observeAfterDelay(String actionRef) async {
-    if (_disposed) return;
+    if (_disposed || !vault.ready) return;
+    final generation = _readinessGeneration;
     try {
       await inspect(actionRef);
     } on Object catch (error) {
-      if (_disposed) return;
+      if (!_current(generation)) return;
       _error = CalendarActionError.from(error);
       notifyListeners();
     }
@@ -472,6 +537,7 @@ final class CalendarActionController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    vault.removeListener(_readinessChanged);
     for (final timer in _observations.values) {
       timer.cancel();
     }

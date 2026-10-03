@@ -42,6 +42,10 @@ pub struct CommunicationView {
     pub items: Vec<CommunicationItem>,
 }
 
+impl CommunicationView {
+    pub const DATA_CLASS: DataClass = DataClass::Personal;
+}
+
 pub fn validate_communication_view(
     view: &CommunicationView,
     now_unix_ms: i64,
@@ -104,7 +108,7 @@ pub fn communication_context_evidence(
 ) -> Result<ContextEvidence, AgentFailure> {
     Ok(ContextEvidence {
         source_handle: view.source_handle.clone(),
-        data_class: DataClass::Personal,
+        data_class: CommunicationView::DATA_CLASS,
         untrusted_text: serde_json::to_string(&view.items)
             .map_err(|_| AgentFailure::InvalidInput)?,
         expires_at_unix_ms: u64::try_from(view.expires_at_unix_ms)

@@ -306,7 +306,10 @@ fn credential_failure(error: GatewayCredentialError) -> AgentFailure {
     match error {
         GatewayCredentialError::Locked => AgentFailure::VaultLocked,
         GatewayCredentialError::Timeout => AgentFailure::DeadlineExceeded,
-        GatewayCredentialError::Unavailable => AgentFailure::CapabilityUnavailable,
+        GatewayCredentialError::Unavailable | GatewayCredentialError::Indeterminate => {
+            AgentFailure::CapabilityUnavailable
+        }
+        GatewayCredentialError::Cancelled => AgentFailure::Cancelled,
         GatewayCredentialError::Conflict => AgentFailure::Conflict,
         GatewayCredentialError::Malformed
         | GatewayCredentialError::Unverified

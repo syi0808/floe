@@ -8,7 +8,6 @@ pub mod calendar_wire;
 pub mod dylib;
 mod host;
 mod installation;
-mod keychain;
 
 pub use acquisition::{
     AcquisitionBroker, AcquisitionExchange, AttentionAcquisitionMode, AttentionAcquisitionRequest,
@@ -32,9 +31,6 @@ pub use installation::DevelopmentResetReason;
 pub use installation::{
     LocalDatabaseAdmission, LocalInstallation, LocalInstallationLease, NativeInstallationError,
     lock_existing_local_installation, prepare_local_installation,
-};
-pub use keychain::{
-    KeychainError, delete_generic_password, read_generic_password, write_generic_password,
 };
 
 mod health_privacy;

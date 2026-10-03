@@ -16,8 +16,6 @@ import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:floe_client/app/runtime/owner_failure.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
-import 'package:floe_client/features/experts/application/agent_registry_controller.dart';
-import 'package:floe_client/features/knowledge/application/agent_memory_controller.dart';
 
 enum AgentProgress {
   idle,
@@ -44,33 +42,10 @@ final class ConversationController extends ChangeNotifier {
     this.owners,
   ) {
     final vault = owners.vault;
-    if (vault == null)
-      throw ArgumentError('Conversation requires an explicit Vault gateway.');
-    vaultController = VaultController(gateway: vault, personId: personId)
-      ..addListener(_notify);
-    registryController = AgentRegistryController(
-      gateway: owners.registry,
-      canOperate: () =>
-          !_busy &&
-          !_sealed &&
-          !_disposed &&
-          _locking == null &&
-          vaultState == AgentVaultState.ready,
-      onFatalFailure: (error) => _failFromError(error, 'storage_unavailable'),
-    )..addListener(_notify);
-    memoryController = AgentMemoryController(
-      memoryGateway: owners.memory,
-      reviewGateway: owners.memoryReview,
-      personId: personId,
-      canOperate: () =>
-          !_busy &&
-          !registryController.busy &&
-          !_sealed &&
-          !_disposed &&
-          _locking == null &&
-          vaultState == AgentVaultState.ready,
-      onFatalFailure: (error) => _failFromError(error, 'storage_unavailable'),
-    )..addListener(_notify);
+    if (vault == null || vault.personId != personId) {
+      throw ArgumentError('Conversation requires the admitted Person’s shared Vault readiness.');
+    }
+    vaultController = vault..addListener(_vaultChanged);
     _conversationRuntime.readModel.addListener(_notify);
   }
 
@@ -100,12 +75,7 @@ final class ConversationController extends ChangeNotifier {
   String? _observedRunId;
   AgentConversationTurnRequest? _conversationRun;
   late final VaultController vaultController;
-  AgentVaultState? get vaultState => vaultController.state;
   bool _sealed = false;
-  Completer<void>? _operationDone;
-  Future<void>? _locking;
-  late final AgentRegistryController registryController;
-  late final AgentMemoryController memoryController;
   final Map<String, AgentInteractionSnapshot> _interactions = {};
   final Set<String> _interactionBusy = {};
   final Map<String, String> _interactionFailures = {};
@@ -129,10 +99,9 @@ final class ConversationController extends ChangeNotifier {
       !_busy &&
       !_sealed &&
       !_disposed &&
-      _locking == null &&
       !needsReload &&
       !needsRecovery &&
-      vaultState == AgentVaultState.ready &&
+      vaultController.ready &&
       session?.id == snapshot.sessionId &&
       session?.personId == personId &&
       !_interactionBusy.contains(snapshot.id) &&
@@ -147,10 +116,9 @@ final class ConversationController extends ChangeNotifier {
       !_busy &&
       !_sealed &&
       !_disposed &&
-      _locking == null &&
       !needsReload &&
       !needsRecovery &&
-      vaultState == AgentVaultState.ready &&
+      vaultController.ready &&
       session?.id == snapshot.sessionId &&
       session?.personId == personId &&
       !_interactionBusy.contains(snapshot.id) &&
@@ -397,28 +365,21 @@ final class ConversationController extends ChangeNotifier {
     _interactionFailures.clear();
   }
 
-  bool get usesVault => owners.vault != null;
   bool get isGeneralConversation => session != null;
   bool get isConnectedConversation => isGeneralConversation;
   bool get isPersonalConversation => isGeneralConversation;
 
-  bool get busy =>
-      _busy ||
-      vaultController.busy ||
-      registryController.busy ||
-      memoryController.busy;
+  bool get busy => _busy || vaultController.busy;
   bool get running => _runSession != null;
   bool get needsRecovery => session?.activeTurn != null && !running;
   ConversationRuntimeGateway get _conversationRuntime =>
       gateway.conversationRuntime;
-  bool get _conversationBusy =>
-      _busy || registryController.busy || memoryController.busy;
+  bool get _conversationBusy => _busy || !vaultController.ready;
   bool get canStartConversation => !_conversationBusy && !_disposed && !running;
   bool get canSend =>
       !_conversationBusy &&
       !_disposed &&
       !_sealed &&
-      _locking == null &&
       !needsReload &&
       !needsRecovery &&
       session != null &&
@@ -440,25 +401,13 @@ final class ConversationController extends ChangeNotifier {
 
   Future<void> load({bool newSession = false}) async {
     if (_disposed) return;
-    if (_locking case final locking?) {
-      await locking;
-    }
-    if (busy || _disposed) return;
+    if (busy || _disposed || !vaultController.ready) return;
     _sealed = false;
     _lastConversationRunId = null;
     _begin();
     progress = AgentProgress.loading;
     _notify();
     try {
-      await vaultController.open().timeout(loadTimeout);
-      if (_sealed) return;
-      if (vaultState != AgentVaultState.ready) {
-        throw const AgentVaultException(
-          'vault_unavailable',
-          reloadRequired: true,
-          sealSession: true,
-        );
-      }
       final conversation = gateway;
       final resumed = newSession
           ? null
@@ -466,6 +415,7 @@ final class ConversationController extends ChangeNotifier {
       if (_sealed || _disposed) return;
       final saved = resumed ??
           await conversation.startConversation(personId).timeout(loadTimeout);
+      if (_sealed || _disposed || !vaultController.ready) return;
       _acceptSession(saved);
       await _conversationRuntime
           .synchronizeConversation(saved)
@@ -680,40 +630,15 @@ final class ConversationController extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
-  Future<void> unlock({bool create = false}) async {
-    if (busy || _disposed || _locking != null || owners.vault == null) {
-      return;
+  void _vaultChanged() {
+    if (_disposed) return;
+    if (!vaultController.ready) {
+      _sealed = true;
+      _clearInteractions();
+      session = null;
+      messages = [];
     }
-    _sealed = false;
-    _begin();
-    progress = AgentProgress.loading;
-    _clearFailure();
     _notify();
-    try {
-      final state = create
-          ? await vaultController.create()
-          : await vaultController.unlock();
-      if (_sealed) return;
-      if (state != AgentVaultState.ready) {
-        throw const AgentVaultException(
-          'vault_unavailable',
-          reloadRequired: true,
-          sealSession: true,
-        );
-      }
-      final resumed = await gateway.resumeConversation(personId);
-      if (_sealed || _disposed) return;
-      final saved = resumed ?? await gateway.startConversation(personId);
-      _acceptSession(saved);
-      await _conversationRuntime.synchronizeConversation(saved);
-      needsReload = false;
-    } on Object catch (error) {
-      _failFromError(error, 'vault_unavailable');
-    } finally {
-      _end();
-      progress = AgentProgress.idle;
-      _notify();
-    }
   }
 
   void detachView() {
@@ -729,39 +654,12 @@ final class ConversationController extends ChangeNotifier {
     _notify();
   }
 
-  Future<void> lockVault() =>
-      _locking ??= _lock().whenComplete(() => _locking = null);
-
-  Future<void> _lock() async {
-    _sealed = true;
-    _clearInteractions();
-    registryController.clear();
-    memoryController.clear();
-    session = null;
-    messages = [];
-    _lastConversationRunId = null;
-    _notify();
-    try {
-      await vaultController.lock();
-      _clearFailure();
-      needsReload = false;
-    } on Object {
-      _fail('vault_unavailable', reloadRequired: true, sealSession: true);
-    } finally {
-      progress = AgentProgress.idle;
-      _notify();
-    }
-  }
-
   void _begin() {
     _busy = true;
-    _operationDone = Completer<void>();
   }
 
   void _end() {
     _busy = false;
-    _operationDone?.complete();
-    _operationDone = null;
   }
 
   void _clearFailure() {
@@ -782,6 +680,11 @@ final class ConversationController extends ChangeNotifier {
   };
 
   void _applyOwnerFailure(OwnerFailure owner) {
+    if (!_sealed && vaultController.ready) {
+      vaultController.reportFailure(AgentVaultException.fromAppWire(
+        owner.reason, ownerFailure: owner,
+      ));
+    }
     _fail(
       owner.reason,
       recoveryAction: owner.recovery,
@@ -849,8 +752,6 @@ final class ConversationController extends ChangeNotifier {
     needsReload = reloadRequired ?? false;
     if (sealSession ?? false) {
       _sealed = true;
-      registryController.clear();
-      memoryController.clear();
       session = null;
       messages = [];
     }
@@ -860,10 +761,7 @@ final class ConversationController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _conversationRuntime.readModel.removeListener(_notify);
-    vaultController.removeListener(_notify);
-    vaultController.dispose();
-    registryController.removeListener(_notify);
-    memoryController.removeListener(_notify);
+    vaultController.removeListener(_vaultChanged);
     super.dispose();
   }
 

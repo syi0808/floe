@@ -490,8 +490,6 @@ final class PairingSnapshot {
         'starting',
         'awaiting_local_confirmation',
         'awaiting_gateway_approval',
-        'verifying',
-        'committing',
         'connected',
         'rejected',
         'expired',
@@ -529,34 +527,76 @@ final class PairingSnapshot {
   final int? nextObservationAfterMs;
 }
 
-final class ProcessingDisclosure {
-  const ProcessingDisclosure({
-    required this.current,
-    required this.requested,
-    required this.categories,
-    required this.scopeLabels,
-  });
-  factory ProcessingDisclosure.fromJson(Object? value) {
-    final j = connectionObject(value, {
-      'current',
-      'requested',
-      'categories',
-      'scope_labels',
-    }, {});
-    return ProcessingDisclosure(
-      current: SourceProcessing.parse(j['current']),
-      requested: SourceProcessing.parse(j['requested']),
-      categories: _list(
-        j['categories'],
-        (v) => _choice(v, {'personal', 'highly_sensitive'}),
-      ),
-      scopeLabels: _list(j['scope_labels'], _text),
+final class ProcessingScope {
+  const ProcessingScope({required this.processing, required this.categories});
+  factory ProcessingScope.fromJson(Object? value) {
+    final tagged = connectionObject(value, {'kind'}, {'categories'});
+    final processing = SourceProcessing.parse(tagged['kind']);
+    if (processing == SourceProcessing.deviceOnly) {
+      connectionObject(value, {'kind'});
+      return const ProcessingScope(processing: SourceProcessing.deviceOnly, categories: []);
+    }
+    final j = connectionObject(value, {'kind', 'categories'});
+    final categories = _list(j['categories'],
+        (v) => _choice(v, {'metadata', 'content', 'derived'}), 3);
+    if (categories.isEmpty || categories.toSet().length != categories.length) {
+      throw const FormatException('Invalid processing categories.');
+    }
+    return ProcessingScope(processing: processing, categories: categories);
+  }
+  final SourceProcessing processing;
+  final List<String> categories;
+  String get label => processing == SourceProcessing.deviceOnly
+      ? 'This device only'
+      : 'This device and verified Gateway (${categories.join(', ')})';
+}
+
+final class ViewProcessingDisclosure {
+  const ViewProcessingDisclosure({required this.viewId, required this.dataClass,
+    required this.dataCategories, required this.current, required this.requested});
+  factory ViewProcessingDisclosure.fromJson(Object? value) {
+    final j = connectionObject(value, {'view_id', 'data_class', 'data_categories', 'current', 'requested'});
+    final categories = _list(j['data_categories'],
+        (v) => _choice(v, {'metadata', 'content', 'derived'}), 3);
+    if (categories.toSet().length != categories.length ||
+        categories.isEmpty != (j['current'] == null && j['requested'] == null)) {
+      throw const FormatException('Invalid reviewed data categories.');
+    }
+    return ViewProcessingDisclosure(
+      viewId: _text(j['view_id']),
+      dataClass: _choice(j['data_class'], {'personal', 'highly_sensitive'}),
+      dataCategories: categories,
+      current: j['current'] == null ? null : ProcessingScope.fromJson(j['current']),
+      requested: j['requested'] == null ? null : ProcessingScope.fromJson(j['requested']),
     );
   }
-  final SourceProcessing current;
-  final SourceProcessing requested;
-  final List<String> categories;
-  final List<String> scopeLabels;
+  final String viewId;
+  final String dataClass;
+  final List<String> dataCategories;
+  final ProcessingScope? current;
+  final ProcessingScope? requested;
+  String get dataClassLabel => dataClass == 'highly_sensitive' ? 'Highly sensitive' : 'Personal';
+  bool get isDerivedHealth => viewId == 'wellbeing.derived' &&
+      dataClass == 'highly_sensitive' && dataCategories.length == 1 &&
+      dataCategories.single == 'derived';
+  bool get expandsGateway => requested?.processing == SourceProcessing.gatewayAllowed &&
+      (current?.processing != SourceProcessing.gatewayAllowed ||
+          requested!.categories.any((category) => !current!.categories.contains(category)));
+}
+
+final class ProcessingDisclosure {
+  const ProcessingDisclosure({required this.views});
+  factory ProcessingDisclosure.fromJson(Object? value, {required bool observe}) {
+    final j = connectionObject(value, {'views'});
+    final views = _list(j['views'], ViewProcessingDisclosure.fromJson, 64);
+    if (views.map((view) => view.viewId).toSet().length != views.length ||
+        (observe && views.isEmpty) ||
+        views.any((view) => (view.requested != null) != observe)) {
+      throw const FormatException('Invalid per-view processing disclosure.');
+    }
+    return ProcessingDisclosure(views: views);
+  }
+  final List<ViewProcessingDisclosure> views;
 }
 
 final class SourceReview {
@@ -589,6 +629,7 @@ final class SourceReview {
       permittedChoices: _list(j['permitted_choices'], ResourceChoice.fromJson),
       processingDisclosure: ProcessingDisclosure.fromJson(
         j['processing_disclosure'],
+        observe: false,
       ),
       expiresAt: _time(j['expires_at']),
       allowedActions: _actions(j['allowed_actions'], {'configure'}),
@@ -624,14 +665,19 @@ final class ObserveReview {
       'expires_at',
       'allowed_actions',
     }, {});
+    final members = _list(j['display_members'], _text, 64);
+    final disclosure = ProcessingDisclosure.fromJson(j['processing_disclosure'], observe: true);
+    if (members.length != disclosure.views.length ||
+        members.toSet().length != members.length ||
+        disclosure.views.any((view) => !members.contains(view.viewId))) {
+      throw const FormatException('Reviewed View scope mismatch.');
+    }
     return ObserveReview(
       reviewRef: ObserveReviewRef.fromJson(j['review_ref']),
       sourceRef: SourceRef(_uuid(j['source_ref'])),
       sourceRevision: _revision(j['source_revision']),
-      displayMembers: _list(j['display_members'], _text),
-      processingDisclosure: ProcessingDisclosure.fromJson(
-        j['processing_disclosure'],
-      ),
+      displayMembers: members,
+      processingDisclosure: disclosure,
       expiresAt: _time(j['expires_at']),
       allowedActions: _actions(j['allowed_actions'], {'allow', 'decline'}),
     );

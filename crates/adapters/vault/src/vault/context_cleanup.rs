@@ -6,8 +6,6 @@ use uuid::Uuid;
 use super::access_grants::AccessGrantCleanup;
 use super::*;
 
-// Version 2 retains coverage invalidation evidence; Session replay caches no longer exist.
-const CONTEXT_CLEANUP_SCHEMA_VERSION: i64 = 2;
 const MAX_CONTEXT_CLEANUP_BATCH: usize = 16;
 const MAX_CONTEXT_CLEANUP_ROWS: i64 = 4096;
 const MAX_CONTEXT_CLEANUP_BYTES: i64 = 4 * 1024 * 1024;
@@ -42,106 +40,13 @@ impl CleanupBudget {
     }
 }
 
-pub(super) async fn initialize_context_cleanup_store(
-    transaction: &Transaction<'_>,
-    person_id: PersonId,
-    create_if_missing: bool,
-) -> Result<(), AgentFailure> {
-    let mut tables = transaction
-        .query(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN (?, ?, ?)",
-            (
-                "agent_context_cleanup_schema",
-                "agent_context_cleanup_applied",
-                "agent_context_cleanup_suppression",
-            ),
-        )
-        .await
-        .map_err(storage)?;
-    let mut found = Vec::new();
-    while let Some(row) = tables.next().await.map_err(storage)? {
-        found.push(row.get::<String>(0).map_err(storage)?);
-    }
-    found.sort();
-    let expected = vec![
-        "agent_context_cleanup_applied".to_owned(),
-        "agent_context_cleanup_schema".to_owned(),
-        "agent_context_cleanup_suppression".to_owned(),
-    ];
-    if found.is_empty() {
-        if !create_if_missing {
-            return Err(AgentFailure::VaultUnavailable);
-        }
-        transaction
-            .execute(
-                "CREATE TABLE agent_context_cleanup_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE TABLE agent_context_cleanup_applied (cleanup_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, grant_id TEXT NOT NULL, invalidated_incarnation TEXT NOT NULL, invalidated_epoch INTEGER NOT NULL, payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 65536), coverage_cursor INTEGER NOT NULL DEFAULT 0, coverage_complete INTEGER NOT NULL CHECK (coverage_complete IN (0, 1)))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE TABLE agent_context_cleanup_suppression (cleanup_id TEXT NOT NULL, person_id TEXT NOT NULL, session_id TEXT NOT NULL, turn_id TEXT NOT NULL, grant_id TEXT NOT NULL, invalidated_incarnation TEXT NOT NULL, invalidated_epoch INTEGER NOT NULL, payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 65536), PRIMARY KEY (cleanup_id, session_id, turn_id))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE INDEX agent_context_cleanup_suppression_turn_idx ON agent_context_cleanup_suppression (person_id, session_id, turn_id)",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "INSERT INTO agent_context_cleanup_schema (id, version) VALUES (1, 2)",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        return Ok(());
-    }
-    if found != expected {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    validate_context_cleanup_store(transaction, person_id).await
-}
-
 async fn validate_context_cleanup_store(
     transaction: &Transaction<'_>,
     person_id: PersonId,
 ) -> Result<(), AgentFailure> {
-    let mut marker = transaction
-        .query("SELECT id, version FROM agent_context_cleanup_schema", ())
+    crate::schema::inspect_family(transaction, crate::schema::Family::Cleanup)
         .await
-        .map_err(storage)?;
-    let Some(row) = marker.next().await.map_err(storage)? else {
-        return Err(AgentFailure::VaultUnavailable);
-    };
-    if row.get::<i64>(0).map_err(storage)? != 1
-        || row.get::<i64>(1).map_err(storage)? != CONTEXT_CLEANUP_SCHEMA_VERSION
-        || marker.next().await.map_err(storage)?.is_some()
-    {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    let mut indexes = transaction
-        .query(
-            "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'agent_context_cleanup_suppression_turn_idx'",
-            (),
-        )
-        .await
-        .map_err(storage)?;
-    if indexes.next().await.map_err(storage)?.is_none() {
-        return Err(AgentFailure::VaultUnavailable);
-    }
+        .map_err(crate::schema::SchemaFailure::into_agent)?;
     let mut applied = transaction
         .query(
             "SELECT cleanup_id, person_id, grant_id, invalidated_incarnation, invalidated_epoch, payload, coverage_cursor, coverage_complete FROM agent_context_cleanup_applied LIMIT ?",
@@ -178,46 +83,22 @@ async fn validate_context_cleanup_store(
 async fn validate_context_cleanup_runtime(
     transaction: &Transaction<'_>,
 ) -> Result<(), AgentFailure> {
-    let mut marker = transaction
-        .query(
-            "SELECT id, version FROM agent_context_cleanup_schema WHERE id = 1",
-            (),
-        )
+    crate::schema::inspect_family(transaction, crate::schema::Family::Cleanup)
         .await
-        .map_err(storage)?;
-    let Some(row) = marker.next().await.map_err(storage)? else {
-        return Err(AgentFailure::VaultUnavailable);
-    };
-    if row.get::<i64>(0).map_err(storage)? != 1
-        || row.get::<i64>(1).map_err(storage)? != CONTEXT_CLEANUP_SCHEMA_VERSION
-        || marker.next().await.map_err(storage)?.is_some()
-    {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    for query in [
-        "SELECT cleanup_id, person_id, grant_id, invalidated_incarnation, invalidated_epoch, payload, coverage_cursor, coverage_complete FROM agent_context_cleanup_applied LIMIT 0",
-        "SELECT cleanup_id, person_id, session_id, turn_id, grant_id, invalidated_incarnation, invalidated_epoch, payload FROM agent_context_cleanup_suppression LIMIT 0",
-    ] {
-        transaction.query(query, ()).await.map_err(storage)?;
-    }
-    Ok(())
+        .map_err(crate::schema::SchemaFailure::into_agent)
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    pub(super) async fn initialize_context_cleanup(
-        &self,
-        create_if_missing: bool,
-    ) -> Result<(), AgentFailure> {
+    pub(super) async fn validate_context_cleanup(&self) -> Result<(), AgentFailure> {
         let mut connection = self.connection()?;
         let transaction = connection
-            .transaction_with_behavior(turso::transaction::TransactionBehavior::Immediate)
+            .transaction_with_behavior(turso::transaction::TransactionBehavior::Deferred)
             .await
             .map_err(|error| match error {
                 turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::Conflict,
                 _ => AgentFailure::StorageUnavailable,
             })?;
-        let result =
-            initialize_context_cleanup_store(&transaction, self.person_id, create_if_missing).await;
+        let result = validate_context_cleanup_store(&transaction, self.person_id).await;
         self.finish_access_grant_transaction(transaction, result)
             .await
     }

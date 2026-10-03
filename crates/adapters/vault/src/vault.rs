@@ -25,6 +25,8 @@ mod authority_keys;
 mod connection_reviews;
 mod context_cleanup;
 mod context_dependencies;
+mod creation;
+pub use creation::{VaultPresence, inspect_vault_presence};
 mod conversation_delegation_recovery;
 mod conversation_interactions;
 mod conversations;
@@ -32,11 +34,13 @@ mod expert_actions;
 pub(crate) mod expert_binding_reviews;
 pub use expert_actions::VaultExpertProposalReader;
 mod gateway_authority;
+mod gateway_pairing_store;
 mod keyring;
 mod learning;
 mod preflight;
 mod registry;
 pub use gateway_authority::{VaultAuthorizationSigner, VaultEnrollmentSigner};
+mod schema_lifecycle;
 mod session_archive;
 mod tasks;
 pub use access_grants::AccessGrantCleanup;
@@ -44,7 +48,7 @@ pub use conversations::{
     VaultConversationActivation, VaultConversationAdmission, VaultConversationCancelAdmission,
     VaultConversationCancelReceipt, VaultConversationCancelRequest, VaultConversationJournalEntry,
 };
-pub use keyring::KeyringVaultKeys;
+pub use keyring::{KeyringVaultKeys, VaultKeyReadFailure};
 pub use preflight::{
     VaultOpenInspection, VaultResetEvidence, VaultResetReason, inspect_existing_vault,
 };
@@ -80,6 +84,17 @@ impl VaultKey {
 
 pub trait VaultKeyProvider: Send + Sync {
     fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<VaultKey, AgentFailure>;
+
+    /// Preflight uses the same provider as ordinary open. Only a provider that
+    /// can prove exact absence or malformed material may classify it that way.
+    fn inspect_existing(
+        &self,
+        person_id: PersonId,
+        vault_id: Uuid,
+    ) -> Result<VaultKey, VaultKeyReadFailure> {
+        self.load(person_id, vault_id)
+            .map_err(VaultKeyReadFailure::Unavailable)
+    }
 
     fn insert(
         &self,
@@ -175,6 +190,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             })?;
         let host_lock = lock_directory(&directory)?;
         let vault_id = Uuid::new_v4();
+        let pending_creation = creation::PendingCreation::begin(&directory, person_id, vault_id)?;
         let mut marker = private_file()
             .create_new(true)
             .open(directory.join("vault.id"))
@@ -213,31 +229,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             task_executor_generation: AtomicU64::new(0),
             _host_lock: host_lock,
         };
-        let connection = vault.connection()?;
-        connection.execute("CREATE TABLE vault_identity (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL, person_id TEXT NOT NULL, vault_id TEXT NOT NULL)", ()).await.map_err(unavailable)?;
-        connection
-            .execute(
-                "INSERT INTO vault_identity VALUES (1, 1, ?, ?)",
-                (person_id.to_string(), vault_id.to_string()),
-            )
-            .await
-            .map_err(unavailable)?;
-        connection.execute("CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL)", ()).await.map_err(unavailable)?;
-        vault.initialize_session_archive().await?;
-        vault.initialize_learning_store(true).await?;
-        vault.initialize_access_grant_store().await?;
-        vault.initialize_connection_reviews(true).await?;
-        vault.initialize_actions_store().await?;
-        vault.initialize_expert_binding_reviews().await?;
-        vault.initialize_context_dependencies().await?;
-        vault.initialize_conversation_store().await?;
-        vault.initialize_task_store().await?;
-        vault.initialize_context_cleanup(true).await?;
-        vault.initialize_remote_authority_store(true).await?;
+        vault.create_schema().await?;
+        vault.validate_stored_records().await?;
         vault.checkpoint().await?;
+        File::open(&path)
+            .and_then(|file| file.sync_all())
+            .map_err(unavailable)?;
         File::open(&directory)
             .and_then(|directory| directory.sync_all())
             .map_err(unavailable)?;
+        pending_creation.finish()?;
         Ok(vault)
     }
 
@@ -246,6 +247,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let directory = root.join(person_id.to_string());
         private_directory(&directory)?;
         let host_lock = lock_directory(&directory)?;
+        creation::ensure_complete(&directory, person_id)?;
         let mut marker = String::new();
         private_file()
             .open(directory.join("vault.id"))
@@ -282,6 +284,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             _host_lock: host_lock,
         };
         let connection = vault.connection()?;
+        crate::schema::inspect(&connection, crate::schema::Layout::Encrypted)
+            .await
+            .map_err(crate::schema::SchemaFailure::into_agent)?;
         let mut rows = connection
             .query(
                 "SELECT version, person_id, vault_id FROM vault_identity WHERE id = 1",
@@ -294,7 +299,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(unavailable)?
             .ok_or(AgentFailure::VaultUnavailable)?;
-        if ![1, 2].contains(&identity.get::<i64>(0).map_err(unavailable)?)
+        if identity.get::<i64>(0).map_err(unavailable)? != crate::schema::ENCRYPTED_LAYOUT_VERSION
             || identity.get::<String>(1).map_err(unavailable)? != person_id.to_string()
             || identity.get::<String>(2).map_err(unavailable)? != vault_id.to_string()
         {
@@ -307,39 +312,27 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             )
             .await
             .map_err(unavailable)?;
-        vault.reject_obsolete_policy_schemas().await?;
-        vault.initialize_learning_store(false).await?;
-        vault.initialize_session_archive().await?;
-        vault.initialize_access_grant_store().await?;
-        vault.initialize_connection_reviews(false).await?;
-        vault.validate_actions_store().await?;
-        vault.validate_expert_binding_reviews().await?;
-        vault.initialize_context_dependencies().await?;
-        vault.initialize_conversation_store().await?;
-        vault.initialize_task_store().await?;
-        vault.initialize_context_cleanup(false).await?;
-        vault.initialize_remote_authority_store(false).await?;
-        vault.expert_registry().await?;
+        vault.validate_stored_records().await?;
         Ok(vault)
+    }
+
+    async fn validate_stored_records(&self) -> Result<(), AgentFailure> {
+        self.validate_session_archive_records().await?;
+        self.validate_access_grant_store().await?;
+        self.validate_actions_store().await?;
+        self.validate_expert_binding_reviews().await?;
+        self.validate_context_dependencies().await?;
+        let connection = self.connection()?;
+        conversations::validate_schema(&connection).await?;
+        tasks::validate_schema(&connection).await?;
+        self.validate_context_cleanup().await?;
+        self.validate_owner_key().await?;
+        self.expert_registry().await?;
+        self.check_access()
     }
 
     pub async fn create_session(&self) -> Result<AgentSession, AgentFailure> {
         self.insert_session(AgentSession::new(self.person_id)).await
-    }
-
-    async fn reject_obsolete_policy_schemas(&self) -> Result<(), AgentFailure> {
-        let connection = self.connection()?;
-        let mut rows = connection
-            .query(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('calendar_grant_policy_schema', 'calendar_grant_policies', 'calendar_grant_mappings', 'remote_view_grant_schema', 'remote_view_grant_mappings', 'personal_feasibility_review_schema', 'personal_feasibility_reviews', 'personal_grant_schema', 'personal_grant_policies', 'personal_feasibility_queries')",
-                (),
-            )
-            .await
-            .map_err(unavailable)?;
-        if rows.next().await.map_err(unavailable)?.is_some() {
-            return Err(AgentFailure::UnsupportedVersion);
-        }
-        Ok(())
     }
 
     /// The Session store Conversation drives, backed by this vault.
@@ -422,20 +415,28 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .query("PRAGMA wal_checkpoint(TRUNCATE)", ())
             .await
             .map_err(storage)?;
-        while rows.next().await.map_err(storage)?.is_some() {}
+        let row = rows
+            .next()
+            .await
+            .map_err(storage)?
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        if row.get::<i64>(0).map_err(storage)? != 0 || rows.next().await.map_err(storage)?.is_some()
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
         Ok(())
     }
 
-    async fn initialize_context_dependencies(&self) -> Result<(), AgentFailure> {
+    async fn validate_context_dependencies(&self) -> Result<(), AgentFailure> {
         let mut connection = self.connection()?;
         let transaction = connection
-            .transaction_with_behavior(turso::transaction::TransactionBehavior::Immediate)
+            .transaction_with_behavior(turso::transaction::TransactionBehavior::Deferred)
             .await
             .map_err(|error| match error {
                 turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::Conflict,
                 _ => AgentFailure::StorageUnavailable,
             })?;
-        let result = context_dependencies::initialize_context_dependency_store(&transaction).await;
+        let result = context_dependencies::validate_context_dependency_store(&transaction).await;
         self.finish_access_grant_transaction(transaction, result)
             .await
     }

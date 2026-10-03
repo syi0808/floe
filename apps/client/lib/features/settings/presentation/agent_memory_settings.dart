@@ -8,6 +8,7 @@ import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/knowledge/application/agent_memory_controller.dart';
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
 import 'package:floe_client/features/settings/presentation/agent_memory_review_settings.dart';
+import 'package:floe_client/features/vault/application/vault_controller.dart';
 
 final class AgentMemorySettingsCard extends StatelessWidget {
   const AgentMemorySettingsCard({
@@ -65,15 +66,62 @@ final class AgentMemorySettingsCard extends StatelessWidget {
   );
 }
 
-final class AgentMemorySettings extends StatelessWidget {
+final class AgentMemorySettings extends StatefulWidget {
   const AgentMemorySettings({
     super.key,
     required this.controller,
+    required this.vault,
     required this.onBack,
   });
 
   final AgentMemoryController controller;
+  final VaultController vault;
   final VoidCallback onBack;
+
+  @override
+  State<AgentMemorySettings> createState() => _AgentMemorySettingsState();
+}
+
+final class _AgentMemorySettingsState extends State<AgentMemorySettings> {
+  AgentMemoryController get controller => widget.controller;
+  bool _wasReady = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.vault.addListener(_readinessChanged);
+    _readinessChanged();
+  }
+
+  @override
+  void didUpdateWidget(AgentMemorySettings oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.vault != widget.vault || oldWidget.controller != controller) {
+      oldWidget.vault.removeListener(_readinessChanged);
+      widget.vault.addListener(_readinessChanged);
+      _wasReady = false;
+      _readinessChanged();
+    }
+  }
+
+  void _readinessChanged() {
+    final ready = widget.vault.ready;
+    if (!_wasReady && ready) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted || !widget.vault.ready) return;
+        await controller.loadReview();
+        if (!mounted || !widget.vault.ready) return;
+        await controller.load();
+      });
+    }
+    _wasReady = ready;
+  }
+
+  @override
+  void dispose() {
+    widget.vault.removeListener(_readinessChanged);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -88,7 +136,7 @@ final class AgentMemorySettings extends StatelessWidget {
             child: FloeButton.text(
               key: const ValueKey('memory-back'),
               icon: const Icon(LucideIcons.arrowLeft, size: 18),
-              onPressed: onBack,
+              onPressed: widget.onBack,
               child: const Text('Data & privacy'),
             ),
           ),

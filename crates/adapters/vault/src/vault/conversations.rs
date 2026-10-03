@@ -11,7 +11,6 @@ use turso::transaction::{Transaction, TransactionBehavior};
 
 use super::*;
 
-const SCHEMA_VERSION: i64 = 9;
 const MAX_RUN_RECORD_BYTES: usize = 128 * 1024;
 const MAX_JOURNAL_ENTRY_BYTES: usize = floe_agent_contract::MAX_TASK_RECEIPT_BYTES + 4096;
 const MAX_RUN_ROWS: i64 = 4_096;
@@ -62,17 +61,6 @@ pub struct VaultConversationJournalEntry {
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    pub(super) async fn initialize_conversation_store(&self) -> Result<(), AgentFailure> {
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(|error| self.registry_transaction_start_error(error))?;
-        let result = initialize(&transaction).await;
-        self.finish_registry_transaction_checked(transaction, result)
-            .await
-    }
-
     pub async fn activate_conversation_executor(
         &self,
     ) -> Result<VaultConversationActivation, AgentFailure> {
@@ -82,7 +70,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
-            initialize(&transaction).await?;
+            validate_schema(&transaction).await?;
             let current_generation = executor_generation(&transaction).await?;
             let next_generation = current_generation
                 .checked_add(1)
@@ -152,7 +140,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             TurnInput::NewMessage(message) => message.message_id,
             TurnInput::ExistingMessage { message_id } => *message_id,
         };
-        initialize(transaction).await?;
+        validate_schema(transaction).await?;
         if session_command_on(transaction, self.person_id, request.command_id)
             .await?
             .is_some()
@@ -419,7 +407,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
-            initialize(&transaction).await?;
+            validate_schema(&transaction).await?;
             if session_command_on(&transaction, self.person_id, request.command_id).await?.is_some() { return Err(AgentFailure::Conflict); }
             let mut existing = transaction
                 .query(
@@ -775,8 +763,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
-            initialize(&transaction).await?;
-            super::conversation_interactions::initialize(&transaction).await?;
+            validate_schema(&transaction).await?;
+            super::conversation_interactions::validate_schema(&transaction).await?;
             let current = self
                 .conversation_run_on(&transaction, commit.run_id)
                 .await?
@@ -1032,7 +1020,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
-            initialize(&transaction).await?;
+            validate_schema(&transaction).await?;
             let mut receipts = transaction.query("SELECT person_id, session_id, expected_revision, result_revision FROM agent_conversation_recovery_commands WHERE command_id = ?", [command_id.as_uuid().to_string()]).await.map_err(storage)?;
             if let Some(row) = receipts.next().await.map_err(storage)? {
                 let revision = u64::try_from(row.get::<i64>(3).map_err(storage)?).map_err(|_| AgentFailure::StorageUnavailable)?;
@@ -1137,16 +1125,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 
     /// The origin group admits a child only once every card is terminal
-    /// and at least one resolved. Missing tables or rows conflict: nothing
-    /// was ever reviewed for this origin.
+    /// and at least one resolved. Missing rows conflict: nothing was reviewed.
     async fn check_resume_group(
         &self,
         transaction: &Transaction<'_>,
         origin_run_id: RunId,
     ) -> Result<(), AgentFailure> {
-        if !table_exists(transaction, "agent_conversation_interactions").await? {
-            return Err(AgentFailure::Conflict);
-        }
         let mut rows = transaction
             .query(
                 "SELECT state FROM agent_conversation_interactions WHERE origin_run_id = ?",
@@ -1184,190 +1168,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 }
 
-async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
-    let mut tables = transaction
-        .query(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('agent_conversation_schema', 'agent_conversation_executor', 'agent_conversation_runs', 'agent_conversation_journal', 'agent_conversation_commands', 'agent_conversation_resume_slots', 'agent_conversation_resume_requests', 'agent_conversation_review_audits', 'agent_conversation_terminal_receipts', 'agent_conversation_session_commands', 'agent_conversation_recovery_commands')",
-            (),
-        )
+pub(super) async fn validate_schema(transaction: &turso::Connection) -> Result<(), AgentFailure> {
+    crate::schema::inspect_family(transaction, crate::schema::Family::Conversation)
         .await
-        .map_err(storage)?;
-    let mut found = Vec::new();
-    while let Some(row) = tables.next().await.map_err(storage)? {
-        found.push(row.get::<String>(0).map_err(storage)?);
-    }
-    found.sort();
-    if found.is_empty() {
-        transaction
-            .execute(
-                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 9))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE TABLE agent_conversation_executor (id INTEGER PRIMARY KEY CHECK (id = 1), generation INTEGER NOT NULL CHECK (generation >= 0))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE TABLE agent_conversation_runs (run_id TEXT PRIMARY KEY, command_id TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL, person_id TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('working', 'blocked', 'completed', 'failed', 'cancelled', 'timed_out', 'interrupted')), aggregate_revision INTEGER NOT NULL CHECK (aggregate_revision > 0), journal_revision INTEGER NOT NULL CHECK (journal_revision >= 0), executor_generation INTEGER NOT NULL CHECK (executor_generation > 0), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 131072))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE TABLE agent_conversation_journal (run_id TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision > 0), kind TEXT NOT NULL, payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 1052672), PRIMARY KEY (run_id, revision), FOREIGN KEY (run_id) REFERENCES agent_conversation_runs(run_id))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE TABLE agent_conversation_commands (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('cancel_run')), target_id TEXT NOT NULL, FOREIGN KEY (target_id) REFERENCES agent_conversation_runs(run_id))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE TABLE agent_conversation_resume_slots (origin_run_id TEXT PRIMARY KEY, child_run_id TEXT NOT NULL, child_command_id TEXT NOT NULL, session_id TEXT NOT NULL, person_id TEXT NOT NULL, FOREIGN KEY (child_run_id) REFERENCES agent_conversation_runs(run_id))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction.execute(
-            "CREATE TABLE agent_conversation_resume_requests (origin_run_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, session_id TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('pending','claimed','superseded')), child_run_id TEXT, payload TEXT NOT NULL)", (),
-        ).await.map_err(storage)?;
-        transaction.execute("CREATE TABLE agent_conversation_recovery_commands (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, session_id TEXT NOT NULL REFERENCES agent_sessions(id), expected_revision INTEGER NOT NULL CHECK(expected_revision >= 0), result_revision INTEGER NOT NULL CHECK(result_revision >= 0))", ()).await.map_err(storage)?;
-        transaction.execute("CREATE TABLE agent_conversation_session_commands (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, session_id TEXT NOT NULL REFERENCES agent_sessions(id), initial_revision INTEGER NOT NULL CHECK(initial_revision = 0))", ()).await.map_err(storage)?;
-        transaction.execute("CREATE TABLE agent_conversation_terminal_receipts (run_id TEXT PRIMARY KEY REFERENCES agent_conversation_runs(run_id), digest TEXT NOT NULL CHECK(length(digest) = 64))", ()).await.map_err(storage)?;
-        transaction.execute(
-            "CREATE TABLE agent_conversation_review_audits (operation_id TEXT NOT NULL, run_id TEXT NOT NULL, person_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(run_id, operation_id))", (),
-        ).await.map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE INDEX agent_conversation_active_session ON agent_conversation_runs (session_id, state, run_id)",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 9)",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "INSERT INTO agent_conversation_executor (id, generation) VALUES (1, 0)",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        return Ok(());
-    }
-    if found
-        != [
-            "agent_conversation_commands".to_owned(),
-            "agent_conversation_executor".to_owned(),
-            "agent_conversation_journal".to_owned(),
-            "agent_conversation_recovery_commands".to_owned(),
-            "agent_conversation_resume_requests".to_owned(),
-            "agent_conversation_resume_slots".to_owned(),
-            "agent_conversation_review_audits".to_owned(),
-            "agent_conversation_runs".to_owned(),
-            "agent_conversation_schema".to_owned(),
-            "agent_conversation_session_commands".to_owned(),
-            "agent_conversation_terminal_receipts".to_owned(),
-        ]
-    {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    let mut marker = transaction
-        .query("SELECT id, version FROM agent_conversation_schema", ())
-        .await
-        .map_err(storage)?;
-    let row = marker
-        .next()
-        .await
-        .map_err(storage)?
-        .ok_or(AgentFailure::VaultUnavailable)?;
-    if row.get::<i64>(0).map_err(storage)? != 1
-        || row.get::<i64>(1).map_err(storage)? != SCHEMA_VERSION
-        || marker.next().await.map_err(storage)?.is_some()
-    {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    transaction
-        .query(
-            "SELECT run_id, command_id, session_id, person_id, state, aggregate_revision, journal_revision, executor_generation, payload FROM agent_conversation_runs LIMIT 0",
-            (),
-        )
-        .await
-        .map_err(storage)?;
-    transaction
-        .query(
-            "SELECT run_id, revision, kind, payload FROM agent_conversation_journal LIMIT 0",
-            (),
-        )
-        .await
-        .map_err(storage)?;
-    transaction
-        .query(
-            "SELECT command_id, person_id, kind, target_id FROM agent_conversation_commands LIMIT 0",
-            (),
-        )
-        .await
-        .map_err(storage)?;
-    transaction
-        .query(
-            "SELECT origin_run_id, child_run_id, child_command_id, session_id, person_id FROM agent_conversation_resume_slots LIMIT 0",
-            (),
-        )
-        .await
-        .map_err(storage)?;
-    let mut index = transaction
-        .query(
-            "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'agent_conversation_active_session' AND tbl_name = 'agent_conversation_runs'",
-            (),
-        )
-        .await
-        .map_err(storage)?;
-    if index.next().await.map_err(storage)?.is_none()
-        || index.next().await.map_err(storage)?.is_some()
-    {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    transaction.query("SELECT origin_run_id, person_id, session_id, state, child_run_id, payload FROM agent_conversation_resume_requests LIMIT 0", ()).await.map_err(storage)?;
-    transaction.query("SELECT operation_id, run_id, person_id, payload FROM agent_conversation_review_audits LIMIT 0", ()).await.map_err(storage)?;
-    transaction
-        .query(
-            "SELECT run_id, digest FROM agent_conversation_terminal_receipts LIMIT 0",
-            (),
-        )
-        .await
-        .map_err(storage)?;
-    transaction.query("SELECT command_id, person_id, session_id, initial_revision FROM agent_conversation_session_commands LIMIT 0", ()).await.map_err(storage)?;
-    transaction.query("SELECT command_id, person_id, session_id, expected_revision, result_revision FROM agent_conversation_recovery_commands LIMIT 0", ()).await.map_err(storage)?;
+        .map_err(crate::schema::SchemaFailure::into_agent)?;
     executor_generation(transaction).await?;
     Ok(())
-}
-
-async fn table_exists(transaction: &Transaction<'_>, table: &str) -> Result<bool, AgentFailure> {
-    let mut rows = transaction
-        .query(
-            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?",
-            [table],
-        )
-        .await
-        .map_err(storage)?;
-    Ok(rows.next().await.map_err(storage)?.is_some())
 }
 
 async fn read_record(
@@ -1741,7 +1547,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result: Result<Option<VaultConversationAdmission>, AgentFailure> = async {
-            initialize(&transaction).await?;
+            validate_schema(&transaction).await?;
             let (persisted, state, child_id) = resume_request_on(&transaction, self.person_id, request.request.origin_run_id).await?.ok_or(AgentFailure::Conflict)?;
             if persisted != request.request { return Err(AgentFailure::Conflict); }
             if state == "claimed" {
@@ -1825,7 +1631,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
-            initialize(&transaction).await?;
+            validate_schema(&transaction).await?;
             if let Some(receipt) = session_command_on(&transaction, self.person_id, request.command_id).await? {
                 let session = self.session_on(&transaction, receipt.session_id).await?;
                 if session.person_id != self.person_id || session.scope.is_some() || session.data_classes != [DataClass::Personal] { return Err(AgentFailure::StorageUnavailable); }

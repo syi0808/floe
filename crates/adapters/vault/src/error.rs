@@ -6,6 +6,8 @@ use thiserror::Error;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StoreErrorCode {
     Validation,
+    UnsupportedSchema,
+    StoredDataCorrupt,
     NotFound,
     Conflict,
     Storage,

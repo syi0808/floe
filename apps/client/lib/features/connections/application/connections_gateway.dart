@@ -1,5 +1,6 @@
 import 'package:floe_client/features/connections/domain/connection_models.dart';
 import 'package:floe_client/app/runtime/owner_failure.dart';
+import 'package:floe_client/app/runtime/native_transport.dart';
 
 abstract interface class ConnectionsGateway {
   Future<GatewaySetup> prepareGatewaySetup({
@@ -96,12 +97,11 @@ abstract interface class ConnectionsGateway {
 }
 
 /// Correlated safe failure data; no request payload or private transport data.
-final class ConnectionsRequestFailure implements Exception {
+sealed class ConnectionsRequestFailure implements Exception {
   const ConnectionsRequestFailure({
     required this.code,
     required this.reason,
     required this.requestId,
-    required this.commandId,
     required this.errorId,
     required this.ownerFailure,
   });
@@ -109,10 +109,33 @@ final class ConnectionsRequestFailure implements Exception {
   final String code;
   final String reason;
   final String requestId;
-  final String? commandId;
   final String errorId;
   final OwnerFailure? ownerFailure;
 
   @override
   String toString() => 'Connections request failed ($reason; $errorId).';
+}
+
+final class ConnectionsCommandFailure extends ConnectionsRequestFailure {
+  const ConnectionsCommandFailure({
+    required super.code,
+    required super.reason,
+    required super.requestId,
+    required super.errorId,
+    required super.ownerFailure,
+    required this.commandId,
+    required this.disposition,
+  });
+  final String commandId;
+  final NativeCommandDisposition disposition;
+}
+
+final class ConnectionsReadFailure extends ConnectionsRequestFailure {
+  const ConnectionsReadFailure({
+    required super.code,
+    required super.reason,
+    required super.requestId,
+    required super.errorId,
+    required super.ownerFailure,
+  });
 }

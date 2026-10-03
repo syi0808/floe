@@ -12,23 +12,11 @@ use turso::transaction::{Transaction, TransactionBehavior};
 
 use super::*;
 
-const SCHEMA_VERSION: i64 = 5;
 const MAX_TASK_JOURNAL_ENTRY_BYTES: usize = 128 * 1024;
 const MAX_TASK_JOURNAL_ENTRIES: usize = 512;
 const MAX_TASK_ROWS: i64 = 4_096;
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    pub(super) async fn initialize_task_store(&self) -> Result<(), AgentFailure> {
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(|error| self.registry_transaction_start_error(error))?;
-        let result = initialize(&transaction).await;
-        self.finish_registry_transaction_checked(transaction, result)
-            .await
-    }
-
     pub async fn activate_task_executor(&self) -> Result<TaskActivation, AgentFailure> {
         let mut connection = self.connection()?;
         let transaction = connection
@@ -36,7 +24,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
-            initialize(&transaction).await?;
+            validate_schema(&transaction).await?;
             let current_generation = executor_generation(&transaction).await?;
             let next_generation = current_generation
                 .checked_add(1)
@@ -643,151 +631,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 }
 
-async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
-    let mut tables = transaction
-        .query(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('agent_task_schema', 'agent_task_executor', 'agent_tasks', 'agent_task_journal')",
-            (),
-        )
+pub(super) async fn validate_schema(transaction: &turso::Connection) -> Result<(), AgentFailure> {
+    crate::schema::inspect_family(transaction, crate::schema::Family::Tasks)
         .await
-        .map_err(storage)?;
-    let mut found = Vec::new();
-    while let Some(row) = tables.next().await.map_err(storage)? {
-        found.push(row.get::<String>(0).map_err(storage)?);
-    }
-    found.sort();
-    if found.is_empty() {
-        transaction
-            .execute(
-                "CREATE TABLE agent_task_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 5))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE TABLE agent_task_executor (id INTEGER PRIMARY KEY CHECK (id = 1), generation INTEGER NOT NULL CHECK (generation >= 0))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE TABLE agent_tasks (task_id TEXT PRIMARY KEY, invocation_key TEXT NOT NULL UNIQUE, person_id TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('submitted', 'working', 'completed', 'blocked', 'failed', 'rejected', 'cancelled', 'timed_out', 'interrupted')), aggregate_revision INTEGER NOT NULL CHECK (aggregate_revision > 0), executor_generation INTEGER NOT NULL CHECK (executor_generation > 0), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 524288))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE INDEX agent_tasks_recovery ON agent_tasks (state, executor_generation, task_id)",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE TABLE agent_task_journal (task_id TEXT NOT NULL, execution_id TEXT NOT NULL, executor_generation INTEGER NOT NULL CHECK (executor_generation > 0), revision INTEGER NOT NULL CHECK (revision BETWEEN 1 AND 512), kind TEXT NOT NULL CHECK (kind IN ('intent', 'result', 'output', 'checkpoint')), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 131072), PRIMARY KEY (task_id, execution_id, executor_generation, revision))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE INDEX agent_task_journal_task_revision ON agent_task_journal (task_id, revision)",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "INSERT INTO agent_task_schema (id, version) VALUES (1, 5)",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "INSERT INTO agent_task_executor (id, generation) VALUES (1, 0)",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        return Ok(());
-    }
-
-    let expected = [
-        "agent_task_executor".to_owned(),
-        "agent_task_journal".to_owned(),
-        "agent_task_schema".to_owned(),
-        "agent_tasks".to_owned(),
-    ];
-    if found != expected {
-        return Err(
-            if found
-                == [
-                    "agent_task_executor".to_owned(),
-                    "agent_task_schema".to_owned(),
-                    "agent_tasks".to_owned(),
-                ]
-            {
-                AgentFailure::UnsupportedVersion
-            } else {
-                AgentFailure::VaultUnavailable
-            },
-        );
-    }
-    let mut marker = transaction
-        .query("SELECT id, version FROM agent_task_schema", ())
-        .await
-        .map_err(storage)?;
-    let row = marker
-        .next()
-        .await
-        .map_err(storage)?
-        .ok_or(AgentFailure::VaultUnavailable)?;
-    let version = row.get::<i64>(1).map_err(storage)?;
-    if row.get::<i64>(0).map_err(storage)? != 1
-        || version != SCHEMA_VERSION
-        || marker.next().await.map_err(storage)?.is_some()
-    {
-        return Err(if version < SCHEMA_VERSION {
-            AgentFailure::UnsupportedVersion
-        } else {
-            AgentFailure::VaultUnavailable
-        });
-    }
-    transaction
-        .query(
-            "SELECT task_id, invocation_key, person_id, state, aggregate_revision, executor_generation, payload FROM agent_tasks LIMIT 0",
-            (),
-        )
-        .await
-        .map_err(storage)?;
-    transaction
-        .query(
-            "SELECT task_id, execution_id, executor_generation, revision, kind, payload FROM agent_task_journal LIMIT 0",
-            (),
-        )
-        .await
-        .map_err(storage)?;
-    for (name, table) in [
-        ("agent_tasks_recovery", "agent_tasks"),
-        ("agent_task_journal_task_revision", "agent_task_journal"),
-    ] {
-        let mut index = transaction
-            .query(
-                "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ? AND tbl_name = ?",
-                (name, table),
-            )
-            .await
-            .map_err(storage)?;
-        if index.next().await.map_err(storage)?.is_none()
-            || index.next().await.map_err(storage)?.is_some()
-        {
-            return Err(AgentFailure::VaultUnavailable);
-        }
-    }
+        .map_err(crate::schema::SchemaFailure::into_agent)?;
     executor_generation(transaction).await?;
     Ok(())
 }

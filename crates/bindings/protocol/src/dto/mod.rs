@@ -57,8 +57,8 @@ pub use commands::{
 
 pub use envelope::{ErrorCodeDto, ErrorDto, ResponseEnvelopeDto, ResponseOutcomeDto};
 pub use errors::{
-    AppResponseDto, AppResponseOutcomeDto, AppWireErrorCodeDto, AppWireErrorDto, OwnerFailureDto,
-    OwnerRecoveryDto,
+    AppCommandDispositionDto, AppResponseDto, AppResponseOutcomeDto, AppWireErrorCodeDto,
+    AppWireErrorDto, OwnerFailureDto, OwnerRecoveryDto,
 };
 pub use events::{AppEventDto, AppEventKindDto, AppEventsRequestDto, AppEventsResultDto};
 pub use interactions::{

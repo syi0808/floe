@@ -20,6 +20,8 @@ pub enum PairingError {
     Cancelled,
     DeadlineExceeded,
     RepairRequired,
+    /// A protected or remote handoff may have completed; keep the operation.
+    Indeterminate,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -27,6 +29,39 @@ pub struct GatewaySetup {
     pub target_ref: Uuid,
     pub display_address: String,
     pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+impl GatewaySetup {
+    pub fn canonical_address(address: &str) -> Result<String, PairingError> {
+        if address.len() > 2048 {
+            return Err(PairingError::InvalidInput);
+        }
+        let authority = address
+            .strip_prefix("http://")
+            .ok_or(PairingError::InvalidInput)?;
+        let authority = authority.strip_suffix('/').unwrap_or(authority);
+        let (host, port) = authority
+            .split_once(':')
+            .ok_or(PairingError::InvalidInput)?;
+        if !matches!(host, "127.0.0.1" | "localhost")
+            || port.is_empty()
+            || !port.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(PairingError::InvalidInput);
+        }
+        let port: u16 = port.parse().map_err(|_| PairingError::InvalidInput)?;
+        if port == 0 {
+            return Err(PairingError::InvalidInput);
+        }
+        Ok(format!("http://127.0.0.1:{port}"))
+    }
+    pub fn validate(&self) -> Result<(), PairingError> {
+        if self.target_ref.is_nil()
+            || Self::canonical_address(&self.display_address)? != self.display_address
+        {
+            return Err(PairingError::InvalidInput);
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,7 +80,7 @@ pub struct ReviewedGatewayIdentity {
 #[derive(Clone, Debug)]
 pub struct PairingStartRequest {
     pub operation_id: Uuid,
-    pub target_ref: Uuid,
+    pub setup: GatewaySetup,
     pub person_id: PersonId,
     pub device_id: String,
     pub generation: u64,
@@ -62,28 +97,19 @@ pub struct PairingConfirmation {
     pub handle: PairingHandle,
     pub reviewed: ReviewedGatewayIdentity,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PairingProgress {
+pub enum PairingOutcome {
     AwaitingLocalConfirmation,
     AwaitingApproval,
-    Approved,
+    Approved(crate::GatewayCredentialMaterial),
     Rejected,
     Expired,
     Cancelled,
     RepairRequired,
 }
-#[derive(Clone, Debug)]
 pub struct PairingObservation {
     pub handle: PairingHandle,
-    pub progress: PairingProgress,
     pub reviewed: ReviewedGatewayIdentity,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StagedCredentialRef {
-    pub operation_id: Uuid,
-    pub generation: u64,
+    pub outcome: PairingOutcome,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -133,17 +159,11 @@ pub struct GatewaySummary {
 }
 
 pub trait GatewayPairingPort: Send + Sync {
-    fn prepare_setup<'a>(
-        &'a self,
-        command_id: Uuid,
-        address: &'a str,
-        scope: &'a OperationScope,
-    ) -> BoxFuture<'a, Result<GatewaySetup, PairingError>>;
     fn start<'a>(
         &'a self,
         request: PairingStartRequest,
         scope: &'a OperationScope,
-    ) -> BoxFuture<'a, Result<PairingChallenge, PairingError>>;
+    ) -> BoxFuture<'a, Result<crate::StartedPairing, PairingError>>;
     fn confirm<'a>(
         &'a self,
         request: PairingConfirmation,
@@ -159,25 +179,6 @@ pub trait GatewayPairingPort: Send + Sync {
         pairing: &'a PairingHandle,
         scope: &'a OperationScope,
     ) -> BoxFuture<'a, Result<PairingObservation, PairingError>>;
-}
-pub trait GatewayEnrollmentPort: Send + Sync {
-    fn complete<'a>(
-        &'a self,
-        pairing: &'a PairingHandle,
-        reviewed: &'a ReviewedGatewayIdentity,
-        scope: &'a OperationScope,
-    ) -> BoxFuture<'a, Result<VerifiedEnrollment, PairingError>>;
-}
-pub trait GatewayCredentialCommit: Send + Sync {
-    fn commit<'a>(
-        &'a self,
-        staged: StagedCredentialRef,
-        expected: &'a VerifiedEnrollment,
-    ) -> BoxFuture<'a, Result<GatewaySummary, PairingError>>;
-    fn readback<'a>(
-        &'a self,
-        operation_id: Uuid,
-    ) -> BoxFuture<'a, Result<Option<GatewaySummary>, PairingError>>;
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -201,14 +202,6 @@ pub struct GatewayPinReceipt {
 }
 pub trait GatewayAuthorityRepository: Send + Sync {
     fn current_pin<'a>(&'a self) -> BoxFuture<'a, Result<Option<GatewayPin>, PairingError>>;
-    fn commit_pin<'a>(
-        &'a self,
-        command: GatewayPinCommit,
-    ) -> BoxFuture<'a, Result<GatewayPinReceipt, PairingError>>;
-    fn readback<'a>(
-        &'a self,
-        operation_id: Uuid,
-    ) -> BoxFuture<'a, Result<Option<GatewayPinReceipt>, PairingError>>;
 }
 /// Exact validated canonical bytes are an internal signing command, never a
 /// product DTO. Raw private keys cannot cross this boundary.

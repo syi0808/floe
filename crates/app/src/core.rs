@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 pub struct FloeCore {
     pub(crate) store: Arc<TursoStore>,
+    pub(crate) installation_root: std::path::PathBuf,
     pub(crate) lease_registry: Arc<SourceLeaseRegistry>,
     pub(crate) day: Arc<floe_day::DayService>,
     pub(crate) product_gateway: Arc<floe_provider_adapters::gateway::ProductGatewayLeaseRegistry>,

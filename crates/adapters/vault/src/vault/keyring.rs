@@ -8,14 +8,14 @@ const SERVICE: &str = "com.floe.agent-vault.v1";
 #[derive(Clone, Copy)]
 pub struct KeyringVaultKeys;
 
-pub(super) enum VaultKeyReadFailure {
+pub enum VaultKeyReadFailure {
     Missing,
     Malformed,
     Unavailable(AgentFailure),
 }
 
-impl KeyringVaultKeys {
-    pub(super) fn inspect_existing(
+impl VaultKeyProvider for KeyringVaultKeys {
+    fn inspect_existing(
         &self,
         person_id: PersonId,
         vault_id: Uuid,
@@ -23,9 +23,7 @@ impl KeyringVaultKeys {
         let entry = entry(person_id, vault_id).map_err(VaultKeyReadFailure::Unavailable)?;
         read_key_classified(&entry)
     }
-}
 
-impl VaultKeyProvider for KeyringVaultKeys {
     fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<VaultKey, AgentFailure> {
         read_key(&entry(person_id, vault_id)?)
     }

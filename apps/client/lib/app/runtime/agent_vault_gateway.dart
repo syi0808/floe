@@ -77,6 +77,7 @@ class AgentVaultException implements Exception {
 }
 
 abstract interface class AgentVaultGateway {
+  bool get hasPendingOperation;
   Future<AgentVaultState> vaultStatus(String personId);
   Future<AgentVaultState> createVault(String personId);
   Future<AgentVaultState> unlockVault(String personId);

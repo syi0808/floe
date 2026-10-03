@@ -41,10 +41,11 @@ pub use application::source_operation::{
 };
 
 pub use application::gateway_pairing::{
-    GatewayPairingService, GatewaySetupRecord, PairingRecord, PairingRepository, PairingSnapshot,
-    PairingState,
+    GatewayPairingService, GatewaySetupRecord, PairingAdmission, PairingRecord, PairingRepository,
+    PairingSnapshot, PairingStartPhase, PairingState,
 };
 pub use ports::gateway_pairing::*;
+pub use ports::gateway_private::*;
 
 pub use domain::product::*;
 pub use ports::product_repository::ConnectionsProductRepository;

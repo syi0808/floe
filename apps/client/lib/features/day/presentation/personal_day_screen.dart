@@ -38,7 +38,6 @@ import 'package:floe_client/features/conversation/application/agent_conversation
 import 'package:floe_client/features/conversation/application/conversation_controller.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/conversation/presentation/agent_panel.dart';
 
 part 'personal_day/navigation.dart';
@@ -91,8 +90,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   _DestinationView destination = _DestinationView.today;
   String? selectedTaskId;
   DateTime? draftEventStart;
-  Future<void>? _connectionsPreparation;
-  bool _connectionPreparationRequested = false;
 
   @override
   void initState() {
@@ -102,29 +99,19 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       query: widget.query,
     );
     unawaited(controller.load());
-    if (widget.calendarActions case final gateway?) {
-      actionController = CalendarActionController(gateway: gateway)..load();
+    final vault = widget.ownerGateways.vault;
+    final actionGateway = widget.calendarActions;
+    if (actionGateway != null && vault != null) {
+      actionController = CalendarActionController(gateway: actionGateway, vault: vault);
     }
-    screenState = Listenable.merge([controller, ?actionController]);
+    screenState = Listenable.merge([controller, ?actionController, ?widget.ownerGateways.vault]);
     final agentGateway = widget.agentGateway;
     if (agentGateway != null) {
       agentController = ConversationController(
         gateway: agentGateway,
         owners: widget.ownerGateways,
         personId: widget.query.personId,
-      )..addListener(_ownerReadinessChanged);
-    }
-    widget.connectionsController?.prepareStorage = _prepareConnections;
-    _syncConnectionReadiness();
-  }
-
-  @override
-  void didUpdateWidget(PersonalDayScreen oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.connectionsController != widget.connectionsController) {
-      oldWidget.connectionsController?.prepareStorage = null;
-      widget.connectionsController?.prepareStorage = _prepareConnections;
-      _syncConnectionReadiness();
+      );
     }
   }
 
@@ -132,8 +119,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     controller.dispose();
-    agentController?.removeListener(_ownerReadinessChanged);
-    widget.connectionsController?.prepareStorage = null;
     actionController?.dispose();
     agentController?.dispose();
     assistantEntryFocus.dispose();
@@ -196,7 +181,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       return SettingsScreen(
         connectionsController: widget.connectionsController,
         actionController: actionController,
-        agentController: agentController,
+        vault: widget.ownerGateways.vault,
+        registryController: widget.ownerGateways.registry,
+        memoryController: widget.ownerGateways.memory,
         expertBindingTarget: expertBindingTarget,
         onBindingReplaced: onBindingReplaced,
         platform: defaultTargetPlatform,
@@ -392,12 +379,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     _DestinationView value, {
     bool openCalendarDetail = false,
   }) {
-    if (!_connectionPreparationRequested &&
-        (value == _DestinationView.settings ||
-            value == _DestinationView.connections)) {
-      _connectionPreparationRequested = true;
-      unawaited(_prepareConnections());
-    }
     setState(() {
       assistantOpen = false;
       openDeviceCalendarDetail = openCalendarDetail;
@@ -406,63 +387,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     });
   }
 
-  /// Reuses the existing Vault lifecycle and never changes navigation after an
-  /// await. A late load may finish in another screen without reopening this one.
-  Future<void> _prepareConnections() async {
-    final pending = _connectionsPreparation;
-    if (pending != null) {
-      await pending;
-      return;
-    }
-    final agent = agentController;
-    if (!mounted || agent == null) return;
-    if (agent.vaultState == AgentVaultState.ready || agent.busy) {
-      _syncConnectionReadiness();
-      return;
-    }
-    final loading = agent.load();
-    _connectionsPreparation = loading;
-    _syncConnectionReadiness();
-    try {
-      await loading;
-    } finally {
-      if (identical(_connectionsPreparation, loading)) {
-        _connectionsPreparation = null;
-      }
-      if (mounted) _syncConnectionReadiness();
-    }
-  }
-
-  void _syncConnectionReadiness() {
-    final agent = agentController;
-    final ready = agent?.vaultState == AgentVaultState.ready;
-    final opening =
-        agent != null && (agent.vaultController.busy || (!ready && agent.busy));
-    widget.connectionsController?.updateStorage(
-      state: agent?.vaultState,
-      opening: opening,
-      failureReason: !ready && !opening ? agent?.failure : null,
-      incidentId: !ready && !opening ? agent?.failureIncidentId : null,
-    );
-  }
-
-  void _ownerReadinessChanged() {
-    if (!mounted) return;
-    _syncConnectionReadiness();
-    final agent = agentController;
-    final actions = actionController;
-    if (agent?.vaultState == AgentVaultState.ready &&
-        actions?.error != null &&
-        !actions!.busy) {
-      unawaited(actions.load());
-    }
-  }
-
   Future<void> _openAssistant() async {
     final agent = agentController;
     if (agent == null) return;
     agent.attachView();
-    if (agent.session == null && !agent.busy) unawaited(agent.load());
     if (MediaQuery.sizeOf(context).width > 960) {
       setState(() => assistantOpen = true);
       return;

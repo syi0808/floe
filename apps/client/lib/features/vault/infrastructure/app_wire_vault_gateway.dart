@@ -9,6 +9,9 @@ final class AppWireVaultGateway implements AgentVaultGateway {
   final OwnerOperationObserver _operations = OwnerOperationObserver();
 
   @override
+  bool get hasPendingOperation => _operations.hasPendingOperation;
+
+  @override
   Future<AgentVaultState> vaultStatus(String personId) =>
       _access(personId, 'status');
   @override

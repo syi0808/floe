@@ -1,6 +1,6 @@
 //! One physical transaction for a Day-owned manual transition and exact replay.
 use super::day_refresh::{finish_transaction, mirror_on, require_executor};
-use crate::{StoreError, TursoStore};
+use crate::TursoStore;
 use floe_day::{
     Capture, DayError, DayMutationCommand, DayMutationPrior, DayMutationResult, DayMutationTarget,
     DomainRef, Event, Note, Task, TimelineItem,
@@ -8,26 +8,12 @@ use floe_day::{
 use serde::{Deserialize, Serialize};
 use turso::Connection;
 
-const TABLE: &str = "CREATE TABLE day_mutation_receipts (person_id TEXT NOT NULL, command_id TEXT NOT NULL, device_id TEXT NOT NULL, intent_digest TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(person_id,command_id))";
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Receipt {
     command: DayMutationCommand,
     intent_digest: [u8; 32],
     result: DayMutationResult,
-}
-pub(super) async fn initialize_mutation_schema(connection: &Connection) -> Result<(), StoreError> {
-    connection
-        .execute(
-            &TABLE.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS "),
-            (),
-        )
-        .await
-        .map_err(crate::engine::storage_error)?;
-    Ok(())
-}
-pub(super) async fn validate_mutation_schema(connection: &Connection) -> Result<(), StoreError> {
-    crate::engine::require_schema(connection, "day_mutation_receipts", TABLE).await
 }
 fn storage(error: impl std::fmt::Display) -> DayError {
     DayError::storage(error.to_string())

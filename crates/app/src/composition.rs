@@ -77,7 +77,11 @@ pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, 
             Ok(store) => store,
             #[cfg(debug_assertions)]
             Err(error)
-                if error.code == floe_vault::StoreErrorCode::Validation && !reset_attempted =>
+                if matches!(
+                    error.code,
+                    floe_vault::StoreErrorCode::UnsupportedSchema
+                        | floe_vault::StoreErrorCode::StoredDataCorrupt
+                ) && !reset_attempted =>
             {
                 installation = installation
                     .reset_before_open(
@@ -99,6 +103,7 @@ pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, 
             match runtime.block_on(floe_vault::inspect_existing_vault(
                 &root,
                 floe_kernel::PersonId(installation.identity().person_id()),
+                &floe_vault::KeyringVaultKeys,
             )) {
                 floe_vault::VaultOpenInspection::Absent
                 | floe_vault::VaultOpenInspection::Compatible => {}
@@ -163,6 +168,14 @@ fn compose(
     runtime: Runtime,
     store: floe_vault::TursoStore,
 ) -> Result<AppHost<AppComposition>, AppOpenError> {
+    let database = std::fs::canonicalize(path)
+        .map_err(|_| AppOpenError::Host(HostError::IdentityUnavailable))?;
+    let installation_root = database
+        .parent()
+        .and_then(std::path::Path::parent)
+        .and_then(std::path::Path::parent)
+        .ok_or(AppOpenError::Host(HostError::IdentityUnavailable))?
+        .to_path_buf();
     let caller = crate::CallerContext::verified(identity, crate::bootstrap::runtime_epoch())
         .map_err(AppOpenError::Host)?;
     let store = Arc::new(store);
@@ -195,6 +208,7 @@ fn compose(
         .map_err(|error| AppOpenError::Store(error.to_string()))?;
     let core = Arc::new(crate::FloeCore {
         store,
+        installation_root,
         lease_registry: Arc::new(floe_context::SourceLeaseRegistry::new()),
         day,
         product_gateway,

@@ -3,13 +3,18 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/features/vault/application/vault_controller.dart';
 import 'package:floe_client/features/connections/application/connections_gateway.dart';
 import 'package:floe_client/features/connections/domain/connection_models.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 
 /// Owns presentation and observation only. Rust owns every lifecycle transition.
 final class ConnectionsController extends ChangeNotifier {
-  ConnectionsController(this.gateway);
+  ConnectionsController(this.gateway, {required this.vault}) {
+    vault.addListener(_readinessChanged);
+    _readinessChanged();
+  }
+  final VaultController vault;
   final ConnectionsGateway gateway;
   ConnectionsOverview? overview;
   GatewaySetup? setup;
@@ -23,25 +28,37 @@ final class ConnectionsController extends ChangeNotifier {
   LaunchAction? launchAction;
   String? failure;
   bool _commandBusy = false;
-  AgentVaultState? _vaultState;
-  bool storageOpening = false;
-  String? storageFailure;
-  String? storageIncidentId;
-  Future<void> Function()? prepareStorage;
+  bool _wasReady = false;
+  bool get storageOpening => vault.busy;
+  String? get storageFailure => _safeToken(vault.reasonCode);
+  String? get storageIncidentId => _safeToken(vault.incidentId);
   int _readinessGeneration = 0;
   int? _activeCommandGeneration;
 
-  bool get ready => _vaultState == AgentVaultState.ready && !storageOpening;
-  bool get busy => _commandBusy || !ready;
+  bool get ready => vault.ready;
+  bool get busy => _commandBusy || !ready || _pendingCommand != null;
   bool get _acceptCommandResult =>
       !_disposed && ready && _activeCommandGeneration == _readinessGeneration;
+
+  void _reportStorageFailure(Object error) {
+    final owner = switch (error) {
+      ConnectionsRequestFailure() => error.ownerFailure,
+      NativeTransportException() => error.ownerFailure,
+      _ => null,
+    };
+    if (owner != null) {
+      vault.reportFailure(AgentVaultException.fromAppWire(
+        owner.reason, ownerFailure: owner,
+      ));
+    }
+  }
 
   String get storageMessage {
     if (storageOpening) return 'Opening local secure storage…';
     if (storageFailure case final reason?) {
       return 'Local secure storage could not open ($reason).';
     }
-    return switch (_vaultState) {
+    return switch (vault.state) {
       AgentVaultState.locked => 'Local secure storage is locked.',
       AgentVaultState.missing => 'Local secure storage is not ready yet.',
       AgentVaultState.unavailable => 'Local secure storage is unavailable.',
@@ -49,26 +66,10 @@ final class ConnectionsController extends ChangeNotifier {
     };
   }
 
-  /// Mirrors the existing Vault lifecycle; Connections never opens it itself.
-  void updateStorage({
-    required AgentVaultState? state,
-    required bool opening,
-    String? failureReason,
-    String? incidentId,
-  }) {
+  void _readinessChanged() {
     if (_disposed) return;
-    final reason = _safeToken(failureReason);
-    final incident = _safeToken(incidentId);
-    if (_vaultState == state &&
-        storageOpening == opening &&
-        storageFailure == reason &&
-        storageIncidentId == incident)
-      return;
-    final wasReady = ready;
-    _vaultState = state;
-    storageOpening = opening;
-    storageFailure = reason;
-    storageIncidentId = incident;
+    final wasReady = _wasReady;
+    _wasReady = ready;
     if (wasReady != ready) {
       _readinessGeneration++;
       _loadGeneration++;
@@ -103,8 +104,10 @@ final class ConnectionsController extends ChangeNotifier {
   Timer? _pairingObservation;
   Timer? _operationObservation;
   Future<void> Function()? _pendingCommand;
+  String? _pendingCommandId;
+  bool _pendingWasUncertain = false;
 
-  bool get hasUncertainCommand => _pendingCommand != null && !busy;
+  bool get hasUncertainCommand => _pendingCommand != null && !_commandBusy && ready;
 
   Future<void> load() async {
     if (_disposed || !ready) return;
@@ -117,6 +120,7 @@ final class ConnectionsController extends ChangeNotifier {
       if (_pendingCommand == null) failure = null;
     } on Object catch (error) {
       if (!_disposed && ready && generation == _loadGeneration) {
+        _reportStorageFailure(error);
         failure = _failureMessage(
           error,
           'Connection status could not be loaded.',
@@ -129,6 +133,8 @@ final class ConnectionsController extends ChangeNotifier {
   Future<void> _command(Future<void> Function(String commandId) action) async {
     if (_disposed || busy || _pendingCommand != null) return;
     final commandId = newAgentRequestId();
+    _pendingCommandId = commandId;
+    _pendingWasUncertain = false;
     _pendingCommand = () => action(commandId);
     await retryPendingCommand();
   }
@@ -137,7 +143,10 @@ final class ConnectionsController extends ChangeNotifier {
   /// A new decision never borrows the pending command's durable identity.
   Future<void> retryPendingCommand() async {
     final pending = _pendingCommand;
-    if (_disposed || busy || pending == null) return;
+    if (_disposed || _commandBusy || !ready || pending == null) return;
+    final wasUncertain = _pendingWasUncertain;
+    // From this point a handoff can outlive this observer or its readiness.
+    _pendingWasUncertain = true;
     _commandBusy = true;
     final generation = _readinessGeneration;
     _activeCommandGeneration = generation;
@@ -147,21 +156,20 @@ final class ConnectionsController extends ChangeNotifier {
       await pending();
       if (_disposed || !ready || generation != _readinessGeneration) return;
       _pendingCommand = null;
+      _pendingCommandId = null;
+      _pendingWasUncertain = false;
       await load();
     } on Object catch (error) {
       if (_disposed || !ready || generation != _readinessGeneration) return;
-      final code = switch (error) {
-        ConnectionsRequestFailure() => error.code,
-        NativeTransportException() => error.code,
-        _ => null,
-      };
-      // Preserve the existing terminal/uncertain rule. Readiness changes above
-      // never release a retained command or create a replacement command ID.
-      if (code != null &&
-          code != 'timeout' &&
-          code != 'ffi' &&
-          code != 'invalid_response')
+      // A later rejection cannot erase uncertainty from an earlier handoff.
+      if (!wasUncertain && error is ConnectionsCommandFailure &&
+          error.commandId == _pendingCommandId &&
+          error.disposition == NativeCommandDisposition.notAdmitted) {
         _pendingCommand = null;
+        _pendingCommandId = null;
+        _pendingWasUncertain = false;
+      }
+      _reportStorageFailure(error);
       failure = _failureMessage(
         error,
         'The result is not confirmed. Check status or recover the same request.',
@@ -235,10 +243,13 @@ final class ConnectionsController extends ChangeNotifier {
           generation != _readinessGeneration ||
           pairing?.operationRef != current.operationRef)
         return;
+      // This snapshot identifies the operation, not a pending Confirm/Cancel
+      // command. Only exact command replay may acknowledge that mutation.
       _setPairing(value);
       await load();
     } on Object catch (error) {
       if (_disposed || !ready || generation != _readinessGeneration) return;
+      _reportStorageFailure(error);
       failure = _failureMessage(
         error,
         'Pairing status is unavailable. The operation is still retained.',
@@ -329,16 +340,19 @@ final class ConnectionsController extends ChangeNotifier {
   Future<void> configureSource(
     SourceReview review,
     List<ResourceRef> selected,
-  ) => _command((id) async {
-    await gateway.configureSource(
-      commandId: id,
-      sourceRef: review.sourceRef,
-      reviewRef: review.reviewRef,
-      selectedResourceRefs: selected,
-      expectedRevision: review.sourceRevision,
-    );
-    if (_acceptCommandResult) sourceReview = null;
-  });
+  ) {
+    final selection = List<ResourceRef>.unmodifiable(selected);
+    return _command((id) async {
+      await gateway.configureSource(
+        commandId: id,
+        sourceRef: review.sourceRef,
+        reviewRef: review.reviewRef,
+        selectedResourceRefs: selection,
+        expectedRevision: review.sourceRevision,
+      );
+      if (_acceptCommandResult) sourceReview = null;
+    });
+  }
 
   Future<void> prepareObserve(
     SourceSummary value,
@@ -411,10 +425,13 @@ final class ConnectionsController extends ChangeNotifier {
           generation != _readinessGeneration ||
           operation?.operationRef != current.operationRef)
         return;
+      // Terminal operation state cannot stand in for the pending command's
+      // identity; retain it until its own correlated replay is acknowledged.
       _setOperation(value);
       await load();
     } on Object catch (error) {
       if (_disposed || !ready || generation != _readinessGeneration) return;
+      _reportStorageFailure(error);
       failure = _failureMessage(
         error,
         'Connection status is unavailable. Check it again.',
@@ -459,7 +476,7 @@ final class ConnectionsController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    prepareStorage = null;
+    vault.removeListener(_readinessChanged);
     _readinessGeneration++;
     _loadGeneration++;
     _pairingObservation?.cancel();

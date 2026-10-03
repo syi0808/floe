@@ -1,4 +1,3 @@
-import 'package:floe_client/features/connections/domain/connection_models.dart';
 import 'package:flutter/material.dart';
 
 import 'package:floe_client/app/design_tokens.dart';
@@ -178,20 +177,16 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
   ) => switch (target) {
     AgentSourceReviewTarget(:final review) => [
       _row(strings.agentInteractionMembers, review.displayMembers.join(', ')),
-      _row(
-        'Processing',
-        review.processingDisclosure.requested == SourceProcessing.deviceOnly
-            ? 'On this device only'
-            : 'On this device or your verified Gateway',
-      ),
-      _row(
-        strings.agentInteractionScopes,
-        review.processingDisclosure.scopeLabels.join(', '),
-      ),
-      _row(
-        strings.agentInteractionData,
-        review.processingDisclosure.categories.join(', '),
-      ),
+      for (final view in review.processingDisclosure.views) ...[
+        _row('${view.viewId} · sensitivity', view.dataClassLabel),
+        _row('${view.viewId} · data', view.dataCategories.join(', ')),
+        _row('${view.viewId} · current', view.current?.label ?? 'No Observe permission'),
+        _row('${view.viewId} · requested', view.requested!.label),
+        if (view.expandsGateway)
+          _row('Gateway permission', 'This review expands processing for ${view.viewId}.'),
+      ],
+      if (review.processingDisclosure.views.any((view) => view.isDerivedHealth))
+        _row('Health', 'Only locally transformed derived Health data may reach the Gateway. Raw Health data stays on this device.'),
     ],
     AgentNavigationTarget(:final sourceLabel) => [
       _row(strings.agentInteractionSource, sourceLabel),

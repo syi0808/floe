@@ -10,7 +10,7 @@ use turso::transaction::TransactionBehavior;
 
 use crate::vault::expert_binding_reviews::{
     EXPERT_COMMAND_LIMIT, EXPERT_COMMAND_PREPARE, EXPERT_COMMAND_REPLACEMENT,
-    count_expert_command_admissions_on, ensure_expert_binding_tables_on, expert_binding_tables_on,
+    count_expert_command_admissions_on, ensure_expert_binding_tables_on,
     insert_expert_command_admission_on, read_binding_replacement_by_command_on,
     read_binding_replacement_for_review_on, read_binding_review_on,
     read_expert_command_admission_on, validate_binding_registry_successor,
@@ -193,9 +193,7 @@ impl<Keys: VaultKeyProvider> BindingReviewRepository for VaultExpertBindingRevie
                         return Ok(stored);
                     }
 
-                    if expert_binding_tables_on(&transaction).await? != 5 {
-                        return Err(AgentFailure::VaultUnavailable);
-                    }
+                    ensure_expert_binding_tables_on(&transaction).await?;
                     floe_experts::validate_binding_review_descriptor(&descriptor)?;
                     let payload = serde_json::to_string(&descriptor)
                         .map_err(|_| AgentFailure::InvalidInput)?;

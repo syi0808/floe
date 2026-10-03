@@ -28,20 +28,75 @@ impl floe_access::DependencyResolver for SmokeResolver {
     }
 }
 
-pub(super) type DiagnosticModel =
-    floe_inference::InferenceService<CompositeModelProvider, SmokeResolver, GatewayCredentialStore>;
+pub(super) type DiagnosticModel = Arc<dyn floe_agent_contract::ModelPort>;
 
 pub(super) fn model(store: GatewayCredentialStore) -> DiagnosticModel {
-    floe_inference::InferenceService::new(
+    Arc::new(floe_inference::InferenceService::new(
         CompositeModelProvider::new(store.clone()),
         SmokeResolver,
         store,
-    )
+    ))
 }
 
-/// Each synthetic exercise creates a real isolated encrypted Person. Gateway
-/// absence comes from that Vault's durable owner state; a foreign system
-/// credential remains a failure. The disposable Vault key stays in memory.
+/// Synthetic diagnostics explicitly have no Gateway. They do not open any
+/// protected system credential slot or manufacture an installation lease.
+struct SyntheticDeviceProvider {
+    actor: OwnerActor,
+}
+impl floe_inference::ModelProvider for SyntheticDeviceProvider {
+    type Prepared = floe_provider_adapters::models::PreparedDeviceTransport;
+    fn observe_primary<'a>(
+        &'a self,
+        request: &'a floe_agent_contract::ModelPlanRequest,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<
+        'a,
+        Result<
+            floe_inference::PrimaryObservation<Self::Prepared>,
+            floe_inference::ModelObservationError,
+        >,
+    > {
+        Box::pin(async move {
+            if request.principal != self.actor.person_id.to_string()
+                || request.device_id != self.actor.device_id
+            {
+                return Err(floe_inference::ModelObservationError::InvalidIdentity);
+            }
+            Ok(floe_inference::PrimaryObservation::Absent(
+                floe_inference::PrimaryAbsence::NoGatewayConfigured,
+            ))
+        })
+    }
+    fn observe_local_fallback<'a>(
+        &'a self,
+        request: &'a floe_agent_contract::ModelPlanRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<
+        'a,
+        Result<
+            floe_inference::LocalObservation<Self::Prepared>,
+            floe_inference::ModelObservationError,
+        >,
+    > {
+        Box::pin(async move {
+            floe_provider_adapters::models::DeviceModelProvider::encrypted()
+                .observe_local_fallback(request, scope)
+                .await
+        })
+    }
+}
+struct NoGatewayAuthority;
+impl floe_access::GatewayAdmission for NoGatewayAuthority {
+    fn admit<'a>(
+        &'a self,
+        _: &'a floe_access::VerifiedGatewayBinding,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<floe_access::VerifiedGatewayBinding, AgentFailure>> {
+        Box::pin(async { Err(AgentFailure::PolicyDenied) })
+    }
+}
+
+/// The isolated encrypted Person and in-memory key support synthetic journals.
 pub(super) struct SyntheticProfile {
     pub vault: Arc<EncryptedAgentVault<SmokeKeys>>,
     pub actor: OwnerActor,
@@ -73,7 +128,13 @@ impl SyntheticProfile {
     }
 
     pub(super) fn model(&self) -> DiagnosticModel {
-        model(GatewayCredentialStore::new(self.vault.clone()))
+        Arc::new(floe_inference::InferenceService::new(
+            SyntheticDeviceProvider {
+                actor: self.actor.clone(),
+            },
+            SmokeResolver,
+            NoGatewayAuthority,
+        ))
     }
 }
 

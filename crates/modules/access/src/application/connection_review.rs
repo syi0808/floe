@@ -105,6 +105,7 @@ impl AccessService {
             let policy_digest = consumer_policy_digest(self.consumers.as_ref())?;
             let mut views = Vec::with_capacity(request.views.len());
             for requested in request.views {
+                let data_class = crate::trusted_view_capability(&requested.view_id)?.data_class;
                 if !crate::source_view_ids(request.source.source.connector().as_str())
                     .contains(&requested.view_id.as_str())
                     || floe_context_contract::connection_view_resource(
@@ -131,6 +132,7 @@ impl AccessService {
                                 && registration.declared_view_capabilities.iter().any(
                                     |capability| {
                                         capability.view_id == requested.view_id
+                                            && capability.data_class == data_class
                                             && requested.categories.iter().all(|category| {
                                                 capability.categories.contains(category)
                                             })
@@ -195,6 +197,7 @@ impl AccessService {
                 }
                 views.push(ReviewedView {
                     view_id: requested.view_id,
+                    data_class,
                     expected,
                     consumers: successor.scope().consumers().to_vec(),
                     purpose: requested.purpose,
@@ -609,8 +612,8 @@ impl AccessService {
                             && grant.scope().resources().contains(&resource)
                     })
                     .collect::<Vec<_>>();
-                let (state, processing) = match matching.as_slice() {
-                    [] => (crate::SourceObserveViewState::Absent, None),
+                let (state, processing, categories) = match matching.as_slice() {
+                    [] => (crate::SourceObserveViewState::Absent, None, Vec::new()),
                     [grant] => (
                         if grant.review_required() {
                             crate::SourceObserveViewState::ReviewRequired
@@ -620,11 +623,14 @@ impl AccessService {
                             crate::SourceObserveViewState::Paused
                         },
                         Some(grant.scope().processing().clone()),
+                        grant.scope().categories().to_vec(),
                     ),
                     _ => return Err(AgentFailure::PolicyDenied),
                 };
                 views.push(crate::SourceObserveView {
                     view_id: (*view_id).to_owned(),
+                    data_class: crate::trusted_view_capability(view_id)?.data_class,
+                    categories,
                     state,
                     processing,
                 });
@@ -1041,6 +1047,8 @@ fn consumer_policy_digest(catalog: &dyn TrustedConsumerCatalog) -> Result<[u8; 3
             capability.categories.sort();
             capability.purposes.sort();
             if capability.view_id.is_empty()
+                || floe_context_contract::source_view_data_class(&capability.view_id)
+                    != Some(capability.data_class)
                 || capability.view_id.len() > 128
                 || capability.categories.is_empty()
                 || capability.purposes.is_empty()

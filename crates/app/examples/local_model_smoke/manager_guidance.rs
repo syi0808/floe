@@ -453,7 +453,7 @@ fn report_summary(corpus: &Corpus, metadata: &ReportMetadata, all_accepted: bool
 }
 
 async fn run_case(
-    model: &impl ModelPort,
+    model: &dyn ModelPort,
     corpus: &Corpus,
     case: &Case,
     repetition: usize,
@@ -583,6 +583,7 @@ pub(super) async fn run(mode: Mode) -> std::process::ExitCode {
     {
         return unverified("invalid_model_identity");
     }
+    let mut _installation_lease = None;
     let (principal, device_id, service, _synthetic_profile) = match mode {
         Mode::Foundation => {
             let profile = match super::support::SyntheticProfile::create().await {
@@ -604,6 +605,10 @@ pub(super) async fn run(mode: Mode) -> std::process::ExitCode {
             if !database.is_absolute() || !database.is_file() {
                 return unverified("existing_database_required");
             }
+            let lease = match floe_provider_adapters::lock_existing_local_installation(database) {
+                Ok(lease) => Arc::new(lease.into_lock_file()),
+                Err(_) => return unverified("existing_installation_busy_or_unavailable"),
+            };
             let identity = match floe_provider_adapters::local_identity_for_database(database) {
                 Ok(Some(identity)) => identity,
                 _ => return unverified("verified_profile_identity_required"),
@@ -622,7 +627,16 @@ pub(super) async fn run(mode: Mode) -> std::process::ExitCode {
                 Ok(vault) => Arc::new(vault),
                 _ => return unverified("existing_vault_unavailable"),
             };
-            let store = GatewayCredentialStore::new(vault);
+            let actor = floe_kernel::OwnerActor {
+                person_id: person,
+                device_id: identity.device_id.clone(),
+                runtime_epoch: 1,
+            };
+            let store = match GatewayCredentialStore::new(vault.clone(), vault, &actor) {
+                Ok(store) => store,
+                Err(_) => return unverified("credential_boundary_unavailable"),
+            };
+            _installation_lease = Some(lease);
             (
                 person.to_string(),
                 identity.device_id,
@@ -695,7 +709,7 @@ pub(super) async fn run(mode: Mode) -> std::process::ExitCode {
     for case in &corpus.cases {
         for repetition in 1..=REPETITIONS {
             match run_case(
-                &service,
+                service.as_ref(),
                 &corpus,
                 case,
                 repetition,

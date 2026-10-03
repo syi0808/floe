@@ -28,10 +28,6 @@ mod learner_journal;
 #[cfg(unix)]
 pub use learner_journal::VaultLearnerJournalFactory;
 
-pub(crate) use connections::initialize_source_operations;
-
-pub(crate) use day::{initialize_day_schema, validate_day_schema};
-
 #[cfg(unix)]
 mod expert_binding_reviews;
 #[cfg(unix)]

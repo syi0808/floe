@@ -1,5 +1,7 @@
 //! Mechanical conversion between the Connections owner and its safe product wire.
-use super::app_wire::{AppWireResult, agent_failure, internal_error, validation};
+use super::app_wire::{
+    AppCommandFailure, AppCommandResult, AppWireResult, agent_failure, internal_error, validation,
+};
 use floe_connections as owner;
 use floe_execution::ExecutionScope;
 use floe_kernel::OwnerActor;
@@ -40,13 +42,27 @@ pub(crate) fn handles_query(query: &dto::AppProductQueryDto) -> bool {
     )
 }
 
+fn command_failure(failure: owner::ConnectionsCommandFailure) -> AppCommandFailure {
+    match failure {
+        owner::ConnectionsCommandFailure::NotAdmitted(reason) => {
+            AppCommandFailure::NotAdmitted(agent_failure(reason))
+        }
+        owner::ConnectionsCommandFailure::Admitted(reason) => {
+            AppCommandFailure::Admitted(agent_failure(reason))
+        }
+        owner::ConnectionsCommandFailure::Indeterminate(reason) => {
+            AppCommandFailure::Indeterminate(agent_failure(reason))
+        }
+    }
+}
+
 pub(crate) async fn command(
     owners: &floe_app::ReadyOwners,
     actor: &OwnerActor,
     command_id: Uuid,
     command: dto::AppProductCommandDto,
     scope: &ExecutionScope,
-) -> AppWireResult<dto::AppCommandResultDto> {
+) -> AppCommandResult<dto::AppCommandResultDto> {
     use dto::{AppCommandResultDto as R, AppProductCommandDto as C};
     let service = &owners.connections;
     Ok(match command {
@@ -55,7 +71,7 @@ pub(crate) async fn command(
                 service
                     .prepare_gateway_setup(actor, command_id, &address_text, scope)
                     .await
-                    .map_err(agent_failure)?,
+                    .map_err(command_failure)?,
             )?,
         },
         C::ConnectionsPairingStart { target_ref } => R::ConnectionsPairing {
@@ -63,7 +79,7 @@ pub(crate) async fn command(
                 service
                     .start_pairing(actor, command_id, target_ref.get(), scope)
                     .await
-                    .map_err(agent_failure)?,
+                    .map_err(command_failure)?,
             )?,
         },
         C::ConnectionsPairingConfirm {
@@ -80,7 +96,7 @@ pub(crate) async fn command(
                         scope,
                     )
                     .await
-                    .map_err(agent_failure)?,
+                    .map_err(command_failure)?,
             )?,
         },
         C::ConnectionsPairingCancel {
@@ -97,7 +113,7 @@ pub(crate) async fn command(
                         scope,
                     )
                     .await
-                    .map_err(agent_failure)?,
+                    .map_err(command_failure)?,
             )?,
         },
         C::ConnectionsGatewayForget {
@@ -114,7 +130,7 @@ pub(crate) async fn command(
                         scope,
                     )
                     .await
-                    .map_err(agent_failure)?,
+                    .map_err(command_failure)?,
             )?,
         },
         C::ConnectionsIntegrationPrepareReview {
@@ -131,7 +147,7 @@ pub(crate) async fn command(
                         scope,
                     )
                     .await
-                    .map_err(agent_failure)?,
+                    .map_err(command_failure)?,
             )?,
         },
         C::ConnectionsIntegrationStart {
@@ -145,12 +161,12 @@ pub(crate) async fn command(
                         actor,
                         command_id,
                         integration_ref.get(),
-                        review_in(review_ref)?,
+                        review_in(review_ref).map_err(AppCommandFailure::NotAdmitted)?,
                         expected_revision,
                         scope,
                     )
                     .await
-                    .map_err(agent_failure)?,
+                    .map_err(command_failure)?,
             )?,
         },
         C::ConnectionsOperationCancel {
@@ -167,7 +183,7 @@ pub(crate) async fn command(
                         scope,
                     )
                     .await
-                    .map_err(agent_failure)?,
+                    .map_err(command_failure)?,
             )?,
         },
         C::ConnectionsSourcePrepareReview {
@@ -184,7 +200,7 @@ pub(crate) async fn command(
                         scope,
                     )
                     .await
-                    .map_err(agent_failure)?,
+                    .map_err(command_failure)?,
             )?,
         },
         C::ConnectionsSourceConfigure {
@@ -199,7 +215,7 @@ pub(crate) async fn command(
                         actor,
                         command_id,
                         source_ref.get(),
-                        review_in(review_ref)?,
+                        review_in(review_ref).map_err(AppCommandFailure::NotAdmitted)?,
                         selected_resource_refs
                             .into_iter()
                             .map(|value| value.get())
@@ -208,7 +224,7 @@ pub(crate) async fn command(
                         scope,
                     )
                     .await
-                    .map_err(agent_failure)?,
+                    .map_err(command_failure)?,
             )?,
         },
         C::ConnectionsDisconnect {
@@ -225,7 +241,7 @@ pub(crate) async fn command(
                         scope,
                     )
                     .await
-                    .map_err(agent_failure)?,
+                    .map_err(command_failure)?,
             )?,
         },
         C::ConnectionsObservePrepareReview {
@@ -244,7 +260,7 @@ pub(crate) async fn command(
                         scope,
                     )
                     .await
-                    .map_err(agent_failure)?,
+                    .map_err(command_failure)?,
             )?,
         },
         C::ConnectionsObserveSet { mutation } => R::ConnectionsSource {
@@ -259,12 +275,12 @@ pub(crate) async fn command(
                         command_id,
                         source_ref.get(),
                         expected_revision,
-                        review_in(review_ref)?,
+                        review_in(review_ref).map_err(AppCommandFailure::NotAdmitted)?,
                         owner::ObserveDecision::Allow,
                         scope,
                     )
                     .await
-                    .map_err(agent_failure)?,
+                    .map_err(command_failure)?,
                 dto::ConnectionObserveSetMutationDto::Pause {
                     source_ref,
                     expected_revision,
@@ -277,7 +293,7 @@ pub(crate) async fn command(
                         scope,
                     )
                     .await
-                    .map_err(agent_failure)?,
+                    .map_err(command_failure)?,
             })?,
         },
         C::ConnectionsGatewayManagementLaunch {
@@ -294,10 +310,10 @@ pub(crate) async fn command(
                         scope,
                     )
                     .await
-                    .map_err(agent_failure)?,
+                    .map_err(command_failure)?,
             )?,
         },
-        _ => return Err(validation("command.kind")),
+        _ => return Err(AppCommandFailure::NotAdmitted(validation("command.kind"))),
     })
 }
 
@@ -407,12 +423,7 @@ fn processing_in(value: dto::RequestedProcessingDto) -> owner::ProcessingChoice 
         dto::RequestedProcessingDto::GatewayAllowed => owner::ProcessingChoice::GatewayAllowed,
     }
 }
-fn processing_out(value: owner::ProcessingChoice) -> dto::RequestedProcessingDto {
-    match value {
-        owner::ProcessingChoice::DeviceOnly => dto::RequestedProcessingDto::DeviceOnly,
-        owner::ProcessingChoice::GatewayAllowed => dto::RequestedProcessingDto::GatewayAllowed,
-    }
-}
+
 fn actions(values: Vec<owner::ConnectionAction>) -> Vec<String> {
     values
         .into_iter()
@@ -538,8 +549,6 @@ fn pairing(value: owner::PairingSnapshot) -> AppWireResult<dto::PairingSnapshotD
                 dto::PairingStateDto::AwaitingLocalConfirmation
             }
             owner::PairingState::AwaitingApproval => dto::PairingStateDto::AwaitingGatewayApproval,
-            owner::PairingState::Verifying => dto::PairingStateDto::Verifying,
-            owner::PairingState::Committing => dto::PairingStateDto::Committing,
             owner::PairingState::Paired => dto::PairingStateDto::Connected,
             owner::PairingState::Rejected => dto::PairingStateDto::Rejected,
             owner::PairingState::Expired => dto::PairingStateDto::Expired,
@@ -682,18 +691,55 @@ fn operation(
         next_observation_after_ms: value.next_observation_after_ms.map(u64::from),
     })
 }
+fn processing_scope(
+    value: floe_context_contract::ProcessingRestriction,
+) -> dto::ProcessingScopeDto {
+    match value {
+        floe_context_contract::ProcessingRestriction::DeviceOnly => {
+            dto::ProcessingScopeDto::DeviceOnly
+        }
+        floe_context_contract::ProcessingRestriction::GatewayAllowed { categories } => {
+            dto::ProcessingScopeDto::GatewayAllowed {
+                categories: categories.into_iter().map(data_category).collect(),
+            }
+        }
+    }
+}
+fn data_category(value: floe_context_contract::GrantDataCategory) -> dto::ProcessingCategoryDto {
+    match value {
+        floe_context_contract::GrantDataCategory::Metadata => dto::ProcessingCategoryDto::Metadata,
+        floe_context_contract::GrantDataCategory::Content => dto::ProcessingCategoryDto::Content,
+        floe_context_contract::GrantDataCategory::Derived => dto::ProcessingCategoryDto::Derived,
+    }
+}
+fn view_sensitivity(
+    value: floe_context_contract::DataClass,
+) -> AppWireResult<dto::ViewSensitivityDto> {
+    match value {
+        floe_context_contract::DataClass::Personal => Ok(dto::ViewSensitivityDto::Personal),
+        floe_context_contract::DataClass::HighlySensitive => {
+            Ok(dto::ViewSensitivityDto::HighlySensitive)
+        }
+        _ => Err(internal_error()),
+    }
+}
 fn disclosure(value: owner::ProcessingDisclosure) -> AppWireResult<dto::ProcessingDisclosureDto> {
     Ok(dto::ProcessingDisclosureDto {
-        current: processing_out(value.current),
-        requested: processing_out(value.requested),
-        scope_labels: value.scope_labels,
-        categories: value
-            .categories
+        views: value
+            .views
             .into_iter()
-            .map(|value| match value.as_str() {
-                "personal" => Ok(dto::ReviewDataCategoryDto::Personal),
-                "highly_sensitive" => Ok(dto::ReviewDataCategoryDto::HighlySensitive),
-                _ => Err(internal_error()),
+            .map(|view| {
+                Ok(dto::ViewProcessingDisclosureDto {
+                    view_id: view.view_id,
+                    data_class: view_sensitivity(view.data_class)?,
+                    data_categories: view
+                        .data_categories
+                        .into_iter()
+                        .map(data_category)
+                        .collect(),
+                    current: view.current.map(processing_scope),
+                    requested: view.requested.map(processing_scope),
+                })
             })
             .collect::<AppWireResult<_>>()?,
     })

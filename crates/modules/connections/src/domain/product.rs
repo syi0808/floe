@@ -4,10 +4,36 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use floe_access::{ReviewRef, SourceExpectation, VerifiedGatewayBinding};
-use floe_context_contract::ConnectionId;
+use floe_context_contract::{ConnectionId, DataClass, GrantDataCategory, ProcessingRestriction};
 use floe_kernel::{AgentFailure, PersonId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+/// Admission evidence for one command delivery. A caller must retain any prior
+/// uncertainty until an exact receipt or identity-bound terminal observation.
+/// The failure reason alone never establishes whether a command was admitted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConnectionsCommandFailure {
+    NotAdmitted(AgentFailure),
+    Admitted(AgentFailure),
+    Indeterminate(AgentFailure),
+}
+impl ConnectionsCommandFailure {
+    /// Internal owners with their own durable command state may project only
+    /// the reason. Product transports must preserve the admission variant.
+    pub fn into_failure(self) -> AgentFailure {
+        match self {
+            Self::NotAdmitted(failure) | Self::Admitted(failure) | Self::Indeterminate(failure) => {
+                failure
+            }
+        }
+    }
+}
+impl From<AgentFailure> for ConnectionsCommandFailure {
+    fn from(failure: AgentFailure) -> Self {
+        Self::Indeterminate(failure)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -89,11 +115,17 @@ pub enum ProcessingChoice {
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ViewProcessingDisclosure {
+    pub view_id: String,
+    pub data_class: DataClass,
+    pub data_categories: Vec<GrantDataCategory>,
+    pub current: Option<ProcessingRestriction>,
+    pub requested: Option<ProcessingRestriction>,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProcessingDisclosure {
-    pub current: ProcessingChoice,
-    pub requested: ProcessingChoice,
-    pub categories: Vec<String>,
-    pub scope_labels: Vec<String>,
+    pub views: Vec<ViewProcessingDisclosure>,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -461,7 +493,6 @@ impl ConnectionsRecord {
                 if summary.state != crate::GatewayState::Forgotten
                     || summary.gateway_ref.is_nil()
                     || summary.revision == 0
-                    || !summary.remote_revocation_pending
                 {
                     return Err(AgentFailure::InvalidInput);
                 }

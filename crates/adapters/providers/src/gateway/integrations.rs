@@ -96,7 +96,7 @@ impl GatewayIntegrationAdapter {
         let (status, bytes) = http
             .request(
                 &connection.endpoint,
-                Some(&connection.bearer),
+                Some(connection.bearer.as_str()),
                 method,
                 path,
                 body,

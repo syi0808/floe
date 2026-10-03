@@ -41,21 +41,23 @@ pub struct SessionArchiveSnapshot {
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    pub(super) async fn initialize_session_archive(&self) -> Result<(), AgentFailure> {
+    /// Preserve stored-session decoding checks without rebuilding derived search.
+    pub(super) async fn validate_session_archive_records(&self) -> Result<(), AgentFailure> {
         let connection = self.connection()?;
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS agent_session_archives (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, source_revision INTEGER NOT NULL, through_turn_id TEXT NOT NULL, message_count INTEGER NOT NULL, payload TEXT NOT NULL)",
-            (),
-        ).await.map_err(storage)?;
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS agent_session_archives_session ON agent_session_archives(session_id, source_revision)",
-            (),
-        ).await.map_err(storage)?;
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS agent_session_search (session_id TEXT NOT NULL, archive_id TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY(session_id, archive_id))",
-            (),
-        ).await.map_err(storage)?;
-        self.rebuild_session_search(&connection).await
+        for query in [
+            "SELECT id,payload FROM agent_sessions",
+            "SELECT id,payload FROM agent_session_archives",
+        ] {
+            let mut rows = connection.query(query, ()).await.map_err(storage)?;
+            while let Some(row) = rows.next().await.map_err(storage)? {
+                let _: String = row.get(0).map_err(storage)?;
+                let session: AgentSession =
+                    serde_json::from_str(&row.get::<String>(1).map_err(storage)?)
+                        .map_err(unavailable)?;
+                integer(session.revision)?;
+            }
+        }
+        Ok(())
     }
 
     pub async fn search_sessions(

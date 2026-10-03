@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 use floe_access::DependencyCoverage;
 use floe_actions::{
@@ -17,60 +17,7 @@ use uuid::Uuid;
 
 use crate::{EncryptedAgentVault, VaultKeyProvider};
 
-const ACTIONS_SCHEMA_VERSION: i64 = 1;
 const ACTION_SELECT: &str = "SELECT person_id, action_id, revision, effect_digest, execution_id, state, collection_state, dispatch_revision, grant_key, length(CAST(payload AS BLOB)), CASE WHEN length(CAST(payload AS BLOB)) <= 65536 THEN payload ELSE '' END, origin_kind FROM actions_records";
-
-const ACTIONS_TABLES: &[(&str, &str)] = &[
-    (
-        "actions_schema",
-        "CREATE TABLE actions_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))",
-    ),
-    (
-        "actions_records",
-        "CREATE TABLE actions_records (person_id TEXT NOT NULL, action_id TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision > 0), effect_digest TEXT NOT NULL CHECK (length(effect_digest) = 64), execution_id TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('pending_review', 'approved', 'rejected', 'cancelled', 'expired', 'executing', 'blocked', 'failed', 'unknown', 'succeeded')), collection_state TEXT NOT NULL CHECK (collection_state IN ('none', 'pending', 'collected')), dispatch_revision INTEGER NOT NULL CHECK (dispatch_revision >= 0), grant_key TEXT NOT NULL, payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) > 0 AND length(CAST(payload AS BLOB)) <= 65536), origin_kind TEXT NOT NULL CHECK (origin_kind IN ('direct', 'expert')), PRIMARY KEY (person_id, action_id), CHECK ((origin_kind = 'direct' AND grant_key = '') OR (origin_kind = 'expert' AND grant_key <> '')), CHECK ((state = 'succeeded' AND collection_state IN ('pending', 'collected')) OR (state <> 'succeeded' AND collection_state = 'none')), CHECK ((state IN ('executing', 'failed', 'unknown', 'succeeded') AND dispatch_revision > 0) OR (state NOT IN ('executing', 'failed', 'unknown', 'succeeded') AND dispatch_revision = 0)))",
-    ),
-    (
-        "actions_authorities",
-        "CREATE TABLE actions_authorities (person_id TEXT PRIMARY KEY, revision INTEGER NOT NULL CHECK (revision > 0), mode TEXT NOT NULL CHECK (mode IN ('allow', 'ask', 'deny')), digest TEXT NOT NULL CHECK (length(digest) = 64), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) > 0 AND length(CAST(payload AS BLOB)) <= 4096))",
-    ),
-    (
-        "actions_command_receipts",
-        "CREATE TABLE actions_command_receipts (person_id TEXT NOT NULL, command_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('submit', 'decision', 'reconciliation', 'authority')), intent_digest TEXT NOT NULL CHECK (length(intent_digest) = 64), action_id TEXT NOT NULL, PRIMARY KEY (person_id, command_id), CHECK ((kind = 'authority' AND action_id = '') OR (kind <> 'authority' AND action_id <> ''))) ",
-    ),
-    (
-        "actions_settlement_receipts",
-        "CREATE TABLE actions_settlement_receipts (person_id TEXT NOT NULL, execution_id TEXT NOT NULL, expected_revision INTEGER NOT NULL CHECK (expected_revision > 0), action_id TEXT NOT NULL, effect_digest TEXT NOT NULL CHECK (length(effect_digest) = 64), outcome_digest TEXT NOT NULL CHECK (length(outcome_digest) = 64), PRIMARY KEY (person_id, execution_id, expected_revision))",
-    ),
-    (
-        "actions_collection_receipts",
-        "CREATE TABLE actions_collection_receipts (person_id TEXT NOT NULL, execution_id TEXT NOT NULL, receipt_digest TEXT NOT NULL CHECK (length(receipt_digest) = 64), ticket_revision INTEGER NOT NULL CHECK (ticket_revision > 0), action_id TEXT NOT NULL, intent_digest TEXT NOT NULL CHECK (length(intent_digest) = 64), PRIMARY KEY (person_id, execution_id, receipt_digest, ticket_revision))",
-    ),
-];
-
-const ACTIONS_INDEXES: &[(&str, &str)] = &[
-    (
-        "actions_records_execution",
-        "CREATE UNIQUE INDEX actions_records_execution ON actions_records (execution_id)",
-    ),
-    (
-        "actions_records_page",
-        "CREATE INDEX actions_records_page ON actions_records (person_id, action_id)",
-    ),
-    (
-        "actions_records_recovery",
-        "CREATE INDEX actions_records_recovery ON actions_records (person_id, state, collection_state, action_id)",
-    ),
-    (
-        "actions_records_grant",
-        "CREATE INDEX actions_records_grant ON actions_records (person_id, grant_key, state, action_id)",
-    ),
-];
-
-const OLD_ACTION_TABLES: &[&str] = &[
-    "agent_action_schema",
-    "agent_action_envelopes",
-    "agent_action_policy",
-];
 
 #[derive(Clone, Debug)]
 struct StoredAction {
@@ -319,158 +266,32 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(AgentFailure::from)
     }
 
-    pub(super) async fn initialize_actions_store(&self) -> Result<(), AgentFailure> {
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(|error| match error {
-                turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::Conflict,
-                _ => AgentFailure::StorageUnavailable,
-            })?;
-        let result = async {
-            let mut objects = transaction
-                .query(
-                    "SELECT name FROM sqlite_master WHERE name GLOB 'actions_*' AND type IN ('table', 'index') ORDER BY name",
-                    (),
-                )
-                .await
-                .map_err(sql_error)?;
-            let mut names = Vec::new();
-            while let Some(row) = objects.next().await.map_err(sql_error)? {
-                names.push(
-                    row.get::<String>(0)
-                        .map_err(|_| ActionStoreError::CorruptRecord)?,
-                );
-            }
-            drop(objects);
-            if names.is_empty() {
-                let mut legacy = transaction
-                    .query(
-                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('agent_action_schema', 'agent_action_envelopes', 'agent_action_policy')",
-                        (),
-                    )
-                    .await
-                    .map_err(sql_error)?;
-                if legacy.next().await.map_err(sql_error)?.is_some() {
-                    return Err(ActionStoreError::CorruptRecord);
-                }
-                drop(legacy);
-                for (_, statement) in ACTIONS_TABLES {
-                    transaction
-                        .execute(statement, ())
-                        .await
-                        .map_err(sql_error)?;
-                }
-                for (_, statement) in ACTIONS_INDEXES {
-                    transaction
-                        .execute(statement, ())
-                        .await
-                        .map_err(sql_error)?;
-                }
-                transaction
-                    .execute(
-                        "INSERT INTO actions_schema (id, version) VALUES (1, ?)",
-                        [ACTIONS_SCHEMA_VERSION],
-                    )
-                    .await
-                    .map_err(sql_error)?;
-                self.write_authority(&transaction,&ActionsAuthority::default_for(self.person_id),None).await?;
-            }
-            self.validate_actions_schema(&transaction).await
-        }
-        .await;
-        self.finish_actions_transaction(transaction, result)
-            .await
-            .map_err(AgentFailure::from)
+    pub(super) async fn seed_actions_authority(
+        &self,
+        transaction: &Transaction<'_>,
+    ) -> Result<(), AgentFailure> {
+        self.write_authority(
+            transaction,
+            &ActionsAuthority::default_for(self.person_id),
+            None,
+        )
+        .await
+        .map_err(AgentFailure::from)
     }
 
     async fn validate_actions_schema(
         &self,
         transaction: &Transaction<'_>,
     ) -> Result<(), ActionStoreError> {
-        let mut unexpected=transaction.query("SELECT name FROM sqlite_master WHERE type IN ('trigger','view') AND (name GLOB 'actions_*' OR tbl_name GLOB 'actions_*')",()).await.map_err(sql_error)?;
-        if unexpected.next().await.map_err(sql_error)?.is_some() {
-            return Err(ActionStoreError::CorruptRecord);
-        }
-        drop(unexpected);
-        for name in OLD_ACTION_TABLES {
-            let mut legacy = transaction
-                .query(
-                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-                    [name.to_string()],
-                )
-                .await
-                .map_err(sql_error)?;
-            if legacy.next().await.map_err(sql_error)?.is_some() {
-                return Err(ActionStoreError::CorruptRecord);
-            }
-        }
-        let mut expected = BTreeMap::new();
-        for (name, statement) in ACTIONS_TABLES {
-            expected.insert((*name).to_owned(), *statement);
-        }
-        for (name, statement) in ACTIONS_INDEXES {
-            expected.insert((*name).to_owned(), *statement);
-        }
-        let mut rows = transaction
-            .query(
-                "SELECT name, sql FROM sqlite_master WHERE name GLOB 'actions_*' AND type IN ('table', 'index') ORDER BY name",
-                (),
-            )
+        crate::schema::inspect_family(transaction, crate::schema::Family::Actions)
             .await
-            .map_err(sql_error)?;
-        let mut actual = BTreeMap::new();
-        while let Some(row) = rows.next().await.map_err(sql_error)? {
-            let name = row
-                .get::<String>(0)
-                .map_err(|_| ActionStoreError::CorruptRecord)?;
-            let sql = row
-                .get::<String>(1)
-                .map_err(|_| ActionStoreError::CorruptRecord)?;
-            if actual.insert(name, sql).is_some() {
-                return Err(ActionStoreError::CorruptRecord);
-            }
-        }
-        drop(rows);
-        if actual.len() != expected.len() {
-            return Err(ActionStoreError::CorruptRecord);
-        }
-        for (name, expected) in expected {
-            let actual = actual.get(&name).ok_or(ActionStoreError::CorruptRecord)?;
-            match crate::schema_sql::compare(actual, expected) {
-                crate::schema_sql::Comparison::Equivalent => {}
-                crate::schema_sql::Comparison::Different
-                | crate::schema_sql::Comparison::InvalidStored => {
-                    return Err(ActionStoreError::CorruptRecord);
-                }
-                crate::schema_sql::Comparison::InvalidExpected => {
-                    return Err(ActionStoreError::Unavailable);
-                }
-            }
-        }
-        let mut marker = transaction
-            .query("SELECT id, version FROM actions_schema", ())
-            .await
-            .map_err(sql_error)?;
-        let row = marker
-            .next()
-            .await
-            .map_err(sql_error)?
-            .ok_or(ActionStoreError::CorruptRecord)?;
-        if row
-            .get::<i64>(0)
-            .map_err(|_| ActionStoreError::CorruptRecord)?
-            != 1
-            || row
-                .get::<i64>(1)
-                .map_err(|_| ActionStoreError::CorruptRecord)?
-                != ACTIONS_SCHEMA_VERSION
-            || marker.next().await.map_err(sql_error)?.is_some()
-        {
-            return Err(ActionStoreError::CorruptRecord);
-        }
-        drop(marker);
+            .map_err(|failure| match failure {
+                crate::schema::SchemaFailure::Unsupported { .. }
+                | crate::schema::SchemaFailure::StoredCorrupt => ActionStoreError::CorruptRecord,
+                crate::schema::SchemaFailure::Busy => ActionStoreError::Conflict,
+                crate::schema::SchemaFailure::Unavailable
+                | crate::schema::SchemaFailure::InvalidDefinition => ActionStoreError::Unavailable,
+            })?;
         self.authority_in_transaction(transaction, self.person_id)
             .await?;
         Ok(())

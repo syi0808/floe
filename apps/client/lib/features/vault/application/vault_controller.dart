@@ -1,50 +1,115 @@
 import 'package:flutter/foundation.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
 
-/// Vault presentation/lifecycle is separate from Conversation and Run control.
+/// App-lifetime observation of the single Rust Vault lifecycle. Features share
+/// this controller; navigation and feature disposal never open or lock storage.
 final class VaultController extends ChangeNotifier {
   VaultController({required this.gateway, required this.personId});
   final AgentVaultGateway gateway;
   final String personId;
-  AgentVaultState? state;
-  bool busy = false;
+  AgentVaultState? _state;
+  AgentVaultException? _failure;
+  bool _busy = false;
+  AgentVaultState? get state => _state;
+  AgentVaultException? get failure => _failure;
+  bool get busy => _busy;
   bool _disposed = false;
+  bool _closing = false;
+  Future<void>? _opening;
+  Future<AgentVaultState> Function()? _failedOperation;
+  bool get ready => !_disposed && !_closing && !busy && state == AgentVaultState.ready;
+  bool get canRecover => !_disposed && !_closing && !busy &&
+      (gateway.hasPendingOperation ||
+          failure?.safeActions.contains('reopen_vault') == true ||
+          (failure?.retryPolicy != 'never' &&
+              failure?.safeActions.contains('retry') == true));
+  String? get reasonCode => _safeToken(failure?.reasonCode ?? failure?.failure);
+  String? get incidentId => _safeToken(failure?.incidentId);
 
-  Future<AgentVaultState> inspect() =>
-      _run(() => gateway.vaultStatus(personId));
-  Future<AgentVaultState> create() => _run(() => gateway.createVault(personId));
-  Future<AgentVaultState> unlock() => _run(() => gateway.unlockVault(personId));
+  /// Called once by AppRuntime after native callback services are available.
+  /// Repeated observers join this same attempt, including its failure result.
+  Future<void> open() => _opening ??= _run(_open);
 
-  Future<AgentVaultState> open() async {
-    final current = await inspect();
+  Future<AgentVaultState> _open() async {
+    final current = await gateway.vaultStatus(personId);
+    if (_closing || _disposed) return current;
     return switch (current) {
-      AgentVaultState.missing => create(),
-      AgentVaultState.locked => unlock(),
+      AgentVaultState.missing => gateway.createVault(personId),
+      AgentVaultState.locked => gateway.unlockVault(personId),
       _ => current,
     };
   }
 
+  /// An uncertain observer rejoins the gateway's retained command identity.
+  /// A new lifecycle attempt requires an explicit owner-projected safe action.
+  Future<void> recover() async {
+    if (!canRecover) return;
+    await _run(gateway.hasPendingOperation ? _failedOperation ?? _open : _open);
+  }
+
   Future<void> lock() async {
+    if (_disposed || _closing || busy || !ready) return;
     await _run(() async {
       await gateway.lockVault(personId);
       return gateway.vaultStatus(personId);
     });
   }
 
-  Future<AgentVaultState> _run(
-    Future<AgentVaultState> Function() operation,
-  ) async {
-    if (_disposed || busy) throw StateError('Vault request is unavailable.');
-    busy = true;
+  /// A feature may report an owner-directed loss of the shared generation, but
+  /// cannot repair, reopen or otherwise mutate the physical Vault itself.
+  void reportFailure(AgentVaultException error) {
+    final domain = error.ownerFailure?.domain ?? error.domain;
+    if (_disposed || _closing || domain != 'vault' ||
+        (error.reloadRequired != true && error.sealSession != true)) return;
+    _state = AgentVaultState.unavailable;
+    _failure = error;
+    notifyListeners();
+  }
+
+  Future<void> _run(Future<AgentVaultState> Function() operation) async {
+    if (_disposed || _closing || busy) return;
+    _busy = true;
+    _failure = null;
     notifyListeners();
     try {
       final value = await operation();
-      if (!_disposed) state = value;
-      return value;
+      if (!_disposed && !_closing) {
+        _state = value;
+        _failedOperation = null;
+      }
+    } on Object catch (error, stackTrace) {
+      final typed = error is AgentVaultException
+          ? error
+          : const AgentVaultException('storage_unavailable');
+      if (!_disposed && !_closing) {
+        _failure = typed;
+        _state = AgentVaultState.unavailable;
+        _failedOperation = operation;
+      }
+      AppDiagnostics.error(
+        component: 'vault',
+        operation: typed.stage ?? 'open',
+        error: StateError('Local secure storage failed: ${_safeToken(typed.reasonCode ?? typed.failure) ?? 'storage_unavailable'}'),
+        stackTrace: stackTrace,
+        failure: _safeToken(typed.failure),
+        reasonCode: _safeToken(typed.reasonCode),
+        failureDomain: _safeToken(typed.domain),
+        failureCategory: _safeToken(typed.category),
+        incidentId: _safeToken(typed.incidentId),
+        requestId: _safeToken(typed.requestId),
+        safeActions: typed.safeActions,
+      );
     } finally {
-      busy = false;
-      if (!_disposed) notifyListeners();
+      _busy = false;
+      if (!_disposed && !_closing) notifyListeners();
     }
+  }
+
+  void closeAdmission() {
+    if (_disposed || _closing) return;
+    _closing = true;
+    notifyListeners();
   }
 
   @override
@@ -53,3 +118,7 @@ final class VaultController extends ChangeNotifier {
     super.dispose();
   }
 }
+
+String? _safeToken(String? value) =>
+    value != null && RegExp(r'^[a-zA-Z0-9_.:-]{1,128}$').hasMatch(value)
+        ? value : null;

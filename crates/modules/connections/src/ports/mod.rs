@@ -12,3 +12,5 @@ pub mod gateway_pairing;
 
 pub mod product_repository;
 pub mod remote_integration;
+
+pub mod gateway_private;

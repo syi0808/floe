@@ -47,6 +47,76 @@ where
     }
 }
 
+#[cfg(unix)]
+fn invoke_command_json_v2(handle_ptr: *mut FloeHandle, request_json: *const c_char) -> *mut c_char {
+    diagnostics::initialize();
+    let raw = match c_input(request_json, "request_json") {
+        Ok(raw) => raw,
+        Err(_) => {
+            return command_output::<Value>(
+                Uuid::nil(),
+                Err(app_wire::AppCommandFailure::NotAdmitted(
+                    app_wire::validation("request_json"),
+                )),
+            );
+        }
+    };
+    let request_id = serde_json::from_str::<Value>(raw)
+        .ok()
+        .and_then(|value| value.get("request_id")?.as_str()?.parse().ok())
+        .unwrap_or_else(Uuid::nil);
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let handle = handle(handle_ptr).map_err(|_| {
+            app_wire::AppCommandFailure::NotAdmitted(app_wire::validation("handle"))
+        })?;
+        let request: AppCommandRequestDto = serde_json::from_str(raw).map_err(|_| {
+            app_wire::AppCommandFailure::NotAdmitted(app_wire::validation("request_json"))
+        })?;
+        app_wire::command(handle, request)
+    }));
+    let result = match result {
+        Ok(result) => result,
+        Err(payload) => {
+            let _ = diagnostics::panic_error(payload);
+            Err(app_wire::AppCommandFailure::Indeterminate(
+                app_wire::internal_error(),
+            ))
+        }
+    };
+    command_output(request_id, result)
+}
+
+#[cfg(unix)]
+fn command_output<T: Serialize>(
+    request_id: Uuid,
+    result: app_wire::AppCommandResult<T>,
+) -> *mut c_char {
+    let response = match result {
+        Ok(result) => AppResponseDto::ok(request_id, result),
+        Err(failure) => {
+            let (disposition, error) = failure.into_parts();
+            AppResponseDto::command_error(request_id, disposition, error)
+        }
+    };
+    // A lost acknowledgement during result encoding is not proof of rejection.
+    let encoded = catch_unwind(AssertUnwindSafe(|| serde_json::to_string(&response)));
+    match encoded {
+        Ok(Ok(encoded)) => CString::new(encoded)
+            .expect("JSON cannot contain NUL")
+            .into_raw(),
+        result => {
+            if let Err(payload) = result {
+                let _ = diagnostics::panic_error(payload);
+            }
+            c_output(AppResponseDto::<Value>::command_error(
+                request_id,
+                AppCommandDispositionDto::Indeterminate,
+                app_wire::internal_error(),
+            ))
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn floe_core_open(
@@ -148,7 +218,7 @@ pub unsafe extern "C" fn floe_core_command_v2(
     handle_ptr: *mut FloeHandle,
     request_json: *const c_char,
 ) -> *mut c_char {
-    invoke_json_v2(handle_ptr, request_json, app_wire::command)
+    invoke_command_json_v2(handle_ptr, request_json)
 }
 
 #[unsafe(no_mangle)]

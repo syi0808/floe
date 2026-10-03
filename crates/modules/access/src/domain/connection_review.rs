@@ -1,8 +1,8 @@
 use crate::{DataAccessGrant, GrantState, VerifiedGatewayBinding};
 use chrono::{DateTime, Utc};
 use floe_context_contract::{
-    GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantPurpose, GrantSourceBinding,
-    ProcessingRestriction, ResourceHandle, SourceAuthority,
+    DataClass, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantPurpose,
+    GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
 };
 use floe_kernel::{AgentFailure, PersonId};
 use serde::{Deserialize, Serialize};
@@ -121,6 +121,7 @@ impl ExpectedGrant {
 #[serde(deny_unknown_fields)]
 pub struct ReviewedView {
     pub view_id: String,
+    pub data_class: DataClass,
     pub expected: ExpectedGrant,
     pub consumers: Vec<GrantConsumer>,
     pub purpose: GrantPurpose,
@@ -200,6 +201,8 @@ impl ConnectionReview {
             }
             if !crate::source_view_ids(self.source.source.connector().as_str())
                 .contains(&view.view_id.as_str())
+                || floe_context_contract::source_view_data_class(&view.view_id)
+                    != Some(view.data_class)
                 || floe_context_contract::connection_view_resource(
                     &view.view_id,
                     &self.source.source.connection_id(),
@@ -659,6 +662,8 @@ pub enum SourceObserveViewState {
 #[serde(deny_unknown_fields)]
 pub struct SourceObserveView {
     pub view_id: String,
+    pub data_class: DataClass,
+    pub categories: Vec<GrantDataCategory>,
     pub state: SourceObserveViewState,
     pub processing: Option<ProcessingRestriction>,
 }

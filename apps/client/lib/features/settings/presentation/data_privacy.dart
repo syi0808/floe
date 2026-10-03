@@ -3,11 +3,13 @@ part of 'settings_screen.dart';
 class _DataPrivacy extends StatefulWidget {
   const _DataPrivacy({
     required this.controller,
+    required this.vault,
     required this.onManageMemory,
     this.platform,
   });
 
-  final ConversationController controller;
+  final AgentMemoryController controller;
+  final VaultController vault;
   final VoidCallback onManageMemory;
   final TargetPlatform? platform;
 
@@ -19,12 +21,13 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   bool memoryRequested = false;
   bool savedMemoryRequested = false;
 
-  ConversationController get controller => widget.controller;
+  AgentMemoryController get controller => widget.controller;
 
   @override
   void initState() {
     super.initState();
     controller.addListener(_controllerChanged);
+    widget.vault.addListener(_controllerChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
@@ -37,11 +40,15 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       memoryRequested = false;
       savedMemoryRequested = false;
     }
+    if (oldWidget.vault != widget.vault) {
+      oldWidget.vault.removeListener(_controllerChanged);
+      widget.vault.addListener(_controllerChanged);
+    }
     _load();
   }
 
   void _controllerChanged() {
-    if (controller.vaultState != AgentVaultState.ready) {
+    if (!widget.vault.ready) {
       memoryRequested = false;
       savedMemoryRequested = false;
       return;
@@ -50,29 +57,32 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   }
 
   Future<void> _load() async {
-    if (controller.memoryController.hasReview &&
+    if (!mounted || !widget.vault.ready) return;
+    if (controller.hasReview &&
         !memoryRequested &&
-        controller.memoryController.canReadReview) {
+        controller.canReadReview) {
       memoryRequested = true;
-      await controller.memoryController.loadReview();
+      await controller.loadReview();
     }
-    if (controller.memoryController.hasMemory &&
+    if (!mounted || !widget.vault.ready) return;
+    if (controller.hasMemory &&
         !savedMemoryRequested &&
-        controller.memoryController.canRead) {
+        controller.canRead) {
       savedMemoryRequested = true;
-      await controller.memoryController.load();
+      await controller.load();
     }
   }
 
   @override
   void dispose() {
     controller.removeListener(_controllerChanged);
+    widget.vault.removeListener(_controllerChanged);
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: controller,
+    animation: Listenable.merge([controller, widget.vault]),
     builder: (context, _) => Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -93,14 +103,14 @@ class _DataPrivacyState extends State<_DataPrivacy> {
           key: ValueKey('connections-privacy-navigation'),
           text: 'Open Connections to connect sources, choose resources, or change Use with Floe.',
         ),
-        if (controller.memoryController.hasMemory) ...[
+        if (controller.hasMemory) ...[
           const SizedBox(height: FloeSpace.lg),
           AgentMemorySettingsCard(
-            controller: controller.memoryController,
+            controller: controller,
             onManage: widget.onManageMemory,
           ),
         ],
-        if (controller.vaultState != AgentVaultState.ready) ...[
+        if (!widget.vault.ready) ...[
           const SizedBox(height: FloeSpace.sm),
           Text(
             'Private data controls will appear when your vault is unlocked.',

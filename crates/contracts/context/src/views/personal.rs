@@ -107,9 +107,12 @@ pub trait PersonalContextProjection: Serialize {
 
 macro_rules! projection {
     ($type:ty, $class:expr) => {
+        impl $type {
+            pub const DATA_CLASS: DataClass = $class;
+        }
         impl PersonalContextProjection for $type {
             fn data_class(&self) -> DataClass {
-                $class
+                Self::DATA_CLASS
             }
             fn schema_version(&self) -> u32 {
                 self.schema_version

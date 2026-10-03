@@ -199,7 +199,6 @@ pub enum GatewayObservation {
     },
     RepairRequired {
         summary: GatewaySummary,
-        slot_digest: Option<[u8; 32]>,
         expectation: floe_access::GatewayCredentialExpectation,
     },
 }
@@ -213,14 +212,13 @@ impl GatewayObservation {
 #[derive(Clone, Debug)]
 pub enum GatewayForgetExpectation {
     Paired(VerifiedGatewayBinding),
-    Unreadable {
+    RepairRequired {
         gateway_ref: Uuid,
         revision: u64,
-        slot_digest: Option<[u8; 32]>,
         expectation: floe_access::GatewayCredentialExpectation,
     },
 }
-/// Public metadata and explicit forgetting at the real secure-store boundary.
+/// Public metadata and atomic forgetting at the encrypted Connections repository.
 pub trait GatewayRegistry: Send + Sync {
     fn current<'a>(
         &'a self,
@@ -229,13 +227,9 @@ pub trait GatewayRegistry: Send + Sync {
     ) -> BoxFuture<'a, Result<Option<GatewayObservation>, crate::PairingError>>;
     fn forget<'a>(
         &'a self,
-        operation_id: Uuid,
+        receipt: crate::ConnectionsRecord,
         expected: GatewayForgetExpectation,
     ) -> BoxFuture<'a, Result<GatewaySummary, crate::PairingError>>;
-    fn forgotten<'a>(
-        &'a self,
-        operation_id: Uuid,
-    ) -> BoxFuture<'a, Result<Option<GatewaySummary>, crate::PairingError>>;
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

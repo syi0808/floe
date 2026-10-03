@@ -7,6 +7,7 @@
 mod engine;
 mod error;
 mod repositories;
+mod schema;
 mod schema_sql;
 #[cfg(unix)]
 mod vault;

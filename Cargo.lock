@@ -734,6 +734,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -941,16 +942,13 @@ dependencies = [
 name = "floe-native"
 version = "0.1.0"
 dependencies = [
- "core-foundation",
  "floe-context-contract",
  "floe-execution",
  "floe-kernel",
  "libc",
- "security-framework-sys",
  "serde",
  "serde_json",
  "tokio",
- "tracing",
  "uuid",
 ]
 

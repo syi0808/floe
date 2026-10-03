@@ -4,101 +4,18 @@ use floe_kernel::PersonId;
 use turso::transaction::Transaction;
 use uuid::Uuid;
 
-const CONTEXT_DEPENDENCY_SCHEMA_VERSION: i64 = 1;
-const SCHEMA_TABLE: &str = "agent_context_dependency_schema";
-const COVERAGE_TABLE: &str = "agent_context_dependency_coverage";
+// Version of the serialized coverage row, distinct from schema lifecycle.
+const CONTEXT_DEPENDENCY_RECORD_VERSION: i64 = 1;
 const MAX_CONTEXT_DEPENDENCY_ROWS: i64 = 100_000;
 pub(super) const MAX_CONTEXT_DEPENDENCY_TURNS_PER_SESSION: i64 = 4_096;
 pub(super) const MAX_CONTEXT_DEPENDENCY_SESSION_BYTES: i64 = 4 * 1024 * 1024;
 
-pub(super) async fn initialize_context_dependency_store(
-    transaction: &Transaction<'_>,
-) -> Result<(), AgentFailure> {
-    let mut tables = transaction
-        .query(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN (?, ?)",
-            (SCHEMA_TABLE, COVERAGE_TABLE),
-        )
-        .await
-        .map_err(storage)?;
-    let mut found = Vec::new();
-    while let Some(row) = tables.next().await.map_err(storage)? {
-        found.push(row.get::<String>(0).map_err(storage)?);
-    }
-    found.sort();
-    if found.is_empty() {
-        transaction
-            .execute(
-                "CREATE TABLE agent_context_dependency_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE TABLE agent_context_dependency_coverage (person_id TEXT NOT NULL, session_id TEXT NOT NULL, turn_id TEXT NOT NULL, version INTEGER NOT NULL CHECK (version = 1), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 65536), PRIMARY KEY (person_id, session_id, turn_id))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE INDEX agent_context_dependency_coverage_session_idx ON agent_context_dependency_coverage (person_id, session_id, turn_id)",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "INSERT INTO agent_context_dependency_schema (id, version) VALUES (1, 1)",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        return Ok(());
-    }
-    if found != [COVERAGE_TABLE.to_owned(), SCHEMA_TABLE.to_owned()] {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    validate_context_dependency_store(transaction).await
-}
-
 pub(super) async fn validate_context_dependency_store(
     transaction: &Transaction<'_>,
 ) -> Result<(), AgentFailure> {
-    let mut marker = transaction
-        .query(
-            "SELECT id, version FROM agent_context_dependency_schema",
-            (),
-        )
+    crate::schema::inspect_family(transaction, crate::schema::Family::Context)
         .await
-        .map_err(storage)?;
-    let Some(row) = marker.next().await.map_err(storage)? else {
-        return Err(AgentFailure::VaultUnavailable);
-    };
-    if row.get::<i64>(0).map_err(storage)? != 1
-        || row.get::<i64>(1).map_err(storage)? != CONTEXT_DEPENDENCY_SCHEMA_VERSION
-        || marker.next().await.map_err(storage)?.is_some()
-    {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    let mut indexes = transaction
-        .query(
-            "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'agent_context_dependency_coverage_session_idx'",
-            (),
-        )
-        .await
-        .map_err(storage)?;
-    if indexes.next().await.map_err(storage)?.is_none() {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    transaction
-        .query(
-            "SELECT person_id, session_id, turn_id, version, payload FROM agent_context_dependency_coverage LIMIT 0",
-            (),
-        )
-        .await
-        .map_err(storage)?;
+        .map_err(crate::schema::SchemaFailure::into_agent)?;
     let mut rows = transaction
         .query(
             "SELECT person_id, session_id, turn_id, version, payload FROM agent_context_dependency_coverage LIMIT ?",
@@ -110,7 +27,7 @@ pub(super) async fn validate_context_dependency_store(
     while let Some(row) = rows.next().await.map_err(storage)? {
         count += 1;
         if count > MAX_CONTEXT_DEPENDENCY_ROWS
-            || row.get::<i64>(3).map_err(storage)? != CONTEXT_DEPENDENCY_SCHEMA_VERSION
+            || row.get::<i64>(3).map_err(storage)? != CONTEXT_DEPENDENCY_RECORD_VERSION
         {
             return Err(AgentFailure::VaultUnavailable);
         }
@@ -149,7 +66,7 @@ pub(super) async fn read_context_dependency_coverage(
         return Ok(DependencyCoverage::Unknown);
     };
     if rows.next().await.map_err(storage)?.is_some()
-        || row.get::<i64>(0).map_err(storage)? != CONTEXT_DEPENDENCY_SCHEMA_VERSION
+        || row.get::<i64>(0).map_err(storage)? != CONTEXT_DEPENDENCY_RECORD_VERSION
     {
         return Err(AgentFailure::VaultUnavailable);
     }
@@ -233,7 +150,7 @@ pub(super) async fn merge_context_dependency_coverage(
     let changed = transaction
         .execute(
             "UPDATE agent_context_dependency_coverage SET version = ?, payload = ? WHERE person_id = ? AND session_id = ? AND turn_id = ?",
-            (CONTEXT_DEPENDENCY_SCHEMA_VERSION, String::from_utf8(payload.clone()).map_err(|_| AgentFailure::InvalidInput)?, person_id.to_string(), session_id.to_string(), turn_id.to_string()),
+            (CONTEXT_DEPENDENCY_RECORD_VERSION, String::from_utf8(payload.clone()).map_err(|_| AgentFailure::InvalidInput)?, person_id.to_string(), session_id.to_string(), turn_id.to_string()),
         )
         .await
         .map_err(storage)?;
@@ -241,7 +158,7 @@ pub(super) async fn merge_context_dependency_coverage(
         transaction
             .execute(
                 "INSERT INTO agent_context_dependency_coverage (person_id, session_id, turn_id, version, payload) VALUES (?, ?, ?, ?, ?)",
-                (person_id.to_string(), session_id.to_string(), turn_id.to_string(), CONTEXT_DEPENDENCY_SCHEMA_VERSION, String::from_utf8(payload).map_err(|_| AgentFailure::InvalidInput)?),
+                (person_id.to_string(), session_id.to_string(), turn_id.to_string(), CONTEXT_DEPENDENCY_RECORD_VERSION, String::from_utf8(payload).map_err(|_| AgentFailure::InvalidInput)?),
             )
             .await
             .map_err(storage)?;
@@ -267,7 +184,7 @@ async fn read_context_dependency_row(
         return Ok(None);
     };
     if rows.next().await.map_err(storage)?.is_some()
-        || row.get::<i64>(0).map_err(storage)? != CONTEXT_DEPENDENCY_SCHEMA_VERSION
+        || row.get::<i64>(0).map_err(storage)? != CONTEXT_DEPENDENCY_RECORD_VERSION
     {
         return Err(AgentFailure::VaultUnavailable);
     }

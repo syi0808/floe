@@ -27,7 +27,6 @@ use uuid::Uuid;
 
 use super::*;
 
-const SCHEMA_VERSION: i64 = 1;
 const MAX_INTERACTION_PAYLOAD_BYTES: usize = 32 * 1024;
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
@@ -71,7 +70,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
-            initialize(&transaction).await?;
+            validate_schema(&transaction).await?;
             if let Some(recorded) = read_decision(&transaction, decision.command_id).await? {
                 if !decision.matches_recorded(&recorded) {
                     return Err(AgentFailure::Conflict);
@@ -138,7 +137,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
-            initialize(&transaction).await?;
+            validate_schema(&transaction).await?;
             let current = read_interaction(&transaction, self.person_id, resolution.interaction_id)
                 .await?.ok_or(AgentFailure::NotFound)?;
             match &resolution.cause {
@@ -232,7 +231,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
-            initialize(&transaction).await?;
+            validate_schema(&transaction).await?;
             let current = read_interaction(&transaction, self.person_id, supersede.interaction_id)
                 .await?
                 .ok_or(AgentFailure::NotFound)?;
@@ -278,7 +277,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
-            initialize(&transaction).await?;
+            validate_schema(&transaction).await?;
             let current = read_interaction(&transaction, self.person_id, expire.interaction_id)
                 .await?
                 .ok_or(AgentFailure::NotFound)?;
@@ -661,125 +660,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 }
 
-async fn table_exists(connection: &turso::Connection, table: &str) -> Result<bool, AgentFailure> {
-    let mut rows = connection
-        .query(
-            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?",
-            [table],
-        )
+pub(super) async fn validate_schema(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
+    crate::schema::inspect_family(transaction, crate::schema::Family::Interactions)
         .await
-        .map_err(storage)?;
-    Ok(rows.next().await.map_err(storage)?.is_some())
-}
-
-pub(super) async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
-    let mut tables = transaction
-        .query(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('agent_conversation_interaction_schema', 'agent_conversation_interactions', 'agent_conversation_interaction_decisions', 'agent_conversation_interaction_refreshes')",
-            (),
-        )
-        .await
-        .map_err(storage)?;
-    let mut found = Vec::new();
-    while let Some(row) = tables.next().await.map_err(storage)? {
-        found.push(row.get::<String>(0).map_err(storage)?);
-    }
-    found.sort();
-    if found.is_empty() {
-        transaction
-            .execute(
-                "CREATE TABLE agent_conversation_interaction_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE TABLE agent_conversation_interactions (interaction_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, person_id TEXT NOT NULL, origin_run_id TEXT NOT NULL, requirement_digest TEXT NOT NULL, target_digest TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('pending', 'resolving', 'resolved', 'denied', 'cancelled', 'superseded', 'expired')), revision INTEGER NOT NULL CHECK (revision > 0), created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 32768))",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE TABLE agent_conversation_interaction_decisions (command_id TEXT PRIMARY KEY, interaction_id TEXT NOT NULL REFERENCES agent_conversation_interactions(interaction_id), kind TEXT NOT NULL CHECK (kind IN ('approve', 'deny', 'dismiss')), target_digest TEXT NOT NULL, principal TEXT NOT NULL, interaction_revision INTEGER NOT NULL CHECK (interaction_revision > 0), decided_at INTEGER NOT NULL)",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction.execute("CREATE TABLE agent_conversation_interaction_refreshes (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, session_id TEXT NOT NULL, interaction_id TEXT NOT NULL REFERENCES agent_conversation_interactions(interaction_id), expected_revision INTEGER NOT NULL CHECK(expected_revision > 0))", ()).await.map_err(storage)?;
-        transaction
-            .execute(
-                "CREATE INDEX agent_conversation_interactions_run ON agent_conversation_interactions (origin_run_id, state, interaction_id)",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        transaction
-            .execute(
-                "INSERT INTO agent_conversation_interaction_schema (id, version) VALUES (1, 1)",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        return Ok(());
-    }
-    if found
-        != [
-            "agent_conversation_interaction_decisions".to_owned(),
-            "agent_conversation_interaction_refreshes".to_owned(),
-            "agent_conversation_interaction_schema".to_owned(),
-            "agent_conversation_interactions".to_owned(),
-        ]
-    {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    let mut marker = transaction
-        .query(
-            "SELECT id, version FROM agent_conversation_interaction_schema",
-            (),
-        )
-        .await
-        .map_err(storage)?;
-    let row = marker
-        .next()
-        .await
-        .map_err(storage)?
-        .ok_or(AgentFailure::VaultUnavailable)?;
-    if row.get::<i64>(0).map_err(storage)? != 1
-        || row.get::<i64>(1).map_err(storage)? != SCHEMA_VERSION
-        || marker.next().await.map_err(storage)?.is_some()
-    {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    transaction
-        .query(
-            "SELECT interaction_id, session_id, person_id, origin_run_id, requirement_digest, target_digest, state, revision, created_at, expires_at, payload FROM agent_conversation_interactions LIMIT 0",
-            (),
-        )
-        .await
-        .map_err(storage)?;
-    transaction
-        .query(
-            "SELECT command_id, interaction_id, kind, target_digest, principal, interaction_revision, decided_at FROM agent_conversation_interaction_decisions LIMIT 0",
-            (),
-        )
-        .await
-        .map_err(storage)?;
-    transaction.query("SELECT command_id, person_id, session_id, interaction_id, expected_revision FROM agent_conversation_interaction_refreshes LIMIT 0", ()).await.map_err(storage)?;
-    let mut index = transaction
-        .query(
-            "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'agent_conversation_interactions_run' AND tbl_name = 'agent_conversation_interactions'",
-            (),
-        )
-        .await
-        .map_err(storage)?;
-    if index.next().await.map_err(storage)?.is_none()
-        || index.next().await.map_err(storage)?.is_some()
-    {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    Ok(())
+        .map_err(crate::schema::SchemaFailure::into_agent)
 }
 
 pub(super) async fn read_interaction(
@@ -787,9 +671,6 @@ pub(super) async fn read_interaction(
     person_id: PersonId,
     interaction_id: Uuid,
 ) -> Result<Option<ConversationInteraction>, AgentFailure> {
-    if !table_exists(connection, "agent_conversation_interactions").await? {
-        return Ok(None);
-    }
     let mut rows = connection
         .query(
             "SELECT interaction_id, session_id, person_id, origin_run_id, requirement_digest, target_digest, state, revision, created_at, expires_at, payload FROM agent_conversation_interactions WHERE interaction_id = ?",
@@ -1031,9 +912,6 @@ pub(super) async fn read_group_on(
     person_id: PersonId,
     origin_run_id: RunId,
 ) -> Result<Vec<ConversationInteraction>, AgentFailure> {
-    if !table_exists(connection, "agent_conversation_interactions").await? {
-        return Ok(Vec::new());
-    }
     let mut rows = connection.query("SELECT interaction_id, session_id, person_id, origin_run_id, requirement_digest, target_digest, state, revision, created_at, expires_at, payload FROM agent_conversation_interactions WHERE origin_run_id = ? ORDER BY created_at ASC, interaction_id ASC LIMIT 65", [origin_run_id.as_uuid().to_string()]).await.map_err(storage)?;
     let mut records = Vec::new();
     while let Some(row) = rows.next().await.map_err(storage)? {
@@ -1092,7 +970,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
-            initialize(&transaction).await?;
+            validate_schema(&transaction).await?;
             let mut rows = transaction.query("SELECT person_id, session_id, interaction_id, expected_revision FROM agent_conversation_interaction_refreshes WHERE command_id = ?", [request.command_id.to_string()]).await.map_err(storage)?;
             let replay = if let Some(row) = rows.next().await.map_err(storage)? {
                 if row.get::<String>(0).map_err(storage)? != self.person_id.to_string() || row.get::<String>(1).map_err(storage)? != request.session_id.to_string()
@@ -1143,13 +1021,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::InvalidInput);
         }
         let connection = self.connection()?;
-        if !table_exists(&connection, "agent_conversation_interactions").await? {
-            self.check_access()?;
-            return Ok(floe_conversation::RecoveryPage {
-                items: Vec::new(),
-                next_cursor: None,
-            });
-        }
         let created = after.map_or(i64::MIN, |cursor| cursor.created_at_unix_ms);
         let id = after.map_or_else(String::new, |cursor| cursor.interaction_id.to_string());
         let mut rows = connection.query("SELECT interaction_id FROM agent_conversation_interactions WHERE person_id = ? AND json_extract(payload, '$.audit.device_id') = ? AND state = 'resolving' AND (created_at > ? OR (created_at = ? AND interaction_id > ?)) ORDER BY created_at, interaction_id LIMIT ?", (person_id.to_string(), actor.device_id.clone(), created, created, id, integer(limit as u64 + 1)?)).await.map_err(storage)?;

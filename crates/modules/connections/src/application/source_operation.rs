@@ -1,9 +1,10 @@
 //! Durable source/Access coordination across two independent stores. A missing
 //! receipt is not an abort; unresolved operations keep their source fenced.
 use crate::{
-    SourceAbortReason, SourceConnection, SourceOperationAdmission, SourceOperationChange,
-    SourceOperationExpectation, SourceOperationKind, SourceOperationPhase, SourceOperationProof,
-    SourceOperationRecord, SourceOperationReservation, SourceRepairReason, SourceRepositoryError,
+    ConnectionsCommandFailure, SourceAbortReason, SourceConnection, SourceOperationAdmission,
+    SourceOperationChange, SourceOperationExpectation, SourceOperationKind, SourceOperationPhase,
+    SourceOperationProof, SourceOperationRecord, SourceOperationReservation, SourceRepairReason,
+    SourceRepositoryError,
 };
 use floe_access::{
     AccessService, ConnectionReview, GrantAbort, GrantAbortOutcome, GrantCommitReceipt,
@@ -335,26 +336,42 @@ impl ConnectionsService {
         command_id: Uuid,
         reference: ReviewRef,
         scope: &ExecutionScope,
-    ) -> Result<SourceOperationRecord, AgentFailure> {
-        self.ensure_open()?;
-        check(actor, scope)?;
-        let intent = intent_digest(&("observe", command_id, &reference))?;
+    ) -> Result<SourceOperationRecord, ConnectionsCommandFailure> {
+        if command_id.is_nil() {
+            return Err(ConnectionsCommandFailure::NotAdmitted(
+                AgentFailure::InvalidInput,
+            ));
+        }
+        self.ensure_open()
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        check(actor, scope).map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        let intent = intent_digest(&("observe", command_id, &reference))
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
         if let Some(replay) = self.replay(actor, command_id, intent, scope).await? {
             return Ok(replay);
         }
         let review = self
             .access
             .inspect_review(actor, reference.clone(), scope)
-            .await?;
+            .await
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
         let current = self
             .sources
             .load(actor.person_id, &review.source.source.connection_id())
             .await
-            .map_err(source_error)?
-            .ok_or(AgentFailure::Conflict)?;
-        let observed = self.evidence.observe(actor, &current, scope).await?;
+            .map_err(source_error)
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?
+            .ok_or(AgentFailure::Conflict)
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        let observed = self
+            .evidence
+            .observe(actor, &current, scope)
+            .await
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
         if observed != review.source {
-            return Err(AgentFailure::Conflict);
+            return Err(ConnectionsCommandFailure::NotAdmitted(
+                AgentFailure::Conflict,
+            ));
         }
         let (admission, reservation) = self
             .reserve(
@@ -366,33 +383,37 @@ impl ConnectionsService {
                 SourceOperationKind::ConnectionReviewApply,
             )
             .await?;
-        if !admission.record.phase.holds_fence() {
-            return Ok(admission.record);
-        }
-        // Always read the immutable receipt following a possibly lost commit
-        // response. There is no second grant application in this invocation.
-        let applied = self
-            .access
-            .apply_review(actor, reference, reservation.clone(), scope)
-            .await;
-        match self
-            .access
-            .receipt(
-                actor,
-                GrantReceiptQuery {
-                    identity: reservation.identity(),
-                },
-                scope,
-            )
-            .await?
-        {
-            Some(GrantOperationReceipt::Committed(receipt)) => {
-                self.complete_committed(actor, admission.record, receipt, None, scope)
-                    .await
+        let result: Result<SourceOperationRecord, AgentFailure> = async {
+            if !admission.record.phase.holds_fence() {
+                return Ok(admission.record);
             }
-            Some(GrantOperationReceipt::Aborted(_)) => Err(AgentFailure::Conflict),
-            None => Err(applied.err().unwrap_or(AgentFailure::StorageUnavailable)),
+            // Always read the immutable receipt following a possibly lost commit
+            // response. There is no second grant application in this invocation.
+            let applied = self
+                .access
+                .apply_review(actor, reference, reservation.clone(), scope)
+                .await;
+            match self
+                .access
+                .receipt(
+                    actor,
+                    GrantReceiptQuery {
+                        identity: reservation.identity(),
+                    },
+                    scope,
+                )
+                .await?
+            {
+                Some(GrantOperationReceipt::Committed(receipt)) => {
+                    self.complete_committed(actor, admission.record, receipt, None, scope)
+                        .await
+                }
+                Some(GrantOperationReceipt::Aborted(_)) => Err(AgentFailure::Conflict),
+                None => Err(applied.err().unwrap_or(AgentFailure::StorageUnavailable)),
+            }
         }
+        .await;
+        result.map_err(ConnectionsCommandFailure::Admitted)
     }
     pub async fn disconnect_source_operation(
         &self,
@@ -401,10 +422,17 @@ impl ConnectionsService {
         source_id: &floe_context_contract::ConnectionId,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<SourceOperationRecord, AgentFailure> {
-        self.ensure_open()?;
-        check(actor, scope)?;
-        let intent = intent_digest(&("disconnect", command_id, source_id, expected_revision))?;
+    ) -> Result<SourceOperationRecord, ConnectionsCommandFailure> {
+        if command_id.is_nil() {
+            return Err(ConnectionsCommandFailure::NotAdmitted(
+                AgentFailure::InvalidInput,
+            ));
+        }
+        self.ensure_open()
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        check(actor, scope).map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        let intent = intent_digest(&("disconnect", command_id, source_id, expected_revision))
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
         if let Some(replay) = self.replay(actor, command_id, intent, scope).await? {
             return Ok(replay);
         }
@@ -412,12 +440,20 @@ impl ConnectionsService {
             .sources
             .load(actor.person_id, source_id)
             .await
-            .map_err(source_error)?
-            .ok_or(AgentFailure::CapabilityUnavailable)?;
+            .map_err(source_error)
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?
+            .ok_or(AgentFailure::CapabilityUnavailable)
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
         if source.revision() != expected_revision {
-            return Err(AgentFailure::Conflict);
+            return Err(ConnectionsCommandFailure::NotAdmitted(
+                AgentFailure::Conflict,
+            ));
         }
-        let expected = self.evidence.observe(actor, &source, scope).await?;
+        let expected = self
+            .evidence
+            .observe(actor, &source, scope)
+            .await
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
         let (admission, reservation) = self
             .reserve(
                 actor,
@@ -428,34 +464,44 @@ impl ConnectionsService {
                 SourceOperationKind::ConnectionDisconnect,
             )
             .await?;
-        if !admission.record.phase.holds_fence() {
-            return Ok(admission.record);
-        }
-        let result = self
-            .access
-            .disconnect(actor, reservation.clone(), scope)
-            .await;
-        match self
-            .access
-            .receipt(
-                actor,
-                GrantReceiptQuery {
-                    identity: reservation.identity(),
-                },
-                scope,
-            )
-            .await?
-        {
-            Some(GrantOperationReceipt::Committed(receipt)) => {
-                let mut successor = source;
-                successor
-                    .disconnect(expected_revision)
-                    .map_err(|_| AgentFailure::Conflict)?;
-                self.complete_committed(actor, admission.record, receipt, Some(successor), scope)
-                    .await
+        let result: Result<SourceOperationRecord, AgentFailure> = async {
+            if !admission.record.phase.holds_fence() {
+                return Ok(admission.record);
             }
-            _ => Err(result.err().unwrap_or(AgentFailure::StorageUnavailable)),
+            let result = self
+                .access
+                .disconnect(actor, reservation.clone(), scope)
+                .await;
+            match self
+                .access
+                .receipt(
+                    actor,
+                    GrantReceiptQuery {
+                        identity: reservation.identity(),
+                    },
+                    scope,
+                )
+                .await?
+            {
+                Some(GrantOperationReceipt::Committed(receipt)) => {
+                    let mut successor = source;
+                    successor
+                        .disconnect(expected_revision)
+                        .map_err(|_| AgentFailure::Conflict)?;
+                    self.complete_committed(
+                        actor,
+                        admission.record,
+                        receipt,
+                        Some(successor),
+                        scope,
+                    )
+                    .await
+                }
+                _ => Err(result.err().unwrap_or(AgentFailure::StorageUnavailable)),
+            }
         }
+        .await;
+        result.map_err(ConnectionsCommandFailure::Admitted)
     }
     pub(super) async fn reserve(
         &self,
@@ -465,14 +511,23 @@ impl ConnectionsService {
         review: Option<ReviewRef>,
         source: SourceExpectation,
         kind: SourceOperationKind,
-    ) -> Result<(SourceOperationAdmission, SourceReservationEvidence), AgentFailure> {
+    ) -> Result<(SourceOperationAdmission, SourceReservationEvidence), ConnectionsCommandFailure>
+    {
         if command_id.is_nil() {
-            return Err(AgentFailure::InvalidInput);
+            return Err(ConnectionsCommandFailure::NotAdmitted(
+                AgentFailure::InvalidInput,
+            ));
         }
-        actor.validate()?;
-        source.validate()?;
+        actor
+            .validate()
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        source
+            .validate()
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
         if source.source.person_id() != actor.person_id {
-            return Err(AgentFailure::PolicyDenied);
+            return Err(ConnectionsCommandFailure::NotAdmitted(
+                AgentFailure::PolicyDenied,
+            ));
         }
         let operation_id = derived_id(
             b"floe.source.operation.v1",
@@ -493,7 +548,9 @@ impl ConnectionsService {
             reservation_generation: 1,
             source: source.clone(),
         };
-        reservation.validate()?;
+        reservation
+            .validate()
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
         let record = SourceOperationRecord {
             device_id: actor.device_id.clone(),
             operation_id,
@@ -515,7 +572,8 @@ impl ConnectionsService {
             .sources
             .reserve(SourceOperationReservation { record })
             .await
-            .map_err(source_error)?;
+            .map_err(source_error)
+            .map_err(ConnectionsCommandFailure::Indeterminate)?;
         Ok((admission, reservation))
     }
     pub(super) async fn complete_committed(
@@ -664,13 +722,14 @@ impl ConnectionsService {
         command_id: Uuid,
         intent: [u8; 32],
         scope: &ExecutionScope,
-    ) -> Result<Option<SourceOperationRecord>, AgentFailure> {
+    ) -> Result<Option<SourceOperationRecord>, ConnectionsCommandFailure> {
         let id = derived_id(b"floe.source.operation.v1", actor.person_id, command_id);
         let Some(operation) = self
             .sources
             .load_operation(id)
             .await
-            .map_err(source_error)?
+            .map_err(source_error)
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?
         else {
             return Ok(None);
         };
@@ -679,12 +738,18 @@ impl ConnectionsService {
             || operation.device_id != actor.device_id
             || operation.expected.source.person_id() != actor.person_id
         {
-            return Err(AgentFailure::Conflict);
+            return Err(ConnectionsCommandFailure::NotAdmitted(
+                AgentFailure::Conflict,
+            ));
         }
         if !operation.phase.holds_fence() {
             return Ok(Some(operation));
         }
-        Ok(Some(self.reconcile(actor, id, None, scope).await?))
+        Ok(Some(
+            self.reconcile(actor, id, None, scope)
+                .await
+                .map_err(ConnectionsCommandFailure::Admitted)?,
+        ))
     }
     pub async fn pause_observe_operation(
         &self,
@@ -693,10 +758,17 @@ impl ConnectionsService {
         source_id: &floe_context_contract::ConnectionId,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<SourceOperationRecord, AgentFailure> {
-        self.ensure_open()?;
-        check(actor, scope)?;
-        let intent = intent_digest(&("pause_observe", command_id, source_id, expected_revision))?;
+    ) -> Result<SourceOperationRecord, ConnectionsCommandFailure> {
+        if command_id.is_nil() {
+            return Err(ConnectionsCommandFailure::NotAdmitted(
+                AgentFailure::InvalidInput,
+            ));
+        }
+        self.ensure_open()
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        check(actor, scope).map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        let intent = intent_digest(&("pause_observe", command_id, source_id, expected_revision))
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
         if let Some(replay) = self.replay(actor, command_id, intent, scope).await? {
             return Ok(replay);
         }
@@ -704,12 +776,20 @@ impl ConnectionsService {
             .sources
             .load(actor.person_id, source_id)
             .await
-            .map_err(source_error)?
-            .ok_or(AgentFailure::CapabilityUnavailable)?;
+            .map_err(source_error)
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?
+            .ok_or(AgentFailure::CapabilityUnavailable)
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
         if source.revision() != expected_revision {
-            return Err(AgentFailure::Conflict);
+            return Err(ConnectionsCommandFailure::NotAdmitted(
+                AgentFailure::Conflict,
+            ));
         }
-        let expected = self.evidence.observe(actor, &source, scope).await?;
+        let expected = self
+            .evidence
+            .observe(actor, &source, scope)
+            .await
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
         let (admission, reservation) = self
             .reserve(
                 actor,
@@ -720,27 +800,31 @@ impl ConnectionsService {
                 SourceOperationKind::ConnectionObservePause,
             )
             .await?;
-        let applied = self
-            .access
-            .pause_observe(actor, reservation.clone(), scope)
-            .await;
-        match self
-            .access
-            .receipt(
-                actor,
-                GrantReceiptQuery {
-                    identity: reservation.identity(),
-                },
-                scope,
-            )
-            .await?
-        {
-            Some(GrantOperationReceipt::Committed(receipt)) => {
-                self.complete_committed(actor, admission.record, receipt, None, scope)
-                    .await
+        let result: Result<SourceOperationRecord, AgentFailure> = async {
+            let applied = self
+                .access
+                .pause_observe(actor, reservation.clone(), scope)
+                .await;
+            match self
+                .access
+                .receipt(
+                    actor,
+                    GrantReceiptQuery {
+                        identity: reservation.identity(),
+                    },
+                    scope,
+                )
+                .await?
+            {
+                Some(GrantOperationReceipt::Committed(receipt)) => {
+                    self.complete_committed(actor, admission.record, receipt, None, scope)
+                        .await
+                }
+                _ => Err(applied.err().unwrap_or(AgentFailure::StorageUnavailable)),
             }
-            _ => Err(applied.err().unwrap_or(AgentFailure::StorageUnavailable)),
         }
+        .await;
+        result.map_err(ConnectionsCommandFailure::Admitted)
     }
     pub async fn reconcile(
         &self,

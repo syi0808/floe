@@ -12,11 +12,12 @@ import 'package:floe_client/app/floe_primitives.dart';
 import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_squircle.dart';
-import 'package:floe_client/features/conversation/application/conversation_controller.dart';
+import 'package:floe_client/features/vault/application/vault_controller.dart';
+import 'package:floe_client/features/experts/application/agent_registry_controller.dart';
+import 'package:floe_client/features/knowledge/application/agent_memory_controller.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/experts/presentation/agent_registry_dialog.dart';
 import 'package:floe_client/features/settings/presentation/agent_memory_settings.dart';
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/actions/application/calendar_action_controller.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
 
@@ -31,7 +32,9 @@ class SettingsScreen extends StatefulWidget {
     super.key,
     required this.connectionsController,
     this.actionController,
-    this.agentController,
+    this.vault,
+    this.registryController,
+    this.memoryController,
     this.expertBindingTarget,
     this.onBindingReplaced,
     this.platform,
@@ -39,7 +42,9 @@ class SettingsScreen extends StatefulWidget {
 
   final ConnectionsController? connectionsController;
   final CalendarActionController? actionController;
-  final ConversationController? agentController;
+  final VaultController? vault;
+  final AgentRegistryController? registryController;
+  final AgentMemoryController? memoryController;
   final AgentExpertBindingTarget? expertBindingTarget;
   final Future<void> Function()? onBindingReplaced;
   final TargetPlatform? platform;
@@ -57,8 +62,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   List<_SettingsPage> get _availablePages => [
     if (widget.actionController != null) _SettingsPage.actions,
-    if (widget.agentController != null) _SettingsPage.dataPrivacy,
-    if (widget.agentController != null) _SettingsPage.experts,
+    if (widget.memoryController != null && widget.vault != null) _SettingsPage.dataPrivacy,
+    if (widget.registryController != null && widget.vault != null) _SettingsPage.experts,
     _SettingsPage.remoteServer,
   ];
 
@@ -71,7 +76,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     if (!_availablePages.contains(selectedPage) &&
         !(selectedPage == _SettingsPage.memory &&
-            widget.agentController != null)) {
+            widget.memoryController != null)) {
       selectedPage = _availablePages.first;
     }
   }
@@ -88,17 +93,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
       controller: widget.actionController!,
     ),
     _SettingsPage.dataPrivacy => _DataPrivacy(
-      controller: widget.agentController!,
+      vault: widget.vault!,
+      controller: widget.memoryController!,
       platform: widget.platform,
       onManageMemory: () => setState(() => selectedPage = _SettingsPage.memory),
     ),
     _SettingsPage.experts => AgentRegistrySettings(
-      controller: widget.agentController!.registryController,
+      controller: widget.registryController!,
+      vault: widget.vault!,
       focus: widget.expertBindingTarget,
       onBindingReplaced: widget.onBindingReplaced,
     ),
     _SettingsPage.memory => AgentMemorySettings(
-      controller: widget.agentController!.memoryController,
+      controller: widget.memoryController!,
+      vault: widget.vault!,
       onBack: () => setState(() => selectedPage = _SettingsPage.dataPrivacy),
     ),
     _SettingsPage.remoteServer => ConnectorScreen(

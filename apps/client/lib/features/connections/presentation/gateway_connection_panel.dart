@@ -171,8 +171,6 @@ String _pairingLabel(String state) => switch (state) {
   'awaiting_local_confirmation' =>
     'Compare the displayed code with your Gateway.',
   'awaiting_gateway_approval' => 'Waiting for confirmation on the Gateway.',
-  'verifying' => 'Verifying the Gateway identity…',
-  'committing' => 'Saving and checking the connection…',
   'connected' => 'Gateway connected.',
   'rejected' => 'Pairing was rejected.',
   'expired' => 'Pairing expired.',

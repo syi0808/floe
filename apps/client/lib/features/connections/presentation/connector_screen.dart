@@ -79,10 +79,14 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
           Text(current.storageMessage),
           if (current.storageIncidentId case final incident?)
             SelectableText('Incident: $incident'),
-          if (!current.storageOpening && current.prepareStorage != null)
+          if (current.vault.canRecover)
             FloeButton.outlined(
-              onPressed: current.prepareStorage,
-              child: const Text('Retry local storage'),
+              onPressed: current.vault.recover,
+              child: Text(current.vault.gateway.hasPendingOperation
+                  ? 'Check the same storage request'
+                  : current.vault.failure?.safeActions.contains('reopen_vault') == true
+                  ? 'Reopen local storage'
+                  : 'Retry local storage'),
             ),
           const SizedBox(height: FloeSpace.sm),
         ],
@@ -459,6 +463,13 @@ final class _SourceCardState extends State<_SourceCard> {
           ],
           if (review != null) ...[
             const SizedBox(height: FloeSpace.base),
+            for (final view in review.processingDisclosure.views) ...[
+              Text('${view.viewId}: ${view.current?.label ?? 'No Observe permission'}.'),
+              Text('Sensitivity: ${view.dataClassLabel}.'),
+              if (view.dataCategories.isNotEmpty)
+                Text('Currently permitted data: ${view.dataCategories.join(', ')}.'),
+            ],
+            const Text('Saving source resources creates no Observe permission. Review access again after changing resources.'),
             for (final choice in review.permittedChoices)
               CheckboxListTile(
                 title: Text(choice.label),
@@ -491,24 +502,16 @@ final class _SourceCardState extends State<_SourceCard> {
           if (observe != null) ...[
             const SizedBox(height: FloeSpace.base),
             for (final member in observe.displayMembers) Text(member),
-            Text(
-              observe.processingDisclosure.current == SourceProcessing.deviceOnly
-                  ? 'Current processing: this device only.'
-                  : 'Current processing: this device and your verified Gateway.',
-            ),
-            Text(
-              observe.processingDisclosure.requested == SourceProcessing.deviceOnly
-                  ? 'Requested processing: this device only.'
-                  : 'Requested processing: this device and your verified Gateway.',
-            ),
-            if (observe.processingDisclosure.current == SourceProcessing.deviceOnly &&
-                observe.processingDisclosure.requested == SourceProcessing.gatewayAllowed)
-              const Text('This review expands processing to your verified Gateway for the scope below.'),
-            for (final label in observe.processingDisclosure.scopeLabels)
-              Text(label),
-            if (observe.processingDisclosure.categories.contains(
-              'highly_sensitive',
-            ))
+            for (final view in observe.processingDisclosure.views) ...[
+              Text(view.viewId),
+              Text('Sensitivity: ${view.dataClassLabel}.'),
+              Text('Reviewed data: ${view.dataCategories.join(', ')}.'),
+              Text('Current reviewed scope: ${view.current?.label ?? 'No Observe permission'}.'),
+              Text('Requested processing: ${view.requested!.label}.'),
+              if (view.expandsGateway)
+                const Text('This view gains or expands Gateway processing permission.'),
+            ],
+            if (observe.processingDisclosure.views.any((view) => view.isDerivedHealth))
               const Text(
                 'This includes highly sensitive data. Only locally transformed derived Health data may reach the Gateway; raw Health data stays on this device.',
               ),

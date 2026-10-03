@@ -47,7 +47,7 @@ impl GatewayModelProvider {
         let (status, bytes) = http
             .request(
                 &connection.endpoint,
-                Some(&connection.bearer),
+                Some(connection.bearer.as_str()),
                 reqwest::Method::GET,
                 "/v1/inference-purposes",
                 None,
@@ -73,7 +73,7 @@ impl GatewayModelProvider {
             .ok_or(ModelObservationError::InvalidIdentity)?;
         if live.binding != connection.binding
             || live.endpoint != connection.endpoint
-            || live.bearer != connection.bearer
+            || live.bearer.as_str() != connection.bearer.as_str()
         {
             return Err(ModelObservationError::InvalidIdentity);
         }
@@ -153,7 +153,7 @@ impl PreparedModelTransport for PreparedGatewayTransport {
                 .http
                 .request(
                     &rechecked.endpoint,
-                    Some(&rechecked.bearer),
+                    Some(rechecked.bearer.as_str()),
                     reqwest::Method::POST,
                     "/v1/agent",
                     Some(body),
@@ -242,7 +242,7 @@ impl PreparedGatewayTransport {
             .ok_or(AgentFailure::PolicyDenied)?;
         if current.binding != self.connection.binding
             || current.endpoint != self.connection.endpoint
-            || current.bearer != self.connection.bearer
+            || current.bearer.as_str() != self.connection.bearer.as_str()
         {
             return Err(AgentFailure::PolicyDenied);
         }
@@ -322,9 +322,10 @@ fn model_calls() -> &'static CallLimiter {
 fn credential_observation(error: GatewayCredentialError) -> ModelObservationError {
     match error {
         GatewayCredentialError::Timeout => ModelObservationError::Timeout,
-        GatewayCredentialError::Locked | GatewayCredentialError::Unavailable => {
-            ModelObservationError::StorageUnavailable
-        }
+        GatewayCredentialError::Cancelled => ModelObservationError::Cancelled,
+        GatewayCredentialError::Locked
+        | GatewayCredentialError::Unavailable
+        | GatewayCredentialError::Indeterminate => ModelObservationError::StorageUnavailable,
         GatewayCredentialError::Malformed | GatewayCredentialError::Unverified => {
             ModelObservationError::CredentialRejected
         }

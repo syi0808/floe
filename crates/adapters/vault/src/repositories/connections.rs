@@ -221,14 +221,6 @@ use floe_connections::{
 use uuid::Uuid;
 const MAX_OPERATION_BYTES: usize = 16_384;
 
-pub(crate) async fn initialize_source_operations(
-    connection: &turso::Connection,
-) -> Result<(), SourceRepositoryError> {
-    connection.execute("CREATE TABLE IF NOT EXISTS source_operations (operation_id TEXT PRIMARY KEY, command_id TEXT NOT NULL, person_id TEXT NOT NULL, connection_id TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision > 0), fence INTEGER NOT NULL CHECK(fence IN (0,1)), payload TEXT NOT NULL, UNIQUE(person_id,command_id))", ()).await.map_err(storage_error)?;
-    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS source_operation_fence ON source_operations(connection_id) WHERE fence = 1", ()).await.map_err(storage_error)?;
-    connection.execute("CREATE INDEX IF NOT EXISTS source_operation_history ON source_operations(connection_id)", ()).await.map_err(storage_error)?;
-    Ok(())
-}
 async fn fenced_on(
     connection: &turso::Connection,
     person: PersonId,

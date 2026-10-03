@@ -203,8 +203,6 @@ pub enum PairingStateDto {
     Starting,
     AwaitingLocalConfirmation,
     AwaitingGatewayApproval,
-    Verifying,
-    Committing,
     Connected,
     Rejected,
     Expired,
@@ -487,28 +485,87 @@ pub struct PermittedResourceChoiceDto {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ReviewDataCategoryDto {
+pub enum ViewSensitivityDto {
     Personal,
     HighlySensitive,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessingCategoryDto {
+    Metadata,
+    Content,
+    Derived,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ProcessingScopeDto {
+    DeviceOnly,
+    GatewayAllowed {
+        categories: Vec<ProcessingCategoryDto>,
+    },
+}
+impl ProcessingScopeDto {
+    fn valid(&self) -> bool {
+        match self {
+            Self::DeviceOnly => true,
+            Self::GatewayAllowed { categories } => {
+                !categories.is_empty()
+                    && categories.len() <= 3
+                    && categories.iter().collect::<HashSet<_>>().len() == categories.len()
+            }
+        }
+    }
+}
+
+fn required_processing_scope<'de, D>(
+    deserializer: D,
+) -> Result<Option<ProcessingScopeDto>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<ProcessingScopeDto>::deserialize(deserializer)
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViewProcessingDisclosureDto {
+    pub view_id: String,
+    pub data_class: ViewSensitivityDto,
+    pub data_categories: Vec<ProcessingCategoryDto>,
+    #[serde(deserialize_with = "required_processing_scope")]
+    pub current: Option<ProcessingScopeDto>,
+    #[serde(deserialize_with = "required_processing_scope")]
+    pub requested: Option<ProcessingScopeDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessingDisclosureDto {
-    pub current: RequestedProcessingDto,
-    pub requested: RequestedProcessingDto,
-    pub categories: Vec<ReviewDataCategoryDto>,
-    pub scope_labels: Vec<String>,
+    pub views: Vec<ViewProcessingDisclosureDto>,
 }
 
 impl ProcessingDisclosureDto {
     fn validate(&self) -> Result<(), &'static str> {
-        if self.categories.len() > 2
-            || self.categories.iter().collect::<HashSet<_>>().len() != self.categories.len()
+        if self.views.len() > 64
             || self
-                .scope_labels
+                .views
                 .iter()
-                .any(|label| !valid_source_text(label, 256))
+                .map(|view| &view.view_id)
+                .collect::<HashSet<_>>()
+                .len()
+                != self.views.len()
+            || self.views.iter().any(|view| {
+                !valid_source_text(&view.view_id, 256)
+                    || view.data_categories.len() > 3
+                    || view.data_categories.iter().collect::<HashSet<_>>().len()
+                        != view.data_categories.len()
+                    || view.data_categories.is_empty()
+                        != (view.current.is_none() && view.requested.is_none())
+                    || view.current.as_ref().is_some_and(|scope| !scope.valid())
+                    || view.requested.as_ref().is_some_and(|scope| !scope.valid())
+            })
         {
             return Err("connections.review.processing_disclosure");
         }
@@ -554,6 +611,14 @@ impl SourceReviewDto {
             return Err("connections.source_review");
         }
         unique_by(&self.permitted_choices, |choice| choice.resource_ref.get())?;
+        if self
+            .processing_disclosure
+            .views
+            .iter()
+            .any(|view| view.requested.is_some())
+        {
+            return Err("connections.source_review.processing_disclosure");
+        }
         self.processing_disclosure.validate()
     }
 }
@@ -654,7 +719,7 @@ impl ObserveReviewDto {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         self.review_ref.validate()?;
         if !valid_revision(self.source_revision)
-            || self.display_members.len() > 8
+            || self.display_members.len() > 64
             || self
                 .display_members
                 .iter()
@@ -663,6 +728,22 @@ impl ObserveReviewDto {
             || !unique_values(&self.allowed_actions)
         {
             return Err("connections.observe_review");
+        }
+        if self.processing_disclosure.views.is_empty()
+            || self
+                .processing_disclosure
+                .views
+                .iter()
+                .any(|view| view.requested.is_none())
+            || self.display_members.iter().collect::<HashSet<_>>()
+                != self
+                    .processing_disclosure
+                    .views
+                    .iter()
+                    .map(|view| &view.view_id)
+                    .collect::<HashSet<_>>()
+        {
+            return Err("connections.observe_review.processing_disclosure");
         }
         self.processing_disclosure.validate()
     }

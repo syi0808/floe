@@ -89,6 +89,14 @@ pub struct LogisticsView {
     pub items: Vec<LogisticsItem>,
 }
 
+impl WorkContextView {
+    pub const DATA_CLASS: DataClass = DataClass::Personal;
+}
+
+impl LogisticsView {
+    pub const DATA_CLASS: DataClass = DataClass::Personal;
+}
+
 pub fn validate_work_context_view(
     view: &WorkContextView,
     now_unix_ms: i64,
@@ -168,21 +176,32 @@ pub fn validate_logistics_view(view: &LogisticsView, now_unix_ms: i64) -> Result
 }
 
 pub fn work_context_evidence(view: &WorkContextView) -> Result<ContextEvidence, AgentFailure> {
-    evidence(&view.source_handle, view.expires_at_unix_ms, view)
+    evidence(
+        &view.source_handle,
+        view.expires_at_unix_ms,
+        WorkContextView::DATA_CLASS,
+        view,
+    )
 }
 
 pub fn logistics_context_evidence(view: &LogisticsView) -> Result<ContextEvidence, AgentFailure> {
-    evidence(&view.source_handle, view.expires_at_unix_ms, view)
+    evidence(
+        &view.source_handle,
+        view.expires_at_unix_ms,
+        LogisticsView::DATA_CLASS,
+        view,
+    )
 }
 
 fn evidence(
     source_handle: &str,
     expires_at_unix_ms: i64,
+    data_class: DataClass,
     value: &impl Serialize,
 ) -> Result<ContextEvidence, AgentFailure> {
     Ok(ContextEvidence {
         source_handle: source_handle.into(),
-        data_class: DataClass::Personal,
+        data_class,
         untrusted_text: serde_json::to_string(value).map_err(|_| AgentFailure::InvalidInput)?,
         expires_at_unix_ms: u64::try_from(expires_at_unix_ms)
             .map_err(|_| AgentFailure::InvalidInput)?,

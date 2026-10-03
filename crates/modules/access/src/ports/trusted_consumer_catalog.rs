@@ -1,10 +1,11 @@
-use floe_context_contract::{GrantConsumer, GrantDataCategory, GrantPurpose};
+use floe_context_contract::{DataClass, GrantConsumer, GrantDataCategory, GrantPurpose};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrustedViewCapability {
     pub view_id: String,
+    pub data_class: DataClass,
     pub categories: Vec<GrantDataCategory>,
     pub purposes: Vec<GrantPurpose>,
 }

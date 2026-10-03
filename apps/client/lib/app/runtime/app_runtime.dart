@@ -1,3 +1,7 @@
+import 'package:floe_client/features/connections/presentation/connections_controller.dart';
+import 'package:floe_client/features/vault/application/vault_controller.dart';
+import 'package:floe_client/features/experts/application/agent_registry_controller.dart';
+import 'package:floe_client/features/knowledge/application/agent_memory_controller.dart';
 import 'package:floe_client/features/connections/infrastructure/app_wire_connections_gateway.dart';
 
 import 'dart:async';
@@ -65,11 +69,34 @@ final class AppRuntime {
   late final memory = AppWireMemoryGateway(_transport);
   late final connections = AppWireConnectionsGateway(_transport);
   late final actions = CalendarActionFacade(this);
+  late final connectionsController = ConnectionsController(connections, vault: vaultController);
+  late final vaultController = VaultController(gateway: vault, personId: personId)
+    ..addListener(_readinessChanged);
+  late final registryController = AgentRegistryController(
+    gateway: registry,
+    canOperate: () => vaultController.ready,
+    onFatalFailure: vaultController.reportFailure,
+  );
+  late final memoryController = AgentMemoryController(
+    memoryGateway: memory,
+    reviewGateway: memory,
+    personId: personId,
+    canOperate: () => vaultController.ready,
+    onFatalFailure: vaultController.reportFailure,
+  );
+  bool _wasReady = false;
+  void _readinessChanged() {
+    final ready = vaultController.ready;
+    if (_wasReady != ready) {
+      registryController.clear();
+      memoryController.clear();
+    }
+    _wasReady = ready;
+  }
   late final owners = LocalOwnerGateways(
-    vault: vault,
-    registry: registry,
-    memory: memory,
-    memoryReview: memory,
+    vault: vaultController,
+    registry: registryController,
+    memory: memoryController,
     actions: actions,
   );
   late final NativeContextHostTransport nativeHostTransport =
@@ -125,8 +152,22 @@ final class AppRuntime {
     }
   }
 
-  Future<void> close() async {
-    readModel.dispose();
-    await _transport.close();
+  Future<void> startVault() => vaultController.open();
+
+  Future<void>? _closing;
+  Future<void> close() => _closing ??= _close();
+
+  Future<void> _close() async {
+    vaultController.closeAdmission();
+    try {
+      await _transport.close();
+    } finally {
+      connectionsController.dispose();
+      registryController.dispose();
+      memoryController.dispose();
+      vaultController.removeListener(_readinessChanged);
+      vaultController.dispose();
+      readModel.dispose();
+    }
   }
 }

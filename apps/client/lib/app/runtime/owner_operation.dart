@@ -43,6 +43,7 @@ final class OwnerOperationObserver {
   final Duration timeout;
   _PendingOwnerOperation? _pending;
   bool _observing = false;
+  bool get hasPendingOperation => _pending != null;
 
   Future<T> observe<T>({
     required String scope,
@@ -97,9 +98,27 @@ final class OwnerOperationObserver {
       final elapsed = Stopwatch()..start();
       final wasStarted = pending.started;
       pending.started = true;
-      var result = wasStarted
-          ? await pending.read(pending.correlation.id, false)
-          : await pending.start(pending.correlation.id);
+      late Map<String, dynamic> result;
+      try {
+        result = wasStarted
+            ? await pending.read(pending.correlation.id, false)
+            : await pending.start(pending.correlation.id);
+      } on NativeTransportException catch (error) {
+        if (!wasStarted &&
+            error.commandDisposition == NativeCommandDisposition.notAdmitted) {
+          // This is the first correlated attempt, proven rejected before owner
+          // admission. Prior admitted/unknown operations always retain identity.
+          _pending = null;
+          throw AgentVaultException.fromAppWire(
+            error.metadata['reason_code'] ?? error.metadata['agent_failure'] ?? error.code,
+            requestId: pending.correlation.id,
+            stage: pending.correlation.stage,
+            metadata: error.metadata,
+            ownerFailure: error.ownerFailure,
+          );
+        }
+        rethrow;
+      }
       while (true) {
         if (result['kind'] != pending.resultKind) {
           throw const FormatException('Invalid owner result kind');

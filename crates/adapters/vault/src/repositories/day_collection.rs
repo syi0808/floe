@@ -3,12 +3,10 @@ use super::day_refresh::{
     current_calendar_sources_on, finish_transaction, mirror_on, persist_mirror_on,
     require_executor, versions_of,
 };
-use crate::{StoreError, TursoStore};
+use crate::TursoStore;
 use floe_day::{DayCollectionCommit, DayCollectionReceipt, DayError, MirrorExpectation};
 use serde::{Deserialize, Serialize};
-use turso::Connection;
 
-const TABLE: &str = "CREATE TABLE day_action_collections (execution_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, device_id TEXT NOT NULL, receipt_digest TEXT NOT NULL, intent_digest TEXT NOT NULL, payload TEXT NOT NULL)";
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CollectionRecord {
@@ -16,21 +14,6 @@ struct CollectionRecord {
     receipt: DayCollectionReceipt,
 }
 
-pub(super) async fn initialize_collection_schema(
-    connection: &Connection,
-) -> Result<(), StoreError> {
-    connection
-        .execute(
-            &TABLE.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS "),
-            (),
-        )
-        .await
-        .map_err(crate::engine::storage_error)?;
-    Ok(())
-}
-pub(super) async fn validate_collection_schema(connection: &Connection) -> Result<(), StoreError> {
-    crate::engine::require_schema(connection, "day_action_collections", TABLE).await
-}
 fn storage(error: impl std::fmt::Display) -> DayError {
     DayError::storage(error.to_string())
 }

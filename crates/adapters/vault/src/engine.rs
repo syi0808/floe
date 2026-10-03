@@ -3,7 +3,7 @@ use turso::core::{Clock, IO};
 
 use turso::{Builder, Connection};
 
-use crate::{StoreError, StoreErrorCode, schema_sql};
+use crate::{StoreError, StoreErrorCode};
 
 pub struct TursoStore {
     database: turso::Database,
@@ -16,13 +16,6 @@ impl TursoStore {
     pub fn with_installation_lock(mut self, lock: std::fs::File) -> Self {
         self.installation_lock = Some(lock);
         self
-    }
-
-    pub async fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
-        match Self::create_new(path.as_ref()).await {
-            Err(error) if error.code == StoreErrorCode::Conflict => Self::open_existing(path).await,
-            result => result,
-        }
     }
 
     /// Create only a provably new plain store. Existing files are never
@@ -50,8 +43,28 @@ impl TursoStore {
             database,
             installation_lock: None,
         };
-        store.initialize().await?;
-        store.validate_existing().await?;
+        let mut connection = store.connection().await?;
+        let transaction = connection
+            .transaction_with_behavior(turso::transaction::TransactionBehavior::Immediate)
+            .await
+            .map_err(admission_error)?;
+        let initialized = async {
+            crate::schema::create(&transaction, crate::schema::Layout::Plain)
+                .await
+                .map_err(|failure| failure.during_creation().into_store())?;
+            crate::schema::inspect(&transaction, crate::schema::Layout::Plain)
+                .await
+                .map_err(|failure| failure.during_creation().into_store())
+        }
+        .await;
+        match initialized {
+            Ok(()) => transaction.commit().await.map_err(admission_error)?,
+            Err(error) => {
+                transaction.rollback().await.map_err(admission_error)?;
+                return Err(error);
+            }
+        }
+        drop(connection);
         // Finish the newly created main file before installation.ready can be
         // published. Do not rely on schema pages remaining only in the WAL.
         let connection = store.connection().await?;
@@ -90,11 +103,15 @@ impl TursoStore {
     /// is opened without Create and retained by the IO adapter through both
     /// validation and ordinary use; no missing-file race can create a profile.
     pub async fn open_existing(path: impl AsRef<Path>) -> Result<Self, StoreError> {
-        let path = std::fs::canonicalize(path.as_ref()).map_err(|_| {
-            StoreError::new(
-                StoreErrorCode::NotFound,
-                "selected profile database is missing",
-            )
+        let path = std::fs::canonicalize(path.as_ref()).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StoreError::new(
+                    StoreErrorCode::NotFound,
+                    "selected profile database is missing",
+                )
+            } else {
+                storage_error(error)
+            }
         })?;
         let mut probe = std::fs::File::open(&path).map_err(storage_error)?;
         if !probe.metadata().map_err(storage_error)?.is_file() {
@@ -108,7 +125,12 @@ impl TursoStore {
         if &header != b"SQLite format 3\0" {
             return Err(unsupported_profile());
         }
-        let path = path.to_str().ok_or_else(unsupported_profile)?.to_owned();
+        let path = path
+            .to_str()
+            .ok_or_else(|| {
+                StoreError::new(StoreErrorCode::Validation, "local database path is invalid")
+            })?
+            .to_owned();
         let io = Arc::new(ExistingProfileIo::new(path.clone()).map_err(storage_error)?);
         let readonly = Self {
             database: Builder::new_local(&path)
@@ -135,87 +157,13 @@ impl TursoStore {
     }
     async fn validate_existing(&self) -> Result<(), StoreError> {
         let connection = self.database.connect().map_err(admission_error)?;
-        // Successfully read metadata or a typed corruption result is evidence;
-        // generic query, busy and I/O errors cannot authorize development reset.
-        require_schema(&connection,"floe_source_schema","CREATE TABLE floe_source_schema (id INTEGER PRIMARY KEY CHECK(id = 1), version INTEGER NOT NULL CHECK(version = 1))").await?;
-        let mut rows = connection
-            .query("SELECT version FROM floe_source_schema WHERE id = 1", ())
+        crate::schema::inspect(&connection, crate::schema::Layout::Plain)
             .await
-            .map_err(admission_error)?;
-        let row = rows
-            .next()
-            .await
-            .map_err(admission_error)?
-            .ok_or_else(unsupported_profile)?;
-        if row.get::<i64>(0).map_err(admission_error)? != 1
-            || rows.next().await.map_err(admission_error)?.is_some()
-        {
-            return Err(unsupported_profile());
-        }
-        drop(rows);
-        for table in ["calendar_actions", "action_authorities"] {
-            require_schema(&connection,table,&format!("CREATE TABLE {table} (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, payload TEXT NOT NULL)")).await?;
-            require_schema(
-                &connection,
-                &format!("{table}_person"),
-                &format!("CREATE INDEX {table}_person ON {table}(person_id)"),
-            )
-            .await?;
-        }
-        crate::repositories::validate_day_schema(&connection).await?;
-        require_schema(&connection,"source_connections","CREATE TABLE source_connections (connection_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, connector_id TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL)").await?;
-        require_schema(&connection,"source_connections_person_connector","CREATE INDEX source_connections_person_connector ON source_connections(person_id, connector_id)").await?;
-        require_schema(&connection,"source_operations","CREATE TABLE source_operations (operation_id TEXT PRIMARY KEY, command_id TEXT NOT NULL, person_id TEXT NOT NULL, connection_id TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision > 0), fence INTEGER NOT NULL CHECK(fence IN (0,1)), payload TEXT NOT NULL, UNIQUE(person_id,command_id))").await?;
-        require_schema(&connection,"source_operation_fence","CREATE UNIQUE INDEX source_operation_fence ON source_operations(connection_id) WHERE fence = 1").await?;
-        require_schema(
-            &connection,
-            "source_operation_history",
-            "CREATE INDEX source_operation_history ON source_operations(connection_id)",
-        )
-        .await?;
-        Ok(())
+            .map_err(crate::schema::SchemaFailure::into_store)
     }
 
     pub(crate) async fn connection(&self) -> Result<Connection, StoreError> {
         self.database.connect().map_err(storage_error)
-    }
-
-    async fn initialize(&self) -> Result<(), StoreError> {
-        let connection = self.connection().await?;
-        connection.execute("CREATE TABLE IF NOT EXISTS floe_source_schema (id INTEGER PRIMARY KEY CHECK(id = 1), version INTEGER NOT NULL CHECK(version = 1))",()).await.map_err(storage_error)?;
-        connection
-            .execute(
-                "INSERT OR IGNORE INTO floe_source_schema(id,version) VALUES (1,1)",
-                (),
-            )
-            .await
-            .map_err(storage_error)?;
-        for table in ["calendar_actions", "action_authorities"] {
-            connection.execute(
-                &format!("CREATE TABLE IF NOT EXISTS {table} (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, payload TEXT NOT NULL)"),
-                (),
-            ).await.map_err(storage_error)?;
-            connection
-                .execute(
-                    &format!("CREATE INDEX IF NOT EXISTS {table}_person ON {table}(person_id)"),
-                    (),
-                )
-                .await
-                .map_err(storage_error)?;
-        }
-        crate::repositories::initialize_day_schema(&connection).await?;
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS source_connections (connection_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, connector_id TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL)",
-            (),
-        ).await.map_err(storage_error)?;
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS source_connections_person_connector ON source_connections(person_id, connector_id)",
-            (),
-        ).await.map_err(storage_error)?;
-        crate::repositories::initialize_source_operations(&connection)
-            .await
-            .map_err(storage_error)?;
-        Ok(())
     }
 }
 
@@ -226,61 +174,16 @@ pub(crate) fn storage_error(error: impl std::fmt::Display) -> StoreError {
 /// Only admission uses typed corruption as development-reset evidence. Generic
 /// engine errors, busy, permission and I/O failures remain unavailable storage.
 pub(crate) fn admission_error(error: turso::Error) -> StoreError {
-    match error {
-        turso::Error::Corrupt(_) | turso::Error::NotAdb(_) => StoreError::new(
-            StoreErrorCode::Validation,
-            "local database contains corrupt stored data",
-        ),
-        error => storage_error(error),
-    }
+    crate::schema::SchemaFailure::from_database(error).into_store()
 }
 
 pub(crate) fn unsupported_profile() -> StoreError {
     StoreError::new(
-        StoreErrorCode::Validation,
+        StoreErrorCode::UnsupportedSchema,
         "selected profile database schema is unsupported",
     )
 }
-pub(crate) async fn require_schema(
-    connection: &Connection,
-    name: &str,
-    expected: &str,
-) -> Result<(), StoreError> {
-    let mut rows = connection
-        .query(
-            "SELECT sql FROM sqlite_master WHERE name = ? AND type IN ('table','index')",
-            (name,),
-        )
-        .await
-        .map_err(admission_error)?;
-    let row = rows
-        .next()
-        .await
-        .map_err(admission_error)?
-        .ok_or_else(|| schema_mismatch(name, "missing_object"))?;
-    let sql: String = row.get(0).map_err(admission_error)?;
-    if rows.next().await.map_err(admission_error)?.is_some() {
-        return Err(schema_mismatch(name, "duplicate_object"));
-    }
-    match schema_sql::compare(&sql, expected) {
-        schema_sql::Comparison::Equivalent => Ok(()),
-        schema_sql::Comparison::Different => Err(schema_mismatch(name, "definition_mismatch")),
-        schema_sql::Comparison::InvalidStored => Err(schema_mismatch(name, "invalid_definition")),
-        schema_sql::Comparison::InvalidExpected => Err(StoreError::new(
-            StoreErrorCode::Storage,
-            "internal schema definition is invalid",
-        )
-        .with_metadata("schema_object", name)),
-    }
-}
 
-fn schema_mismatch(name: &str, reason: &str) -> StoreError {
-    unsupported_profile()
-        .with_metadata("schema_object", name)
-        .with_metadata("schema_mismatch", reason)
-}
-/// Turso's high-level Builder defaults to Create. Retaining a preopened main
-/// file makes existing-profile admission independent of that default.
 struct ExistingProfileIo {
     path: String,
     inner: turso::core::PlatformIO,

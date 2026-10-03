@@ -168,6 +168,7 @@ Future<void> _start() async {
         personalAcquisition = null;
       }
     }
+    unawaited(runtime.startVault());
     runApp(
       FloeApp(
         personId: runtime.personId,
@@ -175,8 +176,9 @@ Future<void> _start() async {
         calendarActions: runtime.actions,
         agentGateway: runtime.conversation,
         ownerGateways: runtime.owners,
-        connectionsGateway: runtime.connections,
+        connectionsController: runtime.connectionsController,
         onDisposeGateway: () async {
+          runtime.vaultController.closeAdmission();
           try {
             await Future.wait([
               if (calendarAcquisition != null) calendarAcquisition.dispose(),

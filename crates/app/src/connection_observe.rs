@@ -37,7 +37,11 @@ impl SourceServices {
         let evidence_reader: Arc<dyn floe_context::EvidenceReader> =
             Arc::new(floe_vault::ContextEvidenceReader::new(vault.clone()));
         let trust: Arc<dyn GatewayTrustReader> = vault.clone();
-        let gateway_credentials = Arc::new(GatewayCredentialStore::new(trust.clone()));
+        let gateway_credentials = Arc::new(GatewayCredentialStore::new(
+            trust.clone(),
+            vault.clone(),
+            &actor,
+        )?);
         let source_verifier: Arc<dyn SourcePreviewVerifier> =
             Arc::new(GatewaySourcePreviewVerifier::new(trust));
         let authorization_signer: Arc<dyn AuthorizationSigner> = Arc::new(
@@ -48,16 +52,12 @@ impl SourceServices {
             Arc::new(GatewayProofVerifier),
         ));
         let pairing_adapter = Arc::new(GatewayPairingAdapter::new(
-            gateway_credentials.as_ref().clone(),
+            vault.clone(),
             enrollment,
             vault.clone(),
-        ));
-        let pairing = Arc::new(GatewayPairingService::new(
-            vault.clone(),
-            pairing_adapter.clone(),
-            pairing_adapter.clone(),
-            pairing_adapter,
-        ));
+            &actor,
+        )?);
+        let pairing = Arc::new(GatewayPairingService::new(vault.clone(), pairing_adapter));
         let trusted = floe_experts_builtin::manifests()
             .into_iter()
             .map(|manifest| {
@@ -117,7 +117,7 @@ impl SourceServices {
                 evidence,
                 cleanup,
                 pairing: pairing.clone(),
-                gateways: gateway_credentials.clone(),
+                gateways: vault.clone(),
                 remote_integrations: integrations,
                 products: vault,
                 source_catalog: metadata.clone(),

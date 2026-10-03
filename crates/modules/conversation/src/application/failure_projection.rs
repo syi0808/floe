@@ -34,7 +34,8 @@ pub fn project_conversation_failure(
         F::PolicyDenied | F::CapabilityDenied | F::ConsentRequired => {
             AgentFailureCategory::Security
         }
-        F::InvalidModelOutput
+        F::IncompleteCreation
+        | F::InvalidModelOutput
         | F::LocalModelInvalidOutput
         | F::ServerModelInvalidOutput
         | F::VaultUnavailable => AgentFailureCategory::Integrity,

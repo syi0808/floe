@@ -29,19 +29,6 @@ pub(crate) struct ExpertCommandAdmission {
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    /// Called only while explicitly creating a new Vault.
-    pub(super) async fn initialize_expert_binding_reviews(&self) -> Result<(), AgentFailure> {
-        self.check_access()?;
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(turso::transaction::TransactionBehavior::Immediate)
-            .await
-            .map_err(|error| self.registry_transaction_start_error(error))?;
-        let result = create_expert_binding_tables_on(&transaction).await;
-        self.finish_registry_transaction_checked(transaction, result)
-            .await
-    }
-
     /// Reopen validates durable evidence without creating missing tables.
     pub(super) async fn validate_expert_binding_reviews(&self) -> Result<(), AgentFailure> {
         self.check_access()?;
@@ -109,113 +96,24 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 }
 
-const EXPERT_BINDING_TABLES: &[(&str, &str)] = &[
-    (
-        "agent_expert_command_admissions",
-        "CREATE TABLE agent_expert_command_admissions (command_id TEXT PRIMARY KEY, family TEXT NOT NULL CHECK (family IN ('binding_prepare', 'registry', 'binding_replacement')), person_id TEXT NOT NULL, device_id TEXT NOT NULL, request_digest TEXT NOT NULL CHECK (length(request_digest) = 64), review_id TEXT NOT NULL CHECK ((family = 'registry' AND review_id = '') OR (family != 'registry' AND length(review_id) = 36)))",
-    ),
-    (
-        "agent_expert_binding_reviews",
-        "CREATE TABLE agent_expert_binding_reviews (review_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, device_id TEXT NOT NULL, command_id TEXT NOT NULL UNIQUE, assignment_id TEXT NOT NULL, requirement_key TEXT NOT NULL, review_digest TEXT NOT NULL CHECK (length(review_digest) = 64), payload TEXT NOT NULL, UNIQUE (person_id, command_id))",
-    ),
-    (
-        "agent_expert_registry_receipts",
-        "CREATE TABLE agent_expert_registry_receipts (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, device_id TEXT NOT NULL, request_digest TEXT NOT NULL CHECK (length(request_digest) = 64), snapshot_revision INTEGER NOT NULL, payload TEXT NOT NULL)",
-    ),
-    (
-        "agent_expert_binding_review_consumptions",
-        "CREATE TABLE agent_expert_binding_review_consumptions (review_id TEXT PRIMARY KEY, command_id TEXT NOT NULL UNIQUE, person_id TEXT NOT NULL, device_id TEXT NOT NULL, review_digest TEXT NOT NULL CHECK (length(review_digest) = 64), request_digest TEXT NOT NULL CHECK (length(request_digest) = 64), committed_at_unix_ms INTEGER NOT NULL)",
-    ),
-    (
-        "agent_expert_binding_replacement_receipts",
-        "CREATE TABLE agent_expert_binding_replacement_receipts (command_id TEXT PRIMARY KEY, consumed_review_id TEXT NOT NULL UNIQUE, person_id TEXT NOT NULL, device_id TEXT NOT NULL, review_digest TEXT NOT NULL CHECK (length(review_digest) = 64), request_digest TEXT NOT NULL CHECK (length(request_digest) = 64), committed_at_unix_ms INTEGER NOT NULL, payload TEXT NOT NULL)",
-    ),
-];
-
-async fn create_expert_binding_tables_on(connection: &Connection) -> Result<(), AgentFailure> {
-    match expert_binding_tables_on(connection).await? {
-        0 => {}
-        5 => return ensure_expert_binding_tables_on(connection).await,
-        _ => return Err(AgentFailure::VaultUnavailable),
-    }
-    for (_, statement) in EXPERT_BINDING_TABLES {
-        connection.execute(statement, ()).await.map_err(storage)?;
-    }
-    ensure_expert_binding_tables_on(connection).await
-}
-
 /// The schema is created only with a new Vault. Missing receipts on an existing
 /// Vault cannot become permission to repeat a registry or binding command.
 pub(crate) async fn ensure_expert_binding_tables_on(
     connection: &Connection,
 ) -> Result<(), AgentFailure> {
-    if expert_binding_tables_on(connection).await? != 5 {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    for (name, statement) in EXPERT_BINDING_TABLES {
-        let mut rows = connection
-            .query(
-                "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?",
-                (*name,),
-            )
-            .await
-            .map_err(storage)?;
-        let row = rows
-            .next()
-            .await
-            .map_err(storage)?
-            .ok_or(AgentFailure::VaultUnavailable)?;
-        let actual = row.get::<String>(0).map_err(storage)?;
-        if rows.next().await.map_err(storage)?.is_some() {
-            return Err(AgentFailure::VaultUnavailable);
-        }
-        match crate::schema_sql::compare(&actual, statement) {
-            crate::schema_sql::Comparison::Equivalent => {}
-            crate::schema_sql::Comparison::Different
-            | crate::schema_sql::Comparison::InvalidStored => {
-                return Err(AgentFailure::VaultUnavailable);
-            }
-            crate::schema_sql::Comparison::InvalidExpected => {
-                return Err(AgentFailure::StorageUnavailable);
-            }
-        }
-    }
-    let mut rows=connection.query("SELECT name FROM sqlite_schema WHERE type IN ('trigger', 'view') AND (name GLOB 'agent_expert_binding_*' OR name GLOB 'agent_expert_command_*' OR name = 'agent_expert_registry_receipts' OR tbl_name GLOB 'agent_expert_binding_*' OR tbl_name GLOB 'agent_expert_command_*' OR tbl_name = 'agent_expert_registry_receipts')",()).await.map_err(storage)?;
-    if rows.next().await.map_err(storage)?.is_some() {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    drop(rows);
+    crate::schema::inspect_family(connection, crate::schema::Family::Bindings)
+        .await
+        .map_err(crate::schema::SchemaFailure::into_agent)?;
     count_expert_command_admissions_on(connection).await?;
     Ok(())
-}
-
-pub(crate) async fn expert_binding_tables_on(connection: &Connection) -> Result<i64, AgentFailure> {
-    let mut rows = connection
-        .query(
-            "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name IN ('agent_expert_command_admissions', 'agent_expert_binding_reviews', 'agent_expert_registry_receipts', 'agent_expert_binding_review_consumptions', 'agent_expert_binding_replacement_receipts')",
-            (),
-        )
-        .await
-        .map_err(storage)?;
-    let count = rows
-        .next()
-        .await
-        .map_err(storage)?
-        .ok_or(AgentFailure::VaultUnavailable)?
-        .get::<i64>(0)
-        .map_err(storage)?;
-    if !(0..=5).contains(&count) {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    Ok(count)
 }
 
 pub(crate) async fn count_expert_command_admissions_on(
     connection: &Connection,
 ) -> Result<i64, AgentFailure> {
-    if expert_binding_tables_on(connection).await? != 5 {
-        return Err(AgentFailure::VaultUnavailable);
-    }
+    crate::schema::inspect_family(connection, crate::schema::Family::Bindings)
+        .await
+        .map_err(crate::schema::SchemaFailure::into_agent)?;
     let mut rows = connection
         .query("SELECT count(*) FROM agent_expert_command_admissions", ())
         .await
@@ -237,10 +135,9 @@ pub(crate) async fn read_expert_command_admission_on(
     connection: &Connection,
     command_id: CommandId,
 ) -> Result<Option<ExpertCommandAdmission>, AgentFailure> {
-    let table_count = expert_binding_tables_on(connection).await?;
-    if table_count != 5 {
-        return Err(AgentFailure::VaultUnavailable);
-    }
+    crate::schema::inspect_family(connection, crate::schema::Family::Bindings)
+        .await
+        .map_err(crate::schema::SchemaFailure::into_agent)?;
     let mut rows = connection
         .query(
             "SELECT command_id, family, person_id, device_id, request_digest, review_id FROM agent_expert_command_admissions WHERE command_id = ?",
@@ -310,10 +207,9 @@ pub(crate) async fn read_binding_review_on(
     registry_instance_id: Uuid,
 ) -> Result<BindingReviewDescriptor, AgentFailure> {
     reference.validate()?;
-    let table_count = expert_binding_tables_on(connection).await?;
-    if table_count != 5 {
-        return Err(AgentFailure::VaultUnavailable);
-    }
+    crate::schema::inspect_family(connection, crate::schema::Family::Bindings)
+        .await
+        .map_err(crate::schema::SchemaFailure::into_agent)?;
     let mut rows = connection
         .query(
             "SELECT person_id, device_id, command_id, assignment_id, requirement_key, review_digest, CASE WHEN length(CAST(payload AS BLOB)) <= 262144 THEN payload ELSE NULL END FROM agent_expert_binding_reviews WHERE review_id = ?",
@@ -384,10 +280,9 @@ pub(crate) async fn read_registry_receipt_on(
     command_id: CommandId,
     registry_instance_id: Uuid,
 ) -> Result<Option<RegistryCommitReceipt>, AgentFailure> {
-    let table_count = expert_binding_tables_on(connection).await?;
-    if table_count != 5 {
-        return Err(AgentFailure::VaultUnavailable);
-    }
+    crate::schema::inspect_family(connection, crate::schema::Family::Bindings)
+        .await
+        .map_err(crate::schema::SchemaFailure::into_agent)?;
     let Some(admission) = read_expert_command_admission_on(connection, command_id).await? else {
         return Ok(None);
     };
@@ -447,10 +342,9 @@ pub(crate) async fn read_binding_replacement_by_command_on(
     command_id: CommandId,
     registry_instance_id: Uuid,
 ) -> Result<Option<BindingReplacementReceipt>, AgentFailure> {
-    let table_count = expert_binding_tables_on(connection).await?;
-    if table_count != 5 {
-        return Err(AgentFailure::VaultUnavailable);
-    }
+    crate::schema::inspect_family(connection, crate::schema::Family::Bindings)
+        .await
+        .map_err(crate::schema::SchemaFailure::into_agent)?;
     let Some(admission) = read_expert_command_admission_on(connection, command_id).await? else {
         return Ok(None);
     };
@@ -478,10 +372,9 @@ pub(crate) async fn read_binding_replacement_for_review_on(
     descriptor: &BindingReviewDescriptor,
     registry_instance_id: Uuid,
 ) -> Result<Option<BindingReplacementReceipt>, AgentFailure> {
-    let table_count = expert_binding_tables_on(connection).await?;
-    if table_count != 5 {
-        return Err(AgentFailure::VaultUnavailable);
-    }
+    crate::schema::inspect_family(connection, crate::schema::Family::Bindings)
+        .await
+        .map_err(crate::schema::SchemaFailure::into_agent)?;
     if descriptor.identity.person_id != person_id
         || descriptor.identity.device_id != device_id
         || descriptor.registry_instance_id != registry_instance_id

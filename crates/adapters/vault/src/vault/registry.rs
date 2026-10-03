@@ -14,7 +14,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 
     /// First registry installation and its command receipt share the caller's transaction.
-    pub(crate) async fn initialize_expert_registry_on(
+    pub(crate) async fn install_expert_registry_on(
         &self,
         connection: &turso::Connection,
         snapshot: &RegistrySnapshot,
@@ -30,7 +30,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if self.registry_on(connection).await?.is_some() {
             return Err(AgentFailure::Conflict);
         }
-        connection.execute("CREATE TABLE agent_expert_registry (id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL, payload TEXT NOT NULL)", ()).await.map_err(storage)?;
         connection
             .execute(
                 "INSERT INTO agent_expert_registry VALUES (1, ?, ?)",
@@ -38,16 +37,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             )
             .await
             .map_err(storage)?;
-        let changed = connection
-            .execute(
-                "UPDATE vault_identity SET version = 2 WHERE id = 1 AND version = 1",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        if changed != 1 {
-            return Err(AgentFailure::Conflict);
-        }
         self.check_access()
     }
 
@@ -139,40 +128,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         connection: &turso::Connection,
     ) -> Result<Option<RegistrySnapshot>, AgentFailure> {
-        let mut identity = connection
-            .query("SELECT version FROM vault_identity WHERE id = 1", ())
+        crate::schema::inspect_family(connection, crate::schema::Family::Registry)
             .await
-            .map_err(unavailable)?;
-        let version = identity
-            .next()
-            .await
-            .map_err(unavailable)?
-            .ok_or(AgentFailure::VaultUnavailable)?
-            .get::<i64>(0)
-            .map_err(unavailable)?;
-        drop(identity);
-        if version == 1 {
-            let mut existing = connection
-                .query(
-                    "SELECT name FROM sqlite_schema WHERE name = 'agent_expert_registry'",
-                    (),
-                )
-                .await
-                .map_err(unavailable)?;
-            if existing.next().await.map_err(unavailable)?.is_some() {
-                return Err(AgentFailure::VaultUnavailable);
-            }
+            .map_err(crate::schema::SchemaFailure::into_agent)?;
+        let mut rows = connection.query("SELECT revision, CASE WHEN length(CAST(payload AS BLOB)) <= 262144 THEN payload ELSE NULL END FROM agent_expert_registry WHERE id = 1", ()).await.map_err(unavailable)?;
+        let Some(row) = rows.next().await.map_err(unavailable)? else {
             return Ok(None);
-        }
-        if version != 2 {
-            return Err(AgentFailure::UnsupportedVersion);
-        }
-        let mut rows = connection.query("SELECT revision, payload FROM agent_expert_registry WHERE id = 1 AND length(CAST(payload AS BLOB)) <= 262144", ()).await.map_err(unavailable)?;
-        let row = rows
-            .next()
-            .await
-            .map_err(unavailable)?
-            .ok_or(AgentFailure::VaultUnavailable)?;
+        };
         let snapshot: RegistrySnapshot =
             serde_json::from_str(&row.get::<String>(1).map_err(unavailable)?)
                 .map_err(unavailable)?;

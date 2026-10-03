@@ -93,7 +93,8 @@ async fn resolve_source_record<R: InteractionRepository + ?Sized>(
     }
     let operation = connections
         .apply_source_review(actor, owner_command_id, reference.clone(), scope)
-        .await?;
+        .await
+        .map_err(floe_connections::ConnectionsCommandFailure::into_failure)?;
     let Some(floe_access::GrantOperationReceipt::Committed(receipt)) = connections
         .operation_receipt(actor, &operation, scope)
         .await?

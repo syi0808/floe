@@ -9,7 +9,6 @@ use uuid::Uuid;
 
 use super::*;
 
-const ACCESS_GRANT_SCHEMA_VERSION: i64 = 2;
 const MAX_ACCESS_GRANTS: usize = 128;
 const MAX_CLEANUP_ITEMS: usize = 256;
 const MAX_GRANT_PAYLOAD_BYTES: usize = 64 * 1024;
@@ -107,76 +106,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(())
     }
 
-    pub(super) async fn initialize_access_grant_store(&self) -> Result<(), AgentFailure> {
-        let mut connection = self.connection()?;
-        let components = [
-            "data_access_grant_schema",
-            "data_access_grants",
-            "data_access_grant_cleanup",
-        ];
-        let mut component_rows = connection.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('data_access_grant_schema', 'data_access_grants', 'data_access_grant_cleanup')", ()).await.map_err(storage)?;
-        let mut existing = Vec::new();
-        while let Some(row) = component_rows.next().await.map_err(storage)? {
-            existing.push(row.get::<String>(0).map_err(storage)?);
-        }
-        if existing.is_empty() {
-            let transaction = match connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .await
-            {
-                Ok(transaction) => transaction,
-                Err(error) => {
-                    let failure = access_transaction_start_error(error);
-                    if failure != AgentFailure::Conflict {
-                        self.latch_access_unavailable();
-                    }
-                    return Err(failure);
-                }
-            };
-            let result = async {
-            transaction.execute("CREATE TABLE data_access_grant_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))", ()).await.map_err(storage)?;
-            transaction
-                .execute(
-                    "INSERT INTO data_access_grant_schema (id, version) VALUES (1, 2)",
-                    (),
-                )
-                .await
-                .map_err(storage)?;
-            transaction.execute("CREATE TABLE data_access_grants (grant_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, authority_owner TEXT NOT NULL, connection_id TEXT NOT NULL, connector TEXT NOT NULL, execution_owner TEXT NOT NULL, grant_incarnation TEXT NOT NULL, access_epoch INTEGER NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL)", ()).await.map_err(storage)?;
-            transaction.execute("CREATE INDEX data_access_grants_person_state ON data_access_grants (person_id, state, grant_id)", ()).await.map_err(storage)?;
-            transaction.execute("CREATE TABLE data_access_grant_cleanup (cleanup_id TEXT PRIMARY KEY, grant_id TEXT NOT NULL, person_id TEXT NOT NULL, invalidated_incarnation TEXT NOT NULL, invalidated_epoch INTEGER NOT NULL, payload TEXT NOT NULL, UNIQUE(grant_id, invalidated_incarnation, invalidated_epoch))", ()).await.map_err(storage)?;
-            transaction.execute("CREATE INDEX data_access_grant_cleanup_ready ON data_access_grant_cleanup (person_id, grant_id, invalidated_epoch)", ()).await.map_err(storage)?;
-            Ok(())
-            }.await;
-            self.finish_access_grant_transaction(transaction, result)
-                .await?;
-        } else if components
-            .iter()
-            .any(|name| !existing.iter().any(|existing_name| existing_name == name))
-        {
-            return Err(AgentFailure::VaultUnavailable);
-        }
-        let mut marker = connection
-            .query(
-                "SELECT version FROM data_access_grant_schema WHERE id = 1",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        match marker.next().await.map_err(storage)? {
-            Some(row) if row.get::<i64>(0).map_err(storage)? == ACCESS_GRANT_SCHEMA_VERSION => {}
-            Some(_) => return Err(AgentFailure::UnsupportedVersion),
-            None => return Err(AgentFailure::VaultUnavailable),
-        }
-        let mut marker_rows = connection
-            .query("SELECT id FROM data_access_grant_schema", ())
-            .await
-            .map_err(storage)?;
-        if marker_rows.next().await.map_err(storage)?.is_none()
-            || marker_rows.next().await.map_err(storage)?.is_some()
-        {
-            return Err(AgentFailure::VaultUnavailable);
-        }
+    pub(super) async fn validate_access_grant_store(&self) -> Result<(), AgentFailure> {
+        let connection = self.connection()?;
+        self.ensure_access_grant_schema(&connection).await?;
         self.validate_all_access_grants(&connection).await
     }
 
@@ -493,79 +425,25 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         connection: &turso::Connection,
     ) -> Result<(), AgentFailure> {
-        let mut components = connection
-            .query(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('data_access_grant_schema', 'data_access_grants', 'data_access_grant_cleanup')",
-                (),
-            )
+        let result = crate::schema::inspect_family(connection, crate::schema::Family::Access)
             .await
-            .map_err(storage)?;
-        let mut component_count = 0;
-        while components.next().await.map_err(storage)?.is_some() {
-            component_count += 1;
-        }
-        if component_count != 3 {
+            .map_err(crate::schema::SchemaFailure::into_agent);
+        if matches!(
+            result,
+            Err(AgentFailure::UnsupportedVersion | AgentFailure::VaultUnavailable)
+        ) {
             self.latch_access_unavailable();
-            return Err(AgentFailure::VaultUnavailable);
         }
-        let mut rows = connection
-            .query(
-                "SELECT version FROM data_access_grant_schema WHERE id = 1",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        let marker = rows
-            .next()
-            .await
-            .map_err(storage)?
-            .ok_or(AgentFailure::VaultUnavailable)?;
-        if marker.get::<i64>(0).map_err(storage)? != ACCESS_GRANT_SCHEMA_VERSION
-            || rows.next().await.map_err(storage)?.is_some()
-        {
-            self.latch_access_unavailable();
-            return Err(AgentFailure::UnsupportedVersion);
-        }
-        Ok(())
+        result
     }
 
     pub(super) async fn ensure_access_grant_schema_transaction(
         &self,
         transaction: &turso::transaction::Transaction<'_>,
     ) -> Result<(), AgentFailure> {
-        let mut components = transaction
-            .query(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('data_access_grant_schema', 'data_access_grants', 'data_access_grant_cleanup')",
-                (),
-            )
+        crate::schema::inspect_family(transaction, crate::schema::Family::Access)
             .await
-            .map_err(storage)?;
-        let mut component_count = 0;
-        while components.next().await.map_err(storage)?.is_some() {
-            component_count += 1;
-        }
-        if component_count != 3 {
-            return Err(AgentFailure::VaultUnavailable);
-        }
-        let mut rows = transaction
-            .query(
-                "SELECT version FROM data_access_grant_schema WHERE id = 1",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        let marker = rows
-            .next()
-            .await
-            .map_err(storage)?
-            .ok_or(AgentFailure::VaultUnavailable)?;
-        if marker.get::<i64>(0).map_err(storage)? != ACCESS_GRANT_SCHEMA_VERSION {
-            return Err(AgentFailure::UnsupportedVersion);
-        }
-        if rows.next().await.map_err(storage)?.is_some() {
-            return Err(AgentFailure::UnsupportedVersion);
-        }
-        Ok(())
+            .map_err(crate::schema::SchemaFailure::into_agent)
     }
 
     async fn validate_all_access_grants(

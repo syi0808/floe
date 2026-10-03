@@ -7,16 +7,42 @@ use floe_kernel::AgentFailure;
 use floe_protocol::*;
 use std::{collections::BTreeMap, time::Duration};
 pub(crate) type AppWireResult<T> = Result<T, AppWireErrorDto>;
+pub(crate) type AppCommandResult<T> = Result<T, AppCommandFailure>;
+
+/// A command error carries admission evidence independently of its cause.
+pub(crate) enum AppCommandFailure {
+    NotAdmitted(AppWireErrorDto),
+    Admitted(AppWireErrorDto),
+    Indeterminate(AppWireErrorDto),
+}
+
+impl From<AppWireErrorDto> for AppCommandFailure {
+    fn from(error: AppWireErrorDto) -> Self {
+        Self::Indeterminate(error)
+    }
+}
+
+impl AppCommandFailure {
+    pub(crate) fn into_parts(self) -> (AppCommandDispositionDto, AppWireErrorDto) {
+        match self {
+            Self::NotAdmitted(error) => (AppCommandDispositionDto::NotAdmitted, error),
+            Self::Admitted(error) => (AppCommandDispositionDto::Admitted, error),
+            Self::Indeterminate(error) => (AppCommandDispositionDto::Indeterminate, error),
+        }
+    }
+}
 
 pub(crate) fn command(
     handle: &FloeHandle,
     request: AppCommandRequestDto,
-) -> AppWireResult<AppCommandResultDto> {
-    request.validate().map_err(request_validation)?;
+) -> AppCommandResult<AppCommandResultDto> {
+    request
+        .validate()
+        .map_err(|field| AppCommandFailure::NotAdmitted(request_validation(field)))?;
     let host = handle.app();
     let host_request = host
         .request(request.request_id.get())
-        .map_err(host_failure)?;
+        .map_err(|failure| AppCommandFailure::NotAdmitted(host_failure(failure)))?;
     let caller = host_request.caller();
     let services = host_request.services();
     let command_id = request.command_id.get();
@@ -25,11 +51,12 @@ pub(crate) fn command(
             let result = services
                 .apply_native_host(
                     caller,
-                    crate::context_wire::command(command).map_err(structural_error)?,
+                    crate::context_wire::command(command)
+                        .map_err(|error| AppCommandFailure::NotAdmitted(structural_error(error)))?,
                 )
                 .map_err(agent_failure)?;
             return crate::conversion::native::native_host_command_result(result)
-                .map_err(structural_error);
+                .map_err(|error| structural_error(error).into());
         }
         AppCommandDto::Product(command) => command,
     };
@@ -37,11 +64,11 @@ pub(crate) fn command(
         || crate::conversation_wire::handles_command(&command)
     {
         let owners = services.ready_owners(caller).map_err(|failure| {
-            if crate::conversation_wire::handles_command(&command) {
+            AppCommandFailure::NotAdmitted(if crate::conversation_wire::handles_command(&command) {
                 crate::conversation_wire::failure_dto(failure, command_id)
             } else {
                 agent_failure(failure)
-            }
+            })
         })?;
         let actor = caller.owner_actor();
         let scope = floe_app::host_scope(
@@ -55,17 +82,21 @@ pub(crate) fn command(
             } else {
                 crate::conversation_wire::command(&owners, &actor, command_id, command, &scope)
                     .await
+                    .map_err(Into::into)
             }
         });
     }
     if crate::actions_wire::handles_command(&command) {
-        return crate::actions_wire::command(services, caller, command_id, command);
+        return crate::actions_wire::command(services, caller, command_id, command)
+            .map_err(Into::into);
     }
     if crate::experts_wire::handles_command(&command) {
-        return crate::experts_wire::command(services, caller, command_id, command);
+        return crate::experts_wire::command(services, caller, command_id, command)
+            .map_err(Into::into);
     }
     if crate::knowledge_wire::handles_command(&command) {
-        return crate::knowledge_wire::command(services, caller, command_id, command);
+        return crate::knowledge_wire::command(services, caller, command_id, command)
+            .map_err(Into::into);
     }
     match command {
         AppProductCommandDto::DayMutate { day, mutation } => {
@@ -75,13 +106,17 @@ pub(crate) fn command(
                     host_request.caller(),
                     floe_app::DayMutationRequest {
                         command_id: command_id,
-                        day: crate::day_wire::read(day).map_err(structural_error)?,
-                        mutation: crate::day_wire::mutation(mutation).map_err(structural_error)?,
+                        day: crate::day_wire::read(day).map_err(|error| {
+                            AppCommandFailure::NotAdmitted(structural_error(error))
+                        })?,
+                        mutation: crate::day_wire::mutation(mutation).map_err(|error| {
+                            AppCommandFailure::NotAdmitted(structural_error(error))
+                        })?,
                     },
                 )
                 .map_err(day_error)?;
             if result.command_id != command_id {
-                return Err(internal_error());
+                return Err(internal_error().into());
             }
             Ok(AppCommandResultDto::DayMutation {
                 command_id: result.command_id,
@@ -114,7 +149,7 @@ pub(crate) fn command(
                 .vault_command(host_request.caller(), command_id, command)
                 .map_err(agent_failure)?;
             if result.operation_id != command_id {
-                return Err(internal_error());
+                return Err(internal_error().into());
             }
             Ok(AppCommandResultDto::VaultOperation {
                 result: vault_result(result),
@@ -125,14 +160,15 @@ pub(crate) fn command(
                 .refresh_day(
                     caller,
                     command_id,
-                    crate::day_wire::read(day).map_err(structural_error)?,
+                    crate::day_wire::read(day)
+                        .map_err(|error| AppCommandFailure::NotAdmitted(structural_error(error)))?,
                 )
                 .map_err(day_error)?;
             Ok(AppCommandResultDto::DayRefresh {
                 refresh: crate::day_wire::refresh(refresh).map_err(structural_error)?,
             })
         }
-        _ => Err(validation("command")),
+        _ => Err(AppCommandFailure::NotAdmitted(validation("command"))),
     }
 }
 pub(crate) fn query(
@@ -359,7 +395,8 @@ pub(crate) fn agent_failure(failure: AgentFailure) -> AppWireErrorDto {
         | AgentFailure::ConsentRequired
         | AgentFailure::CapabilityDenied
         | AgentFailure::AccessReviewRequired => AppWireErrorCodeDto::AccessDenied,
-        AgentFailure::StorageUnavailable
+        AgentFailure::IncompleteCreation
+        | AgentFailure::StorageUnavailable
         | AgentFailure::VaultUnavailable
         | AgentFailure::VaultLocked
         | AgentFailure::ModelUnavailable

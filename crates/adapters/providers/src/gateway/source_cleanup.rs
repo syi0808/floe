@@ -82,7 +82,7 @@ impl SourceCleanup for GatewaySourceCleanup {
             let exchange = http
                 .request(
                     &connection.endpoint,
-                    Some(&connection.bearer),
+                    Some(connection.bearer.as_str()),
                     reqwest::Method::POST,
                     &format!("/v1/connectors/{connector}/disconnect"),
                     Some(body),

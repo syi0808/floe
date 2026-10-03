@@ -14,6 +14,8 @@ pub fn trusted_view_capability(view_id: &str) -> Result<TrustedViewCapability, A
     };
     Ok(TrustedViewCapability {
         view_id: view_id.to_owned(),
+        data_class: floe_context_contract::source_view_data_class(view_id)
+            .ok_or(AgentFailure::CapabilityUnavailable)?,
         categories,
         purposes: vec![GrantPurpose::Assistant],
     })
