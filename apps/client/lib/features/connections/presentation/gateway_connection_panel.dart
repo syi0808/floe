@@ -177,5 +177,8 @@ String _pairingLabel(String state) => switch (state) {
   'expired' => 'Pairing expired.',
   'cancelled' => 'Pairing was cancelled.',
   'repair_required' => 'The Gateway connection needs repair.',
+  'revocation_pending' =>
+    'Pairing is inactive. Remote revocation still needs attention.',
+  'forgotten' => 'This Gateway connection was forgotten.',
   _ => throw const FormatException('Unknown pairing state.'),
 };

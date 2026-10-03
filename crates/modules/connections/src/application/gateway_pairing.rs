@@ -20,12 +20,20 @@ pub enum PairingState {
     Expired,
     Cancelled,
     RepairRequired,
+    RevocationPending,
+    Forgotten,
 }
 impl PairingState {
     pub fn terminal(self) -> bool {
         matches!(
             self,
-            Self::Paired | Self::Rejected | Self::Expired | Self::Cancelled | Self::RepairRequired
+            Self::Paired
+                | Self::Rejected
+                | Self::Expired
+                | Self::Cancelled
+                | Self::RepairRequired
+                | Self::RevocationPending
+                | Self::Forgotten
         )
     }
 }
@@ -129,10 +137,16 @@ impl PairingRecord {
             || (self.handle.is_some() && self.start_phase != PairingStartPhase::Dispatched)
             || (!matches!(
                 self.state,
-                PairingState::Pending | PairingState::RepairRequired | PairingState::Cancelled
+                PairingState::Pending
+                    | PairingState::RepairRequired
+                    | PairingState::Cancelled
+                    | PairingState::Forgotten
             ) && self.handle.is_none())
-            || (self.state == PairingState::Paired)
-                != (self.gateway.is_some() && self.enrollment.is_some())
+            || (self.gateway.is_some() != self.enrollment.is_some())
+            || (self.state == PairingState::Paired && self.enrollment.is_none())
+            || (self.enrollment.is_some()
+                && !matches!(self.state, PairingState::Paired | PairingState::Forgotten))
+            || (self.state == PairingState::Forgotten && self.forgotten_command.is_none())
             || (self.state == PairingState::Cancelling && self.cancellation_command.is_none())
             || self.confirmation_command.is_some_and(|id| id.is_nil())
             || self.cancellation_command.is_some_and(|id| id.is_nil())
@@ -149,6 +163,14 @@ impl PairingRecord {
             && self.confirmation_command.is_some()
             && self.cancellation_command.is_none()
             && self.forgotten_command.is_none()
+            && !matches!(
+                self.last_failure,
+                Some(
+                    PairingError::ForeignIdentity
+                        | PairingError::ChangedProducer
+                        | PairingError::Rejected
+                )
+            )
     }
     pub fn validate_successor(&self, next: &Self, expected: u64) -> Result<(), PairingError> {
         self.validate()?;
@@ -247,7 +269,7 @@ impl PairingRecord {
         next.display_code = Some(c.display_code.clone());
         next.expires_at_unix_ms = Some(c.expires_at_unix_ms);
         next.state = if self.forgotten_command.is_some() {
-            PairingState::RepairRequired
+            PairingState::Forgotten
         } else if self.cancellation_command.is_some() {
             PairingState::Cancelling
         } else {
@@ -335,12 +357,15 @@ impl PairingRecord {
         let mut next = self.clone();
         next.revision = next.revision.checked_add(1).ok_or(PairingError::Conflict)?;
         next.forgotten_command = Some(command);
-        if next.state != PairingState::Paired {
-            next.state = if self.start_phase == PairingStartPhase::Staged {
-                PairingState::Cancelled
-            } else {
-                PairingState::RepairRequired
-            };
+        next.state = PairingState::Forgotten;
+        if let Some(gateway) = next.gateway.as_mut() {
+            gateway.state = GatewayState::Forgotten;
+            gateway.revision = gateway
+                .revision
+                .checked_add(1)
+                .ok_or(PairingError::Conflict)?;
+            gateway.remote_revocation_pending = self.start_phase == PairingStartPhase::Dispatched;
+            gateway.allowed_actions = vec![ConnectionAction::Pair];
         }
         next.last_failure = (self.start_phase == PairingStartPhase::Dispatched
             && self.state != PairingState::Paired)
@@ -357,7 +382,11 @@ impl PairingRecord {
                     vec![ConnectionAction::Confirm, ConnectionAction::Cancel]
                 }
                 PairingState::Pending | PairingState::AwaitingApproval => {
-                    vec![ConnectionAction::Cancel, ConnectionAction::Reobserve]
+                    if self.cancellation_command.is_some() {
+                        vec![ConnectionAction::Reobserve]
+                    } else {
+                        vec![ConnectionAction::Cancel, ConnectionAction::Reobserve]
+                    }
                 }
                 PairingState::Cancelling => vec![ConnectionAction::Reobserve],
                 PairingState::RepairRequired if self.can_reconcile_repair() => {
@@ -742,13 +771,17 @@ impl GatewayPairingService {
                 r.last_failure = Some(PairingError::Indeterminate);
                 return Ok(self.save(r).await?.snapshot());
             }
+            let prepared = match self.transport.prepare_start(start_request(&r), scope).await {
+                Ok(value) => value,
+                Err(error) => return self.record_failure(r, error).await,
+            };
             check(actor, scope)?;
             if r.start_phase == PairingStartPhase::Staged {
                 r.start_phase = PairingStartPhase::Dispatched;
                 r = self.save(r).await?;
             }
             check(actor, scope)?;
-            let started = match self.transport.start(start_request(&r), scope).await {
+            let started = match self.transport.start(prepared, scope).await {
                 Ok(v) => v,
                 Err(e) => return self.record_failure(r, e).await,
             };
@@ -818,9 +851,8 @@ impl GatewayPairingService {
                 }
             }
             outcome => {
-                r.last_failure = None;
-                r.state = match outcome {
-                    PairingOutcome::AwaitingLocalConfirmation => return Ok(r.snapshot()),
+                let next_state = match outcome {
+                    PairingOutcome::AwaitingLocalConfirmation => r.state,
                     PairingOutcome::AwaitingApproval if r.cancellation_command.is_some() => {
                         PairingState::Cancelling
                     }
@@ -831,6 +863,11 @@ impl GatewayPairingService {
                     PairingOutcome::RepairRequired => PairingState::RepairRequired,
                     PairingOutcome::Approved(_) => unreachable!(),
                 };
+                if r.state == next_state && r.last_failure.is_none() {
+                    return Ok(r.snapshot());
+                }
+                r.state = next_state;
+                r.last_failure = None;
                 Ok(self.save(r).await?.snapshot())
             }
         }
@@ -858,10 +895,17 @@ impl GatewayPairingService {
         if r.forgotten_command.is_some() || (r.state.terminal() && !r.can_reconcile_repair()) {
             return Ok(r.snapshot());
         }
-        if error == PairingError::RepairRequired {
+        let previous_state = r.state;
+        if matches!(
+            error,
+            PairingError::RepairRequired
+                | PairingError::ForeignIdentity
+                | PairingError::ChangedProducer
+                | PairingError::Rejected
+        ) {
             r.state = PairingState::RepairRequired;
         }
-        if r.last_failure != Some(error) || r.state == PairingState::RepairRequired {
+        if r.last_failure != Some(error) || r.state != previous_state {
             r.last_failure = Some(error);
             r = self.save(r).await?;
         }
@@ -916,9 +960,13 @@ fn pairing_failure_projection(record: &PairingRecord) -> Option<crate::Connectio
             crate::ConnectionFailureReason::Expired,
             crate::ConnectionRecovery::NewReview,
         ),
-        PairingState::RepairRequired => (
+        PairingState::RepairRequired | PairingState::RevocationPending => (
             crate::ConnectionFailureReason::OperationUncertain,
-            crate::ConnectionRecovery::Reconcile,
+            if record.can_reconcile_repair() {
+                crate::ConnectionRecovery::Reconcile
+            } else {
+                crate::ConnectionRecovery::None
+            },
         ),
         _ if record.last_failure == Some(PairingError::Indeterminate) => (
             crate::ConnectionFailureReason::OperationUncertain,

@@ -95,3 +95,12 @@ pub enum PairingActivationResult {
     /// evidence, never current credential authority or a replacement pin.
     HistoricalRevocationEvidence(PairingRecord),
 }
+
+/// Fully read and validated private inputs for one external Start handoff.
+/// This transport-only value is neither serializable nor a product DTO.
+pub struct PreparedPairingStart {
+    pub request: crate::PairingStartRequest,
+    pub proof: PairingProof,
+    pub issuer: floe_access::RemoteOwnerPublicKey,
+    pub expected_pin_revision: u64,
+}

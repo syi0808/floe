@@ -30,6 +30,8 @@ pub(super) fn pairing_state(state: PairingState) -> &'static str {
         PairingState::Expired => "expired",
         PairingState::Cancelled => "cancelled",
         PairingState::RepairRequired => "repair_required",
+        PairingState::RevocationPending => "revocation_pending",
+        PairingState::Forgotten => "forgotten",
     }
 }
 
@@ -642,7 +644,7 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                     // or Forget won. Retain recovery evidence, never authority.
                     let mut historical = current.clone();
                     historical.revision = historical.revision.checked_add(1).ok_or(AgentFailure::Conflict)?;
-                    historical.state = PairingState::RepairRequired;
+                    historical.state = if current.forgotten_command.is_some() { PairingState::Forgotten } else { PairingState::RevocationPending };
                     historical.last_failure = Some(PairingError::Indeterminate);
                     write_pairing_on(&tx, current.revision, &historical).await?;
                     tx.execute("UPDATE gateway_pairing_private SET credential=? WHERE operation_id=? AND credential IS NULL",
@@ -942,6 +944,9 @@ impl<K: VaultKeyProvider> GatewayRegistry for EncryptedAgentVault<K> {
                 .await
                 .map_err(|_| PairingError::StorageUnavailable)?;
             let result = async {
+                if super::gateway_authority::command_rejection_on(&tx, receipt.person_id, receipt.command_id).await?.is_some() {
+                    return Err(AgentFailure::Conflict);
+                }
                 let mut rows = tx.query("SELECT payload FROM connections_product_records WHERE record_ref=? OR (person_id=? AND command_id=?)",
                     (receipt.record_ref.to_string(), receipt.person_id.to_string(), receipt.command_id.to_string())).await.map_err(storage)?;
                 if let Some(row) = rows.next().await.map_err(storage)? {

@@ -558,6 +558,8 @@ fn pairing(value: owner::PairingSnapshot) -> AppWireResult<dto::PairingSnapshotD
             owner::PairingState::Expired => dto::PairingStateDto::Expired,
             owner::PairingState::Cancelled => dto::PairingStateDto::Cancelled,
             owner::PairingState::RepairRequired => dto::PairingStateDto::RepairRequired,
+            owner::PairingState::RevocationPending => dto::PairingStateDto::RevocationPending,
+            owner::PairingState::Forgotten => dto::PairingStateDto::Forgotten,
         },
         display_code: value.display_code,
         expires_at: value.expires_at.map(|time| time.to_rfc3339()),

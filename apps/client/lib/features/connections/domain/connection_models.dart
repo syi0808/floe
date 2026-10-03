@@ -496,6 +496,8 @@ final class PairingSnapshot {
         'expired',
         'cancelled',
         'repair_required',
+        'revocation_pending',
+        'forgotten',
       }),
       displayCode: j['display_code'] == null
           ? null

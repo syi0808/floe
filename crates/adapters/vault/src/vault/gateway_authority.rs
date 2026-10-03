@@ -296,7 +296,7 @@ impl<K: VaultKeyProvider> EnrollmentSigner for VaultEnrollmentSigner<K> {
     fn readback<'a>(
         &'a self,
         id: Uuid,
-    ) -> BoxFuture<'a, Result<Option<EnrollmentSignature>, PairingError>> {
+    ) -> BoxFuture<'a, Result<Option<EnrollmentReceipt>, PairingError>> {
         Box::pin(async move {
             match self
                 .vault
@@ -304,12 +304,11 @@ impl<K: VaultKeyProvider> EnrollmentSigner for VaultEnrollmentSigner<K> {
                 .await
                 .map_err(pairing_storage)?
             {
-                Some(command) => Ok(Some(
-                    self.vault
-                        .sign_enrollment_receipt(&command)
-                        .await
-                        .map_err(pairing_storage)?,
-                )),
+                Some(command) => Ok(Some(EnrollmentReceipt {
+                    operation_id: command.operation_id,
+                    request_digest: command.request_digest,
+                    key_id: command.issuer.key_id,
+                })),
                 None => Ok(None),
             }
         })
@@ -1127,7 +1126,90 @@ async fn current_credential_in_transaction(
     ))
 }
 
+pub(super) async fn command_rejection_on(
+    connection: &turso::Connection,
+    person: floe_kernel::PersonId,
+    command_id: Uuid,
+) -> Result<Option<ConnectionsCommandRejection>, AgentFailure> {
+    let mut rows = connection
+        .query(
+            "SELECT payload FROM connections_command_rejections WHERE person_id=? AND command_id=?",
+            (person.to_string(), command_id.to_string()),
+        )
+        .await
+        .map_err(storage)?;
+    let Some(row) = rows.next().await.map_err(storage)? else {
+        return Ok(None);
+    };
+    let rejection: ConnectionsCommandRejection =
+        bounded_decode(&row.get::<String>(0).map_err(storage)?)?;
+    rejection.identity.validate()?;
+    if rejection.identity.person_id != person || rejection.identity.command_id != command_id {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    Ok(Some(rejection))
+}
+
 impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K> {
+    fn rejected_command<'a>(
+        &'a self,
+        identity: ConnectionsCommandIdentity,
+    ) -> BoxFuture<'a, Result<Option<AgentFailure>, AgentFailure>> {
+        Box::pin(async move {
+            identity.validate()?;
+            if identity.person_id != self.person_id {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let rejection =
+                command_rejection_on(&self.connection()?, identity.person_id, identity.command_id)
+                    .await?;
+            self.check_access()?;
+            match rejection {
+                Some(rejection) if rejection.identity == identity => Ok(Some(rejection.reason)),
+                Some(_) => Err(AgentFailure::Conflict),
+                None => Ok(None),
+            }
+        })
+    }
+    fn reject_unadmitted_command<'a>(
+        &'a self,
+        identity: ConnectionsCommandIdentity,
+        reason: AgentFailure,
+    ) -> BoxFuture<'a, Result<ConnectionsCommandResolution, AgentFailure>> {
+        Box::pin(async move {
+            identity.validate()?;
+            if identity.person_id != self.person_id {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let mut connection = self.connection()?;
+            let tx = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .await
+                .map_err(storage)?;
+            let result = async {
+                let mut rows = tx.query("SELECT payload FROM connections_product_records WHERE record_ref=? OR (person_id=? AND command_id=?)",
+                    (identity.record_ref.to_string(), identity.person_id.to_string(), identity.command_id.to_string())).await.map_err(storage)?;
+                if let Some(row) = rows.next().await.map_err(storage)? {
+                    let record: ConnectionsRecord = bounded_decode(&row.get::<String>(0).map_err(storage)?)?;
+                    record.validate()?;
+                    if !identity.matches(&record) { return Err(AgentFailure::Conflict); }
+                    return Ok(ConnectionsCommandResolution::Admitted);
+                }
+                drop(rows);
+                if let Some(rejection) = command_rejection_on(&tx, identity.person_id, identity.command_id).await? {
+                    if rejection.identity != identity { return Err(AgentFailure::Conflict); }
+                    return Ok(ConnectionsCommandResolution::NotApplied(rejection.reason));
+                }
+                let rejection = ConnectionsCommandRejection { identity, reason };
+                tx.execute("INSERT INTO connections_command_rejections VALUES(?,?,?)", (
+                    rejection.identity.person_id.to_string(), rejection.identity.command_id.to_string(), bounded_encode(&rejection)?,
+                )).await.map_err(storage)?;
+                self.check_access()?;
+                Ok(ConnectionsCommandResolution::NotApplied(reason))
+            }.await;
+            self.finish_access_grant_transaction(tx, result).await
+        })
+    }
     fn load<'a>(
         &'a self,
         person: floe_kernel::PersonId,
@@ -1194,6 +1276,9 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
                 .await
                 .map_err(storage)?;
             let result=async{
+            if command_rejection_on(&tx, record.person_id, record.command_id).await?.is_some() {
+                return Err(AgentFailure::Conflict);
+            }
             let mut rows=tx.query("SELECT payload FROM connections_product_records WHERE record_ref=? OR (person_id=? AND command_id=?)",(record.record_ref.to_string(),record.person_id.to_string(),record.command_id.to_string())).await.map_err(storage)?;
             if let Some(row)=rows.next().await.map_err(storage)?{let current:ConnectionsRecord=bounded_decode(&row.get::<String>(0).map_err(storage)?)?;
                 if current.record_ref!=record.record_ref||current.command_id!=record.command_id||current.intent_digest!=record.intent_digest||current.person_id!=record.person_id||current.device_id!=record.device_id{return Err(AgentFailure::Conflict)}return Ok(current)}drop(rows);

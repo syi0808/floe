@@ -160,3 +160,6 @@ Do not hold a global Vault transaction across model or provider I/O.
 
 
 Pairing command resolution is durable: Start, Confirm and Cancel atomically commit the exact immutable intent with either its safe success snapshot or a terminal rejection. `NotApplied` means that stored whole-command decision; it is not inferred from a Conflict error or from a missing read response. Replays cannot turn that rejection into later execution. Attempt-local `NotAdmitted` remains distinct and cannot erase prior uncertainty. A monotonic admission generation survives restoration of a prior credential expectation. Cancelling is a nonterminal workflow phase; late exact remote responses are retained without reversing local Cancel/Forget or publishing retired authority.
+
+
+Product-record Connections commands resolve uncertainty by checking their exact admitted record and committing a negative receipt when absent. Both first insertion and atomic Forget honor that fence. Preparatory native source construction is pure; the admitted NativeSetup operation materializes it before any OS prompt. Source-operation journals are not inferred absent from a missing product record. Enrollment receipt readback contains only identity/digest metadata, never a newly minted owner signature. RevocationPending and Forgotten pairing snapshots are terminal and cannot advertise live Gateway authority.

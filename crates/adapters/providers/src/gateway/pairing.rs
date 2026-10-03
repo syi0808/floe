@@ -121,7 +121,7 @@ impl GatewayPairingAdapter {
                 | PairingError::TransportUnavailable => PairingError::Indeterminate,
                 other => other,
             })?;
-        super::json::strict_json_bytes(&bytes, 65536).map_err(|_| PairingError::Rejected)?;
+        super::json::strict_json_bytes(&bytes, 65536).map_err(|_| PairingError::Indeterminate)?;
         if status != 200 {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]
@@ -134,7 +134,7 @@ impl GatewayPairingAdapter {
                 error: ErrorCode,
             }
             let wire: ErrorWire =
-                serde_json::from_slice(&bytes).map_err(|_| PairingError::Rejected)?;
+                serde_json::from_slice(&bytes).map_err(|_| PairingError::Indeterminate)?;
             if status == 409 && wire.error.code == "pairing_repair_required" {
                 return Err(PairingError::RepairRequired);
             }
@@ -145,7 +145,7 @@ impl GatewayPairingAdapter {
                 _ => PairingError::Indeterminate,
             });
         }
-        serde_json::from_slice(&bytes).map_err(|_| PairingError::Rejected)
+        serde_json::from_slice(&bytes).map_err(|_| PairingError::Indeterminate)
     }
 
     async fn private(
@@ -305,12 +305,13 @@ impl GatewayPairingAdapter {
 }
 
 impl GatewayPairingPort for GatewayPairingAdapter {
-    fn start<'a>(
+    fn prepare_start<'a>(
         &'a self,
         request: PairingStartRequest,
         scope: &'a OperationScope,
-    ) -> BoxFuture<'a, Result<StartedPairing, PairingError>> {
+    ) -> BoxFuture<'a, Result<PreparedPairingStart, PairingError>> {
         Box::pin(async move {
+            check_scope(scope)?;
             request.setup.validate()?;
             if request.person_id != self.person || request.device_id != self.device {
                 return Err(PairingError::ForeignIdentity);
@@ -326,37 +327,37 @@ impl GatewayPairingPort for GatewayPairingAdapter {
                 .await?;
             let operation = &snapshot.operation;
             if operation.setup != request.setup
-                || operation.start_phase != PairingStartPhase::Dispatched
+                || operation.state != PairingState::Pending
+                || operation.handle.is_some()
                 || operation.forgotten_command.is_some()
                 || operation.cancellation_command.is_some()
             {
                 return Err(PairingError::Conflict);
             }
-            if let (Some(handle), Some(enrollment)) = (&operation.handle, snapshot.enrollment) {
-                return Ok(StartedPairing {
-                    challenge: PairingChallenge {
-                        handle: handle.clone(),
-                        display_code: operation
-                            .display_code
-                            .clone()
-                            .ok_or(PairingError::RepairRequired)?,
-                        expires_at_unix_ms: operation
-                            .expires_at_unix_ms
-                            .ok_or(PairingError::RepairRequired)?,
-                        reviewed: operation
-                            .reviewed
-                            .clone()
-                            .ok_or(PairingError::RepairRequired)?,
-                    },
-                    enrollment,
-                });
-            }
-            if operation.state != PairingState::Pending || operation.handle.is_some() {
-                return Err(PairingError::Conflict);
-            }
             let issuer = self.signer.public_key().await?;
             let pin = self.authority.current_pin().await?;
-            let polling_proof = Zeroizing::new(URL_SAFE_NO_PAD.encode(snapshot.proof.as_bytes()));
+            check_scope(scope)?;
+            Ok(PreparedPairingStart {
+                request,
+                proof: snapshot.proof,
+                issuer,
+                expected_pin_revision: pin.map_or(0, |pin| pin.revision),
+            })
+        })
+    }
+    fn start<'a>(
+        &'a self,
+        prepared: PreparedPairingStart,
+        scope: &'a OperationScope,
+    ) -> BoxFuture<'a, Result<StartedPairing, PairingError>> {
+        Box::pin(async move {
+            let PreparedPairingStart {
+                request,
+                proof,
+                issuer,
+                expected_pin_revision,
+            } = prepared;
+            let polling_proof = Zeroizing::new(URL_SAFE_NO_PAD.encode(proof.as_bytes()));
             let wire: StartWire = self.request(&request.setup.display_address, "/pair/start", serde_json::json!({
                 "schema_version":1,"operation_id":request.operation_id,"proof":polling_proof.as_str(),
                 "person_id":request.person_id.to_string(),"device_id":request.device_id,
@@ -389,7 +390,7 @@ impl GatewayPairingPort for GatewayPairingAdapter {
                     reviewed: ReviewedGatewayIdentity {
                         producer: wire.producer,
                         issuer,
-                        expected_pin_revision: pin.map_or(0, |pin| pin.revision),
+                        expected_pin_revision,
                     },
                 },
                 enrollment,

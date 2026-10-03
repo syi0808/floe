@@ -153,11 +153,19 @@ impl ConnectionsService {
     ) -> Result<GatewaySummary, ConnectionsCommandFailure> {
         let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
             ConnectionsCommandFailure::NotAdmitted;
+        let mut command_identity = None;
         let result: Result<GatewaySummary, AgentFailure> = async {
             self.ensure_open()?;
             check(actor, scope)?;
             let intent = digest(&("forget_gateway", gateway_ref, expected_revision))?;
             let id = command_ref(actor.person_id, command_id);
+            command_identity = Some(ConnectionsCommandIdentity {
+                record_ref: id,
+                person_id: actor.person_id,
+                device_id: actor.device_id.clone(),
+                command_id,
+                intent_digest: intent,
+            });
             if let Some(record) = self.command(actor, id, command_id, intent).await? {
                 classify = ConnectionsCommandFailure::Admitted;
                 return match record.payload {
@@ -224,7 +232,8 @@ impl ConnectionsService {
             Ok(summary)
         }
         .await;
-        result.map_err(classify)
+        self.finish_product_command(result, classify, command_identity)
+            .await
     }
     pub async fn overview(
         &self,
@@ -413,11 +422,19 @@ impl ConnectionsService {
     ) -> Result<IntegrationReview, ConnectionsCommandFailure> {
         let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
             ConnectionsCommandFailure::NotAdmitted;
+        let mut command_identity = None;
         let result: Result<IntegrationReview, AgentFailure> = async {
             self.ensure_open()?;
             check(actor, scope)?;
             let intent = digest(&("integration_review", integration_ref, expected_revision))?;
             let id = command_ref(actor.person_id, command_id);
+            command_identity = Some(ConnectionsCommandIdentity {
+                record_ref: id,
+                person_id: actor.person_id,
+                device_id: actor.device_id.clone(),
+                command_id,
+                intent_digest: intent,
+            });
             if let Some(record) = self.command(actor, id, command_id, intent).await? {
                 classify = ConnectionsCommandFailure::Admitted;
                 return match record.payload {
@@ -479,7 +496,8 @@ impl ConnectionsService {
             Ok(summary)
         }
         .await;
-        result.map_err(classify)
+        self.finish_product_command(result, classify, command_identity)
+            .await
     }
     pub async fn inspect_integration_review(
         &self,
@@ -509,6 +527,7 @@ impl ConnectionsService {
     ) -> Result<ConnectionOperationSnapshot, ConnectionsCommandFailure> {
         let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
             ConnectionsCommandFailure::NotAdmitted;
+        let mut command_identity = None;
         let result: Result<ConnectionOperationSnapshot, AgentFailure> = async {
             self.ensure_open()?;
             check(actor, scope)?;
@@ -519,6 +538,13 @@ impl ConnectionsService {
                 expected_revision,
             ))?;
             let id = command_ref(actor.person_id, command_id);
+            command_identity = Some(ConnectionsCommandIdentity {
+                record_ref: id,
+                person_id: actor.person_id,
+                device_id: actor.device_id.clone(),
+                command_id,
+                intent_digest: intent,
+            });
             if let Some(record) = self.command(actor, id, command_id, intent).await? {
                 classify = ConnectionsCommandFailure::Admitted;
                 return match record.payload {
@@ -625,7 +651,8 @@ impl ConnectionsService {
             Ok(snapshot)
         }
         .await;
-        result.map_err(classify)
+        self.finish_product_command(result, classify, command_identity)
+            .await
     }
     pub async fn get_operation(
         &self,
@@ -941,11 +968,19 @@ impl ConnectionsService {
     ) -> Result<SourceReview, ConnectionsCommandFailure> {
         let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
             ConnectionsCommandFailure::NotAdmitted;
+        let mut command_identity = None;
         let result: Result<SourceReview, AgentFailure> = async {
             self.ensure_open()?;
             check(actor, scope)?;
             let intent = digest(&("source_review", source_ref, expected_revision))?;
             let id = command_ref(actor.person_id, command_id);
+            command_identity = Some(ConnectionsCommandIdentity {
+                record_ref: id,
+                person_id: actor.person_id,
+                device_id: actor.device_id.clone(),
+                command_id,
+                intent_digest: intent,
+            });
             if let Some(record) = self.command(actor, id, command_id, intent).await? {
                 classify = ConnectionsCommandFailure::Admitted;
                 return match record.payload {
@@ -1065,7 +1100,8 @@ impl ConnectionsService {
             Ok(summary)
         }
         .await;
-        result.map_err(classify)
+        self.finish_product_command(result, classify, command_identity)
+            .await
     }
     pub async fn inspect_source_review(
         &self,
@@ -1096,6 +1132,7 @@ impl ConnectionsService {
     ) -> Result<SourceSummary, ConnectionsCommandFailure> {
         let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
             ConnectionsCommandFailure::NotAdmitted;
+        let mut command_identity = None;
         let result: Result<SourceSummary, AgentFailure> = async {
             self.ensure_open()?;
             check(actor, scope)?;
@@ -1107,6 +1144,13 @@ impl ConnectionsService {
                 expected_revision,
             ))?;
             let id = command_ref(actor.person_id, command_id);
+            command_identity = Some(ConnectionsCommandIdentity {
+                record_ref: id,
+                person_id: actor.person_id,
+                device_id: actor.device_id.clone(),
+                command_id,
+                intent_digest: intent,
+            });
             if let Some(record) = self.command(actor, id, command_id, intent).await? {
                 classify = ConnectionsCommandFailure::Admitted;
                 return match record.payload.clone() {
@@ -1220,7 +1264,8 @@ impl ConnectionsService {
             self.drive_source_configuration(actor, pending, scope).await
         }
         .await;
-        result.map_err(classify)
+        self.finish_product_command(result, classify, command_identity)
+            .await
     }
     async fn drive_source_configuration(
         &self,
@@ -1371,6 +1416,7 @@ impl ConnectionsService {
     ) -> Result<ObserveReview, ConnectionsCommandFailure> {
         let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
             ConnectionsCommandFailure::NotAdmitted;
+        let mut command_identity = None;
         let result: Result<ObserveReview, AgentFailure> = async {
             self.ensure_open()?;
             check(actor, scope)?;
@@ -1381,6 +1427,13 @@ impl ConnectionsService {
                 requested_processing,
             ))?;
             let id = command_ref(actor.person_id, command_id);
+            command_identity = Some(ConnectionsCommandIdentity {
+                record_ref: id,
+                person_id: actor.person_id,
+                device_id: actor.device_id.clone(),
+                command_id,
+                intent_digest: intent,
+            });
             if let Some(record) = self.command(actor, id, command_id, intent).await? {
                 classify = ConnectionsCommandFailure::Admitted;
                 return match record.payload {
@@ -1463,7 +1516,8 @@ impl ConnectionsService {
             self.project_observe(actor, review, scope).await
         }
         .await;
-        result.map_err(classify)
+        self.finish_product_command(result, classify, command_identity)
+            .await
     }
     pub async fn inspect_observe_review(
         &self,
@@ -1601,11 +1655,19 @@ impl ConnectionsService {
     ) -> Result<ValidatedManagementLaunch, ConnectionsCommandFailure> {
         let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
             ConnectionsCommandFailure::NotAdmitted;
+        let mut command_identity = None;
         let result: Result<ValidatedManagementLaunch, AgentFailure> = async {
             self.ensure_open()?;
             check(actor, scope)?;
             let intent = digest(&("management_launch", gateway_ref, expected_revision))?;
             let id = command_ref(actor.person_id, command_id);
+            command_identity = Some(ConnectionsCommandIdentity {
+                record_ref: id,
+                person_id: actor.person_id,
+                device_id: actor.device_id.clone(),
+                command_id,
+                intent_digest: intent,
+            });
             if let Some(record) = self.command(actor, id, command_id, intent).await? {
                 classify = ConnectionsCommandFailure::Admitted;
                 return match record.payload {
@@ -1649,7 +1711,8 @@ impl ConnectionsService {
             Ok(action)
         }
         .await;
-        result.map_err(classify)
+        self.finish_product_command(result, classify, command_identity)
+            .await
     }
     fn operation_scope(&self, scope: &ExecutionScope) -> ExecutionScope {
         ExecutionScope::root(
@@ -1745,14 +1808,27 @@ impl ConnectionsService {
                 cancellations,
                 id,
             };
+            let mut retry_delay = std::time::Duration::from_secs(2);
             loop {
-                if service.ensure_open().is_err()
-                    || scope.cancellation().is_cancelled()
-                    || scope.deadline() <= tokio::time::Instant::now()
-                {
+                if service.ensure_open().is_err() || scope.cancellation().is_cancelled() {
                     break;
                 }
-                let result = service.reconcile_pairing(&actor, id, &scope).await;
+                // The owner job lives until terminalization or owner shutdown;
+                // each transport round has its own bounded deadline. A query
+                // never has to restart a silently expired mutation driver.
+                let round = ExecutionScope::root(
+                    scope.cancellation().clone(),
+                    tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+                    scope.budget().child(0, 0),
+                    scope.trace_context(),
+                );
+                let result = service.pairing.reconcile_pairing(&actor, id, &round).await;
+                if result
+                    .as_ref()
+                    .is_ok_and(|snapshot| snapshot.state == PairingState::Paired)
+                {
+                    let _ = service.spawn_catalog_refresh(actor.clone(), &round);
+                }
                 if result.as_ref().is_ok_and(|snapshot| {
                     snapshot.state.terminal()
                         && !(snapshot.state == PairingState::RepairRequired
@@ -1764,13 +1840,28 @@ impl ConnectionsService {
                 }
                 if matches!(
                     result,
-                    Err(AgentFailure::PolicyDenied
-                        | AgentFailure::VaultUnavailable
-                        | AgentFailure::StorageUnavailable)
+                    Err(PairingError::StorageUnavailable
+                        | PairingError::CredentialUnavailable
+                        | PairingError::ForeignIdentity
+                        | PairingError::ChangedProducer
+                        | PairingError::InvalidInput)
                 ) {
                     break;
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                retry_delay = if matches!(
+                    result,
+                    Err(PairingError::Indeterminate
+                        | PairingError::TransportUnavailable
+                        | PairingError::DeadlineExceeded)
+                ) {
+                    (retry_delay * 2).min(std::time::Duration::from_secs(30))
+                } else {
+                    std::time::Duration::from_secs(2)
+                };
+                tokio::select! {
+                    _ = scope.cancellation().cancelled() => break,
+                    _ = tokio::time::sleep(retry_delay) => {}
+                }
             }
         });
         Ok(())
@@ -2063,10 +2154,6 @@ impl ConnectionsService {
             source
                 .restart_native_setup(previous)
                 .map_err(|_| AgentFailure::Conflict)?;
-            self.sources
-                .update(&source, previous)
-                .await
-                .map_err(source_error)?;
             return Ok(source);
         }
         let mode = if matches!(connector.as_str(), "health.apple" | "attention.macos") {
@@ -2086,7 +2173,6 @@ impl ConnectionsService {
             vec![],
         )
         .map_err(|_| AgentFailure::InvalidInput)?;
-        self.sources.create(&source).await.map_err(source_error)?;
         Ok(source)
     }
     async fn drive_native_setup(
@@ -2135,6 +2221,36 @@ impl ConnectionsService {
             snapshot.allowed_actions.clear();
             snapshot.next_observation_after_ms = None;
         } else {
+            // The product admission is already durable before touching source
+            // state. A rejected command can never leave a new Pending source.
+            match self
+                .sources
+                .load(actor.person_id, source.connection_id())
+                .await
+                .map_err(source_error)?
+            {
+                None => {
+                    if source.revision() != 1 {
+                        return Err(AgentFailure::Conflict);
+                    }
+                    self.sources.create(&source).await.map_err(source_error)?;
+                }
+                Some(current) if current == source => {}
+                Some(mut current) if current.state() == SourceState::Disconnected => {
+                    let previous = current.revision();
+                    current
+                        .restart_native_setup(previous)
+                        .map_err(|_| AgentFailure::Conflict)?;
+                    if current != source {
+                        return Err(AgentFailure::Conflict);
+                    }
+                    self.sources
+                        .update(&current, previous)
+                        .await
+                        .map_err(source_error)?;
+                }
+                Some(_) => return Err(AgentFailure::Conflict),
+            }
             let previous = record.revision;
             record.revision += 1;
             snapshot.revision = record.revision;
@@ -2222,6 +2338,38 @@ impl ConnectionsService {
         record.validate()?;
         Ok(record)
     }
+    async fn finish_product_command<T>(
+        &self,
+        result: Result<T, AgentFailure>,
+        classify: fn(AgentFailure) -> ConnectionsCommandFailure,
+        identity: Option<ConnectionsCommandIdentity>,
+    ) -> Result<T, ConnectionsCommandFailure> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(reason) => {
+                let failure = classify(reason);
+                let Some(identity) = identity else {
+                    return Err(failure);
+                };
+                if matches!(failure, ConnectionsCommandFailure::Admitted(_)) {
+                    return Err(failure);
+                }
+                match self
+                    .products
+                    .reject_unadmitted_command(identity, reason)
+                    .await
+                {
+                    Ok(ConnectionsCommandResolution::NotApplied(reason)) => {
+                        Err(ConnectionsCommandFailure::NotApplied(reason))
+                    }
+                    Ok(ConnectionsCommandResolution::Admitted) => {
+                        Err(ConnectionsCommandFailure::Admitted(reason))
+                    }
+                    Err(reason) => Err(ConnectionsCommandFailure::Indeterminate(reason)),
+                }
+            }
+        }
+    }
     async fn command(
         &self,
         actor: &OwnerActor,
@@ -2231,6 +2379,19 @@ impl ConnectionsService {
     ) -> Result<Option<ConnectionsRecord>, AgentFailure> {
         if command_id.is_nil() {
             return Err(AgentFailure::InvalidInput);
+        }
+        if let Some(reason) = self
+            .products
+            .rejected_command(ConnectionsCommandIdentity {
+                record_ref: id,
+                person_id: actor.person_id,
+                device_id: actor.device_id.clone(),
+                command_id,
+                intent_digest: intent,
+            })
+            .await?
+        {
+            return Err(reason);
         }
         let Some(record) = self.products.load(actor.person_id, id).await? else {
             return Ok(None);

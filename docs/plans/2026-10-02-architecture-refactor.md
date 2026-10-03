@@ -624,3 +624,16 @@ Real Apple runtime, Flutter aggregate analysis, the expanded failure probes and 
 
 
 Readiness review clarification: Registry and Memory already fence callbacks with their operation generation and reset it on readiness transitions; their stale-report premise did not include those source files. A failure revision now additionally prevents an in-flight Vault presentation update from overwriting a newer failure report. No second physical Vault generation is introduced.
+
+### Follow-up review closure (2026-10-04)
+
+The review accepted exact pairing rejection receipts, monotonic admission, late Cancel/Forget response retention and current-credential signing fences. Its remaining concrete driver/projection findings are being closed in one source batch:
+
+- Pairing owner jobs retain their lifecycle until terminalization or owner shutdown, with bounded per-round deadlines and capped retry backoff for transport uncertainty. Product error flattening no longer decides driver liveness. No-op observations do not increment revisions.
+- Revocation evidence and Forgotten are explicit terminal pairing states. They cannot advertise connection authority or automatic reconciliation. A cancellation already recorded is not offered again.
+- Local private/issuer/pin reads are prepared before durable Start dispatch intent. The final intent remains conservative across the unavoidable database/network crash window; no failure causes automatic secret replacement or loss of evidence. The Go Gateway's exact operation/proof replay was inspected in `server/internal/pairing/pairing.go` and `receipts.go`; it reuses the saved challenge and rejects changed identity/proof.
+- Enrollment receipt readback returns metadata only and cannot mint a new signature. Undecodable remote mutation responses remain Indeterminate.
+- Product-record commands use an atomic negative receipt fenced against their first business commit. A resolver checks for exact existing admission before recording NotApplied; late first inserts and Forget must honor the same rejection fence. Preflight errors are not interpreted as proof by name. Native Pending source materialization moves after durable NativeSetup admission. Preparatory Access review artifacts are not an applied grant or remote effect and remain preserved.
+- Source-operation-only commands and their existing owner journals remain under separate semantic audit; a product-record absence proof must never be used to erase an uncertain source operation.
+
+All changes in this follow-up batch still require a coherent Rust/Dart gate and targeted behavior probes. No permanent S3 suite, real user credential operation or data cleanup is included.

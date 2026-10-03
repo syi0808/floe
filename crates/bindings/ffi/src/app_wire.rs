@@ -425,6 +425,23 @@ pub(crate) fn agent_failure(failure: AgentFailure) -> AppWireErrorDto {
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| "unknown".into());
     error.metadata.insert("reason_code".into(), reason_code);
+    if let Some(projection) = floe_app::VaultLifecycleFailureProjection::access_failure(failure) {
+        let incident = UuidRefDto::new(uuid::Uuid::new_v4()).expect("fresh incident identity");
+        error.owner_failure = Some(OwnerFailureDto {
+            domain: projection.domain,
+            category: projection.category,
+            reason: projection.failure,
+            incident_id: incident.clone(),
+            correlation_id: incident,
+            reload_required: projection.reload_required,
+            seal_session: projection.seal_session,
+            recovery: match projection.recovery {
+                floe_app::VaultLifecycleRecovery::None => OwnerRecoveryDto::None,
+                floe_app::VaultLifecycleRecovery::ReopenVault => OwnerRecoveryDto::Reopen,
+            },
+            safe_actions: projection.safe_actions,
+        });
+    }
     error
 }
 

@@ -617,3 +617,45 @@ fn validate_operation(
         Ok(())
     }
 }
+
+/// Identity of a product command whose first business commit is a product record.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectionsCommandIdentity {
+    pub record_ref: Uuid,
+    pub person_id: PersonId,
+    pub device_id: String,
+    pub command_id: Uuid,
+    pub intent_digest: [u8; 32],
+}
+impl ConnectionsCommandIdentity {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.record_ref.is_nil()
+            || !self.person_id.is_valid()
+            || self.command_id.is_nil()
+            || self.device_id.is_empty()
+            || self.device_id.len() > 256
+            || self.intent_digest == [0; 32]
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+    pub fn matches(&self, record: &ConnectionsRecord) -> bool {
+        self.record_ref == record.record_ref
+            && self.person_id == record.person_id
+            && self.device_id == record.device_id
+            && self.command_id == record.command_id
+            && self.intent_digest == record.intent_digest
+    }
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectionsCommandRejection {
+    pub identity: ConnectionsCommandIdentity,
+    pub reason: AgentFailure,
+}
+pub enum ConnectionsCommandResolution {
+    Admitted,
+    NotApplied(AgentFailure),
+}

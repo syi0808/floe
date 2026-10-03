@@ -159,9 +159,15 @@ pub struct GatewaySummary {
 }
 
 pub trait GatewayPairingPort: Send + Sync {
-    fn start<'a>(
+    /// Performs local reads/validation only, before the owner commits dispatch intent.
+    fn prepare_start<'a>(
         &'a self,
         request: PairingStartRequest,
+        scope: &'a OperationScope,
+    ) -> BoxFuture<'a, Result<crate::PreparedPairingStart, PairingError>>;
+    fn start<'a>(
+        &'a self,
+        prepared: crate::PreparedPairingStart,
         scope: &'a OperationScope,
     ) -> BoxFuture<'a, Result<crate::StartedPairing, PairingError>>;
     fn confirm<'a>(
@@ -229,6 +235,12 @@ pub struct EnrollmentSignature {
     pub key_id: String,
     pub signature: String,
 }
+#[derive(Clone, Eq, PartialEq)]
+pub struct EnrollmentReceipt {
+    pub operation_id: Uuid,
+    pub request_digest: [u8; 32],
+    pub key_id: String,
+}
 pub trait EnrollmentSigner: Send + Sync {
     fn public_key<'a>(&'a self) -> BoxFuture<'a, Result<RemoteOwnerPublicKey, PairingError>>;
     fn sign_enrollment<'a>(
@@ -238,7 +250,7 @@ pub trait EnrollmentSigner: Send + Sync {
     fn readback<'a>(
         &'a self,
         operation_id: Uuid,
-    ) -> BoxFuture<'a, Result<Option<EnrollmentSignature>, PairingError>>;
+    ) -> BoxFuture<'a, Result<Option<EnrollmentReceipt>, PairingError>>;
 }
 /// The real Gateway adapter checks strict signed-wire framing and every claim
 /// against this exact internal command before the key holder signs it.

@@ -3,6 +3,10 @@ use super::SchemaObject;
 
 pub(super) const GATEWAY_OBJECTS: &[SchemaObject] = &[
     SchemaObject::table(
+        "connections_command_rejections",
+        "CREATE TABLE connections_command_rejections(person_id TEXT NOT NULL,command_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(person_id,command_id))",
+    ),
+    SchemaObject::table(
         "gateway_pairing_command_receipts",
         "CREATE TABLE gateway_pairing_command_receipts(person_id TEXT NOT NULL,command_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(person_id,command_id))",
     ),

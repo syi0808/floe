@@ -209,6 +209,8 @@ pub enum PairingStateDto {
     Expired,
     Cancelled,
     RepairRequired,
+    RevocationPending,
+    Forgotten,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Hash, Serialize)]

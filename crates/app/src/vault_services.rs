@@ -46,6 +46,18 @@ pub struct VaultLifecycleFailureProjection {
     pub reload_required: bool,
     pub seal_session: bool,
 }
+impl VaultLifecycleFailureProjection {
+    /// Only intrinsically physical Vault failures cross feature boundaries as
+    /// shared readiness failures. Generic storage/provider errors do not.
+    pub fn access_failure(failure: AgentFailure) -> Option<Self> {
+        match failure {
+            AgentFailure::VaultUnavailable | AgentFailure::VaultLocked => {
+                Some(crate::vault_lifecycle::project_failure(failure, "access"))
+            }
+            _ => None,
+        }
+    }
+}
 impl VaultLifecycleResult {
     pub fn failure_projection(&self) -> Option<VaultLifecycleFailureProjection> {
         self.failure
