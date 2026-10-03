@@ -1,6 +1,6 @@
 //! Bounded encrypted identity/operation/receipt storage. Pairing lifecycle and
 //! source policy belong to Connections and Access, respectively.
-use super::authority_keys::decode_exact;
+use super::authority_keys::{decode_canonical, decode_exact};
 use super::{EncryptedAgentVault, VaultKeyProvider, storage};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use floe_access::{

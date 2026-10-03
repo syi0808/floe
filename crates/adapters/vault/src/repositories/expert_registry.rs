@@ -264,7 +264,7 @@ impl<Keys: VaultKeyProvider> RegistryRepository for VaultExpertRegistryRepositor
                             (
                                 commit.command_id.as_uuid().to_string(),
                                 commit.actor.person_id.to_string(),
-                                &commit.actor.device_id,
+                                commit.actor.device_id.as_str(),
                                 hex_digest(&commit.request_digest),
                                 to_i64(receipt.snapshot.revision)?,
                                 payload,

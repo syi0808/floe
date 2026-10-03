@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "G2 25599 cloud and all three full apps reach the same six Conversation/Provider Rust errors. Coherent owner projection/export/import corrections and captured formatting integrated, not rerun. iOS signing environment blocker resolved using ordinary Flutter build housekeeping in fresh task checkout; security settings unchanged. Analyzer and prior standalone native/ABI, Go and policy passes retained with input proof. Full G2 remains unpassed; no tests or live operations.",
+  "verification": "G2 7f4 cloud and all three apps reach the same 13 Vault errors. Coherent dependency, bounded decoder, string parameter and explicit ToolReviewRequired result-category fixes integrated with captured formatting, not rerun. DAG freshly passed; prior Go/native/analyzer coverage retained with input evidence. Next full cloud Rust build precedes Apple retries. Full G2 remains unpassed; no tests or live operations.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "2e8140b25d697f2f4f067767375deb449dc37e56",
+  "current_correction_source_commit": "2174873f9c132a0ff541fe256a1e884651eae784",
   "current_status_document": "docs/plans/t0-execution-status.json"
 }

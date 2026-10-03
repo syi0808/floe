@@ -340,7 +340,7 @@ async fn ensure_successful_sources_unfenced(
             return Err(conflict(
                 "a successful Calendar source is held by a pending source operation",
             )
-            .with_metadata("connection_id", connection_id.to_string()));
+            .with_metadata("connection_id", connection_id.as_str()));
         }
     }
     Ok(())
@@ -626,7 +626,7 @@ impl floe_day::DayRefreshRepository for TursoStore {
                         return Err(conflict("Pending Calendar sources must remain unavailable")
                             .with_metadata(
                                 "connection_id",
-                                source.version.source.connection_id().to_string(),
+                                source.version.source.connection_id().as_str(),
                             ));
                     }
                 }

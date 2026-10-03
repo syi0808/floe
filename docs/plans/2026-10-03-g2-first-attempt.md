@@ -66,3 +66,12 @@ Cloud and all three full app builds now reach the same six Rust diagnostics in C
 The coherent correction removes obsolete public Task-source publication exports while retaining the authenticated private receipt/journal path; declares Conversation's tracing dependency; compares the boxed journal receipt by reference; and projects both Knowledge memories and its optional issue into AgentContext. It preserves the existing authorized read and error propagation. Four misspelled Calendar result-kind uses now name the canonical Access owner type, without adding an alias. Confirmed unused imports and the captured one-file formatting adjustment are included. A read-only nearby caller/export scan found no additional defect of these classes.
 
 These source corrections have not been compiled locally. Full Rust and all app targets require the next exact-snapshot retry. Prior standalone DeviceModel/Health and ABI-export results are partial coverage, reusable only with input evidence; they do not establish full app success. No tests, app launches or model/provider operations ran.
+
+
+## Affected retry on 7f4a7c70
+
+The prior Conversation/Provider errors are gone. Cloud and all three app builds now report the same 13 Vault compiler errors. The fresh dependency-policy run passed, Go reused exact input evidence, and only a Calendar import-order formatting patch was returned; lockfiles were unchanged.
+
+The correction declares the existing Tokio dependency for ExecutionScope's Tokio deadline clock, imports the existing bounded canonical base64url decoder, uses ConnectionId's explicit string view for metadata, and supplies string slices to five Turso SQL tuple parameters. Both Conversation journal category handlers explicitly classify ToolReviewRequired as result, matching Engine record_result and Task storage: this event consumes the real ToolIntent and records source-review blockage. It is not silently ignored or classified as a checkpoint. Captured formatting is integrated.
+
+For subsequent G2 corrections the common full Rust build runs first in cloud. Once it passes, that exact frozen snapshot proceeds through all Apple app targets. This avoids repeating three app builds against already-known common Rust failures. Full G2 and application ABI verification remain open; no tests or live operations ran.

@@ -1493,6 +1493,7 @@ fn journal_kind(event: &JournalEvent) -> &'static str {
         | JournalEvent::DelegationIntent { .. } => "intent",
         JournalEvent::ModelResult { .. }
         | JournalEvent::ToolResult { .. }
+        | JournalEvent::ToolReviewRequired { .. }
         | JournalEvent::DelegationResult { .. } => "result",
         JournalEvent::Output { .. } => "output",
         JournalEvent::FinalizationStarted { .. }
