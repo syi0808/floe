@@ -62,7 +62,11 @@ A legitimate special-deployment or third-party execution constraint may still be
 
 ### 4. Health has a separate mandatory device-local privacy operation
 
-The mandatory semantic-transform scope is Health/Wellbeing only. Do not introduce a generic privacy-transform framework or add transforms to other connectors without a separate decision and a demonstrated second use case. Apple is the implementation target; Android local-model implementation and build gates are not part of this cutover.
+The mandatory semantic-transform scope is Health/Wellbeing only. Transform is a small shared typed interface that concrete HealthTransform implements; a future EmailTransform may implement the same interface. This does not introduce a transform registry, discovery system or orchestration framework, and does not authorize transforms for other connectors. Apple is the implementation target; Android local-model implementation and build gates are not part of this cutover.
+
+The user clarified and approved this boundary on 2026-10-03: domain transforms are independent of acquisition and model execution. FoundationModels is one peer implementation of a common backend-neutral DeviceModel contract. All admitted local execution consumers, including reasoning Fallback, use that same semantic contract across Swift and Rust bindings. DeviceModel owns bounded execution, capabilities and generic structured output; it does not inspect role/purpose strings to select Health, Learner or Agent business schemas. Domain owners supply explicit output contracts and validate domain meaning. Higher Engine/ModelPort/Inference authority, Gateway-primary selection, source permission, accounting and independent job/receipt lifetimes remain unchanged. The first implementation supplies FoundationModels only; an injectable boundary is not a claim that another local backend is implemented.
+
+Device models are prioritized for transforms; Health specifically remains mandatory device-only with no remote or deterministic semantic fallback. Future transforms retain their own explicitly decided placement policy. Manager, Experts and Learner retain the common remote Primary/device Fallback rule in section 3; no historical Learner RemoteOnly exception or model-recipient background grant is restored.
 
 ```text
 HealthKit
