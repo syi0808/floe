@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "G2 first attempt failed; compiler fixes and approved Transform/DeviceModel cutover remain unverified. Go neutral output schemas, declared capabilities and correlated failure usage are source-reviewed and saved; coordinated Rust/Swift cutover remains in progress. No new compiler, formatter, build, tests or model calls ran. Whole G2 waits coherent structural closure; joint behavior verification precedes test reconstruction.",
+  "verification": "G2 first attempt failed. Reviewed shared Transform/Health domain, stateless bridge and Apple acquisition/source separation are saved; generic model contracts/backend/hosts and final same-snapshot native integration remain active. Source review fixed lifetime and library-retention fences. No new executable checks or model calls ran; this intermediate checkpoint is not structural closure or a build pass.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "3dc5fe3e481e216cab3a317e624dd696a077b16c",
+  "current_correction_source_commit": "b9dca29d4c01e6061a23acbd23f8be772d04d5bb",
   "current_status_document": "docs/plans/t0-execution-status.json"
 }

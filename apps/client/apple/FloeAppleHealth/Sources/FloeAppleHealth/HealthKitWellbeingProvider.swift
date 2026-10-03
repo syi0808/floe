@@ -3,63 +3,39 @@ import Foundation
 import HealthKit
 import UIKit
 
-public enum HealthKitWellbeingFailure: Error, Equatable {
-    case unsupported
-    case permissionRequired
-    case noDataOrReadAccessLimited
-    case unavailable
-    case privacyTransform(HealthPrivacyTransformFailure)
-}
-
-public struct AppleWellbeingObservation: Sendable {
-    public let view: AppleWellbeingView
-    public let privacyTransform: HealthPrivacyTransformProof
-}
-
 public actor HealthKitWellbeingProvider {
-    private let transformer: any HealthPrivacyTransforming
     private let healthStore: HKHealthStore
-    private let sourceHandle: String
     private let host: AppleHealthHost
     private let operatingSystemMajorVersion: Int
     private let now: @Sendable () -> Date
     private var authorizationRequestCompleted = false
-    private var lastView: AppleWellbeingView?
-    private var lastSuccessAtUnixMs: Int64?
-    private var lastReadHadNoData = false
 
     init(
-        transformer: any HealthPrivacyTransforming,
         healthStore: HKHealthStore = HKHealthStore(),
-        sourceHandle: String,
         host: AppleHealthHost,
         operatingSystemMajorVersion: Int,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
-        self.transformer = transformer
         self.healthStore = healthStore
-        self.sourceHandle = sourceHandle
         self.host = host
         self.operatingSystemMajorVersion = operatingSystemMajorVersion
         self.now = now
     }
 
     @MainActor
-    public static func currentHostProvider(sourceHandle: String, transformer: any HealthPrivacyTransforming) -> HealthKitWellbeingProvider {
+    public static func currentHostProvider() -> HealthKitWellbeingProvider {
 #if targetEnvironment(macCatalyst)
         let host = AppleHealthHost.macCatalyst
 #else
         let host: AppleHealthHost = UIDevice.current.userInterfaceIdiom == .pad ? .iPad : .iPhone
 #endif
         return HealthKitWellbeingProvider(
-            transformer: transformer,
-            sourceHandle: sourceHandle,
             host: host,
             operatingSystemMajorVersion: ProcessInfo.processInfo.operatingSystemVersion.majorVersion
         )
     }
 
-    static var readTypes: Set<HKObjectType> {
+    private static var readTypes: Set<HKObjectType> {
         var types = Set<HKObjectType>()
         if let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) { types.insert(sleep) }
         if let steps = HKObjectType.quantityType(forIdentifier: .stepCount) { types.insert(steps) }
@@ -67,91 +43,61 @@ public actor HealthKitWellbeingProvider {
         return types
     }
 
-    public func requestReadAuthorization() async throws -> AppleHealthLifecycle {
+    public func requestReadAuthorization() async throws {
         guard isSupported else { throw HealthKitWellbeingFailure.unsupported }
         do {
             try await requestAuthorization()
             authorizationRequestCompleted = true
-            return await lifecycle()
+        } catch let failure as HealthKitWellbeingFailure {
+            throw failure
         } catch {
             throw HealthKitWellbeingFailure.unavailable
         }
     }
 
-    public func readDerivedWellbeing(binding: HealthTransformBinding) async throws -> AppleWellbeingObservation {
+    public func readAggregates() async throws -> HealthKitWellbeingAcquisition {
         guard isSupported else { throw HealthKitWellbeingFailure.unsupported }
-        guard try await authorizationRequestStatus() != .shouldRequest else {
-            throw HealthKitWellbeingFailure.permissionRequired
-        }
-
-        let end = now()
-        let start = end.addingTimeInterval(-36 * 60 * 60)
         do {
+            guard try await authorizationRequestStatus() != .shouldRequest else {
+                throw HealthKitWellbeingFailure.permissionRequired
+            }
+
+            let end = now()
+            let start = end.addingTimeInterval(-36 * 60 * 60)
             async let sleepHours = querySleepHours(start: start, end: end)
             async let steps = queryCumulativeQuantity(.stepCount, unit: .count(), start: start, end: end)
             async let exerciseMinutes = queryCumulativeQuantity(.appleExerciseTime, unit: .minute(), start: start, end: end)
             let values = try await (sleepHours, steps, exerciseMinutes)
             guard values.0 != nil || values.1 != nil || values.2 != nil else {
-                lastView = nil
-                lastReadHadNoData = true
                 throw HealthKitWellbeingFailure.noDataOrReadAccessLimited
             }
-            let input = try HealthPrivacyTransformInput(
-                sleepHours: values.0, steps: values.1, exerciseMinutes: values.2
+            return HealthKitWellbeingAcquisition(
+                sleepHours: values.0,
+                steps: values.1,
+                exerciseMinutes: values.2
             )
-            let success = try await transformer.transform(input, binding: binding)
-            try Task.checkCancellation()
-            let observedAtUnixMs = success.transformedAtUnixMs
-            let view = AppleWellbeingProjection.make(
-                output: success.output,
-                sourceHandle: sourceHandle,
-                observedAtUnixMs: observedAtUnixMs,
-                evidenceHandle: "health.transform:\(success.proof.operationID.uuidString.lowercased())"
-            )
-            lastView = view
-            lastSuccessAtUnixMs = observedAtUnixMs
-            lastReadHadNoData = false
-            return AppleWellbeingObservation(view: view, privacyTransform: success.proof)
         } catch let failure as HealthKitWellbeingFailure {
-            lastView = nil
             throw failure
-        } catch let failure as HealthPrivacyTransformFailure {
-            lastView = nil
-            throw HealthKitWellbeingFailure.privacyTransform(failure)
         } catch {
-            lastView = nil
             throw HealthKitWellbeingFailure.unavailable
         }
     }
 
-    public func lifecycle() async -> AppleHealthLifecycle {
-        let observedAtUnixMs = Int64(now().timeIntervalSince1970 * 1_000)
-        guard isSupported else {
-            return AppleHealthLifecycle(state: .unsupported, observedAtUnixMs: observedAtUnixMs, lastSuccessAtUnixMs: lastSuccessAtUnixMs, view: nil)
-        }
-        let requestStatus: HKAuthorizationRequestStatus
+    public func readStatus() async -> HealthKitReadStatus {
+        guard isSupported else { return .unsupported }
         do {
-            requestStatus = try await authorizationRequestStatus()
+            let status = try await authorizationRequestStatus()
+            if status == .shouldRequest {
+                return .requestRequired(requestCompleted: authorizationRequestCompleted)
+            }
+            return .queryable
         } catch {
-            return AppleHealthLifecycle(state: .unavailable, observedAtUnixMs: observedAtUnixMs, lastSuccessAtUnixMs: lastSuccessAtUnixMs, view: nil)
+            return .unavailable
         }
-        if requestStatus == .shouldRequest && !authorizationRequestCompleted {
-            return AppleHealthLifecycle(state: .permissionRequired, observedAtUnixMs: observedAtUnixMs, lastSuccessAtUnixMs: lastSuccessAtUnixMs, view: nil)
-        }
-        if lastReadHadNoData {
-            return AppleHealthLifecycle(state: .noDataOrReadAccessLimited, observedAtUnixMs: observedAtUnixMs, lastSuccessAtUnixMs: lastSuccessAtUnixMs, view: nil)
-        }
-        guard let lastView else {
-            return AppleHealthLifecycle(state: .pending, observedAtUnixMs: observedAtUnixMs, lastSuccessAtUnixMs: lastSuccessAtUnixMs, view: nil)
-        }
-        guard lastView.expiresAtUnixMs > observedAtUnixMs else {
-            return AppleHealthLifecycle(state: .stale, observedAtUnixMs: observedAtUnixMs, lastSuccessAtUnixMs: lastSuccessAtUnixMs, view: nil)
-        }
-        return AppleHealthLifecycle(state: .ready, observedAtUnixMs: observedAtUnixMs, lastSuccessAtUnixMs: lastSuccessAtUnixMs, view: lastView)
     }
 
     private var isSupported: Bool {
-        return AppleHealthAvailability.isSupported(
+        AppleHealthAvailability.isSupported(
             host: host,
             operatingSystemMajorVersion: operatingSystemMajorVersion,
             healthDataAvailable: HKHealthStore.isHealthDataAvailable()
