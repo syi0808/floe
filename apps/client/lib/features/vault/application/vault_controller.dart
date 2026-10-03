@@ -16,6 +16,7 @@ final class VaultController extends ChangeNotifier {
   bool get busy => _busy;
   bool _disposed = false;
   bool _closing = false;
+  bool _desiredReady = true;
   int _failureRevision = 0;
   Future<void>? _opening;
   Future<AgentVaultState> Function()? _failedOperation;
@@ -41,7 +42,7 @@ final class VaultController extends ChangeNotifier {
       await gateway.resumePendingOperation(personId);
     }
     final current = await gateway.vaultStatus(personId);
-    if (_closing || _disposed) return current;
+    if (_closing || _disposed || !_desiredReady) return current;
     return switch (current) {
       AgentVaultState.missing => gateway.createVault(personId),
       AgentVaultState.locked => gateway.unlockVault(personId),
@@ -58,6 +59,7 @@ final class VaultController extends ChangeNotifier {
 
   Future<void> lock() async {
     if (_disposed || _closing || busy || !ready) return;
+    _desiredReady = false;
     await _run(() async {
       await gateway.lockVault(personId);
       return gateway.vaultStatus(personId);

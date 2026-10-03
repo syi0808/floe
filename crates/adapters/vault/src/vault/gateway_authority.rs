@@ -1192,7 +1192,7 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(storage)?;
+                .map_err(product_begin)?;
             let result = async {
                 let mut rows = tx.query("SELECT payload FROM connections_product_records WHERE record_ref=? OR (person_id=? AND command_id=?)",
                     (identity.record_ref.to_string(), identity.person_id.to_string(), identity.command_id.to_string())).await.map_err(storage)?;
@@ -1274,6 +1274,44 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
             Ok(records)
         })
     }
+    fn admit_cancellation<'a>(
+        &'a self,
+        receipt: ConnectionsRecord,
+    ) -> BoxFuture<'a, Result<ConnectionsRecord, AgentFailure>> {
+        Box::pin(async move {
+            receipt.validate()?;
+            if receipt.person_id != self.person_id || receipt.revision != 1 {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let ConnectionsPayload::CancellationIntent { operation_ref, .. } = receipt.payload
+            else {
+                return Err(AgentFailure::InvalidInput);
+            };
+            let mut connection = self.connection()?;
+            let tx = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .await
+                .map_err(product_begin)?;
+            let result=async {
+                if command_rejection_on(&tx,receipt.person_id,receipt.command_id).await?.is_some() { return Err(AgentFailure::Conflict); }
+                let mut rows=tx.query("SELECT payload FROM connections_product_records WHERE record_ref=? OR (person_id=? AND command_id=?)",(receipt.record_ref.to_string(),receipt.person_id.to_string(),receipt.command_id.to_string())).await.map_err(storage)?;
+                if let Some(row)=rows.next().await.map_err(storage)? {
+                    let existing:ConnectionsRecord=bounded_decode(&row.get::<String>(0).map_err(storage)?)?;existing.validate()?;
+                    if existing.record_ref!=receipt.record_ref || existing.person_id!=receipt.person_id || existing.device_id!=receipt.device_id || existing.command_id!=receipt.command_id || existing.intent_digest!=receipt.intent_digest {return Err(AgentFailure::Conflict);}
+                    return Ok(existing);
+                }
+                drop(rows);
+                let mut rows=tx.query("SELECT payload FROM connections_product_records WHERE record_ref=? AND person_id=?",(operation_ref.to_string(),receipt.person_id.to_string())).await.map_err(storage)?;
+                let target:ConnectionsRecord=bounded_decode(&rows.next().await.map_err(storage)?.ok_or(AgentFailure::NotFound)?.get::<String>(0).map_err(storage)?)?;drop(rows);
+                let next=target.with_cancellation(&receipt)?;
+                let changed=tx.execute("UPDATE connections_product_records SET revision=?,payload=? WHERE record_ref=? AND revision=?",(next.revision as i64,bounded_encode(&next)?,operation_ref.to_string(),target.revision as i64)).await.map_err(storage)?;
+                if changed!=1 {return Err(AgentFailure::Conflict);}
+                tx.execute("INSERT INTO connections_product_records VALUES(?,?,?,?,?)",(receipt.record_ref.to_string(),receipt.person_id.to_string(),receipt.command_id.to_string(),receipt.revision as i64,bounded_encode(&receipt)?)).await.map_err(storage)?;
+                self.check_access()?;Ok(receipt)
+            }.await;
+            self.finish_access_grant_transaction(tx, result).await
+        })
+    }
     fn insert<'a>(
         &'a self,
         record: ConnectionsRecord,
@@ -1287,7 +1325,7 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(storage)?;
+                .map_err(product_begin)?;
             let result=async{
             if command_rejection_on(&tx, record.person_id, record.command_id).await?.is_some() {
                 return Err(AgentFailure::Conflict);
@@ -1295,7 +1333,7 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
             let mut rows=tx.query("SELECT payload FROM connections_product_records WHERE record_ref=? OR (person_id=? AND command_id=?)",(record.record_ref.to_string(),record.person_id.to_string(),record.command_id.to_string())).await.map_err(storage)?;
             if let Some(row)=rows.next().await.map_err(storage)?{let current:ConnectionsRecord=bounded_decode(&row.get::<String>(0).map_err(storage)?)?;
                 if current.record_ref!=record.record_ref||current.command_id!=record.command_id||current.intent_digest!=record.intent_digest||current.person_id!=record.person_id||current.device_id!=record.device_id{return Err(AgentFailure::Conflict)}return Ok(current)}drop(rows);
-            if matches!(record.payload, ConnectionsPayload::GatewayForgotten(_)) {
+            if matches!(record.payload, ConnectionsPayload::GatewayForgotten(_) | ConnectionsPayload::CancellationIntent { .. }) {
                 return Err(AgentFailure::PolicyDenied);
             }
             tx.execute("INSERT INTO connections_product_records VALUES(?,?,?,?,?)",(record.record_ref.to_string(),record.person_id.to_string(),record.command_id.to_string(),record.revision as i64,bounded_encode(&record)?)).await.map_err(storage)?;Ok(record)
@@ -1317,7 +1355,7 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(storage)?;
+                .map_err(product_begin)?;
             let result=async{
             let mut rows=tx.query("SELECT payload FROM connections_product_records WHERE record_ref=? AND person_id=?",(record.record_ref.to_string(),record.person_id.to_string())).await.map_err(storage)?;
             let current:ConnectionsRecord=bounded_decode(&rows.next().await.map_err(storage)?.ok_or(AgentFailure::Conflict)?.get::<String>(0).map_err(storage)?)?;drop(rows);
@@ -1327,5 +1365,12 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
         }.await;
             self.finish_access_grant_transaction(tx, result).await
         })
+    }
+}
+
+fn product_begin(error: turso::Error) -> AgentFailure {
+    match error {
+        turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::Conflict,
+        other => storage(other),
     }
 }

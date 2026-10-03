@@ -22,12 +22,11 @@ use std::{
     collections::HashMap,
     fs,
     os::unix::fs::DirBuilderExt,
-    panic::{AssertUnwindSafe, catch_unwind},
+    panic::{catch_unwind, AssertUnwindSafe},
     path::{Path, PathBuf},
     sync::{
-        Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc,
+        mpsc, Arc, Condvar, Mutex,
     },
     time::Duration,
 };
@@ -316,15 +315,10 @@ struct Job {
     intent: VaultLifecycleIntent,
     cancellation: Cancellation,
     result: Mutex<Option<Result<VaultState, AgentFailure>>>,
-    release_queued: AtomicBool,
     archived: AtomicBool,
 }
-enum WorkerMessage {
-    Execute(Arc<Job>),
-    Release(Arc<Job>),
-}
 struct Worker {
-    sender: Option<mpsc::SyncSender<WorkerMessage>>,
+    sender: Option<mpsc::SyncSender<Arc<Job>>>,
     jobs: Arc<Mutex<HashMap<Uuid, Arc<Job>>>>,
     closing: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<Result<(), AgentFailure>>>,
@@ -342,11 +336,10 @@ impl Worker {
             .enable_all()
             .build()
             .map_err(|_| AgentFailure::VaultUnavailable)?;
-        let (sender, receiver) = mpsc::sync_channel::<WorkerMessage>(MAX_PENDING);
+        let (sender, receiver) = mpsc::sync_channel::<Arc<Job>>(MAX_PENDING);
         let closing = Arc::new(AtomicBool::new(false));
         let worker_closing = closing.clone();
         let jobs = Arc::new(Mutex::new(HashMap::<Uuid, Arc<Job>>::new()));
-        let worker_jobs = jobs.clone();
         let thread = std::thread::Builder::new()
             .name("floe-vault-lifecycle".into())
             .stack_size(8 * 1024 * 1024)
@@ -356,30 +349,23 @@ impl Worker {
                 let mut shutdown_failure = None;
                 // This receiver blocks only the dedicated queue thread; the
                 // runtime workers remain available for admitted owner work.
-                while let Ok(message) = receiver.recv() {
-                    let job = match message {
-                        WorkerMessage::Execute(job) => job,
-                        WorkerMessage::Release(job) => {
-                            let result = job.result.lock().ok().and_then(|value| *value);
-                            if let Some(result) = result {
-                                let receipt = stored_receipt(&job, result);
-                                if job.archived.load(Ordering::Acquire)
-                                    || runtime
-                                        .block_on(
-                                            core.store.archive_vault_lifecycle_receipt(receipt),
-                                        )
-                                        .is_ok()
-                                {
-                                    if let Ok(mut jobs) = worker_jobs.lock() {
-                                        jobs.remove(&job.id);
-                                    }
-                                } else {
-                                    job.release_queued.store(false, Ordering::Release);
-                                }
-                            } else {
-                                job.release_queued.store(false, Ordering::Release);
-                            }
-                            continue;
+                'work: while let Ok(job) = receiver.recv() {
+                    // Lookup failure is not an execution outcome. Retain the
+                    // queued identity and retry; never retire a live generation
+                    // or overwrite an existing receipt because its read failed.
+                    let saved = loop {
+                        if worker_closing.load(Ordering::Acquire) {
+                            break 'work;
+                        }
+                        match runtime.block_on(async {
+                            tokio::time::timeout(
+                                Duration::from_secs(5),
+                                core.store.load_vault_lifecycle_receipt(job.id),
+                            )
+                            .await
+                        }) {
+                            Ok(Ok(value)) => break value,
+                            _ => std::thread::sleep(Duration::from_millis(200)),
                         }
                     };
                     let outcome = if worker_closing.load(Ordering::Acquire) {
@@ -389,12 +375,7 @@ impl Worker {
                     } else {
                         match catch_unwind(AssertUnwindSafe(|| {
                             runtime.block_on(async {
-                                if let Some(receipt) = core
-                                    .store
-                                    .load_vault_lifecycle_receipt(job.id)
-                                    .await
-                                    .map_err(|_| AgentFailure::StorageUnavailable)?
-                                {
+                                if let Some(receipt) = saved {
                                     job.archived.store(true, Ordering::Release);
                                     return receipt_outcome(&job, receipt);
                                 }
@@ -436,6 +417,29 @@ impl Worker {
                             retire(&runtime, &core, &published, &mut current, job.id)
                         {
                             shutdown_failure.get_or_insert(failure);
+                        }
+                    }
+                    // Completion/release cannot be acknowledged before the
+                    // exact outcome is durable. A failed archive retries the
+                    // same receipt, never the physical lifecycle operation.
+                    while !job.archived.load(Ordering::Acquire) {
+                        if worker_closing.load(Ordering::Acquire) {
+                            break 'work;
+                        }
+                        let receipt = stored_receipt(&job, outcome);
+                        if runtime
+                            .block_on(async {
+                                tokio::time::timeout(
+                                    Duration::from_secs(5),
+                                    core.store.archive_vault_lifecycle_receipt(receipt),
+                                )
+                                .await
+                            })
+                            .is_ok_and(|value| value.is_ok())
+                        {
+                            job.archived.store(true, Ordering::Release);
+                        } else {
+                            std::thread::sleep(Duration::from_millis(200));
                         }
                     }
                     match job.result.lock() {
@@ -508,13 +512,12 @@ impl Worker {
                         intent,
                         cancellation: Cancellation::new(),
                         result: Mutex::new(None),
-                        release_queued: AtomicBool::new(false),
                         archived: AtomicBool::new(false),
                     });
                     self.sender
                         .as_ref()
                         .ok_or(AgentFailure::Interrupted)?
-                        .try_send(WorkerMessage::Execute(job.clone()))
+                        .try_send(job.clone())
                         .map_err(|error| match error {
                             mpsc::TrySendError::Full(_) => AgentFailure::BudgetExceeded,
                             mpsc::TrySendError::Disconnected(_) => AgentFailure::Interrupted,
@@ -531,20 +534,25 @@ impl Worker {
             if release && result.is_none() {
                 return Err(AgentFailure::Conflict);
             }
-            // Only acknowledged results leave RAM, and only after the queue has
-            // durably archived the exact receipt. Replayed IDs are checked against
-            // that archive before execution; cache eviction cannot make them fresh.
-            if release && !job.release_queued.swap(true, Ordering::AcqRel) {
-                if self
-                    .sender
-                    .as_ref()
-                    .ok_or(AgentFailure::Interrupted)?
-                    .try_send(WorkerMessage::Release(job.clone()))
-                    .is_err()
-                {
-                    job.release_queued.store(false, Ordering::Release);
-                    return Err(AgentFailure::BudgetExceeded);
+            // All completed results are already durably archived. A replay
+            // receipt (including a changed-intent Conflict) never replaces it.
+            if release {
+                if !job.archived.load(Ordering::Acquire) {
+                    return Err(AgentFailure::Conflict);
                 }
+                let id = job.id;
+                // Clone below avoids retaining a reference into the map while evicting.
+                let completed = *result;
+                let stage = job.intent.stage().to_string();
+                drop(result);
+                jobs.remove(&id);
+                return Ok(VaultLifecycleResult {
+                    operation_id: id,
+                    stage,
+                    done: true,
+                    state: completed.and_then(Result::ok),
+                    failure: completed.and_then(Result::err),
+                });
             }
             Ok(VaultLifecycleResult {
                 operation_id: id,

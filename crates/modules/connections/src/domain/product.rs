@@ -341,7 +341,7 @@ pub enum ConnectionsPayload {
         operation_ref: Uuid,
         expected_revision: u64,
     },
-    SourceCancellation(ConnectionOperationSnapshot),
+    CancellationReceipt(ConnectionOperationSnapshot),
     ObserveReview {
         reference: ReviewRef,
         source_ref: Uuid,
@@ -483,7 +483,7 @@ impl ConnectionsRecord {
                     return Err(AgentFailure::InvalidInput);
                 }
             }
-            ConnectionsPayload::SourceCancellation(snapshot) => {
+            ConnectionsPayload::CancellationReceipt(snapshot) => {
                 if snapshot.operation_ref.is_nil() || snapshot.revision == 0 {
                     return Err(AgentFailure::InvalidInput);
                 }
@@ -515,6 +515,47 @@ impl ConnectionsRecord {
         }
         Ok(())
     }
+    /// Pure cancellation transition; storage commits this successor with the
+    /// exact cancellation admission in one transaction.
+    pub fn with_cancellation(&self, receipt: &Self) -> Result<Self, AgentFailure> {
+        self.validate()?;
+        receipt.validate()?;
+        let ConnectionsPayload::CancellationIntent {
+            operation_ref,
+            expected_revision,
+        } = receipt.payload
+        else {
+            return Err(AgentFailure::InvalidInput);
+        };
+        if operation_ref != self.record_ref
+            || receipt.person_id != self.person_id
+            || receipt.device_id != self.device_id
+            || expected_revision > self.revision
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        let ConnectionsPayload::IntegrationOperation(ref operation) = self.payload else {
+            return Err(AgentFailure::InvalidInput);
+        };
+        if !operation
+            .snapshot
+            .allowed_actions
+            .contains(&ConnectionAction::Cancel)
+            || operation.cancellation_command.is_some()
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        let mut next = self.clone();
+        next.revision = self.revision.checked_add(1).ok_or(AgentFailure::Conflict)?;
+        let ConnectionsPayload::IntegrationOperation(ref mut operation) = next.payload else {
+            unreachable!()
+        };
+        operation.cancellation_command = Some(receipt.command_id);
+        operation.snapshot.revision = next.revision;
+        operation.snapshot.allowed_actions = vec![ConnectionAction::Reobserve];
+        self.validate_successor(&next)?;
+        Ok(next)
+    }
     pub fn validate_successor(&self, next: &Self) -> Result<(), AgentFailure> {
         self.validate()?;
         next.validate()?;
@@ -533,7 +574,7 @@ impl ConnectionsRecord {
                     operation_ref,
                     expected_revision,
                 },
-                ConnectionsPayload::SourceCancellation(snapshot),
+                ConnectionsPayload::CancellationReceipt(snapshot),
             ) if snapshot.operation_ref == *operation_ref
                 && snapshot.revision >= *expected_revision => {}
 

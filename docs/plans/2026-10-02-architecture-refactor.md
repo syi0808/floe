@@ -652,3 +652,16 @@ Root directly implemented the latest review findings. The production Rust worksp
 A fresh plain-store AppHost probe processed 80 real Lock-only queue commands, released/archived outcomes, replayed the oldest command and rejected a changed intent under that ID. It did not create/unlock an encrypted Vault or access a real key provider. Fake-key storage probes additionally passed late Start-after-Forget retention, terminal authority fences and separate source/product negative receipts. These disposable probes remain outside the committed application/test suite. Actual sealed-generation key-provider recovery and Apple runtime qualification remain pending; no existing user profile or private UI has been operated.
 
 The cancellation worker and per-target recovery changes require final same-snapshot qualification and another narrowly scoped Opus review. Main remains held at the last diagnostic-qualified snapshot. Mac command-only validation is waiting for the user's explicit exception to the no-delegation instruction.
+
+
+### Atomic cancellation and acknowledged lifecycle completion (2026-10-04)
+
+The 45ca86d2 Opus source review accepted the prior sealed-generation/status, late Forget evidence, Access-first admission and separated journal fixes. Root verified its remaining concrete findings and changed the owning contracts directly:
+
+- Integration Cancel receipt and target cancellation fence now commit together. Generic insertion cannot admit that receipt. A stale driver CAS cannot remove the fence. Cancellation never calls Begin to manufacture a handle; NotFound remains an explicitly uncertain observation.
+- The unreachable source-cancellation branch was removed. Source operations have no Cancel product action. Integration/cancellation and catalog jobs now retain owner lifetime with bounded rounds, contention retry and owner shutdown, avoiding the previous five-minute silent expiry.
+- Lifecycle completion is only visible after immutable receipt archival. Lookup failure retries without entering physical execution or retiring a live generation; archive failure retries the same outcome before acknowledgement. Release cannot silently consume a cache slot after an unacknowledged archive failure.
+- Vault presentation retains the user's explicit Lock intent across a status timeout. Recovery cannot silently turn that status retry into Unlock.
+- Gateway summaries project Gateway-domain actions; catalog failures do not advertise a fictitious Reopen recovery.
+
+The coherent Rust production build passed. The expanded fake-key probe passed atomic cancellation admission/target readback, exact replay, rejection fencing and stale-driver CAS. The actual AppHost 80-command Lock-only/archive replay probe passed again under the new acknowledgement order. Nine disposable Flutter probes passed, including canonical typed-reference isolation and Lock → status timeout → Retry with no Unlock. No real Apple key/provider, HTTP, or permanent S3 suite execution is claimed. The conditional Access expiry-before-replay concern was checked in current inspect_review/read_review: they validate the stored identity and actor without expiry, so that claimed persistent expiry blocker was not reproduced in source. Same-snapshot review and Apple qualification remain pending.

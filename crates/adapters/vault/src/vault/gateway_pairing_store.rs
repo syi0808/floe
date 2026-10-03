@@ -3,13 +3,13 @@
 use super::gateway_authority::{
     bounded_decode, bounded_encode, pairing_storage, validate_producer,
 };
-use super::{EncryptedAgentVault, VaultKeyProvider, storage};
+use super::{storage, EncryptedAgentVault, VaultKeyProvider};
 use floe_access::GatewayCredentialExpectation;
 use floe_connections::*;
 use floe_execution::BoxFuture;
 use floe_kernel::{AgentFailure, PersonId};
 use sha2::Digest;
-use turso::{Connection, transaction::TransactionBehavior};
+use turso::{transaction::TransactionBehavior, Connection};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -913,7 +913,12 @@ impl<K: VaultKeyProvider> GatewayRegistry for EncryptedAgentVault<K> {
                         remote_revocation_pending: operation.start_phase
                             == PairingStartPhase::Dispatched,
                         allowed_actions: vec![ConnectionAction::Forget],
-                        failure: operation.snapshot().failure,
+                        failure: operation.snapshot().failure.map(|mut notice| {
+                            notice.safe_actions = vec![ConnectionAction::Forget];
+                            notice.recovery = ConnectionRecovery::None;
+                            notice.reload_required = false;
+                            notice
+                        }),
                     },
                     expectation,
                 }))

@@ -24,6 +24,11 @@ pub trait ConnectionsProductRepository: Send + Sync {
         person: PersonId,
         limit: usize,
     ) -> BoxFuture<'a, Result<Vec<ConnectionsRecord>, AgentFailure>>;
+    /// Atomically admits the exact cancellation and fences its integration target.
+    fn admit_cancellation<'a>(
+        &'a self,
+        receipt: ConnectionsRecord,
+    ) -> BoxFuture<'a, Result<ConnectionsRecord, AgentFailure>>;
     fn insert<'a>(
         &'a self,
         record: ConnectionsRecord,

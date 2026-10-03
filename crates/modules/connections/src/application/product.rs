@@ -751,7 +751,7 @@ impl ConnectionsService {
             classify = ConnectionsCommandFailure::Indeterminate;
             let pending = self
                 .products
-                .insert(record(
+                .admit_cancellation(record(
                     actor,
                     id,
                     command_id,
@@ -777,7 +777,7 @@ impl ConnectionsService {
         scope: &ExecutionScope,
     ) -> Result<ConnectionOperationSnapshot, AgentFailure> {
         let operation_ref = match &receipt.payload {
-            ConnectionsPayload::SourceCancellation(snapshot) => return Ok(snapshot.clone()),
+            ConnectionsPayload::CancellationReceipt(snapshot) => return Ok(snapshot.clone()),
             ConnectionsPayload::CancellationIntent { operation_ref, .. } => *operation_ref,
             _ => return Err(AgentFailure::Conflict),
         };
@@ -802,70 +802,39 @@ impl ConnectionsService {
             return Err(AgentFailure::PolicyDenied);
         }
         let (operation_ref, expected_revision) = match receipt.payload {
-            ConnectionsPayload::SourceCancellation(ref snapshot) => return Ok(snapshot.clone()),
+            ConnectionsPayload::CancellationReceipt(ref snapshot) => return Ok(snapshot.clone()),
             ConnectionsPayload::CancellationIntent {
                 operation_ref,
                 expected_revision,
             } => (operation_ref, expected_revision),
             _ => return Err(AgentFailure::Conflict),
         };
-        let snapshot = if let Some(mut stored) =
-            self.products.load(actor.person_id, operation_ref).await?
-        {
-            if stored.device_id != actor.device_id || stored.revision < expected_revision {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            let ConnectionsPayload::IntegrationOperation(mut operation) = stored.payload.clone()
-            else {
-                return Err(AgentFailure::InvalidInput);
-            };
-            if !matches!(
-                operation.snapshot.state,
-                ConnectionOperationState::Completed
-                    | ConnectionOperationState::Cancelled
-                    | ConnectionOperationState::Failed
-            ) {
-                if operation.cancellation_command.is_none() {
-                    operation.cancellation_command = Some(receipt.command_id);
-                    let previous = stored.revision;
-                    stored.revision = previous.checked_add(1).ok_or(AgentFailure::Conflict)?;
-                    operation.snapshot.revision = stored.revision;
-                    operation.snapshot.allowed_actions = vec![ConnectionAction::Reobserve];
-                    stored.payload = ConnectionsPayload::IntegrationOperation(operation.clone());
-                    stored = self.products.compare_and_swap(previous, stored).await?;
-                }
-                self.spawn_integration(actor.clone(), stored, false, scope)?;
-            }
-            operation.snapshot
-        } else {
-            let operation = self
-                .sources
-                .load_operation(operation_ref)
-                .await
-                .map_err(source_error)?
-                .ok_or(AgentFailure::NotFound)?;
-            if operation.device_id != actor.device_id
-                || operation.expected.source.person_id() != actor.person_id
-                || operation.revision < expected_revision
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            // Cancellation direction is monotonic for this immutable operation.
-            // Owner receipts decide whether cancellation or an earlier commit won.
-            let operation = self
-                .reconcile(
-                    actor,
-                    operation_ref,
-                    Some(SourceAbortReason::Cancelled),
-                    scope,
-                )
-                .await?;
-            self.source_operation_snapshot(actor, &operation, scope)
-                .await?
+        let stored = self
+            .products
+            .load(actor.person_id, operation_ref)
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        if stored.device_id != actor.device_id || stored.revision < expected_revision {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let ConnectionsPayload::IntegrationOperation(operation) = &stored.payload else {
+            return Err(AgentFailure::InvalidInput);
         };
+        if operation.cancellation_command != Some(receipt.command_id) {
+            return Err(AgentFailure::Conflict);
+        }
+        let snapshot = operation.snapshot.clone();
+        if !matches!(
+            snapshot.state,
+            ConnectionOperationState::Completed
+                | ConnectionOperationState::Cancelled
+                | ConnectionOperationState::Failed
+        ) {
+            self.spawn_integration(actor.clone(), stored, false, scope)?;
+        }
         let previous = receipt.revision;
         receipt.revision = previous.checked_add(1).ok_or(AgentFailure::Conflict)?;
-        receipt.payload = ConnectionsPayload::SourceCancellation(snapshot.clone());
+        receipt.payload = ConnectionsPayload::CancellationReceipt(snapshot.clone());
         self.products.compare_and_swap(previous, receipt).await?;
         Ok(snapshot)
     }
@@ -912,7 +881,7 @@ impl ConnectionsService {
         };
         // The stored command is the sole replay identity. A missing remote
         // receipt may rejoin that exact command; it never creates a new attempt.
-        let mut observed = if start {
+        let mut observed = if start && operation.cancellation_command.is_none() {
             self.remote_integrations.begin(begin.clone(), scope).await
         } else {
             self.remote_integrations
@@ -921,8 +890,31 @@ impl ConnectionsService {
         };
         if matches!(&observed, Err(IntegrationError::NotFound))
             && operation.remote.remote_revision == 0
+            && operation.cancellation_command.is_none()
         {
             observed = self.remote_integrations.begin(begin, scope).await;
+        }
+        if operation.cancellation_command.is_some()
+            && matches!(observed, Err(IntegrationError::NotFound))
+        {
+            // Absence does not exclude a delayed pre-cancel request. Preserve
+            // uncertainty and poll; never create a remote attempt to cancel it.
+            let notice = failure(
+                record.record_ref,
+                ConnectionFailureReason::OperationUncertain,
+                ConnectionRecovery::Reobserve,
+            );
+            if operation.snapshot.failure.as_ref() != Some(&notice) {
+                let previous = record.revision;
+                record.revision = previous.checked_add(1).ok_or(AgentFailure::Conflict)?;
+                operation.snapshot.revision = record.revision;
+                operation.snapshot.failure = Some(notice);
+                operation.snapshot.allowed_actions = vec![ConnectionAction::Reobserve];
+                operation.snapshot.next_observation_after_ms = Some(2000);
+                record.payload = ConnectionsPayload::IntegrationOperation(operation.clone());
+                self.products.compare_and_swap(previous, record).await?;
+            }
+            return Ok(operation.snapshot);
         }
         let observed = if operation.cancellation_command.is_some() {
             let remote = observed.map_err(integration_error)?;
@@ -1810,37 +1802,53 @@ impl ConnectionsService {
                 cancellations,
                 id,
             };
-            let mut current = record;
             let mut first = start;
+            let mut retry_delay = std::time::Duration::from_secs(2);
             loop {
-                if service.ensure_open().is_err()
-                    || scope.cancellation().is_cancelled()
-                    || scope.deadline() <= tokio::time::Instant::now()
-                {
+                if service.ensure_open().is_err() || scope.cancellation().is_cancelled() {
                     break;
                 }
-                let result = if matches!(
-                    current.payload,
-                    ConnectionsPayload::CancellationIntent { .. }
-                        | ConnectionsPayload::SourceCancellation(_)
-                ) {
-                    service.drive_cancellation(&actor, current, &scope).await
-                } else if matches!(current.payload, ConnectionsPayload::NativeSetup { .. }) {
-                    service.drive_native_setup(&actor, current, &scope).await
-                } else {
-                    service
-                        .drive_integration(&actor, current, first, &scope)
-                        .await
-                };
+                let round = ExecutionScope::root(
+                    scope.cancellation().clone(),
+                    tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+                    scope.budget().child(0, 0),
+                    scope.trace_context(),
+                );
+                let result = async {
+                    let current = service
+                        .products
+                        .load(actor.person_id, id)
+                        .await?
+                        .ok_or(AgentFailure::NotFound)?;
+                    if matches!(current.payload, ConnectionsPayload::CancellationReceipt(_)) {
+                        return Ok(None);
+                    }
+                    let snapshot = if matches!(
+                        current.payload,
+                        ConnectionsPayload::CancellationIntent { .. }
+                    ) {
+                        service.drive_cancellation(&actor, current, &round).await?
+                    } else if matches!(current.payload, ConnectionsPayload::NativeSetup { .. }) {
+                        service.drive_native_setup(&actor, current, &round).await?
+                    } else {
+                        service
+                            .drive_integration(&actor, current, first, &round)
+                            .await?
+                    };
+                    Ok::<_, AgentFailure>(Some(snapshot))
+                }
+                .await;
                 first = false;
-                if result.as_ref().is_ok_and(|snapshot| {
-                    matches!(
-                        snapshot.state,
-                        ConnectionOperationState::Completed
-                            | ConnectionOperationState::Failed
-                            | ConnectionOperationState::Cancelled
-                            | ConnectionOperationState::RepairRequired
-                    )
+                if result.as_ref().is_ok_and(|value| {
+                    value.as_ref().is_none_or(|snapshot| {
+                        matches!(
+                            snapshot.state,
+                            ConnectionOperationState::Completed
+                                | ConnectionOperationState::Failed
+                                | ConnectionOperationState::Cancelled
+                                | ConnectionOperationState::RepairRequired
+                        )
+                    })
                 }) {
                     break;
                 }
@@ -1848,18 +1856,16 @@ impl ConnectionsService {
                     result,
                     Err(AgentFailure::PolicyDenied
                         | AgentFailure::VaultUnavailable
-                        | AgentFailure::StorageUnavailable)
+                        | AgentFailure::VaultLocked)
                 ) {
                     break;
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                let Ok(Some(record)) = service.products.load(actor.person_id, id).await else {
-                    break;
+                retry_delay = if result.is_err() {
+                    (retry_delay * 2).min(std::time::Duration::from_secs(30))
+                } else {
+                    std::time::Duration::from_secs(2)
                 };
-                if matches!(record.payload, ConnectionsPayload::SourceCancellation(_)) {
-                    break;
-                }
-                current = record;
+                tokio::select! { _=scope.cancellation().cancelled()=>break, _=tokio::time::sleep(retry_delay)=>{} }
             }
         });
         Ok(())
@@ -1965,18 +1971,25 @@ impl ConnectionsService {
                 id,
             };
             loop {
-                if service.ensure_open().is_err()
-                    || scope.cancellation().is_cancelled()
-                    || scope.deadline() <= tokio::time::Instant::now()
-                {
+                if service.ensure_open().is_err() || scope.cancellation().is_cancelled() {
                     break;
                 }
-                match service.refresh_integrations(&actor, &scope).await {
+                let round = ExecutionScope::root(
+                    scope.cancellation().clone(),
+                    tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+                    scope.budget().child(0, 0),
+                    scope.trace_context(),
+                );
+                match service.refresh_integrations(&actor, &round).await {
                     Ok(()) => break,
-                    Err(AgentFailure::CapabilityUnavailable | AgentFailure::DeadlineExceeded) => {}
-                    Err(_) => break,
+                    Err(
+                        AgentFailure::VaultUnavailable
+                        | AgentFailure::VaultLocked
+                        | AgentFailure::PolicyDenied,
+                    ) => break,
+                    Err(_) => {}
                 }
-                tokio::select! {_=tokio::time::sleep_until(scope.deadline())=>break,_=tokio::time::sleep(std::time::Duration::from_secs(10))=>{}}
+                tokio::select! {_=scope.cancellation().cancelled()=>break,_=tokio::time::sleep(std::time::Duration::from_secs(10))=>{}}
             }
         });
         Ok(())
@@ -1996,7 +2009,7 @@ impl ConnectionsService {
                 } else {
                     ConnectionFailureReason::OperationUncertain
                 };
-                let mut notice = failure(summary.gateway_ref, reason, ConnectionRecovery::Reopen);
+                let mut notice = failure(summary.gateway_ref, reason, ConnectionRecovery::None);
                 notice.category = floe_kernel::AgentFailureCategory::Transient;
                 notice.safe_actions = summary.allowed_actions.clone();
                 summary.failure = Some(notice);

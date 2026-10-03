@@ -100,7 +100,7 @@ impl SourceRepository for TursoStore {
             connection
                 .execute("BEGIN IMMEDIATE", ())
                 .await
-                .map_err(storage_error)?;
+                .map_err(begin_error)?;
             let result = async {
             if fenced_on(&connection, source.person_id(), source.connection_id()).await? { return Err(SourceRepositoryError::Conflict); }
         let changed = connection.execute(
@@ -143,7 +143,7 @@ impl SourceRepository for TursoStore {
             connection
                 .execute("BEGIN IMMEDIATE", ())
                 .await
-                .map_err(storage_error)?;
+                .map_err(begin_error)?;
             let result = async {
             if fenced_on(&connection, source.person_id(), source.connection_id()).await? { return Err(SourceRepositoryError::Conflict); }
             let mut rows = connection.query(
@@ -339,7 +339,7 @@ impl SourceOperationRepository for TursoStore {
             connection
                 .execute("BEGIN IMMEDIATE", ())
                 .await
-                .map_err(storage_error)?;
+                .map_err(begin_error)?;
             let result=async {
                 let mut rows=connection.query("SELECT operation_id,command_id,person_id,connection_id,revision,fence,payload FROM source_operations WHERE operation_id=? OR (person_id=? AND command_id=?)",
                     (identity.record_ref.to_string(),identity.person_id.to_string(),identity.command_id.to_string())).await.map_err(storage_error)?;
@@ -379,7 +379,7 @@ impl SourceOperationRepository for TursoStore {
             connection
                 .execute("BEGIN IMMEDIATE", ())
                 .await
-                .map_err(storage_error)?;
+                .map_err(begin_error)?;
             let result = async {
             if source_command_rejection_on(&connection,requested.expected.source.person_id(),requested.command_id).await?.is_some() {
                 return Err(SourceRepositoryError::Conflict);
@@ -427,7 +427,7 @@ impl SourceOperationRepository for TursoStore {
             connection
                 .execute("BEGIN IMMEDIATE", ())
                 .await
-                .map_err(storage_error)?;
+                .map_err(begin_error)?;
             let result = async {
             let current = operation_on(&connection, change.operation_id).await?.ok_or(SourceRepositoryError::Conflict)?;
             let source = source_on(&connection, &current.expected.source.connection_id()).await?;
@@ -557,4 +557,11 @@ async fn source_command_rejection_on(
         return Err(SourceRepositoryError::Corrupt);
     }
     Ok(Some(receipt))
+}
+
+fn begin_error(error: turso::Error) -> SourceRepositoryError {
+    match error {
+        turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => SourceRepositoryError::Conflict,
+        other => storage_error(other),
+    }
 }
