@@ -6,6 +6,9 @@
 
 mod abi;
 mod app_wire;
+mod actions_wire;
+mod experts_wire;
+mod knowledge_wire;
 mod bridge;
 mod connections_wire;
 mod context_wire;

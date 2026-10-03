@@ -99,6 +99,8 @@ pub enum DelegationExecutionState {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentUsage {
+    pub unknown_token_attempts: u32,
+    pub unknown_cost_attempts: u32,
     pub model_attempts: u32,
     pub estimated_tokens: u64,
     pub estimated_cost_micros: u64,

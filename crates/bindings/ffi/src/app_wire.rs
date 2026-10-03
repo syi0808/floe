@@ -1,7 +1,6 @@
 use crate::bridge::FloeHandle;
 use floe_app::{
-    ActionCommands, ActionQueries, DayCommands, DayQueries, ExpertCommands, ExpertQueries,
-    KnowledgeCommands, KnowledgeQueries, NativeHostCommands, NativeHostQueries,
+    DayCommands, DayQueries, NativeHostCommands, NativeHostQueries,
     VaultLifecycleCommands, VaultLifecycleQueries,
 };
 use floe_kernel::AgentFailure;
@@ -59,18 +58,16 @@ pub(crate) fn command(
             }
         });
     }
+    if crate::actions_wire::handles_command(&command) {
+        return crate::actions_wire::command(services, caller, command_id, command);
+    }
+    if crate::experts_wire::handles_command(&command) {
+        return crate::experts_wire::command(services, caller, command_id, command);
+    }
+    if crate::knowledge_wire::handles_command(&command) {
+        return crate::knowledge_wire::command(services, caller, command_id, command);
+    }
     match command {
-        AppProductCommandDto::ActionsCalendar { operation } => {
-            let command = crate::conversion::owners::calendar_action_operation(operation)
-                .map_err(structural_error)?;
-            let result = host_request
-                .services()
-                .action_command(host_request.caller(), command_id, command)
-                .map_err(service_error)?;
-            Ok(AppCommandResultDto::ActionOperation {
-                result: action_result(result, command_id)?,
-            })
-        }
         AppProductCommandDto::DayMutate { day, mutation } => {
             let result = host_request
                 .services()
@@ -84,7 +81,7 @@ pub(crate) fn command(
                 )
                 .map_err(day_error)?;
             if result.command_id != command_id {
-                return Err(service_error(floe_app::ServiceError::Internal));
+                return Err(internal_error());
             }
             Ok(AppCommandResultDto::DayMutation {
                 command_id: result.command_id,
@@ -94,79 +91,10 @@ pub(crate) fn command(
                     )?,
                     changed_item: result
                         .changed_item
-                        .map(crate::conversion::timeline_item_to_dto),
+                        .map(crate::conversion::timeline_item_to_dto).transpose()
+                        .map_err(|failure| structural_error(floe_protocol::wire::conversion_error(failure)))?,
                     capture: result.capture.map(crate::conversion::capture_to_dto),
                 },
-            })
-        }
-        AppProductCommandDto::KnowledgeMemoryDecide {
-            candidate_id,
-            decision,
-        } => {
-            let decision = floe_app::MemoryReviewDecision {
-                candidate_id,
-                kind: match decision {
-                    floe_protocol::AgentMemoryReviewDecisionKindDto::Approve => {
-                        floe_app::KnowledgeDecisionKind::Approve
-                    }
-                    floe_protocol::AgentMemoryReviewDecisionKindDto::Reject => {
-                        floe_app::KnowledgeDecisionKind::Reject
-                    }
-                },
-            };
-            let result = host_request
-                .services()
-                .decide_memory(host_request.caller(), command_id, decision)
-                .map_err(service_error)?;
-            Ok(AppCommandResultDto::KnowledgeOperation {
-                result: knowledge_result(result, command_id)?,
-            })
-        }
-        AppProductCommandDto::ExpertsRegistryConfigure { change } => {
-            let command =
-                floe_app::ExpertCommand::ConfigureRegistry(floe_app::RegistryConfiguration {
-                    instance_id: change.instance_id,
-                    expected_revision: change.expected_revision,
-                    target: match change.target {
-                        floe_protocol::RegistryConfigurationTargetDto::Installation {
-                            id,
-                            enabled,
-                        } => floe_app::RegistryConfigurationTarget::Installation { id, enabled },
-                        floe_protocol::RegistryConfigurationTargetDto::Assignment {
-                            id,
-                            enabled,
-                        } => floe_app::RegistryConfigurationTarget::Assignment { id, enabled },
-                    },
-                });
-            let result = host_request
-                .services()
-                .expert_command(host_request.caller(), command_id, command)
-                .map_err(service_error)?;
-            Ok(AppCommandResultDto::ExpertOperation {
-                result: expert_result(result, command_id)?,
-            })
-        }
-        AppProductCommandDto::ExpertsBindingReplace { selection } => {
-            let result = host_request
-                .services()
-                .expert_command(
-                    host_request.caller(),
-                    command_id,
-                    floe_app::ExpertCommand::ReplaceBinding(
-                        floe_app::ExpertBindingSelectionIntent {
-                            assignment_id: selection.assignment_id,
-                            package_id: selection.package_id,
-                            package_version: selection.package_version,
-                            definition_revision: selection.definition_revision,
-                            requirement_key: selection.requirement_key,
-                            expected_binding_revision: selection.expected_binding_revision,
-                            candidate_ids: selection.candidate_ids,
-                        },
-                    ),
-                )
-                .map_err(service_error)?;
-            Ok(AppCommandResultDto::ExpertOperation {
-                result: expert_result(result, command_id)?,
             })
         }
         AppProductCommandDto::VaultCreate {}
@@ -181,16 +109,18 @@ pub(crate) fn command(
             let result = host_request
                 .services()
                 .vault_command(host_request.caller(), command_id, command)
-                .map_err(service_error)?;
+                .map_err(agent_failure)?;
             if result.operation_id != command_id {
-                return Err(service_error(floe_app::ServiceError::Internal));
+                return Err(internal_error());
             }
             Ok(AppCommandResultDto::VaultOperation {
                 result: vault_result(result),
             })
         }
-        AppProductCommandDto::DayRefresh { .. } => {
-            Err(agent_failure(AgentFailure::CapabilityUnavailable))
+        AppProductCommandDto::DayRefresh { day } => {
+            let refresh = services.refresh_day(caller, command_id, crate::day_wire::read(day).map_err(structural_error)?)
+                .map_err(day_error)?;
+            Ok(AppCommandResultDto::DayRefresh { refresh: crate::day_wire::refresh(refresh).map_err(structural_error)? })
         }
         _ => Err(validation("command")),
     }
@@ -242,48 +172,16 @@ pub(crate) fn query(
             }
         });
     }
+    if crate::actions_wire::handles_query(&query) {
+        return crate::actions_wire::query(services, caller, request_id, query);
+    }
+    if crate::experts_wire::handles_query(&query) {
+        return crate::experts_wire::query(services, caller, request_id, query);
+    }
+    if crate::knowledge_wire::handles_query(&query) {
+        return crate::knowledge_wire::query(services, caller, request_id, query);
+    }
     match query {
-        AppProductQueryDto::ActionsCapabilities {}
-        | AppProductQueryDto::ActionsAuthority {}
-        | AppProductQueryDto::ActionsList {}
-        | AppProductQueryDto::ActionsGet { .. }
-        | AppProductQueryDto::ActionsProposalInspect { .. } => {
-            let inspection = match query {
-                AppProductQueryDto::ActionsCapabilities {} => {
-                    floe_app::ActionInspection::Capabilities
-                }
-                AppProductQueryDto::ActionsAuthority {} => floe_app::ActionInspection::Authority,
-                AppProductQueryDto::ActionsList {} => floe_app::ActionInspection::List,
-                AppProductQueryDto::ActionsGet { action_id } => {
-                    floe_app::ActionInspection::Get { action_id }
-                }
-                AppProductQueryDto::ActionsProposalInspect {
-                    session_id,
-                    invocation_id,
-                } => floe_app::ActionInspection::Proposal {
-                    session_id,
-                    invocation_id,
-                },
-                _ => unreachable!(),
-            };
-            let result = services
-                .inspect_actions(caller, request_id, inspection)
-                .map_err(service_error)?;
-            Ok(AppQueryResultDto::ActionOperation {
-                result: action_result(result, request_id)?,
-            })
-        }
-        AppProductQueryDto::ActionsReadResult {
-            operation_id,
-            release,
-        } => {
-            let result = services
-                .read_action_result(caller, operation_id, release)
-                .map_err(service_error)?;
-            Ok(AppQueryResultDto::ActionOperation {
-                result: action_result(result, operation_id)?,
-            })
-        }
         AppProductQueryDto::DaySnapshot { day } => {
             let result = services
                 .read_day(
@@ -297,78 +195,12 @@ pub(crate) fn query(
                 })?,
             })
         }
-        knowledge_query @ (AppProductQueryDto::KnowledgeMemoryOverview {}
-        | AppProductQueryDto::KnowledgeMemoryReview {}) => {
-            let inspection = if matches!(
-                knowledge_query,
-                AppProductQueryDto::KnowledgeMemoryOverview {}
-            ) {
-                floe_app::KnowledgeInspection::Memory
-            } else {
-                floe_app::KnowledgeInspection::Review
-            };
-            let result = services
-                .inspect_knowledge(caller, request_id, inspection)
-                .map_err(service_error)?;
-            Ok(AppQueryResultDto::KnowledgeOperation {
-                result: knowledge_result(result, request_id)?,
-            })
-        }
-        AppProductQueryDto::KnowledgeReadResult {
-            operation_id,
-            release,
-        } => {
-            let result = services
-                .read_knowledge_result(caller, operation_id, release)
-                .map_err(service_error)?;
-            Ok(AppQueryResultDto::KnowledgeOperation {
-                result: knowledge_result(result, operation_id)?,
-            })
-        }
-        AppProductQueryDto::ExpertsRegistryInspect {} => {
-            let inspection = floe_app::ExpertInspection::Registry;
-            let result = services
-                .inspect_experts(caller, request_id, inspection)
-                .map_err(service_error)?;
-            Ok(AppQueryResultDto::ExpertOperation {
-                result: expert_result(result, request_id)?,
-            })
-        }
-        AppProductQueryDto::ExpertsSourceCandidates {
-            assignment_id,
-            requirement_key,
-        } => {
-            let result = services
-                .inspect_experts(
-                    caller,
-                    request_id,
-                    floe_app::ExpertInspection::Candidates {
-                        assignment_id,
-                        requirement_key,
-                    },
-                )
-                .map_err(service_error)?;
-            Ok(AppQueryResultDto::ExpertOperation {
-                result: expert_result(result, request_id)?,
-            })
-        }
-        AppProductQueryDto::ExpertsReadResult {
-            operation_id,
-            release,
-        } => {
-            let result = services
-                .read_expert_result(caller, operation_id, release)
-                .map_err(service_error)?;
-            Ok(AppQueryResultDto::ExpertOperation {
-                result: expert_result(result, operation_id)?,
-            })
-        }
         AppProductQueryDto::VaultStatus {} => {
             let result = services
                 .vault_status(caller, request_id)
-                .map_err(service_error)?;
+                .map_err(agent_failure)?;
             if result.operation_id != request_id {
-                return Err(service_error(floe_app::ServiceError::Internal));
+                return Err(internal_error());
             }
             Ok(AppQueryResultDto::VaultOperation {
                 result: vault_result(result),
@@ -380,16 +212,17 @@ pub(crate) fn query(
         } => {
             let result = services
                 .read_vault_result(caller, operation_id, release)
-                .map_err(service_error)?;
+                .map_err(agent_failure)?;
             if result.operation_id != operation_id {
-                return Err(service_error(floe_app::ServiceError::Internal));
+                return Err(internal_error());
             }
             Ok(AppQueryResultDto::VaultOperation {
                 result: vault_result(result),
             })
         }
-        AppProductQueryDto::DayRefreshGet { .. } => {
-            Err(agent_failure(AgentFailure::CapabilityUnavailable))
+        AppProductQueryDto::DayRefreshGet { operation_ref } => {
+            let refresh = services.get_day_refresh(caller, operation_ref.get()).map_err(day_error)?;
+            Ok(AppQueryResultDto::DayRefresh { refresh: crate::day_wire::refresh(refresh).map_err(structural_error)? })
         }
         _ => Err(validation("query")),
     }
@@ -434,7 +267,7 @@ fn vault_result(result: floe_app::VaultLifecycleResult) -> floe_protocol::VaultL
     }
 }
 
-fn structural_error(error: floe_protocol::ErrorDto) -> AppWireErrorDto {
+pub(crate) fn structural_error(error: floe_protocol::ErrorDto) -> AppWireErrorDto {
     let mut metadata = error.metadata;
     let domain_code = serde_json::to_value(error.code)
         .ok()
@@ -459,110 +292,6 @@ fn structural_error(error: floe_protocol::ErrorDto) -> AppWireErrorDto {
 
 fn day_error(error: floe_app::CoreError) -> AppWireErrorDto {
     structural_error(crate::bridge::core_error(error))
-}
-
-fn expert_result(
-    result: floe_app::ExpertOperationResult,
-    operation_id: uuid::Uuid,
-) -> AppWireResult<floe_protocol::ExpertOperationResultDto> {
-    if result.operation_id != operation_id {
-        return Err(service_error(floe_app::ServiceError::Internal));
-    }
-    Ok(floe_protocol::ExpertOperationResultDto {
-        operation_id,
-        done: result.done,
-        state: result.state.map(crate::conversion::owners::vault_state_dto),
-        registry: result
-            .registry
-            .as_ref()
-            .map(floe_protocol::wire::protocol_payload)
-            .transpose()
-            .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
-        candidates: result
-            .candidates
-            .map(|catalog| floe_protocol::ExpertCandidateCatalogDto {
-                assignment_id: catalog.assignment_id,
-                requirement_key: catalog.requirement_key,
-                binding_revision: catalog.binding_revision,
-                candidates: catalog
-                    .candidates
-                    .into_iter()
-                    .map(|candidate| floe_protocol::ExpertSourceCandidateDto {
-                        candidate_id: candidate.candidate_id,
-                        title: candidate.title,
-                        detail: candidate.detail,
-                        availability: candidate.availability,
-                        selected: candidate.selected,
-                    })
-                    .collect(),
-            }),
-        failure: result.failure.as_ref().map(|failure| {
-            crate::conversion::owners::failure_envelope(
-                failure,
-                &result.stage,
-                &operation_id.to_string(),
-            )
-        }),
-    })
-}
-
-fn knowledge_result(
-    result: floe_app::KnowledgeOperationResult,
-    operation_id: uuid::Uuid,
-) -> AppWireResult<floe_protocol::KnowledgeOperationResultDto> {
-    if result.operation_id != operation_id {
-        return Err(service_error(floe_app::ServiceError::Internal));
-    }
-    Ok(floe_protocol::KnowledgeOperationResultDto {
-        operation_id,
-        done: result.done,
-        state: result.state.map(crate::conversion::owners::vault_state_dto),
-        memory: result
-            .memory
-            .map(crate::conversion::owners::memory_dto)
-            .transpose()
-            .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
-        memory_review: result
-            .memory_review
-            .map(crate::conversion::owners::memory_review_dto)
-            .transpose()
-            .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
-        failure: result.failure.as_ref().map(|failure| {
-            crate::conversion::owners::failure_envelope(
-                failure,
-                &result.stage,
-                &operation_id.to_string(),
-            )
-        }),
-    })
-}
-
-fn action_result(
-    result: floe_app::ActionOperationResult,
-    operation_id: uuid::Uuid,
-) -> AppWireResult<floe_protocol::ActionOperationResultDto> {
-    if result.operation_id != operation_id {
-        return Err(service_error(floe_app::ServiceError::Internal));
-    }
-    Ok(floe_protocol::ActionOperationResultDto {
-        operation_id,
-        done: result.done,
-        state: result.state.map(crate::conversion::owners::vault_state_dto),
-        calendar_actions: result
-            .calendar_actions
-            .as_ref()
-            .map(serde_json::to_value)
-            .transpose()
-            .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
-        proposal: result.proposal.map(crate::conversion::owners::proposal_dto),
-        failure: result.failure.as_ref().map(|failure| {
-            crate::conversion::owners::failure_envelope(
-                failure,
-                &result.stage,
-                &operation_id.to_string(),
-            )
-        }),
-    })
 }
 
 pub(crate) fn validation(field: &'static str) -> AppWireErrorDto {
@@ -604,32 +333,6 @@ pub(crate) fn host_failure(failure: floe_app::HostError) -> AppWireErrorDto {
             None,
         ),
     }
-}
-
-pub(crate) fn service_error(failure: floe_app::ServiceError) -> AppWireErrorDto {
-    let (code, message) = match failure {
-        floe_app::ServiceError::InvalidInput => {
-            (AppWireErrorCodeDto::Validation, "invalid app command")
-        }
-        floe_app::ServiceError::NotFound => (AppWireErrorCodeDto::NotFound, "record was not found"),
-        floe_app::ServiceError::Conflict => (
-            AppWireErrorCodeDto::Conflict,
-            "app command conflicts with durable state",
-        ),
-        floe_app::ServiceError::AccessDenied => (
-            AppWireErrorCodeDto::AccessDenied,
-            "app command is not authorized",
-        ),
-        floe_app::ServiceError::Unavailable => (
-            AppWireErrorCodeDto::Unavailable,
-            "app command is unavailable",
-        ),
-        floe_app::ServiceError::Internal => (
-            AppWireErrorCodeDto::Internal,
-            "app command could not complete",
-        ),
-    };
-    wire_error(code, message, None)
 }
 
 pub(crate) fn agent_failure(failure: AgentFailure) -> AppWireErrorDto {

@@ -6,11 +6,11 @@ use uuid::Uuid;
 pub enum KnowledgeQuery { Overview { limit: usize }, Review }
 pub enum KnowledgeQueryResult {
     Overview(floe_knowledge::MemoryOverviewSnapshot),
-    Review(floe_knowledge::MemoryReviewSnapshot),
+    Review(floe_knowledge::MemoryReviewDisplay),
 }
 pub trait KnowledgeCommands {
     fn knowledge_decide(&self, caller: &CallerContext, command_id: Uuid, candidate_id: Uuid,
-        decision: floe_knowledge::KnowledgeDecisionKind) -> Result<floe_knowledge::KnowledgeDecisionResult, AgentFailure>;
+        decision: floe_knowledge::KnowledgeDecisionKind) -> Result<floe_knowledge::MemoryDecisionAcknowledgement, AgentFailure>;
 }
 pub trait KnowledgeQueries {
     fn knowledge_query(&self, caller: &CallerContext, request_id: Uuid, query: KnowledgeQuery)
@@ -18,7 +18,7 @@ pub trait KnowledgeQueries {
 }
 impl KnowledgeCommands for AppComposition {
     fn knowledge_decide(&self, caller: &CallerContext, command_id: Uuid, candidate_id: Uuid,
-        decision: floe_knowledge::KnowledgeDecisionKind) -> Result<floe_knowledge::KnowledgeDecisionResult, AgentFailure> {
+        decision: floe_knowledge::KnowledgeDecisionKind) -> Result<floe_knowledge::MemoryDecisionAcknowledgement, AgentFailure> {
         let command_id = CommandId::from_uuid(command_id).ok_or(AgentFailure::InvalidInput)?;
         let owners = self.ready_owners(caller)?;
         let actor = caller.owner_actor();

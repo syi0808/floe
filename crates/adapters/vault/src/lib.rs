@@ -22,3 +22,6 @@ pub use repositories::VaultLearnerJournalFactory;
 
 #[cfg(unix)]
 pub use vault::{VaultAuthorizationSigner, VaultEnrollmentSigner};
+
+#[cfg(unix)]
+pub use repositories::{VaultExpertBindingReviewRepository, VaultExpertRegistryRepository};

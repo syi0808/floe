@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fs::File,
     io::Write,
+    os::unix::fs::PermissionsExt,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -11,7 +12,10 @@ use floe_agent_contract::{
     ModelResponse, PreparedModelCall,
 };
 use floe_execution::ExecutionScope;
+use floe_kernel::{OwnerActor, PersonId};
 use floe_provider_adapters::gateway::{CompositeModelProvider, GatewayCredentialStore};
+use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
+use uuid::Uuid;
 
 pub(super) struct SmokeResolver;
 impl floe_access::DependencyResolver for SmokeResolver {
@@ -20,22 +24,6 @@ impl floe_access::DependencyResolver for SmokeResolver {
         _: &'a floe_context_contract::ContextDependency,
         _: &'a floe_access::DependencyAuthorization,
     ) -> BoxFuture<'a, Result<(), AgentFailure>> {
-        Box::pin(async { Err(AgentFailure::PolicyDenied) })
-    }
-}
-
-/// A synthetic fresh identity has no enrolled producer. A committed credential
-/// still fails identity/trust validation; it is never converted to absence.
-struct SyntheticTrust;
-impl floe_access::GatewayTrustReader for SyntheticTrust {
-    fn credential_expectation<'a>(
-        &'a self,
-    ) -> BoxFuture<'a, Result<floe_access::GatewayCredentialExpectation, AgentFailure>> {
-        Box::pin(async { Ok(floe_access::GatewayCredentialExpectation::Unpaired) })
-    }
-    fn pinned_producer<'a>(
-        &'a self,
-    ) -> BoxFuture<'a, Result<floe_access::RemoteProducerIdentity, AgentFailure>> {
         Box::pin(async { Err(AgentFailure::PolicyDenied) })
     }
 }
@@ -51,8 +39,49 @@ pub(super) fn model(store: GatewayCredentialStore) -> DiagnosticModel {
     )
 }
 
-pub(super) fn synthetic_model() -> DiagnosticModel {
-    model(GatewayCredentialStore::new(Arc::new(SyntheticTrust)))
+/// Each synthetic exercise creates a real isolated encrypted Person. Gateway
+/// absence comes from that Vault's durable owner state; a foreign system
+/// credential remains a failure. The disposable Vault key stays in memory.
+pub(super) struct SyntheticProfile {
+    pub vault: Arc<EncryptedAgentVault<SmokeKeys>>,
+    pub actor: OwnerActor,
+    _root: tempfile::TempDir,
+}
+
+impl SyntheticProfile {
+    pub(super) async fn create() -> Result<Self, AgentFailure> {
+        let root = tempfile::Builder::new().prefix("floe-synthetic-smoke-").tempdir()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700))
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        let person = PersonId::new();
+        let vault = Arc::new(EncryptedAgentVault::create(root.path(), person, SmokeKeys::default()).await?);
+        let actor = OwnerActor { person_id: vault.person_id(),
+            device_id: format!("synthetic-smoke-{}", Uuid::new_v4()), runtime_epoch: 1 };
+        actor.validate()?;
+        Ok(Self { vault, actor, _root: root })
+    }
+
+    pub(super) fn model(&self) -> DiagnosticModel {
+        model(GatewayCredentialStore::new(self.vault.clone()))
+    }
+}
+
+#[derive(Default)]
+pub(super) struct SmokeKeys(Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>);
+
+impl VaultKeyProvider for SmokeKeys {
+    fn load(&self, person: PersonId, vault: Uuid) -> Result<VaultKey, AgentFailure> {
+        self.0.lock().map_err(|_| AgentFailure::VaultUnavailable)?
+            .get(&(person, vault)).copied().map(VaultKey::from_bytes).ok_or(AgentFailure::VaultUnavailable)
+    }
+
+    fn insert(&self, person: PersonId, vault: Uuid, key: &VaultKey) -> Result<(), AgentFailure> {
+        let mut keys = self.0.lock().map_err(|_| AgentFailure::VaultUnavailable)?;
+        if keys.contains_key(&(person, vault)) { return Err(AgentFailure::VaultUnavailable); }
+        keys.insert((person, vault), *key.as_bytes());
+        Ok(())
+    }
 }
 
 /// A durable diagnostic journal containing only synthetic fixture events.

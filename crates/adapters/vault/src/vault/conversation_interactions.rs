@@ -412,7 +412,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::Conflict);
         }
         let id = audit.operation_id.to_string();
-        let mut rows = transaction.query("SELECT run_id,person_id,payload FROM agent_conversation_review_audits WHERE operation_id=?", [id.clone()]).await.map_err(storage)?;
+        let mut rows = transaction.query("SELECT run_id,person_id,payload FROM agent_conversation_review_audits WHERE operation_id=? AND run_id=?", (id.clone(), run.run_id.as_uuid().to_string())).await.map_err(storage)?;
         if let Some(row) = rows.next().await.map_err(storage)? {
             let payload = row.get::<String>(2).map_err(storage)?;
             if payload.len() > 128 * 1024 { return Err(AgentFailure::StorageUnavailable); }

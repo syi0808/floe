@@ -209,7 +209,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
         request: &'a floe_agent_contract::DelegationRequest, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<floe_agent_contract::TaskReceipt, AgentFailure>>
     {
-        Box::pin(async move { self.authorize(actor)?;
+        Box::pin(async move { let _operation = self.begin_operation(actor, scope).await?;
             self.dependencies.tasks.recover_delegation(actor, request, scope).await })
     }
     fn close_admission(&self) {
@@ -218,7 +218,14 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
     }
 
     fn shutdown<'a>(&'a self) -> BoxFuture<'a, Result<(), AgentFailure>> {
-        Box::pin(async move { self.close_admission(); self.dependencies.tasks.shutdown().await })
+        Box::pin(async move {
+            self.close_admission();
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+            let _operations = tokio::time::timeout_at(deadline, self.operations.write()).await
+                .map_err(|_| AgentFailure::DeadlineExceeded)?;
+            tokio::time::timeout_at(deadline, self.dependencies.tasks.shutdown()).await
+                .map_err(|_| AgentFailure::DeadlineExceeded)?
+        })
     }
 
     fn read_task_execution_receipt<'a>(
@@ -228,7 +235,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<TaskExecutionReceipt, AgentFailure>> {
         Box::pin(async move {
-            self.authorize(actor)?;
+            let _operation = self.begin_operation(actor, scope).await?;
             reference.validate()?;
             scope
                 .run(
@@ -246,7 +253,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<ExpertDirectorySnapshot, AgentFailure>> {
         Box::pin(async move {
-            self.authorize(actor)?;
+            let _operation = self.begin_operation(actor, scope).await?;
             let snapshot = self.read_registry(actor, scope).await?;
             project_expert_directory(&snapshot, actor.person_id)
         })
@@ -262,7 +269,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<ExpertDirectorySnapshot, AgentFailure>> {
         Box::pin(async move {
-            self.authorize(actor)?;
+            let _operation = self.begin_operation(actor, scope).await?;
             if !command_id.is_valid() || installation_id.is_nil() {
                 return Err(AgentFailure::InvalidInput);
             }
@@ -338,7 +345,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<BindingInspection, AgentFailure>> {
         Box::pin(async move {
-            self.authorize(actor)?;
+            let _operation = self.begin_operation(actor, scope).await?;
             validate_requirement_key(&requirement_key)?;
             if assignment_id.is_nil() {
                 return Err(AgentFailure::InvalidInput);
@@ -382,7 +389,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<BindingReview, AgentFailure>> {
         Box::pin(async move {
-            self.authorize(actor)?;
+            let _operation = self.begin_operation(actor, scope).await?;
             if !command_id.is_valid() || assignment_id.is_nil() {
                 return Err(AgentFailure::InvalidInput);
             }
@@ -415,7 +422,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<BindingReview, AgentFailure>> {
         Box::pin(async move {
-            self.authorize(actor)?;
+            let _operation = self.begin_operation(actor, scope).await?;
             if !command_id.is_valid() {
                 return Err(AgentFailure::InvalidInput);
             }
@@ -466,7 +473,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<BindingReview, AgentFailure>> {
         Box::pin(async move {
-            self.authorize(actor)?;
+            let _operation = self.begin_operation(actor, scope).await?;
             review_ref.validate()?;
             let descriptor = scope
                 .run(
@@ -496,7 +503,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<ExpertDirectorySnapshot, AgentFailure>> {
         Box::pin(async move {
-            self.authorize(actor)?;
+            let _operation = self.begin_operation(actor, scope).await?;
             if !command_id.is_valid() {
                 return Err(AgentFailure::InvalidInput);
             }
@@ -701,7 +708,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<Option<BindingMutationReceipt>, AgentFailure>> {
         Box::pin(async move {
-            self.authorize(actor)?;
+            let _operation = self.begin_operation(actor, scope).await?;
             if !command_id.is_valid() {
                 return Err(AgentFailure::InvalidInput);
             }
@@ -726,7 +733,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<Option<BindingMutationReceipt>, AgentFailure>> {
         Box::pin(async move {
-            self.authorize(actor)?;
+            let _operation = self.begin_operation(actor, scope).await?;
             review_ref.validate()?;
             let Some(receipt) = scope
                 .run(

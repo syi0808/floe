@@ -20,23 +20,20 @@ mod diagnostics;
 mod error;
 #[cfg(unix)]
 mod expert_services;
-mod first_party_observe;
 mod host;
 #[cfg(unix)]
 mod knowledge_services;
 mod local_context;
-#[cfg(unix)]
-mod local_operations;
 mod native_lane;
 #[cfg(unix)]
 mod owner_handles;
 mod prompts;
-mod services;
-#[cfg(unix)]
-mod vault_host;
 #[cfg(unix)]
 mod vault_services;
-mod worker;
+#[cfg(unix)]
+mod vault_lifecycle;
+#[cfg(unix)]
+mod ready_generation;
 
 pub use floe_context_contract::{CalendarProvider, CalendarScope, ResourceHandle, SourceAuthority};
 /// Values carried by the remaining host service signatures. The S1
@@ -50,14 +47,13 @@ pub use floe_day::{
 };
 pub use floe_diagnostics::{PanicRecord, TraceContext, instrument, panic_record};
 
-pub use floe_actions::{ActionAuthorityMode, CalendarAction, CalendarActionState};
+pub use floe_actions::ActionAuthorityMode;
 pub use floe_context_contract::ConnectionId;
 pub use floe_kernel::{AgentFailure, CommandId, PersonId, RunId};
 pub use floe_knowledge::{KnowledgeDecisionKind, MemoryOrigin, MemoryOverviewSnapshot};
 
-pub use action_facade::CalendarActionCommand;
 #[cfg(unix)]
-pub use action_services::{ActionCommands, ActionInspection, ActionOperationResult, ActionQueries};
+pub use action_services::{ActionsCommand, ActionsCommandResult, ActionsCommands, ActionsQuery, ActionsQueryResult, ActionsQueries};
 pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};
 #[cfg(unix)]
 pub use composition::{AppComposition, AppOpenError, open};
@@ -68,16 +64,11 @@ pub use context_services::{
 };
 pub use core::{Classification, FloeCore};
 #[cfg(unix)]
-pub use day_services::{
-    DayCommands, DayMutation, DayMutationRequest, DayMutationResult, DayQueries, DayRead,
-};
+pub use day_services::{DayCommands, DayQueries};
+pub use floe_day::{DayQuery, DayMutation, DayMutationRequest, DayMutationResult};
 pub use error::{CoreError, ErrorCode};
 #[cfg(unix)]
-pub use expert_services::{
-    ExpertBindingSelectionIntent, ExpertCandidateCatalog, ExpertCommand, ExpertCommands,
-    ExpertInspection, ExpertOperationResult, ExpertQueries, ExpertSourceCandidateView,
-    RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview,
-};
+pub use expert_services::{ExpertCommand, ExpertCommandResult, ExpertCommands, ExpertQuery, ExpertQueryResult, ExpertQueries};
 /// The acquisition values one local-context command carries.
 pub use floe_context::valid_native_subject_fingerprint;
 pub use floe_provider_adapters::sources::native_acquisition::{
@@ -90,24 +81,15 @@ pub use floe_provider_adapters::sources::native_acquisition::{
 };
 pub use host::{AppHost, HostRequest};
 #[cfg(unix)]
-pub use knowledge_services::{
-    KnowledgeCommands, KnowledgeInspection, KnowledgeOperationResult, KnowledgeQueries,
-};
+pub use knowledge_services::{KnowledgeCommands, KnowledgeQuery, KnowledgeQueryResult, KnowledgeQueries};
 pub use local_context::{
     LocalContextHost, NativeHostKind, NativeHostOutcome, NativeHostRegistrationRef,
 };
 pub use native_lane::{NativeHostLane, NativeHostLaneError};
 #[cfg(unix)]
 pub use owner_handles::{ReadyOwners, host_scope};
-pub use services::CalendarActionsResult;
-pub use services::ServiceError;
 
 #[cfg(unix)]
 pub use vault_services::{
-    VaultLifecycleCommand, VaultLifecycleCommands, VaultLifecycleQueries, VaultLifecycleResult,
+    VaultLifecycleCommand, VaultLifecycleCommands, VaultLifecycleQueries, VaultLifecycleResult, VaultState,
 };
-pub use worker::{
-    CalendarActionOperation, CalendarActionProposal, CalendarProposalInspection,
-    MemoryReviewDecision, MemoryReviewResult, VaultState,
-};
-pub(crate) use worker::{WorkerAction, WorkerResult};

@@ -400,10 +400,8 @@ pub enum AppCommandResultDto {
         command_id: Uuid,
         mutation: super::MutationResultDto,
     },
-    KnowledgeOperation {
-        #[serde(flatten)]
-        result: super::KnowledgeOperationResultDto,
-    },
+    #[serde(rename="knowledge.memory.decision")]
+    KnowledgeDecision { acknowledgement: super::MemoryDecisionAcknowledgementDto },
     #[serde(rename = "experts.directory")]
     ExpertsDirectory { directory: super::ExpertDirectorySnapshotDto },
     #[serde(rename = "experts.binding_review")]

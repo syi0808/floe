@@ -15,6 +15,8 @@ const MAX_SESSION_MEDIA_TYPES: usize = 16;
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationSessionUsageDto {
+    pub unknown_token_attempts: u32,
+    pub unknown_cost_attempts: u32,
     pub model_attempts: u32,
     pub estimated_tokens: u64,
     pub estimated_cost_micros: u64,

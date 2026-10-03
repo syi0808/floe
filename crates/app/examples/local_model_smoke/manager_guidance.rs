@@ -8,10 +8,10 @@ use std::{
 use floe_agent_contract::{
     A2A_PROTOCOL_VERSION, AGENT_SCHEMA_VERSION, AgentCard, AgentContext, AgentDefinition,
     AgentFailure, AllowedCatalog, AuthorizedModelProjection, BoxFuture, DataClass,
-    DelegationExecutionContext, DelegationRequest, DependencyCoverage, InvocationKey,
+    DependencyCoverage,
     ModelCapabilities, ModelConversation, ModelConversationEntry, ModelPlanRequest, ModelPort,
     ModelProjectionOutcome, ModelProjectionPort, ModelProjectionRequest, ModelRequest, ModelStep,
-    PreparedModelPlan, ProcessingBoundary, TaskId, TaskReceipt, TaskSnapshot, TaskState,
+    PreparedModelPlan, ProcessingBoundary,
 };
 use floe_conversation::{ConversationModelProjection, prompts::manager_role_spec};
 use floe_execution::{
@@ -319,7 +319,7 @@ async fn project_case(
         vec![DataClass::Synthetic],
         floe_experts::RunExpertEnvironmentIdentity {
             revision: catalog.revision,
-            digest: [1; 32],
+            digest: Sha256::digest(serde_json::to_vec(catalog).map_err(|_| AgentFailure::InvalidInput)?).into(),
         },
     )?;
     let projection = projector
@@ -388,60 +388,6 @@ fn classify_batch(steps: &[ModelStep], kind: AcceptedKind, agents: &[String]) ->
     }
 }
 
-fn settled_fixture_exchange(
-    step: &ModelStep,
-    result: &str,
-    principal: &str,
-    session_id: Uuid,
-    run_id: Uuid,
-) -> Result<ModelConversationEntry, AgentFailure> {
-    let ModelStep::Delegate {
-        agent_id,
-        definition_revision,
-        message,
-        context_refs,
-    } = step
-    else {
-        return Err(AgentFailure::InvalidInput);
-    };
-    let task_id = TaskId::new();
-    let request = DelegationRequest {
-        task_id,
-        parent_run_id: Some(run_id),
-        principal: principal.into(),
-        invocation_key: InvocationKey::new(),
-        selected_agent_id: agent_id.clone(),
-        selected_definition_revision: *definition_revision,
-        message: message.clone(),
-        context_refs: context_refs.clone(),
-        execution_context: DelegationExecutionContext {
-            session_id,
-            device_id: "synthetic-manager-eval".into(),
-            agent_context: context(),
-            max_output_bytes: OUTPUT_BYTES,
-        },
-    };
-    let receipt = TaskReceipt {
-        task_id,
-        snapshot: TaskSnapshot {
-            task_id,
-            parent_run_id: request.parent_run_id,
-            principal: request.principal.clone(),
-            agent_id: agent_id.clone(),
-            definition_revision: *definition_revision,
-            state: TaskState::Completed,
-            result: Some(result.into()),
-            artifacts: vec![],
-            coverage: DependencyCoverage::Independent,
-            issue: None,
-        },
-        replay: None,
-    };
-    let exchange = ModelConversationEntry::DelegationExchange { request, receipt };
-    exchange.validate()?;
-    Ok(exchange)
-}
-
 fn digest(bytes: impl AsRef<[u8]>) -> String {
     format!("{:x}", Sha256::digest(bytes.as_ref()))
 }
@@ -462,19 +408,10 @@ fn report_case(
     projection: &AuthorizedModelProjection,
     _catalog: &AllowedCatalog,
     steps: &[ModelStep],
-    follow_up: bool,
     failure: Option<AgentFailure>,
 ) -> Value {
-    let kind = if follow_up {
-        case.next_accepted_kind.unwrap_or(AcceptedKind::Answer)
-    } else {
-        case.accepted_kind
-    };
-    let agents = if follow_up {
-        &case.accepted_next_agents
-    } else {
-        &case.accepted_agents
-    };
+    let kind = case.accepted_kind;
+    let agents = &case.accepted_agents;
     let accepted = failure.is_none() && classify_batch(steps, kind, agents);
     json!({
         "schema_version": 1, "case_id": case.id, "repetition": repetition, "stage": metadata.stage, "commit_sha": metadata.commit,
@@ -486,11 +423,11 @@ fn report_case(
         "run_frame_sha256": projection.envelope.manifest.run_frame_sha256,
         "expert_environment": projection.envelope.manifest.expert_environment,
         "ordered_cards": projection.envelope.manifest.agent_cards,
-        "phase": if follow_up { "synthesis" } else { "selection" }, "batch_steps": steps, "choice_accepted": accepted,
+        "phase": "selection", "batch_steps": steps, "choice_accepted": accepted,
         "status": if failure.is_some() { "EXECUTION_FAILURE" } else if accepted { "REVIEW_REQUIRED" } else { "BEHAVIOR_FAILURE" },
         "failure": failure, "behavior_review": "pending", "rubric": case.rubric, "personal_data": false,
         "accepted_kind": kind, "accepted_agents": agents, "review_focus": case.review_focus,
-        "synthetic_result_replay": follow_up, "real_expert_execution": false,
+        "synthetic_result_replay": false, "real_expert_execution": false,
     })
 }
 
@@ -506,7 +443,8 @@ fn report_summary(corpus: &Corpus, metadata: &ReportMetadata, all_accepted: bool
         "provider": if metadata.boundary == "device" { "foundation" } else { "server" },
         "boundary": metadata.boundary, "model_id": metadata.model_id, "model_id_origin": metadata.model_id_origin,
         "configuration_sha256": metadata.configuration_hash,
-        "cases": corpus.cases.len(), "synthesis_cases": synthesis_cases, "repetitions": REPETITIONS,
+        "cases": corpus.cases.len(), "synthesis_cases": 0, "deferred_synthesis_cases": synthesis_cases,
+        "coverage": "selection_only", "repetitions": REPETITIONS,
         "expected_report_records": REPETITIONS * (corpus.cases.len() + synthesis_cases),
         "behavior_review": "pending", "personal_data": false,
     })
@@ -520,14 +458,12 @@ async fn run_case(
     metadata: &ReportMetadata,
     principal: &str,
     session_id: Uuid,
-    origin_run_id: Uuid,
     device_id: &str,
     journal: &super::support::DiagnosticJournal,
 ) -> Result<bool, AgentFailure> {
     let catalog = build_catalog(corpus, case)?;
-    let mut conversation = conversation(case);
-    let mut accepted = true;
-    for follow_up in [false, true] {
+    let conversation = conversation(case);
+    let accepted = {
         let ledger = BudgetLedger::new(BudgetConfig::new(8192, 1_000_000), ModelUsage::default());
         let scope = ExecutionScope::root(
             Cancellation::default(),
@@ -589,34 +525,18 @@ async fn run_case(
             &projection,
             &catalog,
             &steps,
-            follow_up,
             failure,
         );
         let shape_ok = report["choice_accepted"] == true;
         println!("{report}");
-        accepted &= shape_ok;
-        if follow_up || !shape_ok {
-            break;
-        }
-        let Some(result) = &case.result_fixture else {
-            break;
-        };
-        for step in &steps {
-            match step {
-                ModelStep::Preamble { text } => {
-                    conversation
-                        .current_turn
-                        .push(ModelConversationEntry::Preamble {
-                            message_id: Uuid::new_v4(),
-                            text: text.clone(),
-                        })
-                }
-                ModelStep::Delegate { .. } => conversation.current_turn.push(
-                    settled_fixture_exchange(step, result, principal, session_id, origin_run_id)?,
-                ),
-                _ => return Err(AgentFailure::InvalidModelOutput),
-            }
-        }
+        shape_ok
+    };
+    if case.result_fixture.is_some() {
+        println!("{}", json!({
+            "schema_version":1, "case_id":case.id, "repetition":repetition,
+            "phase":"synthesis", "status":"UNVERIFIED", "reason":"s3_real_task_receipt_reconstruction",
+            "synthetic_result_replay":false, "real_expert_execution":false, "personal_data":false,
+        }));
     }
     Ok(accepted)
 }
@@ -658,12 +578,14 @@ pub(super) async fn run(mode: Mode) -> std::process::ExitCode {
     {
         return unverified("invalid_model_identity");
     }
-    let (principal, device_id, service) = match mode {
-        Mode::Foundation => (
-            PersonId::new().to_string(),
-            "synthetic-smoke-device".to_owned(),
-            super::support::synthetic_model(),
-        ),
+    let (principal, device_id, service, _synthetic_profile) = match mode {
+        Mode::Foundation => {
+            let profile = match super::support::SyntheticProfile::create().await {
+                Ok(profile) => profile,
+                Err(_) => return unverified("isolated_profile_unavailable"),
+            };
+            (profile.actor.person_id.to_string(), profile.actor.device_id.clone(), profile.model(), Some(profile))
+        },
         Mode::Server => {
             let Some(database) = std::env::var_os("FLOE_MANAGER_EVAL_DATABASE") else {
                 return unverified("explicit_existing_database_required");
@@ -695,6 +617,7 @@ pub(super) async fn run(mode: Mode) -> std::process::ExitCode {
                 person.to_string(),
                 identity.device_id,
                 super::support::model(store),
+                None,
             )
         }
     };
@@ -768,7 +691,6 @@ pub(super) async fn run(mode: Mode) -> std::process::ExitCode {
                 repetition,
                 &metadata,
                 &principal,
-                Uuid::new_v4(),
                 Uuid::new_v4(),
                 &device_id,
                 &journal,

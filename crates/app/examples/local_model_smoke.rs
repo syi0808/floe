@@ -29,8 +29,19 @@ async fn main() -> std::process::ExitCode {
         return manager_guidance::run(manager_guidance::Mode::Server).await;
     }
     let optional_memory = arguments == ["--exercise-optional-memory"];
-    let learner = arguments == ["--exercise-learner"];
-    let learner_expiry = arguments == ["--exercise-learner-expiry"];
+    let learner_mode = arguments.first().map(String::as_str);
+    let learner = learner_mode == Some("--exercise-learner");
+    let learner_expiry = learner_mode == Some("--exercise-learner-expiry");
+    let learner_profile = if learner || learner_expiry {
+        match arguments.as_slice() {
+            [_] => None,
+            [_, flag, path] if flag == "--profile" => Some(std::path::PathBuf::from(path)),
+            _ => {
+                eprintln!("Learner modes accept --profile /absolute/path/to/an/isolated/prepared/people/PERSON/floe.db");
+                return std::process::ExitCode::FAILURE;
+            }
+        }
+    } else { None };
     if arguments != ["--availability"]
         && arguments != ["--exercise"]
         && !optional_memory
@@ -38,15 +49,16 @@ async fn main() -> std::process::ExitCode {
         && !learner_expiry
     {
         eprintln!(
-            "Use --availability, --exercise, --exercise-optional-memory, --exercise-learner, --exercise-learner-expiry, --exercise-manager-guidance, or --exercise-manager-guidance-server (synthetic only)."
+            "Use --availability, --exercise, --exercise-optional-memory, --exercise-learner [--profile PATH], --exercise-learner-expiry [--profile PATH], --exercise-manager-guidance, or --exercise-manager-guidance-server (synthetic only). Learner requires a fresh isolated prepared profile; it does not create or replace keys."
         );
         return std::process::ExitCode::FAILURE;
     }
     if learner || learner_expiry {
-        return match learner::run(learner_expiry).await {
+        return match learner::run(learner_expiry, learner_profile).await {
             Ok(result) => {
                 println!("{result}");
-                std::process::ExitCode::SUCCESS
+                if result["status"] == "passed" { std::process::ExitCode::SUCCESS }
+                else { std::process::ExitCode::FAILURE }
             }
             Err(failure) => {
                 println!(
@@ -94,9 +106,16 @@ async fn main() -> std::process::ExitCode {
         ledger.work_lease(),
         floe_kernel::TraceContext::new(turn_id),
     );
-    let service = support::synthetic_model();
-    let principal = floe_kernel::PersonId::new().to_string();
-    let device_id = "synthetic-smoke-device".to_owned();
+    let profile = match support::SyntheticProfile::create().await {
+        Ok(profile) => profile,
+        Err(failure) => {
+            println!("{}", json!({"schema_version":1,"failure":failure,"personal_data":false}));
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let service = profile.model();
+    let principal = profile.actor.person_id.to_string();
+    let device_id = profile.actor.device_id.clone();
     let prepared = match service
         .prepare(
             ModelPlanRequest {

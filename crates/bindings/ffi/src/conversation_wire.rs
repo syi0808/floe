@@ -338,6 +338,8 @@ fn session_snapshot(
             })
             .transpose()?,
         usage: ConversationSessionUsageDto {
+            unknown_token_attempts: value.usage.unknown_token_attempts,
+            unknown_cost_attempts: value.usage.unknown_cost_attempts,
             model_attempts: value.usage.model_attempts,
             estimated_tokens: value.usage.estimated_tokens,
             estimated_cost_micros: value.usage.estimated_cost_micros,
@@ -541,18 +543,8 @@ fn interaction_snapshot(
                     }
                 },
             },
-            T::ExpertBinding {
-                assignment_id,
-                package_id,
-                package_version,
-                requirement_key,
-                capability,
-            } => AppInteractionTargetDto::ExpertBinding {
-                assignment_id: reference!(AssignmentRefDto, assignment_id),
-                package_id,
-                package_version,
-                requirement_key,
-                capability,
+            T::ExpertBinding { review } => AppInteractionTargetDto::ExpertBinding {
+                review: crate::experts_wire::binding_review_to_dto(review)?,
             },
         },
         actions: value

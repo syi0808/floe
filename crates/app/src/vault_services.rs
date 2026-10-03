@@ -1,111 +1,40 @@
+//! Commands for the one host-owned encrypted Vault lifecycle.
 use uuid::Uuid;
+use crate::{AgentFailure, AppComposition, CallerContext};
+use crate::vault_lifecycle::VaultLifecycleIntent;
 
-use crate::local_operations::{LocalOperationIntent, LocalOperationOwner};
-use crate::{AgentFailure, AppComposition, CallerContext, ServiceError, VaultState};
-
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VaultState { #[default] Missing, Locked, Ready, Unavailable }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum VaultLifecycleCommand {
-    Create,
-    Unlock,
-    Lock,
-}
-
+pub enum VaultLifecycleCommand { Create, Unlock, Lock }
 #[derive(Clone, Debug)]
 pub struct VaultLifecycleResult {
-    pub operation_id: Uuid,
-    pub stage: String,
-    pub done: bool,
-    pub state: Option<VaultState>,
-    pub failure: Option<AgentFailure>,
+    pub operation_id: Uuid, pub stage: String, pub done: bool,
+    pub state: Option<VaultState>, pub failure: Option<AgentFailure>,
 }
-
 pub trait VaultLifecycleCommands {
-    fn vault_command(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-        command: VaultLifecycleCommand,
-    ) -> Result<VaultLifecycleResult, ServiceError>;
+    fn vault_command(&self, caller:&CallerContext, operation_id:Uuid, command:VaultLifecycleCommand)
+        -> Result<VaultLifecycleResult,AgentFailure>;
 }
-
 pub trait VaultLifecycleQueries {
-    fn vault_status(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-    ) -> Result<VaultLifecycleResult, ServiceError>;
-
-    fn read_vault_result(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-        release: bool,
-    ) -> Result<VaultLifecycleResult, ServiceError>;
+    fn vault_status(&self, caller:&CallerContext, request_id:Uuid)->Result<VaultLifecycleResult,AgentFailure>;
+    fn read_vault_result(&self, caller:&CallerContext, operation_id:Uuid, release:bool)->Result<VaultLifecycleResult,AgentFailure>;
 }
-
 impl VaultLifecycleCommands for AppComposition {
-    fn vault_command(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-        command: VaultLifecycleCommand,
-    ) -> Result<VaultLifecycleResult, ServiceError> {
-        self.agent_vault
-            .local_request(
-                caller,
-                operation_id,
-                Some(LocalOperationIntent::VaultCommand(command)),
-                LocalOperationOwner::Vault,
-                false,
-            )
-            .map(vault_result)
-            .map_err(crate::composition::service_failure)
+    fn vault_command(&self, caller:&CallerContext, operation_id:Uuid, command:VaultLifecycleCommand)
+        -> Result<VaultLifecycleResult,AgentFailure> {
+        let intent = match command { VaultLifecycleCommand::Create=>VaultLifecycleIntent::Create,
+            VaultLifecycleCommand::Unlock=>VaultLifecycleIntent::Unlock, VaultLifecycleCommand::Lock=>VaultLifecycleIntent::Lock };
+        self.agent_vault.request(caller,operation_id,Some(intent),false)
     }
 }
-
 impl VaultLifecycleQueries for AppComposition {
-    fn vault_status(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-    ) -> Result<VaultLifecycleResult, ServiceError> {
-        self.agent_vault
-            .local_request(
-                caller,
-                operation_id,
-                Some(LocalOperationIntent::VaultStatus),
-                LocalOperationOwner::Vault,
-                false,
-            )
-            .map(vault_result)
-            .map_err(crate::composition::service_failure)
+    fn vault_status(&self, caller:&CallerContext, request_id:Uuid)->Result<VaultLifecycleResult,AgentFailure> {
+        if request_id.is_nil(){return Err(AgentFailure::InvalidInput);}
+        Ok(VaultLifecycleResult {operation_id:request_id,stage:"status".into(),done:true,
+            state:Some(self.agent_vault.status(caller)?),failure:None})
     }
-
-    fn read_vault_result(
-        &self,
-        caller: &CallerContext,
-        operation_id: Uuid,
-        release: bool,
-    ) -> Result<VaultLifecycleResult, ServiceError> {
-        self.agent_vault
-            .local_request(
-                caller,
-                operation_id,
-                None,
-                LocalOperationOwner::Vault,
-                release,
-            )
-            .map(vault_result)
-            .map_err(crate::composition::service_failure)
-    }
-}
-
-fn vault_result(result: crate::WorkerResult) -> VaultLifecycleResult {
-    VaultLifecycleResult {
-        operation_id: result.request_id,
-        stage: result.stage,
-        done: result.done,
-        state: result.state,
-        failure: result.failure,
+    fn read_vault_result(&self, caller:&CallerContext, operation_id:Uuid, release:bool)->Result<VaultLifecycleResult,AgentFailure> {
+        self.agent_vault.request(caller,operation_id,None,release)
     }
 }

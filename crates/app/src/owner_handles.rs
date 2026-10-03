@@ -10,6 +10,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use uuid::Uuid;
 
 pub struct ReadyOwners {
@@ -47,15 +48,29 @@ impl ReadyOwners {
         }
         Ok(())
     }
-    pub(crate) fn close_admission(&self) {
+    pub(crate) fn close_admission(&self) -> Result<(), AgentFailure> {
         self.available.store(false, Ordering::Release);
-        self.conversation.close_admission();
-        self.experts.close_admission();
-        self.knowledge.close_admission();
-        self.actions.shutdown();
-        self.connections.shutdown();
+        // Every owner is fenced even when a different close hook panics.
+        let conversation = close_owner(|| self.conversation.close_admission());
+        let experts = close_owner(|| self.experts.close_admission());
+        let knowledge = close_owner(|| self.knowledge.close_admission());
+        let actions = close_owner(|| self.actions.shutdown());
+        let connections = close_owner(|| self.connections.shutdown());
+        conversation.and(experts).and(knowledge).and(actions).and(connections)
     }
 }
+fn close_owner(close: impl FnOnce()) -> Result<(), AgentFailure> {
+    match catch_unwind(AssertUnwindSafe(close)) {
+        Ok(()) => Ok(()),
+        Err(payload) => {
+            // A custom panic payload may itself panic when dropped. Retirement
+            // must remain safe even when invoked during another unwind.
+            std::mem::forget(payload);
+            Err(AgentFailure::Interrupted)
+        }
+    }
+}
+
 /// Request scopes bound owner admission and reads. Background owner operations
 /// detach only after durable admission and retain their own bounded lifetime.
 pub fn host_scope(

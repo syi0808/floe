@@ -1,26 +1,6 @@
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use uuid::Uuid;
-
-pub use floe_agent_contract::{
-    AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction, AgentRetryPolicy,
-};
-
-macro_rules! response_payload {
-    ($name:ident) => {
-        #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-        #[serde(transparent)]
-        pub struct $name(pub Value);
-    };
-}
-
-response_payload!(AgentEventDto);
-response_payload!(AgentFailureDto);
-response_payload!(ConnectorSnapshotDto);
-response_payload!(EpistemicStatusDto);
-response_payload!(KnowledgeCandidateDto);
-response_payload!(KnowledgeDecisionResultDto);
-response_payload!(PersonalMemoryKindDto);
+use serde::{Deserialize,Serialize};
+use super::{EpistemicStatusDto,PersonalMemoryKindDto};
+pub use floe_agent_contract::{AgentFailureCategory,AgentFailureDomain,AgentFailureSafeAction,AgentRetryPolicy};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -56,48 +36,12 @@ pub enum AgentVaultRecoveryActionDto {
     Reconcile,
     RetryRead,
 }
-response_payload!(RegistryOverviewDto);
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RegistryConfigurationDto {
-    pub instance_id: Uuid,
-    pub expected_revision: u64,
-    pub target: RegistryConfigurationTargetDto,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum RegistryConfigurationTargetDto {
-    Installation { id: Uuid, enabled: bool },
-    Assignment { id: Uuid, enabled: bool },
-}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentMemoryReviewDecisionKindDto {
     Approve,
     Reject,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentProposalInspectionDto {
-    pub schema_version: u32,
-    pub person_id: String,
-    pub session_id: String,
-    pub invocation_id: String,
-    pub action: Option<AgentProposalActionDto>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentMemoryReviewOverviewDto {
-    pub schema_version: u32,
-    pub person_id: String,
-    pub candidates: Vec<KnowledgeCandidateDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decision: Option<KnowledgeDecisionResultDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -135,29 +79,6 @@ pub enum AgentMemoryOriginDto {
     Learned,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentProposalActionDto {
-    pub action_id: String,
-    pub execution_id: String,
-    pub status: AgentProposalStatusDto,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
-    pub starts_at: chrono::DateTime<chrono::Utc>,
-    pub ends_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentProposalStatusDto {
-    Pending,
-    Approved,
-    Rejected,
-    Executing,
-    Blocked,
-    Unknown,
-    Succeeded,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentVaultStateDto {
@@ -165,47 +86,6 @@ pub enum AgentVaultStateDto {
     Locked,
     Ready,
     Unavailable,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum CalendarActionOperationDto {
-    Capabilities {},
-    GetAuthority {},
-    SetAuthority {
-        calendar_create: ActionAuthorityModeDto,
-    },
-    Execute {
-        action_id: String,
-    },
-    Recover {
-        action_id: String,
-    },
-    List {},
-    Get {
-        action_id: String,
-    },
-    Propose {
-        calendar_id: String,
-        title: String,
-        starts_at: String,
-        ends_at: String,
-        timezone: String,
-    },
-    Direct {
-        calendar_id: String,
-        title: String,
-        starts_at: String,
-        ends_at: String,
-        timezone: String,
-        event_id: Option<String>,
-        event_revision: Option<u64>,
-        delete: bool,
-    },
-    Decide {
-        action_id: String,
-        decision: CalendarActionDecisionDto,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -216,9 +96,3 @@ pub enum ActionAuthorityModeDto {
     Deny,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CalendarActionDecisionDto {
-    Approve,
-    Reject,
-}

@@ -172,6 +172,7 @@ pub struct ConversationDependencies<R, S, T> {
     pub resolver: Arc<dyn DependencyResolver>,
     pub connections: Arc<floe_connections::ConnectionsService>,
     pub experts_owner: Arc<dyn floe_experts::ExpertsOwner>,
+    pub knowledge: Arc<dyn floe_knowledge::KnowledgeOwner>,
     pub runtime_epoch: u64,
 }
 
@@ -201,7 +202,7 @@ struct ServiceState<R, S, T> {
 impl<R, S, T> ConversationService<R, S, T>
 where
     R: ConversationRepository + InteractionRepository + SessionRepository + 'static,
-    S: SessionStore + floe_knowledge::MemoryContextReader + Send + Sync + 'static,
+    S: SessionStore + Send + Sync + 'static,
     T: floe_experts::TaskRepository + 'static,
 {
     pub fn new(
@@ -236,7 +237,7 @@ where
 impl<R, S, T> ServiceState<R, S, T>
 where
     R: ConversationRepository + InteractionRepository + SessionRepository + 'static,
-    S: SessionStore + floe_knowledge::MemoryContextReader + Send + Sync + 'static,
+    S: SessionStore + Send + Sync + 'static,
     T: floe_experts::TaskRepository + 'static,
 {
     fn check(&self, actor: &OwnerActor) -> Result<(), AgentFailure> {
@@ -327,15 +328,11 @@ where
         tasks.spawn(async move {
             let mut request = request;
             let outcome = async {
-                let memories = floe_execution::tasks::run_bounded(
-                    state
-                        .dependencies
-                        .sessions
-                        .read_memory_context(chrono::Utc::now()),
-                    request.deadline,
-                    &request.cancellation,
-                )
-                .await?;
+                let _foreground = state.dependencies.knowledge.foreground_lease()?;
+                let read_scope = ExecutionScope::root(request.cancellation.child_scope(), request.deadline,
+                    BudgetLedger::new(floe_execution::budget::BudgetConfig::new(0,0), Default::default()).root_lease(),
+                    TraceContext::new(request.command_id.as_uuid()).with_run_id(run_id));
+                let memories = state.dependencies.knowledge.read_context(&actor, &read_scope).await?;
                 let context = AgentContext {
                     projection_version: 1,
                     persona: None,
@@ -512,7 +509,7 @@ where
 impl<R, S, T> ConversationOwner for ConversationService<R, S, T>
 where
     R: ConversationRepository + InteractionRepository + SessionRepository + 'static,
-    S: SessionStore + floe_knowledge::MemoryContextReader + Send + Sync + 'static,
+    S: SessionStore + Send + Sync + 'static,
     T: floe_experts::TaskRepository + 'static,
 {
     fn close_admission(&self) {

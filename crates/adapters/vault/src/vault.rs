@@ -29,6 +29,7 @@ mod conversation_interactions;
 mod conversations;
 mod conversation_delegation_recovery;
 mod expert_actions;
+pub(crate) mod expert_binding_reviews;
 pub use expert_actions::VaultExpertProposalReader;
 mod gateway_authority;
 mod keyring;
@@ -224,6 +225,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_access_grant_store().await?;
         vault.initialize_connection_reviews(true).await?;
         vault.initialize_actions_store().await?;
+        vault.initialize_expert_binding_reviews().await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_conversation_store().await?;
         vault.initialize_task_store().await?;
@@ -315,6 +317,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_access_grant_store().await?;
         vault.initialize_connection_reviews(false).await?;
         vault.validate_actions_store().await?;
+        vault.validate_expert_binding_reviews().await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_conversation_store().await?;
         vault.initialize_task_store().await?;
@@ -441,7 +444,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    fn connection(&self) -> Result<turso::Connection, AgentFailure> {
+    pub(crate) fn connection(&self) -> Result<turso::Connection, AgentFailure> {
         if self.unavailable.load(Ordering::Acquire) {
             return Err(AgentFailure::VaultUnavailable);
         }

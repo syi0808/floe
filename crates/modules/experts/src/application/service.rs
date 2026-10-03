@@ -22,6 +22,7 @@ pub struct ExpertsDependencies<Tasks> {
 pub struct ExpertsService<Tasks> {
     pub(crate) dependencies: ExpertsDependencies<Tasks>,
     pub(crate) closing: AtomicBool,
+    pub(crate) operations: tokio::sync::RwLock<()>,
 }
 impl<Tasks> Drop for ExpertsService<Tasks> {
     fn drop(&mut self) { self.closing.store(true, Ordering::Release); self.dependencies.tasks.close_admission(); }
@@ -36,7 +37,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
             registration.manifest.validate()?;
             if !ids.insert(&registration.manifest.package.id) { return Err(AgentFailure::Conflict); }
         }
-        Ok(Self { dependencies, closing: AtomicBool::new(false) })
+        Ok(Self { dependencies, closing: AtomicBool::new(false), operations: tokio::sync::RwLock::new(()) })
     }
 
     pub fn task_coordinator(&self) -> Arc<TaskCoordinator<Tasks>> { Arc::clone(&self.dependencies.tasks) }
@@ -47,9 +48,18 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
         Ok(())
     }
 
+    pub(crate) async fn begin_operation<'a>(&'a self, actor: &OwnerActor, scope: &ExecutionScope)
+        -> Result<tokio::sync::RwLockReadGuard<'a, ()>, AgentFailure>
+    {
+        self.authorize(actor)?;
+        let guard = scope.run(async { Ok(self.operations.read().await) }).await?;
+        self.authorize(actor)?;
+        Ok(guard)
+    }
+
     pub async fn activate(&self, scope: &ExecutionScope) -> Result<(), AgentFailure> {
         let actor = &self.dependencies.actor;
-        self.authorize(actor)?;
+        let _operation = self.begin_operation(actor, scope).await?;
         let mut snapshot = self.dependencies.registry.read(actor, scope).await?;
         let manifests = self.dependencies.programs.iter().map(|program| program.manifest.clone()).collect::<Vec<_>>();
         if !manifests.is_empty() {

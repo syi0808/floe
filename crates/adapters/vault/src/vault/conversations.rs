@@ -1238,7 +1238,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
         transaction.execute("CREATE TABLE agent_conversation_session_commands (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, session_id TEXT NOT NULL REFERENCES agent_sessions(id), initial_revision INTEGER NOT NULL CHECK(initial_revision = 0))", ()).await.map_err(storage)?;
         transaction.execute("CREATE TABLE agent_conversation_terminal_receipts (run_id TEXT PRIMARY KEY REFERENCES agent_conversation_runs(run_id), digest TEXT NOT NULL CHECK(length(digest) = 64))", ()).await.map_err(storage)?;
         transaction.execute(
-            "CREATE TABLE agent_conversation_review_audits (operation_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, person_id TEXT NOT NULL, payload TEXT NOT NULL)", (),
+            "CREATE TABLE agent_conversation_review_audits (operation_id TEXT NOT NULL, run_id TEXT NOT NULL, person_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(run_id, operation_id))", (),
         ).await.map_err(storage)?;
         transaction
             .execute(

@@ -218,8 +218,11 @@ pub fn project_run_accounting(
         &super::recovery::journal_binding(receipt, entries), entries,
         floe_agent_runtime::JournalProjectionMode::DurablePrefix,
     )?;
+    let accounting = floe_agent_runtime::aggregate_model_accounting(&[projected.own_accounting.clone()], &projected.delegated_receipts)?;
     Ok(RunAccountingProjection {
         usage: crate::AgentUsage {
+            unknown_token_attempts: accounting.unknown_token_attempts,
+            unknown_cost_attempts: accounting.unknown_cost_attempts,
             model_attempts: projected.usage.attempts,
             iterations: projected.completed_iterations,
             capability_calls: u32::try_from(entries.iter().filter(|entry| matches!(entry.event, floe_agent_contract::JournalEvent::ToolIntent { .. })).count())

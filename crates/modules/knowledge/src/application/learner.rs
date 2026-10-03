@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use chrono::{DateTime, Utc};
 use floe_kernel::AgentFailure;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{LearningObservationKind, PersonalMemoryValue};
@@ -119,7 +120,11 @@ impl LearnerProjectionBlock {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         self.plan.validate()?;
         self.review.validate()?;
-        if self.plan.consumer != LEARNER_INFERENCE_CONSUMER || self.plan.purpose != LEARNER_INFERENCE_PURPOSE {
+        let digest: [u8; 32] = Sha256::digest(serde_json::to_vec(&(
+            &self.plan, self.review.projection_operation_id, &self.review.blockers,
+        )).map_err(|_| AgentFailure::StorageUnavailable)?).into();
+        if self.review.target_digest != digest || self.plan.consumer != LEARNER_INFERENCE_CONSUMER
+            || self.plan.purpose != LEARNER_INFERENCE_PURPOSE {
             return Err(AgentFailure::PolicyDenied);
         }
         Ok(())

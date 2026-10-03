@@ -59,8 +59,6 @@ pub enum AppProductQueryDto {
     KnowledgeMemoryOverview {},
     #[serde(rename = "knowledge.memory.review")]
     KnowledgeMemoryReview {},
-    #[serde(rename = "knowledge.read_result")]
-    KnowledgeReadResult { operation_id: Uuid, release: bool },
     #[serde(rename = "connections.overview")]
     ConnectionsOverview {},
     #[serde(rename = "connections.pairing.get")]
@@ -118,7 +116,6 @@ impl AppProductQueryDto {
             Self::ConnectionsIntegrationInspectReview { review_ref }
             | Self::ConnectionsSourceInspectReview { review_ref }
             | Self::ConnectionsObserveInspectReview { review_ref } => return review_ref.validate(),
-            Self::KnowledgeReadResult { operation_id, .. } => ("query.operation_id", operation_id),
             Self::ExpertsDirectory {} => return Ok(()),
             Self::ExpertsInspectBinding { requirement_ref, .. } => return if requirement_ref.is_empty() || requirement_ref.len()>128 || requirement_ref.trim()!=requirement_ref || requirement_ref.chars().any(char::is_control) { Err("query.requirement_ref") } else { Ok(()) },
             Self::ExpertsInspectBindingReview { review_ref } => return review_ref.validate(),
@@ -166,10 +163,10 @@ pub enum AppQueryResultDto {
     DayRefresh {
         refresh: super::DayRefreshStateDto,
     },
-    KnowledgeOperation {
-        #[serde(flatten)]
-        result: super::KnowledgeOperationResultDto,
-    },
+    #[serde(rename="knowledge.memory.overview")]
+    KnowledgeOverview { overview: super::AgentMemoryOverviewDto },
+    #[serde(rename="knowledge.memory.review")]
+    KnowledgeReview { review: super::MemoryReviewDisplayDto },
     #[serde(rename = "connections.gateway_setup")]
     ConnectionsGatewaySetup {
         setup: super::GatewaySetupDto,

@@ -69,13 +69,20 @@ impl VaultBridge {
         let slot = self.published.lock().map_err(|_| AgentFailure::Interrupted)?;
         if slot.closing { return Err(AgentFailure::Interrupted); }
         if let Some(failure) = slot.failure { return Err(failure); }
-        let (admitted, generation) = slot.current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+        let Some((admitted, generation)) = slot.current.as_ref() else {
+            return Err(match stored_vault_state(&self.root, PersonId(caller.person_id()))? {
+                VaultState::Locked => AgentFailure::VaultLocked,
+                VaultState::Missing => AgentFailure::NotFound,
+                _ => AgentFailure::VaultUnavailable,
+            });
+        };
         if admitted != caller { return Err(AgentFailure::PolicyDenied); }
         let owners = generation.owners();
         owners.check(&caller.owner_actor())?;
         if let Err(failure) = generation.check_access() {
-            let _ = self.core.product_gateway.lock();
-            owners.close_admission();
+            let gateway = self.core.product_gateway.lock();
+            let close = owners.close_admission();
+            gateway.and(close)?;
             return Err(failure);
         }
         Ok(owners)
@@ -92,8 +99,9 @@ impl VaultBridge {
                 let owners = generation.owners();
                 owners.check(&caller.owner_actor())?;
                 if let Err(failure) = generation.check_access() {
-                    let _ = self.core.product_gateway.lock();
-                    owners.close_admission();
+                    let gateway = self.core.product_gateway.lock();
+                    let close = owners.close_admission();
+                    gateway.and(close)?;
                     return Err(failure);
                 }
                 Ok(VaultState::Ready)
@@ -333,9 +341,16 @@ fn close_published(published: &Mutex<Published>, core: &FloeCore, permanent: boo
         Err(poisoned) => (poisoned.into_inner(), Some(AgentFailure::Interrupted)),
     };
     slot.closing |= permanent;
-    let gateway = if permanent { core.product_gateway.close() } else { core.product_gateway.lock() };
-    if let Some((_, open)) = slot.current.take() { open.owners().close_admission(); }
-    failure.map_or(gateway, Err)
+    let open = slot.current.take();
+    drop(slot);
+    let gateway = catch_unwind(AssertUnwindSafe(|| {
+        if permanent { core.product_gateway.close() } else { core.product_gateway.lock() }
+    })).unwrap_or(Err(AgentFailure::Interrupted));
+    let owners = match open {
+        Some((_, open)) => open.owners().close_admission(),
+        None => Ok(()),
+    };
+    failure.map_or(Ok(()), Err).and(gateway).and(owners)
 }
 
 fn retire(runtime: &tokio::runtime::Runtime, core: &FloeCore, published: &Mutex<Published>,

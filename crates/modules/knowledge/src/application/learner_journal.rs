@@ -166,3 +166,55 @@ fn uncertain(entries: &[JournalEntry], projection: &JournalProjection) -> bool {
     !projection.unresolved_attempts.is_empty() || entries.iter().any(|entry| matches!(
         &entry.event, JournalEvent::ModelResult { accounting, .. } if accounting.unknown_tokens || accounting.unknown_cost))
 }
+
+/// Validate terminal evidence before the repository applies its lifecycle CAS.
+pub fn validate_learner_settlement(job: &LearnerReviewJob, journal: &LearnerClaimJournal,
+    settlement: &LearnerJobSettlement, candidate: Option<&KnowledgeCandidate>) -> Result<(), AgentFailure>
+{
+    validate_claim_identity(job, &journal.head)?;
+    if job.state != LearnerJobState::Running { return Err(AgentFailure::Conflict); }
+    let projection = validate_learner_journal(&journal.head, &journal.entries)?;
+    let is_uncertain = uncertain(&journal.entries, &projection);
+    match settlement {
+        LearnerJobSettlement::Completed { candidate_id } => {
+            if is_uncertain { return Err(AgentFailure::Interrupted); }
+            let (text, _) = projection.output.ok_or(AgentFailure::Conflict)?;
+            match (parse_learner_review_output(&text)?, candidate_id, candidate) {
+                (None, None, None) => {}
+                (Some(proposal), Some(candidate_id), Some(candidate)) => {
+                    let expected = super::learner_service::stage_request(&job.input, proposal);
+                    let identity = memory_stage_identity(journal.head.person_id, &expected)?;
+                    if candidate.id != *candidate_id || candidate.person_id != journal.head.person_id
+                        || candidate.kind != KnowledgeKind::Memory || candidate.actor != expected.actor
+                        || candidate.idempotency_key != identity.candidate_key || candidate.source_refs != identity.source_refs
+                        || candidate.payload != (KnowledgePayload::Memory { value: expected.value })
+                        || candidate.base_revision != expected.base_revision
+                        || candidate.extractor_version != expected.extractor_version
+                        || candidate.prompt_version != expected.prompt_version
+                        || candidate.created_at != expected.created_at
+                        || match expected.target_id {
+                            Some(target) => candidate.operation != KnowledgeOperation::Revise || candidate.target_id != Some(target),
+                            None => candidate.operation != KnowledgeOperation::Create
+                                || (candidate.state != KnowledgeCandidateState::Approved && candidate.target_id.is_some()),
+                        }
+                    { return Err(AgentFailure::PolicyDenied); }
+                }
+                _ => return Err(AgentFailure::Conflict),
+            }
+        }
+        LearnerJobSettlement::Blocked { blockage } => {
+            blockage.validate()?;
+            if candidate.is_some() || is_uncertain || projection.output.is_some() || projection.pending_batch.is_some()
+                || blockage.plan.principal != journal.head.person_id.to_string()
+                || blockage.plan.device_id != journal.head.device_id
+            { return Err(AgentFailure::PolicyDenied); }
+        }
+        LearnerJobSettlement::Deferred { .. } => {
+            if candidate.is_some() || is_uncertain || projection.output.is_some() { return Err(AgentFailure::Interrupted); }
+        }
+        LearnerJobSettlement::Failed { .. } => {
+            if candidate.is_some() { return Err(AgentFailure::InvalidInput); }
+        }
+    }
+    Ok(())
+}

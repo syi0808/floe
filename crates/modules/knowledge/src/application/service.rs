@@ -47,6 +47,7 @@ pub struct KnowledgeService {
     background: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     clock: Arc<dyn KnowledgeClock>,
     closing: AtomicBool,
+    operations: tokio::sync::RwLock<()>,
 }
 impl KnowledgeService {
     pub fn new(dependencies: KnowledgeDependencies) -> Result<Self, AgentFailure> {
@@ -56,7 +57,16 @@ impl KnowledgeService {
             Arc::clone(&dependencies.clock), dependencies.learner_budget)?;
         Ok(Self { actor: dependencies.actor, repository: dependencies.repository,
             learner: Arc::new(learner), clock: dependencies.clock, closing: AtomicBool::new(false),
-            scheduling: crate::LearnerScheduling::default(), background: tokio::sync::Mutex::new(None) })
+            scheduling: crate::LearnerScheduling::default(), background: tokio::sync::Mutex::new(None),
+            operations: tokio::sync::RwLock::new(()) })
+    }
+    async fn begin_operation<'a>(&'a self, actor: &OwnerActor, scope: &ExecutionScope)
+        -> Result<tokio::sync::RwLockReadGuard<'a, ()>, AgentFailure>
+    {
+        self.authorize(actor)?;
+        let guard = scope.run(async { Ok(self.operations.read().await) }).await?;
+        self.authorize(actor)?;
+        Ok(guard)
     }
     fn authorize(&self, actor: &OwnerActor) -> Result<(), AgentFailure> {
         actor.validate()?;
@@ -67,12 +77,12 @@ impl KnowledgeService {
 impl KnowledgeRead for KnowledgeService {
     fn read_context<'a>(&'a self, actor: &'a OwnerActor, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<crate::MemoryContextSnapshot, AgentFailure>>
-    { Box::pin(async move { self.authorize(actor)?; self.repository.read_context(actor, self.clock.now(), scope).await }) }
+    { Box::pin(async move { let _operation = self.begin_operation(actor, scope).await?; self.repository.read_context(actor, self.clock.now(), scope).await }) }
 }
 impl KnowledgeOwner for KnowledgeService {
     fn activate<'a>(&'a self, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<(), AgentFailure>> {
         Box::pin(async move {
-            self.authorize(&self.actor)?;
+            let _operation = self.begin_operation(&self.actor, scope).await?;
             let mut background = scope.run(async { Ok(self.background.lock().await) }).await?;
             self.authorize(&self.actor)?;
             if let Some(handle) = background.as_ref() {
@@ -97,6 +107,8 @@ impl KnowledgeOwner for KnowledgeService {
         Box::pin(async move {
             self.close_admission();
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+            let _operations = tokio::time::timeout_at(deadline, self.operations.write()).await
+                .map_err(|_| AgentFailure::DeadlineExceeded)?;
             tokio::time::timeout_at(deadline, self.learner.shutdown()).await
                 .map_err(|_| AgentFailure::DeadlineExceeded)??;
             let mut background = tokio::time::timeout_at(deadline, self.background.lock()).await
@@ -112,21 +124,26 @@ impl KnowledgeOwner for KnowledgeService {
     }
     fn overview<'a>(&'a self, actor: &'a OwnerActor, limit: usize, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<crate::MemoryOverviewSnapshot, AgentFailure>>
-    { Box::pin(async move { self.authorize(actor)?; crate::validate_memory_overview_limit(limit)?;
+    { Box::pin(async move { let _operation = self.begin_operation(actor, scope).await?; crate::validate_memory_overview_limit(limit)?;
         self.repository.overview(actor, limit, scope).await }) }
     fn review<'a>(&'a self, actor: &'a OwnerActor, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<crate::MemoryReviewDisplay, AgentFailure>>
-    { Box::pin(async move { self.authorize(actor)?; crate::project_memory_review(&self.repository.review(actor, scope).await?) }) }
+    { Box::pin(async move { let _operation = self.begin_operation(actor, scope).await?; crate::project_memory_review(&self.repository.review(actor, scope).await?) }) }
     fn decide<'a>(&'a self, actor: &'a OwnerActor, command_id: CommandId, candidate_id: Uuid,
         kind: crate::KnowledgeDecisionKind, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<crate::MemoryDecisionAcknowledgement, AgentFailure>>
-    { Box::pin(async move { self.authorize(actor)?;
+    { Box::pin(async move { let _operation = self.begin_operation(actor, scope).await?;
         if candidate_id.is_nil() || command_id.as_uuid().is_nil() { return Err(AgentFailure::InvalidInput); }
         let result = self.repository.decide(actor, crate::MemoryDecisionRequest { command_id, candidate_id,
             kind, decided_at: self.clock.now() }, scope).await?;
         crate::project_memory_decision(command_id, &result) }) }
     fn run_next<'a>(&'a self, cancellation: Cancellation) -> BoxFuture<'a, Result<bool, AgentFailure>> {
-        Box::pin(async move { self.authorize(&self.actor)?; self.learner.run_next(cancellation).await })
+        Box::pin(async move {
+            self.authorize(&self.actor)?;
+            let _operation = self.operations.read().await;
+            self.authorize(&self.actor)?;
+            self.learner.run_next(cancellation).await
+        })
     }
 }
 impl Drop for KnowledgeService { fn drop(&mut self) { self.scheduling.close(); self.learner.close_admission(); } }
