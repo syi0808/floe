@@ -40,3 +40,10 @@ The user reported unsupported plain schema during startup. An isolated pinned-Tu
 A reviewed narrow correction compares bounded SQL token sequences. It ignores inter-token whitespace and unquoted ASCII keyword/identifier case, while preserving quoted content, numeric spelling, compound operators, constraints and order. IF NOT EXISTS is normalized only at the CREATE prefix. Stored invalid/different definitions remain rejected; malformed expected definitions are internal Storage failures. Safe mismatch metadata is available at StoreError but still flattened by the existing App startup string projection.
 
 The corrected patch is published as unverified because artifact transfer to the isolated worker failed. Next validation must fetch this exact commit and prove fresh create/close/reopen succeeds, all 26 schema objects match, and a scratch replacement CHECK(id >= 1) with unchanged row(1,1) is rejected. Additional lexical negatives preserve literal case, word boundaries, compound operators and key constraints. This is isolated behavior reproduction, not automated suite reconstruction. No user database, key or recovery archive was modified.
+
+
+## Focused schema correction validation on c3c10528
+
+The exact published patch passed isolated fresh create/drop/reopen, reopening a copy of the original failing scratch database, and all 26 schema definitions. A changed CHECK(id >= 1) with unchanged marker row(1,1) was rejected with definition_mismatch metadata. Five lexical cases passed: formatting equivalence plus preservation of quoted literal case, word boundaries, operator meaning and UNIQUE. Scratch evidence remains preserved; no user database was opened or reset and no persistent test suite was rewritten.
+
+The isolated worker used Rust1.99.0 with the pinned dependency lock; this establishes the reproduced behavior but does not substitute for the supported Rust1.93.1 Apple build. The exact two-file formatting-only delta (14 additions/13 deletions) is integrated. Next gate is the rebuilt macOS artifact, followed by affected scoped Apple coverage and coordinated user retest.

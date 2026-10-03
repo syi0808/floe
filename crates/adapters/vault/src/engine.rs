@@ -272,7 +272,8 @@ pub(crate) async fn require_schema(
         schema_sql::Comparison::InvalidExpected => Err(StoreError::new(
             StoreErrorCode::Storage,
             "internal schema definition is invalid",
-        ).with_metadata("schema_object", name)),
+        )
+        .with_metadata("schema_object", name)),
     }
 }
 

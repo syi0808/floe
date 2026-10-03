@@ -80,8 +80,9 @@ fn tokenize(sql: &str) -> Option<Vec<Token>> {
                 index += 1;
                 Token::Quoted(sql[start..index].to_owned())
             }
-            value if value.is_ascii_digit()
-                || (value == b'.' && bytes.get(index + 1).is_some_and(u8::is_ascii_digit)) =>
+            value
+                if value.is_ascii_digit()
+                    || (value == b'.' && bytes.get(index + 1).is_some_and(u8::is_ascii_digit)) =>
             {
                 index = number_end(bytes, index)?;
                 Token::Number(sql[start..index].to_owned())
@@ -108,13 +109,16 @@ fn tokenize(sql: &str) -> Option<Vec<Token>> {
                 index += 1;
                 Token::Symbol(")".into())
             }
-            b',' | b'.' | b';' | b'=' | b'<' | b'>' | b'!' | b'|' | b'&'
-            | b'+' | b'-' | b'*' | b'/' | b'%' | b'~' => {
+            b',' | b'.' | b';' | b'=' | b'<' | b'>' | b'!' | b'|' | b'&' | b'+' | b'-' | b'*'
+            | b'/' | b'%' | b'~' => {
                 let rest = &bytes[index..];
                 let width = if rest.starts_with(b"->>") {
                     3
-                } else if [b"==", b"<=", b">=", b"!=", b"<>", b"||", b"<<", b">>", b"->"]
-                    .iter().any(|operator| rest.starts_with(*operator))
+                } else if [
+                    b"==", b"<=", b">=", b"!=", b"<>", b"||", b"<<", b">>", b"->",
+                ]
+                .iter()
+                .any(|operator| rest.starts_with(*operator))
                 {
                     2
                 } else if bytes[index] == b'!' {
@@ -154,9 +158,7 @@ fn normalize_create_prefix(tokens: &mut Vec<Token>) -> Option<()> {
     }
     let name_index = kind_index + 1;
     if word(tokens.get(name_index), "if") {
-        if !word(tokens.get(name_index + 1), "not")
-            || !word(tokens.get(name_index + 2), "exists")
-        {
+        if !word(tokens.get(name_index + 1), "not") || !word(tokens.get(name_index + 2), "exists") {
             return None;
         }
         drop(tokens.drain(name_index..name_index + 3));
@@ -167,9 +169,7 @@ fn normalize_create_prefix(tokens: &mut Vec<Token>) -> Option<()> {
     let body_index = if table {
         name_index + 1
     } else {
-        if !word(tokens.get(name_index + 1), "on")
-            || !identifier(tokens.get(name_index + 2))
-        {
+        if !word(tokens.get(name_index + 1), "on") || !identifier(tokens.get(name_index + 2)) {
             return None;
         }
         name_index + 3
