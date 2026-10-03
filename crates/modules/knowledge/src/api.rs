@@ -22,7 +22,9 @@ pub enum LearningOutcome {
         run_id: floe_kernel::RunId,
         review_group_id: Uuid,
     },
-    Halted { reason: AgentFailure },
+    Halted {
+        reason: AgentFailure,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

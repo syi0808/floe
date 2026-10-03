@@ -4,7 +4,6 @@
 use std::sync::Arc;
 
 use tokio::runtime::{Builder, Runtime};
-use uuid::Uuid;
 
 use crate::{AppHost, FloeCore, HostError, HostServices, local_context, vault_host};
 

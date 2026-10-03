@@ -8,7 +8,6 @@ mod action_facade;
 mod action_services;
 mod api;
 mod bootstrap;
-mod calendar_facade;
 #[cfg(unix)]
 mod composition;
 mod connection_observe;

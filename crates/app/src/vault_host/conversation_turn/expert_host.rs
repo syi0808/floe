@@ -1375,7 +1375,7 @@ impl<Keys: VaultKeyProvider> ConversationContextReaderApi for ConversationContex
     ) -> Pin<Box<dyn Future<Output = Result<NativeContextView, AgentFailure>> + Send + 'a>> {
         let handle = uuid::Uuid::new_v5(&self.person_id.0, b"floe.tasks");
         Box::pin(floe_context::task_context_view(
-            &self.core.store,
+            self.core.store.as_ref(),
             self.person_id,
             handle,
             chrono::Utc::now(),

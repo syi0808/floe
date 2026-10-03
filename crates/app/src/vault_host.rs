@@ -246,7 +246,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
                 },
                 floe_conversation::ManagerConfig {
                     role_spec: floe_conversation::prompts::manager_role_spec(),
-                    purpose: floe_inference::CANONICAL_MODEL_PURPOSE.into(),
+                    purpose: floe_conversation::CONVERSATION_PURPOSE.into(),
                     max_iterations: budget.max_iterations.min(64),
                     max_output_bytes: budget.max_output_bytes,
                     max_run_duration: Duration::from_millis(budget.deadline_ms),
@@ -990,11 +990,10 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
             {
                 return Err(AgentFailure::CapabilityUnavailable);
             }
-            let provider =
-                floe_provider_adapters::sources::native_calendar::NativeCalendar::new(
-                    vec![stored.calendar_id.clone()],
-                    core.store.clone(),
-                );
+            let provider = floe_provider_adapters::sources::native_calendar::NativeCalendar::new(
+                vec![stored.calendar_id.clone()],
+                core.store.clone(),
+            );
             if matches!(operation, CalendarActionOperation::Recover { .. }) {
                 core.recover_expert_calendar_action(vault, person_id, action_id, &provider)
                     .await?

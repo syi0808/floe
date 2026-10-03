@@ -30,3 +30,11 @@ Input `3a698d76b66cec22a4cc59572afa3c90c3a1bf51`. The affected Rust checks ran w
 Corrections preserve typed Task IDs and canonical Task/Artifact evidence; source operation storage uses the ConnectionId accessor. Calendar action validation receives the actual Connections repository at construction. Removed obsolete per-session attempt-list pruning without changing immutable Run journals or aggregate usage. Knowledge records Blocked with exact Run/review IDs; its Completed-only evidence and learner admission remain unchanged. Provider signed-consumer verification must preserve the admitted consumer kind and exact signed identifier without guessing builtin authority.
 
 Rust compilation remains pending after this correction batch. Passed unchanged Dart/Go/Swift phases are retained, not rerun without new affected changes. Protocol unused validator warnings remain visible; no validation contract was removed solely to silence them.
+
+## Third Rust pass and App corrections
+
+Input `cd309cf4d977caaf50e7d09c4a6f6efec99489fa`. Provider and Vault compilation advanced successfully; eight App diagnostics stemmed from four causes. Five returned formatter changes are integrated.
+
+The unused App Calendar import/failure facade still referenced the removed connection service. Repository-wide caller search confirmed no consumers after the S1 public Day injection-route removal, so the facade and its module registration are deleted instead of reviving the obsolete route. Day-owned internal storage operations remain for planned S2 acquisition closure. Other fixes import CalendarRange, use Conversation's existing exported CONVERSATION_PURPOSE, and borrow the concrete Day repository behind Arc. Compiler-reported unused imports are removed. No authority or domain policy is moved into App.
+
+Affected Rust compilation remains pending; Dart, Go, and Apple source remain unchanged from their passing inputs.

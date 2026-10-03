@@ -127,7 +127,9 @@ impl ServerSourceClient {
         cancellation: &floe_execution::Cancellation,
     ) -> Result<serde_json::Value, AgentFailure> {
         self.source.revalidate().await?;
-        read.grant.validate().map_err(|_| AgentFailure::PolicyDenied)?;
+        read.grant
+            .validate()
+            .map_err(|_| AgentFailure::PolicyDenied)?;
         let mut consumers = read
             .grant
             .scope()
@@ -201,9 +203,7 @@ impl ServerSourceClient {
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<serde_json::Value, AgentFailure> {
-        if !request.path.ends_with("/admit")
-            || request.consumer != admitted_consumer.identifier()
-        {
+        if !request.path.ends_with("/admit") || request.consumer != admitted_consumer.identifier() {
             return Err(AgentFailure::InvalidInput);
         }
         let _permit = self

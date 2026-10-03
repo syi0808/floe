@@ -3,7 +3,7 @@ use crate::{
     EventId, EventSchedule, NoteId, PersonId, Priority, Revision, TaskId, TimelineItem,
 };
 use chrono::{DateTime, NaiveDate, Utc};
-use floe_day::TimelineRepository;
+use floe_day::{CalendarRange, TimelineRepository};
 use uuid::Uuid;
 
 pub struct DayRead {

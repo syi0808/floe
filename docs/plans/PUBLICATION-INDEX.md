@@ -6,7 +6,7 @@ This publication contains the compiler-focused production snapshot, the G1 comma
 
 Large behavior ledgers, generated source maps, machine-readable audit evidence, and other deferred files are retained in the local refactor checkout and existing delivery artifacts. Their relative links in published documents are **pending publication** where the referenced file is listed as deferred below. Omission does not mean the evidence was discarded or the audit was skipped.
 
-Current correction source: `164114b3e73475f33028c9ae16312056187f22e1`. The original production/document source identities above remain historical provenance.
+Current correction source: `3a5abbd6be83ad4ba5f5d4d4e241c84c0a6ce8f5`. The original production/document source identities above remain historical provenance.
 
 ## Published Markdown documents
 
