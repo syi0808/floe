@@ -75,3 +75,8 @@ The prior Conversation/Provider errors are gone. Cloud and all three app builds 
 The correction declares the existing Tokio dependency for ExecutionScope's Tokio deadline clock, imports the existing bounded canonical base64url decoder, uses ConnectionId's explicit string view for metadata, and supplies string slices to five Turso SQL tuple parameters. Both Conversation journal category handlers explicitly classify ToolReviewRequired as result, matching Engine record_result and Task storage: this event consumes the real ToolIntent and records source-review blockage. It is not silently ignored or classified as a checkpoint. Captured formatting is integrated.
 
 For subsequent G2 corrections the common full Rust build runs first in cloud. Once it passes, that exact frozen snapshot proceeds through all Apple app targets. This avoids repeating three app builds against already-known common Rust failures. Full G2 and application ABI verification remain open; no tests or live operations ran.
+
+
+## Cloud-first retry on 4430c81d
+
+All 13 Vault diagnostics are resolved. Full Rust compilation advances to one App facade re-export of the removed CalendarMirrorInput type. Repository source search confirms it has no remaining definition or caller; remove that stale export without restoring the old arbitrary mirror-publication path. Rust formatting and whitespace passed with no patch; dependency policy passed with 23 nodes and 126 edges, and Go retained exact-input evidence. No lockfile changes occurred. Apple builds were intentionally not repeated against this known common Rust error. Full Rust retry remains necessary before Apple app validation.

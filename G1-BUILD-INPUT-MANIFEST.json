@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "G2 7f4 cloud and all three apps reach the same 13 Vault errors. Coherent dependency, bounded decoder, string parameter and explicit ToolReviewRequired result-category fixes integrated with captured formatting, not rerun. DAG freshly passed; prior Go/native/analyzer coverage retained with input evidence. Next full cloud Rust build precedes Apple retries. Full G2 remains unpassed; no tests or live operations.",
+  "verification": "G2 4430 resolves all Vault errors; full cloud Rust stops at one obsolete App CalendarMirrorInput export, now removed but not rerun. Complete App facade source scan found no other missing export. Formatting/DAG passed, no lock changes; Go retained exact-input proof. Cloud full Rust precedes Apple retries. Full G2 unpassed; no tests or live operations.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "2174873f9c132a0ff541fe256a1e884651eae784",
+  "current_correction_source_commit": "5405d0ebb18a12da364f19cc1da67d25e6a519cb",
   "current_status_document": "docs/plans/t0-execution-status.json"
 }
