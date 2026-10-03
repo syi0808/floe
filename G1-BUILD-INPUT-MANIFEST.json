@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "G2 aa2756 retained Go/DAG passes with input proof; Dart analysis and direct Health device/simulator compilation passed. Full Rust/model-product/app builds failed at four compiler sites; captured formatting and those bounded corrections are integrated but not rerun. iOS destinations now work; simulator opaque status255 needs verbose next attempt. No tests or model calls. Next affected full build batch is ready.",
+  "verification": "G2 d84: standalone local-model device/simulator products and all four ABI exports pass; unchanged analyzer, Health, Go and DAG passes retained with input evidence. Full Rust/macOS stop at Context private-module re-export, now corrected but not rerun. Full iOS apps stop at task-local framework metadata during ad-hoc signing; fresh checkout outside FileProvider prepared without attribute/security changes. Captured Swift formatting integrated. Full G2 remains unpassed; no tests or model/provider operations.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "c80d557db06bde15dd322b1255460bbc1b0da321",
+  "current_correction_source_commit": "8a506ae673a30e88af1675bd80c6ef47f65a1d7a",
   "current_status_document": "docs/plans/t0-execution-status.json"
 }

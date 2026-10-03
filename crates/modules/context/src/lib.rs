@@ -31,6 +31,8 @@ mod application {
     pub mod source_review;
     pub mod source_view;
     mod trusted_consumers;
+
+    pub use trusted_consumers::ContextTrustedConsumerCatalog;
 }
 
 mod ports {
@@ -159,7 +161,7 @@ pub use application::expert_execution::{
 };
 
 pub use application::dependency_resolver::ContextDependencyResolver;
-pub use application::trusted_consumers::ContextTrustedConsumerCatalog;
+pub use application::ContextTrustedConsumerCatalog;
 
 pub use application::source_review::ContextSourceReview;
 pub use ports::source_metadata::SourceMetadataTransport;
