@@ -10,6 +10,7 @@ pub enum TaskState {
     Submitted,
     Working,
     Completed,
+    Blocked,
     Failed,
     Rejected,
     Cancelled,
@@ -30,11 +31,15 @@ pub struct TaskSnapshot {
     pub artifacts: Vec<Artifact>,
     pub coverage: DependencyCoverage,
     pub issue: Option<AgentFailure>,
+    pub blockage: Option<crate::TaskBlockage>,
 }
 
 impl TaskSnapshot {
     pub fn validate(&self, maximum_bytes: usize) -> Result<(), AgentFailure> {
         let result_valid = match self.state {
+            TaskState::Blocked => self.result.is_none() && self.issue.is_none()
+                && self.artifacts.is_empty() && self.blockage.is_some()
+                && self.coverage != DependencyCoverage::Unknown,
             TaskState::Completed => {
                 self.result
                     .as_deref()
@@ -53,6 +58,8 @@ impl TaskSnapshot {
             || self.agent_id.trim().is_empty()
             || self.definition_revision == 0
             || !result_valid
+            || (self.state == TaskState::Blocked) != self.blockage.is_some()
+            || self.blockage.as_ref().is_some_and(|blockage| blockage.validate().is_err())
             || self
                 .result
                 .as_deref()
@@ -194,4 +201,25 @@ pub struct TaskReceipt {
     pub task_id: TaskId,
     pub snapshot: TaskSnapshot,
     pub replay: Option<crate::ReplayReceipt>,
+    pub execution: crate::TaskExecutionEvidence,
+}
+
+impl TaskReceipt {
+    pub fn validate(&self, maximum_bytes: usize) -> Result<(), AgentFailure> {
+        self.snapshot.validate(maximum_bytes)?;
+        if self.task_id != self.snapshot.task_id { return Err(AgentFailure::InvalidInput); }
+        match &self.execution {
+            crate::TaskExecutionEvidence::Admitted(receipt) => {
+                receipt.validate(maximum_bytes)?;
+                if receipt.snapshot != self.snapshot { return Err(AgentFailure::Conflict); }
+            }
+            crate::TaskExecutionEvidence::Unadmitted => {
+                if self.snapshot.state != TaskState::Rejected || self.snapshot.issue.is_none()
+                    || !self.snapshot.artifacts.is_empty()
+                    || self.snapshot.coverage != DependencyCoverage::Independent
+                { return Err(AgentFailure::InvalidInput); }
+            }
+        }
+        Ok(())
+    }
 }

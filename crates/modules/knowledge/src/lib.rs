@@ -2,12 +2,15 @@ pub mod api;
 pub mod prompts;
 pub mod ports {
     pub mod evidence;
+    pub mod learner_projection;
     pub mod repository;
 }
 pub use application::learner::validate_learner_input;
 pub use application::learner_scheduling::{LearnerLease, LearnerScheduling};
 pub use application::learner_service::LearnerService;
 pub use ports::evidence::EvidenceReader;
+pub use ports::learner_projection::{LearnerClaimRef, LearnerEvidenceRepository,
+    LearnerProjectionBounds, LearnerProjectionPort, LearnerProjectionRequest};
 pub use ports::repository::{
     LearnerJobRepository, LearnerJournalFactory, MemoryContextReader, MemoryReviewRepository,
 };

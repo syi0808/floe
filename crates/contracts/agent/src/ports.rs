@@ -141,6 +141,13 @@ fn has_duplicate_agent_pins(pins: &[PinnedAgentRevision]) -> bool {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct JournalEntry {
+    pub revision: u64,
+    pub event: JournalEvent,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum JournalEvent {
     ModelIntent {
@@ -160,6 +167,10 @@ pub enum JournalEvent {
     },
     ToolResult {
         result: ToolResult,
+    },
+    ToolReviewRequired {
+        call_id: Uuid,
+        blockers: floe_context_contract::SourceAccessBlockers,
     },
     DelegationIntent {
         request: DelegationRequest,
@@ -214,12 +225,21 @@ pub trait PreparedModelCall: Send + Sync {
     ) -> BoxFuture<'a, Result<crate::ModelResponse, AgentFailure>>;
 }
 
+#[derive(Clone, Debug)]
+pub enum ToolInvocationOutcome {
+    Completed(ToolResult),
+    NeedsSourceReview {
+        call_id: Uuid,
+        blockers: floe_context_contract::SourceAccessBlockers,
+    },
+}
+
 pub trait ToolPort: Sync {
     fn invoke<'a>(
         &'a self,
         call: ToolCall,
         scope: &'a floe_execution::ExecutionScope,
-    ) -> BoxFuture<'a, Result<ToolResult, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<ToolInvocationOutcome, AgentFailure>>;
 }
 
 pub trait DelegationPort: Sync {

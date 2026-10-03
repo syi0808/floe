@@ -21,6 +21,7 @@ mod ports;
 mod projection;
 pub mod prompts;
 mod replay;
+mod task_execution;
 mod timeline_view;
 
 pub use archive::{
@@ -37,7 +38,7 @@ pub use delegation::{
     delegation_request_digest, valid_context_refs,
 };
 pub use endpoint::{
-    AgentEndpoint, EndpointInvocation, EndpointSettlement, ExpertReport,
+    AgentEndpoint, EndpointInvocation, EndpointResources, EndpointSettlement, ExpertBlockReport, ExpertExecutionOutcome, ExpertReport,
     MAX_ENDPOINT_SETTLEMENT_BYTES,
 };
 pub use envelope::{
@@ -58,7 +59,7 @@ pub use floe_context_contract::{
     EpistemicStatus, ExpertTimelineView, LearningEvidenceRef, MAX_CONTEXT_EVIDENCE,
     MAX_CONTEXT_EVIDENCE_BYTES, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES,
     MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS, MAX_TIMELINE_VIEW_ITEMS,
-    MemoryContextSnapshot, PersonalMemoryKind, SourceAuthority, SourceGrant, TimelineViewItem,
+    MemoryContextSnapshot, PersonalMemoryKind, SourceAccessBlockers, SourceAuthority, SourceGrant, TimelineViewItem,
 };
 pub use floe_execution::budget::ModelAccounting;
 pub use floe_execution::{BoxFuture, CancelReason, Cancellation, ExecutionScope};
@@ -81,9 +82,9 @@ pub use model_conversation::{
     MAX_CONTEXT_REFS, MAX_MODEL_CONVERSATION_BYTES, ModelConversation, ModelConversationEntry,
 };
 pub use ports::{
-    BatchCursor, DelegationPort, ExecutionJournal, JournalAck, JournalEvent, ModelPort,
+    BatchCursor, DelegationPort, ExecutionJournal, JournalAck, JournalEntry, JournalEvent, ModelPort,
     ModelProjectionPort, PinnedAgentRevision, PinnedToolRevision, PreparedModelCall, ToolPort,
-    ValidatedModelBatch,
+    ToolInvocationOutcome, ValidatedModelBatch,
 };
 pub use projection::{
     AuthorizedModelProjection, MAX_CORRECTION_BYTES, MAX_INPUT_DATA_CLASSES, MODEL_CORRECTION_TEXT,
@@ -91,6 +92,8 @@ pub use projection::{
     SourceProjectionReview,
 };
 pub use replay::{AttemptId, InvocationKey, ReplayReceipt, input_digest};
+pub use task_execution::{TaskBlockage, TaskExecutionEvidence, TaskExecutionKey,
+    TaskExecutionReceipt, TaskExecutionReceiptRef, TaskModelAccounting, UnresolvedModelAttempt};
 pub use timeline_view::TimelineViewRead;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

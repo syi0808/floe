@@ -46,10 +46,27 @@ impl EndpointSettlement {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct EndpointInvocation {
     pub request: DelegationRequest,
     pub request_digest: [u8; 32],
+    pub execution: crate::TaskExecutionKey,
+    pub journal: std::sync::Arc<dyn crate::ExecutionJournal>,
+    pub resources: std::sync::Arc<EndpointResources>,
+}
+
+/// Task-owned leases outlive endpoint return and stay held through terminal acknowledgement.
+#[derive(Default)]
+pub struct EndpointResources {
+    held: std::sync::Mutex<Vec<Box<dyn Send>>>,
+}
+impl EndpointResources {
+    pub fn retain(&self, resource: Box<dyn Send>) -> Result<(), AgentFailure> {
+        let mut held = self.held.lock().map_err(|_| AgentFailure::StorageUnavailable)?;
+        if held.len() >= 64 { return Err(AgentFailure::BudgetExceeded); }
+        held.push(resource);
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -127,5 +144,37 @@ pub trait AgentEndpoint: Send + Sync {
         &'a self,
         invocation: EndpointInvocation,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<ExpertReport, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<ExpertExecutionOutcome, AgentFailure>>;
+}
+
+#[derive(Clone, Debug)]
+pub struct ExpertBlockReport {
+    pub task_id: TaskId,
+    pub principal: String,
+    pub agent_id: String,
+    pub definition_revision: u64,
+    pub coverage: DependencyCoverage,
+    pub blockage: crate::TaskBlockage,
+}
+
+#[derive(Clone, Debug)]
+pub enum ExpertExecutionOutcome {
+    Completed(ExpertReport),
+    Blocked(ExpertBlockReport),
+}
+
+impl ExpertBlockReport {
+    pub fn validate(&self, invocation: &EndpointInvocation) -> Result<(), AgentFailure> {
+        self.blockage.validate()?;
+        self.coverage.validate().map_err(|_| AgentFailure::InvalidModelOutput)?;
+        if self.task_id != invocation.request.task_id
+            || self.principal != invocation.request.principal
+            || self.agent_id != invocation.request.selected_agent_id
+            || self.definition_revision != invocation.request.selected_definition_revision
+            || self.coverage == DependencyCoverage::Unknown
+        {
+            return Err(AgentFailure::InvalidModelOutput);
+        }
+        Ok(())
+    }
 }

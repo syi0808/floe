@@ -7,10 +7,16 @@ use floe_agent_contract::{
     ModelConversation, ModelConversationEntry, ModelCorrection, ModelPlanRequest, ModelPort,
     ModelProjectionOutcome, ModelProjectionPort, ModelProjectionRequest, ModelRequest,
     ModelResponse, ModelStep, ModelUsage, PinnedAgentRevision, PinnedToolRevision, ReplayReceipt,
-    SourceProjectionReview, TaskId, TaskReceipt, ToolCall, ToolPort, ToolResult,
+    SourceProjectionReview, TaskId, TaskReceipt, ToolCall, ToolInvocationOutcome, ToolPort, ToolResult,
     ValidatedModelBatch,
 };
 use uuid::Uuid;
+
+#[derive(Clone, Debug)]
+pub struct ValidatedFinalPayload {
+    pub text: String,
+    pub artifacts: Vec<floe_agent_contract::Artifact>,
+}
 
 pub trait FinalPayloadValidator: Sync {
     fn validate(
@@ -18,7 +24,7 @@ pub trait FinalPayloadValidator: Sync {
         role: &str,
         text: &str,
         artifacts: &[floe_agent_contract::Artifact],
-    ) -> Result<(), AgentFailure>;
+    ) -> Result<ValidatedFinalPayload, AgentFailure>;
 }
 
 struct ContractValidator;
@@ -28,7 +34,7 @@ impl FinalPayloadValidator for ContractValidator {
         _: &str,
         text: &str,
         artifacts: &[floe_agent_contract::Artifact],
-    ) -> Result<(), AgentFailure> {
+    ) -> Result<ValidatedFinalPayload, AgentFailure> {
         if text.trim().is_empty() || text.len() > floe_agent_contract::MAX_OUTPUT_BYTES {
             return Err(AgentFailure::InvalidModelOutput);
         }
@@ -37,7 +43,8 @@ impl FinalPayloadValidator for ContractValidator {
                 .coverage
                 .validate()
                 .map_err(|_| AgentFailure::InvalidModelOutput)
-        })
+        })?;
+        Ok(ValidatedFinalPayload { text: text.to_owned(), artifacts: artifacts.to_owned() })
     }
 }
 
@@ -55,6 +62,8 @@ pub struct EnginePorts<'a> {
 pub struct EngineConfig {
     pub max_attempt_tokens: u64,
     pub max_attempt_cost_micros: u64,
+    pub max_task_tokens: u64,
+    pub max_task_cost_micros: u64,
     pub max_tool_calls: u32,
     pub max_delegations: u32,
 }
@@ -63,6 +72,8 @@ impl Default for EngineConfig {
         Self {
             max_attempt_tokens: 4_096,
             max_attempt_cost_micros: 1_000_000,
+            max_task_tokens: 16_384,
+            max_task_cost_micros: 1_000_000,
             max_tool_calls: 32,
             max_delegations: 16,
         }
@@ -86,14 +97,20 @@ pub struct EngineReport {
 #[derive(Clone, Debug)]
 pub enum EngineOutcome {
     Completed(EngineReport),
-    NeedsSourceReview(EngineSourceReview),
+    Blocked(EngineBlock),
 }
 
 #[derive(Clone, Debug)]
-pub struct EngineSourceReview {
-    pub plan: floe_agent_contract::PreparedModelPlan,
-    pub review: SourceProjectionReview,
+pub struct EngineBlock {
+    pub blockage: EngineBlockage,
     pub report: EngineReport,
+}
+
+#[derive(Clone, Debug)]
+pub enum EngineBlockage {
+    ModelProjection { plan: floe_agent_contract::PreparedModelPlan, review: SourceProjectionReview },
+    SourceRead { call_id: Uuid, blockers: floe_agent_contract::SourceAccessBlockers },
+    Delegation { receipt: TaskReceipt },
 }
 
 /// Which step kind a stable invocation identity belongs to.
@@ -215,9 +232,9 @@ impl Drive<'_> {
     async fn run(self) -> Result<EngineOutcome, AgentFailure> {
         let mut drive = ActiveDrive {
             config: self.config,
+            execution_id: self.request.execution_id,
             request: self.request,
             ports: self.ports,
-            execution_id: Uuid::new_v4(),
             conversation: ModelConversation {
                 history: Vec::new(),
                 current_turn: Vec::new(),
@@ -234,7 +251,6 @@ impl Drive<'_> {
         drive.conversation = drive.request.conversation.clone();
         drive.model_replay.clone_from(&drive.request.replay);
         if let Some(resume) = drive.request.resume.clone() {
-            drive.execution_id = resume.validated_batch.execution_id;
             if !resume
                 .validated_batch
                 .pinned_revisions_hold(&drive.request.allowed_catalog)
@@ -267,7 +283,7 @@ impl Drive<'_> {
                 )
                 .await?
             {
-                return Ok(EngineOutcome::Completed(report));
+                return Ok(report);
             }
             drive.completed_iterations += 1;
             drive
@@ -298,11 +314,11 @@ impl Drive<'_> {
                         })
                         .await?;
                     if let Some(report) = drive.execute_batch(&batch, 0, &corrections).await? {
-                        return Ok(EngineOutcome::Completed(report));
+                        return Ok(report);
                     }
                 }
-                BatchOutcome::NeedsSourceReview(review) => {
-                    return Ok(EngineOutcome::NeedsSourceReview(review));
+                BatchOutcome::Blocked(review) => {
+                    return Ok(EngineOutcome::Blocked(review));
                 }
             }
             drive.completed_iterations += 1;
@@ -325,7 +341,7 @@ impl Drive<'_> {
 
 enum BatchOutcome {
     Ready((ValidatedModelBatch, Vec<Option<String>>)),
-    NeedsSourceReview(EngineSourceReview),
+    Blocked(EngineBlock),
 }
 
 struct ActiveDrive<'a> {
@@ -474,9 +490,8 @@ impl ActiveDrive<'_> {
                     if review.projection_operation_id != projection_operation_id {
                         return Err(AgentFailure::PolicyDenied);
                     }
-                    return Ok(BatchOutcome::NeedsSourceReview(EngineSourceReview {
-                        plan: plan.clone(),
-                        review,
+                    return Ok(BatchOutcome::Blocked(EngineBlock {
+                        blockage: EngineBlockage::ModelProjection { plan: plan.clone(), review },
                         report: EngineReport {
                             steps: self.steps.clone(),
                             output: None,
@@ -595,19 +610,35 @@ impl ActiveDrive<'_> {
         }
         validate_batch_shape(&response.steps)?;
         let corrections = validate_model_steps(&response.steps, &self.request.allowed_catalog)?;
-        for step in &response.steps {
+        let mut validated_steps = response.steps.clone();
+        for step in &mut validated_steps {
             if let ModelStep::Answer { text, artifacts } = step {
-                self.ports
+                let payload = self.ports
                     .validator
                     .validate(&self.request.role_spec.role_id, text, artifacts)?;
+                *text = payload.text;
+                *artifacts = payload.artifacts;
+                if text.trim().is_empty() || text.len() > self.request.max_output_bytes {
+                    return Err(AgentFailure::InvalidModelOutput);
+                }
                 if artifacts
                     .iter()
-                    .any(|artifact| artifact.validate(self.request.max_output_bytes).is_err())
+                    .any(|artifact| artifact.validate(self.request.max_output_bytes).is_err()
+                        || match (&projection.coverage, &artifact.coverage) {
+                            (_, DependencyCoverage::Independent) => false,
+                            (DependencyCoverage::Dependent { dependencies: admitted },
+                                DependencyCoverage::Dependent { dependencies: claimed }) =>
+                                claimed.iter().any(|dependency| !admitted.contains(dependency)),
+                            _ => true,
+                        })
                 {
                     return Err(AgentFailure::InvalidModelOutput);
                 }
             }
         }
+        if serde_json::to_vec(&validated_steps).map_err(|_| AgentFailure::InvalidModelOutput)?.len()
+            > self.request.max_output_bytes
+        { return Err(AgentFailure::BudgetExceeded); }
         let (tool_revisions, agent_revisions) =
             pin_revisions(&response.steps, &self.request.allowed_catalog);
         // A delegating batch binds the exact execution context before anything
@@ -632,7 +663,7 @@ impl ActiveDrive<'_> {
                 attempt_id,
                 projection_ref: projection.projection_ref,
                 batch_id: Uuid::new_v4(),
-                steps: response.steps.clone(),
+                steps: validated_steps,
                 catalog_revision: self.request.allowed_catalog.revision,
                 tool_revisions,
                 agent_revisions,
@@ -651,7 +682,7 @@ impl ActiveDrive<'_> {
         batch: &ValidatedModelBatch,
         start_index: u32,
         corrections: &[Option<String>],
-    ) -> Result<Option<EngineReport>, AgentFailure> {
+    ) -> Result<Option<EngineOutcome>, AgentFailure> {
         for (step_index, step) in batch.steps.iter().enumerate() {
             let ordinal = step_index as u32;
             if ordinal < start_index {
@@ -679,11 +710,6 @@ impl ActiveDrive<'_> {
                     // Canonical validation is authoritative; this only guards
                     // against a trailing step being silently ignored.
                     debug_assert_eq!(ordinal as usize + 1, batch.steps.len());
-                    self.ports.validator.validate(
-                        &self.request.role_spec.role_id,
-                        text,
-                        artifacts,
-                    )?;
                     self.request
                         .scope
                         .run(self.ports.journal.record_output(JournalEvent::Output {
@@ -698,17 +724,17 @@ impl ActiveDrive<'_> {
                     // The answering coverage is the persisted batch's own:
                     // an answer executed from a resumed batch commits the
                     // same coverage it was validated under.
-                    return Ok(Some(self.report(
+                    return Ok(Some(EngineOutcome::Completed(self.report(
                         Some(text.clone()),
                         Some(batch.projection_coverage.clone()),
-                    )));
+                    ))));
                 }
                 ModelStep::CallTool {
                     tool_id,
                     definition_revision,
                     input,
                 } => {
-                    self.execute_tool(
+                    if let Some(blockage) = self.execute_tool(
                         batch,
                         ordinal,
                         corrections.get(step_index).and_then(Option::as_ref),
@@ -716,7 +742,11 @@ impl ActiveDrive<'_> {
                         *definition_revision,
                         input,
                     )
-                    .await?;
+                    .await? {
+                        return Ok(Some(EngineOutcome::Blocked(EngineBlock {
+                            blockage, report: self.report(None, None),
+                        })));
+                    }
                 }
                 ModelStep::Delegate {
                     agent_id,
@@ -724,7 +754,7 @@ impl ActiveDrive<'_> {
                     message,
                     context_refs,
                 } => {
-                    self.execute_delegation(
+                    if let Some(blockage) = self.execute_delegation(
                         batch,
                         ordinal,
                         agent_id,
@@ -732,7 +762,11 @@ impl ActiveDrive<'_> {
                         message,
                         context_refs,
                     )
-                    .await?;
+                    .await? {
+                        return Ok(Some(EngineOutcome::Blocked(EngineBlock {
+                            blockage, report: self.report(None, None),
+                        })));
+                    }
                 }
             }
         }
@@ -747,7 +781,7 @@ impl ActiveDrive<'_> {
         tool_id: &str,
         definition_revision: u64,
         input: &str,
-    ) -> Result<(), AgentFailure> {
+    ) -> Result<Option<EngineBlockage>, AgentFailure> {
         if self.tool_calls >= self.config.max_tool_calls {
             return Err(AgentFailure::BudgetExceeded);
         }
@@ -850,7 +884,16 @@ impl ActiveDrive<'_> {
                 .run(self.ports.tools.invoke(call.clone(), &child))
                 .await
             {
-                Ok(result) => {
+                Ok(ToolInvocationOutcome::NeedsSourceReview { call_id, blockers }) => {
+                    if call_id != call.call_id { return Err(AgentFailure::PolicyDenied); }
+                    blockers.validate().map_err(|_| AgentFailure::InvalidInput)?;
+                    let ack = self.ports.journal.record_result(JournalEvent::ToolReviewRequired {
+                        call_id, blockers: blockers.clone(),
+                    }).await?;
+                    if !matches!(ack, JournalAck::Accepted { .. }) { return Err(AgentFailure::Conflict); }
+                    return Ok(Some(EngineBlockage::SourceRead { call_id, blockers }));
+                }
+                Ok(ToolInvocationOutcome::Completed(result)) => {
                     self.model_replay
                         .push(tool_replay(&self.request, &call, &result));
                     result
@@ -895,7 +938,7 @@ impl ActiveDrive<'_> {
             result: result.clone(),
         })?;
         self.steps.push(EngineStep::Tool(result));
-        Ok(())
+        Ok(None)
     }
 
     async fn execute_delegation(
@@ -906,7 +949,7 @@ impl ActiveDrive<'_> {
         definition_revision: u64,
         message: &str,
         context_refs: &[String],
-    ) -> Result<(), AgentFailure> {
+    ) -> Result<Option<EngineBlockage>, AgentFailure> {
         if self.delegations >= self.config.max_delegations {
             return Err(AgentFailure::BudgetExceeded);
         }
@@ -968,20 +1011,14 @@ impl ActiveDrive<'_> {
             .await?;
         let child = self.request.scope.child_scope(
             self.request.scope.deadline(),
-            self.config.max_attempt_tokens.max(1),
-            self.config.max_attempt_cost_micros.max(1),
+            self.config.max_task_tokens.max(1),
+            self.config.max_task_cost_micros.max(1),
             Some(delegation.task_id),
         );
         let receipt = if let JournalAck::Replayed(replay_receipt) = intent {
             replay_task(&delegation, &replay_receipt, self.request.max_output_bytes)?
         } else if let Some(replay_receipt) = find_task_replay(&self.model_replay, &delegation) {
-            // Same-identity result replay: the receipt is re-issued under this
-            // run so the new journal pairs; outcome and coverage are preserved.
-            let mut receipt =
-                replay_resumed_task(&delegation, &replay_receipt, self.request.max_output_bytes)?;
-            receipt.snapshot.parent_run_id = delegation.parent_run_id;
-            receipt.snapshot.validate(self.request.max_output_bytes)?;
-            receipt
+            replay_resumed_task(&delegation, &replay_receipt, self.request.max_output_bytes)?
         } else if let Some(failure) = soft_failure {
             // Host-generated terminal rejection without dispatch: no
             // DelegationPort call, but the intent/result pair is durable and
@@ -999,8 +1036,10 @@ impl ActiveDrive<'_> {
                     artifacts: vec![],
                     coverage: floe_agent_contract::DependencyCoverage::Independent,
                     issue: Some(failure),
+                    blockage: None,
                 },
                 replay: None,
+                execution: floe_agent_contract::TaskExecutionEvidence::Unadmitted,
             }
         } else {
             let delegated = self.ports.delegation.delegate(delegation.clone(), &child);
@@ -1021,6 +1060,10 @@ impl ActiveDrive<'_> {
                     }),
             )
             .await?;
+        if receipt.snapshot.state == floe_agent_contract::TaskState::Blocked {
+            self.steps.push(EngineStep::Delegation(Box::new(receipt.clone())));
+            return Ok(Some(EngineBlockage::Delegation { receipt }));
+        }
         self.checkpoint(JournalEvent::BatchProgress {
             cursor: BatchCursor {
                 batch_id: batch.batch_id,
@@ -1028,12 +1071,14 @@ impl ActiveDrive<'_> {
             },
         })
         .await?;
+        let mut history_request = delegation;
+        history_request.parent_run_id = receipt.snapshot.parent_run_id;
         self.push_current(ModelConversationEntry::DelegationExchange {
-            request: delegation,
+            request: history_request,
             receipt: receipt.clone(),
         })?;
         self.steps.push(EngineStep::Delegation(Box::new(receipt)));
-        Ok(())
+        Ok(None)
     }
 
     fn push_current(&mut self, entry: ModelConversationEntry) -> Result<(), AgentFailure> {
@@ -1157,6 +1202,7 @@ fn tool_replay(request: &EngineRequest, call: &ToolCall, result: &ToolResult) ->
         task_artifacts: vec![],
         task_coverage: floe_agent_contract::DependencyCoverage::Unknown,
         task_issue: None,
+        task_execution: None,
         tool_artifacts: result.artifacts.clone(),
         tool_coverage: result.coverage.clone(),
         tool_issue: result.issue.as_ref().map(|issue| issue.failure),
@@ -1194,64 +1240,55 @@ fn replay_task(
     maximum_bytes: usize,
 ) -> Result<TaskReceipt, AgentFailure> {
     verify_task_replay(request, receipt)?;
-    let task = TaskReceipt {
-        task_id: request.task_id,
-        snapshot: floe_agent_contract::TaskSnapshot {
-            task_id: request.task_id,
-            parent_run_id: request.parent_run_id,
-            principal: request.principal.clone(),
-            agent_id: request.selected_agent_id.clone(),
-            definition_revision: request.selected_definition_revision,
-            state: receipt.task_state.ok_or(AgentFailure::InvalidInput)?,
-            result: receipt.task_result.clone(),
-            artifacts: receipt.task_artifacts.clone(),
-            coverage: receipt.task_coverage.clone(),
-            issue: receipt.task_issue,
-        },
-        replay: Some(receipt.clone()),
-    };
-    task.snapshot.validate(maximum_bytes)?;
-    if serde_json::to_vec(&task)
-        .map(|encoded| encoded.len() > maximum_bytes)
-        .unwrap_or(true)
-    {
-        return Err(AgentFailure::InvalidModelOutput);
-    }
-    Ok(task)
+    restored_task_receipt(request, receipt, maximum_bytes)
 }
 
 /// Cross-run result replay: same invocation identity and input, but the linkage
 /// (run, parent) belongs to the run that recorded it, so linkage is not
-/// compared here. The caller re-issues the receipt under this run.
+/// compared here. The original Task receipt remains immutable.
 fn replay_resumed_task(
     request: &DelegationRequest,
     receipt: &ReplayReceipt,
     maximum_bytes: usize,
 ) -> Result<TaskReceipt, AgentFailure> {
     verify_resumed_task_replay(request, receipt)?;
-    let task = TaskReceipt {
-        task_id: request.task_id,
-        snapshot: floe_agent_contract::TaskSnapshot {
-            task_id: request.task_id,
-            parent_run_id: request.parent_run_id,
-            principal: request.principal.clone(),
-            agent_id: request.selected_agent_id.clone(),
-            definition_revision: request.selected_definition_revision,
-            state: receipt.task_state.ok_or(AgentFailure::InvalidInput)?,
-            result: receipt.task_result.clone(),
-            artifacts: receipt.task_artifacts.clone(),
-            coverage: receipt.task_coverage.clone(),
-            issue: receipt.task_issue,
-        },
-        replay: Some(receipt.clone()),
+    restored_task_receipt(request, receipt, maximum_bytes)
+}
+
+fn restored_task_receipt(request: &DelegationRequest, replay: &ReplayReceipt, maximum_bytes: usize)
+    -> Result<TaskReceipt, AgentFailure>
+{
+    let (snapshot, execution) = match &replay.task_execution {
+        Some(execution) => {
+            execution.validate(maximum_bytes)?;
+            (execution.snapshot.clone(), floe_agent_contract::TaskExecutionEvidence::Admitted(execution.clone()))
+        }
+        None => (
+            floe_agent_contract::TaskSnapshot {
+                task_id: request.task_id,
+                parent_run_id: replay.run_id.map(|id| id.as_uuid()),
+                principal: request.principal.clone(),
+                agent_id: request.selected_agent_id.clone(),
+                definition_revision: request.selected_definition_revision,
+                state: replay.task_state.ok_or(AgentFailure::StorageUnavailable)?,
+                result: replay.task_result.clone(), artifacts: replay.task_artifacts.clone(),
+                coverage: replay.task_coverage.clone(), issue: replay.task_issue, blockage: None,
+            },
+            floe_agent_contract::TaskExecutionEvidence::Unadmitted,
+        ),
     };
-    task.snapshot.validate(maximum_bytes)?;
-    if serde_json::to_vec(&task)
-        .map(|encoded| encoded.len() > maximum_bytes)
-        .unwrap_or(true)
-    {
-        return Err(AgentFailure::InvalidModelOutput);
-    }
+    if snapshot.task_id != request.task_id || snapshot.principal != request.principal
+        || snapshot.agent_id != request.selected_agent_id
+        || snapshot.definition_revision != request.selected_definition_revision
+        || snapshot.result != replay.task_result || Some(snapshot.state) != replay.task_state
+        || snapshot.artifacts != replay.task_artifacts || snapshot.coverage != replay.task_coverage
+        || snapshot.issue != replay.task_issue
+    { return Err(AgentFailure::Conflict); }
+    let task = TaskReceipt {
+        task_id: request.task_id, snapshot, replay: Some(replay.clone()),
+        execution,
+    };
+    task.validate(maximum_bytes)?;
     Ok(task)
 }
 
@@ -1266,7 +1303,7 @@ fn verify_receipt(
     ) {
         return Err(AgentFailure::Conflict);
     }
-    receipt.snapshot.validate(maximum_bytes)?;
+    receipt.validate(maximum_bytes)?;
     if serde_json::to_vec(receipt)
         .map(|encoded| encoded.len() > maximum_bytes)
         .unwrap_or(true)
@@ -1301,6 +1338,7 @@ fn verify_tool_replay(
         && receipt.task_artifacts.is_empty()
         && receipt.task_coverage == floe_agent_contract::DependencyCoverage::Unknown
         && receipt.task_issue.is_none()
+        && receipt.task_execution.is_none()
         && receipt.input_digest == input_digest(&call.input))
     .then_some(())
     .ok_or(AgentFailure::InvalidInput)
@@ -1322,6 +1360,7 @@ fn verify_resumed_tool_replay(
         && receipt.task_artifacts.is_empty()
         && receipt.task_coverage == floe_agent_contract::DependencyCoverage::Unknown
         && receipt.task_issue.is_none()
+        && receipt.task_execution.is_none()
         && receipt.input_digest == input_digest(&call.input))
     .then_some(())
     .ok_or(AgentFailure::InvalidInput)
@@ -1380,7 +1419,12 @@ fn verify_resumed_task_replay(
             .iter()
             .all(|artifact| artifact.coverage.validate().is_ok())
         && receipt.task_coverage.validate().is_ok()
-        && receipt.input_digest == floe_agent_contract::delegation_request_digest(request))
+        && receipt.input_digest == {
+            let mut original = request.clone();
+            original.parent_run_id = receipt.task_execution.as_ref()
+                .map_or(receipt.run_id.map(|id| id.as_uuid()), |execution| execution.snapshot.parent_run_id);
+            floe_agent_contract::delegation_request_digest(&original)
+        })
     .then_some(())
     .ok_or(AgentFailure::InvalidInput)
 }

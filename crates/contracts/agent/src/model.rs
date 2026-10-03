@@ -117,6 +117,7 @@ impl EngineResumeState {
 
 #[derive(Clone, Debug)]
 pub struct EngineRequest {
+    pub execution_id: Uuid,
     pub principal: String,
     pub device_id: String,
     pub role_spec: RoleSpec,
@@ -146,7 +147,8 @@ impl EngineRequest {
             required_capabilities: crate::ModelCapabilities::chat(),
         }
         .validate()?;
-        if self.principal.trim().is_empty()
+        if self.execution_id.is_nil()
+            || self.principal.trim().is_empty()
             || self.purpose.trim().is_empty()
             || self.purpose.len() > 512
             || self.consumer.trim().is_empty()
@@ -172,6 +174,9 @@ impl EngineRequest {
             .try_for_each(AgentDefinition::validate)?;
         if let Some(resume) = &self.resume {
             resume.validate(self.max_output_bytes)?;
+            if resume.validated_batch.execution_id != self.execution_id {
+                return Err(AgentFailure::Conflict);
+            }
         }
         if let Some(context) = &self.delegation_context {
             context.validate()?;

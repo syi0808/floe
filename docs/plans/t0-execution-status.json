@@ -1,7 +1,7 @@
 {
   "baseline": "3f4b407f8079d611224cd7adbef121f9e7e75e8e",
   "branch": "refactor/architecture-20261002",
-  "stage": "S2 active: product Calendar and native Actions contracts published for bounded parallel adapters/storage. No S2 compiler/check/test run.",
+  "stage": "S2 active: Task-owned journals/immutable receipts, role-neutral Engine, Experts binding and lifecycle frozen for parallel adapters. No S2 checks.",
   "registration_counts": {
     "rust": 1298,
     "rust_retained_owners": 751,
@@ -105,7 +105,7 @@
     "protocol": "Cloud two-file followup applied; current native caller corrections active. No cloud worker editing now.",
     "events": "Owner event buffer applied; actual blocked interaction references added; current native ownership."
   },
-  "last_update": "2026-10-03 05:18 UTC",
+  "last_update": "2026-10-03 05:27 UTC",
   "implementation_ownership": {
     "implement_shared_model_runtime": "shared contracts/runtime/inference, Experts/builtin model call seams, Knowledge Learner journal/model seams, App Expert/Learner adapters and examples; now Conversation owner code and pure projections",
     "implement_go_gateway_slice": "Go/Vault Conversation and native callback lane completed/checkpointed; current static race/transaction audit",
@@ -133,5 +133,5 @@
     "2026-10-02-s2-engine-owner-contracts.md",
     "s2-action-recovery-contract-proposal.md"
   ],
-  "s2_contract_source": "71b8567385321aafea25b08812e9a45e181ce01d"
+  "s2_contract_source": "8bd2f3985b9342af02487ff74ced4ec70628496d"
 }
