@@ -12,6 +12,8 @@ pub enum MemoryStageOrigin {
 #[derive(Clone, Debug)]
 pub struct MemoryStageRequest {
     pub actor: OwnerActor,
+    /// Current owner clock for fresh admission; exact stored replay retains its original receipt.
+    pub now: DateTime<Utc>,
     pub request: crate::StageMemoryCandidate,
     pub origin: MemoryStageOrigin,
 }

@@ -218,3 +218,12 @@ pub fn validate_learner_settlement(job: &LearnerReviewJob, journal: &LearnerClai
     }
     Ok(())
 }
+
+/// A later claim may follow only a settled, known, output-free deferred execution.
+pub fn validate_learner_deferred_journal(journal: &LearnerClaimJournal) -> Result<(), AgentFailure> {
+    let projection = validate_learner_journal(&journal.head, &journal.entries)?;
+    if projection.output.is_some() || uncertain(&journal.entries, &projection) {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    Ok(())
+}

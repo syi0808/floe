@@ -485,3 +485,15 @@ impl LearnerReviewJob {
         Ok(next)
     }
 }
+
+/// Stored current-memory snapshots remain immutable, but their validity is live.
+pub fn validate_learner_memory_time(input: &LearnerReviewInput, now: DateTime<Utc>)
+    -> Result<(), AgentFailure>
+{
+    let now = now.timestamp_millis();
+    if input.current_memories.iter().any(|memory|
+        memory.valid_from_unix_ms.is_some_and(|from| from > now)
+            || memory.valid_until_unix_ms.is_some_and(|until| until <= now))
+    { return Err(AgentFailure::StaleContext); }
+    Ok(())
+}

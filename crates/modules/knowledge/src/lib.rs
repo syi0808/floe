@@ -6,7 +6,7 @@ pub mod ports {
     pub mod learner_repository;
     pub mod knowledge_repository;
 }
-pub use application::learner::validate_learner_input;
+pub use application::learner::{validate_learner_input, validate_learner_memory_time};
 pub use application::learner_scheduling::{KnowledgeForegroundLease, LearnerLease, LearnerScheduling};
 pub use application::learner_service::LearnerService;
 pub use application::service::{KnowledgeClock, KnowledgeDependencies, KnowledgeOwner,
@@ -51,7 +51,7 @@ pub use application::learner::{
     parse_learner_review_output, reject_learner_claim, retryable_learner_failure,
     settle_learner_job, settlement_for_learner_result, validate_learner_job_lifecycle,
 };
-pub use application::discovery::explicit_review_input;
+pub use application::discovery::{explicit_learning_evidence_turns, explicit_review_input};
 pub use application::memory::{
     admit_learning_evidence, project_memory_summary, validate_learning_evidence,
     validate_memory_overview_limit, validate_stage_request,
@@ -70,7 +70,7 @@ pub use application::storage_policy::{MemoryStageIdentity, MemoryStagePlan, Memo
     knowledge_content_hash, memory_stage_identity, memory_stage_receipt, validate_memory_stage_replay, plan_memory_stage, project_memory_context,
     learner_job_key, new_learner_job};
 pub use application::learner_journal::{LearnerClaimJournal, LearnerJournalHead,
-    advance_learner_journal, validate_learner_journal, validate_learner_budget, recover_learner_claim, validate_learner_stage, validate_learner_settlement};
+    advance_learner_journal, validate_learner_journal, validate_learner_budget, recover_learner_claim, validate_learner_stage, validate_learner_settlement, validate_learner_deferred_journal};
 
 pub use application::memory_display::{MemoryCandidateSummary, MemoryReviewAction, MemoryReviewDisplay,
     MemoryDecisionAcknowledgement, project_memory_review, project_memory_decision};

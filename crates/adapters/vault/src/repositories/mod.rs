@@ -12,7 +12,7 @@ mod day_refresh;
 mod day_collection;
 mod day_mutation;
 #[cfg(unix)]
-mod memory_review;
+mod knowledge;
 #[cfg(unix)]
 mod task;
 
@@ -40,3 +40,6 @@ mod expert_registry;
 pub use expert_binding_reviews::VaultExpertBindingReviewRepository;
 #[cfg(unix)]
 pub use expert_registry::VaultExpertRegistryRepository;
+
+#[cfg(unix)]
+pub use knowledge::VaultKnowledgeRepository;

@@ -18,7 +18,7 @@ pub use repositories::{ContextEvidenceReader, VaultConversationRepository, Vault
 pub use vault::*;
 
 #[cfg(unix)]
-pub use repositories::VaultLearnerJournalFactory;
+pub use repositories::{VaultLearnerJournalFactory, VaultKnowledgeRepository};
 
 #[cfg(unix)]
 pub use vault::{VaultAuthorizationSigner, VaultEnrollmentSigner};

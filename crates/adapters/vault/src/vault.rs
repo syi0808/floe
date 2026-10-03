@@ -220,7 +220,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(unavailable)?;
         connection.execute("CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL)", ()).await.map_err(unavailable)?;
         vault.initialize_session_archive().await?;
-        vault.initialize_learning_store().await?;
+        vault.initialize_learning_store(true).await?;
         vault.initialize_access_grant_store().await?;
         vault.initialize_connection_reviews(true).await?;
         vault.initialize_actions_store().await?;
@@ -304,8 +304,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(unavailable)?;
         vault.reject_obsolete_policy_schemas().await?;
+        vault.initialize_learning_store(false).await?;
         vault.initialize_session_archive().await?;
-        vault.initialize_learning_store().await?;
         vault.initialize_access_grant_store().await?;
         vault.initialize_connection_reviews(false).await?;
         vault.validate_actions_store().await?;

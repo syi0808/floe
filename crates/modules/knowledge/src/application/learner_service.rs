@@ -235,7 +235,7 @@ impl LearnerService {
     {
         let Some(proposal) = crate::parse_learner_review_output(text)? else { return Ok(None); };
         let candidate = self.knowledge.stage(MemoryStageRequest {
-            actor: self.actor.clone(), request: stage_request(&job.input, proposal),
+            actor: self.actor.clone(), now: self.clock.now(), request: stage_request(&job.input, proposal),
             origin: MemoryStageOrigin::Learner { claim,
                 journal_revision: projection.journal_revision, journal_digest: projection.journal_digest },
         }, scope).await?;

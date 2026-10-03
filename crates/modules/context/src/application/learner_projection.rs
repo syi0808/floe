@@ -26,6 +26,7 @@ impl LearnerProjectionPort for ContextLearnerProjection {
             request.validate()?; check(&request, scope, &self.actor, self.clock.now())?;
             let input = scope.run(self.repository.read_claim(&request.actor, request.claim, scope)).await?;
             floe_knowledge::validate_learner_input(&input, request.actor.person_id)?;
+            floe_knowledge::validate_learner_memory_time(&input, self.clock.now())?;
             if input.run_id != request.claim.job_id || input.observed_at > self.clock.now() || serde_json::to_vec(&input).map_err(|_| AgentFailure::InvalidInput)?.len() > request.bounds.max_input_bytes { return Err(AgentFailure::PolicyDenied); }
             let expected_refs = input.turn_ids.iter().map(|turn_id| floe_knowledge::LearningEvidenceRef { session_id: input.session_id, turn_id: *turn_id }).collect::<Vec<_>>();
             if request.evidence_refs != expected_refs { return Err(AgentFailure::PolicyDenied); }
@@ -67,6 +68,7 @@ impl LearnerProjectionPort for ContextLearnerProjection {
             // not publish a projection under its old input.
             let current = scope.run(self.repository.read_claim(&request.actor, request.claim, scope)).await?;
             if current != input { return Err(AgentFailure::Conflict); }
+            floe_knowledge::validate_learner_memory_time(&current, self.clock.now())?;
             check(&request, scope, &self.actor, self.clock.now())?; Ok(outcome)
         })
     }

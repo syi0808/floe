@@ -33,7 +33,8 @@ final class PersonalDayController extends ChangeNotifier {
   String? _refreshCommandId;
   DayQuery? _refreshQuery;
   DayRefreshSnapshot? _refreshOperation;
-  Future<DaySnapshot>? _refreshing;
+  Future<void>? _refreshing;
+  CompletedDayRefresh? lastRefreshAcknowledgement;
 
   DayQuery get query => _query;
 
@@ -65,7 +66,14 @@ final class PersonalDayController extends ChangeNotifier {
       loadState = DayLoadState.ready;
     } on Object catch (error) {
       if (_disposed || generation != _loadGeneration) return;
-      loadState = keepPrevious ? DayLoadState.ready : DayLoadState.failure;
+      if (error is _CurrentDayUnavailable) {
+        // The command completed. Its historical receipt is retained separately;
+        // unavailable live metadata cannot be presented as Current coverage.
+        snapshot = null;
+        loadState = DayLoadState.failure;
+      } else {
+        loadState = keepPrevious ? DayLoadState.ready : DayLoadState.failure;
+      }
       errorMessage = error.toString();
     }
     notifyListeners();
@@ -75,11 +83,11 @@ final class PersonalDayController extends ChangeNotifier {
     // Finish observing the retained command before admitting an explicitly
     // requested refresh for another date. Never reuse its result for that date.
     final retainedQuery = _refreshQuery ?? query;
-    final result = await (_refreshing ??= _refreshOwner(query)
+    await (_refreshing ??= _refreshOwner(query)
         .whenComplete(() => _refreshing = null));
     if (_disposed) throw StateError('Day observer detached.');
     if (!_sameQueryIntent(retainedQuery, query)) return _refresh(query);
-    return result;
+    return _currentDayAfterAcknowledgement(query, 'Calendar refresh completed');
   }
 
   bool _sameQueryIntent(DayQuery left, DayQuery right) =>
@@ -91,7 +99,7 @@ final class PersonalDayController extends ChangeNotifier {
       (left.endTimezoneOffsetSeconds ?? left.timezoneOffsetSeconds) ==
           (right.endTimezoneOffsetSeconds ?? right.timezoneOffsetSeconds);
 
-  Future<DaySnapshot> _refreshOwner(DayQuery query) async {
+  Future<void> _refreshOwner(DayQuery query) async {
     final refresher = _refreshGateway;
     if (refresher == null)
       throw StateError('Day source refresh is not available.');
@@ -119,10 +127,14 @@ final class PersonalDayController extends ChangeNotifier {
           'Day refresh returned a snapshot for a different query.',
         );
       }
+      final completed = _refreshOperation;
+      if (completed is! CompletedDayRefresh) {
+        throw const FormatException('Day refresh completion was not acknowledged.');
+      }
+      lastRefreshAcknowledgement = completed;
       _refreshCommandId = null;
       _refreshQuery = null;
       _refreshOperation = null;
-      return result;
     } on Object {
       if (_refreshOperation is FailedDayRefresh ||
           _refreshOperation is InterruptedDayRefresh) {
@@ -163,8 +175,8 @@ final class PersonalDayController extends ChangeNotifier {
     final generation = _loadGeneration;
     return _run(() async {
       final result = await _gateway.classifyCapture(capture, draft, query);
-      _acceptMutationSnapshot(result, query, generation);
       if (!_disposed && identical(pendingCapture, capture)) pendingCapture = null;
+      await _displayAfterMutation(result, query, generation);
     });
   }
 
@@ -174,8 +186,8 @@ final class PersonalDayController extends ChangeNotifier {
     DaySnapshot? acknowledged;
     final succeeded = await _run(() async {
       final result = await _gateway.setTaskCompleted(task, completed, query);
-      _acceptMutationSnapshot(result, query, generation);
       acknowledged = result;
+      await _displayAfterMutation(result, query, generation);
     });
     return succeeded ? acknowledged : null;
   }
@@ -185,24 +197,52 @@ final class PersonalDayController extends ChangeNotifier {
     final generation = _loadGeneration;
     await _run(() async {
       final result = await _gateway.deleteItem(item, query);
-      _acceptMutationSnapshot(result, query, generation);
+      await _displayAfterMutation(result, query, generation);
     });
   }
 
-  void _acceptMutationSnapshot(
-    DaySnapshot result,
+  Future<DaySnapshot> _currentDayAfterAcknowledgement(
+    DayQuery query,
+    String acknowledgement,
+  ) async {
+    try {
+      final current = await _gateway.loadDay(query);
+      if (!_matchesQuery(current, query)) {
+        throw const FormatException('Day returned a different display query.');
+      }
+      return current;
+    } on Object catch (error) {
+      throw _CurrentDayUnavailable(acknowledgement, error);
+    }
+  }
+
+  Future<void> _displayAfterMutation(
+    DaySnapshot acknowledged,
     DayQuery query,
     int generation,
-  ) {
-    if (!_matchesQuery(result, query)) {
+  ) async {
+    if (!_matchesQuery(acknowledged, query)) {
       throw const FormatException('Day mutation returned a different query.');
     }
     if (_disposed || generation != _loadGeneration ||
         !_sameQueryIntent(query, _query)) return;
-    // A read admitted before this mutation must not replace its acknowledgement.
-    _loadGeneration++;
-    snapshot = result;
-    loadState = DayLoadState.ready;
+    // The receipt is an immutable historical acknowledgement. Read the current
+    // display independently, without replaying a successful command on failure.
+    final displayGeneration = ++_loadGeneration;
+    loadState = DayLoadState.loading;
+    try {
+      final current = await _currentDayAfterAcknowledgement(query, 'Change saved');
+      if (_disposed || displayGeneration != _loadGeneration) return;
+      snapshot = current;
+      loadState = DayLoadState.ready;
+    } on _CurrentDayUnavailable catch (error) {
+      if (_disposed || displayGeneration != _loadGeneration) return;
+      snapshot = null;
+      loadState = DayLoadState.failure;
+      errorMessage = error.toString();
+      // The mutation succeeded; only display observation failed. The caller
+      // must close its save flow instead of retrying the already saved change.
+    }
   }
 
   Future<void> moveDay(int offset) {
@@ -252,4 +292,13 @@ final class PersonalDayController extends ChangeNotifier {
       if (!_disposed) notifyListeners();
     }
   }
+}
+
+final class _CurrentDayUnavailable implements Exception {
+  const _CurrentDayUnavailable(this.acknowledgement, this.cause);
+  final String acknowledgement;
+  final Object cause;
+  @override
+  String toString() =>
+      '$acknowledgement, but the current Day could not be loaded. Retry loading Day. $cause';
 }

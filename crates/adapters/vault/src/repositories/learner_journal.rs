@@ -1,19 +1,42 @@
 use std::sync::Arc;
 
-use floe_agent_contract::{AgentFailure, BoxFuture, ExecutionJournal, JournalAck, JournalEvent};
-use floe_kernel::PersonId;
-use floe_knowledge::LearnerJournalFactory;
-use uuid::Uuid;
+use floe_agent_contract::{AgentFailure, BoxFuture, ExecutionJournal, JournalAck, JournalEvent, OwnerActor, PersonId};
+use floe_knowledge::{LearnerClaimJournal, LearnerClaimRef, LearnerJournalFactory};
 
 use crate::{EncryptedAgentVault, VaultKeyProvider};
 
+/// The adapter pins one verified host actor to the Vault generation it owns.
 pub struct VaultLearnerJournalFactory<Keys> {
     vault: Arc<EncryptedAgentVault<Keys>>,
+    actor: OwnerActor,
 }
 
-impl<Keys> VaultLearnerJournalFactory<Keys> {
-    pub fn new(vault: Arc<EncryptedAgentVault<Keys>>) -> Self {
-        Self { vault }
+impl<Keys: VaultKeyProvider> VaultLearnerJournalFactory<Keys> {
+    pub fn new(
+        vault: Arc<EncryptedAgentVault<Keys>>,
+        actor: OwnerActor,
+    ) -> Result<Self, AgentFailure> {
+        actor.validate()?;
+        vault.check_access()?;
+        if actor.person_id != vault.person_id() {
+            return Err(AgentFailure::NotFound);
+        }
+        if actor.device_id.len() > 128 {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(Self { vault, actor })
+    }
+
+    fn authorize_person(&self, person_id: PersonId) -> Result<(), AgentFailure> {
+        self.vault.check_access()?;
+        if person_id != self.actor.person_id || person_id != self.vault.person_id() {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        self.actor.validate()?;
+        if self.actor.device_id.len() > 128 {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
     }
 }
 
@@ -21,27 +44,34 @@ impl<Keys: VaultKeyProvider + 'static> LearnerJournalFactory for VaultLearnerJou
     fn journal(
         &self,
         person_id: PersonId,
-        job_id: Uuid,
-        claim_attempt: u8,
+        claim: LearnerClaimRef,
     ) -> Result<Arc<dyn ExecutionJournal>, AgentFailure> {
-        if person_id != self.vault.person_id()
-            || job_id.is_nil()
-            || !(1..=floe_knowledge::MAX_LEARNER_JOB_ATTEMPTS).contains(&claim_attempt)
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
+        self.authorize_person(person_id)?;
+        claim.validate()?;
         Ok(Arc::new(VaultLearnerJournal {
             vault: self.vault.clone(),
-            job_id,
-            claim_attempt,
+            actor: self.actor.clone(),
+            claim,
         }))
+    }
+
+    fn load_journal<'a>(
+        &'a self,
+        person_id: PersonId,
+        claim: LearnerClaimRef,
+    ) -> BoxFuture<'a, Result<LearnerClaimJournal, AgentFailure>> {
+        Box::pin(async move {
+            self.authorize_person(person_id)?;
+            claim.validate()?;
+            self.vault.load_learner_journal(&self.actor, claim).await
+        })
     }
 }
 
 struct VaultLearnerJournal<Keys> {
     vault: Arc<EncryptedAgentVault<Keys>>,
-    job_id: Uuid,
-    claim_attempt: u8,
+    actor: OwnerActor,
+    claim: LearnerClaimRef,
 }
 
 impl<Keys: VaultKeyProvider + 'static> VaultLearnerJournal<Keys> {
@@ -52,8 +82,10 @@ impl<Keys: VaultKeyProvider + 'static> VaultLearnerJournal<Keys> {
         Box::pin(async move {
             let revision = self
                 .vault
-                .append_learner_journal(self.job_id, self.claim_attempt, event)
+                .append_learner_journal(&self.actor, self.claim, event)
                 .await?;
+            // The Vault returns only after the event and authenticated head
+            // have committed together, so callers may release result bytes.
             Ok(JournalAck::Accepted { revision })
         })
     }
@@ -64,35 +96,38 @@ impl<Keys: VaultKeyProvider + 'static> ExecutionJournal for VaultLearnerJournal<
         &'a self,
         event: JournalEvent,
     ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
-        if !matches!(event, JournalEvent::ModelIntent { .. }) {
+        if !matches!(&event, JournalEvent::ModelIntent { .. }) {
             return Box::pin(async { Err(AgentFailure::CapabilityDenied) });
         }
         self.record(event)
     }
+
     fn record_result<'a>(
         &'a self,
         event: JournalEvent,
     ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
-        if !matches!(event, JournalEvent::ModelResult { .. }) {
+        if !matches!(&event, JournalEvent::ModelResult { .. }) {
             return Box::pin(async { Err(AgentFailure::CapabilityDenied) });
         }
         self.record(event)
     }
+
     fn record_output<'a>(
         &'a self,
         event: JournalEvent,
     ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
-        if !matches!(event, JournalEvent::Output { .. }) {
+        if !matches!(&event, JournalEvent::Output { .. }) {
             return Box::pin(async { Err(AgentFailure::CapabilityDenied) });
         }
         self.record(event)
     }
+
     fn checkpoint<'a>(
         &'a self,
         event: JournalEvent,
     ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
         if !matches!(
-            event,
+            &event,
             JournalEvent::Checkpoint { .. }
                 | JournalEvent::ValidatedBatch { .. }
                 | JournalEvent::BatchProgress { .. }
