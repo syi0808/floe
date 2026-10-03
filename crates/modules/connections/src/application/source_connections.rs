@@ -2,10 +2,7 @@ use floe_context_contract::{ConnectionId, ConnectorId};
 use floe_kernel::PersonId;
 use thiserror::Error;
 
-use crate::{
-    SourceConnection, SourceConnectionError, SourceRepository,
-    SourceRepositoryError,
-};
+use crate::{SourceConnection, SourceConnectionError, SourceRepository, SourceRepositoryError};
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum SourceServiceError {
@@ -44,5 +41,4 @@ impl<'a, Repository: SourceRepository + ?Sized> SourceConnectionService<'a, Repo
             .list_current(person_id, connector_id)
             .await?)
     }
-
 }

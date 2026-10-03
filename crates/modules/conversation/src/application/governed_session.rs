@@ -206,7 +206,7 @@ impl<Repository: GovernedSessionRepository> SessionStore for GovernedSessionStor
                 is_user: matches!(message, AgentMessage::User { .. }),
                 result_id: match message {
                     AgentMessage::Capability { call_id, .. } => Some(*call_id),
-                    AgentMessage::Delegation { task, .. } => Some(task.id),
+                    AgentMessage::Delegation { task, .. } => Some(task.task_id.as_uuid()),
                     _ => None,
                 },
             })

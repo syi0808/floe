@@ -124,7 +124,10 @@ impl ConversationEventBuffer {
                 issue: receipt.issue.clone(),
                 attempt_refs: receipt.attempt_refs.clone(),
                 task_refs: receipt.task_refs.clone(),
-                interaction_refs: receipt.blocked.as_ref().map_or_else(Vec::new, |block| block.interaction_refs.clone()),
+                interaction_refs: receipt
+                    .blocked
+                    .as_ref()
+                    .map_or_else(Vec::new, |block| block.interaction_refs.clone()),
             }),
         )
     }
@@ -136,10 +139,15 @@ impl ConversationEventBuffer {
     ) -> Result<EventRead, AgentFailure> {
         actor.validate()?;
         request.validate()?;
-        if actor.runtime_epoch != self.runtime_epoch { return Err(AgentFailure::PolicyDenied); }
+        if actor.runtime_epoch != self.runtime_epoch {
+            return Err(AgentFailure::PolicyDenied);
+        }
 
         let principal = actor.person_id.to_string();
-        let state = self.state.lock().map_err(|_| AgentFailure::StorageUnavailable)?;
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
         let resync_required = || EventRead::ResyncRequired {
             snapshot_cursor: state.latest_cursor,
         };
@@ -182,7 +190,10 @@ impl ConversationEventBuffer {
         aggregate_revision: u64,
         payload: EventPayload,
     ) -> Result<(), AgentFailure> {
-        let mut state = self.state.lock().map_err(|_| AgentFailure::StorageUnavailable)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
         if state.exhausted {
             return Err(AgentFailure::StorageUnavailable);
         }

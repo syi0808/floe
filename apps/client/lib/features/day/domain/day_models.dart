@@ -218,26 +218,55 @@ final class NoteDraft extends ClassificationDraft {
 }
 
 sealed class DayRefreshSnapshot {
-  const DayRefreshSnapshot({required this.operationRef, required this.revision});
+  const DayRefreshSnapshot({
+    required this.operationRef,
+    required this.revision,
+  });
   final String operationRef;
   final int revision;
-  bool get terminal => this is CompletedDayRefresh || this is FailedDayRefresh || this is InterruptedDayRefresh;
+  bool get terminal =>
+      this is CompletedDayRefresh ||
+      this is FailedDayRefresh ||
+      this is InterruptedDayRefresh;
 }
+
 final class PendingDayRefresh extends DayRefreshSnapshot {
-  const PendingDayRefresh({required super.operationRef, required super.revision});
+  const PendingDayRefresh({
+    required super.operationRef,
+    required super.revision,
+  });
 }
+
 final class RunningDayRefresh extends DayRefreshSnapshot {
-  const RunningDayRefresh({required super.operationRef, required super.revision});
+  const RunningDayRefresh({
+    required super.operationRef,
+    required super.revision,
+  });
 }
+
 final class CompletedDayRefresh extends DayRefreshSnapshot {
-  const CompletedDayRefresh({required super.operationRef, required super.revision, required this.day});
+  const CompletedDayRefresh({
+    required super.operationRef,
+    required super.revision,
+    required this.day,
+  });
   final DaySnapshot day;
 }
+
 final class FailedDayRefresh extends DayRefreshSnapshot {
-  const FailedDayRefresh({required super.operationRef, required super.revision, required this.failure});
+  const FailedDayRefresh({
+    required super.operationRef,
+    required super.revision,
+    required this.failure,
+  });
   final OwnerFailure failure;
 }
+
 final class InterruptedDayRefresh extends DayRefreshSnapshot {
-  const InterruptedDayRefresh({required super.operationRef, required super.revision, required this.failure});
+  const InterruptedDayRefresh({
+    required super.operationRef,
+    required super.revision,
+    required this.failure,
+  });
   final OwnerFailure failure;
 }

@@ -14,8 +14,11 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 pub trait PersonalConnectionReader: Sync {
-    fn source_is_fenced<'a>(&'a self, person_id: PersonId, connection_id: &'a ConnectionId)
-        -> BoxFuture<'a, Result<bool, AgentFailure>>;
+    fn source_is_fenced<'a>(
+        &'a self,
+        person_id: PersonId,
+        connection_id: &'a ConnectionId,
+    ) -> BoxFuture<'a, Result<bool, AgentFailure>>;
     fn load<'a>(
         &'a self,
         person_id: PersonId,

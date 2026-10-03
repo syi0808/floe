@@ -1,14 +1,20 @@
 //! Wrapped authority key material never leaves the encrypted adapter.
-use base64::{Engine as _,engine::general_purpose::URL_SAFE_NO_PAD};
+use super::{EncryptedAgentVault, VaultKeyProvider, storage};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use floe_access::RemoteOwnerPublicKey;
 use floe_agent_contract::AgentFailure;
-use ring::{aead,hkdf,rand::{SecureRandom,SystemRandom},signature::{self,KeyPair}};
+use ring::{
+    aead, hkdf,
+    rand::{SecureRandom, SystemRandom},
+    signature::{self, KeyPair},
+};
 use uuid::Uuid;
-use super::{EncryptedAgentVault,VaultKeyProvider,storage};
-const OWNER_WRAP_CONTEXT:&[u8]=b"floe.remote.owner-key.wrap.v1\0";
+const OWNER_WRAP_CONTEXT: &[u8] = b"floe.remote.owner-key.wrap.v1\0";
 
-impl<Keys:VaultKeyProvider> EncryptedAgentVault<Keys>{
-    pub(super) fn generate_wrapped_owner_key(&self) -> Result<(String, String, String, String), AgentFailure> {
+impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub(super) fn generate_wrapped_owner_key(
+        &self,
+    ) -> Result<(String, String, String, String), AgentFailure> {
         let random = SystemRandom::new();
         let pkcs8 = signature::Ed25519KeyPair::generate_pkcs8(&random)
             .map_err(|_| AgentFailure::VaultUnavailable)?;
@@ -95,7 +101,9 @@ impl<Keys:VaultKeyProvider> EncryptedAgentVault<Keys>{
         Ok(())
     }
 
-    pub(super) async fn remote_owner_public_key(&self) -> Result<RemoteOwnerPublicKey, AgentFailure> {
+    pub(super) async fn remote_owner_public_key(
+        &self,
+    ) -> Result<RemoteOwnerPublicKey, AgentFailure> {
         self.validate_owner_key().await?;
         let mut rows = self
             .connection()?
@@ -116,7 +124,9 @@ impl<Keys:VaultKeyProvider> EncryptedAgentVault<Keys>{
         })
     }
 
-    pub(super) async fn load_owner_key(&self) -> Result<(signature::Ed25519KeyPair, String), AgentFailure> {
+    pub(super) async fn load_owner_key(
+        &self,
+    ) -> Result<(signature::Ed25519KeyPair, String), AgentFailure> {
         let mut rows = self
             .connection()?
             .query(
@@ -171,4 +181,3 @@ pub(super) fn decode_exact(value: &str, length: usize) -> Result<Vec<u8>, AgentF
     }
     Ok(decoded)
 }
-

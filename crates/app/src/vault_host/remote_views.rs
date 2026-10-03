@@ -42,7 +42,10 @@ impl<'a, Keys: VaultKeyProvider> RemoteViewReader<'a, Keys> {
         device_id: &'a str,
     ) -> Self {
         Self {
-            vault, core, signer, verifier,
+            vault,
+            core,
+            signer,
+            verifier,
             source_client,
             person_id,
             person_text: person_id.to_string(),
@@ -135,16 +138,49 @@ impl<Keys: VaultKeyProvider> floe_context::SelectedSourceReader for RemoteViewRe
 }
 
 impl<Keys: VaultKeyProvider> floe_context::SourceReader for RemoteViewReader<'_, Keys> {
-    fn read<'a>(&'a self, request: &'a floe_context::SourceReadRequest) -> floe_execution::BoxFuture<'a, Result<floe_context_contract::SourceReadOutcome<floe_context::SourceRead>, AgentFailure>> {
+    fn read<'a>(
+        &'a self,
+        request: &'a floe_context::SourceReadRequest,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<floe_context_contract::SourceReadOutcome<floe_context::SourceRead>, AgentFailure>,
+    > {
         Box::pin(async move {
-            let outcome = floe_context::read_configured_remote_view(self.vault, self.verifier, self.core.store.as_ref(), self.core.store.as_ref(),
-                &self.transport(), self.person_id, self.pairing(), request.source().as_str(), request.consumer().identifier(),
-                request.query().clone(), &RemoteCallWindow { deadline: request.deadline(), cancellation: request.cancellation().clone() },
-                request.process_incarnation_id(), request.query_fingerprint()).await?;
+            let outcome = floe_context::read_configured_remote_view(
+                self.vault,
+                self.verifier,
+                self.core.store.as_ref(),
+                self.core.store.as_ref(),
+                &self.transport(),
+                self.person_id,
+                self.pairing(),
+                request.source().as_str(),
+                request.consumer().identifier(),
+                request.query().clone(),
+                &RemoteCallWindow {
+                    deadline: request.deadline(),
+                    cancellation: request.cancellation().clone(),
+                },
+                request.process_incarnation_id(),
+                request.query_fingerprint(),
+            )
+            .await?;
             Ok(match outcome {
-                floe_context_contract::SourceReadOutcome::Ready((payload, bindings)) => floe_context_contract::SourceReadOutcome::Ready(floe_context::SourceRead::with_bindings(request.source().clone(), payload, bindings)),
-                floe_context_contract::SourceReadOutcome::Unavailable(reason) => floe_context_contract::SourceReadOutcome::Unavailable(reason),
-                floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers),
+                floe_context_contract::SourceReadOutcome::Ready((payload, bindings)) => {
+                    floe_context_contract::SourceReadOutcome::Ready(
+                        floe_context::SourceRead::with_bindings(
+                            request.source().clone(),
+                            payload,
+                            bindings,
+                        ),
+                    )
+                }
+                floe_context_contract::SourceReadOutcome::Unavailable(reason) => {
+                    floe_context_contract::SourceReadOutcome::Unavailable(reason)
+                }
+                floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
+                    floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers)
+                }
             })
         })
     }

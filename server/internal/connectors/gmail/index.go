@@ -1,18 +1,16 @@
 package gmail
 
 import (
- "floe/server/internal/integrations"
- "floe/server/internal/views"
 	"encoding/json"
 	"errors"
+	"floe/server/internal/integrations"
+	"floe/server/internal/views"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-
-	
 )
 
 const (
@@ -30,15 +28,13 @@ type Index struct {
 }
 
 type indexState struct {
-	SchemaVersion       int                 `json:"schema_version"`
-	ConnectionID        string              `json:"connection_id"`
-	HistoryID           string              `json:"history_id,omitempty"`
-	Messages            map[string]Metadata `json:"messages"`
-	LastSuccessAtUnixMS *int64              `json:"last_success_at_unix_ms,omitempty"`
-	LastFailure         *integrations.Failure            `json:"last_failure,omitempty"`
+	SchemaVersion       int                   `json:"schema_version"`
+	ConnectionID        string                `json:"connection_id"`
+	HistoryID           string                `json:"history_id,omitempty"`
+	Messages            map[string]Metadata   `json:"messages"`
+	LastSuccessAtUnixMS *int64                `json:"last_success_at_unix_ms,omitempty"`
+	LastFailure         *integrations.Failure `json:"last_failure,omitempty"`
 }
-
-
 
 func OpenIndex(directory, connectionID string) (*Index, error) {
 	if !validID(connectionID) {

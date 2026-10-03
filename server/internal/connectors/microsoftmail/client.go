@@ -1,12 +1,12 @@
 package microsoftmail
 
 import (
- "floe/server/internal/views"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"floe/server/internal/views"
 	"io"
 	"net/http"
 	"net/url"
@@ -65,8 +65,6 @@ type message struct {
 		} `json:"emailAddress"`
 	} `json:"toRecipients"`
 }
-
-
 
 func New(tokens TokenSource, connectionID string) (*Client, error) {
 	return NewWithBaseURL(tokens, defaultBaseURL, connectionID)

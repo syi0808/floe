@@ -45,7 +45,9 @@ pub struct LearnerReviewOutput {
 /// proposal, even when there is nothing to remember. Unknown fields,
 /// duplicate fields and a missing proposal fail closed: the model did
 /// something this role never asked for.
-pub fn parse_learner_review_output(text: &str) -> Result<Option<LearnerMemoryProposal>, AgentFailure> {
+pub fn parse_learner_review_output(
+    text: &str,
+) -> Result<Option<LearnerMemoryProposal>, AgentFailure> {
     let value: serde_json::Value =
         serde_json::from_str(text).map_err(|_| AgentFailure::InvalidModelOutput)?;
     if !value

@@ -146,8 +146,12 @@ func ValidatedConnectorScope(definition Definition, scope map[string]any) (map[s
 			return nil, errors.New("invalid home assistant scope")
 		}
 		sort.Strings(entities)
- for i:=1;i<len(entities);i++{if entities[i]==entities[i-1]{return nil,errors.New("duplicate entity")}}
- return map[string]any{"base_url": baseURL, "entities": entities}, nil
+		for i := 1; i < len(entities); i++ {
+			if entities[i] == entities[i-1] {
+				return nil, errors.New("duplicate entity")
+			}
+		}
+		return map[string]any{"base_url": baseURL, "entities": entities}, nil
 	case "google_drive.files":
 		folderID, ok := ScopeString(scope, "folder_id")
 		if !ok || folderID == "" || len(folderID) > 256 {

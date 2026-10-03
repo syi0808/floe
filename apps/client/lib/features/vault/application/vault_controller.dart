@@ -10,7 +10,8 @@ final class VaultController extends ChangeNotifier {
   bool busy = false;
   bool _disposed = false;
 
-  Future<AgentVaultState> inspect() => _run(() => gateway.vaultStatus(personId));
+  Future<AgentVaultState> inspect() =>
+      _run(() => gateway.vaultStatus(personId));
   Future<AgentVaultState> create() => _run(() => gateway.createVault(personId));
   Future<AgentVaultState> unlock() => _run(() => gateway.unlockVault(personId));
 
@@ -30,7 +31,9 @@ final class VaultController extends ChangeNotifier {
     });
   }
 
-  Future<AgentVaultState> _run(Future<AgentVaultState> Function() operation) async {
+  Future<AgentVaultState> _run(
+    Future<AgentVaultState> Function() operation,
+  ) async {
     if (_disposed || busy) throw StateError('Vault request is unavailable.');
     busy = true;
     notifyListeners();
@@ -45,5 +48,8 @@ final class VaultController extends ChangeNotifier {
   }
 
   @override
-  void dispose() { _disposed = true; super.dispose(); }
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
 }

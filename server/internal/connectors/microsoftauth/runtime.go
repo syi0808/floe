@@ -179,7 +179,7 @@ func (runtime *Runtime) Token(ctx context.Context) (string, error) {
 		}
 		if current.ProviderIdentity != "" && current.ProviderIdentity != refreshed.ProviderIdentity {
 			refreshed.IdentityVerified = false
-            refreshed.IdentityReviewRequired = true
+			refreshed.IdentityReviewRequired = true
 			_ = runtime.save(refreshed)
 			return "", ErrCredentialExpired
 		}

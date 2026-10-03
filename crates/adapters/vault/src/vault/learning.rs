@@ -81,7 +81,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     ) -> Result<u64, AgentFailure> {
         use floe_agent_contract::JournalEvent;
         let mut connection = self.connection()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).await.map_err(storage)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(storage)?;
         let result = async {
             let job = learner_job_by_id(&transaction, self.person_id, job_id).await?.ok_or(AgentFailure::NotFound)?;
             if job.state != LearnerJobState::Running || job.attempts != claim_attempt {
@@ -1285,14 +1288,24 @@ async fn learner_has_uncertain_attempt(
         let event: JournalEvent = decode(&row.get::<String>(0).map_err(storage)?)?;
         match event {
             JournalEvent::ModelIntent { attempt_id, .. } => {
-                if !unsettled.insert(attempt_id) { return Err(AgentFailure::VaultUnavailable); }
+                if !unsettled.insert(attempt_id) {
+                    return Err(AgentFailure::VaultUnavailable);
+                }
             }
-            JournalEvent::ModelResult { attempt_id, accounting, usage } => {
-                if !unsettled.remove(&attempt_id) { return Err(AgentFailure::VaultUnavailable); }
-                accounting.validate_charge(usage.tokens, usage.cost_micros).map_err(|_| AgentFailure::VaultUnavailable)?;
+            JournalEvent::ModelResult {
+                attempt_id,
+                accounting,
+                usage,
+            } => {
+                if !unsettled.remove(&attempt_id) {
+                    return Err(AgentFailure::VaultUnavailable);
+                }
+                accounting
+                    .validate_charge(usage.tokens, usage.cost_micros)
+                    .map_err(|_| AgentFailure::VaultUnavailable)?;
                 unknown |= accounting.unknown_tokens || accounting.unknown_cost;
             }
-            _ => {},
+            _ => {}
         }
     }
     Ok(unknown || !unsettled.is_empty())

@@ -17,4 +17,3 @@ pub struct CalendarActionsResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authority: Option<floe_actions::ActionAuthority>,
 }
-

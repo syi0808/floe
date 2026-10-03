@@ -1,22 +1,14 @@
 package gmail
 
 import (
- "floe/server/internal/integrations"
- "floe/server/internal/views"
 	"crypto/sha256"
 	"encoding/hex"
+	"floe/server/internal/integrations"
+	"floe/server/internal/views"
 	"time"
 )
 
 const readonlyScope = "https://www.googleapis.com/auth/gmail.readonly"
-
-
-
-
-
-
-
-
 
 func ConnectorDescriptor() integrations.Descriptor {
 	capability := func(id, output string) integrations.Capability {

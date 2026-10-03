@@ -25,16 +25,34 @@ final class AppleContextGateway {
     return connections;
   }
 
-  Future<Map<String, dynamic>> requestPermissionAcquisition(Map<String, dynamic> request) async {
+  Future<Map<String, dynamic>> requestPermissionAcquisition(
+    Map<String, dynamic> request,
+  ) async {
     _requireAppleMobile();
-    if (request['mode'] != 'request_permission' || request['device_id'] != _deviceId) {
+    if (request['mode'] != 'request_permission' ||
+        request['device_id'] != _deviceId) {
       throw const FormatException('Invalid permission acquisition.');
     }
-    final value = _strictMap(await _channel.invokeMapMethod<Object?, Object?>('requestPermissionAcquisition', request));
-    _requireExactKeys(value, {'native_subject_fingerprint_before','native_subject_fingerprint_after','permission_class'}, 'Permission completion');
-    if (!{'request_completed','denied','unavailable'}.contains(value['permission_class']) ||
-        !RegExp(r'^[0-9a-f]{64}$').hasMatch(value['native_subject_fingerprint_before'] as String) ||
-        !RegExp(r'^[0-9a-f]{64}$').hasMatch(value['native_subject_fingerprint_after'] as String)) {
+    final value = _strictMap(
+      await _channel.invokeMapMethod<Object?, Object?>(
+        'requestPermissionAcquisition',
+        request,
+      ),
+    );
+    _requireExactKeys(value, {
+      'native_subject_fingerprint_before',
+      'native_subject_fingerprint_after',
+      'permission_class',
+    }, 'Permission completion');
+    if (!{
+          'request_completed',
+          'denied',
+          'unavailable',
+        }.contains(value['permission_class']) ||
+        !RegExp(r'^[0-9a-f]{64}$')
+            .hasMatch(value['native_subject_fingerprint_before'] as String) ||
+        !RegExp(r'^[0-9a-f]{64}$')
+            .hasMatch(value['native_subject_fingerprint_after'] as String)) {
       throw const FormatException('Invalid permission completion.');
     }
     return value;
@@ -58,23 +76,36 @@ final class AppleContextGateway {
 
   Future<Map<String, dynamic>> inspectContactsCatalog() async {
     _requireAppleMobile();
-    final value = _strictMap(await _channel.invokeMapMethod<Object?, Object?>(
-      'inspectContactsCatalog', appleNativeArguments(_deviceId),
-    ));
-    _requireExactKeys(value, {'resources','native_subject_fingerprint','permission_class','catalog_complete'}, 'Contacts resource catalog');
+    final value = _strictMap(
+      await _channel.invokeMapMethod<Object?, Object?>(
+        'inspectContactsCatalog',
+        appleNativeArguments(_deviceId),
+      ),
+    );
+    _requireExactKeys(value, {
+      'resources',
+      'native_subject_fingerprint',
+      'permission_class',
+      'catalog_complete',
+    }, 'Contacts resource catalog');
     final resources = value['resources'];
-    if (resources is! List || resources.length > 256 || value['catalog_complete'] is! bool ||
+    if (resources is! List ||
+        resources.length > 256 ||
+        value['catalog_complete'] is! bool ||
         value['native_subject_fingerprint'] is! String ||
-        !RegExp(r'^[0-9a-f]{64}$').hasMatch(value['native_subject_fingerprint'] as String) ||
+        !RegExp(r'^[0-9a-f]{64}$')
+            .hasMatch(value['native_subject_fingerprint'] as String) ||
         value['permission_class'] is! String) {
       throw const FormatException('Invalid Contacts resource catalog.');
     }
     final handles = <String>{};
     for (final item in resources) {
       final resource = _strictMap(item);
-      _requireExactKeys(resource, {'handle','label'}, 'Contacts resource');
-      if (!_validHandle(resource['handle']) || resource['label'] is! String ||
-          (resource['label'] as String).isEmpty || !handles.add(resource['handle'] as String)) {
+      _requireExactKeys(resource, {'handle', 'label'}, 'Contacts resource');
+      if (!_validHandle(resource['handle']) ||
+          resource['label'] is! String ||
+          (resource['label'] as String).isEmpty ||
+          !handles.add(resource['handle'] as String)) {
         throw const FormatException('Invalid Contacts resource metadata.');
       }
     }
@@ -116,20 +147,32 @@ final class AppleContextGateway {
 
   Future<Map<String, dynamic>> inspectWellbeingCatalog() async {
     _requireAppleMobile();
-    final value = _strictMap(await _channel.invokeMapMethod<Object?, Object?>(
-      'inspectWellbeingCatalog', appleNativeArguments(_deviceId),
-    ));
-    _requireExactKeys(value, {'resources','native_subject_fingerprint','permission_class','catalog_complete'}, 'Health resource catalog');
+    final value = _strictMap(
+      await _channel.invokeMapMethod<Object?, Object?>(
+        'inspectWellbeingCatalog',
+        appleNativeArguments(_deviceId),
+      ),
+    );
+    _requireExactKeys(value, {
+      'resources',
+      'native_subject_fingerprint',
+      'permission_class',
+      'catalog_complete',
+    }, 'Health resource catalog');
     final resources = value['resources'];
-    if (resources is! List || resources.length != 1 || value['catalog_complete'] != true ||
+    if (resources is! List ||
+        resources.length != 1 ||
+        value['catalog_complete'] != true ||
         value['native_subject_fingerprint'] is! String ||
-        !RegExp(r'^[0-9a-f]{64}$').hasMatch(value['native_subject_fingerprint'] as String) ||
+        !RegExp(r'^[0-9a-f]{64}$')
+            .hasMatch(value['native_subject_fingerprint'] as String) ||
         value['permission_class'] is! String) {
       throw const FormatException('Invalid native Health resource catalog.');
     }
     final resource = _strictMap(resources.single);
-    _requireExactKeys(resource, {'handle','label'}, 'Health resource');
-    if (resource['handle'] != 'wellbeing.derived' || resource['label'] is! String) {
+    _requireExactKeys(resource, {'handle', 'label'}, 'Health resource');
+    if (resource['handle'] != 'wellbeing.derived' ||
+        resource['label'] is! String) {
       throw const FormatException('Invalid Health resource metadata.');
     }
     return value;
@@ -167,13 +210,21 @@ final class AppleContextGateway {
     final view = _strictMap(
       await _channel.invokeMapMethod<Object?, Object?>(
         'readWellbeing',
-        appleNativeArguments(_deviceId, {'transform_binding': transformBinding}),
+        appleNativeArguments(_deviceId, {
+          'transform_binding': transformBinding,
+        }),
       ),
     );
-    _requireExactKeys(view, {'view', 'privacy_transform'}, 'Health acquisition');
+    _requireExactKeys(view, {
+      'view',
+      'privacy_transform',
+    }, 'Health acquisition');
     final transformed = _strictMap(view['view']);
     final proof = _strictMap(view['privacy_transform']);
-    _requireExactKeys(proof, {'operation_id', 'output_sha256'}, 'Health transform proof');
+    _requireExactKeys(proof, {
+      'operation_id',
+      'output_sha256',
+    }, 'Health transform proof');
     if (proof['operation_id'] is! String ||
         proof['output_sha256'] is! String ||
         !RegExp(r'^[0-9a-f]{64}$').hasMatch(proof['output_sha256'] as String)) {
@@ -311,7 +362,8 @@ void validateAppleWellbeingView(Map<String, dynamic> view) {
       evidence.any((value) => !_validHandle(value))) {
     throw const FormatException('Invalid Apple Wellbeing View.');
   }
-  final unknown = view['capacity'] == 'unknown' && view['recovery'] == 'unknown';
+  final unknown =
+      view['capacity'] == 'unknown' && view['recovery'] == 'unknown';
   if (unknown
       ? evidence.isNotEmpty || view['confidence_millis'] != 0
       : evidence.isEmpty || view['confidence_millis'] != 600) {

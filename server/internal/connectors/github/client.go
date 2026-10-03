@@ -1,12 +1,12 @@
 package github
 
 import (
- "floe/server/internal/views"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"floe/server/internal/views"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,8 +14,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	
 )
 
 const (
@@ -55,7 +53,6 @@ type issue struct {
 		Name string `json:"name"`
 	} `json:"labels"`
 }
-
 
 func New(tokens TokenSource) (*Client, error) {
 	return NewWithBaseURL(tokens, defaultBaseURL)

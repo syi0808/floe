@@ -9,15 +9,15 @@ import (
 )
 
 type AuditRecord struct {
- TraceID string `json:"trace_id"`
- CreatedAt time.Time `json:"created_at"`
- Purpose string `json:"purpose"`
- DataClasses []string `json:"data_classes"`
- RequestDigest string `json:"request_digest"`
- ResponseDigest string `json:"response_digest,omitempty"`
- IdentityDigest string `json:"identity_digest"`
- Outcome string `json:"outcome"`
- Usage UsageObservation `json:"usage"`
+	TraceID        string           `json:"trace_id"`
+	CreatedAt      time.Time        `json:"created_at"`
+	Purpose        string           `json:"purpose"`
+	DataClasses    []string         `json:"data_classes"`
+	RequestDigest  string           `json:"request_digest"`
+	ResponseDigest string           `json:"response_digest,omitempty"`
+	IdentityDigest string           `json:"identity_digest"`
+	Outcome        string           `json:"outcome"`
+	Usage          UsageObservation `json:"usage"`
 }
 
 type auditLog struct {
@@ -62,6 +62,15 @@ func (log *auditLog) list(limit int) []AuditRecord {
 	return records
 }
 
-func newAuditRecord(trace,purpose string,classes []string,request any,identity,outcome string,output any,usage UsageObservation,started time.Time)AuditRecord {
- raw,_:=json.Marshal(request);digest:=sha256.Sum256(raw);id:=sha256.Sum256([]byte(identity));record:=AuditRecord{TraceID:trace,CreatedAt:started.UTC(),Purpose:purpose,DataClasses:append([]string(nil),classes...),RequestDigest:hex.EncodeToString(digest[:]),IdentityDigest:hex.EncodeToString(id[:]),Outcome:outcome,Usage:usage};if output!=nil{raw,_=json.Marshal(output);digest=sha256.Sum256(raw);record.ResponseDigest=hex.EncodeToString(digest[:])};return record
+func newAuditRecord(trace, purpose string, classes []string, request any, identity, outcome string, output any, usage UsageObservation, started time.Time) AuditRecord {
+	raw, _ := json.Marshal(request)
+	digest := sha256.Sum256(raw)
+	id := sha256.Sum256([]byte(identity))
+	record := AuditRecord{TraceID: trace, CreatedAt: started.UTC(), Purpose: purpose, DataClasses: append([]string(nil), classes...), RequestDigest: hex.EncodeToString(digest[:]), IdentityDigest: hex.EncodeToString(id[:]), Outcome: outcome, Usage: usage}
+	if output != nil {
+		raw, _ = json.Marshal(output)
+		digest = sha256.Sum256(raw)
+		record.ResponseDigest = hex.EncodeToString(digest[:])
+	}
+	return record
 }

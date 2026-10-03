@@ -4,7 +4,7 @@ use floe_kernel::PersonId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_agent_contract::{AgentFailure, ProcessingBoundary, ModelStep, SessionProtection};
+use floe_agent_contract::{AgentFailure, ModelStep, ProcessingBoundary, SessionProtection};
 
 use floe_agent_contract::{AGENT_VERSION, CapabilityExecution, ProviderReplay};
 
@@ -167,7 +167,9 @@ impl AgentMessage {
     pub fn may_derive_from_source(&self) -> bool {
         match self {
             Self::Assistant { .. } | Self::Capability { result: Ok(_), .. } => true,
-            Self::Delegation { task, .. } => task.state == floe_agent_contract::TaskState::Completed,
+            Self::Delegation { task, .. } => {
+                task.state == floe_agent_contract::TaskState::Completed
+            }
             Self::Compaction { .. }
             | Self::Preamble { .. }
             | Self::User { .. }
@@ -202,8 +204,13 @@ pub struct SessionRecoveryPointer {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum AgentOutcome {
     Completed,
-    Blocked { run_id: floe_kernel::RunId, review_group_id: Uuid },
-    Halted { reason: AgentFailure },
+    Blocked {
+        run_id: floe_kernel::RunId,
+        review_group_id: Uuid,
+    },
+    Halted {
+        reason: AgentFailure,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

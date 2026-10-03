@@ -1,15 +1,13 @@
 package gmail
 
 import (
- "floe/server/internal/integrations"
- "floe/server/internal/views"
 	"context"
 	"encoding/json"
 	"errors"
+	"floe/server/internal/integrations"
+	"floe/server/internal/views"
 	"sync"
 	"time"
-
-	
 )
 
 type AuthRuntime interface {

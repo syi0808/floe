@@ -1,14 +1,12 @@
 package homeassistant
 
 import (
- "floe/server/internal/integrations"
- "floe/server/internal/views"
 	"context"
 	"errors"
+	"floe/server/internal/integrations"
+	"floe/server/internal/views"
 	"sync"
 	"time"
-
-	
 )
 
 type Service struct {

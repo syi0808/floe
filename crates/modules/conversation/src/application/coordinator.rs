@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use floe_agent_contract::{
     AgentMessage, BatchCursor, DependencyCoverage, EngineRequest, EngineResumeState, EngineStep,
-    MessageRole, ModelConversation, ModelConversationEntry, UserInteractionRef,
-    UserInteractionStatus, ValidatedModelBatch,
+    MessageRole, ModelConversation, ModelConversationEntry, ValidatedModelBatch,
 };
 use floe_agent_runtime::{Engine, EngineOutcome, EnginePorts, EngineReport};
 use floe_execution::{ExecutionScope, budget::BudgetLedger};
@@ -11,11 +10,9 @@ use floe_kernel::{AgentFailure, OwnerActor, RunId, TraceContext};
 
 use crate::{
     CONVERSATION_CONSUMER, CommandQuery, ContinuationSnapshot, ConversationInteraction,
-    ConversationPorts, ConversationRepository, InteractionOrigin, InteractionRepository,
-    InteractionResumeRef, InteractionState, ManagerConfig,
-    RecoveryReceipt, RecoveryRequest,
-    RunReceipt, RunState, RunTerminal, TurnAdmission,
-    TurnAdmissionRequest, TurnMode, TurnRequest,
+    ConversationPorts, ConversationRepository, InteractionRepository, InteractionResumeRef,
+    InteractionState, ManagerConfig, RecoveryReceipt, RecoveryRequest, RunReceipt, RunState,
+    RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnMode, TurnRequest,
 };
 
 use super::finalization::{FinalizationOutcome, finalize_exhausted_run};
@@ -41,9 +38,18 @@ pub(super) struct RunCoordinator<Repository> {
 }
 
 impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<Repository> {
-    pub(super) fn new(repository: Arc<Repository>, config: ManagerConfig, connections: Arc<floe_connections::ConnectionsService>) -> Result<Self, AgentFailure> {
+    pub(super) fn new(
+        repository: Arc<Repository>,
+        config: ManagerConfig,
+        connections: Arc<floe_connections::ConnectionsService>,
+    ) -> Result<Self, AgentFailure> {
         config.validate()?;
-        Ok(Self { repository, engine: Engine::default(), config, connections })
+        Ok(Self {
+            repository,
+            engine: Engine::default(),
+            config,
+            connections,
+        })
     }
 
     pub(super) async fn prepare_run(
@@ -53,7 +59,8 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
     ) -> Result<RunAdmission, AgentFailure> {
         actor.validate()?;
         request.validate()?;
-        if actor.person_id.to_string() != request.principal || actor.device_id != request.device_id {
+        if actor.person_id.to_string() != request.principal || actor.device_id != request.device_id
+        {
             return Err(AgentFailure::PolicyDenied);
         }
         let intent = request.canonical_intent()?;
@@ -113,28 +120,53 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
         let run_id = RunId::new();
         let input = match &request.mode {
             TurnMode::New => crate::TurnInput::NewMessage(AgentMessage {
-                message_id: request.command_id.as_uuid(), role: MessageRole::User,
-                text: intent.text.clone(), call_id: None, coverage: DependencyCoverage::Independent,
+                message_id: request.command_id.as_uuid(),
+                role: MessageRole::User,
+                text: intent.text.clone(),
+                call_id: None,
+                coverage: DependencyCoverage::Independent,
             }),
             TurnMode::Continue(_) => crate::TurnInput::ExistingMessage {
-                message_id: continuation.as_ref().ok_or(AgentFailure::Conflict)?.user_message_id,
+                message_id: continuation
+                    .as_ref()
+                    .ok_or(AgentFailure::Conflict)?
+                    .user_message_id,
             },
             TurnMode::Resume(_) => crate::TurnInput::ExistingMessage {
-                message_id: resume_origin.as_ref().ok_or(AgentFailure::Conflict)?.user_message_id,
+                message_id: resume_origin
+                    .as_ref()
+                    .ok_or(AgentFailure::Conflict)?
+                    .user_message_id,
             },
         };
         let admission_request = TurnAdmissionRequest {
-            expert_environment: request.expert_environment, run_id, command_id: request.command_id,
-            session_id: request.session_id, expected_session_revision: request.expected_session_revision,
-            principal: request.principal.clone(), device_id: request.device_id.clone(), request_digest,
-            mode: request.mode.clone(), retry_of: request.retry_of, input,
+            expert_environment: request.expert_environment,
+            run_id,
+            command_id: request.command_id,
+            session_id: request.session_id,
+            expected_session_revision: request.expected_session_revision,
+            principal: request.principal.clone(),
+            device_id: request.device_id.clone(),
+            request_digest,
+            mode: request.mode.clone(),
+            retry_of: request.retry_of,
+            input,
         };
         let admission = match &request.mode {
             TurnMode::Resume(reference) => {
-                let pending = self.repository.pending_resume_requests(64).await?.into_iter()
+                let pending = self
+                    .repository
+                    .pending_resume_requests(64)
+                    .await?
+                    .into_iter()
                     .find(|pending| pending.origin_run_id == reference.origin_run_id)
                     .ok_or(AgentFailure::Conflict)?;
-                self.repository.claim_resume(crate::ResumeChildAdmission { request: pending, child: admission_request }).await?
+                self.repository
+                    .claim_resume(crate::ResumeChildAdmission {
+                        request: pending,
+                        child: admission_request,
+                    })
+                    .await?
             }
             _ => self.repository.admit_turn(admission_request).await?,
         };
@@ -149,7 +181,7 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
                     return Err(AgentFailure::StorageUnavailable);
                 };
                 verify_resumed(&request, reference, &receipt)?;
-                    return Ok(RunAdmission::Existing(receipt));
+                return Ok(RunAdmission::Existing(receipt));
             }
         };
         admitted.validate()?;
@@ -196,7 +228,12 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
         {
             return Err(AgentFailure::StorageUnavailable);
         }
-        Ok(RunAdmission::Created(PreparedRun { admitted, continuation, resume_origin, intent }))
+        Ok(RunAdmission::Created(PreparedRun {
+            admitted,
+            continuation,
+            resume_origin,
+            intent,
+        }))
     }
 
     pub(super) async fn drive_run(
@@ -207,7 +244,12 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
         prepared: PreparedRun,
         _cancellation_guard: super::cancellation::RunCancellationGuard,
     ) -> Result<RunReceipt, AgentFailure> {
-        let PreparedRun { admitted, continuation, resume_origin, intent } = prepared;
+        let PreparedRun {
+            admitted,
+            continuation,
+            resume_origin,
+            intent,
+        } = prepared;
         let run_id = admitted.receipt.run_id;
         let expected_aggregate_revision = admitted.receipt.aggregate_revision;
         let now = tokio::time::Instant::now();
@@ -272,10 +314,7 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
                             .await;
                     }
                 };
-                Some((
-                    origin.user_message_id,
-                    resume_marker_text(origin, &group),
-                ))
+                Some((origin.user_message_id, resume_marker_text(origin, &group)))
             }
         };
         let completed_iterations = continuation
@@ -304,12 +343,20 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
             ledger.work_lease(),
             TraceContext::new(request.command_id.as_uuid()).with_run_id(run_id),
         );
-        let original = admitted.transcript.iter().find(|message|
-            message.message_id == admitted.receipt.user_message_id && message.role == MessageRole::User)
+        let original = admitted
+            .transcript
+            .iter()
+            .find(|message| {
+                message.message_id == admitted.receipt.user_message_id
+                    && message.role == MessageRole::User
+            })
             .ok_or(AgentFailure::StorageUnavailable)?;
-        if original.text != intent.text { return Err(AgentFailure::Conflict); }
+        if original.text != intent.text {
+            return Err(AgentFailure::Conflict);
+        }
         let user_entry = ModelConversationEntry::User {
-            message_id: original.message_id, text: original.text.clone(),
+            message_id: original.message_id,
+            text: original.text.clone(),
         };
         let (model_conversation, resume, mut continuation_replay) = match continuation {
             // Continuation and resume both derive from the validated request
@@ -475,40 +522,57 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
                         Err(failure) => RunTerminal::from_failure(failure),
                     },
                     None => {
-                        return self.finalize_exhaustion(
-                            actor,
-                            run_id,
-                            &engine_request.scope,
-                            &engine_request,
-                            ports,
-                            AgentFailure::Stalled,
-                            &turn_context,
-                        )
-                        .await
+                        return self
+                            .finalize_exhaustion(
+                                actor,
+                                run_id,
+                                &engine_request.scope,
+                                &engine_request,
+                                ports,
+                                AgentFailure::Stalled,
+                                &turn_context,
+                            )
+                            .await;
                     }
                 }
             }
             Ok(EngineOutcome::NeedsSourceReview(blocked)) => {
-                let commit = super::source_review::build_blocked_run_commit(self.repository.as_ref(),
-                    self.connections.as_ref(), actor, run_id, blocked, None, turn_context.now_unix_ms,
-                    &engine_request.scope).await;
+                let commit = super::source_review::build_blocked_run_commit(
+                    self.repository.as_ref(),
+                    self.connections.as_ref(),
+                    actor,
+                    run_id,
+                    blocked,
+                    None,
+                    turn_context.now_unix_ms,
+                    &engine_request.scope,
+                )
+                .await;
                 return match commit {
                     Ok(commit) => self.repository.finish_blocked_run(commit).await,
-                    Err(failure) => self.repository.finish_run(run_id, expected_aggregate_revision,
-                        RunTerminal::from_failure(failure)).await,
+                    Err(failure) => {
+                        self.repository
+                            .finish_run(
+                                run_id,
+                                expected_aggregate_revision,
+                                RunTerminal::from_failure(failure),
+                            )
+                            .await
+                    }
                 };
             }
             Err(failure @ (AgentFailure::BudgetExceeded | AgentFailure::Stalled)) => {
-                return self.finalize_exhaustion(
-                    actor,
-                    run_id,
-                    &engine_request.scope,
-                    &engine_request,
-                    ports,
-                    failure,
-                    &turn_context,
-                )
-                .await
+                return self
+                    .finalize_exhaustion(
+                        actor,
+                        run_id,
+                        &engine_request.scope,
+                        &engine_request,
+                        ports,
+                        failure,
+                        &turn_context,
+                    )
+                    .await;
             }
             Err(failure) => RunTerminal::from_failure(failure),
         };
@@ -527,17 +591,38 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
         issue: AgentFailure,
         turn: &TurnRequest,
     ) -> Result<RunReceipt, AgentFailure> {
-        let outcome = finalize_exhausted_run(&self.engine, self.repository.as_ref(), self.connections.as_ref(),
-            actor, run_id, scope, request, ports, issue, turn).await;
+        let outcome = finalize_exhausted_run(
+            &self.engine,
+            self.repository.as_ref(),
+            self.connections.as_ref(),
+            actor,
+            run_id,
+            scope,
+            request,
+            ports,
+            issue,
+            turn,
+        )
+        .await;
         let terminal = match outcome {
-            Ok(FinalizationOutcome::Blocked(commit)) => return self.repository.finish_blocked_run(commit).await,
+            Ok(FinalizationOutcome::Blocked(commit)) => {
+                return self.repository.finish_blocked_run(commit).await;
+            }
             Ok(FinalizationOutcome::Replied(terminal)) => terminal,
             Ok(FinalizationOutcome::NotAttempted(failure)) => RunTerminal::from_failure(failure),
-            Ok(FinalizationOutcome::AttemptedWithoutReply) => RunTerminal::from_failure(AgentFailure::Stalled),
+            Ok(FinalizationOutcome::AttemptedWithoutReply) => {
+                RunTerminal::from_failure(AgentFailure::Stalled)
+            }
             Err(failure) => RunTerminal::from_failure(failure),
         };
-        let receipt = self.repository.load_receipt(run_id).await?.ok_or(AgentFailure::StorageUnavailable)?;
-        self.repository.finish_run(run_id, receipt.aggregate_revision, terminal).await
+        let receipt = self
+            .repository
+            .load_receipt(run_id)
+            .await?
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        self.repository
+            .finish_run(run_id, receipt.aggregate_revision, terminal)
+            .await
     }
 
     /// The origin a linked resume continues, verified before admission.
@@ -563,8 +648,6 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
         }
         Ok(origin)
     }
-
-
 }
 
 pub async fn recover_session<Repository: ConversationRepository>(
@@ -680,9 +763,13 @@ pub async fn continuation<Repository: ConversationRepository>(
             .cost_micros
             .checked_add(projected.usage.cost_micros)
             .ok_or(AgentFailure::StorageUnavailable)?;
-        usage.estimated_tokens = usage.estimated_tokens.checked_add(projected.usage.estimated_tokens)
+        usage.estimated_tokens = usage
+            .estimated_tokens
+            .checked_add(projected.usage.estimated_tokens)
             .ok_or(AgentFailure::StorageUnavailable)?;
-        usage.estimated_cost_micros = usage.estimated_cost_micros.checked_add(projected.usage.estimated_cost_micros)
+        usage.estimated_cost_micros = usage
+            .estimated_cost_micros
+            .checked_add(projected.usage.estimated_cost_micros)
             .ok_or(AgentFailure::StorageUnavailable)?;
         // Cross-run resume lineage: a newer run supersedes an older pending
         // batch only after durably re-recording the exact batch and starting

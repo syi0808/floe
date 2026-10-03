@@ -72,17 +72,24 @@ impl ExpertReport {
         invocation: &EndpointInvocation,
         maximum_bytes: usize,
     ) -> Result<(), AgentFailure> {
-        let artifact_coverage_valid = self.artifacts.iter().all(|artifact| {
-            match (&self.coverage, &artifact.coverage) {
-                (_, DependencyCoverage::Unknown) => false,
-                (_, DependencyCoverage::Independent) => true,
-                (
-                    DependencyCoverage::Dependent { dependencies: report },
-                    DependencyCoverage::Dependent { dependencies: artifact },
-                ) => artifact.iter().all(|dependency| report.contains(dependency)),
-                _ => false,
-            }
-        });
+        let artifact_coverage_valid =
+            self.artifacts
+                .iter()
+                .all(|artifact| match (&self.coverage, &artifact.coverage) {
+                    (_, DependencyCoverage::Unknown) => false,
+                    (_, DependencyCoverage::Independent) => true,
+                    (
+                        DependencyCoverage::Dependent {
+                            dependencies: report,
+                        },
+                        DependencyCoverage::Dependent {
+                            dependencies: artifact,
+                        },
+                    ) => artifact
+                        .iter()
+                        .all(|dependency| report.contains(dependency)),
+                    _ => false,
+                });
         let mut artifact_ids = std::collections::HashSet::new();
         if self.task_id != invocation.request.task_id
             || self.principal != invocation.request.principal

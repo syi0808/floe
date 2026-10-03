@@ -58,7 +58,6 @@ impl ScheduleAssessment {
 }
 
 pub use plan::{
-    FOCUS_REQUEST, ScheduleRequestPlan, day_bounds, plan_request,
-    requested_range, run_policy,
+    FOCUS_REQUEST, ScheduleRequestPlan, day_bounds, plan_request, requested_range, run_policy,
 };
 pub const RESULT_MEDIA_TYPE: &str = "application/vnd.floe.expert.schedule+json;version=1";

@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use floe_agent_contract::{DataClass, ModelCapabilities, ModelPlanRequest, ModelProjectionOutcome, ModelPort, ProcessingBoundary};
+use floe_agent_contract::{
+    DataClass, ModelCapabilities, ModelPlanRequest, ModelPort, ModelProjectionOutcome,
+    ProcessingBoundary,
+};
 use floe_context::AgentContext;
 use floe_conversation::prompts::manager_prompt;
 use floe_execution::Cancellation;
@@ -94,23 +97,42 @@ async fn main() -> std::process::ExitCode {
     let service = support::synthetic_model();
     let principal = floe_kernel::PersonId::new().to_string();
     let device_id = "synthetic-smoke-device".to_owned();
-    let prepared = match service.prepare(ModelPlanRequest {
-        principal: principal.clone(), device_id: device_id.clone(),
-        purpose: "everyday_assistance".into(), consumer: "conversation.root".into(),
-        required_capabilities: ModelCapabilities::chat(),
-    }, &scope).await {
+    let prepared = match service
+        .prepare(
+            ModelPlanRequest {
+                principal: principal.clone(),
+                device_id: device_id.clone(),
+                purpose: "everyday_assistance".into(),
+                consumer: "conversation.root".into(),
+                required_capabilities: ModelCapabilities::chat(),
+            },
+            &scope,
+        )
+        .await
+    {
         Ok(prepared) => prepared,
         Err(failure) => {
-            println!("{}", json!({"schema_version":1,"failure":failure,"personal_data":false}));
+            println!(
+                "{}",
+                json!({"schema_version":1,"failure":failure,"personal_data":false})
+            );
             return std::process::ExitCode::FAILURE;
         }
     };
     if prepared.plan().boundary != ProcessingBoundary::Device {
-        println!("{}", json!({"status":"UNVERIFIED","reason":"local_fallback_not_selected","personal_data":false}));
+        println!(
+            "{}",
+            json!({"status":"UNVERIFIED","reason":"local_fallback_not_selected","personal_data":false})
+        );
         return std::process::ExitCode::FAILURE;
     }
-    println!("{}", json!({"schema_version":1,"availability":"available","boundary":"device","personal_data":false}));
-    if arguments == ["--availability"] { return std::process::ExitCode::SUCCESS; }
+    println!(
+        "{}",
+        json!({"schema_version":1,"availability":"available","boundary":"device","personal_data":false})
+    );
+    if arguments == ["--availability"] {
+        return std::process::ExitCode::SUCCESS;
+    }
     let projection =
         floe_context::assemble_context_projection(floe_context::ContextProjectionInput {
             role: floe_context::ContextProjectionRole::Manager,
@@ -138,22 +160,41 @@ async fn main() -> std::process::ExitCode {
         ModelProjectionOutcome::NeedsSourceReview(_) => return std::process::ExitCode::FAILURE,
     };
     let journal = match support::DiagnosticJournal::new() {
-        Ok(journal) => journal, Err(_) => return std::process::ExitCode::FAILURE,
+        Ok(journal) => journal,
+        Err(_) => return std::process::ExitCode::FAILURE,
     };
     let request = floe_agent_contract::ModelRequest {
-        reservation_ceiling: floe_execution::budget::ModelReservationCeiling::for_lease(scope.budget()),        attempt_id: Uuid::new_v4(), principal, device_id, projection,
-        catalog: floe_agent_contract::AllowedCatalog { cards: vec![], tools: vec![], revision: 1 },
-        purpose: "everyday_assistance".into(), consumer: "conversation.root".into(), replay: vec![],
+        reservation_ceiling: floe_execution::budget::ModelReservationCeiling::for_lease(
+            scope.budget(),
+        ),
+        attempt_id: Uuid::new_v4(),
+        principal,
+        device_id,
+        projection,
+        catalog: floe_agent_contract::AllowedCatalog {
+            cards: vec![],
+            tools: vec![],
+            revision: 1,
+        },
+        purpose: "everyday_assistance".into(),
+        consumer: "conversation.root".into(),
+        replay: vec![],
     };
     match support::invoke(prepared.as_ref(), request, &scope, &journal).await {
         Ok(response) => {
-            println!("{}", json!({"schema_version":1,"status":"passed","output":response.steps,
+            println!(
+                "{}",
+                json!({"schema_version":1,"status":"passed","output":response.steps,
                 "charged_tokens":response.usage.tokens,"cost_micros":response.usage.cost_micros,
-                "accounting":response.accounting,"journal":journal.path(),"personal_data":false}));
+                "accounting":response.accounting,"journal":journal.path(),"personal_data":false})
+            );
             std::process::ExitCode::SUCCESS
         }
         Err(failure) => {
-            println!("{}", json!({"schema_version":1,"failure":failure,"journal":journal.path(),"personal_data":false}));
+            println!(
+                "{}",
+                json!({"schema_version":1,"failure":failure,"journal":journal.path(),"personal_data":false})
+            );
             std::process::ExitCode::FAILURE
         }
     }

@@ -188,8 +188,12 @@ pub fn validate_wellbeing_view(view: &WellbeingView, now_unix_ms: i64) -> Result
         now_unix_ms,
         WELLBEING_MAX_LIFETIME_MS,
     )?;
-    if matches!(view.capacity, CapacityState::Unknown) && matches!(view.recovery, RecoveryState::Unknown)
-        && !view.evidence_handles.is_empty() { return Err(AgentFailure::InvalidInput); }
+    if matches!(view.capacity, CapacityState::Unknown)
+        && matches!(view.recovery, RecoveryState::Unknown)
+        && !view.evidence_handles.is_empty()
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
     validate_derived(
         view.confidence_millis,
         &view.evidence_handles,

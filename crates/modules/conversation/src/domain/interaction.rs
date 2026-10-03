@@ -18,10 +18,7 @@
 //! display labels. Model-safe artifacts carry only the opaque
 //! [`UserInteractionRef`].
 
-use floe_agent_contract::{
-    AgentFailure, PackageKind, PackageRef,
-    UserInteractionKind,
-};
+use floe_agent_contract::{AgentFailure, PackageKind, PackageRef, UserInteractionKind};
 use floe_kernel::{CommandId, PersonId, RunId};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -77,8 +74,13 @@ impl InteractionOrigin {
                 task_id,
                 capability_call_id,
             } => !task_id.is_nil() && capability_call_id.is_none_or(|call_id| !call_id.is_nil()),
-            Self::Projection { run_id, projection_operation_id, target_digest } =>
-                run_id.is_valid() && !projection_operation_id.is_nil() && *target_digest != [0; 32],
+            Self::Projection {
+                run_id,
+                projection_operation_id,
+                target_digest,
+            } => {
+                run_id.is_valid() && !projection_operation_id.is_nil() && *target_digest != [0; 32]
+            }
         };
         valid.then_some(()).ok_or(AgentFailure::StorageUnavailable)
     }
@@ -348,9 +350,17 @@ impl ConversationInteraction {
         self.origin.validate()?;
         if let Some(record) = &self.projection {
             record.validate()?;
-            if record.person_id != self.person_id || record.session_id != self.session_id || record.run_id != self.origin_run_id { return Err(AgentFailure::StorageUnavailable); }
+            if record.person_id != self.person_id
+                || record.session_id != self.session_id
+                || record.run_id != self.origin_run_id
+            {
+                return Err(AgentFailure::StorageUnavailable);
+            }
         }
-        if matches!(self.origin, InteractionOrigin::Projection { .. }) && self.projection.is_none() { return Err(AgentFailure::StorageUnavailable); }
+        if matches!(self.origin, InteractionOrigin::Projection { .. }) && self.projection.is_none()
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
         self.requirement.validate()?;
         self.target.validate()?;
         self.state.validate()?;
@@ -550,17 +560,26 @@ pub fn state_after_resolution(
     resolution: &InteractionResolution,
     owner_receipt: &super::OwnerResolutionReceipt,
 ) -> Result<InteractionState, AgentFailure> {
-    resolution.validate()?; owner_receipt.validate()?;
+    resolution.validate()?;
+    owner_receipt.validate()?;
     match state {
-        InteractionState::Resolving { decision_id, owner_command_id }
-            if *decision_id == resolution.decision_id && *owner_command_id == resolution.owner_command_id
-                && owner_receipt.command_id() == *owner_command_id
-                && owner_receipt.operation_id() == resolution.owner_operation_id => {
-            Ok(InteractionState::Resolved { receipt: InteractionResolutionReceipt {
-                decision_id: *decision_id, owner_command_id: *owner_command_id,
-                owner_operation_id: resolution.owner_operation_id, owner_receipt: owner_receipt.clone(),
-                resolved_at_unix_ms: resolution.resolved_at_unix_ms,
-            } })
+        InteractionState::Resolving {
+            decision_id,
+            owner_command_id,
+        } if *decision_id == resolution.decision_id
+            && *owner_command_id == resolution.owner_command_id
+            && owner_receipt.command_id() == *owner_command_id
+            && owner_receipt.operation_id() == resolution.owner_operation_id =>
+        {
+            Ok(InteractionState::Resolved {
+                receipt: InteractionResolutionReceipt {
+                    decision_id: *decision_id,
+                    owner_command_id: *owner_command_id,
+                    owner_operation_id: resolution.owner_operation_id,
+                    owner_receipt: owner_receipt.clone(),
+                    resolved_at_unix_ms: resolution.resolved_at_unix_ms,
+                },
+            })
         }
         _ => Err(AgentFailure::Conflict),
     }
@@ -687,8 +706,14 @@ pub fn interaction_publication_id(
                 None => bytes.push(0),
             }
         }
-        InteractionOrigin::Projection { run_id, projection_operation_id, target_digest } => {
-            if *run_id != origin_run_id { return Err(AgentFailure::InvalidInput); }
+        InteractionOrigin::Projection {
+            run_id,
+            projection_operation_id,
+            target_digest,
+        } => {
+            if *run_id != origin_run_id {
+                return Err(AgentFailure::InvalidInput);
+            }
             bytes.push(3);
             bytes.extend_from_slice(run_id.as_uuid().as_bytes());
             bytes.extend_from_slice(projection_operation_id.as_bytes());
@@ -733,7 +758,8 @@ pub struct InteractionResolution {
 
 impl InteractionResolution {
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.owner_command_id.is_nil() || self.target_digest == [0; 32]
+        if self.owner_command_id.is_nil()
+            || self.target_digest == [0; 32]
             || self.interaction_id.is_nil()
             || !self.person_id.is_valid()
             || self.expected_revision == 0
@@ -784,8 +810,6 @@ impl ExpireInteraction {
     }
 }
 
-
-
 fn append_str(bytes: &mut Vec<u8>, value: &str) {
     append_bytes(bytes, value.as_bytes());
 }
@@ -809,13 +833,22 @@ fn validate_identifier(value: &str, limit: usize) -> Result<(), AgentFailure> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InteractionRefresh {
-    pub command_id: Uuid, pub person_id: PersonId, pub session_id: Uuid,
-    pub interaction_id: Uuid, pub expected_revision: u64,
+    pub command_id: Uuid,
+    pub person_id: PersonId,
+    pub session_id: Uuid,
+    pub interaction_id: Uuid,
+    pub expected_revision: u64,
 }
 impl InteractionRefresh {
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.command_id.is_nil() || !self.person_id.is_valid() || self.session_id.is_nil()
-            || self.interaction_id.is_nil() || self.expected_revision == 0 { return Err(AgentFailure::InvalidInput); }
+        if self.command_id.is_nil()
+            || !self.person_id.is_valid()
+            || self.session_id.is_nil()
+            || self.interaction_id.is_nil()
+            || self.expected_revision == 0
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
         Ok(())
     }
 }

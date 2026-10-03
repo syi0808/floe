@@ -1,11 +1,9 @@
 package googlecalendar
 
 import (
- "floe/server/internal/integrations"
- "floe/server/internal/views"
 	"encoding/json"
-
-	
+	"floe/server/internal/integrations"
+	"floe/server/internal/views"
 )
 
 func ConnectorDescriptor() integrations.Descriptor {

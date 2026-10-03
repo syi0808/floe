@@ -159,7 +159,9 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
             let context = &invocation.request.execution_context;
             context.validate()?;
             self.actor.validate()?;
-            if self.actor.person_id != self.vault.person_id() || self.actor.device_id != context.device_id {
+            if self.actor.person_id != self.vault.person_id()
+                || self.actor.device_id != context.device_id
+            {
                 return Err(AgentFailure::PolicyDenied);
             }
             let run_id = invocation
@@ -219,10 +221,15 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 &self.connections,
                 &person_id.to_string(),
                 &context.device_id,
-            ).await?;
-            let signer = floe_vault::VaultAuthorizationSigner::new(self.vault.clone(),
-                Arc::new(floe_provider_adapters::gateway::GatewayProofVerifier));
-            let verifier = floe_provider_adapters::gateway::GatewaySourcePreviewVerifier::new(self.vault.clone());
+            )
+            .await?;
+            let signer = floe_vault::VaultAuthorizationSigner::new(
+                self.vault.clone(),
+                Arc::new(floe_provider_adapters::gateway::GatewayProofVerifier),
+            );
+            let verifier = floe_provider_adapters::gateway::GatewaySourcePreviewVerifier::new(
+                self.vault.clone(),
+            );
             let remote_reader = match source_client.as_ref() {
                 Some(client) => Some(remote_views::RemoteViewReader::new(
                     &self.vault,
@@ -279,8 +286,10 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 selection: &self.selection,
             };
             let repository = floe_vault::VaultConversationRepository::new(Arc::clone(&self.vault));
-            let journal = floe_conversation::ConversationRepository::journal(&repository,
-                floe_kernel::RunId::from_uuid(run_id).ok_or(AgentFailure::InvalidInput)?)?;
+            let journal = floe_conversation::ConversationRepository::journal(
+                &repository,
+                floe_kernel::RunId::from_uuid(run_id).ok_or(AgentFailure::InvalidInput)?,
+            )?;
             let experts = ConversationExperts {
                 model: self.model.as_ref(),
                 journal: journal.as_ref(),
@@ -842,7 +851,9 @@ impl ConversationExperts<'_> {
             Some(runs) => runs.load_receipt(origin_run_id).await?,
             None => None,
         } {
-            if receipt.principal != request.person_id.to_string() || receipt.session_id != request.session_id {
+            if receipt.principal != request.person_id.to_string()
+                || receipt.session_id != request.session_id
+            {
                 return Err(AgentFailure::CapabilityDenied);
             }
         }
@@ -860,7 +871,8 @@ impl ConversationExperts<'_> {
             model: ExpertModelHost {
                 model: self.model,
                 journal: self.journal,
-                task_id: floe_kernel::TaskId::from_uuid(expert_request.task_id).ok_or(AgentFailure::InvalidInput)?,
+                task_id: floe_kernel::TaskId::from_uuid(expert_request.task_id)
+                    .ok_or(AgentFailure::InvalidInput)?,
                 device_id: self.device_id.ok_or(AgentFailure::CapabilityDenied)?,
                 scope: self.scope,
                 captured: &captured,
@@ -884,18 +896,24 @@ impl ConversationExperts<'_> {
             let origin_run_id = floe_kernel::RunId::from_uuid(request.parent_turn_id)
                 .ok_or(AgentFailure::InvalidInput)?;
             let refs = floe_conversation::publish_task_source_review(
-                runs, interactions, self.source_connections,
+                runs,
+                interactions,
+                self.source_connections,
                 floe_conversation::PublishTaskSourceReview {
-                    actor: self.actor.clone(), session_id: request.session_id, origin_run_id,
-                    task_id: expert_request.task_id, capability_call_id: None, blockers,
+                    actor: self.actor.clone(),
+                    session_id: request.session_id,
+                    origin_run_id,
+                    task_id: expert_request.task_id,
+                    capability_call_id: None,
+                    blockers,
                     now_unix_ms: expert_request.current_time_unix_ms,
-                }, self.scope,
-            ).await?;
+                },
+                self.scope,
+            )
+            .await?;
             output
                 .artifacts
-                .extend(floe_conversation::interaction_ref_artifacts(
-                    &refs,
-                )?);
+                .extend(floe_conversation::interaction_ref_artifacts(&refs)?);
         }
         let model_requirement = model_blocked
             .lock()
@@ -903,7 +921,9 @@ impl ConversationExperts<'_> {
             .take();
         if let Some(blocked) = model_requirement {
             let runs = self.runs.ok_or(AgentFailure::CapabilityUnavailable)?;
-            let interactions = self.interactions.ok_or(AgentFailure::CapabilityUnavailable)?;
+            let interactions = self
+                .interactions
+                .ok_or(AgentFailure::CapabilityUnavailable)?;
             let origin_run_id = floe_kernel::RunId::from_uuid(request.parent_turn_id)
                 .ok_or(AgentFailure::InvalidInput)?;
             let references = floe_conversation::publish_task_projection_review(
@@ -921,8 +941,11 @@ impl ConversationExperts<'_> {
                     now_unix_ms: expert_request.current_time_unix_ms,
                 },
                 self.scope,
-            ).await?;
-            output.artifacts.extend(floe_conversation::interaction_ref_artifacts(&references)?);
+            )
+            .await?;
+            output
+                .artifacts
+                .extend(floe_conversation::interaction_ref_artifacts(&references)?);
         }
         tracing::info!(
             expert = request.agent_id,

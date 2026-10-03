@@ -70,9 +70,13 @@ pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
         .enable_all()
         .build()
         .map_err(|error| AppOpenError::Runtime(error.to_string()))?;
-    let store = runtime.block_on(floe_vault::TursoStore::open_existing(path))
+    let store = runtime
+        .block_on(floe_vault::TursoStore::open_existing(path))
         .map_err(|error| AppOpenError::Store(error.to_string()))?;
-    let core = Arc::new(crate::FloeCore { store: Arc::new(store), lease_registry: Arc::new(floe_context::SourceLeaseRegistry::new()) });
+    let core = Arc::new(crate::FloeCore {
+        store: Arc::new(store),
+        lease_registry: Arc::new(floe_context::SourceLeaseRegistry::new()),
+    });
     let local_context = Arc::new(crate::local_context::LocalContextHost::default());
     let services = AppComposition {
         runtime,

@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{
-    AGENT_SCHEMA_VERSION, AgentFailure, DependencyCoverage, MAX_OUTPUT_BYTES,
-};
+use crate::{AGENT_SCHEMA_VERSION, AgentFailure, DependencyCoverage, MAX_OUTPUT_BYTES};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

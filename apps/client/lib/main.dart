@@ -67,17 +67,26 @@ Future<void> _start() async {
     final selection = await LocalProfileSelection.open();
     final profile = await selection.selected();
     if (profile == null) {
-      runApp(ProfileSelectionApp(profiles: await selection.candidates(), onSelect: (profile) async {
-        await selection.select(profile);
-        await _start();
-      }, onReload: _start));
+      runApp(
+        ProfileSelectionApp(
+          profiles: await selection.candidates(),
+          onSelect: (profile) async {
+            await selection.select(profile);
+            await _start();
+          },
+          onReload: _start,
+        ),
+      );
       return;
     }
     final androidNative = Platform.isAndroid ? AndroidContextGateway() : null;
     final device = await LocalDeviceIdentity.openExisting();
     final calendarHost = EventKitCalendarHost(deviceId: device.id);
     // App-lifetime objects are created once here; no feature owns them.
-    final runtime = await AppRuntime.openSelected(deviceId: device.id, profile: profile);
+    final runtime = await AppRuntime.openSelected(
+      deviceId: device.id,
+      profile: profile,
+    );
     final gateway = AppWireDayGateway(runtime);
     CalendarAcquisitionService? calendarAcquisition;
     if (Platform.isMacOS || Platform.isIOS || androidNative != null) {
@@ -195,7 +204,9 @@ Future<void> _start() async {
               if (attentionAcquisition != null) attentionAcquisition.dispose(),
               if (personalAcquisition != null) personalAcquisition.dispose(),
             ]).timeout(const Duration(seconds: 5));
-          } finally { await runtime.close(); }
+          } finally {
+            await runtime.close();
+          }
         },
         builder: kDebugMode
             ? (context, child) => DesignFeedbackOverlay(child: child!)
@@ -229,60 +240,108 @@ PersonalAcquisitionReader _applePersonalReader(
   AppleContextGateway native,
   String deviceId,
 ) => (request) async {
-  if (request['device_id'] != deviceId) throw PlatformException(code: 'permission_denied');
+  if (request['device_id'] != deviceId)
+    throw PlatformException(code: 'permission_denied');
   final mode = request['mode'];
   final domain = request['domain'];
-  if (!{'people','wellbeing'}.contains(domain)) throw PlatformException(code: 'provider_unavailable');
+  if (!{'people', 'wellbeing'}.contains(domain))
+    throw PlatformException(code: 'provider_unavailable');
   if (mode == 'request_permission') {
     final completion = await native.requestPermissionAcquisition(request);
-    return _personalPeopleResult(request,
-      {'subject_fingerprint': completion['native_subject_fingerprint_before'], 'permission_class': completion['permission_class']},
-      {'subject_fingerprint': completion['native_subject_fingerprint_after'], 'permission_class': completion['permission_class']},
-      null, domain == 'people' ? 'apple_contacts' : 'apple_health');
+    return _personalPeopleResult(
+      request,
+      {
+        'subject_fingerprint': completion['native_subject_fingerprint_before'],
+        'permission_class': completion['permission_class'],
+      },
+      {
+        'subject_fingerprint': completion['native_subject_fingerprint_after'],
+        'permission_class': completion['permission_class'],
+      },
+      null,
+      domain == 'people' ? 'apple_contacts' : 'apple_health',
+    );
   }
   if (mode == 'inspect_catalog') {
-    final before = domain == 'people' ? await native.inspectContactsCatalog() : await native.inspectWellbeingCatalog();
-    final after = domain == 'people' ? await native.inspectContactsCatalog() : await native.inspectWellbeingCatalog();
-    if (before['native_subject_fingerprint'] != after['native_subject_fingerprint']) {
+    final before = domain == 'people'
+        ? await native.inspectContactsCatalog()
+        : await native.inspectWellbeingCatalog();
+    final after = domain == 'people'
+        ? await native.inspectContactsCatalog()
+        : await native.inspectWellbeingCatalog();
+    if (before['native_subject_fingerprint'] !=
+        after['native_subject_fingerprint']) {
       throw PlatformException(code: 'permission_denied');
     }
-    final subject = {'subject_fingerprint': after['native_subject_fingerprint'], 'permission_class': after['permission_class']};
-    return _personalPeopleResult(request, subject, subject, null,
+    final subject = {
+      'subject_fingerprint': after['native_subject_fingerprint'],
+      'permission_class': after['permission_class'],
+    };
+    return _personalPeopleResult(
+      request,
+      subject,
+      subject,
+      null,
       domain == 'people' ? 'apple_contacts' : 'apple_health',
       resources: (after['resources'] as List).cast<Map>(),
-      catalogComplete: after['catalog_complete'] as bool);
+      catalogComplete: after['catalog_complete'] as bool,
+    );
   }
   if (domain == 'wellbeing') {
     final before = await native.inspectWellbeingSubject();
     final expected = request['expected_native_subject_fingerprint'];
-    if (expected != null && before['subject_fingerprint'] != expected) throw PlatformException(code: 'permission_denied');
+    if (expected != null && before['subject_fingerprint'] != expected)
+      throw PlatformException(code: 'permission_denied');
     if (mode == 'inspect_subject') {
       final after = await native.inspectWellbeingSubject();
-      return _personalPeopleResult(request, before, after, null, 'apple_health');
+      return _personalPeopleResult(
+        request,
+        before,
+        after,
+        null,
+        'apple_health',
+      );
     }
-    if (mode != 'read_projection') throw PlatformException(code: 'provider_unavailable');
+    if (mode != 'read_projection')
+      throw PlatformException(code: 'provider_unavailable');
     final result = await native.readWellbeingAcquisition({
-      'request_id': request['request_id'], 'host_epoch': request['host_epoch'],
-      'person_id': request['person_id'], 'device_id': request['device_id'],
+      'request_id': request['request_id'],
+      'host_epoch': request['host_epoch'],
+      'person_id': request['person_id'],
+      'device_id': request['device_id'],
       'native_subject_fingerprint': before['subject_fingerprint'],
     });
     final after = await native.inspectWellbeingSubject();
     return {
-      ..._personalPeopleResult(request, before, after, Map<String,dynamic>.from(result['view'] as Map), 'apple_health'),
-      'transform_operation_id': (result['privacy_transform'] as Map)['operation_id'],
+      ..._personalPeopleResult(
+        request,
+        before,
+        after,
+        Map<String, dynamic>.from(result['view'] as Map),
+        'apple_health',
+      ),
+      'transform_operation_id':
+          (result['privacy_transform'] as Map)['operation_id'],
     };
   }
   final selected = request['selected_handles'];
-  if (domain != 'people' || selected is! List || selected.isEmpty || selected.any((value) => value is! String)) {
+  if (domain != 'people' ||
+      selected is! List ||
+      selected.isEmpty ||
+      selected.any((value) => value is! String)) {
     throw PlatformException(code: 'provider_unavailable');
   }
   final handles = selected.cast<String>();
   final before = await native.inspectContactsSubject(handles);
   final expected = request['expected_native_subject_fingerprint'];
-  if (expected != null && before['subject_fingerprint'] != expected) throw PlatformException(code: 'permission_denied');
-  Map<String,dynamic>? view;
+  if (expected != null && before['subject_fingerprint'] != expected)
+    throw PlatformException(code: 'permission_denied');
+  Map<String, dynamic>? view;
   if (mode == 'read_projection') {
-    view = await native.readContacts(limit: handles.length, selectedHandles: handles);
+    view = await native.readContacts(
+      limit: handles.length,
+      selectedHandles: handles,
+    );
   } else if (mode != 'inspect_subject') {
     throw PlatformException(code: 'provider_unavailable');
   }
@@ -295,7 +354,8 @@ PersonalAcquisitionReader _androidContactsReader(
   String deviceId,
 ) => (request) async {
   final selected = request['selected_handles'];
-  if (request['mode'] != 'read_projection' || request['domain'] != 'people' ||
+  if (request['mode'] != 'read_projection' ||
+      request['domain'] != 'people' ||
       request['device_id'] != deviceId ||
       selected is! List ||
       selected.isEmpty ||

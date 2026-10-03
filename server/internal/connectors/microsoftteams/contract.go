@@ -1,11 +1,9 @@
 package microsoftteams
 
 import (
- "floe/server/internal/integrations"
- "floe/server/internal/views"
 	"encoding/json"
-
-	
+	"floe/server/internal/integrations"
+	"floe/server/internal/views"
 )
 
 const observeScope = "ChannelMessage.Read.All"

@@ -1,35 +1,42 @@
 use floe_agent_contract::{
-    AgentMessage, BatchCursor, DependencyCoverage, EngineStep, JournalEvent, ModelConversation,
-    ReplayReceipt, ValidatedModelBatch,
+    AgentMessage, BatchCursor, DependencyCoverage, JournalEvent, ModelConversation, ReplayReceipt,
+    ValidatedModelBatch,
 };
 use floe_kernel::{AgentFailure, CommandId, RunId};
 use uuid::Uuid;
 
 mod intent;
 mod purpose;
-pub use purpose::{CONVERSATION_PURPOSE, CONVERSATION_CONSUMER};
+pub use purpose::{CONVERSATION_CONSUMER, CONVERSATION_PURPOSE};
 mod interaction;
 mod run_record;
 mod source_review;
-pub use source_review::{ProjectionReviewRecord, ProjectionReviewPublication, BlockedRunCommit, OwnerResolutionReceipt, InteractionResolutionCommit, ResumeRequired, ResumeChildAdmission, PublishTaskProjectionReview};
-pub use run_record::{UnresolvedModelAttempt, RunRecord, RunState, RunReceipt, RunTerminal, RunBlockRecord, RunBlockOrigin, PriorExhaustion};
+pub use run_record::{
+    PriorExhaustion, RunBlockOrigin, RunBlockRecord, RunReceipt, RunRecord, RunState, RunTerminal,
+    UnresolvedModelAttempt,
+};
+pub use source_review::{
+    BlockedRunCommit, InteractionResolutionCommit, OwnerResolutionReceipt,
+    ProjectionReviewPublication, ProjectionReviewRecord, PublishTaskProjectionReview,
+    ResumeChildAdmission, ResumeRequired,
+};
 
 pub use intent::{
-    AdmittedExecution, CanonicalTurnIntent, MAX_TURN_TEXT_BYTES, StartTurn, ContinuationToken,
+    AdmittedExecution, CanonicalTurnIntent, ContinuationToken, MAX_TURN_TEXT_BYTES, StartTurn,
     normalize_turn_text,
 };
 pub use interaction::{
-    ConversationInteraction, InteractionRefresh, DecisionAdmission, 
-    ExpertBindingTarget, ExpireInteraction, ExpireOutcome, INTERACTION_PENDING_LIFETIME_MS,
-    InteractionDecision, InteractionDecisionKind, InteractionOrigin,
-    InteractionRequirement, InteractionRequirementKind, InteractionResolution,
-    InteractionResolutionReceipt, InteractionResumeRef, InteractionState,
-    MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_RESUME_LINEAGE,
-    MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES,
-    MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_BUNDLE_MEMBERS,
-    NavigationDestination, NavigationOnlyTarget, PublishAdmission,     ReviewedTarget, SupersedeInteraction, canonical_requirement_digest,
-    canonical_target_digest, decision_owner_command_id, interaction_publication_id,
-    next_state_after_decision, resume_command_id, state_after_resolution,
+    ConversationInteraction, DecisionAdmission, ExpertBindingTarget, ExpireInteraction,
+    ExpireOutcome, INTERACTION_PENDING_LIFETIME_MS, InteractionDecision, InteractionDecisionKind,
+    InteractionOrigin, InteractionRefresh, InteractionRequirement, InteractionRequirementKind,
+    InteractionResolution, InteractionResolutionReceipt, InteractionResumeRef, InteractionState,
+    MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_RESUME_LINEAGE, MAX_REVIEWED_IDENTIFIER_BYTES,
+    MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES, MAX_REVIEWED_TARGET_BYTES,
+    MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_BUNDLE_MEMBERS, NavigationDestination,
+    NavigationOnlyTarget, PublishAdmission, ReviewedTarget, SupersedeInteraction,
+    canonical_requirement_digest, canonical_target_digest, decision_owner_command_id,
+    interaction_publication_id, next_state_after_decision, resume_command_id,
+    state_after_resolution,
 };
 
 pub const MAX_COMPACTION_SUMMARY_BYTES: usize = 16 * 1024;
@@ -42,7 +49,9 @@ pub struct StartSessionRequest {
 impl StartSessionRequest {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         validate_principal(&self.principal)?;
-        if !self.command_id.is_valid() { return Err(AgentFailure::InvalidInput); }
+        if !self.command_id.is_valid() {
+            return Err(AgentFailure::InvalidInput);
+        }
         Ok(())
     }
 }
@@ -163,7 +172,10 @@ pub enum TurnMode {
 }
 
 #[derive(Clone, Debug)]
-pub enum TurnInput { NewMessage(AgentMessage), ExistingMessage { message_id: Uuid } }
+pub enum TurnInput {
+    NewMessage(AgentMessage),
+    ExistingMessage { message_id: Uuid },
+}
 
 #[derive(Clone, Debug)]
 pub struct TurnAdmissionRequest {
@@ -186,10 +198,18 @@ impl TurnAdmissionRequest {
         match (&self.mode, &self.input) {
             (TurnMode::New, TurnInput::NewMessage(message)) => {
                 message.validate()?;
-                if message.message_id != self.command_id.as_uuid() || message.role != floe_agent_contract::MessageRole::User
-                    || message.call_id.is_some() || message.coverage != DependencyCoverage::Independent { return Err(AgentFailure::InvalidInput); }
+                if message.message_id != self.command_id.as_uuid()
+                    || message.role != floe_agent_contract::MessageRole::User
+                    || message.call_id.is_some()
+                    || message.coverage != DependencyCoverage::Independent
+                {
+                    return Err(AgentFailure::InvalidInput);
+                }
             }
-            (TurnMode::Continue(_) | TurnMode::Resume(_), TurnInput::ExistingMessage { message_id }) if !message_id.is_nil() => {},
+            (
+                TurnMode::Continue(_) | TurnMode::Resume(_),
+                TurnInput::ExistingMessage { message_id },
+            ) if !message_id.is_nil() => {}
             _ => return Err(AgentFailure::InvalidInput),
         }
         if !self.run_id.is_valid()
@@ -199,8 +219,10 @@ impl TurnAdmissionRequest {
             || self.principal.is_empty()
             || self.principal.len() > 256
             || self.principal.chars().any(char::is_control)
-            || self.device_id.is_empty() || self.device_id.len() > 256
-            || self.device_id.trim() != self.device_id || self.device_id.chars().any(char::is_control)
+            || self.device_id.is_empty()
+            || self.device_id.len() > 256
+            || self.device_id.trim() != self.device_id
+            || self.device_id.chars().any(char::is_control)
             || self.request_digest == [0; 32]
             || self.retry_of.is_some_and(|run_id| !run_id.is_valid())
             || self.retry_of.is_some() && !matches!(&self.mode, TurnMode::New)
@@ -272,7 +294,8 @@ pub struct RecoveryRequest {
 
 impl RecoveryRequest {
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        if !self.command_id.is_valid() || self.session_id.is_nil()
+        if !self.command_id.is_valid()
+            || self.session_id.is_nil()
             || self.principal.trim() != self.principal
             || self.principal.is_empty()
             || self.principal.len() > 256

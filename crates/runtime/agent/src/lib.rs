@@ -3,7 +3,7 @@ mod capability;
 mod engine;
 pub use capability::execute_recorded;
 pub use engine::{
-    Engine, EngineSourceReview, EngineConfig, EngineOutcome, EnginePorts, EngineReport,
+    Engine, EngineConfig, EngineOutcome, EnginePorts, EngineReport, EngineSourceReview,
     FinalPayloadValidator, InvocationKind, stable_call_id, stable_invocation_key,
     stable_preamble_id, stable_task_id,
 };

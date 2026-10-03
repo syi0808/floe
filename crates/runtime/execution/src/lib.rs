@@ -12,5 +12,4 @@ pub mod tasks;
 pub use cancellation::{CancelReason, Cancellation};
 pub use scope::ExecutionScope;
 
-pub type BoxFuture<'a, T> =
-    std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;

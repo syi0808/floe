@@ -1,20 +1,18 @@
 package homeassistant
 
 import (
- "floe/server/internal/views"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"floe/server/internal/views"
 	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
-
-	
 )
 
 const maxEntities = 16
@@ -48,7 +46,6 @@ type stateResponse struct {
 		FriendlyName string `json:"friendly_name"`
 	} `json:"attributes"`
 }
-
 
 func New(tokens TokenSource, baseURL, connectionID string) (*Client, error) {
 	if tokens == nil || !validIdentifier(connectionID) {

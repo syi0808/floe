@@ -228,24 +228,25 @@ class _DayToolbar extends StatelessWidget {
             onPressed: onCreateEvent,
             icon: const Icon(LucideIcons.plus, size: 18),
           ),
-          if (controller.canRefresh) FloeButton.icon(
-            tooltip: AppLocalizations.of(context).refreshCalendar,
-            loading: controller.loadState == DayLoadState.loading,
-            onPressed: () async {
-              await controller.refresh();
-              if (!context.mounted ||
-                  controller.loadState != DayLoadState.ready ||
-                  controller.snapshot?.calendar?.error != null) {
-                return;
-              }
-              FloeToastHost.of(context).show(
-                title: AppLocalizations.of(context).calendarsRefreshed,
-                description: AppLocalizations.of(context)
-                    .localTasksAndNotesUnchanged,
-              );
-            },
-            icon: Icon(LucideIcons.refreshCw, size: 18),
-          ),
+          if (controller.canRefresh)
+            FloeButton.icon(
+              tooltip: AppLocalizations.of(context).refreshCalendar,
+              loading: controller.loadState == DayLoadState.loading,
+              onPressed: () async {
+                await controller.refresh();
+                if (!context.mounted ||
+                    controller.loadState != DayLoadState.ready ||
+                    controller.snapshot?.calendar?.error != null) {
+                  return;
+                }
+                FloeToastHost.of(context).show(
+                  title: AppLocalizations.of(context).calendarsRefreshed,
+                  description: AppLocalizations.of(context)
+                      .localTasksAndNotesUnchanged,
+                );
+              },
+              icon: Icon(LucideIcons.refreshCw, size: 18),
+            ),
         ],
       ),
     );

@@ -103,7 +103,8 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
           strings.agentInteractionStateSuperseded,
         AgentInteractionState.expired => strings.agentInteractionStateExpired,
         AgentInteractionState.stale => strings.agentInteractionStale,
-        AgentInteractionState.wrongDevice => strings.agentInteractionWrongDevice,
+        AgentInteractionState.wrongDevice =>
+          strings.agentInteractionWrongDevice,
       };
       return FloeSquircle(
         size: FloeSquircleSize.md,
@@ -173,13 +174,24 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
   ) => switch (target) {
     AgentSourceReviewTarget(:final review) => [
       _row(strings.agentInteractionMembers, review.displayMembers.join(', ')),
-      _row('Processing', review.processingDisclosure.requested == SourceProcessing.deviceOnly
-        ? 'On this device only'
-        : 'On this device or your verified Gateway'),
-      _row(strings.agentInteractionScopes, review.processingDisclosure.scopeLabels.join(', ')),
-      _row(strings.agentInteractionData, review.processingDisclosure.categories.join(', ')),
+      _row(
+        'Processing',
+        review.processingDisclosure.requested == SourceProcessing.deviceOnly
+            ? 'On this device only'
+            : 'On this device or your verified Gateway',
+      ),
+      _row(
+        strings.agentInteractionScopes,
+        review.processingDisclosure.scopeLabels.join(', '),
+      ),
+      _row(
+        strings.agentInteractionData,
+        review.processingDisclosure.categories.join(', '),
+      ),
     ],
-    AgentNavigationTarget(:final sourceLabel) => [_row(strings.agentInteractionSource, sourceLabel)],
+    AgentNavigationTarget(:final sourceLabel) => [
+      _row(strings.agentInteractionSource, sourceLabel),
+    ],
     AgentExpertBindingTarget(
       :final packageId,
       :final requirementKey,

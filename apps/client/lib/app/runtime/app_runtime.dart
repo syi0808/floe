@@ -1,6 +1,6 @@
 import 'package:floe_client/features/connections/infrastructure/app_wire_connections_gateway.dart';
-import 'dart:async';
 
+import 'dart:async';
 
 import 'package:floe_client/app/runtime/local_profile_selection.dart';
 import 'package:floe_client/features/knowledge/infrastructure/app_wire_memory_gateway.dart';
@@ -48,7 +48,9 @@ final class AppRuntime {
   final String deviceId;
   final String personId;
 
-  late final AppWireConversationClient client = AppWireConversationClient(_transport);
+  late final AppWireConversationClient client = AppWireConversationClient(
+    _transport,
+  );
   late final AppReadModel readModel = AppReadModel();
   late final vault = AppWireVaultGateway(_transport);
   late final conversation = AppWireConversationGateway(
@@ -71,10 +73,19 @@ final class AppRuntime {
       AppWireNativeContextHostTransport(_transport.nativeCallbacks);
   AppWireTransport get wireTransport => _transport;
 
-  static Future<AppRuntime> openSelected({required String deviceId, required ExistingLocalProfile profile}) async =>
-      AppRuntime._(await _open(NativeTransport.open(
-        libraryPath: resolveLibraryPath(), databasePath: profile.databasePath,
-      )), deviceId, profile.personId);
+  static Future<AppRuntime> openSelected({
+    required String deviceId,
+    required ExistingLocalProfile profile,
+  }) async => AppRuntime._(
+    await _open(
+      NativeTransport.open(
+        libraryPath: resolveLibraryPath(),
+        databasePath: profile.databasePath,
+      ),
+    ),
+    deviceId,
+    profile.personId,
+  );
 
   static Future<AppRuntime> open({
     required String libraryPath,

@@ -2,9 +2,11 @@
 
 Production source: `69e6c427aab0b3dbcbe194281536d05abf1bd6cf`. Documentation source: `72364ad47f098270a4447c8de2f059d9517d46f3`.
 
-This publication contains the compiler-focused production snapshot, the G1 command sheet, and the bounded Markdown documents listed below. It is not the full local Git tree. No compiler, analyzer, build, or test pass is claimed.
+This publication contains the compiler-focused production snapshot, the G1 command sheet, and the bounded Markdown documents listed below. It is not the full local Git tree. Original snapshot validation and the current correction status are documented in [G1 first pass](2026-10-03-g1-first-pass.md). Go internal compilation and Apple compiler-only phases passed; Rust and Dart remain pending correction validation. No tests or full application builds have run.
 
 Large behavior ledgers, generated source maps, machine-readable audit evidence, and other deferred files are retained in the local refactor checkout and existing delivery artifacts. Their relative links in published documents are **pending publication** where the referenced file is listed as deferred below. Omission does not mean the evidence was discarded or the audit was skipped.
+
+Current correction source: `359a6d02bf0d9f82a8adb5ac0d918edc96c05013`. The original production/document source identities above remain historical provenance.
 
 ## Published Markdown documents
 
@@ -52,6 +54,9 @@ Large behavior ledgers, generated source maps, machine-readable audit evidence, 
 - [t0-vault-behavior-ledger.md](t0-vault-behavior-ledger.md)
 - [t0-vault-removal-audit.md](t0-vault-removal-audit.md)
 
+- [G1 first compiler pass](2026-10-03-g1-first-pass.md)
+- [Execution status](t0-execution-status.json)
+
 ## Deferred evidence and large documents
 
 Every path in this list is pending publication; these are identifiers, not working links.
@@ -94,7 +99,6 @@ Every path in this list is pending publication; these are identifiers, not worki
 - `docs/plans/t0-client-behavior-ledger-presentation.json` (168260 bytes; Git blob `a0540607706e3cf308a9235a4952d45736b5dc00`)
 - `docs/plans/t0-client-behavior-ledger-sources.json` (885642 bytes; Git blob `187519d3d3c97c3933fd3c4002eba9e15992e468`)
 - `docs/plans/t0-context-native-semantic-audit.json` (984639 bytes; Git blob `24cd570d488329f4a80711fb922212b2e597a307`)
-- `docs/plans/t0-execution-status.json` (7747 bytes; Git blob `ff5041b34cd842ff6bb754854e53e3642e1b94c9`)
 - `docs/plans/t0-fixture-reference-audit/coordinator-disposition.json` (1686 bytes; Git blob `ad0199d2945ba36af1c01a0ea87ef73417955e4b`)
 - `docs/plans/t0-fixture-reference-audit/coverage.json` (6171 bytes; Git blob `5ae209c0dde812c43c3059394ea2628cbb4197dd`)
 - `docs/plans/t0-fixture-reference-audit/fixture_inventory.csv` (8101 bytes; Git blob `e8069fe37e67b94ccb29922fda41caa16480e010`)

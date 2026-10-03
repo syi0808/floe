@@ -54,7 +54,6 @@ pub trait MemoryReviewRepository: Send + Sync {
     ) -> impl Future<Output = Result<KnowledgeDecisionResult, AgentFailure>> + Send;
 }
 
-
 /// Opens the canonical durable journal for one admitted Learner job claim.
 pub trait LearnerJournalFactory: Send + Sync {
     fn journal(

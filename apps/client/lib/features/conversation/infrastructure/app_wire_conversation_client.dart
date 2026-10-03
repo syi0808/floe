@@ -101,14 +101,27 @@ final class AppCancelRunReceipt {
   final int runtimeEpoch;
 }
 
-enum AppRunState { accepted, executing, finalizing, cancelling, blocked, finished }
+enum AppRunState {
+  accepted,
+  executing,
+  finalizing,
+  cancelling,
+  blocked,
+  finished,
+}
 
 extension AppRunStateTerminal on AppRunState {
-  bool get terminal => this == AppRunState.finished || this == AppRunState.blocked;
+  bool get terminal =>
+      this == AppRunState.finished || this == AppRunState.blocked;
 }
 
 final class AppWireIssue {
-  const AppWireIssue(this.code, this.message, {this.metadata = const {}, this.ownerFailure});
+  const AppWireIssue(
+    this.code,
+    this.message, {
+    this.metadata = const {},
+    this.ownerFailure,
+  });
 
   final String code;
   final String message;
@@ -234,7 +247,8 @@ final class AppWireConversationClient {
     AppContinuationRef? continuation,
     String? retryOf,
   }) {
-    if (_closed) throw StateError('AppWireConversationClient is already closed.');
+    if (_closed)
+      throw StateError('AppWireConversationClient is already closed.');
     final normalizedText = _normalizeTurnText(text);
     if (sessionId.isEmpty ||
         expectedRevision < 0 ||
@@ -258,7 +272,8 @@ final class AppWireConversationClient {
     PreparedStartTurn command, {
     Duration timeout = const Duration(seconds: 3),
   }) {
-    if (_closed) return Future.error(StateError('AppWireConversationClient is closed.'));
+    if (_closed)
+      return Future.error(StateError('AppWireConversationClient is closed.'));
     final requestId = _newId();
     return _correlate(requestId, () async {
       final normalizedText = _normalizeTurnText(command.text);
@@ -271,7 +286,8 @@ final class AppWireConversationClient {
           'session_id': command.sessionId,
           'expected_revision': command.expectedRevision,
           'text': normalizedText,
-          if (command.continuation case final continuation?) 'continuation_ref': {'id': continuation.id},
+          if (command.continuation case final continuation?)
+            'continuation_ref': {'id': continuation.id},
           'retry_of': ?command.retryOf,
         },
       }, timeout: timeout);
@@ -280,7 +296,8 @@ final class AppWireConversationClient {
   }
 
   PreparedCancelRun prepareCancelRun(String runId) {
-    if (_closed) throw StateError('AppWireConversationClient is already closed.');
+    if (_closed)
+      throw StateError('AppWireConversationClient is already closed.');
     if (runId.isEmpty) throw const FormatException('Invalid Run ID.');
     return PreparedCancelRun(commandId: _newId(), runId: runId);
   }
@@ -289,7 +306,8 @@ final class AppWireConversationClient {
     PreparedCancelRun command, {
     Duration timeout = const Duration(seconds: 3),
   }) {
-    if (_closed) return Future.error(StateError('AppWireConversationClient is closed.'));
+    if (_closed)
+      return Future.error(StateError('AppWireConversationClient is closed.'));
     final requestId = _newId();
     return _correlate(requestId, () async {
       final result = await _transport.commandV2({
@@ -331,7 +349,8 @@ final class AppWireConversationClient {
     String commandId, {
     Duration timeout = const Duration(seconds: 3),
   }) {
-    if (_closed) return Future.error(StateError('AppWireConversationClient is closed.'));
+    if (_closed)
+      return Future.error(StateError('AppWireConversationClient is closed.'));
     final requestId = _newId();
     return _correlate(requestId, () async {
       final result = await _transport.queryV2({
@@ -351,7 +370,8 @@ final class AppWireConversationClient {
     String runId, {
     Duration timeout = const Duration(seconds: 3),
   }) {
-    if (_closed) return Future.error(StateError('AppWireConversationClient is closed.'));
+    if (_closed)
+      return Future.error(StateError('AppWireConversationClient is closed.'));
     final requestId = _newId();
     return _correlate(requestId, () async {
       final result = await _transport.queryV2({
@@ -367,7 +387,8 @@ final class AppWireConversationClient {
     String messageId, {
     Duration timeout = const Duration(seconds: 3),
   }) {
-    if (_closed) return Future.error(StateError('AppWireConversationClient is closed.'));
+    if (_closed)
+      return Future.error(StateError('AppWireConversationClient is closed.'));
     final requestId = _newId();
     return _correlate(requestId, () async {
       final result = await _transport.queryV2({
@@ -396,7 +417,8 @@ final class AppWireConversationClient {
     required AgentInteractionDecision decision,
     required String targetDigest,
   }) {
-    if (_closed) throw StateError('AppWireConversationClient is already closed.');
+    if (_closed)
+      throw StateError('AppWireConversationClient is already closed.');
     if (interactionId.isEmpty ||
         sessionId.isEmpty ||
         expectedRevision <= 0 ||
@@ -417,7 +439,8 @@ final class AppWireConversationClient {
     PreparedInteractionResolve command, {
     Duration timeout = const Duration(seconds: 15),
   }) {
-    if (_closed) return Future.error(StateError('AppWireConversationClient is closed.'));
+    if (_closed)
+      return Future.error(StateError('AppWireConversationClient is closed.'));
     final requestId = _newId();
     return _correlate(requestId, () async {
       final result = await _transport.commandV2({
@@ -450,7 +473,8 @@ final class AppWireConversationClient {
     required String sessionId,
     required int expectedRevision,
   }) {
-    if (_closed) throw StateError('AppWireConversationClient is already closed.');
+    if (_closed)
+      throw StateError('AppWireConversationClient is already closed.');
     if (interactionId.isEmpty || sessionId.isEmpty || expectedRevision <= 0) {
       throw const FormatException('Invalid interaction refresh.');
     }
@@ -466,7 +490,8 @@ final class AppWireConversationClient {
     PreparedInteractionRefresh command, {
     Duration timeout = const Duration(seconds: 15),
   }) {
-    if (_closed) return Future.error(StateError('AppWireConversationClient is closed.'));
+    if (_closed)
+      return Future.error(StateError('AppWireConversationClient is closed.'));
     final requestId = _newId();
     return _correlate(requestId, () async {
       final result = await _transport.commandV2({
@@ -492,7 +517,8 @@ final class AppWireConversationClient {
     String interactionId, {
     Duration timeout = const Duration(seconds: 3),
   }) {
-    if (_closed) return Future.error(StateError('AppWireConversationClient is closed.'));
+    if (_closed)
+      return Future.error(StateError('AppWireConversationClient is closed.'));
     if (interactionId.isEmpty) {
       return Future.error(const FormatException('Invalid interaction ID.'));
     }
@@ -511,8 +537,11 @@ final class AppWireConversationClient {
           payload['interaction_id'] == interactionId) {
         return null;
       }
-      if (payload['kind'] != 'interaction') throw const FormatException('Invalid interaction result kind.');
-      final snapshot = AgentInteractionSnapshot.parse(Map<String,dynamic>.from(payload)..remove('kind'));
+      if (payload['kind'] != 'interaction')
+        throw const FormatException('Invalid interaction result kind.');
+      final snapshot = AgentInteractionSnapshot.parse(
+        Map<String, dynamic>.from(payload)..remove('kind'),
+      );
       if (snapshot.id != interactionId) {
         throw const FormatException('Interaction scope mismatch.');
       }
@@ -524,7 +553,8 @@ final class AppWireConversationClient {
     String sessionId, {
     Duration timeout = const Duration(seconds: 3),
   }) {
-    if (_closed) return Future.error(StateError('AppWireConversationClient is closed.'));
+    if (_closed)
+      return Future.error(StateError('AppWireConversationClient is closed.'));
     if (sessionId.isEmpty) {
       return Future.error(const FormatException('Invalid session ID.'));
     }
@@ -542,7 +572,8 @@ final class AppWireConversationClient {
       final interactions = payload['interactions'];
       if (payload['kind'] != 'interaction_list' ||
           payload['session_id'] != sessionId ||
-          interactions is! List || interactions.length > 64) {
+          interactions is! List ||
+          interactions.length > 64) {
         throw const FormatException('Invalid interaction list.');
       }
       return List<AgentInteractionSnapshot>.unmodifiable(
@@ -556,7 +587,8 @@ final class AppWireConversationClient {
     int limit = 64,
     Duration timeout = const Duration(seconds: 3),
   }) {
-    if (_closed) return Future.error(StateError('AppWireConversationClient is closed.'));
+    if (_closed)
+      return Future.error(StateError('AppWireConversationClient is closed.'));
     if (limit <= 0 ||
         limit > 256 ||
         (after != null && (after.runtimeEpoch <= 0 || after.cursor < 0))) {
@@ -661,14 +693,17 @@ final class AppWireConversationClient {
     _pending.clear();
     for (final completer in pending) {
       if (!completer.isCompleted) {
-        completer.completeError(StateError('AppWireConversationClient closed.'));
+        completer.completeError(
+          StateError('AppWireConversationClient closed.'),
+        );
       }
     }
     await _transport.close();
   }
 
   Future<T> _correlate<T>(String requestId, Future<T> Function() invoke) {
-    if (_closed) return Future.error(StateError('AppWireConversationClient is closed.'));
+    if (_closed)
+      return Future.error(StateError('AppWireConversationClient is closed.'));
     if (_pending.containsKey(requestId)) {
       return Future.error(StateError('Duplicate app request ID.'));
     }
@@ -766,12 +801,33 @@ AppRunSnapshot _runSnapshot(
   Map<String, dynamic> result, {
   required String expectedRunId,
 }) {
-  _wireFields(result, {'kind','run_id','session_id','revision','runtime_epoch','executor_generation','state','progress','task_refs','attempt_refs'}, {'report'});
-  if (!_wireId(result['run_id']) || !_wireId(result['session_id']) ||
-      result['revision'] is! int || (result['revision'] as int) < 1 ||
-      result['runtime_epoch'] is! int || (result['runtime_epoch'] as int) < 1 ||
-      result['executor_generation'] is! int || (result['executor_generation'] as int) < 1 ||
-      result['progress'] is! String || !_wireRefs(result['task_refs']) || !_wireRefs(result['attempt_refs'])) {
+  _wireFields(
+    result,
+    {
+      'kind',
+      'run_id',
+      'session_id',
+      'revision',
+      'runtime_epoch',
+      'executor_generation',
+      'state',
+      'progress',
+      'task_refs',
+      'attempt_refs',
+    },
+    {'report'},
+  );
+  if (!_wireId(result['run_id']) ||
+      !_wireId(result['session_id']) ||
+      result['revision'] is! int ||
+      (result['revision'] as int) < 1 ||
+      result['runtime_epoch'] is! int ||
+      (result['runtime_epoch'] as int) < 1 ||
+      result['executor_generation'] is! int ||
+      (result['executor_generation'] as int) < 1 ||
+      result['progress'] is! String ||
+      !_wireRefs(result['task_refs']) ||
+      !_wireRefs(result['attempt_refs'])) {
     throw const FormatException('Invalid Run projection.');
   }
   if (result['kind'] != 'run_snapshot' || result['run_id'] != expectedRunId) {
@@ -785,15 +841,32 @@ AppRunSnapshot _runSnapshot(
   AppTurnReport? report;
   if (reportValue != null) {
     final source = _map(reportValue);
-    _wireFields(source, {'execution','reply','issues','action_refs','interaction_refs'}, {'final_message_ref'});
-    if (!_wireRefs(source['action_refs']) || !_wireRefs(source['interaction_refs']) ||
-        source['final_message_ref'] != null && !_wireId(source['final_message_ref'])) {
+    _wireFields(
+      source,
+      {'execution', 'reply', 'issues', 'action_refs', 'interaction_refs'},
+      {'final_message_ref'},
+    );
+    if (!_wireRefs(source['action_refs']) ||
+        !_wireRefs(source['interaction_refs']) ||
+        source['final_message_ref'] != null &&
+            !_wireId(source['final_message_ref'])) {
       throw const FormatException('Invalid report references.');
     }
     final issues = source['issues'];
     if (issues is! List ||
-        !{'completed','partial','blocked','failed','cancelled','indeterminate'}.contains(source['execution']) ||
-        !{'generated','policy_notice','not_produced'}.contains(source['reply'])) {
+        !{
+          'completed',
+          'partial',
+          'blocked',
+          'failed',
+          'cancelled',
+          'indeterminate',
+        }.contains(source['execution']) ||
+        !{
+          'generated',
+          'policy_notice',
+          'not_produced',
+        }.contains(source['reply'])) {
       throw const FormatException('Invalid app turn report.');
     }
     if (source['execution'] == 'blocked' &&
@@ -806,11 +879,17 @@ AppRunSnapshot _runSnapshot(
       issues: issues
           .map((issue) {
             final value = _map(issue);
-            _wireFields(value, {'code','message'}, {'field','metadata','owner_failure'});
+            _wireFields(
+              value,
+              {'code', 'message'},
+              {'field', 'metadata', 'owner_failure'},
+            );
             return AppWireIssue(
               value['code'] as String,
               value['message'] as String,
-              ownerFailure: value['owner_failure'] == null ? null : OwnerFailure.fromJson(value['owner_failure']),
+              ownerFailure: value['owner_failure'] == null
+                  ? null
+                  : OwnerFailure.fromJson(value['owner_failure']),
               metadata: Map.unmodifiable(
                 _map(value['metadata'] ?? const <String, Object?>{})
                     .map((key, value) => MapEntry(key, value as String)),
@@ -822,7 +901,9 @@ AppRunSnapshot _runSnapshot(
     );
   }
   if (state == AppRunState.blocked &&
-      (report?.execution != 'blocked' || report?.reply != 'not_produced' || report?.finalMessageRef != null)) {
+      (report?.execution != 'blocked' ||
+          report?.reply != 'not_produced' ||
+          report?.finalMessageRef != null)) {
     throw const FormatException('Invalid blocked Run report.');
   }
   if (report?.execution == 'blocked' && state != AppRunState.blocked) {
@@ -843,14 +924,26 @@ AppRunSnapshot _runSnapshot(
 Map<String, dynamic> _map(Object? value) =>
     Map<String, dynamic>.from(value! as Map);
 
-void _wireFields(Map<String,dynamic> value, Set<String> required, [Set<String> optional = const {}]) {
-  if (!value.keys.toSet().containsAll(required) || value.keys.toSet().difference({...required,...optional}).isNotEmpty) {
+void _wireFields(
+  Map<String, dynamic> value,
+  Set<String> required, [
+  Set<String> optional = const {},
+]) {
+  if (!value.keys.toSet().containsAll(required) ||
+      value.keys.toSet().difference({...required, ...optional}).isNotEmpty) {
     throw const FormatException('Invalid owner projection fields.');
   }
 }
-bool _wireId(Object? value) => value is String && value != '00000000-0000-0000-0000-000000000000' &&
-  RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$').hasMatch(value);
-bool _wireRefs(Object? value) => value is List && value.every(_wireId) && value.toSet().length == value.length;
+
+bool _wireId(Object? value) =>
+    value is String &&
+    value != '00000000-0000-0000-0000-000000000000' &&
+    RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+        .hasMatch(value);
+bool _wireRefs(Object? value) =>
+    value is List &&
+    value.every(_wireId) &&
+    value.toSet().length == value.length;
 
 String _uuidV4() {
   final random = Random.secure();

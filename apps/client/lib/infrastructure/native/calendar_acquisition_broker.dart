@@ -10,7 +10,7 @@ typedef CalendarAcquisitionReader = Future<Map<String, dynamic>> Function(
 
 final class CalendarAcquisitionBroker {
   CalendarAcquisitionBroker({required NativeContextHostTransport transport})
-      : _transport = transport;
+    : _transport = transport;
 
   final NativeContextHostTransport _transport;
   NativeHostRegistration? _registration;
@@ -23,8 +23,7 @@ final class CalendarAcquisitionBroker {
   Future<void> start() async {
     _ensureOpen();
     if (_started) return;
-    _registration = await _transport.registerAcquisitionHost(
-    );
+    _registration = await _transport.registerAcquisitionHost();
     if (_disposed) {
       await _transport.disposeAcquisitionHost(registration: _registration!);
       throw StateError('Native host was detached during registration.');
@@ -84,9 +83,7 @@ final class CalendarAcquisitionBroker {
     if (_disposed) return;
     _disposed = true;
     if (_started) {
-      await _transport.disposeAcquisitionHost(
-        registration: _registration!,
-      );
+      await _transport.disposeAcquisitionHost(registration: _registration!);
     }
   }
 
@@ -160,23 +157,40 @@ final class CalendarAcquisitionBroker {
       throw const FormatException('Native subject changed before acquisition.');
     }
     if (request['mode'] == 'request_permission' &&
-        (!{'request_completed','denied','unavailable'}.contains(result['permission_class']) ||
-         (result['available_calendar_ids'] as List).isNotEmpty || (result['available_calendars'] as List).isNotEmpty)) {
+        (!{
+              'request_completed',
+              'denied',
+              'unavailable',
+            }.contains(result['permission_class']) ||
+            (result['available_calendar_ids'] as List).isNotEmpty ||
+            (result['available_calendars'] as List).isNotEmpty)) {
       throw const FormatException('Invalid Calendar permission outcome.');
     }
     final resources = result['available_calendars'];
-    if (resources is! List || resources.length > 256 || resources.any((value) =>
-        value is! Map || value.length != 2 || value['handle'] is! String || value['label'] is! String ||
-        (value['handle'] as String).isEmpty || (value['handle'] as String).length > 512 ||
-        (value['label'] as String).isEmpty || (value['label'] as String).length > 256 ||
-        RegExp(r'[\x00-\x1f\x7f]').hasMatch(value['label'] as String))) {
+    if (resources is! List ||
+        resources.length > 256 ||
+        resources.any(
+          (value) =>
+              value is! Map ||
+              value.length != 2 ||
+              value['handle'] is! String ||
+              value['label'] is! String ||
+              (value['handle'] as String).isEmpty ||
+              (value['handle'] as String).length > 512 ||
+              (value['label'] as String).isEmpty ||
+              (value['label'] as String).length > 256 ||
+              RegExp(r'[\x00-\x1f\x7f]').hasMatch(value['label'] as String),
+        )) {
       throw const FormatException('Invalid native Calendar catalog.');
     }
-    final resourceIDs = resources.map((value) => (value as Map)['handle'] as String).toList();
+    final resourceIDs = resources
+        .map((value) => (value as Map)['handle'] as String)
+        .toList();
     final available = result['available_calendar_ids'];
     if (available is! List ||
         !_deepEqual(available, resourceIDs) ||
-        ({'inspect_catalog','request_permission'}.contains(request['mode']) && (request['calendar_ids'] as List).isNotEmpty) ||
+        ({'inspect_catalog', 'request_permission'}.contains(request['mode']) &&
+            (request['calendar_ids'] as List).isNotEmpty) ||
         available.any((value) => value is! String) ||
         !_sortedUnique(available.cast<String>()) ||
         !(request['calendar_ids'] as List).every(available.contains) ||
@@ -231,8 +245,6 @@ final class CalendarAcquisitionBroker {
     }
     return left == right;
   }
-
-
 }
 
 final class CalendarAcquisitionService {
@@ -240,7 +252,9 @@ final class CalendarAcquisitionService {
     required CalendarAcquisitionBroker broker,
     required CalendarAcquisitionReader reader,
     Duration pollInterval = const Duration(milliseconds: 100),
-  }) : _broker = broker, _reader = reader, _pollInterval = pollInterval;
+  }) : _broker = broker,
+       _reader = reader,
+       _pollInterval = pollInterval;
 
   final CalendarAcquisitionBroker _broker;
   final CalendarAcquisitionReader _reader;

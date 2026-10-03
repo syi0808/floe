@@ -7,8 +7,8 @@ mod ports;
 pub use api::{ModelConsumer, ModelPurpose};
 pub use application::{InferenceAvailability, InferenceService};
 pub use floe_agent_contract::{
-    ModelBindingDigest, ModelCapabilities, ModelCapability, ModelPlanRequest,
-    PreparedModelPlan, ProcessingBoundary,
+    ModelBindingDigest, ModelCapabilities, ModelCapability, ModelPlanRequest, PreparedModelPlan,
+    ProcessingBoundary,
 };
 pub use ports::model_provider::{
     AdmittedDispatchTarget, CanonicalModelRequest, CanonicalModelResponse, LocalAvailabilityReason,

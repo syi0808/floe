@@ -12,14 +12,13 @@ use crate::RequirementReadOutcome;
 use floe_agent_contract::prompts::PromptAssembly;
 use floe_agent_contract::{
     AGENT_VERSION, AgentFailure, ExpertModel, ExpertModelAnswer, ExpertModelCall,
-    ExpertModelOutcome, SourceProjectionReview, SessionProtection,
+    ExpertModelOutcome, SessionProtection, SourceProjectionReview,
 };
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_context_contract::{
     CalendarContextView, CommunicationView, ContextEvidence, ContextIssueReason, ContextSource,
-    MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS,
-    calendar_context_evidence, communication_context_evidence, validate_calendar_context_view,
-    validate_communication_view,
+    MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, calendar_context_evidence,
+    communication_context_evidence, validate_calendar_context_view, validate_communication_view,
 };
 
 pub(crate) async fn read_declared_view<Host, View>(
@@ -175,7 +174,7 @@ pub(crate) async fn run_expert_model<Model: ExpertModel>(
             policy: policy.clone(),
             context,
             assignment: assignment.to_owned(),
-                max_output_bytes: max_output_bytes.min(8192),
+            max_output_bytes: max_output_bytes.min(8192),
             max_tokens: max_model_tokens,
             max_cost_micros: max_model_cost_micros,
             deadline,

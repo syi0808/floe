@@ -1,8 +1,8 @@
+use super::inference_wire::WireStep;
+use super::json::strict_json_bytes;
 use floe_agent_contract::{AgentFailure, MAX_CONTEXT_REFS, MAX_OUTPUT_BYTES, valid_context_refs};
 use serde::Deserialize;
 use serde_json::json;
-use super::inference_wire::WireStep;
-use super::json::strict_json_bytes;
 
 pub(crate) fn encode_agent_input(
     request: &floe_inference::CanonicalModelRequest,
@@ -50,7 +50,9 @@ pub(crate) fn encode_agent_input(
         .into_iter()
         .map(|tool| {
             let parameters = strict_object(&tool.input_schema)?;
-            if parameters["type"] != "object" { return Err(AgentFailure::InvalidInput); }
+            if parameters["type"] != "object" {
+                return Err(AgentFailure::InvalidInput);
+            }
             Ok(json!({
                 "type": "function",
                 "function": {
@@ -158,7 +160,6 @@ pub(crate) fn decode_agent_step(
                 input,
             })
         }
-
     }
 }
 
@@ -191,46 +192,77 @@ fn rewrite_tool_calls(message: &mut serde_json::Value) -> Result<(), AgentFailur
     Ok(())
 }
 
-
 fn strict_object(raw: &str) -> Result<serde_json::Value, AgentFailure> {
     strict_json_bytes(raw.as_bytes(), 32768)?;
-    let value: serde_json::Value = serde_json::from_str(raw).map_err(|_| AgentFailure::InvalidInput)?;
-    if !value.is_object() { return Err(AgentFailure::InvalidInput); }
+    let value: serde_json::Value =
+        serde_json::from_str(raw).map_err(|_| AgentFailure::InvalidInput)?;
+    if !value.is_object() {
+        return Err(AgentFailure::InvalidInput);
+    }
     Ok(value)
 }
 
 fn validate_input(input: &serde_json::Value) -> Result<(), AgentFailure> {
     let bytes = serde_json::to_vec(input).map_err(|_| AgentFailure::InvalidInput)?;
     strict_json_bytes(&bytes, 32768)?;
-    let messages = input["messages"].as_array().ok_or(AgentFailure::InvalidInput)?;
-    let tools = input["tools"].as_array().ok_or(AgentFailure::InvalidInput)?;
-    if messages.is_empty() || messages.len() > 256 || tools.len() > 64 { return Err(AgentFailure::InvalidInput); }
+    let messages = input["messages"]
+        .as_array()
+        .ok_or(AgentFailure::InvalidInput)?;
+    let tools = input["tools"]
+        .as_array()
+        .ok_or(AgentFailure::InvalidInput)?;
+    if messages.is_empty() || messages.len() > 256 || tools.len() > 64 {
+        return Err(AgentFailure::InvalidInput);
+    }
     let mut used = std::collections::BTreeSet::new();
     let mut pending = std::collections::BTreeSet::new();
     for message in messages {
         match message["role"].as_str() {
             Some("tool") => {
-                let id = message["tool_call_id"].as_str().ok_or(AgentFailure::InvalidInput)?;
-                if !pending.remove(id) || !message["content"].is_string() { return Err(AgentFailure::InvalidInput); }
+                let id = message["tool_call_id"]
+                    .as_str()
+                    .ok_or(AgentFailure::InvalidInput)?;
+                if !pending.remove(id) || !message["content"].is_string() {
+                    return Err(AgentFailure::InvalidInput);
+                }
             }
             Some("user" | "assistant") => {
-                if !pending.is_empty() { return Err(AgentFailure::InvalidInput); }
+                if !pending.is_empty() {
+                    return Err(AgentFailure::InvalidInput);
+                }
                 if let Some(calls) = message.get("tool_calls") {
                     let calls = calls.as_array().ok_or(AgentFailure::InvalidInput)?;
-                    if calls.is_empty() || calls.len() > 8 { return Err(AgentFailure::InvalidInput); }
+                    if calls.is_empty() || calls.len() > 8 {
+                        return Err(AgentFailure::InvalidInput);
+                    }
                     for call in calls {
                         let id = call["id"].as_str().ok_or(AgentFailure::InvalidInput)?;
-                        if !super::inference_wire::valid_call_id(id) || !used.insert(id.to_owned()) { return Err(AgentFailure::InvalidInput); }
+                        if !super::inference_wire::valid_call_id(id) || !used.insert(id.to_owned())
+                        {
+                            return Err(AgentFailure::InvalidInput);
+                        }
                         pending.insert(id.to_owned());
-                        let name = call["function"]["name"].as_str().ok_or(AgentFailure::InvalidInput)?;
-                        if !super::inference_wire::valid_alias(name) { return Err(AgentFailure::InvalidInput); }
-                        strict_object(call["function"]["arguments"].as_str().ok_or(AgentFailure::InvalidInput)?)?;
+                        let name = call["function"]["name"]
+                            .as_str()
+                            .ok_or(AgentFailure::InvalidInput)?;
+                        if !super::inference_wire::valid_alias(name) {
+                            return Err(AgentFailure::InvalidInput);
+                        }
+                        strict_object(
+                            call["function"]["arguments"]
+                                .as_str()
+                                .ok_or(AgentFailure::InvalidInput)?,
+                        )?;
                     }
-                } else if !message["content"].is_string() { return Err(AgentFailure::InvalidInput); }
+                } else if !message["content"].is_string() {
+                    return Err(AgentFailure::InvalidInput);
+                }
             }
             _ => return Err(AgentFailure::InvalidInput),
         }
     }
-    if !pending.is_empty() { return Err(AgentFailure::InvalidInput); }
+    if !pending.is_empty() {
+        return Err(AgentFailure::InvalidInput);
+    }
     Ok(())
 }

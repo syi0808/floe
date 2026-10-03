@@ -112,16 +112,39 @@ impl AcquisitionExchange for CalendarExchange {
             // The answer is not to this request; the request keeps waiting.
             return CompletionOutcome::Refuse(AgentFailure::StaleContext);
         }
-        if request.mode==CalendarAcquisitionMode::RequestPermission {
-            if !request.calendar_ids.is_empty()||!response.batches.is_empty()||!response.available_calendar_ids.is_empty()||!response.available_calendars.is_empty(){return CompletionOutcome::RejectKeepingDeadline(AgentFailure::PolicyDenied)}
+        if request.mode == CalendarAcquisitionMode::RequestPermission {
+            if !request.calendar_ids.is_empty()
+                || !response.batches.is_empty()
+                || !response.available_calendar_ids.is_empty()
+                || !response.available_calendars.is_empty()
+            {
+                return CompletionOutcome::RejectKeepingDeadline(AgentFailure::PolicyDenied);
+            }
             return CompletionOutcome::Accept;
         }
-        if response.available_calendars.len()>256
-            || response.available_calendars.iter().any(|resource|resource.handle.is_empty()||resource.handle.len()>512||resource.label.is_empty()||resource.label.len()>256||resource.label.chars().any(char::is_control))
-            || response.available_calendars.iter().map(|resource|&resource.handle).collect::<std::collections::BTreeSet<_>>() != response.available_calendar_ids.iter().collect::<std::collections::BTreeSet<_>>() {
+        if response.available_calendars.len() > 256
+            || response.available_calendars.iter().any(|resource| {
+                resource.handle.is_empty()
+                    || resource.handle.len() > 512
+                    || resource.label.is_empty()
+                    || resource.label.len() > 256
+                    || resource.label.chars().any(char::is_control)
+            })
+            || response
+                .available_calendars
+                .iter()
+                .map(|resource| &resource.handle)
+                .collect::<std::collections::BTreeSet<_>>()
+                != response
+                    .available_calendar_ids
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+        {
             return CompletionOutcome::RejectKeepingDeadline(AgentFailure::PolicyDenied);
         }
-        if response.mode==CalendarAcquisitionMode::InspectCatalog && (!request.calendar_ids.is_empty()||!response.batches.is_empty()) {
+        if response.mode == CalendarAcquisitionMode::InspectCatalog
+            && (!request.calendar_ids.is_empty() || !response.batches.is_empty())
+        {
             return CompletionOutcome::RejectKeepingDeadline(AgentFailure::PolicyDenied);
         }
         if response.mode == CalendarAcquisitionMode::ReadEvents

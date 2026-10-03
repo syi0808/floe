@@ -29,11 +29,22 @@ impl AdmittedDispatchTarget {
         }
     }
 
-    pub fn matches(&self, binding_digest: &ModelBindingDigest, boundary: ProcessingBoundary) -> bool {
+    pub fn matches(
+        &self,
+        binding_digest: &ModelBindingDigest,
+        boundary: ProcessingBoundary,
+    ) -> bool {
         self.binding_digest == *binding_digest
-            && matches!((&self.target, boundary),
-                (floe_access::ModelDispatchTarget::Device, ProcessingBoundary::Device)
-                | (floe_access::ModelDispatchTarget::Gateway { .. }, ProcessingBoundary::Gateway))
+            && matches!(
+                (&self.target, boundary),
+                (
+                    floe_access::ModelDispatchTarget::Device,
+                    ProcessingBoundary::Device
+                ) | (
+                    floe_access::ModelDispatchTarget::Gateway { .. },
+                    ProcessingBoundary::Gateway
+                )
+            )
     }
 }
 
@@ -57,14 +68,24 @@ impl CanonicalModelRequest {
             || self.max_output_bytes == 0
             || self.max_output_bytes > floe_agent_contract::MAX_OUTPUT_BYTES
             || self.input_data_classes.is_empty()
-            || self.input_data_classes.iter().any(|class| !matches!(class,
-                DataClass::Synthetic | DataClass::Personal | DataClass::HighlySensitive))
+            || self.input_data_classes.iter().any(|class| {
+                !matches!(
+                    class,
+                    DataClass::Synthetic | DataClass::Personal | DataClass::HighlySensitive
+                )
+            })
         {
             return Err(AgentFailure::InvalidInput);
         }
         self.envelope.validate()?;
-        self.catalog.tools.iter().try_for_each(floe_agent_contract::ToolDescriptor::validate)?;
-        self.catalog.cards.iter().try_for_each(floe_agent_contract::AgentDefinition::validate)
+        self.catalog
+            .tools
+            .iter()
+            .try_for_each(floe_agent_contract::ToolDescriptor::validate)?;
+        self.catalog
+            .cards
+            .iter()
+            .try_for_each(floe_agent_contract::AgentDefinition::validate)
     }
 }
 
@@ -146,7 +167,9 @@ pub enum ModelObservationError {
 impl From<ModelObservationError> for AgentFailure {
     fn from(error: ModelObservationError) -> Self {
         match error {
-            ModelObservationError::InvalidIdentity | ModelObservationError::PermissionDenied => Self::PolicyDenied,
+            ModelObservationError::InvalidIdentity | ModelObservationError::PermissionDenied => {
+                Self::PolicyDenied
+            }
             ModelObservationError::InvalidInventory => Self::ServerModelInvalidOutput,
             ModelObservationError::CredentialRejected => Self::CredentialExpired,
             ModelObservationError::Timeout => Self::DeadlineExceeded,

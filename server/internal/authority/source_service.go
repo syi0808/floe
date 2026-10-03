@@ -1,15 +1,15 @@
 package authority
 
 import (
- "floe/server/internal/views"
 	"context"
- "floe/server/internal/trust"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"floe/server/internal/trust"
+	"floe/server/internal/views"
 	"io"
 	"reflect"
 	"regexp"
@@ -22,7 +22,7 @@ import (
 
 type SourceService struct {
 	Admissions                *Admissions
- Sign func([]byte) ([]byte,error)
+	Sign                      func([]byte) ([]byte, error)
 	Authority                 SourceAuthority
 	Engine                    func() *Engine
 	Metadata                  func() (map[string]any, error)
@@ -215,7 +215,7 @@ func (service *SourceService) readRemoteView(ctx context.Context, viewID, connec
 		if err != nil {
 			return nil, 0, err
 		}
-		return normalizedView(view,views.Calendar)
+		return normalizedView(view, views.Calendar)
 	}
 	var payload struct {
 		Query  string `json:"query"`
@@ -242,7 +242,7 @@ func (service *SourceService) readRemoteView(ctx context.Context, viewID, connec
 			}
 			view, err := runtime.ReadCommunicationView(ctx, payload.Query, payload.Cursor, payload.Limit)
 			if err == nil {
-				return normalizedView(view,views.ID(viewID))
+				return normalizedView(view, views.ID(viewID))
 			}
 		}
 		return nil, 0, errors.New("mail unavailable")
@@ -265,7 +265,7 @@ func (service *SourceService) readRemoteView(ctx context.Context, viewID, connec
 			}
 			view, err := runtime.ReadWorkContextView(ctx)
 			if err == nil {
-				return normalizedView(view,views.ID(viewID))
+				return normalizedView(view, views.ID(viewID))
 			}
 		}
 	} else {
@@ -283,7 +283,7 @@ func (service *SourceService) readRemoteView(ctx context.Context, viewID, connec
 			}
 			view, err := runtime.ReadLogisticsView(ctx)
 			if err == nil {
-				return normalizedView(view,views.ID(viewID))
+				return normalizedView(view, views.ID(viewID))
 			}
 		}
 	}
@@ -376,8 +376,10 @@ func (service *SourceService) PreviewView(principal trust.Principal, viewID stri
 		return
 	}
 	signature, err := service.Sign(descriptorBytes)
- if err != nil { return operation.Reject(operation.Unavailable,"producer_unavailable") }
- metadata["descriptor_b64url"] = base64.RawURLEncoding.EncodeToString(descriptorBytes)
+	if err != nil {
+		return operation.Reject(operation.Unavailable, "producer_unavailable")
+	}
+	metadata["descriptor_b64url"] = base64.RawURLEncoding.EncodeToString(descriptorBytes)
 	metadata["producer_signature"] = base64.RawURLEncoding.EncodeToString(signature)
 	metadata["expires_at_unix_ms"] = time.Now().Add(30 * time.Second).UnixMilli()
 	metadata["connection_revision"] = record.Revision
@@ -477,8 +479,11 @@ func (service *SourceService) AdmitView(ctx context.Context, principal trust.Pri
 	service.Admissions.remoteView[challenge.ID] = remoteViewAdmissionState{path: viewID, query: append([]byte(nil), input.Query...), principal: principal, connectorID: record.ConnectorID, connectionID: record.ConnectionID, connectionRev: input.ConnectionRevision, sourceResources: append([]string(nil), sourceResources...), providerIdentity: record.ProviderIdentity, expires: challenge.ExpiresAt}
 	service.Admissions.mu.Unlock()
 	signature, err := service.Sign(challenge.Bytes)
- if err != nil { authority.CancelAdmission(challenge.ID);return operation.Reject(operation.Unavailable,"producer_unavailable") }
- outcome = operation.Accept(challengeReply("admission", challenge.ID, challenge.BytesB64, challenge.ExpiresAt, signature, metadata))
+	if err != nil {
+		authority.CancelAdmission(challenge.ID)
+		return operation.Reject(operation.Unavailable, "producer_unavailable")
+	}
+	outcome = operation.Accept(challengeReply("admission", challenge.ID, challenge.BytesB64, challenge.ExpiresAt, signature, metadata))
 	return
 }
 func (service *SourceService) ReadView(ctx context.Context, principal trust.Principal, viewID string, proof trust.Proof) (outcome operation.Result) {
@@ -524,16 +529,24 @@ func (service *SourceService) ReadView(ctx context.Context, principal trust.Prin
 		outcome = operation.Reject(operation.Conflict, "connection_changed")
 		return
 	}
-	if err := service.Authority.WithCurrentReference(principal, authorized.Source,func(views.SourceSnapshot)error{return nil});err!=nil { authority.CancelAdmission(admissionID);service.deleteRemoteViewAdmission(admissionID);return operation.Reject(operation.Denied,"source_changed") }
- result, items, err := service.readRemoteView(ctx, viewID, state.connectionID, state.connectorID, state.query, service.Communication, service.Work, service.Logistics)
+	if err := service.Authority.WithCurrentReference(principal, authorized.Source, func(views.SourceSnapshot) error { return nil }); err != nil {
+		authority.CancelAdmission(admissionID)
+		service.deleteRemoteViewAdmission(admissionID)
+		return operation.Reject(operation.Denied, "source_changed")
+	}
+	result, items, err := service.readRemoteView(ctx, viewID, state.connectionID, state.connectorID, state.query, service.Communication, service.Work, service.Logistics)
 	if err != nil {
 		authority.CancelAdmission(admissionID)
 		service.deleteRemoteViewAdmission(admissionID)
 		outcome = operation.Reject(operation.Unavailable, "view_unavailable")
 		return
 	}
-	if err := service.Authority.WithCurrentReference(principal,authorized.Source,func(views.SourceSnapshot)error{return nil});err!=nil { authority.CancelAdmission(admissionID);service.deleteRemoteViewAdmission(admissionID);return operation.Reject(operation.Denied,"source_changed") }
- release, err := authority.StageResult(admissionID, principal, authorized, result, items)
+	if err := service.Authority.WithCurrentReference(principal, authorized.Source, func(views.SourceSnapshot) error { return nil }); err != nil {
+		authority.CancelAdmission(admissionID)
+		service.deleteRemoteViewAdmission(admissionID)
+		return operation.Reject(operation.Denied, "source_changed")
+	}
+	release, err := authority.StageResult(admissionID, principal, authorized, result, items)
 	service.deleteRemoteViewAdmission(admissionID)
 	if err != nil {
 		outcome = operation.Reject(operation.Denied, "release_denied")
@@ -546,8 +559,11 @@ func (service *SourceService) ReadView(ctx context.Context, principal trust.Prin
 		return
 	}
 	signature, err := service.Sign(release.Bytes)
- if err != nil { authority.CancelRelease(release.ID);return operation.Reject(operation.Unavailable,"producer_unavailable") }
- outcome = operation.Accept(challengeReply("release", release.ID, release.BytesB64, release.ExpiresAt, signature, metadata))
+	if err != nil {
+		authority.CancelRelease(release.ID)
+		return operation.Reject(operation.Unavailable, "producer_unavailable")
+	}
+	outcome = operation.Accept(challengeReply("release", release.ID, release.BytesB64, release.ExpiresAt, signature, metadata))
 	return
 }
 func challengeReply(operation, id, bytesB64 string, expires time.Time, signature []byte, metadata map[string]any) map[string]any {
@@ -585,4 +601,31 @@ var connectionIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0
 func validConnectionID(value string) bool { return connectionIDPattern.MatchString(value) }
 func StrictJSON(data []byte) bool         { return rejectDuplicateJSON(data) == nil }
 
-func normalizedView(value any,id views.ID)([]byte,uint32,error){raw,err:=json.Marshal(value);if err!=nil{return nil,0,views.ErrInvalid};result:=views.Result{ViewID:id};var out any;switch id{case views.Calendar:result.Calendar=&views.CalendarView{};out=result.Calendar;case views.Communication:result.Communication=&views.CommunicationView{};out=result.Communication;case views.WorkContext:result.Work=&views.WorkContextView{};out=result.Work;case views.Logistics:result.Logistics=&views.LogisticsView{};out=result.Logistics;default:return nil,0,views.ErrInvalid};if trust.DecodeStrict(raw,out,1<<20,32)!=nil{return nil,0,views.ErrInvalid};return views.EncodeBounded(result,views.Bounds{MaxItems:128,MaxBytes:1<<20})}
+func normalizedView(value any, id views.ID) ([]byte, uint32, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, 0, views.ErrInvalid
+	}
+	result := views.Result{ViewID: id}
+	var out any
+	switch id {
+	case views.Calendar:
+		result.Calendar = &views.CalendarView{}
+		out = result.Calendar
+	case views.Communication:
+		result.Communication = &views.CommunicationView{}
+		out = result.Communication
+	case views.WorkContext:
+		result.Work = &views.WorkContextView{}
+		out = result.Work
+	case views.Logistics:
+		result.Logistics = &views.LogisticsView{}
+		out = result.Logistics
+	default:
+		return nil, 0, views.ErrInvalid
+	}
+	if trust.DecodeStrict(raw, out, 1<<20, 32) != nil {
+		return nil, 0, views.ErrInvalid
+	}
+	return views.EncodeBounded(result, views.Bounds{MaxItems: 128, MaxBytes: 1 << 20})
+}

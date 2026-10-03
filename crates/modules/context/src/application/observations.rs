@@ -21,17 +21,11 @@ use serde_json::Value;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::{
-    AttentionView, PeopleView, WellbeingView, validate_attention_view, validate_people_view,
-    validate_wellbeing_view,
-};
+use crate::{AttentionView, PeopleView, validate_attention_view, validate_people_view};
 
 /// The views a device may publish here.
-pub const ALLOWED_VIEW_IDS: [&str; 3] = [
-    "people.identity",
-    "attention.coarse",
-    "calendar.timeline",
-];
+pub const ALLOWED_VIEW_IDS: [&str; 3] =
+    ["people.identity", "attention.coarse", "calendar.timeline"];
 
 /// The most trusted observations kept per kind.
 const MAX_TRUSTED_ATTENTION: usize = 16;
@@ -136,7 +130,9 @@ impl ObservationRegistry {
         view: Value,
         received_wall_unix_ms: i64,
     ) -> Result<bool, AgentFailure> {
-        if view_id == "wellbeing.derived" { return Err(AgentFailure::PolicyDenied); }
+        if view_id == "wellbeing.derived" {
+            return Err(AgentFailure::PolicyDenied);
+        }
         let (observed_at_unix_ms, expires_at_unix_ms) =
             validate_view(view_id, &view, received_wall_unix_ms)?;
         let monotonic_ttl = Duration::from_millis(
@@ -436,8 +432,12 @@ impl ObservationRegistry {
         }
         if let Some(evidence) = &health_transform {
             evidence.validate(device_id, chrono::Utc::now())?;
-            if evidence.host_epoch != host_epoch || evidence.transformed_at.timestamp_millis() != observed_at_unix_ms
-                || evidence.expires_at.timestamp_millis() != expires_at_unix_ms { return Err(AgentFailure::PolicyDenied); }
+            if evidence.host_epoch != host_epoch
+                || evidence.transformed_at.timestamp_millis() != observed_at_unix_ms
+                || evidence.expires_at.timestamp_millis() != expires_at_unix_ms
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
         }
         let monotonic_ttl = Duration::from_millis(
             u64::try_from(expires_at_unix_ms - observed_at_unix_ms)

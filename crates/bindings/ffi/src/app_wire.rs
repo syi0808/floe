@@ -1,32 +1,62 @@
-use std::{collections::BTreeMap, time::Duration};
+use crate::bridge::FloeHandle;
+use floe_app::{
+    ActionCommands, ActionQueries, DayCommands, DayQueries, ExpertCommands, ExpertQueries,
+    KnowledgeCommands, KnowledgeQueries, NativeHostCommands, NativeHostQueries,
+    VaultLifecycleCommands, VaultLifecycleQueries,
+};
 use floe_kernel::AgentFailure;
 use floe_protocol::*;
-use floe_app::{ActionCommands, ActionQueries, DayCommands, DayQueries, ExpertCommands, ExpertQueries,
-    KnowledgeCommands, KnowledgeQueries, VaultLifecycleCommands, VaultLifecycleQueries, NativeHostCommands, NativeHostQueries};
-use crate::bridge::FloeHandle;
+use std::{collections::BTreeMap, time::Duration};
 pub(crate) type AppWireResult<T> = Result<T, AppWireErrorDto>;
 
-pub(crate) fn command(handle: &FloeHandle, request: AppCommandRequestDto) -> AppWireResult<AppCommandResultDto> {
+pub(crate) fn command(
+    handle: &FloeHandle,
+    request: AppCommandRequestDto,
+) -> AppWireResult<AppCommandResultDto> {
     request.validate().map_err(request_validation)?;
     let host = handle.app();
-    let host_request = host.request(request.request_id.get()).map_err(host_failure)?;
+    let host_request = host
+        .request(request.request_id.get())
+        .map_err(host_failure)?;
     let caller = host_request.caller();
     let services = host_request.services();
     let command_id = request.command_id.get();
     let command = match request.command {
         AppCommandDto::NativeHost(command) => {
-            let result = services.apply_native_host(caller, crate::context_wire::command(command).map_err(structural_error)?).map_err(agent_failure)?;
-            return crate::conversion::native::native_host_command_result(result).map_err(structural_error);
+            let result = services
+                .apply_native_host(
+                    caller,
+                    crate::context_wire::command(command).map_err(structural_error)?,
+                )
+                .map_err(agent_failure)?;
+            return crate::conversion::native::native_host_command_result(result)
+                .map_err(structural_error);
         }
         AppCommandDto::Product(command) => command,
     };
-    if crate::connections_wire::handles_command(&command) || crate::conversation_wire::handles_command(&command) {
-        let owners = services.ready_owners(caller).map_err(|failure| if crate::conversation_wire::handles_command(&command) { crate::conversation_wire::failure_dto(failure, command_id) } else { agent_failure(failure) })?;
+    if crate::connections_wire::handles_command(&command)
+        || crate::conversation_wire::handles_command(&command)
+    {
+        let owners = services.ready_owners(caller).map_err(|failure| {
+            if crate::conversation_wire::handles_command(&command) {
+                crate::conversation_wire::failure_dto(failure, command_id)
+            } else {
+                agent_failure(failure)
+            }
+        })?;
         let actor = caller.owner_actor();
-        let scope = floe_app::host_scope(command_id, floe_execution::Cancellation::default(), Duration::from_secs(35));
+        let scope = floe_app::host_scope(
+            command_id,
+            floe_execution::Cancellation::default(),
+            Duration::from_secs(35),
+        );
         return services.execute_owner(async {
-            if crate::connections_wire::handles_command(&command) { crate::connections_wire::command(&owners, &actor, command_id, command, &scope).await }
-            else { crate::conversation_wire::command(&owners, &actor, command_id, command, &scope).await }
+            if crate::connections_wire::handles_command(&command) {
+                crate::connections_wire::command(&owners, &actor, command_id, command, &scope).await
+            } else {
+                crate::conversation_wire::command(&owners, &actor, command_id, command, &scope)
+                    .await
+            }
         });
     }
     match command {
@@ -159,11 +189,16 @@ pub(crate) fn command(handle: &FloeHandle, request: AppCommandRequestDto) -> App
                 result: vault_result(result),
             })
         }
-        AppProductCommandDto::DayRefresh { .. } => Err(agent_failure(AgentFailure::CapabilityUnavailable)),
+        AppProductCommandDto::DayRefresh { .. } => {
+            Err(agent_failure(AgentFailure::CapabilityUnavailable))
+        }
         _ => Err(validation("command")),
     }
 }
-pub(crate) fn query(handle: &FloeHandle, request: AppQueryRequestDto) -> AppWireResult<AppQueryResultDto> {
+pub(crate) fn query(
+    handle: &FloeHandle,
+    request: AppQueryRequestDto,
+) -> AppWireResult<AppQueryResultDto> {
     request.validate().map_err(request_validation)?;
     let host = handle.app();
     let request_id = request.request_id.get();
@@ -172,18 +207,39 @@ pub(crate) fn query(handle: &FloeHandle, request: AppQueryRequestDto) -> AppWire
     let services = host_request.services();
     let query = match request.query {
         AppQueryDto::NativeHost(query) => {
-            let result = services.query_native_host(caller, crate::context_wire::query(query).map_err(structural_error)?).map_err(agent_failure)?;
-            return crate::conversion::native::native_host_query_result(result).map_err(structural_error);
+            let result = services
+                .query_native_host(
+                    caller,
+                    crate::context_wire::query(query).map_err(structural_error)?,
+                )
+                .map_err(agent_failure)?;
+            return crate::conversion::native::native_host_query_result(result)
+                .map_err(structural_error);
         }
         AppQueryDto::Product(query) => query,
     };
-    if crate::connections_wire::handles_query(&query) || crate::conversation_wire::handles_query(&query) {
-        let owners = services.ready_owners(caller).map_err(|failure| if crate::conversation_wire::handles_query(&query) { crate::conversation_wire::failure_dto(failure, request_id) } else { agent_failure(failure) })?;
+    if crate::connections_wire::handles_query(&query)
+        || crate::conversation_wire::handles_query(&query)
+    {
+        let owners = services.ready_owners(caller).map_err(|failure| {
+            if crate::conversation_wire::handles_query(&query) {
+                crate::conversation_wire::failure_dto(failure, request_id)
+            } else {
+                agent_failure(failure)
+            }
+        })?;
         let actor = caller.owner_actor();
-        let scope = floe_app::host_scope(request_id, floe_execution::Cancellation::default(), Duration::from_secs(35));
+        let scope = floe_app::host_scope(
+            request_id,
+            floe_execution::Cancellation::default(),
+            Duration::from_secs(35),
+        );
         return services.execute_owner(async {
-            if crate::connections_wire::handles_query(&query) { crate::connections_wire::query(&owners, &actor, query, &scope).await }
-            else { crate::conversation_wire::query(&owners, &actor, query, &scope).await }
+            if crate::connections_wire::handles_query(&query) {
+                crate::connections_wire::query(&owners, &actor, query, &scope).await
+            } else {
+                crate::conversation_wire::query(&owners, &actor, query, &scope).await
+            }
         });
     }
     match query {
@@ -193,7 +249,9 @@ pub(crate) fn query(handle: &FloeHandle, request: AppQueryRequestDto) -> AppWire
         | AppProductQueryDto::ActionsGet { .. }
         | AppProductQueryDto::ActionsProposalInspect { .. } => {
             let inspection = match query {
-                AppProductQueryDto::ActionsCapabilities {} => floe_app::ActionInspection::Capabilities,
+                AppProductQueryDto::ActionsCapabilities {} => {
+                    floe_app::ActionInspection::Capabilities
+                }
                 AppProductQueryDto::ActionsAuthority {} => floe_app::ActionInspection::Authority,
                 AppProductQueryDto::ActionsList {} => floe_app::ActionInspection::List,
                 AppProductQueryDto::ActionsGet { action_id } => {
@@ -239,8 +297,12 @@ pub(crate) fn query(handle: &FloeHandle, request: AppQueryRequestDto) -> AppWire
                 })?,
             })
         }
-        AppProductQueryDto::KnowledgeMemoryOverview {} | AppProductQueryDto::KnowledgeMemoryReview {} => {
-            let inspection = if matches!(request.query, AppProductQueryDto::KnowledgeMemoryOverview {}) {
+        AppProductQueryDto::KnowledgeMemoryOverview {}
+        | AppProductQueryDto::KnowledgeMemoryReview {} => {
+            let inspection = if matches!(
+                request.query,
+                AppProductQueryDto::KnowledgeMemoryOverview {}
+            ) {
                 floe_app::KnowledgeInspection::Memory
             } else {
                 floe_app::KnowledgeInspection::Review
@@ -326,20 +388,35 @@ pub(crate) fn query(handle: &FloeHandle, request: AppQueryRequestDto) -> AppWire
                 result: vault_result(result),
             })
         }
-        AppProductQueryDto::DayRefreshGet { .. } => Err(agent_failure(AgentFailure::CapabilityUnavailable)),
+        AppProductQueryDto::DayRefreshGet { .. } => {
+            Err(agent_failure(AgentFailure::CapabilityUnavailable))
+        }
         _ => Err(validation("query")),
     }
 }
-pub(crate) fn events(handle: &FloeHandle, request: AppEventsRequestDto) -> AppWireResult<AppEventsResultDto> {
+pub(crate) fn events(
+    handle: &FloeHandle,
+    request: AppEventsRequestDto,
+) -> AppWireResult<AppEventsResultDto> {
     request.validate().map_err(request_validation)?;
     let host = handle.app();
-    let host_request = host.request(request.request_id.get()).map_err(host_failure)?;
+    let host_request = host
+        .request(request.request_id.get())
+        .map_err(host_failure)?;
     let caller = host_request.caller();
     let services = host_request.services();
-    let owners = services.ready_owners(caller).map_err(|failure| crate::conversation_wire::failure_dto(failure, request.request_id.get()))?;
+    let owners = services.ready_owners(caller).map_err(|failure| {
+        crate::conversation_wire::failure_dto(failure, request.request_id.get())
+    })?;
     let actor = caller.owner_actor();
-    let scope = floe_app::host_scope(request.request_id.get(), floe_execution::Cancellation::default(), Duration::from_secs(5));
-    services.execute_owner(crate::conversation_wire::events(&owners, &actor, request, &scope))
+    let scope = floe_app::host_scope(
+        request.request_id.get(),
+        floe_execution::Cancellation::default(),
+        Duration::from_secs(5),
+    );
+    services.execute_owner(crate::conversation_wire::events(
+        &owners, &actor, request, &scope,
+    ))
 }
 
 fn vault_result(result: floe_app::VaultLifecycleResult) -> floe_protocol::VaultLifecycleResultDto {

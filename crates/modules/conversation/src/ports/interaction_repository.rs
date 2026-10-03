@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     ConversationInteraction, DecisionAdmission, ExpireInteraction, ExpireOutcome,
-    InteractionDecision, InteractionResolution, PublishAdmission, SupersedeInteraction,
+    InteractionDecision, PublishAdmission, SupersedeInteraction,
 };
 
 /// Durable Conversation interaction storage.
@@ -15,11 +15,27 @@ use crate::{
 /// compare-and-swap transitions. No method here grants authority, reads a
 /// source or calls a model.
 pub trait InteractionRepository: Send + Sync {
-    fn resolving_interactions<'a>(&'a self, person_id: PersonId, limit: usize) -> BoxFuture<'a, Result<Vec<ConversationInteraction>, AgentFailure>>;
-    fn admit_refresh<'a>(&'a self, request: crate::InteractionRefresh) -> BoxFuture<'a, Result<ConversationInteraction, AgentFailure>>;
-    fn resolve_and_request_resume<'a>(&'a self, commit: crate::InteractionResolutionCommit) -> BoxFuture<'a, Result<crate::InteractionResolutionReceipt, AgentFailure>>;
-    fn pending_resume_requests<'a>(&'a self, limit: usize) -> BoxFuture<'a, Result<Vec<crate::ResumeRequired>, AgentFailure>>;
-    fn claim_resume<'a>(&'a self, request: crate::ResumeChildAdmission) -> BoxFuture<'a, Result<crate::TurnAdmission, AgentFailure>>;
+    fn resolving_interactions<'a>(
+        &'a self,
+        person_id: PersonId,
+        limit: usize,
+    ) -> BoxFuture<'a, Result<Vec<ConversationInteraction>, AgentFailure>>;
+    fn admit_refresh<'a>(
+        &'a self,
+        request: crate::InteractionRefresh,
+    ) -> BoxFuture<'a, Result<ConversationInteraction, AgentFailure>>;
+    fn resolve_and_request_resume<'a>(
+        &'a self,
+        commit: crate::InteractionResolutionCommit,
+    ) -> BoxFuture<'a, Result<crate::InteractionResolutionReceipt, AgentFailure>>;
+    fn pending_resume_requests<'a>(
+        &'a self,
+        limit: usize,
+    ) -> BoxFuture<'a, Result<Vec<crate::ResumeRequired>, AgentFailure>>;
+    fn claim_resume<'a>(
+        &'a self,
+        request: crate::ResumeChildAdmission,
+    ) -> BoxFuture<'a, Result<crate::TurnAdmission, AgentFailure>>;
 
     /// Atomically create the interaction or replay the identical publication.
     /// Races on the same stable id return the same row exactly once.

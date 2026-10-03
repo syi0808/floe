@@ -38,7 +38,10 @@ impl StartTurn {
             || self.session_id.is_nil()
             || self.retry_of.is_some_and(|run_id| !run_id.is_valid())
             || self.retry_of.is_some() && self.continuation_ref.is_some()
-            || self.continuation_ref.as_ref().is_some_and(|reference| reference.id.is_nil())
+            || self
+                .continuation_ref
+                .as_ref()
+                .is_some_and(|reference| reference.id.is_nil())
         {
             return Err(AgentFailure::InvalidInput);
         }

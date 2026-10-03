@@ -1,4 +1,9 @@
-use std::{collections::{BTreeMap, HashSet}, path::{Path, PathBuf}, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use floe_agent_contract::{
     A2A_PROTOCOL_VERSION, AGENT_SCHEMA_VERSION, AgentCard, AgentContext, AgentDefinition,
@@ -9,7 +14,10 @@ use floe_agent_contract::{
     PreparedModelPlan, ProcessingBoundary, TaskId, TaskReceipt, TaskSnapshot, TaskState,
 };
 use floe_conversation::{ConversationModelProjection, prompts::manager_role_spec};
-use floe_execution::{Cancellation, ExecutionScope, budget::{BudgetConfig, BudgetLedger, ModelUsage}};
+use floe_execution::{
+    Cancellation, ExecutionScope,
+    budget::{BudgetConfig, BudgetLedger, ModelUsage},
+};
 use floe_kernel::{PersonId, TraceContext};
 use floe_provider_adapters::gateway::GatewayCredentialStore;
 use serde::{Deserialize, Serialize};
@@ -231,10 +239,18 @@ struct SyntheticEvidence {
 
 impl floe_context::EvidenceReader for SyntheticEvidence {
     fn read_turn_coverage<'a>(
-        &'a self, session_id: Uuid, turn_id: Uuid,
+        &'a self,
+        session_id: Uuid,
+        turn_id: Uuid,
     ) -> floe_execution::BoxFuture<'a, Result<DependencyCoverage, AgentFailure>> {
         let known = session_id == self.session_id && self.history_ids.contains(&turn_id);
-        Box::pin(async move { Ok(if known { DependencyCoverage::Independent } else { DependencyCoverage::Unknown }) })
+        Box::pin(async move {
+            Ok(if known {
+                DependencyCoverage::Independent
+            } else {
+                DependencyCoverage::Unknown
+            })
+        })
     }
 }
 
@@ -323,7 +339,9 @@ async fn project_case(
         .await?;
     let projection = match projection {
         ModelProjectionOutcome::Ready(projection) => projection,
-        ModelProjectionOutcome::NeedsSourceReview(_) => return Err(AgentFailure::AccessReviewRequired),
+        ModelProjectionOutcome::NeedsSourceReview(_) => {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
     };
     if projection.coverage != DependencyCoverage::Independent
         || projection.input_data_classes != [DataClass::Synthetic]
@@ -517,13 +535,26 @@ async fn run_case(
             ledger.work_lease(),
             TraceContext::new(session_id),
         );
-        let prepared = model.prepare(ModelPlanRequest {
-            principal: principal.into(), device_id: device_id.into(),
-            purpose: "everyday_assistance".into(), consumer: "conversation.root".into(),
-            required_capabilities: ModelCapabilities::chat(),
-        }, &scope).await?;
-        let expected_boundary = if metadata.boundary == "device" { ProcessingBoundary::Device } else { ProcessingBoundary::Gateway };
-        if prepared.plan().boundary != expected_boundary { return Err(AgentFailure::PolicyDenied); }
+        let prepared = model
+            .prepare(
+                ModelPlanRequest {
+                    principal: principal.into(),
+                    device_id: device_id.into(),
+                    purpose: "everyday_assistance".into(),
+                    consumer: "conversation.root".into(),
+                    required_capabilities: ModelCapabilities::chat(),
+                },
+                &scope,
+            )
+            .await?;
+        let expected_boundary = if metadata.boundary == "device" {
+            ProcessingBoundary::Device
+        } else {
+            ProcessingBoundary::Gateway
+        };
+        if prepared.plan().boundary != expected_boundary {
+            return Err(AgentFailure::PolicyDenied);
+        }
         let projection = project_case(
             &catalog,
             conversation.clone(),
@@ -534,7 +565,10 @@ async fn run_case(
         )
         .await?;
         let request = ModelRequest {
-            reservation_ceiling: floe_execution::budget::ModelReservationCeiling::for_lease(scope.budget()),            attempt_id: Uuid::new_v4(),
+            reservation_ceiling: floe_execution::budget::ModelReservationCeiling::for_lease(
+                scope.budget(),
+            ),
+            attempt_id: Uuid::new_v4(),
             principal: principal.into(),
             device_id: device_id.into(),
             projection: projection.clone(),
@@ -543,10 +577,11 @@ async fn run_case(
             consumer: "conversation.root".into(),
             replay: vec![],
         };
-        let (steps, failure) = match super::support::invoke(prepared.as_ref(), request, &scope, journal).await {
-            Ok(response) => (response.steps, None),
-            Err(failure) => (vec![], Some(failure)),
-        };
+        let (steps, failure) =
+            match super::support::invoke(prepared.as_ref(), request, &scope, journal).await {
+                Ok(response) => (response.steps, None),
+                Err(failure) => (vec![], Some(failure)),
+            };
         let report = report_case(
             case,
             repetition,
@@ -576,15 +611,9 @@ async fn run_case(
                             text: text.clone(),
                         })
                 }
-                ModelStep::Delegate { .. } => {
-                    conversation.current_turn.push(settled_fixture_exchange(
-                        step,
-                        result,
-                        principal,
-                        session_id,
-                        origin_run_id,
-                    )?)
-                }
+                ModelStep::Delegate { .. } => conversation.current_turn.push(
+                    settled_fixture_exchange(step, result, principal, session_id, origin_run_id)?,
+                ),
                 _ => return Err(AgentFailure::InvalidModelOutput),
             }
         }
@@ -630,57 +659,131 @@ pub(super) async fn run(mode: Mode) -> std::process::ExitCode {
         return unverified("invalid_model_identity");
     }
     let (principal, device_id, service) = match mode {
-        Mode::Foundation => (PersonId::new().to_string(), "synthetic-smoke-device".to_owned(), super::support::synthetic_model()),
+        Mode::Foundation => (
+            PersonId::new().to_string(),
+            "synthetic-smoke-device".to_owned(),
+            super::support::synthetic_model(),
+        ),
         Mode::Server => {
-            let Some(database) = std::env::var_os("FLOE_MANAGER_EVAL_DATABASE") else { return unverified("explicit_existing_database_required"); };
-            let database = Path::new(&database);
-            if !database.is_absolute() || !database.is_file() { return unverified("existing_database_required"); }
-            let identity = match floe_provider_adapters::local_identity_for_database(database) {
-                Ok(Some(identity)) => identity, _ => return unverified("verified_profile_identity_required"),
+            let Some(database) = std::env::var_os("FLOE_MANAGER_EVAL_DATABASE") else {
+                return unverified("explicit_existing_database_required");
             };
-            let Some(person) = PersonId::from_uuid(identity.person_id) else { return unverified("invalid_principal"); };
+            let database = Path::new(&database);
+            if !database.is_absolute() || !database.is_file() {
+                return unverified("existing_database_required");
+            }
+            let identity = match floe_provider_adapters::local_identity_for_database(database) {
+                Ok(Some(identity)) => identity,
+                _ => return unverified("verified_profile_identity_required"),
+            };
+            let Some(person) = PersonId::from_uuid(identity.person_id) else {
+                return unverified("invalid_principal");
+            };
             let root = PathBuf::from(format!("{}.agent-vaults", database.display()));
-            let vault = match floe_vault::EncryptedAgentVault::open(&root, person, floe_vault::KeyringVaultKeys).await {
-                Ok(vault) => Arc::new(vault), _ => return unverified("existing_vault_unavailable"),
+            let vault = match floe_vault::EncryptedAgentVault::open(
+                &root,
+                person,
+                floe_vault::KeyringVaultKeys,
+            )
+            .await
+            {
+                Ok(vault) => Arc::new(vault),
+                _ => return unverified("existing_vault_unavailable"),
             };
             let store = GatewayCredentialStore::new(vault);
-            (person.to_string(), identity.device_id, super::support::model(store))
+            (
+                person.to_string(),
+                identity.device_id,
+                super::support::model(store),
+            )
         }
     };
     let preflight_scope = ExecutionScope::root(
-        Cancellation::default(), tokio::time::Instant::now() + Duration::from_secs(30),
+        Cancellation::default(),
+        tokio::time::Instant::now() + Duration::from_secs(30),
         BudgetLedger::new(BudgetConfig::new(8192, 1_000_000), ModelUsage::default()).work_lease(),
         TraceContext::new(Uuid::new_v4()),
     );
-    let prepared = match service.prepare(ModelPlanRequest {
-        principal: principal.clone(), device_id: device_id.clone(), purpose: "everyday_assistance".into(),
-        consumer: "conversation.root".into(), required_capabilities: ModelCapabilities::chat(),
-    }, &preflight_scope).await {
-        Ok(prepared) => prepared, Err(_) => return unverified("model_planning_failed"),
+    let prepared = match service
+        .prepare(
+            ModelPlanRequest {
+                principal: principal.clone(),
+                device_id: device_id.clone(),
+                purpose: "everyday_assistance".into(),
+                consumer: "conversation.root".into(),
+                required_capabilities: ModelCapabilities::chat(),
+            },
+            &preflight_scope,
+        )
+        .await
+    {
+        Ok(prepared) => prepared,
+        Err(_) => return unverified("model_planning_failed"),
     };
-    let expected = match mode { Mode::Foundation => ProcessingBoundary::Device, Mode::Server => ProcessingBoundary::Gateway };
-    if prepared.plan().boundary != expected { return unverified("requested_diagnostic_boundary_not_selected"); }
+    let expected = match mode {
+        Mode::Foundation => ProcessingBoundary::Device,
+        Mode::Server => ProcessingBoundary::Gateway,
+    };
+    if prepared.plan().boundary != expected {
+        return unverified("requested_diagnostic_boundary_not_selected");
+    }
     let metadata = ReportMetadata {
-        stage, commit,
-        boundary: if expected == ProcessingBoundary::Device { "device" } else { "gateway" },
-        model_id_origin: if model_id.is_some() { "operator_configuration" } else { "unavailable" },
+        stage,
+        commit,
+        boundary: if expected == ProcessingBoundary::Device {
+            "device"
+        } else {
+            "gateway"
+        },
+        model_id_origin: if model_id.is_some() {
+            "operator_configuration"
+        } else {
+            "unavailable"
+        },
         model_id,
-        configuration_hash: digest(serde_json::to_vec(&(prepared.plan().boundary, prepared.plan().binding_digest, &prepared.plan().capabilities)).unwrap_or_default()),
+        configuration_hash: digest(
+            serde_json::to_vec(&(
+                prepared.plan().boundary,
+                prepared.plan().binding_digest,
+                &prepared.plan().capabilities,
+            ))
+            .unwrap_or_default(),
+        ),
     };
     let journal = match super::support::DiagnosticJournal::new() {
-        Ok(journal) => journal, Err(_) => return unverified("durable_journal_unavailable"),
+        Ok(journal) => journal,
+        Err(_) => return unverified("durable_journal_unavailable"),
     };
-    println!("{}", json!({"journal":journal.path(),"personal_data":false}));
+    println!(
+        "{}",
+        json!({"journal":journal.path(),"personal_data":false})
+    );
     let mut all_accepted = true;
     for case in &corpus.cases {
         for repetition in 1..=REPETITIONS {
-            match run_case(&service, &corpus, case, repetition, &metadata, &principal,
-                Uuid::new_v4(), Uuid::new_v4(), &device_id, &journal).await {
+            match run_case(
+                &service,
+                &corpus,
+                case,
+                repetition,
+                &metadata,
+                &principal,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                &device_id,
+                &journal,
+            )
+            .await
+            {
                 Ok(accepted) => all_accepted &= accepted,
                 Err(_) => return unverified("fixture_projection_failure"),
             }
         }
     }
     println!("{}", report_summary(&corpus, &metadata, all_accepted));
-    if all_accepted { std::process::ExitCode::SUCCESS } else { std::process::ExitCode::FAILURE }
+    if all_accepted {
+        std::process::ExitCode::SUCCESS
+    } else {
+        std::process::ExitCode::FAILURE
+    }
 }

@@ -164,10 +164,18 @@ impl DataAccessGrant {
     }
     /// Invalidate a reviewed source configuration without authorizing its new
     /// physical resources. Every live grant requires a fresh explicit review.
-    pub fn invalidate_source(&mut self, expected: GrantAuthority) -> Result<bool, GrantTransitionError> {
+    pub fn invalidate_source(
+        &mut self,
+        expected: GrantAuthority,
+    ) -> Result<bool, GrantTransitionError> {
         self.check_expected(expected)?;
-        if self.state == GrantState::Revoked { return Err(GrantTransitionError::Terminal); }
-        self.authority = self.authority.advance().ok_or(GrantTransitionError::Overflow)?;
+        if self.state == GrantState::Revoked {
+            return Err(GrantTransitionError::Terminal);
+        }
+        self.authority = self
+            .authority
+            .advance()
+            .ok_or(GrantTransitionError::Overflow)?;
         self.state = GrantState::Paused;
         self.review_required = true;
         Ok(true)

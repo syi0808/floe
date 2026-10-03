@@ -141,19 +141,31 @@ pub unsafe extern "C" fn floe_native_host_acquire(
     error_json_out: *mut *mut c_char,
 ) -> *mut FloeNativeHostLane {
     diagnostics::initialize();
-    if !error_json_out.is_null() { unsafe { *error_json_out = ptr::null_mut() }; }
+    if !error_json_out.is_null() {
+        unsafe { *error_json_out = ptr::null_mut() };
+    }
     let operation = || -> app_wire::AppWireResult<*mut FloeNativeHostLane> {
         let handle = handle(handle_ptr).map_err(|_| app_wire::validation("handle"))?;
-        let request = handle.app().request(Uuid::new_v4()).map_err(app_wire::host_failure)?;
-        let lane = request.acquire_native_host_lane().map_err(app_wire::host_failure)?;
+        let request = handle
+            .app()
+            .request(Uuid::new_v4())
+            .map_err(app_wire::host_failure)?;
+        let lane = request
+            .acquire_native_host_lane()
+            .map_err(app_wire::host_failure)?;
         Ok(Box::into_raw(Box::new(FloeNativeHostLane { lane })))
     };
     let error = match catch_unwind(AssertUnwindSafe(operation)) {
         Ok(Ok(lane)) => return lane,
         Ok(Err(error)) => error,
-        Err(payload) => { let _ = diagnostics::panic_error(payload); app_wire::internal_error() },
+        Err(payload) => {
+            let _ = diagnostics::panic_error(payload);
+            app_wire::internal_error()
+        }
     };
-    if !error_json_out.is_null() { unsafe { *error_json_out = c_output(AppResponseDto::<Value>::error(Uuid::nil(), error)) }; }
+    if !error_json_out.is_null() {
+        unsafe { *error_json_out = c_output(AppResponseDto::<Value>::error(Uuid::nil(), error)) };
+    }
     ptr::null_mut()
 }
 
@@ -163,36 +175,59 @@ fn invoke_native_json_v2<Request, Response>(
     request_json: *const c_char,
     operation: impl FnOnce(&FloeNativeHostLane, Request) -> app_wire::AppWireResult<Response>,
 ) -> *mut c_char
-where Request: DeserializeOwned, Response: Serialize {
+where
+    Request: DeserializeOwned,
+    Response: Serialize,
+{
     diagnostics::initialize();
     let raw = match c_input(request_json, "request_json") {
         Ok(raw) if raw.len() <= 128 * 1024 => raw,
-        _ => return c_output(AppResponseDto::<Value>::error(Uuid::nil(), app_wire::validation("request_json"))),
+        _ => {
+            return c_output(AppResponseDto::<Value>::error(
+                Uuid::nil(),
+                app_wire::validation("request_json"),
+            ));
+        }
     };
-    let request_id = serde_json::from_str::<Value>(raw).ok()
-        .and_then(|value| value.get("request_id")?.as_str()?.parse().ok()).unwrap_or_else(Uuid::nil);
+    let request_id = serde_json::from_str::<Value>(raw)
+        .ok()
+        .and_then(|value| value.get("request_id")?.as_str()?.parse().ok())
+        .unwrap_or_else(Uuid::nil);
     let result = catch_unwind(AssertUnwindSafe(|| {
         let lane = unsafe { lane_ptr.as_ref() }.ok_or_else(|| app_wire::validation("lane"))?;
-        let request = serde_json::from_str(raw).map_err(|_| app_wire::validation("request_json"))?;
+        let request =
+            serde_json::from_str(raw).map_err(|_| app_wire::validation("request_json"))?;
         operation(lane, request)
     }));
     match result {
         Ok(Ok(value)) => c_output(AppResponseDto::ok(request_id, value)),
         Ok(Err(error)) => c_output(AppResponseDto::<Value>::error(request_id, error)),
-        Err(payload) => { let _ = diagnostics::panic_error(payload); c_output(AppResponseDto::<Value>::error(request_id, app_wire::internal_error())) },
+        Err(payload) => {
+            let _ = diagnostics::panic_error(payload);
+            c_output(AppResponseDto::<Value>::error(
+                request_id,
+                app_wire::internal_error(),
+            ))
+        }
     }
 }
 
 #[unsafe(no_mangle)]
 #[allow(clippy::missing_safety_doc)]
 #[cfg(unix)]
-pub unsafe extern "C" fn floe_native_host_command_v2(lane: *mut FloeNativeHostLane, request_json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn floe_native_host_command_v2(
+    lane: *mut FloeNativeHostLane,
+    request_json: *const c_char,
+) -> *mut c_char {
     invoke_native_json_v2(lane, request_json, native_lane::command)
 }
 #[unsafe(no_mangle)]
 #[allow(clippy::missing_safety_doc)]
 #[cfg(unix)]
-pub unsafe extern "C" fn floe_native_host_query_v2(lane: *mut FloeNativeHostLane, request_json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn floe_native_host_query_v2(
+    lane: *mut FloeNativeHostLane,
+    request_json: *const c_char,
+) -> *mut c_char {
     invoke_native_json_v2(lane, request_json, native_lane::query)
 }
 /// Free exactly once, after the callback worker's final call. Closing the lane
@@ -202,6 +237,8 @@ pub unsafe extern "C" fn floe_native_host_query_v2(lane: *mut FloeNativeHostLane
 pub unsafe extern "C" fn floe_native_host_free(lane: *mut FloeNativeHostLane) {
     if !lane.is_null() {
         let result = catch_unwind(AssertUnwindSafe(|| unsafe { drop(Box::from_raw(lane)) }));
-        if let Err(payload) = result { let _ = diagnostics::panic_error(payload); }
+        if let Err(payload) = result {
+            let _ = diagnostics::panic_error(payload);
+        }
     }
 }

@@ -126,7 +126,6 @@ impl AuthorizedModelProjection {
     }
 }
 
-
 #[derive(Clone, Debug)]
 pub enum ModelProjectionOutcome {
     Ready(AuthorizedModelProjection),
@@ -146,6 +145,8 @@ impl SourceProjectionReview {
         if self.projection_operation_id.is_nil() || self.target_digest == [0; 32] {
             return Err(AgentFailure::InvalidInput);
         }
-        self.blockers.validate().map_err(|_| AgentFailure::InvalidInput)
+        self.blockers
+            .validate()
+            .map_err(|_| AgentFailure::InvalidInput)
     }
 }

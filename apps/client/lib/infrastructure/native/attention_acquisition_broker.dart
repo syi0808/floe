@@ -10,7 +10,7 @@ typedef AttentionAcquisitionReader = Future<Map<String, dynamic>> Function(
 
 final class AttentionAcquisitionBroker {
   AttentionAcquisitionBroker({required NativeContextHostTransport transport})
-      : _transport = transport;
+    : _transport = transport;
 
   final NativeContextHostTransport _transport;
   NativeHostRegistration? _registration;
@@ -21,8 +21,7 @@ final class AttentionAcquisitionBroker {
   Future<void> start() async {
     _ensureOpen();
     if (_started) return;
-    _registration = await _transport.registerAttentionHost(
-    );
+    _registration = await _transport.registerAttentionHost();
     if (_disposed) {
       await _transport.disposeAttentionHost(registration: _registration!);
       throw StateError('Native host was detached during registration.');
@@ -81,9 +80,7 @@ final class AttentionAcquisitionBroker {
     if (_disposed) return;
     _disposed = true;
     if (_started) {
-      await _transport.disposeAttentionHost(
-        registration: _registration!,
-      );
+      await _transport.disposeAttentionHost(registration: _registration!);
     }
   }
 
@@ -151,7 +148,7 @@ final class AttentionAcquisitionBroker {
           ...optional,
         }).isNotEmpty ||
         !request.keys.toSet().containsAll(required) ||
-        !_validOpaque(request['person_id']) ||
+        !_validOpaque(request['person_id'], maximum: 36) ||
         request['host_epoch'] != _hostEpoch ||
         !_validOpaque(request['request_id'], maximum: 128) ||
         !_validOpaque(request['host_epoch'], maximum: 128) ||
@@ -195,8 +192,6 @@ final class AttentionAcquisitionBroker {
       value.isNotEmpty &&
       value.length <= maximum &&
       !value.contains(RegExp(r'\s'));
-
-
 }
 
 final class AttentionAcquisitionService {
@@ -204,7 +199,9 @@ final class AttentionAcquisitionService {
     required AttentionAcquisitionBroker broker,
     required AttentionAcquisitionReader reader,
     Duration pollInterval = const Duration(milliseconds: 100),
-  }) : _broker = broker, _reader = reader, _pollInterval = pollInterval;
+  }) : _broker = broker,
+       _reader = reader,
+       _pollInterval = pollInterval;
 
   final AttentionAcquisitionBroker _broker;
   final AttentionAcquisitionReader _reader;

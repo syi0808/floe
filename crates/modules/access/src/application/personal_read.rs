@@ -10,7 +10,6 @@
 
 use floe_context_contract::{
     GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantSourceBinding,
-    ProcessingRestriction,
 };
 use floe_kernel::AgentFailure;
 

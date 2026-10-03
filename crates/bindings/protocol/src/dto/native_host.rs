@@ -2,9 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     CalendarBatchDto, CalendarFailureDto, CalendarProviderDto, LocalContextAcquisitionModeDto,
-    LocalContextAcquisitionRequestDto, LocalContextAttentionAcquisitionModeDto,
-    LocalContextAttentionAcquisitionRequestDto, LocalContextPersonalAcquisitionRequestDto,
-    LocalContextPersonalDomainDto, LocalContextPersonalAcquisitionModeDto, NativeSourceResourceDto, UuidRefDto,
+    LocalContextAttentionAcquisitionModeDto,
+    LocalContextPersonalAcquisitionModeDto,
+    LocalContextPersonalDomainDto,
+    NativeSourceResourceDto, UuidRefDto,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -137,9 +138,9 @@ pub enum NativeHostCommandDto {
 impl NativeHostCommandDto {
     pub fn validate(&self) -> Result<(), &'static str> {
         match self {
-            Self::CalendarRegister {}
-            | Self::AttentionRegister {}
-            | Self::PersonalRegister {} => Ok(()),
+            Self::CalendarRegister {} | Self::AttentionRegister {} | Self::PersonalRegister {} => {
+                Ok(())
+            }
             Self::CalendarComplete {
                 registration,
                 result,
@@ -179,9 +180,23 @@ impl NativeHostCommandDto {
                 validate_registration_result(registration, &result.host_epoch)?;
                 validate_request_id(&result.request_id)?;
                 match (result.mode, result.domain, result.transform_operation_id) {
-                    (LocalContextPersonalAcquisitionModeDto::ReadProjection, LocalContextPersonalDomainDto::Wellbeing, Some(_)) => Ok(()),
-                    (LocalContextPersonalAcquisitionModeDto::ReadProjection, LocalContextPersonalDomainDto::People, None) => Ok(()),
-                    (LocalContextPersonalAcquisitionModeDto::InspectSubject | LocalContextPersonalAcquisitionModeDto::InspectCatalog | LocalContextPersonalAcquisitionModeDto::RequestPermission, _, None) => Ok(()),
+                    (
+                        LocalContextPersonalAcquisitionModeDto::ReadProjection,
+                        LocalContextPersonalDomainDto::Wellbeing,
+                        Some(_),
+                    ) => Ok(()),
+                    (
+                        LocalContextPersonalAcquisitionModeDto::ReadProjection,
+                        LocalContextPersonalDomainDto::People,
+                        None,
+                    ) => Ok(()),
+                    (
+                        LocalContextPersonalAcquisitionModeDto::InspectSubject
+                        | LocalContextPersonalAcquisitionModeDto::InspectCatalog
+                        | LocalContextPersonalAcquisitionModeDto::RequestPermission,
+                        _,
+                        None,
+                    ) => Ok(()),
                     _ => Err("completion.transform_operation_id"),
                 }
             }

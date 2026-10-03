@@ -26,9 +26,15 @@ impl LocalAcquisitionBrokers {
         Self::default()
     }
 
-    pub fn calendar_handle(&self)->std::sync::Arc<CalendarBroker>{self.calendar.clone()}
-    pub fn attention_handle(&self)->std::sync::Arc<AttentionBroker>{self.attention.clone()}
-    pub fn personal_handle(&self)->std::sync::Arc<PersonalBroker>{self.personal.clone()}
+    pub fn calendar_handle(&self) -> std::sync::Arc<CalendarBroker> {
+        self.calendar.clone()
+    }
+    pub fn attention_handle(&self) -> std::sync::Arc<AttentionBroker> {
+        self.attention.clone()
+    }
+    pub fn personal_handle(&self) -> std::sync::Arc<PersonalBroker> {
+        self.personal.clone()
+    }
 
     pub fn calendar(&self) -> &CalendarBroker {
         &self.calendar
@@ -43,4 +49,4 @@ impl LocalAcquisitionBrokers {
     }
 }
 
-pub use floe_native::{PersonalAcquisitionMode,NativeSourceResource};
+pub use floe_native::{NativeSourceResource, PersonalAcquisitionMode};

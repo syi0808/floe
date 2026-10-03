@@ -1,5 +1,3 @@
-use floe_kernel::AgentFailure;
-
 /// A connector catalog exactly as a producer reported it.
 ///
 /// Connections projects it; a model route never queries a source catalog.
@@ -64,4 +62,3 @@ pub fn project_calendar_connections(
     }
     Some(calendar)
 }
-

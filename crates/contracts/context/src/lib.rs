@@ -233,8 +233,12 @@ pub enum ProcessingRestriction {
 }
 
 impl ProcessingRestriction {
-    pub fn gateway_allowed(mut categories: Vec<GrantDataCategory>) -> Result<Self, GrantValidationError> {
-        if categories.is_empty() { return Err(GrantValidationError::MissingScope); }
+    pub fn gateway_allowed(
+        mut categories: Vec<GrantDataCategory>,
+    ) -> Result<Self, GrantValidationError> {
+        if categories.is_empty() {
+            return Err(GrantValidationError::MissingScope);
+        }
         ensure_unique(&categories, "category")?;
         categories.sort();
         Ok(Self::GatewayAllowed { categories })
@@ -243,8 +247,12 @@ impl ProcessingRestriction {
     pub fn admits_gateway(&self, requested: &[GrantDataCategory]) -> bool {
         match self {
             Self::DeviceOnly => false,
-            Self::GatewayAllowed { categories } => !requested.is_empty()
-                && requested.iter().all(|category| categories.contains(category)),
+            Self::GatewayAllowed { categories } => {
+                !requested.is_empty()
+                    && requested
+                        .iter()
+                        .all(|category| categories.contains(category))
+            }
         }
     }
 }
@@ -695,8 +703,7 @@ impl ContextDependency {
             categories: allowed,
             ..
         } = &processing
-            && (allowed.is_empty()
-                || allowed.windows(2).any(|pair| pair[0] >= pair[1]))
+            && (allowed.is_empty() || allowed.windows(2).any(|pair| pair[0] >= pair[1]))
         {
             return Err(ContextDependencyError::InvalidScope);
         }
@@ -757,12 +764,22 @@ impl ContextDependency {
         let mut rebuilt = rebuilt;
         rebuilt.health_transform = self.health_transform.clone();
         if let Some(evidence) = &self.health_transform {
-            if self.source.connector().as_str() != "health.apple" || self.source.execution_owner().as_str().strip_prefix("apple:") != Some(evidence.device_id.as_str())
-                || evidence.transformed_at != self.observed_at || evidence.expires_at != self.expires_at {
+            if self.source.connector().as_str() != "health.apple"
+                || self
+                    .source
+                    .execution_owner()
+                    .as_str()
+                    .strip_prefix("apple:")
+                    != Some(evidence.device_id.as_str())
+                || evidence.transformed_at != self.observed_at
+                || evidence.expires_at != self.expires_at
+            {
                 return Err(ContextDependencyError::InvalidScope);
             }
         }
-        (rebuilt == *self).then_some(()).ok_or(ContextDependencyError::NonCanonical)
+        (rebuilt == *self)
+            .then_some(())
+            .ok_or(ContextDependencyError::NonCanonical)
     }
 
     pub fn person_id(&self) -> PersonId {
@@ -803,16 +820,36 @@ impl ContextDependency {
     pub fn processing(&self) -> &ProcessingRestriction {
         &self.processing
     }
-    pub fn with_health_transform(mut self, evidence: HealthTransformEvidence) -> Result<Self, ContextDependencyError> {
+    pub fn with_health_transform(
+        mut self,
+        evidence: HealthTransformEvidence,
+    ) -> Result<Self, ContextDependencyError> {
         self.health_transform = Some(evidence);
         self.validate()?;
         Ok(self)
     }
-    pub fn health_transform(&self) -> Option<&HealthTransformEvidence> { self.health_transform.as_ref() }
-    pub fn validate_health_transform(&self, device_id: &str, now: DateTime<Utc>) -> Result<(), floe_kernel::AgentFailure> {
-        let evidence = self.health_transform.as_ref().ok_or(floe_kernel::AgentFailure::PolicyDenied)?;
-        if self.source.connector().as_str() != "health.apple" || self.source.execution_owner().as_str().strip_prefix("apple:") != Some(device_id)
-            || evidence.transformed_at != self.observed_at || evidence.expires_at != self.expires_at {
+    pub fn health_transform(&self) -> Option<&HealthTransformEvidence> {
+        self.health_transform.as_ref()
+    }
+    pub fn validate_health_transform(
+        &self,
+        device_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), floe_kernel::AgentFailure> {
+        let evidence = self
+            .health_transform
+            .as_ref()
+            .ok_or(floe_kernel::AgentFailure::PolicyDenied)?;
+        if self.source.connector().as_str() != "health.apple"
+            || self
+                .source
+                .execution_owner()
+                .as_str()
+                .strip_prefix("apple:")
+                != Some(device_id)
+            || evidence.transformed_at != self.observed_at
+            || evidence.expires_at != self.expires_at
+        {
             return Err(floe_kernel::AgentFailure::PolicyDenied);
         }
         evidence.validate(device_id, now)
@@ -1057,4 +1094,3 @@ impl SourceGrant {
         matches!(self, Self::Granted)
     }
 }
-

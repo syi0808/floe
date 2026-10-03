@@ -190,7 +190,10 @@ async fn generate_canonical(
                 )?;
                 return Ok(floe_inference::CanonicalModelResponse {
                     output: Ok(vec![step]),
-                    usage: floe_inference::ProviderUsageObservation { tokens: None, cost_micros: Some(0) },
+                    usage: floe_inference::ProviderUsageObservation {
+                        tokens: None,
+                        cost_micros: Some(0),
+                    },
                 });
             }
             _ => return Err(AgentFailure::InvalidModelOutput),
@@ -341,9 +344,16 @@ impl FoundationModelProvider {
         reply.availability.ok_or(AgentFailure::InvalidModelOutput)
     }
 
-    pub fn synthetic() -> Self { Self { protection: SessionProtection::SyntheticOnly } }
-    pub fn encrypted() -> Self { Self { protection: SessionProtection::Encrypted } }
-
+    pub fn synthetic() -> Self {
+        Self {
+            protection: SessionProtection::SyntheticOnly,
+        }
+    }
+    pub fn encrypted() -> Self {
+        Self {
+            protection: SessionProtection::Encrypted,
+        }
+    }
 }
 
 pub struct PreparedFoundationTransport {
@@ -351,13 +361,27 @@ pub struct PreparedFoundationTransport {
     binding_digest: floe_agent_contract::ModelBindingDigest,
 }
 impl floe_inference::PreparedModelTransport for PreparedFoundationTransport {
-    fn dispatch_target(&self) -> floe_access::ModelDispatchTarget { floe_access::ModelDispatchTarget::Device }
-    fn generate<'a>(&'a self, request: floe_inference::CanonicalModelRequest,
-        target: floe_inference::AdmittedDispatchTarget)
-        -> floe_agent_contract::BoxFuture<'a, Result<floe_inference::CanonicalModelResponse, AgentFailure>> {
+    fn dispatch_target(&self) -> floe_access::ModelDispatchTarget {
+        floe_access::ModelDispatchTarget::Device
+    }
+    fn generate<'a>(
+        &'a self,
+        request: floe_inference::CanonicalModelRequest,
+        target: floe_inference::AdmittedDispatchTarget,
+    ) -> floe_agent_contract::BoxFuture<
+        'a,
+        Result<floe_inference::CanonicalModelResponse, AgentFailure>,
+    > {
         Box::pin(async move {
-            if !target.matches(&self.binding_digest, floe_agent_contract::ProcessingBoundary::Device) { return Err(AgentFailure::PolicyDenied); }
-            generate_canonical(&NativeTransport, request, self.protection).await.map_err(map_canonical_failure)
+            if !target.matches(
+                &self.binding_digest,
+                floe_agent_contract::ProcessingBoundary::Device,
+            ) {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            generate_canonical(&NativeTransport, request, self.protection)
+                .await
+                .map_err(map_canonical_failure)
         })
     }
 }
@@ -370,40 +394,93 @@ fn map_canonical_failure(failure: AgentFailure) -> AgentFailure {
 }
 impl floe_inference::ModelProvider for FoundationModelProvider {
     type Prepared = PreparedFoundationTransport;
-    fn observe_primary<'a>(&'a self, _request: &'a floe_agent_contract::ModelPlanRequest,
-        _scope: &'a floe_execution::ExecutionScope)
-        -> floe_agent_contract::BoxFuture<'a, Result<floe_inference::PrimaryObservation<Self::Prepared>, floe_inference::ModelObservationError>> {
+    fn observe_primary<'a>(
+        &'a self,
+        _request: &'a floe_agent_contract::ModelPlanRequest,
+        _scope: &'a floe_execution::ExecutionScope,
+    ) -> floe_agent_contract::BoxFuture<
+        'a,
+        Result<
+            floe_inference::PrimaryObservation<Self::Prepared>,
+            floe_inference::ModelObservationError,
+        >,
+    > {
         Box::pin(async { Err(floe_inference::ModelObservationError::InvalidIdentity) })
     }
-    fn observe_local_fallback<'a>(&'a self, request: &'a floe_agent_contract::ModelPlanRequest,
-        scope: &'a floe_execution::ExecutionScope)
-        -> floe_agent_contract::BoxFuture<'a, Result<floe_inference::LocalObservation<Self::Prepared>, floe_inference::ModelObservationError>> {
+    fn observe_local_fallback<'a>(
+        &'a self,
+        request: &'a floe_agent_contract::ModelPlanRequest,
+        scope: &'a floe_execution::ExecutionScope,
+    ) -> floe_agent_contract::BoxFuture<
+        'a,
+        Result<
+            floe_inference::LocalObservation<Self::Prepared>,
+            floe_inference::ModelObservationError,
+        >,
+    > {
         Box::pin(async move {
-            use floe_inference::{LocalObservation, LocalAvailabilityReason, ModelObservationError};
+            use floe_inference::{
+                LocalAvailabilityReason, LocalObservation, ModelObservationError,
+            };
             use sha2::{Digest, Sha256};
-            request.validate().map_err(|_| ModelObservationError::InvalidIdentity)?;
-            if scope.cancellation().is_cancelled() { return Err(ModelObservationError::Cancelled); }
-            if scope.deadline() <= tokio::time::Instant::now() { return Err(ModelObservationError::Timeout); }
-            if !LOCAL_MODEL.available() { return Ok(LocalObservation::Unavailable(LocalAvailabilityReason::Unsupported)); }
-            let availability = self.availability().map_err(|_| ModelObservationError::TransportUnavailable)?;
+            request
+                .validate()
+                .map_err(|_| ModelObservationError::InvalidIdentity)?;
+            if scope.cancellation().is_cancelled() {
+                return Err(ModelObservationError::Cancelled);
+            }
+            if scope.deadline() <= tokio::time::Instant::now() {
+                return Err(ModelObservationError::Timeout);
+            }
+            if !LOCAL_MODEL.available() {
+                return Ok(LocalObservation::Unavailable(
+                    LocalAvailabilityReason::Unsupported,
+                ));
+            }
+            let availability = self
+                .availability()
+                .map_err(|_| ModelObservationError::TransportUnavailable)?;
             let reason = match availability {
                 LocalModelAvailability::Available => None,
-                LocalModelAvailability::UnsupportedOs | LocalModelAvailability::UnsupportedProfile | LocalModelAvailability::DeviceNotEligible => Some(LocalAvailabilityReason::Unsupported),
-                LocalModelAvailability::AppleIntelligenceNotEnabled => Some(LocalAvailabilityReason::Disabled),
-                LocalModelAvailability::ModelNotReady | LocalModelAvailability::ModelUnavailable => Some(LocalAvailabilityReason::NotReady),
+                LocalModelAvailability::UnsupportedOs
+                | LocalModelAvailability::UnsupportedProfile
+                | LocalModelAvailability::DeviceNotEligible => {
+                    Some(LocalAvailabilityReason::Unsupported)
+                }
+                LocalModelAvailability::AppleIntelligenceNotEnabled => {
+                    Some(LocalAvailabilityReason::Disabled)
+                }
+                LocalModelAvailability::ModelNotReady
+                | LocalModelAvailability::ModelUnavailable => {
+                    Some(LocalAvailabilityReason::NotReady)
+                }
             };
-            if let Some(reason) = reason { return Ok(LocalObservation::Unavailable(reason)); }
-            let mut hasher = Sha256::new(); hasher.update(b"floe.foundation.binding.v1\0");
-            hasher.update(request.principal.as_bytes()); hasher.update([0]); hasher.update(request.device_id.as_bytes());
+            if let Some(reason) = reason {
+                return Ok(LocalObservation::Unavailable(reason));
+            }
+            let mut hasher = Sha256::new();
+            hasher.update(b"floe.foundation.binding.v1\0");
+            hasher.update(request.principal.as_bytes());
+            hasher.update([0]);
+            hasher.update(request.device_id.as_bytes());
             let binding_digest = floe_agent_contract::ModelBindingDigest(hasher.finalize().into());
-            Ok(LocalObservation::Available(floe_inference::PreparedModelProfile {
-                capability: floe_inference::ObservedModelCapability {
-                    purpose: floe_inference::ModelPurpose::new(request.purpose.clone()).ok_or(ModelObservationError::InvalidIdentity)?,
-                    consumer: floe_inference::ModelConsumer::new(request.consumer.clone()).ok_or(ModelObservationError::InvalidIdentity)?,
-                    capabilities: floe_agent_contract::ModelCapabilities::chat(), boundary: floe_agent_contract::ProcessingBoundary::Device,
-                    binding_digest,
-                }, transport: PreparedFoundationTransport { protection: self.protection, binding_digest },
-            }))
+            Ok(LocalObservation::Available(
+                floe_inference::PreparedModelProfile {
+                    capability: floe_inference::ObservedModelCapability {
+                        purpose: floe_inference::ModelPurpose::new(request.purpose.clone())
+                            .ok_or(ModelObservationError::InvalidIdentity)?,
+                        consumer: floe_inference::ModelConsumer::new(request.consumer.clone())
+                            .ok_or(ModelObservationError::InvalidIdentity)?,
+                        capabilities: floe_agent_contract::ModelCapabilities::chat(),
+                        boundary: floe_agent_contract::ProcessingBoundary::Device,
+                        binding_digest,
+                    },
+                    transport: PreparedFoundationTransport {
+                        protection: self.protection,
+                        binding_digest,
+                    },
+                },
+            ))
         })
     }
 }

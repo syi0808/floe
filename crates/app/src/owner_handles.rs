@@ -1,9 +1,15 @@
 //! Ready generation handles and request execution resources. Owners retain all
 //! domain validation and operations; this host admits only its verified actor.
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use std::time::Duration;
+use floe_execution::{
+    Cancellation, ExecutionScope,
+    budget::{BudgetConfig, BudgetLedger, ModelUsage},
+};
 use floe_kernel::{AgentFailure, OwnerActor, TraceContext};
-use floe_execution::{Cancellation, ExecutionScope, budget::{BudgetConfig, BudgetLedger, ModelUsage}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::Duration;
 use uuid::Uuid;
 
 pub struct ReadyOwners {
@@ -13,13 +19,26 @@ pub struct ReadyOwners {
     pub conversation: Arc<dyn floe_conversation::ConversationOwner>,
 }
 impl ReadyOwners {
-    pub(crate) fn new(actor: OwnerActor, connections: Arc<floe_connections::ConnectionsService>, conversation: Arc<dyn floe_conversation::ConversationOwner>) -> Self {
-        Self { actor, available: AtomicBool::new(true), connections, conversation }
+    pub(crate) fn new(
+        actor: OwnerActor,
+        connections: Arc<floe_connections::ConnectionsService>,
+        conversation: Arc<dyn floe_conversation::ConversationOwner>,
+    ) -> Self {
+        Self {
+            actor,
+            available: AtomicBool::new(true),
+            connections,
+            conversation,
+        }
     }
     pub(crate) fn check(&self, actor: &OwnerActor) -> Result<(), AgentFailure> {
         actor.validate()?;
-        if !self.available.load(Ordering::Acquire) { return Err(AgentFailure::VaultUnavailable); }
-        if actor != &self.actor { return Err(AgentFailure::PolicyDenied); }
+        if !self.available.load(Ordering::Acquire) {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        if actor != &self.actor {
+            return Err(AgentFailure::PolicyDenied);
+        }
         Ok(())
     }
     pub(crate) fn close_admission(&self) {
@@ -30,11 +49,27 @@ impl ReadyOwners {
 }
 /// Request scopes bound owner admission and reads. Background owner operations
 /// detach only after durable admission and retain their own bounded lifetime.
-pub fn host_scope(request_id: Uuid, cancellation: Cancellation, timeout: Duration) -> ExecutionScope {
+pub fn host_scope(
+    request_id: Uuid,
+    cancellation: Cancellation,
+    timeout: Duration,
+) -> ExecutionScope {
     let ledger = BudgetLedger::new(BudgetConfig::new(1, 1), ModelUsage::default());
-    ExecutionScope::root(cancellation, tokio::time::Instant::now() + timeout, ledger.root_lease(), TraceContext::new(request_id))
+    ExecutionScope::root(
+        cancellation,
+        tokio::time::Instant::now() + timeout,
+        ledger.root_lease(),
+        TraceContext::new(request_id),
+    )
 }
 impl crate::AppComposition {
-    pub fn ready_owners(&self, caller: &crate::CallerContext) -> Result<Arc<ReadyOwners>, AgentFailure> { self.agent_vault.ready(caller) }
-    pub fn execute_owner<F: std::future::Future>(&self, future: F) -> F::Output { self.runtime.block_on(future) }
+    pub fn ready_owners(
+        &self,
+        caller: &crate::CallerContext,
+    ) -> Result<Arc<ReadyOwners>, AgentFailure> {
+        self.agent_vault.ready(caller)
+    }
+    pub fn execute_owner<F: std::future::Future>(&self, future: F) -> F::Output {
+        self.runtime.block_on(future)
+    }
 }

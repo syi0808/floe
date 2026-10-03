@@ -65,4 +65,6 @@ pub fn open_error(value: AppOpenError) -> ErrorDto {
 
 /// Separately owned callback handle. Its Rust fields derive Send and Sync from
 /// owned thread-safe state; it contains no FloeHandle/AppComposition pointer.
-pub struct FloeNativeHostLane { pub(crate) lane: floe_app::NativeHostLane }
+pub struct FloeNativeHostLane {
+    pub(crate) lane: floe_app::NativeHostLane,
+}

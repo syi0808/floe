@@ -1,6 +1,6 @@
-use floe_kernel::AgentFailure;
 use crate::{ConnectionResource, ResourceMode, SourceConnection};
 use floe_context_contract::{ATTENTION_VIEW_ID, PEOPLE_VIEW_ID, ResourceHandle, WELLBEING_VIEW_ID};
+use floe_kernel::AgentFailure;
 
 #[derive(Clone, Copy)]
 pub struct PersonalSourceSpec {

@@ -7,8 +7,11 @@ pub struct ModelPurpose(String);
 impl ModelPurpose {
     pub fn new(value: impl Into<String>) -> Option<Self> {
         let value = value.into();
-        matches!(value.as_str(), "quick_response" | "everyday_assistance" | "deep_work")
-            .then_some(Self(value))
+        matches!(
+            value.as_str(),
+            "quick_response" | "everyday_assistance" | "deep_work"
+        )
+        .then_some(Self(value))
     }
 
     pub fn as_str(&self) -> &str {
@@ -27,7 +30,7 @@ impl ModelConsumer {
             && value.len() <= 128
             && value.trim() == value
             && !value.chars().any(char::is_control))
-            .then_some(Self(value))
+        .then_some(Self(value))
     }
 
     pub fn as_str(&self) -> &str {

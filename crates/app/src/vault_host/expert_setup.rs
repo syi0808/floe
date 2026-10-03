@@ -30,19 +30,30 @@ impl<Keys: VaultKeyProvider> ExpertInstallStore for VaultExpertBundle<'_, Keys> 
 
     fn overview<'a>(&'a self) -> BoxFuture<'a, Result<Option<ExpertInstallResult>, AgentFailure>> {
         Box::pin(async move {
-            self.vault.expert_install_overview(&self.manifest_digest()?).await
+            self.vault
+                .expert_install_overview(&self.manifest_digest()?)
+                .await
         })
     }
 
     fn registry_revision<'a>(&'a self) -> BoxFuture<'a, Result<u64, AgentFailure>> {
         Box::pin(async move {
-            Ok(self.vault.registry_overview().await?.map_or(0, |registry| registry.revision))
+            Ok(self
+                .vault
+                .registry_overview()
+                .await?
+                .map_or(0, |registry| registry.revision))
         })
     }
 
-    fn install<'a>(&'a self, operation: ExpertInstallOperation) -> BoxFuture<'a, Result<ExpertInstallResult, AgentFailure>> {
+    fn install<'a>(
+        &'a self,
+        operation: ExpertInstallOperation,
+    ) -> BoxFuture<'a, Result<ExpertInstallResult, AgentFailure>> {
         Box::pin(async move {
-            self.vault.install_expert_bundle(operation, &self.manifests, self.cancellation.clone()).await
+            self.vault
+                .install_expert_bundle(operation, &self.manifests, self.cancellation.clone())
+                .await
         })
     }
 }

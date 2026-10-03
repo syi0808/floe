@@ -5,8 +5,8 @@ use uuid::Uuid;
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
+use floe_agent_contract::ExpertModel;
 use floe_agent_contract::InferencePolicyDecision;
-use floe_agent_contract::{ExpertModel};
 use floe_context_contract::{LogisticsView, logistics_context_evidence, validate_logistics_view};
 
 use crate::prompts::life_logistics_expert_prompt;

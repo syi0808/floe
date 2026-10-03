@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use floe_access::{
     ContextDependency, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose,
-    GrantSourceBinding, PersonalReadRequirement, ProcessingRestriction, ResourceHandle,
+    GrantSourceBinding, PersonalReadRequirement, ResourceHandle,
     active_read_grant, grant_unchanged, subject_unchanged,
 };
 use floe_agent_contract::{AgentFailure, PersonId};
@@ -110,7 +110,12 @@ pub async fn authorize_personal_dependency(
         resource: logical.clone(),
         contract_version: 1,
     };
-    if connections.source_is_fenced(person_id, &selected.connection_id).await? { return Err(AgentFailure::PolicyDenied); }
+    if connections
+        .source_is_fenced(person_id, &selected.connection_id)
+        .await?
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
     let connection = connections
         .load(person_id, &selected.connection_id)
         .await?
@@ -141,8 +146,11 @@ pub async fn authorize_personal_dependency(
         consumer: dependency.consumer(),
         reject_ambiguous: view != floe_context_contract::ATTENTION_VIEW_ID,
     };
-    let grant = active_read_grant(&records.snapshot(source.clone()).await?.grants, &requirement)
-        .map_err(|_| AgentFailure::PolicyDenied)?;
+    let grant = active_read_grant(
+        &records.snapshot(source.clone()).await?.grants,
+        &requirement,
+    )
+    .map_err(|_| AgentFailure::PolicyDenied)?;
     if dependency.grant_id() != grant.id() || dependency.grant_authority() != grant.authority() {
         return Err(AgentFailure::PolicyDenied);
     }
@@ -194,8 +202,11 @@ pub async fn authorize_personal_dependency(
             .await?
             .ok_or(AgentFailure::PolicyDenied)?;
         standing_source_unchanged(&connection, &current).map_err(|_| AgentFailure::PolicyDenied)?;
-        let current_grant = active_read_grant(&records.snapshot(source.clone()).await?.grants, &requirement)
-            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let current_grant = active_read_grant(
+            &records.snapshot(source.clone()).await?.grants,
+            &requirement,
+        )
+        .map_err(|_| AgentFailure::PolicyDenied)?;
         grant_unchanged(&grant, &current_grant).map_err(|_| AgentFailure::PolicyDenied)?;
     } else {
         let observation = driver
@@ -218,7 +229,12 @@ pub async fn authorize_personal_dependency(
     if view == floe_context_contract::WELLBEING_VIEW_ID {
         dependency.validate_health_transform(device_id, Utc::now())?;
     }
-    if connections.source_is_fenced(person_id, connection.connection_id()).await? { return Err(AgentFailure::PolicyDenied); }
+    if connections
+        .source_is_fenced(person_id, connection.connection_id())
+        .await?
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
     Ok(())
 }
 
@@ -307,7 +323,12 @@ pub async fn read_selected_people_outcome(
 ) -> Result<floe_context_contract::SourceReadOutcome<(PeopleView, ContextDependency)>, AgentFailure>
 {
     within_read_window(deadline, cancellation)?;
-    if connections.source_is_fenced(person_id, &selected.connection_id).await? { return Err(AgentFailure::PolicyDenied); }
+    if connections
+        .source_is_fenced(person_id, &selected.connection_id)
+        .await?
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
     let connection = connections
         .load(person_id, &selected.connection_id)
         .await?
@@ -382,7 +403,12 @@ pub async fn read_selected_people_outcome(
         .await?
         .ok_or(AgentFailure::StaleContext)?;
     standing_source_unchanged(&connection, &current)?;
-    if connections.source_is_fenced(person_id, connection.connection_id()).await? { return Err(AgentFailure::PolicyDenied); }
+    if connections
+        .source_is_fenced(person_id, connection.connection_id())
+        .await?
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
     let current_grant = active_read_grant(
         &records.snapshot(source.clone()).await?.grants,
         &PersonalReadRequirement {
@@ -482,7 +508,12 @@ pub async fn read_selected_wellbeing_outcome(
     AgentFailure,
 > {
     within_read_window(deadline, cancellation)?;
-    if connections.source_is_fenced(person_id, &selected.connection_id).await? { return Err(AgentFailure::PolicyDenied); }
+    if connections
+        .source_is_fenced(person_id, &selected.connection_id)
+        .await?
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
     let connection = connections
         .load(person_id, &selected.connection_id)
         .await?
@@ -558,17 +589,28 @@ pub async fn read_selected_wellbeing_outcome(
         .await?
         .ok_or(AgentFailure::StaleContext)?;
     standing_source_unchanged(&connection, &current)?;
-    if connections.source_is_fenced(person_id, connection.connection_id()).await? { return Err(AgentFailure::PolicyDenied); }
-    let current_grant = active_read_grant(&records.snapshot(source.clone()).await?.grants, &requirement)?;
+    if connections
+        .source_is_fenced(person_id, connection.connection_id())
+        .await?
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let current_grant = active_read_grant(
+        &records.snapshot(source.clone()).await?.grants,
+        &requirement,
+    )?;
     grant_unchanged(&grant, &current_grant)?;
-    let transform = acquired.health_transform.ok_or(AgentFailure::PolicyDenied)?;
+    let transform = acquired
+        .health_transform
+        .ok_or(AgentFailure::PolicyDenied)?;
     let view: WellbeingView = decode(acquired.view.ok_or(AgentFailure::CapabilityUnavailable)?)?;
     transform.validate_view(device_id, &view, Utc::now())?;
     validate_wellbeing_view(&view, Utc::now().timestamp_millis())
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;
     let observation_id = Uuid::new_v4();
     let process = driver.process_incarnation();
-    let query_fingerprint = wellbeing_query_fingerprint(&view, &transform, &subject, observation_id, process);
+    let query_fingerprint =
+        wellbeing_query_fingerprint(&view, &transform, &subject, observation_id, process);
     let (observed, expires) = freshness(view.observed_at_unix_ms, view.expires_at_unix_ms)?;
     let dependency = ContextDependency::try_new(
         person_id,
@@ -595,7 +637,8 @@ pub async fn read_selected_wellbeing_outcome(
         expires,
     )
     .map_err(|_| AgentFailure::InvalidInput)?
-    .with_health_transform(transform.clone()).map_err(|_| AgentFailure::PolicyDenied)?;
+    .with_health_transform(transform.clone())
+    .map_err(|_| AgentFailure::PolicyDenied)?;
     driver.commit_personal_observation(
         person_id,
         device_id,
@@ -629,7 +672,12 @@ pub async fn admit_selected_attention_outcome(
     AgentFailure,
 > {
     within_read_window(deadline, cancellation)?;
-    if connections.source_is_fenced(person_id, &selected.connection_id).await? { return Err(AgentFailure::PolicyDenied); }
+    if connections
+        .source_is_fenced(person_id, &selected.connection_id)
+        .await?
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
     let connection = connections
         .load(person_id, &selected.connection_id)
         .await?
@@ -711,8 +759,16 @@ pub async fn admit_selected_attention_outcome(
         .await?
         .ok_or(AgentFailure::StaleContext)?;
     standing_source_unchanged(&connection, &current)?;
-    if connections.source_is_fenced(person_id, connection.connection_id()).await? { return Err(AgentFailure::PolicyDenied); }
-    let current_grant = active_read_grant(&records.snapshot(source.clone()).await?.grants, &requirement)?;
+    if connections
+        .source_is_fenced(person_id, connection.connection_id())
+        .await?
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let current_grant = active_read_grant(
+        &records.snapshot(source.clone()).await?.grants,
+        &requirement,
+    )?;
     grant_unchanged(&grant, &current_grant)?;
     let (observation_id, process) =
         driver.commit_attention_projection(person_id, &host_epoch, device_id, &view, &subject)?;

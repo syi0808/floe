@@ -98,7 +98,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       controller: widget.agentController!,
       onBack: () => setState(() => selectedPage = _SettingsPage.dataPrivacy),
     ),
-    _SettingsPage.remoteServer => ConnectorScreen(controller: widget.connectionsController),
+    _SettingsPage.remoteServer => ConnectorScreen(
+      controller: widget.connectionsController,
+    ),
   };
 
   @override

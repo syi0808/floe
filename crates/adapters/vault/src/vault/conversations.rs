@@ -1,11 +1,11 @@
 use floe_agent_contract::DataClass;
 use floe_agent_contract::{CommandId, DependencyCoverage, RunId};
-use floe_conversation::{
-    AgentMessage, AgentUsage, MAX_RESUME_LINEAGE,
-    RunRecord, RunState, RunTerminal, TurnAdmissionRequest, TurnInput, TurnMode,
-};
 use floe_agent_contract::{EngineStep, JournalEvent};
-use floe_conversation::{BlockedRunCommit, JournalEntry, ResumeRequired, ResumeChildAdmission};
+use floe_conversation::{
+    AgentMessage, AgentUsage, MAX_RESUME_LINEAGE, RunRecord, RunState, RunTerminal,
+    TurnAdmissionRequest, TurnInput, TurnMode,
+};
+use floe_conversation::{BlockedRunCommit, JournalEntry, ResumeChildAdmission, ResumeRequired};
 use sha2::{Digest, Sha256};
 use turso::transaction::{Transaction, TransactionBehavior};
 
@@ -171,27 +171,51 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(activation)
     }
 
-    pub async fn admit_conversation_turn(&self, request: TurnAdmissionRequest) -> Result<VaultConversationAdmission, AgentFailure> {
-        if matches!(request.mode, TurnMode::Resume(_)) { return Err(AgentFailure::InvalidInput); }
+    pub async fn admit_conversation_turn(
+        &self,
+        request: TurnAdmissionRequest,
+    ) -> Result<VaultConversationAdmission, AgentFailure> {
+        if matches!(request.mode, TurnMode::Resume(_)) {
+            return Err(AgentFailure::InvalidInput);
+        }
         let mut connection = self.connection()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).await.map_err(storage)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(storage)?;
         let result = self.admit_conversation_turn_on(&transaction, request).await;
-        self.finish_registry_transaction_checked(transaction, result).await
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
     }
 
-    async fn admit_conversation_turn_on(&self, transaction: &Transaction<'_>, request: TurnAdmissionRequest) -> Result<VaultConversationAdmission, AgentFailure> {
+    async fn admit_conversation_turn_on(
+        &self,
+        transaction: &Transaction<'_>,
+        request: TurnAdmissionRequest,
+    ) -> Result<VaultConversationAdmission, AgentFailure> {
         request.validate()?;
         if request.principal != self.person_id.to_string() {
             return Err(AgentFailure::CapabilityDenied);
         }
-        let continuation = match &request.mode { TurnMode::Continue(value) => Some(value.clone()), _ => None };
-        let resume = match &request.mode { TurnMode::Resume(value) => Some(value.clone()), _ => None };
+        let continuation = match &request.mode {
+            TurnMode::Continue(value) => Some(value.clone()),
+            _ => None,
+        };
+        let resume = match &request.mode {
+            TurnMode::Resume(value) => Some(value.clone()),
+            _ => None,
+        };
         let user_message_id = match &request.input {
             TurnInput::NewMessage(message) => message.message_id,
             TurnInput::ExistingMessage { message_id } => *message_id,
         };
         initialize(transaction).await?;
-        if session_command_on(transaction, self.person_id, request.command_id).await?.is_some() { return Err(AgentFailure::Conflict); }
+        if session_command_on(transaction, self.person_id, request.command_id)
+            .await?
+            .is_some()
+        {
+            return Err(AgentFailure::Conflict);
+        }
         if let Some(existing) = self
             .conversation_run_by_command_on(transaction, request.command_id)
             .await?
@@ -202,7 +226,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 Err(AgentFailure::Conflict)
             };
         }
-        if command_identity_used(transaction, request.command_id.as_uuid()).await? { return Err(AgentFailure::Conflict); }
+        if command_identity_used(transaction, request.command_id.as_uuid()).await? {
+            return Err(AgentFailure::Conflict);
+        }
         let mut conflicting_command = transaction
             .query(
                 "SELECT 1 FROM agent_conversation_commands WHERE command_id = ?",
@@ -237,8 +263,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             {
                 return Err(AgentFailure::Conflict);
             }
-            if let Some(child_run_id) =
-                self.resume_slot_on(transaction, reference.origin_run_id).await?
+            if let Some(child_run_id) = self
+                .resume_slot_on(transaction, reference.origin_run_id)
+                .await?
             {
                 let child = self
                     .conversation_run_on(transaction, child_run_id)
@@ -272,19 +299,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .ok_or(AgentFailure::Conflict)?;
             let resumable = matches!(
                 (source.state, source.issue),
-                (
-                    RunState::TimedOut,
-                    Some(AgentFailure::DeadlineExceeded)
-                ) | (
-                    RunState::Failed,
-                    Some(AgentFailure::BudgetExceeded)
-                )
+                (RunState::TimedOut, Some(AgentFailure::DeadlineExceeded))
+                    | (RunState::Failed, Some(AgentFailure::BudgetExceeded))
             );
             if !resumable
                 || source.session_id != request.session_id
                 || source.person_id != self.person_id
                 || source.session_revision != request.expected_session_revision
-                || source.device_id != request.device_id || source.user_message_id != user_message_id
+                || source.device_id != request.device_id
+                || source.user_message_id != user_message_id
                 || source.executor_generation != reference.executor_generation
                 || source
                     .continuation_level
@@ -336,9 +359,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .checked_add(1)
             .ok_or(AgentFailure::Conflict)?;
         if continuation.is_none() && resume.is_none() {
-            let TurnInput::NewMessage(message) = &request.input else { return Err(AgentFailure::InvalidInput); };
+            let TurnInput::NewMessage(message) = &request.input else {
+                return Err(AgentFailure::InvalidInput);
+            };
             session.messages.push(AgentMessage::User {
-                turn_id: request.run_id.as_uuid(), message_id: message.message_id, text: message.text.clone(),
+                turn_id: request.run_id.as_uuid(),
+                message_id: message.message_id,
+                text: message.text.clone(),
             });
         }
         session.usage = AgentUsage::default();
@@ -611,120 +638,291 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    pub async fn finish_conversation_run(&self, run_id: RunId, expected_aggregate_revision: u64, terminal: RunTerminal) -> Result<RunRecord, AgentFailure> {
-        if terminal.state == RunState::Blocked { return Err(AgentFailure::InvalidInput); }
+    pub async fn finish_conversation_run(
+        &self,
+        run_id: RunId,
+        expected_aggregate_revision: u64,
+        terminal: RunTerminal,
+    ) -> Result<RunRecord, AgentFailure> {
+        if terminal.state == RunState::Blocked {
+            return Err(AgentFailure::InvalidInput);
+        }
         let mut connection = self.connection()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).await.map_err(storage)?;
-        let result = self.finish_conversation_run_on(&transaction, run_id, expected_aggregate_revision, terminal).await;
-        self.finish_registry_transaction_checked(transaction, result).await
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(storage)?;
+        let result = self
+            .finish_conversation_run_on(&transaction, run_id, expected_aggregate_revision, terminal)
+            .await;
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
     }
 
-    async fn finish_conversation_run_on(&self, transaction: &Transaction<'_>, run_id: RunId, expected_aggregate_revision: u64, terminal: RunTerminal) -> Result<RunRecord, AgentFailure> {
+    async fn finish_conversation_run_on(
+        &self,
+        transaction: &Transaction<'_>,
+        run_id: RunId,
+        expected_aggregate_revision: u64,
+        terminal: RunTerminal,
+    ) -> Result<RunRecord, AgentFailure> {
         terminal.validate()?;
         let digest = terminal_digest(run_id, expected_aggregate_revision, &terminal)?;
-        let current = self.conversation_run_on(transaction, run_id).await?.ok_or(AgentFailure::NotFound)?;
+        let current = self
+            .conversation_run_on(transaction, run_id)
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
         if current.state.is_terminal() {
             let receipt = terminal_receipt_on(transaction, run_id).await?;
             return if receipt.as_deref() == Some(digest.as_str())
-                && current.aggregate_revision == expected_aggregate_revision.checked_add(1).ok_or(AgentFailure::Conflict)? {
+                && current.aggregate_revision
+                    == expected_aggregate_revision
+                        .checked_add(1)
+                        .ok_or(AgentFailure::Conflict)?
+            {
                 Ok(current)
-            } else { Err(AgentFailure::Conflict) };
+            } else {
+                Err(AgentFailure::Conflict)
+            };
         }
-        if current.executor_generation != self.active_conversation_executor_generation(transaction).await?
-            || current.aggregate_revision != expected_aggregate_revision { return Err(AgentFailure::Conflict); }
+        if current.executor_generation
+            != self
+                .active_conversation_executor_generation(transaction)
+                .await?
+            || current.aggregate_revision != expected_aggregate_revision
+        {
+            return Err(AgentFailure::Conflict);
+        }
         let session = self.session_on(transaction, current.session_id).await?;
         let journal = self.conversation_journal_on(transaction, &current).await?;
         floe_conversation::validate_terminal_steps(&terminal, &journal)?;
-        let (next, next_session) = floe_conversation::apply_terminal(&current, &session, &terminal, &journal)?;
+        let (next, next_session) =
+            floe_conversation::apply_terminal(&current, &session, &terminal, &journal)?;
         for message in floe_conversation::terminal_messages(run_id, &terminal)? {
             if let AgentMessage::Delegation { turn_id, task } = message {
                 transaction.execute("INSERT INTO agent_task_delegations (task_id, session_id, turn_id) VALUES (?, ?, ?)",
                     (task.task_id.to_string(), session.id.to_string(), turn_id.to_string())).await.map_err(|_| AgentFailure::Conflict)?;
             }
         }
-        let changed = transaction.execute("UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
-            (integer(next_session.revision)?, self.payload(&next_session)?, session.id.to_string(), integer(session.revision)?)).await.map_err(storage)?;
-        if changed != 1 { return Err(AgentFailure::Conflict); }
-        context_dependencies::merge_context_dependency_coverage(transaction, self.person_id, session.id, run_id.as_uuid(), terminal.coverage.clone()).await?;
-        if write_run(transaction, &next, current.aggregate_revision, current.executor_generation).await? != 1 { return Err(AgentFailure::Conflict); }
-        transaction.execute("INSERT INTO agent_conversation_terminal_receipts (run_id, digest) VALUES (?, ?)",
-            (run_id.as_uuid().to_string(), digest)).await.map_err(storage)?;
+        let changed = transaction
+            .execute(
+                "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
+                (
+                    integer(next_session.revision)?,
+                    self.payload(&next_session)?,
+                    session.id.to_string(),
+                    integer(session.revision)?,
+                ),
+            )
+            .await
+            .map_err(storage)?;
+        if changed != 1 {
+            return Err(AgentFailure::Conflict);
+        }
+        context_dependencies::merge_context_dependency_coverage(
+            transaction,
+            self.person_id,
+            session.id,
+            run_id.as_uuid(),
+            terminal.coverage.clone(),
+        )
+        .await?;
+        if write_run(
+            transaction,
+            &next,
+            current.aggregate_revision,
+            current.executor_generation,
+        )
+        .await?
+            != 1
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        transaction
+            .execute(
+                "INSERT INTO agent_conversation_terminal_receipts (run_id, digest) VALUES (?, ?)",
+                (run_id.as_uuid().to_string(), digest),
+            )
+            .await
+            .map_err(storage)?;
         self.enqueue_resume_on(transaction, &next).await?;
         self.check_access()?;
         Ok(next)
     }
 
-    pub async fn finish_blocked_conversation_run(&self, commit: BlockedRunCommit) -> Result<RunRecord, AgentFailure> {
+    pub async fn finish_blocked_conversation_run(
+        &self,
+        commit: BlockedRunCommit,
+    ) -> Result<RunRecord, AgentFailure> {
         commit.validate()?;
-        if commit.person_id != self.person_id { return Err(AgentFailure::CapabilityDenied); }
+        if commit.person_id != self.person_id {
+            return Err(AgentFailure::CapabilityDenied);
+        }
         let mut connection = self.connection()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).await.map_err(|error| self.registry_transaction_start_error(error))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
             initialize(&transaction).await?;
             super::conversation_interactions::initialize(&transaction).await?;
-            let current = self.conversation_run_on(&transaction, commit.run_id).await?.ok_or(AgentFailure::NotFound)?;
+            let current = self
+                .conversation_run_on(&transaction, commit.run_id)
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
             let replay = current.state == RunState::Blocked;
-            if current.person_id != commit.person_id || current.session_id != commit.session_id
-                || current.executor_generation != commit.executor_generation || current.journal_revision != commit.expected_journal_revision
-                || (!replay && (current.state != RunState::Working || current.session_revision != commit.expected_session_revision
-                    || current.aggregate_revision != commit.expected_aggregate_revision))
-                || (replay && (current.session_revision != commit.expected_session_revision.checked_add(1).ok_or(AgentFailure::Conflict)?
-                    || current.aggregate_revision != commit.expected_aggregate_revision.checked_add(1).ok_or(AgentFailure::Conflict)?)) {
+            if current.person_id != commit.person_id
+                || current.session_id != commit.session_id
+                || current.executor_generation != commit.executor_generation
+                || current.journal_revision != commit.expected_journal_revision
+                || (!replay
+                    && (current.state != RunState::Working
+                        || current.session_revision != commit.expected_session_revision
+                        || current.aggregate_revision != commit.expected_aggregate_revision))
+                || (replay
+                    && (current.session_revision
+                        != commit
+                            .expected_session_revision
+                            .checked_add(1)
+                            .ok_or(AgentFailure::Conflict)?
+                        || current.aggregate_revision
+                            != commit
+                                .expected_aggregate_revision
+                                .checked_add(1)
+                                .ok_or(AgentFailure::Conflict)?))
+            {
                 return Err(AgentFailure::Conflict);
             }
-            let block = commit.terminal.blocked.as_ref().ok_or(AgentFailure::InvalidInput)?;
+            let block = commit
+                .terminal
+                .blocked
+                .as_ref()
+                .ok_or(AgentFailure::InvalidInput)?;
             for publication in &commit.publications {
-                if publication.record.device_id != current.device_id { return Err(AgentFailure::Conflict); }
-                self.store_projection_review_on(&transaction, &current, &publication.record, replay).await?;
+                if publication.record.device_id != current.device_id {
+                    return Err(AgentFailure::Conflict);
+                }
+                self.store_projection_review_on(
+                    &transaction,
+                    &current,
+                    &publication.record,
+                    replay,
+                )
+                .await?;
                 for interaction in &publication.interactions {
-                    let index = block.interaction_refs.iter().position(|id| *id == interaction.id).ok_or(AgentFailure::Conflict)?;
+                    let index = block
+                        .interaction_refs
+                        .iter()
+                        .position(|id| *id == interaction.id)
+                        .ok_or(AgentFailure::Conflict)?;
                     let origin = block.origins.get(index).ok_or(AgentFailure::Conflict)?;
-                    if origin.run_id != current.run_id || origin.session_id != current.session_id
-                        || origin.person_id != current.person_id || origin.device_id != current.device_id
-                        || origin.executor_generation != current.executor_generation || origin.origin != interaction.origin {
+                    if origin.run_id != current.run_id
+                        || origin.session_id != current.session_id
+                        || origin.person_id != current.person_id
+                        || origin.device_id != current.device_id
+                        || origin.executor_generation != current.executor_generation
+                        || origin.origin != interaction.origin
+                    {
                         return Err(AgentFailure::Conflict);
                     }
-                    if let floe_conversation::ReviewedTarget::SourceReview(reference) = &interaction.target {
-                        if block.review_refs.get(index) != Some(reference) { return Err(AgentFailure::Conflict); }
-                    } else { return Err(AgentFailure::Conflict); }
-                    if let Some(existing) = super::conversation_interactions::read_interaction(&transaction, self.person_id, interaction.id).await? {
-                        if !same_publication(&existing, interaction) { return Err(AgentFailure::Conflict); }
+                    if let floe_conversation::ReviewedTarget::SourceReview(reference) =
+                        &interaction.target
+                    {
+                        if block.review_refs.get(index) != Some(reference) {
+                            return Err(AgentFailure::Conflict);
+                        }
                     } else {
-                        if replay { return Err(AgentFailure::StorageUnavailable); }
-                        self.check_interaction_origin_on(&transaction, interaction, true).await?;
-                        let stored = super::conversation_interactions::count_interactions(&transaction, current.run_id, false).await?;
-                        let active = super::conversation_interactions::count_interactions(&transaction, current.run_id, true).await?;
-                        if stored >= floe_conversation::MAX_STORED_INTERACTIONS_PER_RUN as u64 || active >= floe_conversation::MAX_ACTIVE_INTERACTIONS_PER_RUN as u64 { return Err(AgentFailure::BudgetExceeded); }
-                        super::conversation_interactions::insert_interaction(&transaction, interaction).await?;
+                        return Err(AgentFailure::Conflict);
+                    }
+                    if let Some(existing) = super::conversation_interactions::read_interaction(
+                        &transaction,
+                        self.person_id,
+                        interaction.id,
+                    )
+                    .await?
+                    {
+                        if !same_publication(&existing, interaction) {
+                            return Err(AgentFailure::Conflict);
+                        }
+                    } else {
+                        if replay {
+                            return Err(AgentFailure::StorageUnavailable);
+                        }
+                        self.check_interaction_origin_on(&transaction, interaction, true)
+                            .await?;
+                        let stored = super::conversation_interactions::count_interactions(
+                            &transaction,
+                            current.run_id,
+                            false,
+                        )
+                        .await?;
+                        let active = super::conversation_interactions::count_interactions(
+                            &transaction,
+                            current.run_id,
+                            true,
+                        )
+                        .await?;
+                        if stored >= floe_conversation::MAX_STORED_INTERACTIONS_PER_RUN as u64
+                            || active >= floe_conversation::MAX_ACTIVE_INTERACTIONS_PER_RUN as u64
+                        {
+                            return Err(AgentFailure::BudgetExceeded);
+                        }
+                        super::conversation_interactions::insert_interaction(
+                            &transaction,
+                            interaction,
+                        )
+                        .await?;
                     }
                 }
             }
-            self.finish_conversation_run_on(&transaction, commit.run_id, commit.expected_aggregate_revision, commit.terminal).await
-        }.await;
-        self.finish_registry_transaction_checked(transaction, result).await
+            self.finish_conversation_run_on(
+                &transaction,
+                commit.run_id,
+                commit.expected_aggregate_revision,
+                commit.terminal,
+            )
+            .await
+        }
+        .await;
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
     }
 
-    pub(super) async fn conversation_journal_on(&self, connection: &turso::Connection, record: &RunRecord) -> Result<Vec<JournalEntry>, AgentFailure> {
+    pub(super) async fn conversation_journal_on(
+        &self,
+        connection: &turso::Connection,
+        record: &RunRecord,
+    ) -> Result<Vec<JournalEntry>, AgentFailure> {
         let mut rows = connection.query("SELECT revision, kind, payload FROM agent_conversation_journal WHERE run_id = ? ORDER BY revision LIMIT 513", [record.run_id.as_uuid().to_string()]).await.map_err(storage)?;
         let mut entries = Vec::new();
         while let Some(row) = rows.next().await.map_err(storage)? {
-            let revision = u64::try_from(row.get::<i64>(0).map_err(storage)?).map_err(|_| AgentFailure::StorageUnavailable)?;
+            let revision = u64::try_from(row.get::<i64>(0).map_err(storage)?)
+                .map_err(|_| AgentFailure::StorageUnavailable)?;
             let kind = row.get::<String>(1).map_err(storage)?;
             let payload = row.get::<String>(2).map_err(storage)?;
-            if revision != entries.len() as u64 + 1 || payload.is_empty() || payload.len() > MAX_JOURNAL_ENTRY_BYTES { return Err(AgentFailure::StorageUnavailable); }
-            let event: JournalEvent = serde_json::from_str(&payload).map_err(|_| AgentFailure::StorageUnavailable)?;
-            if kind != journal_kind(&event) { return Err(AgentFailure::StorageUnavailable); }
+            if revision != entries.len() as u64 + 1
+                || payload.is_empty()
+                || payload.len() > MAX_JOURNAL_ENTRY_BYTES
+            {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            let event: JournalEvent =
+                serde_json::from_str(&payload).map_err(|_| AgentFailure::StorageUnavailable)?;
+            if kind != journal_kind(&event) {
+                return Err(AgentFailure::StorageUnavailable);
+            }
             entries.push(JournalEntry { revision, event });
         }
-        if entries.len() > MAX_JOURNAL_ENTRIES as usize || entries.len() as u64 != record.journal_revision { return Err(AgentFailure::StorageUnavailable); }
+        if entries.len() > MAX_JOURNAL_ENTRIES as usize
+            || entries.len() as u64 != record.journal_revision
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
         validate_journal(record, &entries)?;
         Ok(entries)
     }
 
-    pub async fn conversation_run(
-        &self,
-        run_id: RunId,
-    ) -> Result<Option<RunRecord>, AgentFailure> {
+    pub async fn conversation_run(&self, run_id: RunId) -> Result<Option<RunRecord>, AgentFailure> {
         if !run_id.is_valid() {
             return Err(AgentFailure::InvalidInput);
         }
@@ -796,11 +994,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         {
             return Err(AgentFailure::VaultUnavailable);
         }
-        let typed = entries.iter().map(|entry| {
-            let event: JournalEvent = serde_json::from_str(&entry.payload).map_err(unavailable)?;
-            if entry.kind != journal_kind(&event) { return Err(AgentFailure::StorageUnavailable); }
-            Ok(JournalEntry { revision: entry.revision, event })
-        }).collect::<Result<Vec<_>, AgentFailure>>()?;
+        let typed = entries
+            .iter()
+            .map(|entry| {
+                let event: JournalEvent =
+                    serde_json::from_str(&entry.payload).map_err(unavailable)?;
+                if entry.kind != journal_kind(&event) {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                Ok(JournalEntry {
+                    revision: entry.revision,
+                    event,
+                })
+            })
+            .collect::<Result<Vec<_>, AgentFailure>>()?;
         validate_journal(&record, &typed)?;
         self.check_access()?;
         Ok(entries)
@@ -1139,7 +1346,13 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     }
     transaction.query("SELECT origin_run_id, person_id, session_id, state, child_run_id, payload FROM agent_conversation_resume_requests LIMIT 0", ()).await.map_err(storage)?;
     transaction.query("SELECT projection_operation_id, run_id, person_id, payload FROM agent_conversation_projection_reviews LIMIT 0", ()).await.map_err(storage)?;
-    transaction.query("SELECT run_id, digest FROM agent_conversation_terminal_receipts LIMIT 0", ()).await.map_err(storage)?;
+    transaction
+        .query(
+            "SELECT run_id, digest FROM agent_conversation_terminal_receipts LIMIT 0",
+            (),
+        )
+        .await
+        .map_err(storage)?;
     transaction.query("SELECT command_id, person_id, session_id, initial_revision FROM agent_conversation_session_commands LIMIT 0", ()).await.map_err(storage)?;
     transaction.query("SELECT command_id, person_id, session_id, expected_revision, result_revision FROM agent_conversation_recovery_commands LIMIT 0", ()).await.map_err(storage)?;
     executor_generation(transaction).await?;
@@ -1171,7 +1384,9 @@ async fn read_record(
         return Ok(None);
     };
     let payload = row.get::<String>(8).map_err(storage)?;
-    if payload.len() > MAX_RUN_RECORD_BYTES { return Err(AgentFailure::StorageUnavailable); }
+    if payload.len() > MAX_RUN_RECORD_BYTES {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     let record: RunRecord = serde_json::from_str(&payload).map_err(unavailable)?;
     record.validate(person_id)?;
     if row.get::<String>(0).map_err(storage)? != record.run_id.as_uuid().to_string()
@@ -1273,82 +1488,190 @@ fn state_name(state: RunState) -> &'static str {
 
 fn journal_kind(event: &JournalEvent) -> &'static str {
     match event {
-        JournalEvent::ModelIntent { .. } | JournalEvent::ToolIntent { .. } | JournalEvent::DelegationIntent { .. } => "intent",
-        JournalEvent::ModelResult { .. } | JournalEvent::ToolResult { .. } | JournalEvent::DelegationResult { .. } => "result",
+        JournalEvent::ModelIntent { .. }
+        | JournalEvent::ToolIntent { .. }
+        | JournalEvent::DelegationIntent { .. } => "intent",
+        JournalEvent::ModelResult { .. }
+        | JournalEvent::ToolResult { .. }
+        | JournalEvent::DelegationResult { .. } => "result",
         JournalEvent::Output { .. } => "output",
-        JournalEvent::FinalizationStarted { .. } | JournalEvent::Checkpoint { .. } | JournalEvent::ValidatedBatch { .. } | JournalEvent::BatchProgress { .. } => "checkpoint",
+        JournalEvent::FinalizationStarted { .. }
+        | JournalEvent::Checkpoint { .. }
+        | JournalEvent::ValidatedBatch { .. }
+        | JournalEvent::BatchProgress { .. } => "checkpoint",
     }
 }
 fn validate_journal(record: &RunRecord, entries: &[JournalEntry]) -> Result<(), AgentFailure> {
     let receipt = floe_conversation::project_run_receipt(record.clone())?;
     floe_conversation::validate_run_journal(&receipt, entries)
 }
-fn terminal_digest(run_id: RunId, expected_revision: u64, terminal: &RunTerminal) -> Result<String, AgentFailure> {
-    let steps = terminal.steps.iter().map(|step| match step {
-        EngineStep::Tool(result) => serde_json::to_value(("tool", result)),
-        EngineStep::Delegation(receipt) => serde_json::to_value(("delegation", receipt)),
-        EngineStep::Answer { text, artifacts } => serde_json::to_value(("answer", text, artifacts)),
-    }).collect::<Result<Vec<_>, _>>().map_err(|_| AgentFailure::StorageUnavailable)?;
-    let bytes = serde_json::to_vec(&(run_id, expected_revision, terminal.state, &terminal.output, steps,
-        &terminal.coverage, terminal.issue, &terminal.blocked, &terminal.interactions)).map_err(|_| AgentFailure::StorageUnavailable)?;
-    Ok(Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect())
+fn terminal_digest(
+    run_id: RunId,
+    expected_revision: u64,
+    terminal: &RunTerminal,
+) -> Result<String, AgentFailure> {
+    let steps = terminal
+        .steps
+        .iter()
+        .map(|step| match step {
+            EngineStep::Tool(result) => serde_json::to_value(("tool", result)),
+            EngineStep::Delegation(receipt) => serde_json::to_value(("delegation", receipt)),
+            EngineStep::Answer { text, artifacts } => {
+                serde_json::to_value(("answer", text, artifacts))
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| AgentFailure::StorageUnavailable)?;
+    let bytes = serde_json::to_vec(&(
+        run_id,
+        expected_revision,
+        terminal.state,
+        &terminal.output,
+        steps,
+        &terminal.coverage,
+        terminal.issue,
+        &terminal.blocked,
+        &terminal.interactions,
+    ))
+    .map_err(|_| AgentFailure::StorageUnavailable)?;
+    Ok(Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
-async fn terminal_receipt_on(connection: &turso::Connection, run_id: RunId) -> Result<Option<String>, AgentFailure> {
-    let mut rows = connection.query("SELECT digest FROM agent_conversation_terminal_receipts WHERE run_id = ?", [run_id.as_uuid().to_string()]).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else { return Ok(None); };
+async fn terminal_receipt_on(
+    connection: &turso::Connection,
+    run_id: RunId,
+) -> Result<Option<String>, AgentFailure> {
+    let mut rows = connection
+        .query(
+            "SELECT digest FROM agent_conversation_terminal_receipts WHERE run_id = ?",
+            [run_id.as_uuid().to_string()],
+        )
+        .await
+        .map_err(storage)?;
+    let Some(row) = rows.next().await.map_err(storage)? else {
+        return Ok(None);
+    };
     let digest = row.get::<String>(0).map_err(storage)?;
-    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) || rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::StorageUnavailable); }
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || rows.next().await.map_err(storage)?.is_some()
+    {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     Ok(Some(digest))
 }
-pub(super) fn same_publication(a: &floe_conversation::ConversationInteraction, b: &floe_conversation::ConversationInteraction) -> bool {
-    a.id == b.id && a.person_id == b.person_id && a.session_id == b.session_id && a.origin_run_id == b.origin_run_id
-        && a.origin_turn_id == b.origin_turn_id && a.origin == b.origin && a.projection == b.projection
-        && a.kind == b.kind && a.requirement == b.requirement && a.requirement_digest == b.requirement_digest
-        && a.target == b.target && a.target_digest == b.target_digest && a.created_at_unix_ms == b.created_at_unix_ms && a.expires_at_unix_ms == b.expires_at_unix_ms
+pub(super) fn same_publication(
+    a: &floe_conversation::ConversationInteraction,
+    b: &floe_conversation::ConversationInteraction,
+) -> bool {
+    a.id == b.id
+        && a.person_id == b.person_id
+        && a.session_id == b.session_id
+        && a.origin_run_id == b.origin_run_id
+        && a.origin_turn_id == b.origin_turn_id
+        && a.origin == b.origin
+        && a.projection == b.projection
+        && a.kind == b.kind
+        && a.requirement == b.requirement
+        && a.requirement_digest == b.requirement_digest
+        && a.target == b.target
+        && a.target_digest == b.target_digest
+        && a.created_at_unix_ms == b.created_at_unix_ms
+        && a.expires_at_unix_ms == b.expires_at_unix_ms
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    pub(super) async fn enqueue_resume_on(&self, transaction: &Transaction<'_>, record: &RunRecord) -> Result<(), AgentFailure> {
-        if !matches!(record.state, RunState::Completed | RunState::Blocked) { return Ok(()); }
+    pub(super) async fn enqueue_resume_on(
+        &self,
+        transaction: &Transaction<'_>,
+        record: &RunRecord,
+    ) -> Result<(), AgentFailure> {
+        if !matches!(record.state, RunState::Completed | RunState::Blocked) {
+            return Ok(());
+        }
         let mut receipt = floe_conversation::project_run_receipt(record.clone())?;
         let entries = self.conversation_journal_on(transaction, record).await?;
         let accounting = floe_conversation::project_run_accounting(&receipt, &entries)?;
-        receipt.attempt_refs = accounting.attempt_refs; receipt.task_refs = accounting.task_refs; receipt.unresolved_attempts = accounting.unresolved_attempts;
-        let group = super::conversation_interactions::read_group_on(transaction, self.person_id, record.run_id).await?;
-        let Some(pending) = floe_conversation::build_resume_required(&receipt, &group)? else { return Ok(()); };
-        if let Some((existing, _, _)) = resume_request_on(transaction, self.person_id, record.run_id).await? {
-            if existing != pending { return Err(AgentFailure::Conflict); }
+        receipt.attempt_refs = accounting.attempt_refs;
+        receipt.task_refs = accounting.task_refs;
+        receipt.unresolved_attempts = accounting.unresolved_attempts;
+        let group = super::conversation_interactions::read_group_on(
+            transaction,
+            self.person_id,
+            record.run_id,
+        )
+        .await?;
+        let Some(pending) = floe_conversation::build_resume_required(&receipt, &group)? else {
+            return Ok(());
+        };
+        if let Some((existing, _, _)) =
+            resume_request_on(transaction, self.person_id, record.run_id).await?
+        {
+            if existing != pending {
+                return Err(AgentFailure::Conflict);
+            }
             return Ok(());
         }
         let session = self.session_on(transaction, record.session_id).await?;
-        let state = if session.revision == pending.expected_session_revision && session.active_turn.is_none() { "pending" } else { "superseded" };
+        let state = if session.revision == pending.expected_session_revision
+            && session.active_turn.is_none()
+        {
+            "pending"
+        } else {
+            "superseded"
+        };
         let payload = serde_json::to_string(&pending).map_err(storage)?;
         transaction.execute("INSERT INTO agent_conversation_resume_requests (origin_run_id, person_id, session_id, state, child_run_id, payload) VALUES (?, ?, ?, ?, NULL, ?)",
             (record.run_id.as_uuid().to_string(), self.person_id.to_string(), record.session_id.to_string(), state, payload)).await.map_err(storage)?;
         Ok(())
     }
-    pub async fn pending_conversation_resume_requests(&self, limit: usize) -> Result<Vec<ResumeRequired>, AgentFailure> {
-        if limit == 0 || limit > 64 { return Err(AgentFailure::InvalidInput); }
+    pub async fn pending_conversation_resume_requests(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<ResumeRequired>, AgentFailure> {
+        if limit == 0 || limit > 64 {
+            return Err(AgentFailure::InvalidInput);
+        }
         let connection = self.connection()?;
         let mut rows = connection.query("SELECT origin_run_id FROM agent_conversation_resume_requests WHERE person_id = ? AND state = 'pending' ORDER BY origin_run_id LIMIT ?", (self.person_id.to_string(), limit as i64 + 1)).await.map_err(storage)?;
         let mut ids = Vec::new();
-        while let Some(row) = rows.next().await.map_err(storage)? { ids.push(parse_run_id(&row.get::<String>(0).map_err(storage)?)?); }
+        while let Some(row) = rows.next().await.map_err(storage)? {
+            ids.push(parse_run_id(&row.get::<String>(0).map_err(storage)?)?);
+        }
         drop(rows);
-        if ids.len() > limit { return Err(AgentFailure::BudgetExceeded); }
+        if ids.len() > limit {
+            return Err(AgentFailure::BudgetExceeded);
+        }
         let mut result = Vec::new();
         for id in ids {
-            if let Some((request, state, _)) = resume_request_on(&connection, self.person_id, id).await? {
-                if state == "pending" { result.push(request); }
+            if let Some((request, state, _)) =
+                resume_request_on(&connection, self.person_id, id).await?
+            {
+                if state == "pending" {
+                    result.push(request);
+                }
             }
         }
         self.check_access()?;
         Ok(result)
     }
-    pub async fn claim_conversation_resume(&self, request: ResumeChildAdmission) -> Result<VaultConversationAdmission, AgentFailure> {
+    pub async fn claim_conversation_resume(
+        &self,
+        request: ResumeChildAdmission,
+    ) -> Result<VaultConversationAdmission, AgentFailure> {
         request.validate()?;
-        if request.request.person_id != self.person_id { return Err(AgentFailure::CapabilityDenied); }
+        if request.request.person_id != self.person_id {
+            return Err(AgentFailure::CapabilityDenied);
+        }
         let mut connection = self.connection()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).await.map_err(|error| self.registry_transaction_start_error(error))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| self.registry_transaction_start_error(error))?;
         let result: Result<Option<VaultConversationAdmission>, AgentFailure> = async {
             initialize(&transaction).await?;
             let (persisted, state, child_id) = resume_request_on(&transaction, self.person_id, request.request.origin_run_id).await?.ok_or(AgentFailure::Conflict)?;
@@ -1380,32 +1703,59 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             self.check_access()?;
             Ok(Some(admission))
         }.await;
-        self.finish_registry_transaction_checked(transaction, result).await?.ok_or(AgentFailure::Conflict)
+        self.finish_registry_transaction_checked(transaction, result)
+            .await?
+            .ok_or(AgentFailure::Conflict)
     }
 }
-async fn resume_request_on(connection: &turso::Connection, person: PersonId, origin: RunId) -> Result<Option<(ResumeRequired, String, Option<RunId>)>, AgentFailure> {
+async fn resume_request_on(
+    connection: &turso::Connection,
+    person: PersonId,
+    origin: RunId,
+) -> Result<Option<(ResumeRequired, String, Option<RunId>)>, AgentFailure> {
     let mut rows = connection.query("SELECT person_id, session_id, state, child_run_id, payload FROM agent_conversation_resume_requests WHERE origin_run_id = ?", [origin.as_uuid().to_string()]).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else { return Ok(None); };
+    let Some(row) = rows.next().await.map_err(storage)? else {
+        return Ok(None);
+    };
     let payload = row.get::<String>(4).map_err(storage)?;
-    if payload.len() > 8192 { return Err(AgentFailure::StorageUnavailable); }
+    if payload.len() > 8192 {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     let pending: ResumeRequired = serde_json::from_str(&payload).map_err(unavailable)?;
     pending.validate()?;
     let state = row.get::<String>(2).map_err(storage)?;
-    let child = row.get::<Option<String>>(3).map_err(storage)?.map(|id| parse_run_id(&id)).transpose()?;
-    if pending.origin_run_id != origin || pending.person_id != person || row.get::<String>(0).map_err(storage)? != person.to_string()
+    let child = row
+        .get::<Option<String>>(3)
+        .map_err(storage)?
+        .map(|id| parse_run_id(&id))
+        .transpose()?;
+    if pending.origin_run_id != origin
+        || pending.person_id != person
+        || row.get::<String>(0).map_err(storage)? != person.to_string()
         || row.get::<String>(1).map_err(storage)? != pending.session_id.to_string()
-        || !matches!(state.as_str(), "pending" | "claimed" | "superseded") || (state == "claimed") != child.is_some()
-        || rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::StorageUnavailable); }
+        || !matches!(state.as_str(), "pending" | "claimed" | "superseded")
+        || (state == "claimed") != child.is_some()
+        || rows.next().await.map_err(storage)?.is_some()
+    {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     Ok(Some((pending, state, child)))
 }
 
-
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    pub async fn start_conversation_session(&self, request: floe_conversation::StartSessionRequest) -> Result<floe_conversation::SessionReceipt, AgentFailure> {
+    pub async fn start_conversation_session(
+        &self,
+        request: floe_conversation::StartSessionRequest,
+    ) -> Result<floe_conversation::SessionReceipt, AgentFailure> {
         request.validate()?;
-        if request.principal != self.person_id.to_string() { return Err(AgentFailure::CapabilityDenied); }
+        if request.principal != self.person_id.to_string() {
+            return Err(AgentFailure::CapabilityDenied);
+        }
         let mut connection = self.connection()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).await.map_err(|error| self.registry_transaction_start_error(error))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
             initialize(&transaction).await?;
             if let Some(receipt) = session_command_on(&transaction, self.person_id, request.command_id).await? {
@@ -1430,38 +1780,88 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             self.check_access()?;
             Ok(receipt)
         }.await;
-        self.finish_registry_transaction_checked(transaction, result).await
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
     }
     pub async fn resume_conversation_session(&self) -> Result<AgentSession, AgentFailure> {
         let connection = self.connection()?;
         let mut rows = connection.query("SELECT id FROM agent_sessions WHERE json_extract(payload, '$.scope') IS NULL AND json_extract(payload, '$.data_classes[0]') = 'personal' ORDER BY rowid DESC LIMIT 1", ()).await.map_err(storage)?;
-        let row = rows.next().await.map_err(storage)?.ok_or(AgentFailure::NotFound)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(storage)?
+            .ok_or(AgentFailure::NotFound)?;
         let id = Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
         drop(rows);
         let session = self.session_on(&connection, id).await?;
-        if session.person_id != self.person_id || session.scope.is_some() || session.data_classes != [DataClass::Personal] { return Err(AgentFailure::PolicyDenied); }
+        if session.person_id != self.person_id
+            || session.scope.is_some()
+            || session.data_classes != [DataClass::Personal]
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
         self.check_access()?;
         Ok(session)
     }
 }
-async fn session_command_on(connection: &turso::Connection, person_id: PersonId, command_id: CommandId) -> Result<Option<floe_conversation::SessionReceipt>, AgentFailure> {
+async fn session_command_on(
+    connection: &turso::Connection,
+    person_id: PersonId,
+    command_id: CommandId,
+) -> Result<Option<floe_conversation::SessionReceipt>, AgentFailure> {
     let mut rows = connection.query("SELECT person_id, session_id, initial_revision FROM agent_conversation_session_commands WHERE command_id = ?", [command_id.as_uuid().to_string()]).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else { return Ok(None); };
-    if row.get::<String>(0).map_err(storage)? != person_id.to_string() || row.get::<i64>(2).map_err(storage)? != 0 { return Err(AgentFailure::Conflict); }
-    let receipt = floe_conversation::SessionReceipt { principal: person_id.to_string(), session_id: Uuid::parse_str(&row.get::<String>(1).map_err(storage)?).map_err(unavailable)?, session_revision: 0 };
+    let Some(row) = rows.next().await.map_err(storage)? else {
+        return Ok(None);
+    };
+    if row.get::<String>(0).map_err(storage)? != person_id.to_string()
+        || row.get::<i64>(2).map_err(storage)? != 0
+    {
+        return Err(AgentFailure::Conflict);
+    }
+    let receipt = floe_conversation::SessionReceipt {
+        principal: person_id.to_string(),
+        session_id: Uuid::parse_str(&row.get::<String>(1).map_err(storage)?)
+            .map_err(unavailable)?,
+        session_revision: 0,
+    };
     receipt.validate()?;
-    if rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::StorageUnavailable); }
+    if rows.next().await.map_err(storage)?.is_some() {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     Ok(Some(receipt))
 }
 
-pub(super) async fn command_identity_used(connection: &turso::Connection, command_id: Uuid) -> Result<bool, AgentFailure> {
-    for table in ["agent_conversation_runs", "agent_conversation_commands", "agent_conversation_session_commands", "agent_conversation_recovery_commands", "agent_conversation_interaction_decisions", "agent_conversation_interaction_refreshes"] {
-        let mut exists = connection.query("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?", [table]).await.map_err(storage)?;
-        if exists.next().await.map_err(storage)?.is_none() { continue; }
+pub(super) async fn command_identity_used(
+    connection: &turso::Connection,
+    command_id: Uuid,
+) -> Result<bool, AgentFailure> {
+    for table in [
+        "agent_conversation_runs",
+        "agent_conversation_commands",
+        "agent_conversation_session_commands",
+        "agent_conversation_recovery_commands",
+        "agent_conversation_interaction_decisions",
+        "agent_conversation_interaction_refreshes",
+    ] {
+        let mut exists = connection
+            .query(
+                "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?",
+                [table],
+            )
+            .await
+            .map_err(storage)?;
+        if exists.next().await.map_err(storage)?.is_none() {
+            continue;
+        }
         drop(exists);
         let query = format!("SELECT 1 FROM {table} WHERE command_id = ?");
-        let mut rows = connection.query(&query, [command_id.to_string()]).await.map_err(storage)?;
-        if rows.next().await.map_err(storage)?.is_some() { return Ok(true); }
+        let mut rows = connection
+            .query(&query, [command_id.to_string()])
+            .await
+            .map_err(storage)?;
+        if rows.next().await.map_err(storage)?.is_some() {
+            return Ok(true);
+        }
     }
     Ok(false)
 }

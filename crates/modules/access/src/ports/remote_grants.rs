@@ -5,13 +5,11 @@
 //! work; verifying the signature and committing the grant atomically is the
 //! store's. Neither of them decides whether the grant is admissible.
 
-use floe_context_contract::{GrantAuthority, GrantId, GrantScope, GrantSourceBinding};
 use floe_execution::Cancellation;
 use floe_kernel::AgentFailure;
 use tokio::time::Instant;
 
-use crate::application::remote_view::{RemoteProducerIdentity, RemoteViewSourceReference};
-use crate::data_access_grant::DataAccessGrant;
+use crate::application::remote_view::RemoteProducerIdentity;
 
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
@@ -60,4 +58,3 @@ pub trait RemoteGrantTransport: Sync {
         window: &'a RemoteCallWindow,
     ) -> BoxFuture<'a, Result<SignedSourcePreview, AgentFailure>>;
 }
-

@@ -2,7 +2,6 @@
 package authority
 
 import (
- "floe/server/internal/views"
 	"bytes"
 	cryptorand "crypto/rand"
 	"crypto/sha256"
@@ -10,15 +9,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"floe/server/internal/trust"
+	"floe/server/internal/views"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
- "floe/server/internal/trust"
 )
 
 const (
-	SchemaVersion   = 1
+	SchemaVersion = 1
 
 	ChallengeTTL           = 30 * time.Second
 	MaxPendingPerClient    = 128
@@ -62,8 +62,16 @@ type systemClock struct{ started time.Time }
 func (c systemClock) Now() time.Time           { return time.Now() }
 func (c systemClock) Monotonic() time.Duration { return time.Since(c.started) }
 
-type Trust interface { ActiveIssuer(trust.Principal)(trust.IssuerSnapshot,error); WithActiveIssuer(trust.Principal,string,func(trust.IssuerSnapshot)error)error; WithCurrentPrincipal(trust.Principal,func(trust.PrincipalSnapshot)error)error }
-type Options struct { Clock Clock; Random func([]byte)error; Trust Trust }
+type Trust interface {
+	ActiveIssuer(trust.Principal) (trust.IssuerSnapshot, error)
+	WithActiveIssuer(trust.Principal, string, func(trust.IssuerSnapshot) error) error
+	WithCurrentPrincipal(trust.Principal, func(trust.PrincipalSnapshot) error) error
+}
+type Options struct {
+	Clock  Clock
+	Random func([]byte) error
+	Trust  Trust
+}
 type GrantReference struct {
 	ID          string
 	Incarnation string
@@ -82,7 +90,9 @@ type Request struct {
 	MaxBytes    uint32
 }
 
-type SourceAuthority interface { WithCurrentReference(trust.Principal,views.SourceReference,func(views.SourceSnapshot)error)error }
+type SourceAuthority interface {
+	WithCurrentReference(trust.Principal, views.SourceReference, func(views.SourceSnapshot) error) error
+}
 type Challenge struct {
 	ID        string
 	Operation Operation
@@ -98,39 +108,293 @@ type Release struct {
 	ExpiresAt time.Time
 }
 
-type Engine struct { mu sync.Mutex;clock Clock;random func([]byte)error;trust Trust;pending map[string]*pendingChallenge;admissions map[string]*admission;stages map[string]*stage;stagedBytes int }
-type pendingChallenge struct { wire []byte;operation Operation;principal trust.Principal;request Request;keyID string;deadline time.Duration;deadlineWall time.Time;state challengeState }
+type Engine struct {
+	mu          sync.Mutex
+	clock       Clock
+	random      func([]byte) error
+	trust       Trust
+	pending     map[string]*pendingChallenge
+	admissions  map[string]*admission
+	stages      map[string]*stage
+	stagedBytes int
+}
+type pendingChallenge struct {
+	wire         []byte
+	operation    Operation
+	principal    trust.Principal
+	request      Request
+	keyID        string
+	deadline     time.Duration
+	deadlineWall time.Time
+	state        challengeState
+}
 type challengeState uint8
-const (challengePending challengeState=iota;challengeChecking;challengeClaimed)
-type stage struct { id,admissionID string;principal trust.Principal;request Request;result []byte;resultDigest string;deadline time.Duration;deadlineWall time.Time;challenge []byte;keyID string;state challengeState }
-type admission struct { principal trust.Principal;request Request;keyID string;deadline time.Duration }
-func New(opts Options)(*Engine,error){if opts.Trust==nil{return nil,ErrUnavailable};clock:=opts.Clock;if clock==nil{clock=systemClock{started:time.Now()}};random:=opts.Random;if random==nil{random=func(b []byte)error{_,err:=cryptorand.Read(b);return err}};return &Engine{clock:clock,random:random,trust:opts.Trust,pending:map[string]*pendingChallenge{},admissions:map[string]*admission{},stages:map[string]*stage{}},nil}
-func(e *Engine) clientCountLocked(client string)int{n:=0;for _,v:=range e.pending{if v.principal.ClientID()==client{n++}};for _,v:=range e.admissions{if v.principal.ClientID()==client{n++}};for _,v:=range e.stages{if v.principal.ClientID()==client{n++}};return n}
-func(e *Engine) IssueAdmission(p trust.Principal,r Request,source SourceAuthority)(Challenge,error){
- if validatePrincipal(p)!=nil||validateRequest(r)!=nil||source==nil{return Challenge{},ErrInvalid};issuer,err:=e.trust.ActiveIssuer(p);if err!=nil{return Challenge{},ErrDenied};r=cloneRequest(r);challenge,wire,err:=e.makeChallenge(OperationAdmission,p,issuer.KeyID,r,&r.Source);if err!=nil{return Challenge{},err}
- consumed:=false;err=source.WithCurrentReference(p,r.Source,func(s views.SourceSnapshot)error{consumed=true;if !sourceMatches(p,r.Source,s){return ErrDenied};e.mu.Lock();defer e.mu.Unlock();e.sweepExpiredLocked();if e.clientCountLocked(p.ClientID())>=MaxPendingPerClient{return ErrDenied};e.pending[challenge.ID]=&pendingChallenge{wire:append([]byte(nil),wire...),operation:OperationAdmission,principal:p,request:r,keyID:issuer.KeyID,deadline:e.clock.Monotonic()+ChallengeTTL,deadlineWall:challenge.ExpiresAt};return nil});if err!=nil||!consumed{return Challenge{},ErrDenied};return challenge,nil
+
+const (
+	challengePending challengeState = iota
+	challengeChecking
+	challengeClaimed
+)
+
+type stage struct {
+	id, admissionID string
+	principal       trust.Principal
+	request         Request
+	result          []byte
+	resultDigest    string
+	deadline        time.Duration
+	deadlineWall    time.Time
+	challenge       []byte
+	keyID           string
+	state           challengeState
 }
-func(e *Engine) ClaimAdmission(p trust.Principal,proof trust.Proof,source SourceAuthority)(string,Request,error){
- if source==nil||!p.Valid(){return "",Request{},ErrDenied};e.mu.Lock();e.sweepExpiredLocked();c,ok:=e.pending[proof.ChallengeID];if !ok||c.state!=challengePending||!p.Same(c.principal){e.mu.Unlock();return "",Request{},ErrReplay};c.state=challengeChecking;copy:=*c;copy.wire=append([]byte(nil),c.wire...);e.mu.Unlock()
- verified:=false;err:=e.trust.WithActiveIssuer(p,copy.keyID,func(issuer trust.IssuerSnapshot)error{verified=true;return trust.VerifyProof(proof,proof.ChallengeID,copy.keyID,copy.wire,issuer.PublicKey)})
- if err!=nil||!verified{e.CancelAdmission(proof.ChallengeID);return "",Request{},ErrDenied}
- consumed:=false;err=source.WithCurrentReference(p,copy.request.Source,func(s views.SourceSnapshot)error{consumed=true;e.mu.Lock();defer e.mu.Unlock();live,ok:=e.pending[proof.ChallengeID];if !ok||live!=c||live.state!=challengeChecking{return ErrReplay};delete(e.pending,proof.ChallengeID);if e.expired(live.deadline)||!sourceMatches(p,copy.request.Source,s){return ErrDenied};e.admissions[proof.ChallengeID]=&admission{p,cloneRequest(copy.request),copy.keyID,e.clock.Monotonic()+ChallengeTTL};return nil})
- if err!=nil||!consumed{e.CancelAdmission(proof.ChallengeID);if err==nil{err=ErrDenied};return "",Request{},err};return proof.ChallengeID,cloneRequest(copy.request),nil
+type admission struct {
+	principal trust.Principal
+	request   Request
+	keyID     string
+	deadline  time.Duration
 }
-func(e *Engine) StageResult(id string,p trust.Principal,r Request,result []byte,count uint32)(Release,error){
- if !p.Valid()||validateRequest(r)!=nil||len(result)>MaxStageBytesPerResult||len(result)>int(r.MaxBytes)||count>r.MaxItems{return Release{},ErrDenied};issuer,err:=e.trust.ActiveIssuer(p);if err!=nil{return Release{},ErrDenied};challenge,wire,err:=e.makeChallenge(OperationRelease,p,issuer.KeyID,r,&r.Source);if err!=nil{return Release{},err};parsed,err:=decodeChallengeWire(wire);if err!=nil{return Release{},err};hash:=sha256.Sum256(result);parsed.ResultDigest=hex.EncodeToString(hash[:]);parsed.AdmissionID=id;encoded,err:=json.Marshal(parsed);if err!=nil||validateWire(parsed)!=nil{return Release{},ErrInvalid}
- var out Release;err=e.trust.WithCurrentPrincipal(p,func(trust.PrincipalSnapshot)error{e.mu.Lock();defer e.mu.Unlock();e.sweepExpiredLocked();a,ok:=e.admissions[id];if !ok||!p.Same(a.principal)||a.keyID!=issuer.KeyID||!requestsEqual(a.request,r){return ErrDenied};if e.stagedBytes+len(result)>MaxStageBytesGlobal{return ErrDenied};e.stages[challenge.ID]=&stage{id:challenge.ID,admissionID:id,principal:p,request:cloneRequest(r),result:append([]byte(nil),result...),resultDigest:parsed.ResultDigest,deadline:e.clock.Monotonic()+ChallengeTTL,deadlineWall:challenge.ExpiresAt,challenge:append([]byte(nil),encoded...),keyID:issuer.KeyID};e.stagedBytes+=len(result);delete(e.admissions,id);out=Release{challenge.ID,append([]byte(nil),encoded...),encodeB64(encoded),challenge.ExpiresAt};return nil});return out,err
+
+func New(opts Options) (*Engine, error) {
+	if opts.Trust == nil {
+		return nil, ErrUnavailable
+	}
+	clock := opts.Clock
+	if clock == nil {
+		clock = systemClock{started: time.Now()}
+	}
+	random := opts.Random
+	if random == nil {
+		random = func(b []byte) error { _, err := cryptorand.Read(b); return err }
+	}
+	return &Engine{clock: clock, random: random, trust: opts.Trust, pending: map[string]*pendingChallenge{}, admissions: map[string]*admission{}, stages: map[string]*stage{}}, nil
 }
-func(e *Engine) ClaimRelease(p trust.Principal,proof trust.Proof,source SourceAuthority)([]byte,error){
- if source==nil||!p.Valid(){return nil,ErrDenied};e.mu.Lock();e.sweepExpiredLocked();s,ok:=e.stages[proof.ChallengeID];if !ok||s.state!=challengePending||!p.Same(s.principal){e.mu.Unlock();return nil,ErrReplay};s.state=challengeChecking;copy:=*s;copy.challenge=append([]byte(nil),s.challenge...);e.mu.Unlock()
- verified:=false;err:=e.trust.WithActiveIssuer(p,copy.keyID,func(issuer trust.IssuerSnapshot)error{verified=true;return trust.VerifyProof(proof,proof.ChallengeID,copy.keyID,copy.challenge,issuer.PublicKey)});if err!=nil||!verified{e.CancelRelease(proof.ChallengeID);return nil,ErrDenied}
- var out []byte;consumed:=false;err=source.WithCurrentReference(p,copy.request.Source,func(current views.SourceSnapshot)error{consumed=true;e.mu.Lock();defer e.mu.Unlock();live,ok:=e.stages[proof.ChallengeID];if !ok||live!=s||live.state!=challengeChecking{return ErrReplay};defer e.dropStageLocked(live);if e.expired(live.deadline)||!sourceMatches(p,live.request.Source,current){return ErrDenied};out=append([]byte(nil),live.result...);return nil});if err!=nil||!consumed{e.CancelRelease(proof.ChallengeID);if err==nil{err=ErrDenied};return nil,err};return out,nil
+func (e *Engine) clientCountLocked(client string) int {
+	n := 0
+	for _, v := range e.pending {
+		if v.principal.ClientID() == client {
+			n++
+		}
+	}
+	for _, v := range e.admissions {
+		if v.principal.ClientID() == client {
+			n++
+		}
+	}
+	for _, v := range e.stages {
+		if v.principal.ClientID() == client {
+			n++
+		}
+	}
+	return n
 }
-func(e *Engine) CancelRelease(id string){e.mu.Lock();defer e.mu.Unlock();if s:=e.stages[id];s!=nil{e.dropStageLocked(s)}}
-func(e *Engine) CancelAdmission(id string){e.mu.Lock();defer e.mu.Unlock();delete(e.pending,id);delete(e.admissions,id)}
-func(e *Engine) expired(deadline time.Duration)bool{return e.clock.Monotonic()>=deadline}
-func(e *Engine) dropStageLocked(s *stage){delete(e.stages,s.id);e.stagedBytes-=len(s.result)}
-func(e *Engine) sweepExpiredLocked(){for id,c:=range e.pending{if e.expired(c.deadline){delete(e.pending,id)}};for id,a:=range e.admissions{if e.expired(a.deadline){delete(e.admissions,id)}};for _,s:=range e.stages{if e.expired(s.deadline){e.dropStageLocked(s)}}}
+func (e *Engine) IssueAdmission(p trust.Principal, r Request, source SourceAuthority) (Challenge, error) {
+	if validatePrincipal(p) != nil || validateRequest(r) != nil || source == nil {
+		return Challenge{}, ErrInvalid
+	}
+	issuer, err := e.trust.ActiveIssuer(p)
+	if err != nil {
+		return Challenge{}, ErrDenied
+	}
+	r = cloneRequest(r)
+	challenge, wire, err := e.makeChallenge(OperationAdmission, p, issuer.KeyID, r, &r.Source)
+	if err != nil {
+		return Challenge{}, err
+	}
+	consumed := false
+	err = source.WithCurrentReference(p, r.Source, func(s views.SourceSnapshot) error {
+		consumed = true
+		if !sourceMatches(p, r.Source, s) {
+			return ErrDenied
+		}
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		e.sweepExpiredLocked()
+		if e.clientCountLocked(p.ClientID()) >= MaxPendingPerClient {
+			return ErrDenied
+		}
+		e.pending[challenge.ID] = &pendingChallenge{wire: append([]byte(nil), wire...), operation: OperationAdmission, principal: p, request: r, keyID: issuer.KeyID, deadline: e.clock.Monotonic() + ChallengeTTL, deadlineWall: challenge.ExpiresAt}
+		return nil
+	})
+	if err != nil || !consumed {
+		return Challenge{}, ErrDenied
+	}
+	return challenge, nil
+}
+func (e *Engine) ClaimAdmission(p trust.Principal, proof trust.Proof, source SourceAuthority) (string, Request, error) {
+	if source == nil || !p.Valid() {
+		return "", Request{}, ErrDenied
+	}
+	e.mu.Lock()
+	e.sweepExpiredLocked()
+	c, ok := e.pending[proof.ChallengeID]
+	if !ok || c.state != challengePending || !p.Same(c.principal) {
+		e.mu.Unlock()
+		return "", Request{}, ErrReplay
+	}
+	c.state = challengeChecking
+	copy := *c
+	copy.wire = append([]byte(nil), c.wire...)
+	e.mu.Unlock()
+	verified := false
+	err := e.trust.WithActiveIssuer(p, copy.keyID, func(issuer trust.IssuerSnapshot) error {
+		verified = true
+		return trust.VerifyProof(proof, proof.ChallengeID, copy.keyID, copy.wire, issuer.PublicKey)
+	})
+	if err != nil || !verified {
+		e.CancelAdmission(proof.ChallengeID)
+		return "", Request{}, ErrDenied
+	}
+	consumed := false
+	err = source.WithCurrentReference(p, copy.request.Source, func(s views.SourceSnapshot) error {
+		consumed = true
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		live, ok := e.pending[proof.ChallengeID]
+		if !ok || live != c || live.state != challengeChecking {
+			return ErrReplay
+		}
+		delete(e.pending, proof.ChallengeID)
+		if e.expired(live.deadline) || !sourceMatches(p, copy.request.Source, s) {
+			return ErrDenied
+		}
+		e.admissions[proof.ChallengeID] = &admission{p, cloneRequest(copy.request), copy.keyID, e.clock.Monotonic() + ChallengeTTL}
+		return nil
+	})
+	if err != nil || !consumed {
+		e.CancelAdmission(proof.ChallengeID)
+		if err == nil {
+			err = ErrDenied
+		}
+		return "", Request{}, err
+	}
+	return proof.ChallengeID, cloneRequest(copy.request), nil
+}
+func (e *Engine) StageResult(id string, p trust.Principal, r Request, result []byte, count uint32) (Release, error) {
+	if !p.Valid() || validateRequest(r) != nil || len(result) > MaxStageBytesPerResult || len(result) > int(r.MaxBytes) || count > r.MaxItems {
+		return Release{}, ErrDenied
+	}
+	issuer, err := e.trust.ActiveIssuer(p)
+	if err != nil {
+		return Release{}, ErrDenied
+	}
+	challenge, wire, err := e.makeChallenge(OperationRelease, p, issuer.KeyID, r, &r.Source)
+	if err != nil {
+		return Release{}, err
+	}
+	parsed, err := decodeChallengeWire(wire)
+	if err != nil {
+		return Release{}, err
+	}
+	hash := sha256.Sum256(result)
+	parsed.ResultDigest = hex.EncodeToString(hash[:])
+	parsed.AdmissionID = id
+	encoded, err := json.Marshal(parsed)
+	if err != nil || validateWire(parsed) != nil {
+		return Release{}, ErrInvalid
+	}
+	var out Release
+	err = e.trust.WithCurrentPrincipal(p, func(trust.PrincipalSnapshot) error {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		e.sweepExpiredLocked()
+		a, ok := e.admissions[id]
+		if !ok || !p.Same(a.principal) || a.keyID != issuer.KeyID || !requestsEqual(a.request, r) {
+			return ErrDenied
+		}
+		if e.stagedBytes+len(result) > MaxStageBytesGlobal {
+			return ErrDenied
+		}
+		e.stages[challenge.ID] = &stage{id: challenge.ID, admissionID: id, principal: p, request: cloneRequest(r), result: append([]byte(nil), result...), resultDigest: parsed.ResultDigest, deadline: e.clock.Monotonic() + ChallengeTTL, deadlineWall: challenge.ExpiresAt, challenge: append([]byte(nil), encoded...), keyID: issuer.KeyID}
+		e.stagedBytes += len(result)
+		delete(e.admissions, id)
+		out = Release{challenge.ID, append([]byte(nil), encoded...), encodeB64(encoded), challenge.ExpiresAt}
+		return nil
+	})
+	return out, err
+}
+func (e *Engine) ClaimRelease(p trust.Principal, proof trust.Proof, source SourceAuthority) ([]byte, error) {
+	if source == nil || !p.Valid() {
+		return nil, ErrDenied
+	}
+	e.mu.Lock()
+	e.sweepExpiredLocked()
+	s, ok := e.stages[proof.ChallengeID]
+	if !ok || s.state != challengePending || !p.Same(s.principal) {
+		e.mu.Unlock()
+		return nil, ErrReplay
+	}
+	s.state = challengeChecking
+	copy := *s
+	copy.challenge = append([]byte(nil), s.challenge...)
+	e.mu.Unlock()
+	verified := false
+	err := e.trust.WithActiveIssuer(p, copy.keyID, func(issuer trust.IssuerSnapshot) error {
+		verified = true
+		return trust.VerifyProof(proof, proof.ChallengeID, copy.keyID, copy.challenge, issuer.PublicKey)
+	})
+	if err != nil || !verified {
+		e.CancelRelease(proof.ChallengeID)
+		return nil, ErrDenied
+	}
+	var out []byte
+	consumed := false
+	err = source.WithCurrentReference(p, copy.request.Source, func(current views.SourceSnapshot) error {
+		consumed = true
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		live, ok := e.stages[proof.ChallengeID]
+		if !ok || live != s || live.state != challengeChecking {
+			return ErrReplay
+		}
+		defer e.dropStageLocked(live)
+		if e.expired(live.deadline) || !sourceMatches(p, live.request.Source, current) {
+			return ErrDenied
+		}
+		out = append([]byte(nil), live.result...)
+		return nil
+	})
+	if err != nil || !consumed {
+		e.CancelRelease(proof.ChallengeID)
+		if err == nil {
+			err = ErrDenied
+		}
+		return nil, err
+	}
+	return out, nil
+}
+func (e *Engine) CancelRelease(id string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if s := e.stages[id]; s != nil {
+		e.dropStageLocked(s)
+	}
+}
+func (e *Engine) CancelAdmission(id string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.pending, id)
+	delete(e.admissions, id)
+}
+func (e *Engine) expired(deadline time.Duration) bool { return e.clock.Monotonic() >= deadline }
+func (e *Engine) dropStageLocked(s *stage)            { delete(e.stages, s.id); e.stagedBytes -= len(s.result) }
+func (e *Engine) sweepExpiredLocked() {
+	for id, c := range e.pending {
+		if e.expired(c.deadline) {
+			delete(e.pending, id)
+		}
+	}
+	for id, a := range e.admissions {
+		if e.expired(a.deadline) {
+			delete(e.admissions, id)
+		}
+	}
+	for _, s := range e.stages {
+		if e.expired(s.deadline) {
+			e.dropStageLocked(s)
+		}
+	}
+}
 func (engine *Engine) makeChallenge(operation Operation, principal trust.Principal, keyID string, request Request, source *views.SourceReference) (Challenge, []byte, error) {
 	if err := validatePrincipal(principal); err != nil {
 		return Challenge{}, nil, err
@@ -227,7 +491,13 @@ func parseChallengeBytes(data []byte) (challengeWire, error) {
 	return wire, nil
 }
 
-func decodeChallengeWire(data []byte)(challengeWire,error){var wire challengeWire;if trust.DecodeStrict(data,&wire,MaxChallengeBytes,MaxJSONDepth)!=nil{return challengeWire{},ErrInvalid};return wire,nil}
+func decodeChallengeWire(data []byte) (challengeWire, error) {
+	var wire challengeWire
+	if trust.DecodeStrict(data, &wire, MaxChallengeBytes, MaxJSONDepth) != nil {
+		return challengeWire{}, ErrInvalid
+	}
+	return wire, nil
+}
 
 func ParseChallengeBytes(data []byte) error { _, err := parseChallengeBytes(data); return err }
 
@@ -499,4 +769,6 @@ func formatUUID(b []byte) string {
 	return fmt.Sprintf("%s-%s-%s-%s-%s", hex.EncodeToString(b[:4]), hex.EncodeToString(b[4:6]), hex.EncodeToString(b[6:8]), hex.EncodeToString(b[8:10]), hex.EncodeToString(b[10:]))
 }
 
-func rejectDuplicateJSON(data []byte)error{return trust.StrictJSON(data,MaxChallengeBytes,MaxJSONDepth)}
+func rejectDuplicateJSON(data []byte) error {
+	return trust.StrictJSON(data, MaxChallengeBytes, MaxJSONDepth)
+}

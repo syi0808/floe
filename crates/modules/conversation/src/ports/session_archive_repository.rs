@@ -1,7 +1,6 @@
-use std::sync::Arc;
-use floe_agent_contract::{ArchiveReadRequest, ArchiveSnapshot, BoxFuture, ExecutionJournal};
-use floe_kernel::{AgentFailure, RunId};
-use crate::{AdmittedTurn, CancelRunAdmission, CancelRunCommand, CommandQuery, CompactionReceipt, CompactionRequest, JournalEntry, RecoveryReceipt, RecoveryRequest, RunReceipt, RunTerminal, SessionReadRequest, SessionReceipt, SessionRequest, TurnAdmission, TurnAdmissionRequest};
+use crate::{CompactionReceipt, CompactionRequest};
+use floe_agent_contract::{ArchiveReadRequest, ArchiveSnapshot, BoxFuture};
+use floe_kernel::AgentFailure;
 
 pub trait SessionArchiveRepository: Send + Sync {
     fn compact_session<'a>(
@@ -14,4 +13,3 @@ pub trait SessionArchiveRepository: Send + Sync {
         request: &'a ArchiveReadRequest,
     ) -> BoxFuture<'a, Result<ArchiveSnapshot, AgentFailure>>;
 }
-

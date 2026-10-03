@@ -16,8 +16,8 @@ use floe_execution::Cancellation;
 use floe_kernel::{AgentFailure, PersonId};
 
 use crate::{
-    AgentContext, InferencePolicyDecision, ModelReplay, ProviderReplay, SourceProjectionReview, ports::BoxFuture,
-    prompts::PromptAssembly,
+    AgentContext, InferencePolicyDecision, ModelReplay, ProviderReplay, SourceProjectionReview,
+    ports::BoxFuture, prompts::PromptAssembly,
 };
 
 /// One assignment, with the context and the bounds it must be answered under.

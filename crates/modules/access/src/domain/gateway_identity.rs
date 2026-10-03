@@ -25,7 +25,6 @@ impl RemoteOwnerPublicKey {
     }
 }
 
-
 /// Everything an authorization must match before it may be signed.
 ///
 /// A transport fills this in from the grant it is reading under; the key holder
@@ -53,4 +52,3 @@ pub struct RemoteViewAuthorizationExpectation {
     pub max_items: u32,
     pub max_bytes: u32,
 }
-

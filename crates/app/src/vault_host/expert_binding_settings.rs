@@ -168,9 +168,11 @@ async fn discover_live_candidates<Keys: floe_vault::VaultKeyProvider>(
                 open.sources.gateway_credentials.as_ref(),
                 &person_id.to_string(),
                 device_id,
-            ).await?
+            )
+            .await?
         {
-            let producer = floe_access::GatewayTrustReader::pinned_producer(open.vault.as_ref()).await?;
+            let producer =
+                floe_access::GatewayTrustReader::pinned_producer(open.vault.as_ref()).await?;
             (
                 client
                     .observe_source_connections(
@@ -195,9 +197,14 @@ async fn discover_live_candidates<Keys: floe_vault::VaultKeyProvider>(
             open.sources.gateway_credentials.as_ref(),
             &person_id.to_string(),
             device_id,
-        ).await?
+        )
+        .await?
         .ok_or(AgentFailure::CapabilityUnavailable)?;
-        Some(floe_access::GatewayTrustReader::pinned_producer(open.vault.as_ref()).await?.execution_owner)
+        Some(
+            floe_access::GatewayTrustReader::pinned_producer(open.vault.as_ref())
+                .await?
+                .execution_owner,
+        )
     } else {
         remote.1
     };

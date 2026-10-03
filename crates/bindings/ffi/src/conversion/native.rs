@@ -8,17 +8,18 @@
 
 use floe_app::{
     AttentionAcquisitionMode, AttentionAcquisitionRequest, CalendarAcquisitionMode,
-    CalendarAcquisitionRequest, CalendarProvider, CalendarSourceFailure, NativeHostOutcome,
-    NativeCalendarBatch, NativeCalendarFailure, NativeCalendarRecord, NativeEventSchedule,
-    PersonalAcquisitionRequest, PersonalDomain, PersonalAcquisitionMode,
+    CalendarAcquisitionRequest, CalendarProvider, CalendarSourceFailure, NativeCalendarBatch,
+    NativeCalendarFailure, NativeCalendarRecord, NativeEventSchedule, NativeHostOutcome,
+    PersonalAcquisitionMode, PersonalAcquisitionRequest, PersonalDomain,
 };
 use floe_protocol::wire::{WireResult, invalid};
 use floe_protocol::{
-    CalendarBatchDto, CalendarFailureDto, CalendarProviderDto, EventScheduleDto,
-    LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,
-    LocalContextAttentionAcquisitionModeDto, LocalContextAttentionAcquisitionRequestDto,
+    AppCommandResultDto, AppQueryResultDto, CalendarBatchDto, CalendarFailureDto,
+    CalendarProviderDto, EventScheduleDto, LocalContextAcquisitionModeDto,
+    LocalContextAcquisitionRequestDto, LocalContextAttentionAcquisitionModeDto,
+    LocalContextAttentionAcquisitionRequestDto, LocalContextPersonalAcquisitionModeDto,
     LocalContextPersonalAcquisitionRequestDto, LocalContextPersonalDomainDto,
-    LocalContextPersonalAcquisitionModeDto, AppCommandResultDto, AppQueryResultDto, NativeHostRegistrationDto, UuidRefDto,
+    NativeHostRegistrationDto, UuidRefDto,
 };
 
 pub fn calendar_provider(value: CalendarProviderDto) -> CalendarProvider {
@@ -89,7 +90,9 @@ pub(crate) fn acquisition_mode(value: LocalContextAcquisitionModeDto) -> Calenda
     match value {
         LocalContextAcquisitionModeDto::InspectSubject => CalendarAcquisitionMode::InspectSubject,
         LocalContextAcquisitionModeDto::InspectCatalog => CalendarAcquisitionMode::InspectCatalog,
-        LocalContextAcquisitionModeDto::RequestPermission => CalendarAcquisitionMode::RequestPermission,
+        LocalContextAcquisitionModeDto::RequestPermission => {
+            CalendarAcquisitionMode::RequestPermission
+        }
         LocalContextAcquisitionModeDto::ReadEvents => CalendarAcquisitionMode::ReadEvents,
     }
 }
@@ -98,7 +101,9 @@ fn acquisition_mode_dto(value: CalendarAcquisitionMode) -> LocalContextAcquisiti
     match value {
         CalendarAcquisitionMode::InspectSubject => LocalContextAcquisitionModeDto::InspectSubject,
         CalendarAcquisitionMode::InspectCatalog => LocalContextAcquisitionModeDto::InspectCatalog,
-        CalendarAcquisitionMode::RequestPermission => LocalContextAcquisitionModeDto::RequestPermission,
+        CalendarAcquisitionMode::RequestPermission => {
+            LocalContextAcquisitionModeDto::RequestPermission
+        }
         CalendarAcquisitionMode::ReadEvents => LocalContextAcquisitionModeDto::ReadEvents,
     }
 }
@@ -191,37 +196,71 @@ pub fn personal_request_dto(
     }
 }
 
-pub(crate) fn personal_mode(value: LocalContextPersonalAcquisitionModeDto) -> PersonalAcquisitionMode {
+pub(crate) fn personal_mode(
+    value: LocalContextPersonalAcquisitionModeDto,
+) -> PersonalAcquisitionMode {
     match value {
-        LocalContextPersonalAcquisitionModeDto::ReadProjection => PersonalAcquisitionMode::ReadProjection,
-        LocalContextPersonalAcquisitionModeDto::InspectSubject => PersonalAcquisitionMode::InspectSubject,
-        LocalContextPersonalAcquisitionModeDto::InspectCatalog => PersonalAcquisitionMode::InspectCatalog,
-        LocalContextPersonalAcquisitionModeDto::RequestPermission => PersonalAcquisitionMode::RequestPermission,
+        LocalContextPersonalAcquisitionModeDto::ReadProjection => {
+            PersonalAcquisitionMode::ReadProjection
+        }
+        LocalContextPersonalAcquisitionModeDto::InspectSubject => {
+            PersonalAcquisitionMode::InspectSubject
+        }
+        LocalContextPersonalAcquisitionModeDto::InspectCatalog => {
+            PersonalAcquisitionMode::InspectCatalog
+        }
+        LocalContextPersonalAcquisitionModeDto::RequestPermission => {
+            PersonalAcquisitionMode::RequestPermission
+        }
     }
 }
 fn personal_mode_dto(value: PersonalAcquisitionMode) -> LocalContextPersonalAcquisitionModeDto {
     match value {
-        PersonalAcquisitionMode::ReadProjection => LocalContextPersonalAcquisitionModeDto::ReadProjection,
-        PersonalAcquisitionMode::InspectSubject => LocalContextPersonalAcquisitionModeDto::InspectSubject,
-        PersonalAcquisitionMode::InspectCatalog => LocalContextPersonalAcquisitionModeDto::InspectCatalog,
-        PersonalAcquisitionMode::RequestPermission => LocalContextPersonalAcquisitionModeDto::RequestPermission,
+        PersonalAcquisitionMode::ReadProjection => {
+            LocalContextPersonalAcquisitionModeDto::ReadProjection
+        }
+        PersonalAcquisitionMode::InspectSubject => {
+            LocalContextPersonalAcquisitionModeDto::InspectSubject
+        }
+        PersonalAcquisitionMode::InspectCatalog => {
+            LocalContextPersonalAcquisitionModeDto::InspectCatalog
+        }
+        PersonalAcquisitionMode::RequestPermission => {
+            LocalContextPersonalAcquisitionModeDto::RequestPermission
+        }
     }
 }
 pub fn native_host_command_result(outcome: NativeHostOutcome) -> WireResult<AppCommandResultDto> {
     match outcome {
-        NativeHostOutcome::Registered(value) => Ok(AppCommandResultDto::NativeHostRegistered { registration: NativeHostRegistrationDto {
-            registration_id: UuidRefDto::new(value.registration_id).ok_or_else(|| invalid("registration_id", "nil host registration"))?,
-            host_epoch: value.host_epoch, runtime_epoch: value.runtime_epoch,
-        }}),
+        NativeHostOutcome::Registered(value) => Ok(AppCommandResultDto::NativeHostRegistered {
+            registration: NativeHostRegistrationDto {
+                registration_id: UuidRefDto::new(value.registration_id)
+                    .ok_or_else(|| invalid("registration_id", "nil host registration"))?,
+                host_epoch: value.host_epoch,
+                runtime_epoch: value.runtime_epoch,
+            },
+        }),
         NativeHostOutcome::Acknowledged => Ok(AppCommandResultDto::NativeHostAcknowledged {}),
         _ => Err(invalid("outcome", "unexpected native command outcome")),
     }
 }
 pub fn native_host_query_result(outcome: NativeHostOutcome) -> WireResult<AppQueryResultDto> {
     match outcome {
-        NativeHostOutcome::CalendarAcquisitions(values) => Ok(AppQueryResultDto::NativeHostCalendarAcquisitions { acquisitions: values.into_iter().map(acquisition_request_dto).collect() }),
-        NativeHostOutcome::AttentionAcquisitions(values) => Ok(AppQueryResultDto::NativeHostAttentionAcquisitions { acquisitions: values.into_iter().map(attention_request_dto).collect() }),
-        NativeHostOutcome::PersonalAcquisitions(values) => Ok(AppQueryResultDto::NativeHostPersonalAcquisitions { acquisitions: values.into_iter().map(personal_request_dto).collect() }),
+        NativeHostOutcome::CalendarAcquisitions(values) => {
+            Ok(AppQueryResultDto::NativeHostCalendarAcquisitions {
+                acquisitions: values.into_iter().map(acquisition_request_dto).collect(),
+            })
+        }
+        NativeHostOutcome::AttentionAcquisitions(values) => {
+            Ok(AppQueryResultDto::NativeHostAttentionAcquisitions {
+                acquisitions: values.into_iter().map(attention_request_dto).collect(),
+            })
+        }
+        NativeHostOutcome::PersonalAcquisitions(values) => {
+            Ok(AppQueryResultDto::NativeHostPersonalAcquisitions {
+                acquisitions: values.into_iter().map(personal_request_dto).collect(),
+            })
+        }
         _ => Err(invalid("outcome", "unexpected native query outcome")),
     }
 }

@@ -9,7 +9,6 @@ use floe_agent_contract::AgentFailure;
 use floe_kernel::PersonId;
 use uuid::Uuid;
 
-
 /// The Person's vault, as this process currently holds it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum VaultState {
@@ -163,4 +162,3 @@ pub struct WorkerResult {
     pub calendar_actions: Option<crate::CalendarActionsResult>,
     pub failure: Option<AgentFailure>,
 }
-

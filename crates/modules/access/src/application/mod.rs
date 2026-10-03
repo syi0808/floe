@@ -34,19 +34,16 @@ pub use personal_sources::{
     WELLBEING_RESOURCE, apple_execution_owner, is_device_local_source,
 };
 pub use release::{ReleasePermit, ReleaseRecipient, admit_release, consume_release};
-pub use remote_authority::{
-    admit_device_pairing, admit_enrollment_pairing,
-};
+pub use remote_authority::{admit_device_pairing, admit_enrollment_pairing};
 pub use remote_grants::{
-    RemoteViewGrantPreview, RemoteViewGrantRequest, 
-    preview_remote_view_grant, 
+    RemoteViewGrantPreview, RemoteViewGrantRequest, preview_remote_view_grant,
 };
 pub use remote_view::{
-    RemoteProducerIdentity, RemoteViewSourceReference,
-    admit_remote_view_binding, admit_remote_view_source, producer_is_pinned,
-    remote_dependency_live, remote_dependency_resource, remote_dependency_source_admits,
-     remote_view_source, source_matches_producer,
+    RemoteProducerIdentity, RemoteViewSourceReference, admit_remote_view_binding,
+    admit_remote_view_source, producer_is_pinned, remote_dependency_live,
+    remote_dependency_resource, remote_dependency_source_admits, remote_view_source,
+    source_matches_producer,
 };
-pub mod connection_review;
 pub mod authorization_signing;
+pub mod connection_review;
 pub mod source_policy;

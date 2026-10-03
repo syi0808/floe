@@ -6,16 +6,14 @@
 //! already covers it. The transport only fetches; the store only verifies keys
 //! and commits.
 
-use floe_context_contract::{GrantConsumer, SourceAuthority};
+use floe_context_contract::GrantConsumer;
 use floe_kernel::{AgentFailure, PersonId};
 
 use crate::application::remote_view::{
     RemoteProducerIdentity, RemoteViewSourceReference, producer_is_pinned, source_matches_producer,
 };
-use crate::data_access_grant::DataAccessGrant;
 use crate::ports::remote_grants::{
-    RemoteCallWindow, RemoteGrantTransport, RemotePairingIdentity,
-    RemoteSourceQuery,
+    RemoteCallWindow, RemoteGrantTransport, RemotePairingIdentity, RemoteSourceQuery,
 };
 
 /// Which remote view is being granted, to whom, over which connection.
@@ -80,9 +78,7 @@ pub async fn preview_remote_view_grant(
         resource: request.resource,
     };
     let preview = transport.view_source_preview(query, window).await?;
-    let reference = verifier
-        .verify(&preview, request.pairing, query)
-        .await?;
+    let reference = verifier.verify(&preview, request.pairing, query).await?;
     source_matches_producer(&reference, &producer, preview.connection_revision)?;
     Ok(RemoteViewGrantPreview {
         reference,
@@ -95,4 +91,3 @@ pub async fn preview_remote_view_grant(
             .collect(),
     })
 }
-

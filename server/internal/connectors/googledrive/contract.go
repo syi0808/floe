@@ -1,11 +1,9 @@
 package googledrive
 
 import (
- "floe/server/internal/integrations"
- "floe/server/internal/views"
 	"encoding/json"
-
-	
+	"floe/server/internal/integrations"
+	"floe/server/internal/views"
 )
 
 const observeScope = "https://www.googleapis.com/auth/drive.readonly"

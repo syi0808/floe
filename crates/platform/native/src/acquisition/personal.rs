@@ -1,8 +1,8 @@
 //! Asking the bundled host for one of the Person's own device sources.
 
 use floe_kernel::{AgentFailure, PersonId};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use serde::{Serialize,Deserialize};
 
 use super::{AcquisitionBroker, AcquisitionExchange, CompletionOutcome};
 
@@ -12,12 +12,20 @@ pub enum PersonalDomain {
     Wellbeing,
 }
 
-#[derive(Clone,Copy,Debug,Eq,PartialEq,Serialize,Deserialize)]
-#[serde(rename_all="snake_case")]
-pub enum PersonalAcquisitionMode { ReadProjection, InspectSubject, InspectCatalog, RequestPermission }
-#[derive(Clone,Debug,Eq,PartialEq,Serialize,Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PersonalAcquisitionMode {
+    ReadProjection,
+    InspectSubject,
+    InspectCatalog,
+    RequestPermission,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct NativeSourceResource {pub handle:String,pub label:String}
+pub struct NativeSourceResource {
+    pub handle: String,
+    pub label: String,
+}
 
 /// How the host's reported failure reaches the waiter.
 pub fn personal_failure(failure: &str) -> AgentFailure {
@@ -110,15 +118,36 @@ impl AcquisitionExchange for PersonalExchange {
         {
             return CompletionOutcome::Reject(AgentFailure::AccessReviewRequired);
         }
-        if (request.mode == PersonalAcquisitionMode::ReadProjection && request.domain == PersonalDomain::Wellbeing && response.view.is_some()) != response.transform_operation_id.is_some() {
+        if (request.mode == PersonalAcquisitionMode::ReadProjection
+            && request.domain == PersonalDomain::Wellbeing
+            && response.view.is_some())
+            != response.transform_operation_id.is_some()
+        {
             return CompletionOutcome::Reject(AgentFailure::PolicyDenied);
         }
-        if request.mode != PersonalAcquisitionMode::ReadProjection && (response.view.is_some() || response.transform_operation_id.is_some()) {
+        if request.mode != PersonalAcquisitionMode::ReadProjection
+            && (response.view.is_some() || response.transform_operation_id.is_some())
+        {
             return CompletionOutcome::Reject(AgentFailure::PolicyDenied);
         }
         if request.mode == PersonalAcquisitionMode::InspectCatalog {
-            if response.resources.len()>256 || response.resources.iter().any(|resource|resource.handle.is_empty()||resource.handle.len()>512||resource.handle.chars().any(char::is_control)||resource.label.is_empty()||resource.label.len()>256||resource.label.chars().any(char::is_control))
-                || response.resources.iter().map(|resource|&resource.handle).collect::<std::collections::BTreeSet<_>>().len()!=response.resources.len() {
+            if response.resources.len() > 256
+                || response.resources.iter().any(|resource| {
+                    resource.handle.is_empty()
+                        || resource.handle.len() > 512
+                        || resource.handle.chars().any(char::is_control)
+                        || resource.label.is_empty()
+                        || resource.label.len() > 256
+                        || resource.label.chars().any(char::is_control)
+                })
+                || response
+                    .resources
+                    .iter()
+                    .map(|resource| &resource.handle)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    != response.resources.len()
+            {
                 return CompletionOutcome::Reject(AgentFailure::PolicyDenied);
             }
         } else if !response.resources.is_empty() || response.catalog_complete {

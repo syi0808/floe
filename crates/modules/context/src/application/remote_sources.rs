@@ -6,29 +6,29 @@
 //! record what the read now depends on. Access judges each step; the transport
 //! performs the I/O; neither of them owns the sequence.
 
-use chrono::Utc;
-use floe_connections::{SourceOperationRepository, SourceRepository};
-use floe_access::{
-    DataAccessGrant, DependencyAuthorization, GrantState, RemoteCallWindow, GrantRepository, SourcePreviewVerifier,
-    RemoteGrantTransport, RemotePairingIdentity, RemoteSourceQuery,
-    admit_remote_view_binding, admit_remote_view_source, grant_unchanged,
-    remote_dependency_live, remote_dependency_resource,
-    remote_dependency_source_admits, remote_view_source, source_matches_producer,
-};
-use floe_agent_contract::{AgentFailure, BoxFuture, PersonId};
-use floe_context_contract::{
-    AuthorizedSourceBinding, ContextDependency, GrantConsumer, GrantOperation, GrantPurpose,
-    MAX_SOURCE_ACCESS_BLOCKERS, ObservedGrant, ProcessingRestriction,
-    ResourceHandle, SourceAccessBlockers, SourceAccessRequirement, SourceAccessRequirementKind,
-    SourceReadOutcome, SourceSelectionReference, SourceUnavailable, connection_view_resource,
-    source_access_id_for_capability, split_connection_view_resource,
-};
-use serde_json::Value;
-use uuid::Uuid;
 use crate::application::remote_views::{
     is_remote_view, merge_remote_views, remote_view_data_categories, remote_view_dependency,
     validate_remote_view, validate_remote_view_query,
 };
+use chrono::Utc;
+use floe_access::{
+    DataAccessGrant, DependencyAuthorization, GrantRepository, GrantState, RemoteCallWindow,
+    RemoteGrantTransport, RemotePairingIdentity, RemoteSourceQuery, SourcePreviewVerifier,
+    admit_remote_view_binding, admit_remote_view_source, grant_unchanged, remote_dependency_live,
+    remote_dependency_resource, remote_dependency_source_admits, remote_view_source,
+    source_matches_producer,
+};
+use floe_agent_contract::{AgentFailure, BoxFuture, PersonId};
+use floe_connections::{SourceOperationRepository, SourceRepository};
+use floe_context_contract::{
+    AuthorizedSourceBinding, ContextDependency, GrantConsumer, GrantOperation, GrantPurpose,
+    MAX_SOURCE_ACCESS_BLOCKERS, ObservedGrant, ResourceHandle,
+    SourceAccessBlockers, SourceAccessRequirement, SourceAccessRequirementKind, SourceReadOutcome,
+    SourceSelectionReference, SourceUnavailable, connection_view_resource,
+    source_access_id_for_capability, split_connection_view_resource,
+};
+use serde_json::Value;
+use uuid::Uuid;
 
 /// The read a remote transport performs once the grant has admitted it.
 pub struct AdmittedRemoteRead<'a> {
@@ -114,72 +114,6 @@ fn remote_source_blocker(
         ),
     )
     .map_err(|_| AgentFailure::InvalidInput)
-}
-
-/// Partition the grants that name this view into admitted reads and concrete
-/// per-source blockers, before any read runs.
-///
-/// A paused grant is re-enableable, an active-but-mismatched grant needs drift
-/// review, and a revoked or foreign grant is not this read's. Two live grants
-/// naming the same connection and requested resource are ambiguous authority;
-/// distinct view resources on one connection are independent targets.
-fn classify_remote_sources(
-    grants: &[DataAccessGrant],
-    person_id: PersonId,
-    consumer: &GrantConsumer,
-    view_id: &str,
-    source_id: &str,
-) -> Result<(Vec<DataAccessGrant>, Vec<SourceAccessRequirement>), AgentFailure> {
-    let mut known: Vec<&DataAccessGrant> = grants
-        .iter()
-        .filter(|grant| {
-            grant.state() != GrantState::Revoked
-                && grant.source().person_id() == person_id
-                && grant.scope().resources().iter().any(|resource| {
-                    connection_view_resource(view_id, &grant.source().connection_id())
-                        .is_ok_and(|expected| &expected == resource)
-                })
-        })
-        .collect();
-    known.sort_by(|left, right| {
-        left.source()
-            .connector()
-            .cmp(right.source().connector())
-            .then_with(|| {
-                left.source()
-                    .connection_id()
-                    .cmp(&right.source().connection_id())
-            })
-            .then_with(|| left.id().cmp(&right.id()))
-    });
-    if known.windows(2).any(|pair| {
-        pair[0].source().person_id() == pair[1].source().person_id()
-            && pair[0].source().connector() == pair[1].source().connector()
-            && pair[0].source().connection_id() == pair[1].source().connection_id()
-    }) {
-        return Err(AgentFailure::Conflict);
-    }
-    let mut admitted = Vec::with_capacity(known.len());
-    let mut blocked = Vec::with_capacity(known.len());
-    for grant in known {
-        let expected = connection_view_resource(view_id, &grant.source().connection_id())
-            .map_err(|_| AgentFailure::InvalidInput)?;
-        if remote_grant_admits(grant, person_id, consumer, expected.as_str())
-            && grant.scope().categories() == remote_view_data_categories(view_id)
-        {
-            admitted.push((*grant).clone());
-            continue;
-        }
-        let reason = if grant.state() == GrantState::Paused {
-            SourceAccessRequirementKind::EnableObserve
-        } else {
-            SourceAccessRequirementKind::ReviewChangedSource
-        };
-        blocked.push(remote_source_blocker(
-            grant, view_id, source_id, consumer, reason,
-        )?);
-    }
-    Ok((admitted, blocked))
 }
 
 fn classify_selected_remote_sources(
@@ -300,13 +234,12 @@ async fn read_one_remote_source(
         resource: &resource,
     };
     let preview = transport.view_source_preview(source_query, window).await?;
-    let reference = verifier
-        .verify(&preview, pairing, source_query)
-        .await?;
+    let reference = verifier.verify(&preview, pairing, source_query).await?;
     source_matches_producer(&reference, &preview.producer, preview.connection_revision)?;
     admit_remote_view_source(&reference, source)?;
     let local_source = current_remote_source(sources, source, &reference).await?;
-    let current_grant = exact_view_grant(store, view_id, source).await?
+    let current_grant = exact_view_grant(store, view_id, source)
+        .await?
         .ok_or(AgentFailure::AccessReviewRequired)?;
     admit_remote_view_binding(&current_grant, grant, source, &resource)?;
     let raw = transport
@@ -327,7 +260,8 @@ async fn read_one_remote_source(
         )
         .await?;
     check_window(window)?;
-    let current_grant = exact_view_grant(store, view_id, source).await?
+    let current_grant = exact_view_grant(store, view_id, source)
+        .await?
         .ok_or(AgentFailure::AccessReviewRequired)?;
     grant_unchanged(grant, &current_grant)?;
     require_unfenced(operations, source).await?;
@@ -340,7 +274,9 @@ async fn read_one_remote_source(
         &current_preview.producer,
         current_preview.connection_revision,
     )?;
-    if current_remote_source(sources, source, &current_reference).await? != local_source || current_reference != reference {
+    if current_remote_source(sources, source, &current_reference).await? != local_source
+        || current_reference != reference
+    {
         return Err(AgentFailure::StaleContext);
     }
     admit_remote_view_binding(&current_grant, grant, source, &resource)?;
@@ -404,9 +340,22 @@ pub async fn read_selected_remote_view(
     let (max_items, max_bytes) = validate_remote_view_query(view_id, &query)?;
     let mut grants = Vec::new();
     for selection in selected {
-        let source = floe_context_contract::GrantSourceBinding::try_new(person_id, selection.connection_id.clone(), selection.connector_id.clone(), selection.execution_owner_id.clone()).map_err(|_| AgentFailure::InvalidInput)?;
+        let source = floe_context_contract::GrantSourceBinding::try_new(
+            person_id,
+            selection.connection_id.clone(),
+            selection.connector_id.clone(),
+            selection.execution_owner_id.clone(),
+        )
+        .map_err(|_| AgentFailure::InvalidInput)?;
         require_unfenced(operations, &source).await?;
-        for grant in store.snapshot(source).await?.grants { if !grants.iter().any(|known: &DataAccessGrant| known.id() == grant.id()) { grants.push(grant); } }
+        for grant in store.snapshot(source).await?.grants {
+            if !grants
+                .iter()
+                .any(|known: &DataAccessGrant| known.id() == grant.id())
+            {
+                grants.push(grant);
+            }
+        }
     }
     let (admitted, blocked) = classify_selected_remote_sources(
         &grants, person_id, &consumer, view_id, source_id, selected,
@@ -566,9 +515,7 @@ pub async fn authorize_remote_dependency(
         resource,
     };
     let preview = transport.view_source_preview(source_query, &window).await?;
-    let reference = verifier
-        .verify(&preview, pairing, source_query)
-        .await?;
+    let reference = verifier.verify(&preview, pairing, source_query).await?;
     source_matches_producer(&reference, &preview.producer, preview.connection_revision)?;
     admit_remote_view_source(&reference, dependency.source())?;
     let _current_source = current_remote_source(sources, dependency.source(), &reference).await?;
@@ -578,67 +525,166 @@ pub async fn authorize_remote_dependency(
         preview.connection_revision,
         &preview.producer.audience,
     )?;
-    let current = exact_view_grant(store, view_id, dependency.source()).await?
+    let current = exact_view_grant(store, view_id, dependency.source())
+        .await?
         .ok_or(AgentFailure::PolicyDenied)?;
     require_unfenced(operations, dependency.source()).await?;
     admit_remote_view_binding(&current, grant, dependency.source(), resource)
 }
 
-async fn exact_view_grant(store: &(impl GrantRepository + ?Sized), view_id: &str, source: &floe_context_contract::GrantSourceBinding) -> Result<Option<DataAccessGrant>, AgentFailure> {
-    let resource = connection_view_resource(view_id, &source.connection_id()).map_err(|_| AgentFailure::InvalidInput)?;
-    let mut matching = store.snapshot(source.clone()).await?.grants.into_iter().filter(|grant| grant.state() != GrantState::Revoked && grant.scope().resources().contains(&resource));
+async fn exact_view_grant(
+    store: &(impl GrantRepository + ?Sized),
+    view_id: &str,
+    source: &floe_context_contract::GrantSourceBinding,
+) -> Result<Option<DataAccessGrant>, AgentFailure> {
+    let resource = connection_view_resource(view_id, &source.connection_id())
+        .map_err(|_| AgentFailure::InvalidInput)?;
+    let mut matching = store
+        .snapshot(source.clone())
+        .await?
+        .grants
+        .into_iter()
+        .filter(|grant| {
+            grant.state() != GrantState::Revoked && grant.scope().resources().contains(&resource)
+        });
     let grant = matching.next();
-    if matching.next().is_some() { return Err(AgentFailure::PolicyDenied); }
+    if matching.next().is_some() {
+        return Err(AgentFailure::PolicyDenied);
+    }
     Ok(grant)
 }
-async fn require_unfenced(operations: &(impl SourceOperationRepository + ?Sized), source: &floe_context_contract::GrantSourceBinding) -> Result<(), AgentFailure> {
-    if operations.source_is_fenced(source.person_id(), &source.connection_id()).await.map_err(|_| AgentFailure::StorageUnavailable)? { return Err(AgentFailure::PolicyDenied); }
+async fn require_unfenced(
+    operations: &(impl SourceOperationRepository + ?Sized),
+    source: &floe_context_contract::GrantSourceBinding,
+) -> Result<(), AgentFailure> {
+    if operations
+        .source_is_fenced(source.person_id(), &source.connection_id())
+        .await
+        .map_err(|_| AgentFailure::StorageUnavailable)?
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
     Ok(())
 }
 
-async fn current_remote_source(sources: &(impl SourceRepository + ?Sized), binding: &floe_context_contract::GrantSourceBinding, reference: &floe_access::RemoteViewSourceReference) -> Result<floe_connections::SourceConnection, AgentFailure> {
-    let source = sources.load(binding.person_id(), &binding.connection_id()).await.map_err(|_| AgentFailure::StorageUnavailable)?.ok_or(AgentFailure::PolicyDenied)?;
-    if !source.is_serving() || source.person_id() != binding.person_id() || source.connector_id() != binding.connector()
-        || source.execution_owner_id() != binding.execution_owner() || source.source_authority() != reference.source_authority
-        || source.resources().iter().map(|resource| resource.handle()).ne(reference.source_resources.iter()) { return Err(AgentFailure::PolicyDenied); }
+async fn current_remote_source(
+    sources: &(impl SourceRepository + ?Sized),
+    binding: &floe_context_contract::GrantSourceBinding,
+    reference: &floe_access::RemoteViewSourceReference,
+) -> Result<floe_connections::SourceConnection, AgentFailure> {
+    let source = sources
+        .load(binding.person_id(), &binding.connection_id())
+        .await
+        .map_err(|_| AgentFailure::StorageUnavailable)?
+        .ok_or(AgentFailure::PolicyDenied)?;
+    if !source.is_serving()
+        || source.person_id() != binding.person_id()
+        || source.connector_id() != binding.connector()
+        || source.execution_owner_id() != binding.execution_owner()
+        || source.source_authority() != reference.source_authority
+        || source
+            .resources()
+            .iter()
+            .map(|resource| resource.handle())
+            .ne(reference.source_resources.iter())
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
     Ok(source)
 }
 
 /// Resolve configured source identities through Connections, independently of
 /// grant presence. A grant list is never a source discovery catalog.
-pub async fn configured_remote_source_selections(sources: &(impl SourceRepository + ?Sized), person_id: PersonId, view_id: &str)
-    -> Result<Vec<SourceSelectionReference>, AgentFailure> {
-    if !is_remote_view(view_id) { return Err(AgentFailure::InvalidInput); }
+pub async fn configured_remote_source_selections(
+    sources: &(impl SourceRepository + ?Sized),
+    person_id: PersonId,
+    view_id: &str,
+) -> Result<Vec<SourceSelectionReference>, AgentFailure> {
+    if !is_remote_view(view_id) {
+        return Err(AgentFailure::InvalidInput);
+    }
     let mut selected = Vec::new();
     for connector in floe_access::remote_connector_ids_for_view(view_id) {
-        let connector = floe_context_contract::ConnectorId::try_new(*connector).map_err(|_| AgentFailure::InvalidInput)?;
-        for source in sources.list_current(person_id, &connector).await.map_err(|_| AgentFailure::StorageUnavailable)? {
-            selected.push(SourceSelectionReference { connector_id: source.connector_id().clone(), connection_id: source.connection_id().clone(),
-                execution_owner_id: source.execution_owner_id().clone(), capability_id: view_id.to_owned(),
-                resource: connection_view_resource(view_id, source.connection_id()).map_err(|_| AgentFailure::InvalidInput)?, contract_version: 1 });
+        let connector = floe_context_contract::ConnectorId::try_new(*connector)
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        for source in sources
+            .list_current(person_id, &connector)
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+        {
+            selected.push(SourceSelectionReference {
+                connector_id: source.connector_id().clone(),
+                connection_id: source.connection_id().clone(),
+                execution_owner_id: source.execution_owner_id().clone(),
+                capability_id: view_id.to_owned(),
+                resource: connection_view_resource(view_id, source.connection_id())
+                    .map_err(|_| AgentFailure::InvalidInput)?,
+                contract_version: 1,
+            });
         }
     }
-    selected.sort(); selected.dedup();
-    if selected.len() > 16 { return Err(AgentFailure::BudgetExceeded); }
+    selected.sort();
+    selected.dedup();
+    if selected.len() > 16 {
+        return Err(AgentFailure::BudgetExceeded);
+    }
     Ok(selected)
 }
 
 #[allow(clippy::too_many_arguments)]
 pub async fn read_configured_remote_view(
-    store: &(impl GrantRepository + ?Sized), verifier: &(impl SourcePreviewVerifier + ?Sized),
-    sources: &(impl SourceRepository + ?Sized), operations: &(impl SourceOperationRepository + ?Sized),
-    transport: &(impl RemoteViewTransport + ?Sized), person_id: PersonId, pairing: RemotePairingIdentity<'_>,
-    view_id: &str, consumer_name: &str, query: Value, window: &RemoteCallWindow,
-    process_incarnation_id: Uuid, query_fingerprint: &[u8],
+    store: &(impl GrantRepository + ?Sized),
+    verifier: &(impl SourcePreviewVerifier + ?Sized),
+    sources: &(impl SourceRepository + ?Sized),
+    operations: &(impl SourceOperationRepository + ?Sized),
+    transport: &(impl RemoteViewTransport + ?Sized),
+    person_id: PersonId,
+    pairing: RemotePairingIdentity<'_>,
+    view_id: &str,
+    consumer_name: &str,
+    query: Value,
+    window: &RemoteCallWindow,
+    process_incarnation_id: Uuid,
+    query_fingerprint: &[u8],
 ) -> Result<SourceReadOutcome<(Value, Vec<AuthorizedSourceBinding>)>, AgentFailure> {
     let selected = configured_remote_source_selections(sources, person_id, view_id).await?;
     if selected.is_empty() {
-        let source_id = source_access_id_for_capability(view_id).ok_or(AgentFailure::InvalidInput)?;
-        let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
-        let requirement = SourceAccessRequirement::try_new(source_id, None, None, GrantOperation::Read, consumer,
-            GrantPurpose::Assistant, Vec::new(), None, SourceAccessRequirementKind::SelectResource, None, None, false).map_err(|_| AgentFailure::InvalidInput)?;
+        let source_id =
+            source_access_id_for_capability(view_id).ok_or(AgentFailure::InvalidInput)?;
+        let consumer =
+            GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
+        let requirement = SourceAccessRequirement::try_new(
+            source_id,
+            None,
+            None,
+            GrantOperation::Read,
+            consumer,
+            GrantPurpose::Assistant,
+            Vec::new(),
+            None,
+            SourceAccessRequirementKind::SelectResource,
+            None,
+            None,
+            false,
+        )
+        .map_err(|_| AgentFailure::InvalidInput)?;
         return blocked_outcome(vec![requirement]);
     }
-    read_selected_remote_view(store, verifier, sources, operations, transport, person_id, pairing, view_id,
-        consumer_name, &selected, query, window, process_incarnation_id, query_fingerprint).await
+    read_selected_remote_view(
+        store,
+        verifier,
+        sources,
+        operations,
+        transport,
+        person_id,
+        pairing,
+        view_id,
+        consumer_name,
+        &selected,
+        query,
+        window,
+        process_incarnation_id,
+        query_fingerprint,
+    )
+    .await
 }

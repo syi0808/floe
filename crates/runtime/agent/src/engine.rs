@@ -3,12 +3,12 @@ use std::collections::{HashMap, HashSet};
 use floe_agent_contract::{
     AgentFailure, AllowedCatalog, AuthorizedModelProjection, BatchCursor, DelegationPort,
     DelegationRequest, DependencyCoverage, EngineRequest, EngineStep, ExecutionJournal,
-    InvocationKey, JournalAck, JournalEvent, MODEL_CORRECTION_TEXT, ModelCapabilities, ModelPlanRequest,
-    ModelConversation, ModelConversationEntry, ModelCorrection, ModelPort, ModelProjectionPort,
-    ModelProjectionOutcome, ModelProjectionRequest, ModelRequest, ModelResponse, ModelStep, ModelUsage,
-    SourceProjectionReview,
-    PinnedAgentRevision, PinnedToolRevision, ReplayReceipt, TaskId, TaskReceipt, ToolCall,
-    ToolPort, ToolResult, ValidatedModelBatch,
+    InvocationKey, JournalAck, JournalEvent, MODEL_CORRECTION_TEXT, ModelCapabilities,
+    ModelConversation, ModelConversationEntry, ModelCorrection, ModelPlanRequest, ModelPort,
+    ModelProjectionOutcome, ModelProjectionPort, ModelProjectionRequest, ModelRequest,
+    ModelResponse, ModelStep, ModelUsage, PinnedAgentRevision, PinnedToolRevision, ReplayReceipt,
+    SourceProjectionReview, TaskId, TaskReceipt, ToolCall, ToolPort, ToolResult,
+    ValidatedModelBatch,
 };
 use uuid::Uuid;
 
@@ -301,7 +301,9 @@ impl Drive<'_> {
                         return Ok(EngineOutcome::Completed(report));
                     }
                 }
-                BatchOutcome::NeedsSourceReview(review) => return Ok(EngineOutcome::NeedsSourceReview(review)),
+                BatchOutcome::NeedsSourceReview(review) => {
+                    return Ok(EngineOutcome::NeedsSourceReview(review));
+                }
             }
             drive.completed_iterations += 1;
             drive
@@ -371,24 +373,41 @@ impl ActiveDrive<'_> {
         receipt: Option<floe_execution::budget::ModelAttemptReceipt>,
     ) -> Result<(), AgentFailure> {
         let (usage, accounting) = receipt.map_or_else(
-            || (ModelUsage::default(), floe_execution::budget::ModelAccounting::default()),
-            |receipt| (ModelUsage {
-                tokens: receipt.charged_tokens,
-                cost_micros: receipt.charged_cost_micros,
-            }, receipt.accounting),
+            || {
+                (
+                    ModelUsage::default(),
+                    floe_execution::budget::ModelAccounting::default(),
+                )
+            },
+            |receipt| {
+                (
+                    ModelUsage {
+                        tokens: receipt.charged_tokens,
+                        cost_micros: receipt.charged_cost_micros,
+                    },
+                    receipt.accounting,
+                )
+            },
         );
         // Accounting acknowledgment must remain possible after model cancellation.
         // Failure keeps the intent and its receipt for conservative recovery.
-        let acknowledgment = self.ports.journal.record_result(JournalEvent::ModelResult {
-            attempt_id,
-            usage,
-            accounting,
-        }).await?;
+        let acknowledgment = self
+            .ports
+            .journal
+            .record_result(JournalEvent::ModelResult {
+                attempt_id,
+                usage,
+                accounting,
+            })
+            .await?;
         if !matches!(acknowledgment, JournalAck::Accepted { .. }) {
             return Err(AgentFailure::Conflict);
         }
         if receipt.is_some() {
-            self.request.scope.budget().acknowledge_model_attempt(attempt_id)?;
+            self.request
+                .scope
+                .budget()
+                .acknowledge_model_attempt(attempt_id)?;
         }
         Ok(())
     }
@@ -404,16 +423,24 @@ impl ActiveDrive<'_> {
             required_capabilities: ModelCapabilities::chat(),
         };
         plan_request.validate()?;
-        let prepared = self.request.scope.run(
-            self.ports.model.prepare(plan_request.clone(), &self.request.scope),
-        ).await?;
+        let prepared = self
+            .request
+            .scope
+            .run(
+                self.ports
+                    .model
+                    .prepare(plan_request.clone(), &self.request.scope),
+            )
+            .await?;
         let plan = prepared.plan().clone();
         plan.validate()?;
         if plan.principal != plan_request.principal
             || plan.device_id != plan_request.device_id
             || plan.purpose != plan_request.purpose
             || plan.consumer != plan_request.consumer
-            || !plan.capabilities.includes(&plan_request.required_capabilities)
+            || !plan
+                .capabilities
+                .includes(&plan_request.required_capabilities)
         {
             return Err(AgentFailure::PolicyDenied);
         }
@@ -431,9 +458,15 @@ impl ActiveDrive<'_> {
                 correction: correction.clone(),
             };
             projection_request.validate()?;
-            let projection = self.request.scope.run(
-                self.ports.projection.project(projection_request, &self.request.scope),
-            ).await?;
+            let projection = self
+                .request
+                .scope
+                .run(
+                    self.ports
+                        .projection
+                        .project(projection_request, &self.request.scope),
+                )
+                .await?;
             let projection = match projection {
                 ModelProjectionOutcome::Ready(projection) => projection,
                 ModelProjectionOutcome::NeedsSourceReview(review) => {
@@ -470,7 +503,8 @@ impl ActiveDrive<'_> {
                 self.config.max_attempt_cost_micros.max(1),
                 None,
             );
-            let reservation_ceiling = floe_execution::budget::ModelReservationCeiling::for_lease(model_scope.budget());
+            let reservation_ceiling =
+                floe_execution::budget::ModelReservationCeiling::for_lease(model_scope.budget());
             let model_request = ModelRequest {
                 attempt_id,
                 reservation_ceiling,
@@ -483,15 +517,17 @@ impl ActiveDrive<'_> {
                 replay: self.model_replay.clone(),
             };
             model_request.validate()?;
-            let intent = self.request.scope.run(
-                self.ports.journal.record_intent(JournalEvent::ModelIntent {
+            let intent = self
+                .request
+                .scope
+                .run(self.ports.journal.record_intent(JournalEvent::ModelIntent {
                     parent_task_id: self.request.scope.task_id(),
                     reservation_ceiling,
                     attempt_id,
                     projection_ref: model_projection.projection_ref,
                     plan: plan.clone(),
-                }),
-            ).await?;
+                }))
+                .await?;
             if let JournalAck::Replayed(receipt) = intent {
                 return Err(if receipt.tool_id.is_some() || receipt.agent_id.is_some() {
                     AgentFailure::InvalidInput
@@ -499,7 +535,9 @@ impl ActiveDrive<'_> {
                     AgentFailure::Conflict
                 });
             }
-            let response = model_scope.run(prepared.generate(model_request, &model_scope)).await;
+            let response = model_scope
+                .run(prepared.generate(model_request, &model_scope))
+                .await;
             // The bounded future has returned or dropped; terminal accounting
             // is now immutable, including conservative dispatch-uncertain charges.
             let receipt = model_scope.budget().model_attempt_receipt(attempt_id);
@@ -528,7 +566,9 @@ impl ActiveDrive<'_> {
                         Ok(validated) => return Ok(BatchOutcome::Ready(validated)),
                         Err(failure) => {
                             if is_correctable(&failure) && correction.is_none() {
-                                correction = Some(ModelCorrection { text: MODEL_CORRECTION_TEXT.into() });
+                                correction = Some(ModelCorrection {
+                                    text: MODEL_CORRECTION_TEXT.into(),
+                                });
                                 continue;
                             }
                             return Err(failure);

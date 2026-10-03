@@ -36,7 +36,9 @@ final class NativeTransportException implements Exception {
       error['code']?.toString() ?? 'internal',
       error['message']?.toString() ?? 'Could not open Rust core.',
       field: error['field']?.toString(),
-      ownerFailure: error['owner_failure'] == null ? null : OwnerFailure.fromJson(error['owner_failure']),
+      ownerFailure: error['owner_failure'] == null
+          ? null
+          : OwnerFailure.fromJson(error['owner_failure']),
       metadata: error['metadata'] is Map
           ? Map<String, String>.unmodifiable(
               (error['metadata'] as Map).map(
@@ -57,7 +59,9 @@ final class NativeTransport implements AppWireTransport {
     _finalizer.attach(this, _disposal, detach: this);
   }
 
-  static final Finalizer<_NativeTransportDisposal> _finalizer = Finalizer((value) => unawaited(value.close()));
+  static final Finalizer<_NativeTransportDisposal> _finalizer = Finalizer(
+    (value) => unawaited(value.close()),
+  );
   final SendPort _commands;
   final _NativeCallbackTransport _nativeCallbacks;
   late final _NativeTransportDisposal _disposal;
@@ -83,7 +87,10 @@ final class NativeTransport implements AppWireTransport {
     }
     final commands = result['commands']! as SendPort;
     try {
-      final callbacks = await _NativeCallbackTransport.start(libraryPath, result['native_lane_address']! as int);
+      final callbacks = await _NativeCallbackTransport.start(
+        libraryPath,
+        result['native_lane_address']! as int,
+      );
       return NativeTransport._(commands, callbacks);
     } on Object {
       await _closeNativePort(commands);
@@ -154,93 +161,164 @@ final class _NativeTransportDisposal {
   Future<void>? _closing;
   Future<void> close() => _closing ??= _close();
   Future<void> _close() async {
-    try { await _closeNativePort(native); }
-    finally { await _closeNativePort(product); }
+    try {
+      await _closeNativePort(native);
+    } finally {
+      await _closeNativePort(product);
+    }
   }
 }
 
 Future<void> _closeNativePort(SendPort commands) async {
   final reply = ReceivePort();
   commands.send({'operation': 'close', 'reply': reply.sendPort});
-  try { await reply.first.timeout(const Duration(seconds: 5)); }
-  on TimeoutException {
+  try {
+    await reply.first.timeout(const Duration(seconds: 5));
+  } on TimeoutException {
     // The close stays queued. Killing an isolate while a native call still owns
     // a handle would invalidate its cleanup; its bounded call finishes/free once.
-  } finally { reply.close(); }
+  } finally {
+    reply.close();
+  }
 }
 
 final class _NativeCallbackTransport implements NativeHostWireTransport {
   _NativeCallbackTransport(this._commands);
   final SendPort _commands;
   bool _closed = false;
-  static Future<_NativeCallbackTransport> start(String libraryPath, int address) async {
+  static Future<_NativeCallbackTransport> start(
+    String libraryPath,
+    int address,
+  ) async {
     final ready = ReceivePort();
     try {
-      await Isolate.spawn(_nativeCallbackWorkerMain, {'ready': ready.sendPort, 'library_path': libraryPath, 'lane_address': address});
+      await Isolate.spawn(_nativeCallbackWorkerMain, {
+        'ready': ready.sendPort,
+        'library_path': libraryPath,
+        'lane_address': address,
+      });
     } on Object {
       ready.close();
       // Spawn failed before ownership could transfer to the worker.
-      FloeNativeBindings(libraryPath).freeNativeHost(Pointer<Void>.fromAddress(address));
+      FloeNativeBindings(libraryPath)
+          .freeNativeHost(Pointer<Void>.fromAddress(address));
       rethrow;
     }
     try {
-      final result = _asMap(await ready.first.timeout(const Duration(seconds: 5)));
-      if (result['status'] != 'ok') throw NativeTransportException('ffi_native_host', result['message'] as String);
+      final result = _asMap(
+        await ready.first.timeout(const Duration(seconds: 5)),
+      );
+      if (result['status'] != 'ok')
+        throw NativeTransportException(
+          'ffi_native_host',
+          result['message'] as String,
+        );
       final commands = result['commands']! as SendPort;
       commands.send({'operation': 'adopt'});
       return _NativeCallbackTransport(commands);
-    } finally { ready.close(); }
+    } finally {
+      ready.close();
+    }
   }
+
   @override
-  Future<Map<String, dynamic>> commandV2(Map<String, dynamic> request, {Duration timeout = const Duration(seconds: 3)}) => _call('command_v2', request, timeout);
+  Future<Map<String, dynamic>> commandV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) => _call('command_v2', request, timeout);
   @override
-  Future<Map<String, dynamic>> queryV2(Map<String, dynamic> request, {Duration timeout = const Duration(seconds: 3)}) => _call('query_v2', request, timeout);
-  Future<Map<String, dynamic>> _call(String operation, Map<String, dynamic> request, Duration timeout) {
+  Future<Map<String, dynamic>> queryV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) => _call('query_v2', request, timeout);
+  Future<Map<String, dynamic>> _call(
+    String operation,
+    Map<String, dynamic> request,
+    Duration timeout,
+  ) {
     if (_closed) throw StateError('The native callback lane is closed.');
     final intent = request[operation == 'command_v2' ? 'command' : 'query'];
-    if (intent is! Map || intent['kind'] is! String || !(intent['kind'] as String).startsWith('native_host.')) {
-      throw const FormatException('Only native host callbacks may use this lane.');
+    if (intent is! Map ||
+        intent['kind'] is! String ||
+        !(intent['kind'] as String).startsWith('native_host.')) {
+      throw const FormatException(
+        'Only native host callbacks may use this lane.',
+      );
     }
     return _sendNativeWire(_commands, operation, request, timeout);
   }
 }
 
-Future<Map<String, dynamic>> _sendNativeWire(SendPort commands, String operation, Map<String, dynamic> request, Duration timeout) async {
+Future<Map<String, dynamic>> _sendNativeWire(
+  SendPort commands,
+  String operation,
+  Map<String, dynamic> request,
+  Duration timeout,
+) async {
   final requestId = request['request_id'];
-  if (request['schema_version'] != appWireProtocolVersion || requestId is! String || requestId.isEmpty) {
+  if (request['schema_version'] != appWireProtocolVersion ||
+      requestId is! String ||
+      requestId.isEmpty) {
     throw const FormatException('Invalid app-wire request envelope.');
   }
   final reply = ReceivePort();
-  commands.send({'operation': operation, 'request': jsonEncode(request), 'reply': reply.sendPort});
+  commands.send({
+    'operation': operation,
+    'request': jsonEncode(request),
+    'reply': reply.sendPort,
+  });
   try {
-    final result = _asMap(await reply.first.timeout(timeout,
-      onTimeout: () => throw const NativeTransportException('timeout', 'The app request timed out; query the command or run state.')));
-    if (result['status'] != 'ok') throw NativeTransportException('ffi', result['message']?.toString() ?? 'The Rust core request failed.');
+    final result = _asMap(
+      await reply.first.timeout(
+        timeout,
+        onTimeout: () => throw const NativeTransportException(
+          'timeout',
+          'The app request timed out; query the command or run state.',
+        ),
+      ),
+    );
+    if (result['status'] != 'ok')
+      throw NativeTransportException(
+        'ffi',
+        result['message']?.toString() ?? 'The Rust core request failed.',
+      );
     final envelope = _asMap(jsonDecode(result['response']! as String));
-    if (envelope['schema_version'] != appWireProtocolVersion || envelope['request_id'] != requestId) {
+    if (envelope['schema_version'] != appWireProtocolVersion ||
+        envelope['request_id'] != requestId) {
       throw const FormatException('Mismatched app-wire response envelope.');
     }
-    if (envelope['status'] == 'error') throw NativeTransportException.fromEnvelope(envelope);
-    if (envelope['status'] != 'ok' || envelope['result'] is! Map) throw const FormatException('Invalid app-wire response envelope.');
+    if (envelope['status'] == 'error')
+      throw NativeTransportException.fromEnvelope(envelope);
+    if (envelope['status'] != 'ok' || envelope['result'] is! Map)
+      throw const FormatException('Invalid app-wire response envelope.');
     return _asMap(envelope['result']);
-  } finally { reply.close(); }
+  } finally {
+    reply.close();
+  }
 }
 
-Future<void> _nativeCallbackWorkerMain(Map<String, Object?> configuration) async {
+Future<void> _nativeCallbackWorkerMain(
+  Map<String, Object?> configuration,
+) async {
   final ready = configuration['ready']! as SendPort;
   final lane = Pointer<Void>.fromAddress(configuration['lane_address']! as int);
   FloeNativeBindings? ownedBindings;
   final commands = ReceivePort();
   final inputMessages = StreamIterator<dynamic>(commands);
   try {
-    final bindings = FloeNativeBindings(configuration['library_path']! as String);
+    final bindings = FloeNativeBindings(
+      configuration['library_path']! as String,
+    );
     ownedBindings = bindings;
     final command = bindings.nativeHostCommandV2;
     final query = bindings.nativeHostQueryV2;
     ready.send({'status': 'ok', 'commands': commands.sendPort});
     // A startup caller that disappears cannot strand an independent native box.
-    final adopted = await inputMessages.moveNext().timeout(const Duration(seconds: 5));
-    if (!adopted || _asMap(inputMessages.current)['operation'] != 'adopt') return;
+    final adopted = await inputMessages.moveNext().timeout(
+      const Duration(seconds: 5),
+    );
+    if (!adopted || _asMap(inputMessages.current)['operation'] != 'adopt')
+      return;
     while (await inputMessages.moveNext()) {
       final message = _asMap(inputMessages.current);
       if (message['operation'] == 'close') {
@@ -258,13 +336,18 @@ Future<void> _nativeCallbackWorkerMain(Map<String, Object?> configuration) async
           'query_v2' => query(lane, input),
           _ => throw StateError('Invalid native callback operation.'),
         };
-        if (output == nullptr) throw StateError('Native callback returned no response.');
-        reply.send({'status':'ok', 'response': output.toDartString()});
-      } on Object catch (error) { reply.send({'status':'error', 'message':error.toString()}); }
-      finally { if (output != nullptr) bindings.freeString(output); calloc.free(input); }
+        if (output == nullptr)
+          throw StateError('Native callback returned no response.');
+        reply.send({'status': 'ok', 'response': output.toDartString()});
+      } on Object catch (error) {
+        reply.send({'status': 'error', 'message': error.toString()});
+      } finally {
+        if (output != nullptr) bindings.freeString(output);
+        calloc.free(input);
+      }
     }
   } on Object catch (error) {
-    ready.send({'status':'error', 'message':error.toString()});
+    ready.send({'status': 'error', 'message': error.toString()});
   } finally {
     ownedBindings?.freeNativeHost(lane);
     commands.close();
@@ -316,10 +399,13 @@ Future<void> _nativeWorkerMain(Map<String, Object?> configuration) async {
         final message = laneError.value;
         final reason = message == nullptr ? null : message.toDartString();
         if (message != nullptr) bindings.freeString(message);
-        throw reason == null ? StateError('Could not acquire native callback lane.')
-          : _exceptionFromEnvelope(_asMap(jsonDecode(reason)));
+        throw reason == null
+            ? StateError('Could not acquire native callback lane.')
+            : _exceptionFromEnvelope(_asMap(jsonDecode(reason)));
       }
-    } finally { calloc.free(laneError); }
+    } finally {
+      calloc.free(laneError);
+    }
   } on Object catch (error) {
     if (nativeLane != nullptr) bindings?.freeNativeHost(nativeLane);
     if (handle != nullptr) bindings?.freeCore(handle);
@@ -331,7 +417,11 @@ Future<void> _nativeWorkerMain(Map<String, Object?> configuration) async {
   }
 
   final commands = ReceivePort();
-  ready.send({'status': 'ok', 'commands': commands.sendPort, 'native_lane_address': nativeLane.address});
+  ready.send({
+    'status': 'ok',
+    'commands': commands.sendPort,
+    'native_lane_address': nativeLane.address,
+  });
   await for (final raw in commands) {
     final message = _asMap(raw);
     final operation = message['operation'];

@@ -39,41 +39,21 @@ pub fn communication_expert_prompt() -> PromptAssembly {
 }
 
 pub fn relationships_expert_prompt() -> PromptAssembly {
-    expert_prompt(
-        "relationships-expert-role",
-        1,
-        RELATIONSHIPS_EXPERT_ROLE,
-    )
+    expert_prompt("relationships-expert-role", 1, RELATIONSHIPS_EXPERT_ROLE)
 }
 
 pub fn focus_expert_prompt() -> PromptAssembly {
-    expert_prompt(
-        "focus-expert-role",
-        1,
-        FOCUS_EXPERT_ROLE,
-    )
+    expert_prompt("focus-expert-role", 1, FOCUS_EXPERT_ROLE)
 }
 
 pub fn wellbeing_expert_prompt() -> PromptAssembly {
-    expert_prompt(
-        "wellbeing-expert-role",
-        1,
-        WELLBEING_EXPERT_ROLE,
-    )
+    expert_prompt("wellbeing-expert-role", 1, WELLBEING_EXPERT_ROLE)
 }
 
 pub fn work_context_expert_prompt() -> PromptAssembly {
-    expert_prompt(
-        "work-context-expert-role",
-        1,
-        WORK_CONTEXT_EXPERT_ROLE,
-    )
+    expert_prompt("work-context-expert-role", 1, WORK_CONTEXT_EXPERT_ROLE)
 }
 
 pub fn life_logistics_expert_prompt() -> PromptAssembly {
-    expert_prompt(
-        "life-logistics-expert-role",
-        1,
-        LIFE_LOGISTICS_EXPERT_ROLE,
-    )
+    expert_prompt("life-logistics-expert-role", 1, LIFE_LOGISTICS_EXPERT_ROLE)
 }

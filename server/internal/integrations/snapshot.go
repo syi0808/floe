@@ -12,12 +12,12 @@ type Capability struct {
 }
 
 type Descriptor struct {
-	SchemaVersion int              `json:"schema_version"`
-	ID            string           `json:"id"`
-	Version       string           `json:"version"`
-	Provider      string           `json:"provider"`
-	Execution     map[string]any   `json:"execution"`
-	Capabilities  []Capability     `json:"capabilities"`
+	SchemaVersion int                    `json:"schema_version"`
+	ID            string                 `json:"id"`
+	Version       string                 `json:"version"`
+	Provider      string                 `json:"provider"`
+	Execution     map[string]any         `json:"execution"`
+	Capabilities  []Capability           `json:"capabilities"`
 	Views         []views.ViewDescriptor `json:"views"`
 }
 
@@ -44,7 +44,7 @@ type DeviceBinding struct {
 }
 
 type Snapshot struct {
-	Descriptor Descriptor     `json:"descriptor"`
-	Connection Connection     `json:"connection"`
+	Descriptor Descriptor           `json:"descriptor"`
+	Connection Connection           `json:"connection"`
 	Views      []views.ViewSnapshot `json:"views"`
 }

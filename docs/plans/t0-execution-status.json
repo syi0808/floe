@@ -1,0 +1,136 @@
+{
+  "baseline": "3f4b407f8079d611224cd7adbef121f9e7e75e8e",
+  "branch": "refactor/architecture-20261002",
+  "stage": "G1 first pass executed on published source3a17 (local69e6): Go internal build and15Apple compiler-only phases passed; Rust workspace/examples and Dart analysis failed. Coherent compiler-fix integration active; S2 production remains gated.",
+  "registration_counts": {
+    "rust": 1298,
+    "rust_retained_owners": 751,
+    "rust_app": 335,
+    "rust_vault": 142,
+    "rust_bindings": 70,
+    "go": 266,
+    "dart_direct_sites": 326,
+    "dart_outer_loop_instances": 370,
+    "swift_framework_registrations": 33,
+    "python_unittest_registrations": 20,
+    "standalone_swift_programs": 2
+  },
+  "behavior_artifacts": {
+    "rust": "t0-rust-behavior-ledger.md",
+    "app": [
+      "t0-app-behavior-ledger.json",
+      "t0-app-behavior-ledger-addendum.md"
+    ],
+    "vault": "t0-vault-behavior-ledger.md",
+    "bindings": [
+      "t0-bindings-behavior-ledger.md",
+      "t0-bindings-fixture-evidence.json"
+    ],
+    "go": [
+      "t0-go-behavior-ledger.json",
+      "t0-go-source-evidence.json"
+    ],
+    "client": "t0-client-behavior-ledger.md",
+    "root_tools": "t0-root-tools-behavior-ledger.md"
+  },
+  "count_caveat": "Source registrations and explicit expansion only, never execution or passing test counts. Table/assertion variants are recorded within each source-linked behavior ledger.",
+  "checks": {
+    "formatters": "PASS on Mac3a17; returned patch integrated",
+    "compilers": "Go internal build PASS;15Apple compiler-only phases PASS;Rust workspace/examples FAIL, corrections pending rerun",
+    "builds": "Full builds NOT RUN; G1 Go internal packages only passed",
+    "tests": "NOT RUN",
+    "architecture_checker": "NOT RUN",
+    "product_changes": "S1 production code actively changing; T0 retained-production-byte verification applies only e289 checkpoint.",
+    "test_removals": "Complete:1298 Rust,266 Go,326 Dart sites/370expanded,33 Swift framework registrations,20 Python tests and2standalone Swift programs removed with exclusive support/targets. No execution claimed.",
+    "static_diff": "Full git diff --check PASS; global Rust/Dart/Swift registrations and explicit old test targets absent. Go *_test.go absent."
+  },
+  "checkpoints": [
+    "1b128525",
+    "f9b97f8e",
+    "023fb179",
+    "a1cee05c",
+    "e2890706",
+    "c5f97ea0",
+    "20a2e5bc",
+    "10b6b147",
+    "03c284cc",
+    "75c82051",
+    "093b564c",
+    "8125d2cc",
+    "9960a3e0",
+    "63aebbe4",
+    "9ac6c739",
+    "9aead0ed",
+    "cfb0d83a",
+    "9403ac37",
+    "372676f5",
+    "bf5beb72",
+    "6c11b3d4",
+    "7f62cd72",
+    "f7045512",
+    "69e6c427"
+  ],
+  "blocking_removal_gates": [],
+  "future_gate_order": [
+    "T0 exact covered test/support removal and static diff",
+    "S1.1-S1.7 whole Conversation/Gateway slice",
+    "G1 formatting and production compilation only",
+    "S2 all remaining architecture closure",
+    "G2 full production and Apple builds",
+    "S3 sequential target test reconstruction",
+    "G3 final qualification"
+  ],
+  "delegation_policy": "Latest user override: bounded implementation may use GPT6Luna Max Fast on saved Codex Cloud; design,decomposition,integration,semantic review stay native/coordinator; local Claude adversarial review. Earlier mechanical-only restriction superseded.",
+  "data_safety": "No profile/database/credential/external-provider reset executed or authorized. Exact-target action-time permanent deletion confirmation required. Parent coordinates approved compiler-focused handoff branch update; no main, PR, merge or deployment.",
+  "gate_acceptance": "2026-10-02 15:11 UTC: Context150 source/475assertion audit has zero hash mismatches; bindings70 semantic caveats saved and exact item spans must be completed before its edits; Vault142 exact27operations audited; all other source/helper/manifests/fixture partitions closed. Same-batch static item and caller audit required before every deletion.",
+  "completed_at": "2026-10-02 15:25 UTC",
+  "removal_artifacts": [
+    "t0-removal-core-rust.json",
+    "t0-removal-boundary-rust.json",
+    "t0-removal-app.json",
+    "t0-removal-vault.json",
+    "t0-removal-bindings.json",
+    "t0-removal-go.json",
+    "t0-removal-client.json",
+    "t0-removal-root-tools.json"
+  ],
+  "remaining_classified_residuals": [
+    "Protocol autotests=false package policy retained until S3 registration",
+    "App dev dependencies retained for real production diagnostics",
+    "Provider kernel,Context kernel,Conversation context-contract and Experts agent-runtime dev edges retained only for exact planned production promotions",
+    "JSON corpora preserved as contract/evaluation evidence and manager-guidance live diagnostic input",
+    "Historical docs/development/plans commands retained as historical source evidence, not current validation"
+  ],
+  "active_reservations": {
+    "protocol": "Cloud two-file followup applied; current native caller corrections active. No cloud worker editing now.",
+    "events": "Owner event buffer applied; actual blocked interaction references added; current native ownership."
+  },
+  "last_update": "2026-10-03 04:04 UTC",
+  "implementation_ownership": {
+    "implement_shared_model_runtime": "shared contracts/runtime/inference, Experts/builtin model call seams, Knowledge Learner journal/model seams, App Expert/Learner adapters and examples; now Conversation owner code and pure projections",
+    "implement_go_gateway_slice": "Go/Vault Conversation and native callback lane completed/checkpointed; current static race/transaction audit",
+    "implement_gateway_identity_transport": "Rust Connections/provider/native Gateway+Health proof, SourceOperation Turso, pairing/private Vault key/pin/signing; full Connections product API closure",
+    "implement_source_review_authority": "Source owner closure plus Connections FFI complete; now final App vault_host/composition/owner_handles/lib static integration fixes",
+    "remove_core_rust_tests": "Apple Health/native and Flutter client S1 implementation (reused task after T0 completion)",
+    "coordinator": "FFI Conversation/main dispatch, protocol integration, dependency policy/docs and stage closure"
+  },
+  "verification_gate": "G1 still open. First-pass Rust errors:missing Apple bindings,Hash derive,Task ID field,integer counter type. Dart1error7warnings107infos. No tests or full app builds.",
+  "ancillary_handoff": "Parent completed partial97baselinefiles+manifest branch codex/handoff-s1-e2890706: commit d0eacbd08dc05dde224a1512d313d2a30845648e, tree5c7ac2f02ab0874f62d82562b9126cf5eecaca77. Not full e289 tree, no active S1 publication. Parent owns remote writes.",
+  "day_stage": "Full refresh/multi-source mirror/acquisition owner closure remains S2. S1 cached reads/CRUD only; no refresh success/availability claims.",
+  "review": "Current source audit and fixes closed across credential, pairing, Access review/Actions invalidation, source device, Go probe/Microsoft identity, safe projections and native callback lifetime. Full static evidence in s1-gateway-current-source-audit-20261002.md and s1-boundary-closure-notes.md. No current runtime validation claim.",
+  "current_gate_sheet": "s1-g1-command-sheet.md",
+  "g1_input": {
+    "original_source_commit": "7f62cd722909825e15348246791eda655e656bfa",
+    "latest_source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
+    "focused_tree": "ceee00c7731dce9c75221be8c2ae59300573ab10",
+    "base_commit": "3f4b407f8079d611224cd7adbef121f9e7e75e8e",
+    "publication": "Published main source3a17f45abe1c73d87a67933fd8d6df023a84e033; docs76ebaa271966e32c343b51ac85b981b6e0c91d21",
+    "mac_thread": "01a0fdd1-926d-7722-a4ea-d88ebb39509c",
+    "result": "First Mac G1 executed on3a17; Go/Apple pass, Rust/Dart fail. Source corrections not yet rechecked."
+  },
+  "s2_preparation": [
+    "s2-day-product-read-contract-proposal.md",
+    "2026-10-02-s2-engine-owner-contracts.md",
+    "s2-action-recovery-contract-proposal.md"
+  ]
+}

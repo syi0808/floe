@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::AGENT_VERSION;
+use floe_agent_contract::ExpertModel;
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_agent_contract::{AgentFailure, DataClass};
-use floe_agent_contract::{ExpertModel};
 use floe_context_contract::{
     ConfirmedInteractionView, ContextEvidence, PeopleView, personal_context_evidence,
     validate_confirmed_interaction_view, validate_people_view,

@@ -13,9 +13,7 @@ mod vault;
 pub use engine::TursoStore;
 pub use error::{StoreError, StoreErrorCode};
 #[cfg(unix)]
-pub use repositories::{
-    ContextEvidenceReader, VaultConversationRepository, VaultTaskRepository,
-};
+pub use repositories::{ContextEvidenceReader, VaultConversationRepository, VaultTaskRepository};
 #[cfg(unix)]
 pub use vault::*;
 
@@ -23,4 +21,4 @@ pub use vault::*;
 pub use repositories::VaultLearnerJournalFactory;
 
 #[cfg(unix)]
-pub use vault::{VaultEnrollmentSigner, VaultAuthorizationSigner};
+pub use vault::{VaultAuthorizationSigner, VaultEnrollmentSigner};

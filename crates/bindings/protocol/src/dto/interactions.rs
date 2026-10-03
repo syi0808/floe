@@ -34,11 +34,12 @@ pub enum AppInteractionStateDto {
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum AppInteractionTargetDto {
     #[serde(rename = "navigation_only")]
-    NavigationOnly { destination: AppNavigationDestinationDto, source_label: String },
-    #[serde(rename = "source_review")]
-    SourceReview {
-        review: super::ObserveReviewDto,
+    NavigationOnly {
+        destination: AppNavigationDestinationDto,
+        source_label: String,
     },
+    #[serde(rename = "source_review")]
+    SourceReview { review: super::ObserveReviewDto },
     #[serde(rename = "expert_binding")]
     ExpertBinding {
         assignment_id: AssignmentRefDto,
@@ -87,12 +88,20 @@ impl AppInteractionSnapshotDto {
             return Err("interaction.expires_at");
         }
         match (&self.interaction_kind, &self.target) {
-            (AppInteractionKindDto::SourceAccess, AppInteractionTargetDto::SourceReview { review }) => {
+            (
+                AppInteractionKindDto::SourceAccess,
+                AppInteractionTargetDto::SourceReview { review },
+            ) => {
                 review.validate()?;
-
             }
-            (AppInteractionKindDto::SourceAccess, AppInteractionTargetDto::NavigationOnly { source_label, .. }) if !source_label.is_empty() && source_label.len() <= 256 => {},
-            (AppInteractionKindDto::ExpertBinding, AppInteractionTargetDto::ExpertBinding { .. }) => {}
+            (
+                AppInteractionKindDto::SourceAccess,
+                AppInteractionTargetDto::NavigationOnly { source_label, .. },
+            ) if !source_label.is_empty() && source_label.len() <= 256 => {}
+            (
+                AppInteractionKindDto::ExpertBinding,
+                AppInteractionTargetDto::ExpertBinding { .. },
+            ) => {}
             _ => return Err("interaction.target.kind"),
         }
         if self.actions.len() > 16
@@ -177,4 +186,8 @@ pub struct AppInteractionListDto {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AppNavigationDestinationDto { ConnectionSettings, SystemPermission, ResourcePicker }
+pub enum AppNavigationDestinationDto {
+    ConnectionSettings,
+    SystemPermission,
+    ResourcePicker,
+}

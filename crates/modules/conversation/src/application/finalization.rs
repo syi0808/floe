@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use floe_agent_contract::{
     AllowedCatalog, DependencyCoverage, EngineRequest, EngineStep, ModelConversation,
-    ModelConversationEntry, RoleSpec, UserInteractionRef, UserInteractionStatus,
+    ModelConversationEntry, RoleSpec,
 };
 use floe_agent_runtime::{Engine, EngineOutcome, EnginePorts, EngineReport};
 use floe_execution::ExecutionScope;
@@ -101,12 +101,19 @@ pub(super) async fn finalize_exhausted_run<
     let Some(prior_execution_id) = projected.execution_id else {
         return Ok(FinalizationOutcome::NotAttempted(issue));
     };
-    let acknowledgment = root_scope.run(repository.journal(run_id)?.checkpoint(
-        floe_agent_contract::JournalEvent::FinalizationStarted {
-            prior_execution_id, abandoned_cursor: projected.cursor.clone(), prior_exhaustion: issue,
-        },
-    )).await?;
-    if !matches!(acknowledgment, floe_agent_contract::JournalAck::Accepted { .. }) {
+    let acknowledgment = root_scope
+        .run(repository.journal(run_id)?.checkpoint(
+            floe_agent_contract::JournalEvent::FinalizationStarted {
+                prior_execution_id,
+                abandoned_cursor: projected.cursor.clone(),
+                prior_exhaustion: issue,
+            },
+        ))
+        .await?;
+    if !matches!(
+        acknowledgment,
+        floe_agent_contract::JournalAck::Accepted { .. }
+    ) {
         return Err(AgentFailure::Conflict);
     }
     let mut current_turn = Vec::with_capacity(usable.len() + 1);
@@ -162,8 +169,17 @@ pub(super) async fn finalize_exhausted_run<
                 AgentFailure::BudgetExceeded => crate::PriorExhaustion::BudgetExceeded,
                 _ => crate::PriorExhaustion::Stalled,
             };
-            let commit = super::source_review::build_blocked_run_commit(repository, connections, actor,
-                run_id, blocked, Some(prior), turn.now_unix_ms, root_scope).await?;
+            let commit = super::source_review::build_blocked_run_commit(
+                repository,
+                connections,
+                actor,
+                run_id,
+                blocked,
+                Some(prior),
+                turn.now_unix_ms,
+                root_scope,
+            )
+            .await?;
             Ok(FinalizationOutcome::Blocked(commit))
         }
         EngineOutcome::Completed(report) => {
@@ -176,8 +192,13 @@ pub(super) async fn finalize_exhausted_run<
             let Some(output) = output else {
                 return Ok(FinalizationOutcome::AttemptedWithoutReply);
             };
-            let mut all_steps = super::source_review::settled_steps(&repository.load_journal(run_id).await?)?;
-            for step in steps { if !all_steps.contains(&step) { all_steps.push(step); } }
+            let mut all_steps =
+                super::source_review::settled_steps(&repository.load_journal(run_id).await?)?;
+            for step in steps {
+                if !all_steps.contains(&step) {
+                    all_steps.push(step);
+                }
+            }
             let steps = all_steps;
             let coverage = finalization_coverage(&usable, answering_projection_coverage, &steps)?;
             Ok(FinalizationOutcome::Replied(RunTerminal {

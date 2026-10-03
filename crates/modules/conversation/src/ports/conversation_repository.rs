@@ -1,10 +1,16 @@
-use std::sync::Arc;
-use floe_agent_contract::{ArchiveReadRequest, ArchiveSnapshot, BoxFuture, ExecutionJournal};
+use crate::{
+    AdmittedTurn, CancelRunAdmission, CancelRunCommand, CommandQuery, JournalEntry, RecoveryReceipt,
+    RecoveryRequest, RunReceipt, RunTerminal, TurnAdmission, TurnAdmissionRequest,
+};
+use floe_agent_contract::{BoxFuture, ExecutionJournal};
 use floe_kernel::{AgentFailure, RunId};
-use crate::{AdmittedTurn, CancelRunAdmission, CancelRunCommand, CommandQuery, CompactionReceipt, CompactionRequest, JournalEntry, RecoveryReceipt, RecoveryRequest, RunReceipt, RunTerminal, SessionReadRequest, SessionReceipt, SessionRequest, TurnAdmission, TurnAdmissionRequest};
+use std::sync::Arc;
 
 pub trait ConversationRepository: Send + Sync {
-    fn finish_blocked_run<'a>(&'a self, commit: crate::BlockedRunCommit) -> BoxFuture<'a, Result<RunReceipt, AgentFailure>>;
+    fn finish_blocked_run<'a>(
+        &'a self,
+        commit: crate::BlockedRunCommit,
+    ) -> BoxFuture<'a, Result<RunReceipt, AgentFailure>>;
 
     fn find_command<'a>(
         &'a self,
@@ -50,4 +56,3 @@ pub trait ConversationRepository: Send + Sync {
         run_id: RunId,
     ) -> BoxFuture<'a, Result<Vec<JournalEntry>, AgentFailure>>;
 }
-

@@ -34,9 +34,16 @@ pub trait DependencyLiveness: Send + Sync {
 }
 
 impl<T: DependencyResolver + ?Sized> DependencyResolver for std::sync::Arc<T> {
-    fn authorize<'a>(&'a self, dependency: &'a ContextDependency, request: &'a DependencyAuthorization)
-        -> floe_execution::BoxFuture<'a, Result<(), AgentFailure>> { (**self).authorize(dependency, request) }
+    fn authorize<'a>(
+        &'a self,
+        dependency: &'a ContextDependency,
+        request: &'a DependencyAuthorization,
+    ) -> floe_execution::BoxFuture<'a, Result<(), AgentFailure>> {
+        (**self).authorize(dependency, request)
+    }
 }
 impl<T: DependencyLiveness + ?Sized> DependencyLiveness for std::sync::Arc<T> {
-    fn validate(&self, dependency: &ContextDependency) -> Result<(), AgentFailure> { (**self).validate(dependency) }
+    fn validate(&self, dependency: &ContextDependency) -> Result<(), AgentFailure> {
+        (**self).validate(dependency)
+    }
 }

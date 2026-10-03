@@ -22,7 +22,6 @@ use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 use crate::FloeCore;
 use crate::local_context::LocalContextHost;
 
-
 /// How long the device is given to answer for its own calendar subject.
 const SUBJECT_DEADLINE: Duration = Duration::from_secs(30);
 
@@ -41,8 +40,18 @@ pub(super) struct CoreCalendarConnections<'a> {
 }
 
 impl CalendarConnectionReader for CoreCalendarConnections<'_> {
-    async fn source_is_fenced(&self, person_id: PersonId, connection_id: &floe_context_contract::ConnectionId) -> Result<bool, AgentFailure> {
-        floe_connections::SourceOperationRepository::source_is_fenced(self.core.store.as_ref(), person_id, connection_id).await.map_err(|_| AgentFailure::StorageUnavailable)
+    async fn source_is_fenced(
+        &self,
+        person_id: PersonId,
+        connection_id: &floe_context_contract::ConnectionId,
+    ) -> Result<bool, AgentFailure> {
+        floe_connections::SourceOperationRepository::source_is_fenced(
+            self.core.store.as_ref(),
+            person_id,
+            connection_id,
+        )
+        .await
+        .map_err(|_| AgentFailure::StorageUnavailable)
     }
     async fn calendar_connection(
         &self,
@@ -78,9 +87,15 @@ impl<Keys: VaultKeyProvider> NativeCalendarGrantReader for VaultNativeCalendarGr
         }
         let consumer = floe_access::GrantConsumer::builtin(consumer)
             .map_err(|_| AgentFailure::CapabilityDenied)?;
-        let admission = floe_access::current_native_calendar_grant(self.vault, person_id,
-            connection.connection_id().as_str(), floe_context_contract::CalendarProvider::EventKit,
-            connection.execution_owner_id().as_str(), &consumer).await?;
+        let admission = floe_access::current_native_calendar_grant(
+            self.vault,
+            person_id,
+            connection.connection_id().as_str(),
+            floe_context_contract::CalendarProvider::EventKit,
+            connection.execution_owner_id().as_str(),
+            &consumer,
+        )
+        .await?;
         Ok(floe_access::CalendarReadAccessAdmission::device_local(
             person_id,
             admission.id(),
@@ -199,7 +214,16 @@ impl NativeCalendarSubjectSource for DeviceCalendarSubject<'_> {
                     calendar_ids: request.calendar_ids.clone(),
                     range_start_unix_ms: start,
                     range_end_unix_ms: start + 86_400_000,
-                    deadline_unix_ms: start + i64::try_from(request.window.deadline.saturating_duration_since(tokio::time::Instant::now()).as_millis().min(30_000)).map_err(|_| AgentFailure::DeadlineExceeded)?,
+                    deadline_unix_ms: start
+                        + i64::try_from(
+                            request
+                                .window
+                                .deadline
+                                .saturating_duration_since(tokio::time::Instant::now())
+                                .as_millis()
+                                .min(30_000),
+                        )
+                        .map_err(|_| AgentFailure::DeadlineExceeded)?,
                     expected_native_subject_fingerprint: None,
                 },
                 start,
@@ -212,4 +236,3 @@ impl NativeCalendarSubjectSource for DeviceCalendarSubject<'_> {
         })
     }
 }
-

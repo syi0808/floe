@@ -1,11 +1,9 @@
 package connections
 
 import (
- "floe/server/internal/views"
 	"context"
+	"floe/server/internal/views"
 	"time"
-
-	
 )
 
 // Owner-defined ports for the concrete connector runtimes.

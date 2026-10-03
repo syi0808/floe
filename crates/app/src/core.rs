@@ -22,9 +22,11 @@ pub use floe_day::Classification;
 impl FloeCore {
     pub async fn open(path: impl AsRef<std::path::Path>) -> Result<Self, CoreError> {
         Ok(Self {
-            store: Arc::new(TursoStore::open(path)
-                .await
-                .map_err(|error| CoreError::new(ErrorCode::Storage, error.to_string()))?),
+            store: Arc::new(
+                TursoStore::open(path)
+                    .await
+                    .map_err(|error| CoreError::new(ErrorCode::Storage, error.to_string()))?,
+            ),
             lease_registry: Arc::new(SourceLeaseRegistry::new()),
         })
     }

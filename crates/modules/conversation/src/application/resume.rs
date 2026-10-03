@@ -63,26 +63,55 @@ pub fn build_resume_required(
     origin: &RunReceipt,
     group: &[ConversationInteraction],
 ) -> Result<Option<crate::ResumeRequired>, floe_kernel::AgentFailure> {
-    use sha2::{Digest, Sha256};
     use floe_kernel::AgentFailure;
+    use sha2::{Digest, Sha256};
     origin.validate()?;
     for interaction in group {
         interaction.validate()?;
-        if interaction.person_id.to_string() != origin.principal || interaction.session_id != origin.session_id
-            || interaction.origin_run_id != origin.run_id { return Err(AgentFailure::StorageUnavailable); }
+        if interaction.person_id.to_string() != origin.principal
+            || interaction.session_id != origin.session_id
+            || interaction.origin_run_id != origin.run_id
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
     }
-    let Ok(link) = resume_gate(origin, group) else { return Ok(None); };
+    let Ok(link) = resume_gate(origin, group) else {
+        return Ok(None);
+    };
     let mut ordered = group.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|interaction| interaction.id);
-    let group_digest: [u8; 32] = Sha256::digest(serde_json::to_vec(&(origin.run_id, origin.user_message_id,
-        ordered.iter().map(|interaction| (interaction.id, interaction.revision, interaction.target_digest, &interaction.state)).collect::<Vec<_>>()))
-        .map_err(|_| AgentFailure::StorageUnavailable)?).into();
+    let group_digest: [u8; 32] = Sha256::digest(
+        serde_json::to_vec(&(
+            origin.run_id,
+            origin.user_message_id,
+            ordered
+                .iter()
+                .map(|interaction| {
+                    (
+                        interaction.id,
+                        interaction.revision,
+                        interaction.target_digest,
+                        &interaction.state,
+                    )
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .map_err(|_| AgentFailure::StorageUnavailable)?,
+    )
+    .into();
     let pending = crate::ResumeRequired {
         origin_run_id: origin.run_id,
-        person_id: floe_kernel::PersonId::from_uuid(uuid::Uuid::parse_str(&origin.principal).map_err(|_| AgentFailure::StorageUnavailable)?)
-            .ok_or(AgentFailure::StorageUnavailable)?,
-        device_id: origin.device_id.clone(), session_id: origin.session_id, user_message_id: origin.user_message_id,
-        group_digest, expected_session_revision: origin.session_revision, lineage: link.lineage,
+        person_id: floe_kernel::PersonId::from_uuid(
+            uuid::Uuid::parse_str(&origin.principal)
+                .map_err(|_| AgentFailure::StorageUnavailable)?,
+        )
+        .ok_or(AgentFailure::StorageUnavailable)?,
+        device_id: origin.device_id.clone(),
+        session_id: origin.session_id,
+        user_message_id: origin.user_message_id,
+        group_digest,
+        expected_session_revision: origin.session_revision,
+        lineage: link.lineage,
     };
     pending.validate()?;
     Ok(Some(pending))

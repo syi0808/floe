@@ -1,4 +1,7 @@
-use floe_agent_contract::{AgentFailure, Artifact, ArtifactPart, DependencyCoverage, USER_INTERACTION_MEDIA_TYPE, UserInteractionKind, UserInteractionRef, UserInteractionStatus};
+use floe_agent_contract::{
+    AgentFailure, Artifact, ArtifactPart, DependencyCoverage, USER_INTERACTION_MEDIA_TYPE,
+    UserInteractionKind, UserInteractionRef, UserInteractionStatus,
+};
 use floe_kernel::RunId;
 use uuid::Uuid;
 
@@ -53,21 +56,19 @@ where
                     purpose: "configuration".into(),
                     inline: false,
                 },
-                target: crate::ReviewedTarget::ExpertBinding(
-                    crate::ExpertBindingTarget {
-                        registry_instance_id: admission.registry_instance_id,
-                        assignment_id: admission.assignment_id,
-                        package: admission.package.clone(),
-                        definition_revision: admission.definition_revision,
-                        requirement_key: requirement.key.clone(),
-                        capability: requirement.capability.clone(),
-                        contract_version: requirement.contract_version,
-                        minimum_sources: requirement.minimum_sources,
-                        maximum_sources: requirement.maximum_sources,
-                        expected_binding_revision: selection.binding_revision,
-                        admitted_selection_digest: selection.digest,
-                    },
-                ),
+                target: crate::ReviewedTarget::ExpertBinding(crate::ExpertBindingTarget {
+                    registry_instance_id: admission.registry_instance_id,
+                    assignment_id: admission.assignment_id,
+                    package: admission.package.clone(),
+                    definition_revision: admission.definition_revision,
+                    requirement_key: requirement.key.clone(),
+                    capability: requirement.capability.clone(),
+                    contract_version: requirement.contract_version,
+                    minimum_sources: requirement.minimum_sources,
+                    maximum_sources: requirement.maximum_sources,
+                    expected_binding_revision: selection.binding_revision,
+                    admitted_selection_digest: selection.digest,
+                }),
             },
             now_unix_ms,
         )

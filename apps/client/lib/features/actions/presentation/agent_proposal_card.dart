@@ -56,10 +56,12 @@ class AgentProposalCard extends StatelessWidget {
           Text(strings.agentProposalTitle, style: FloeType.controlLabel),
           const SizedBox(height: 8),
           if (action != null) ...[
-            Text(strings.agentProposalInterval(
-              date.format(action.startsAt.toLocal()),
-              date.format(action.endsAt.toLocal()),
-            )),
+            Text(
+              strings.agentProposalInterval(
+                date.format(action.startsAt.toLocal()),
+                date.format(action.endsAt.toLocal()),
+              ),
+            ),
             const SizedBox(height: 8),
           ],
           Semantics(

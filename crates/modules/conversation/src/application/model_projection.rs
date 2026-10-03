@@ -7,8 +7,8 @@
 //! placement, route, recipient, or credential state.
 
 use floe_agent_contract::{
-    AgentContext, AgentFailure, ModelProjectionOutcome, BoxFuture, DataClass,
-    ModelProjectionPort, ModelProjectionRequest,
+    AgentContext, AgentFailure, BoxFuture, DataClass, ModelProjectionOutcome, ModelProjectionPort,
+    ModelProjectionRequest,
     prompts::{PromptAssembly, PromptComponentKind},
 };
 use floe_context::{DependencyResolver, EvidenceReader};

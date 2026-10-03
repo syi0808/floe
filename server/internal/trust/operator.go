@@ -1,9 +1,9 @@
 package trust
 
 import (
+	"context"
 	"crypto/rand"
- "context"
- "crypto/subtle"
+	"crypto/subtle"
 	"sync"
 	"time"
 
@@ -68,13 +68,41 @@ func (sessions *operatorSessions) Login(credential string) (string, operation.Re
 }
 
 // OperatorPrincipal cannot be used as an app principal or acquire source authority.
-type OperatorPrincipal struct { owner *Service; sessionID string; expires time.Time }
-func(s *Service) LoginOperator(credential string)(string,operation.Result){return s.operators.Login(credential)}
-func(s *Service) LogoutOperator(cookie string){s.operators.Delete(cookie)}
-func(s *Service) OperatorSession(cookie string)(OperatorSession,bool){return s.operators.Lookup(cookie)}
-func(s *Service) AuthenticateOperatorSession(ctx context.Context,cookie,csrf string,mutation bool)(OperatorPrincipal,error){
- if err:=ctx.Err();err!=nil{return OperatorPrincipal{},err};if s.RequiredSecurityError()!=nil{return OperatorPrincipal{},fail(operation.Unavailable,"trust_unavailable")};session,ok:=s.operators.Lookup(cookie);if !ok||mutation&&subtle.ConstantTimeCompare([]byte(csrf),[]byte(session.CSRF))!=1{return OperatorPrincipal{},fail(operation.Unauthenticated,"unauthorized")};return OperatorPrincipal{s,Digest(cookie),session.Expires},nil
+type OperatorPrincipal struct {
+	owner     *Service
+	sessionID string
+	expires   time.Time
 }
-func(s *Service) WithCurrentOperator(p OperatorPrincipal,consume func()error)error{
- if s.RequiredSecurityError()!=nil{return fail(operation.Unavailable,"trust_unavailable")};s.operators.mu.Lock();defer s.operators.mu.Unlock();r,ok:=s.operators.active[p.sessionID];if p.owner!=s||!ok||r.Expires!=p.expires||!r.Expires.After(time.Now())||consume==nil{return fail(operation.Unauthenticated,"unauthorized")};return consume()
+
+func (s *Service) LoginOperator(credential string) (string, operation.Result) {
+	return s.operators.Login(credential)
+}
+func (s *Service) LogoutOperator(cookie string) { s.operators.Delete(cookie) }
+func (s *Service) OperatorSession(cookie string) (OperatorSession, bool) {
+	return s.operators.Lookup(cookie)
+}
+func (s *Service) AuthenticateOperatorSession(ctx context.Context, cookie, csrf string, mutation bool) (OperatorPrincipal, error) {
+	if err := ctx.Err(); err != nil {
+		return OperatorPrincipal{}, err
+	}
+	if s.RequiredSecurityError() != nil {
+		return OperatorPrincipal{}, fail(operation.Unavailable, "trust_unavailable")
+	}
+	session, ok := s.operators.Lookup(cookie)
+	if !ok || mutation && subtle.ConstantTimeCompare([]byte(csrf), []byte(session.CSRF)) != 1 {
+		return OperatorPrincipal{}, fail(operation.Unauthenticated, "unauthorized")
+	}
+	return OperatorPrincipal{s, Digest(cookie), session.Expires}, nil
+}
+func (s *Service) WithCurrentOperator(p OperatorPrincipal, consume func() error) error {
+	if s.RequiredSecurityError() != nil {
+		return fail(operation.Unavailable, "trust_unavailable")
+	}
+	s.operators.mu.Lock()
+	defer s.operators.mu.Unlock()
+	r, ok := s.operators.active[p.sessionID]
+	if p.owner != s || !ok || r.Expires != p.expires || !r.Expires.After(time.Now()) || consume == nil {
+		return fail(operation.Unauthenticated, "unauthorized")
+	}
+	return consume()
 }

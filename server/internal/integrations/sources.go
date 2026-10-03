@@ -1,19 +1,165 @@
 package integrations
 
 import (
- "floe/server/internal/views"
- "context"
- "encoding/json"
- "errors"
- "reflect"
- "strings"
- "floe/server/internal/authority"
- "floe/server/internal/connections"
- "floe/server/internal/operation"
- "floe/server/internal/trust"
+	"context"
+	"encoding/json"
+	"errors"
+	"floe/server/internal/authority"
+	"floe/server/internal/connections"
+	"floe/server/internal/operation"
+	"floe/server/internal/trust"
+	"floe/server/internal/views"
+	"reflect"
+	"strings"
 )
-func(s *Service) OwnedConnection(connector,person string)(connections.Record,string,bool){metadata,err:=s.trust.ProducerMetadata();if err!=nil{return connections.Record{},"",false};s.mu.RLock();defer s.mu.RUnlock();if s.readyLocked(person)!=nil{return connections.Record{},"",false};for _,r:=range s.state.Connections{if r.ConnectorID==connector&&r.PersonID==person{return cloneRecord(r),metadata.ExecutionOwner,true}};return connections.Record{},"",false}
-func(s *Service) List(ctx context.Context,p trust.Principal)operation.Result{if err:=s.check(p);err!=nil{return trust.Result(err)};s.mu.RLock();state:=clone(s.state);runtimes:=copyRuntimes(s.runtimes);s.mu.RUnlock();sources:=connections.Sources{ByConnector:map[string]connections.SnapshotSource{},ByConnection:map[string]connections.SnapshotSource{}};for id,r:=range state.Connections{if r.PersonID==p.PersonID()&&(r.Device==nil||r.Device.DeviceID==p.DeviceID()){runtime,ok:=runtimes[id];if !ok||runtime.Snapshot==nil{return operation.Reject(operation.Unavailable,"connections_unavailable")};sources.ByConnection[id]=runtime.Snapshot}};result,err:=connections.List(ctx,connections.Scope{ClientID:p.ClientID(),PersonID:p.PersonID(),DeviceID:p.DeviceID()},state.Connections,sources,s);if err!=nil{return operation.Reject(operation.Unavailable,"connection_scope_unavailable")};if err=s.check(p);err!=nil{return trust.Result(err)};return operation.Accept(map[string]any{"schema_version":1,"person_id":p.PersonID(),"device_id":p.DeviceID(),"connections":result})}
-func(s *Service) WithCurrentReference(p trust.Principal,ref views.SourceReference,consume func(views.SourceSnapshot)error)error{if consume==nil{return errors.New("source consumer required")};metadata,err:=s.trust.ProducerMetadata();if err!=nil{return err};return s.trust.WithCurrentPrincipal(p,func(trust.PrincipalSnapshot)error{s.mu.RLock();defer s.mu.RUnlock();if err:=s.readyLocked(p.PersonID());err!=nil{return err};r,ok:=s.state.Connections[ref.ConnectionID];if !ok||authority.ValidateCurrentSource(p,p,ref,r,metadata.ExecutionOwner)!=nil{return errors.New("source unavailable")};runtime,ok:=s.runtimes[r.ConnectionID];if !ok||runtime.Identity==nil{return errors.New("source identity unavailable")};namespace,subject,ok:=strings.Cut(r.ProviderIdentity,":");if !ok{return errors.New("source identity unavailable")};return runtime.Identity.WithVerified(binding(r),ProviderIdentity{namespace,subject,true,1},func()error{return consume(views.SourceSnapshot{SourceReference:ref,PersonID:r.PersonID,Active:true})})})}
-func(s *Service) preflight(ctx context.Context,expected connections.Record)error{s.mu.RLock();current,ok:=s.state.Connections[expected.ConnectionID];runtime:=s.runtimes[expected.ConnectionID];s.mu.RUnlock();if !ok||!reflect.DeepEqual(current,expected)||runtime.Identity==nil{return errors.New("source identity unavailable")};id,err:=runtime.Identity.Preflight(ctx,binding(expected));if err!=nil||!id.Verified||id.Generation!=1||id.Namespace+":"+id.Subject!=expected.ProviderIdentity{return errors.New("source identity changed")};s.mu.RLock();defer s.mu.RUnlock();if !reflect.DeepEqual(s.state.Connections[expected.ConnectionID],expected){return errors.New("source changed")};return nil}
-func(s *Service) SourceService(p trust.Principal)(*authority.SourceService,error){if err:=s.trust.WithCurrentPrincipal(p,func(trust.PrincipalSnapshot)error{return nil});err!=nil{return nil,err};s.mu.RLock();records:=map[string]connections.Record{};runtimes:=copyRuntimes(s.runtimes);for id,r:=range s.state.Connections{if r.PersonID==p.PersonID()&&(r.Device==nil||r.Device.DeviceID==p.DeviceID()){records[id]=cloneRecord(r)}};s.mu.RUnlock();metadata:=func()(map[string]any,error){m,err:=s.trust.ProducerMetadata();if err!=nil{return nil,err};data,err:=json.Marshal(m);if err!=nil{return nil,err};var out map[string]any;err=json.Unmarshal(data,&out);return out,err};executionOwner:=func()string{m,err:=s.trust.ProducerMetadata();if err!=nil{return ""};return m.ExecutionOwner};service:=&authority.SourceService{Admissions:s.admissions,Authority:s,Engine:func()*authority.Engine{if s.trust.RequiredSecurityError()!=nil{return nil};return s.engine},Metadata:metadata,ExecutionOwner:executionOwner,Sign:s.trust.SignProducerChallenge,PreflightCalendarIdentity:s.preflight,Records:records,Calendars:map[string]connections.CalendarRuntime{}};for id:=range records{r:=runtimes[id];if r.Calendar!=nil{service.Calendars[id]=r.Calendar};if r.Communication!=nil{service.Communication=append(service.Communication,r.Communication)};if r.Work!=nil{service.Work=append(service.Work,r.Work)};if r.Logistics!=nil{service.Logistics=append(service.Logistics,r.Logistics)}};return service,nil}
+
+func (s *Service) OwnedConnection(connector, person string) (connections.Record, string, bool) {
+	metadata, err := s.trust.ProducerMetadata()
+	if err != nil {
+		return connections.Record{}, "", false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.readyLocked(person) != nil {
+		return connections.Record{}, "", false
+	}
+	for _, r := range s.state.Connections {
+		if r.ConnectorID == connector && r.PersonID == person {
+			return cloneRecord(r), metadata.ExecutionOwner, true
+		}
+	}
+	return connections.Record{}, "", false
+}
+func (s *Service) List(ctx context.Context, p trust.Principal) operation.Result {
+	if err := s.check(p); err != nil {
+		return trust.Result(err)
+	}
+	s.mu.RLock()
+	state := clone(s.state)
+	runtimes := copyRuntimes(s.runtimes)
+	s.mu.RUnlock()
+	sources := connections.Sources{ByConnector: map[string]connections.SnapshotSource{}, ByConnection: map[string]connections.SnapshotSource{}}
+	for id, r := range state.Connections {
+		if r.PersonID == p.PersonID() && (r.Device == nil || r.Device.DeviceID == p.DeviceID()) {
+			runtime, ok := runtimes[id]
+			if !ok || runtime.Snapshot == nil {
+				return operation.Reject(operation.Unavailable, "connections_unavailable")
+			}
+			sources.ByConnection[id] = runtime.Snapshot
+		}
+	}
+	result, err := connections.List(ctx, connections.Scope{ClientID: p.ClientID(), PersonID: p.PersonID(), DeviceID: p.DeviceID()}, state.Connections, sources, s)
+	if err != nil {
+		return operation.Reject(operation.Unavailable, "connection_scope_unavailable")
+	}
+	if err = s.check(p); err != nil {
+		return trust.Result(err)
+	}
+	return operation.Accept(map[string]any{"schema_version": 1, "person_id": p.PersonID(), "device_id": p.DeviceID(), "connections": result})
+}
+func (s *Service) WithCurrentReference(p trust.Principal, ref views.SourceReference, consume func(views.SourceSnapshot) error) error {
+	if consume == nil {
+		return errors.New("source consumer required")
+	}
+	metadata, err := s.trust.ProducerMetadata()
+	if err != nil {
+		return err
+	}
+	return s.trust.WithCurrentPrincipal(p, func(trust.PrincipalSnapshot) error {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		if err := s.readyLocked(p.PersonID()); err != nil {
+			return err
+		}
+		r, ok := s.state.Connections[ref.ConnectionID]
+		if !ok || authority.ValidateCurrentSource(p, p, ref, r, metadata.ExecutionOwner) != nil {
+			return errors.New("source unavailable")
+		}
+		runtime, ok := s.runtimes[r.ConnectionID]
+		if !ok || runtime.Identity == nil {
+			return errors.New("source identity unavailable")
+		}
+		namespace, subject, ok := strings.Cut(r.ProviderIdentity, ":")
+		if !ok {
+			return errors.New("source identity unavailable")
+		}
+		return runtime.Identity.WithVerified(binding(r), ProviderIdentity{namespace, subject, true, 1}, func() error {
+			return consume(views.SourceSnapshot{SourceReference: ref, PersonID: r.PersonID, Active: true})
+		})
+	})
+}
+func (s *Service) preflight(ctx context.Context, expected connections.Record) error {
+	s.mu.RLock()
+	current, ok := s.state.Connections[expected.ConnectionID]
+	runtime := s.runtimes[expected.ConnectionID]
+	s.mu.RUnlock()
+	if !ok || !reflect.DeepEqual(current, expected) || runtime.Identity == nil {
+		return errors.New("source identity unavailable")
+	}
+	id, err := runtime.Identity.Preflight(ctx, binding(expected))
+	if err != nil || !id.Verified || id.Generation != 1 || id.Namespace+":"+id.Subject != expected.ProviderIdentity {
+		return errors.New("source identity changed")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !reflect.DeepEqual(s.state.Connections[expected.ConnectionID], expected) {
+		return errors.New("source changed")
+	}
+	return nil
+}
+func (s *Service) SourceService(p trust.Principal) (*authority.SourceService, error) {
+	if err := s.trust.WithCurrentPrincipal(p, func(trust.PrincipalSnapshot) error { return nil }); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	records := map[string]connections.Record{}
+	runtimes := copyRuntimes(s.runtimes)
+	for id, r := range s.state.Connections {
+		if r.PersonID == p.PersonID() && (r.Device == nil || r.Device.DeviceID == p.DeviceID()) {
+			records[id] = cloneRecord(r)
+		}
+	}
+	s.mu.RUnlock()
+	metadata := func() (map[string]any, error) {
+		m, err := s.trust.ProducerMetadata()
+		if err != nil {
+			return nil, err
+		}
+		data, err := json.Marshal(m)
+		if err != nil {
+			return nil, err
+		}
+		var out map[string]any
+		err = json.Unmarshal(data, &out)
+		return out, err
+	}
+	executionOwner := func() string {
+		m, err := s.trust.ProducerMetadata()
+		if err != nil {
+			return ""
+		}
+		return m.ExecutionOwner
+	}
+	service := &authority.SourceService{Admissions: s.admissions, Authority: s, Engine: func() *authority.Engine {
+		if s.trust.RequiredSecurityError() != nil {
+			return nil
+		}
+		return s.engine
+	}, Metadata: metadata, ExecutionOwner: executionOwner, Sign: s.trust.SignProducerChallenge, PreflightCalendarIdentity: s.preflight, Records: records, Calendars: map[string]connections.CalendarRuntime{}}
+	for id := range records {
+		r := runtimes[id]
+		if r.Calendar != nil {
+			service.Calendars[id] = r.Calendar
+		}
+		if r.Communication != nil {
+			service.Communication = append(service.Communication, r.Communication)
+		}
+		if r.Work != nil {
+			service.Work = append(service.Work, r.Work)
+		}
+		if r.Logistics != nil {
+			service.Logistics = append(service.Logistics, r.Logistics)
+		}
+	}
+	return service, nil
+}

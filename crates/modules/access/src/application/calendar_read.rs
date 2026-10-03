@@ -8,10 +8,10 @@
 use std::future::Future;
 
 use floe_context_contract::{
-    CALENDAR_CONTEXT_VIEW_ID, CalendarProvider, CalendarReadAccessStamp,
-    ContextDependency, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation,
-    GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle,
-    SourceAuthority, connection_view_resource,
+    CALENDAR_CONTEXT_VIEW_ID, CalendarProvider, CalendarReadAccessStamp, ContextDependency,
+    GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+    GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+    connection_view_resource,
 };
 use floe_execution::Cancellation;
 use floe_kernel::AgentFailure;
@@ -286,21 +286,42 @@ pub async fn current_native_calendar_grant(
     device_id: &str,
     consumer: &GrantConsumer,
 ) -> Result<crate::DataAccessGrant, AgentFailure> {
-    let connector = super::native_calendar::native_calendar_connector(provider).ok_or(AgentFailure::CapabilityUnavailable)?;
-    let source = GrantSourceBinding::try_new(person_id,
-        floe_context_contract::ConnectionId::try_new(connection_id).map_err(|_| AgentFailure::InvalidInput)?,
-        floe_context_contract::ConnectorId::try_new(connector).map_err(|_| AgentFailure::InvalidInput)?,
-        floe_context_contract::ExecutionOwnerId::try_new(device_id).map_err(|_| AgentFailure::InvalidInput)?)
-        .map_err(|_| AgentFailure::InvalidInput)?;
+    let connector = super::native_calendar::native_calendar_connector(provider)
+        .ok_or(AgentFailure::CapabilityUnavailable)?;
+    let source = GrantSourceBinding::try_new(
+        person_id,
+        floe_context_contract::ConnectionId::try_new(connection_id)
+            .map_err(|_| AgentFailure::InvalidInput)?,
+        floe_context_contract::ConnectorId::try_new(connector)
+            .map_err(|_| AgentFailure::InvalidInput)?,
+        floe_context_contract::ExecutionOwnerId::try_new(device_id)
+            .map_err(|_| AgentFailure::InvalidInput)?,
+    )
+    .map_err(|_| AgentFailure::InvalidInput)?;
     let snapshot = repository.snapshot(source.clone()).await?;
     let resource = native_calendar_resource(connection_id)?;
-    let matching = snapshot.grants.into_iter().filter(|grant| grant.state() != crate::GrantState::Revoked
-        && grant.scope().resources().contains(&resource)).collect::<Vec<_>>();
-    let [grant] = matching.as_slice() else { return Err(AgentFailure::AccessReviewRequired); };
-    if grant.state() != crate::GrantState::Active || grant.review_required() || grant.authority_owner() != snapshot.authority_owner
-        || grant.source() != &source || grant.scope().resources() != [resource]
+    let matching = snapshot
+        .grants
+        .into_iter()
+        .filter(|grant| {
+            grant.state() != crate::GrantState::Revoked
+                && grant.scope().resources().contains(&resource)
+        })
+        .collect::<Vec<_>>();
+    let [grant] = matching.as_slice() else {
+        return Err(AgentFailure::AccessReviewRequired);
+    };
+    if grant.state() != crate::GrantState::Active
+        || grant.review_required()
+        || grant.authority_owner() != snapshot.authority_owner
+        || grant.source() != &source
+        || grant.scope().resources() != [resource]
         || grant.scope().categories() != [GrantDataCategory::Metadata, GrantDataCategory::Content]
-        || grant.scope().operations() != [GrantOperation::Read] || !grant.scope().purposes().contains(&GrantPurpose::Assistant)
-        || !grant.scope().consumers().contains(consumer) { return Err(AgentFailure::AccessReviewRequired); }
+        || grant.scope().operations() != [GrantOperation::Read]
+        || !grant.scope().purposes().contains(&GrantPurpose::Assistant)
+        || !grant.scope().consumers().contains(consumer)
+    {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
     Ok(grant.clone())
 }

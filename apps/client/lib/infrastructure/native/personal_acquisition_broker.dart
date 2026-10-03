@@ -10,7 +10,7 @@ typedef PersonalAcquisitionReader = Future<Map<String, dynamic>> Function(
 
 final class PersonalAcquisitionBroker {
   PersonalAcquisitionBroker({required NativeContextHostTransport transport})
-      : _transport = transport;
+    : _transport = transport;
 
   final NativeContextHostTransport _transport;
   NativeHostRegistration? _registration;
@@ -23,8 +23,7 @@ final class PersonalAcquisitionBroker {
   Future<void> start() async {
     _ensureOpen();
     if (_started) return;
-    _registration = await _transport.registerPersonalHost(
-    );
+    _registration = await _transport.registerPersonalHost();
     if (_disposed) {
       await _transport.disposePersonalHost(registration: _registration!);
       throw StateError('Native host was detached during registration.');
@@ -83,9 +82,7 @@ final class PersonalAcquisitionBroker {
     if (_disposed) return;
     _disposed = true;
     if (_started) {
-      await _transport.disposePersonalHost(
-        registration: _registration!,
-      );
+      await _transport.disposePersonalHost(registration: _registration!);
     }
   }
 
@@ -116,7 +113,12 @@ final class PersonalAcquisitionBroker {
         !_validOpaque(request['host_epoch']) ||
         !_validOpaque(request['device_id']) ||
         !{'people', 'wellbeing'}.contains(request['domain']) ||
-        !{'read_projection','inspect_subject','inspect_catalog','request_permission'}.contains(request['mode']) ||
+        !{
+          'read_projection',
+          'inspect_subject',
+          'inspect_catalog',
+          'request_permission',
+        }.contains(request['mode']) ||
         request['deadline_unix_ms'] is! int ||
         (request['deadline_unix_ms']! as int) <=
             DateTime.now().toUtc().millisecondsSinceEpoch ||
@@ -127,12 +129,17 @@ final class PersonalAcquisitionBroker {
       throw const FormatException('Invalid personal acquisition request.');
     }
     final selected = request['selected_handles'];
-    if (selected is! List || selected.length > 64 || selected.toSet().length != selected.length || selected.any((value) => !_validOpaque(value))) {
+    if (selected is! List ||
+        selected.length > 64 ||
+        selected.toSet().length != selected.length ||
+        selected.any((value) => !_validOpaque(value))) {
       throw const FormatException('Invalid personal acquisition handles.');
     }
     switch (request['domain']) {
       case 'people':
-        if ({'inspect_catalog','request_permission'}.contains(request['mode']) ? selected.isNotEmpty : selected.isEmpty) {
+        if ({'inspect_catalog', 'request_permission'}.contains(request['mode'])
+            ? selected.isNotEmpty
+            : selected.isEmpty) {
           throw const FormatException('Invalid People acquisition request.');
         }
       case 'wellbeing':
@@ -174,8 +181,9 @@ final class PersonalAcquisitionBroker {
         ].any((key) => result[key] != request[key]) ||
         !_validFingerprint(result['native_subject_fingerprint_before']) ||
         !_validFingerprint(result['native_subject_fingerprint_after']) ||
-        request['mode'] != 'request_permission' && result['native_subject_fingerprint_before'] !=
-            result['native_subject_fingerprint_after'] ||
+        request['mode'] != 'request_permission' &&
+            result['native_subject_fingerprint_before'] !=
+                result['native_subject_fingerprint_after'] ||
         result['permission_class'] is! String ||
         result['permission_class'] == '' ||
         result['provider'] is! String ||
@@ -184,15 +192,20 @@ final class PersonalAcquisitionBroker {
     }
     final transform = result['transform_operation_id'];
     final resources = result['resources'];
-    if (resources is! List || resources.length > 256 || result['catalog_complete'] is! bool) {
+    if (resources is! List ||
+        resources.length > 256 ||
+        result['catalog_complete'] is! bool) {
       throw const FormatException('Invalid native resource catalog.');
     }
     final mode = request['mode'];
     if (mode == 'inspect_catalog') {
       final handles = <String>{};
       for (final value in resources) {
-        if (value is! Map || value.length != 2 || !_validOpaque(value['handle']) ||
-            value['label'] is! String || (value['label'] as String).isEmpty ||
+        if (value is! Map ||
+            value.length != 2 ||
+            !_validOpaque(value['handle']) ||
+            value['label'] is! String ||
+            (value['label'] as String).isEmpty ||
             !handles.add(value['handle'] as String)) {
           throw const FormatException('Invalid native resource metadata.');
         }
@@ -200,22 +213,35 @@ final class PersonalAcquisitionBroker {
     } else if (resources.isNotEmpty || result['catalog_complete'] != false) {
       throw const FormatException('Unexpected native catalog.');
     }
-    if (mode == 'request_permission' && !{'request_completed','denied','unavailable'}.contains(result['permission_class'])) {
+    if (mode == 'request_permission' &&
+        !{
+          'request_completed',
+          'denied',
+          'unavailable',
+        }.contains(result['permission_class'])) {
       throw const FormatException('Invalid permission outcome.');
     }
     if (mode != 'read_projection') {
-      if (result['view'] != null || transform != null) throw const FormatException('Native inspection returned source data.');
+      if (result['view'] != null || transform != null)
+        throw const FormatException('Native inspection returned source data.');
       return;
     }
     if (result['view'] is! Map ||
         (request['domain'] == 'wellbeing'
-          ? transform is! String || !RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$').hasMatch(transform)
-          : transform != null)) {
+            ? transform is! String ||
+                  !RegExp(
+                    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+                  ).hasMatch(transform)
+            : transform != null)) {
       throw const FormatException('Invalid native projection evidence.');
     }
-    if (request['domain'] == 'people' && (result['view'] as Map)['view_id'] != 'people.identity' ||
-        request['domain'] == 'wellbeing' && (result['view'] as Map)['view_id'] != 'wellbeing.derived') {
-      throw const FormatException('Personal acquisition view does not match domain.');
+    if (request['domain'] == 'people' &&
+            (result['view'] as Map)['view_id'] != 'people.identity' ||
+        request['domain'] == 'wellbeing' &&
+            (result['view'] as Map)['view_id'] != 'wellbeing.derived') {
+      throw const FormatException(
+        'Personal acquisition view does not match domain.',
+      );
     }
   }
 
@@ -240,8 +266,6 @@ final class PersonalAcquisitionBroker {
       value.isNotEmpty &&
       value.length <= 512 &&
       !value.contains(RegExp(r'\s'));
-
-
 }
 
 final class PersonalAcquisitionService {
@@ -249,7 +273,9 @@ final class PersonalAcquisitionService {
     required PersonalAcquisitionBroker broker,
     required PersonalAcquisitionReader reader,
     Duration pollInterval = const Duration(milliseconds: 100),
-  }) : _broker = broker, _reader = reader, _pollInterval = pollInterval;
+  }) : _broker = broker,
+       _reader = reader,
+       _pollInterval = pollInterval;
 
   final PersonalAcquisitionBroker _broker;
   final PersonalAcquisitionReader _reader;

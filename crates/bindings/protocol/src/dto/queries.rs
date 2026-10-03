@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{
-    APP_WIRE_VERSION, ActionRefDto, AppCommandReceiptDto, AppWireErrorDto, CommandIdDto,
-    GatewayRefDto, InteractionRefDto, MessageRefDto, NativeHostQueryDto, OperationRefDto,
-    RequestIdDto, ReviewRefDto, RunRefDto, SessionRefDto, TaskRefDto, AttemptRefDto,
+    APP_WIRE_VERSION, ActionRefDto, AppCommandReceiptDto, AppWireErrorDto, AttemptRefDto,
+    CommandIdDto, GatewayRefDto, InteractionRefDto, MessageRefDto, NativeHostQueryDto,
+    OperationRefDto, RequestIdDto, ReviewRefDto, RunRefDto, SessionRefDto, TaskRefDto,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -71,29 +71,17 @@ pub enum AppProductQueryDto {
     #[serde(rename = "connections.overview")]
     ConnectionsOverview {},
     #[serde(rename = "connections.pairing.get")]
-    ConnectionsPairingGet {
-        operation_ref: OperationRefDto,
-    },
+    ConnectionsPairingGet { operation_ref: OperationRefDto },
     #[serde(rename = "connections.gateway.get")]
-    ConnectionsGatewayGet {
-        gateway_ref: GatewayRefDto,
-    },
+    ConnectionsGatewayGet { gateway_ref: GatewayRefDto },
     #[serde(rename = "connections.integration.inspect_review")]
-    ConnectionsIntegrationInspectReview {
-        review_ref: ReviewRefDto,
-    },
+    ConnectionsIntegrationInspectReview { review_ref: ReviewRefDto },
     #[serde(rename = "connections.operation.get")]
-    ConnectionsOperationGet {
-        operation_ref: OperationRefDto,
-    },
+    ConnectionsOperationGet { operation_ref: OperationRefDto },
     #[serde(rename = "connections.source.inspect_review")]
-    ConnectionsSourceInspectReview {
-        review_ref: ReviewRefDto,
-    },
+    ConnectionsSourceInspectReview { review_ref: ReviewRefDto },
     #[serde(rename = "connections.observe.inspect_review")]
-    ConnectionsObserveInspectReview {
-        review_ref: ReviewRefDto,
-    },
+    ConnectionsObserveInspectReview { review_ref: ReviewRefDto },
     #[serde(rename = "experts.registry.inspect")]
     ExpertsRegistryInspect {},
     #[serde(rename = "experts.sources.candidates")]
@@ -146,7 +134,7 @@ impl AppProductQueryDto {
             | Self::KnowledgeMemoryReview {}
             | Self::ConnectionsOverview {} => return Ok(()),
             Self::ConnectionsPairingGet { .. } | Self::ConnectionsOperationGet { .. } => {
-                return Ok(())
+                return Ok(());
             }
             Self::ConnectionsGatewayGet { .. } => return Ok(()),
             Self::ConnectionsIntegrationInspectReview { review_ref }
@@ -257,7 +245,9 @@ pub enum AppQueryResultDto {
         #[serde(flatten)]
         result: super::ExpertOperationResultDto,
     },
-    ConversationSession { session: super::ConversationSessionSnapshotDto },
+    ConversationSession {
+        session: super::ConversationSessionSnapshotDto,
+    },
     VaultOperation {
         #[serde(flatten)]
         result: super::VaultLifecycleResultDto,
@@ -340,9 +330,17 @@ impl AppRunSnapshotDto {
         if self.runtime_epoch == 0 || self.executor_generation == 0 {
             return Err("run.generation");
         }
-        if self.task_refs.iter().collect::<std::collections::HashSet<_>>().len()
+        if self
+            .task_refs
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
             != self.task_refs.len()
-            || self.attempt_refs.iter().collect::<std::collections::HashSet<_>>().len()
+            || self
+                .attempt_refs
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
                 != self.attempt_refs.len()
         {
             return Err("run.references");
@@ -385,7 +383,11 @@ pub struct AppTurnReportDto {
 
 impl AppTurnReportDto {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.interaction_refs.iter().collect::<std::collections::HashSet<_>>().len()
+        if self
+            .interaction_refs
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
             != self.interaction_refs.len()
         {
             return Err("run.report.interaction_refs");

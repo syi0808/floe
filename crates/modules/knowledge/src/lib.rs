@@ -8,7 +8,9 @@ pub use application::learner::validate_learner_input;
 pub use application::learner_scheduling::{LearnerLease, LearnerScheduling};
 pub use application::learner_service::LearnerService;
 pub use ports::evidence::EvidenceReader;
-pub use ports::repository::{LearnerJournalFactory, LearnerJobRepository, MemoryContextReader, MemoryReviewRepository};
+pub use ports::repository::{
+    LearnerJobRepository, LearnerJournalFactory, MemoryContextReader, MemoryReviewRepository,
+};
 pub mod application {
     pub mod learner;
     pub mod learner_scheduling;
@@ -31,8 +33,8 @@ pub use api::{
 pub use application::learner::{
     LEARNER_INFERENCE_CONSUMER, LEARNER_INFERENCE_PURPOSE, LEARNER_JOB_LEASE_SECONDS,
     LEARNER_JOB_RETRY_DELAY_SECONDS, LearnerBudget, LearnerJobClaim, LearnerJobLifecycle,
-    LearnerJobSettlement, LearnerJobState, LearnerMemoryProposal, LearnerModel, LearnerModelRequest,
-    LearnerReviewInput, LearnerReviewJob, LearnerReviewOutput, LearnerRuntime,
+    LearnerJobSettlement, LearnerJobState, LearnerMemoryProposal, LearnerModel,
+    LearnerModelRequest, LearnerReviewInput, LearnerReviewJob, LearnerReviewOutput, LearnerRuntime,
     MAX_LEARNER_JOB_ATTEMPTS, MemoryCandidateSink, claim_learner_job, explicit_learning_signal,
     parse_learner_review_output, reject_learner_claim, retryable_learner_failure,
     settle_learner_job, settlement_for_learner_result, validate_learner_job_lifecycle,

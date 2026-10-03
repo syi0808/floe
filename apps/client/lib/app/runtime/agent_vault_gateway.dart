@@ -23,12 +23,28 @@ class AgentVaultException implements Exception {
     this.ownerFailure,
   });
 
-  factory AgentVaultException.fromAppWire(String failure, {OwnerFailure? ownerFailure, String? requestId, String? stage, Map<String,String> metadata = const {}}) =>
-      AgentVaultException(ownerFailure?.reason ?? failure, requestId: requestId, stage: stage, metadata: metadata, ownerFailure: ownerFailure,
-        recoveryAction: ownerFailure?.recovery, domain: ownerFailure?.domain, category: ownerFailure?.category,
-        reasonCode: ownerFailure?.reason, safeActions: ownerFailure?.safeActions.toList(growable: false) ?? const [],
-        incidentId: ownerFailure?.incidentId, correlationRequestId: ownerFailure?.correlationId,
-        reloadRequired: ownerFailure?.reloadRequired, sealSession: ownerFailure?.sealSession);
+  factory AgentVaultException.fromAppWire(
+    String failure, {
+    OwnerFailure? ownerFailure,
+    String? requestId,
+    String? stage,
+    Map<String, String> metadata = const {},
+  }) => AgentVaultException(
+    ownerFailure?.reason ?? failure,
+    requestId: requestId,
+    stage: stage,
+    metadata: metadata,
+    ownerFailure: ownerFailure,
+    recoveryAction: ownerFailure?.recovery,
+    domain: ownerFailure?.domain,
+    category: ownerFailure?.category,
+    reasonCode: ownerFailure?.reason,
+    safeActions: ownerFailure?.safeActions.toList(growable: false) ?? const [],
+    incidentId: ownerFailure?.incidentId,
+    correlationRequestId: ownerFailure?.correlationId,
+    reloadRequired: ownerFailure?.reloadRequired,
+    sealSession: ownerFailure?.sealSession,
+  );
 
   final String failure;
   final OwnerFailure? ownerFailure;

@@ -1,4 +1,8 @@
-mod domain { pub mod source_operation; pub mod product; pub mod personal_source_spec; }
+mod domain {
+    pub mod personal_source_spec;
+    pub mod product;
+    pub mod source_operation;
+}
 pub use domain::personal_source_spec::PersonalSourceSpec;
 pub use domain::source_operation::*;
 mod api;
@@ -10,7 +14,7 @@ pub use source::{
     ConnectionResource, ResourceMode, SourceConnection, SourceConnectionError, SourceState,
 };
 
-pub use api::{CalendarConnectionRef,ConnectorCatalogObservation,project_calendar_connections};
+pub use api::{CalendarConnectionRef, ConnectorCatalogObservation, project_calendar_connections};
 pub use application::source_connections::{SourceConnectionService, SourceServiceError};
 pub use ports::{SourceRepository, SourceRepositoryError};
 
@@ -25,15 +29,22 @@ pub use application::connected_context::{
 
 pub use floe_context_contract::{ConnectionId, ConnectorId};
 
-pub use ports::{SourceOperationRepository,ConnectionsRepository};
+pub use ports::{ConnectionsRepository, SourceOperationRepository};
 
-pub use application::source_operation::{ConnectionsService,ConnectionsDependencies,PrepareSourceReviews,PreparedSourceReviews,PrepareProjectionReviews,PreparedProjectionReviews,SourceReviewEvidence,SourceCleanup,SourceCleanupOutcome};
+pub use application::source_operation::{
+    ConnectionsDependencies, ConnectionsService, PrepareProjectionReviews, PrepareSourceReviews,
+    PreparedProjectionReviews, PreparedSourceReviews, SourceCleanup, SourceCleanupOutcome,
+    SourceReviewEvidence,
+};
 
+pub use application::gateway_pairing::{
+    GatewayPairingService, GatewaySetupRecord, PairingRecord, PairingRepository, PairingSnapshot,
+    PairingState,
+};
 pub use ports::gateway_pairing::*;
-pub use application::gateway_pairing::{GatewayPairingService,GatewaySetupRecord,PairingRepository,PairingRecord,PairingSnapshot,PairingState};
 
 pub use domain::product::*;
-pub use ports::remote_integration::*;
 pub use ports::product_repository::ConnectionsProductRepository;
+pub use ports::remote_integration::*;
 
 pub use application::product::source_ref;

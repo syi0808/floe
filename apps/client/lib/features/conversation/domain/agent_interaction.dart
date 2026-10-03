@@ -2,7 +2,17 @@ import 'package:floe_client/features/connections/domain/connection_models.dart';
 
 enum AgentInteractionKind { sourceAccess, expertBinding }
 
-enum AgentInteractionState { pending, resolving, resolved, denied, dismissed, superseded, expired, stale, wrongDevice }
+enum AgentInteractionState {
+  pending,
+  resolving,
+  resolved,
+  denied,
+  dismissed,
+  superseded,
+  expired,
+  stale,
+  wrongDevice,
+}
 
 enum AgentInteractionAction {
   allow,
@@ -17,8 +27,29 @@ enum AgentInteractionAction {
 
 enum AgentInteractionDecision { approve, deny, dismiss }
 
-enum AgentInteractionResolveOutcome { pending, resolved, resolving, denied, dismissed, superseded, expired, stale, wrongDevice }
-enum AgentInteractionRefreshOutcome { pending, denied, dismissed, resolved, resolving, superseded, expired, stale, wrongDevice }
+enum AgentInteractionResolveOutcome {
+  pending,
+  resolved,
+  resolving,
+  denied,
+  dismissed,
+  superseded,
+  expired,
+  stale,
+  wrongDevice,
+}
+
+enum AgentInteractionRefreshOutcome {
+  pending,
+  denied,
+  dismissed,
+  resolved,
+  resolving,
+  superseded,
+  expired,
+  stale,
+  wrongDevice,
+}
 
 sealed class AgentInteractionTarget {
   const AgentInteractionTarget();
@@ -37,14 +68,25 @@ sealed class AgentInteractionTarget {
         if (json.length != 2 || !json.containsKey('review')) {
           throw const FormatException('Invalid source review target.');
         }
-        return AgentSourceReviewTarget(review: ObserveReview.fromJson(json['review']));
+        return AgentSourceReviewTarget(
+          review: ObserveReview.fromJson(json['review']),
+        );
       case 'navigation_only':
-        if (json.length != 3 || !{'connection_settings','system_permission','resource_picker'}.contains(json['destination'])) {
+        if (json.length != 3 ||
+            !{
+              'connection_settings',
+              'system_permission',
+              'resource_picker',
+            }.contains(json['destination'])) {
           throw const FormatException('Invalid source navigation target.');
         }
-        return AgentNavigationTarget(destination: field('destination'), sourceLabel: field('source_label'));
+        return AgentNavigationTarget(
+          destination: field('destination'),
+          sourceLabel: field('source_label'),
+        );
       case 'expert_binding':
-        if (json.length != 6) throw const FormatException('Invalid Expert binding target.');
+        if (json.length != 6)
+          throw const FormatException('Invalid Expert binding target.');
         return AgentExpertBindingTarget(
           assignmentId: field('assignment_id'),
           packageId: field('package_id'),
@@ -64,7 +106,10 @@ final class AgentSourceReviewTarget extends AgentInteractionTarget {
 }
 
 final class AgentNavigationTarget extends AgentInteractionTarget {
-  const AgentNavigationTarget({required this.destination, required this.sourceLabel});
+  const AgentNavigationTarget({
+    required this.destination,
+    required this.sourceLabel,
+  });
   final String destination;
   final String sourceLabel;
 }
@@ -101,13 +146,29 @@ final class AgentInteractionSnapshot {
   });
 
   factory AgentInteractionSnapshot.parse(Map<String, dynamic> json) {
-    const fields = {'interaction_id','session_id','origin_run_id','interaction_kind','state','revision','target_digest','created_at','expires_at','target','actions'};
-    if (json.length != fields.length || !json.keys.toSet().containsAll(fields)) {
+    const fields = {
+      'interaction_id',
+      'session_id',
+      'origin_run_id',
+      'interaction_kind',
+      'state',
+      'revision',
+      'target_digest',
+      'created_at',
+      'expires_at',
+      'target',
+      'actions',
+    };
+    if (json.length != fields.length ||
+        !json.keys.toSet().containsAll(fields)) {
       throw const FormatException('Invalid interaction snapshot fields.');
     }
     String id(String name) {
       final value = json[name];
-      if (value is! String || !RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$').hasMatch(value)) {
+      if (value is! String ||
+          !RegExp(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+          ).hasMatch(value)) {
         throw FormatException('Invalid interaction $name.');
       }
       return value;
@@ -127,24 +188,33 @@ final class AgentInteractionSnapshot {
     }
     DateTime timestamp(String name) {
       final value = json[name];
-      if (value is! String || !value.endsWith('Z')) throw FormatException('Invalid interaction $name.');
+      if (value is! String || !value.endsWith('Z'))
+        throw FormatException('Invalid interaction $name.');
       final parsed = DateTime.tryParse(value);
-      if (parsed == null || !parsed.isUtc) throw FormatException('Invalid interaction $name.');
+      if (parsed == null || !parsed.isUtc)
+        throw FormatException('Invalid interaction $name.');
       return parsed;
     }
+
     final created = timestamp('created_at');
     final expires = timestamp('expires_at');
     final actions = json['actions'];
-    if (actions is! List || actions.length > 16 || actions.toSet().length != actions.length) {
+    if (actions is! List ||
+        actions.length > 16 ||
+        actions.toSet().length != actions.length) {
       throw const FormatException('Invalid interaction actions.');
     }
     final target = json['target'];
     if (target is! Map) {
       throw const FormatException('Invalid interaction target.');
     }
-    if (number('revision') < 1 || created.millisecondsSinceEpoch < 0 || !expires.isAfter(created) ||
-        json['interaction_kind'] == 'source_access' && !{'source_review','navigation_only'}.contains(target['kind']) ||
-        json['interaction_kind'] == 'expert_binding' && target['kind'] != 'expert_binding') {
+    if (number('revision') < 1 ||
+        created.millisecondsSinceEpoch < 0 ||
+        !expires.isAfter(created) ||
+        json['interaction_kind'] == 'source_access' &&
+            !{'source_review', 'navigation_only'}.contains(target['kind']) ||
+        json['interaction_kind'] == 'expert_binding' &&
+            target['kind'] != 'expert_binding') {
       throw const FormatException('Invalid interaction owner projection.');
     }
     return AgentInteractionSnapshot(

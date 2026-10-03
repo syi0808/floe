@@ -26,8 +26,7 @@ final class AppConversationProjection {
   bool canSend(String sessionId) =>
       syncState == AppReadSyncState.synchronized &&
       runs.values.every(
-        (run) =>
-            run.sessionId != sessionId || run.state.terminal,
+        (run) => run.sessionId != sessionId || run.state.terminal,
       );
 }
 

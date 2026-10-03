@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"floe/server/internal/authority"
- "floe/server/internal/trust"
+	"floe/server/internal/trust"
 )
 
 type sourceProofWire struct {

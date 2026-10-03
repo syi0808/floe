@@ -50,7 +50,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if state_name(&envelope.action.state) != state || envelope.digest()? != stored_digest {
                 return Err(AgentFailure::VaultUnavailable);
             }
-            if !envelope.invalidate_grant(self.person_id, grant_id, authority)? { continue; }
+            if !envelope.invalidate_grant(self.person_id, grant_id, authority)? {
+                continue;
+            }
             let payload =
                 serde_json::to_string(&envelope).map_err(|_| AgentFailure::InvalidInput)?;
             let updated_digest = envelope.digest()?;
@@ -456,8 +458,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.finish_access_grant_transaction(transaction, result)
             .await
     }
-
-
 
     pub(crate) async fn admit_agent_action_dispatch_with_cancellation_and_fence(
         &self,

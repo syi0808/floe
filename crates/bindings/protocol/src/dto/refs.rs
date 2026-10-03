@@ -40,7 +40,9 @@ impl<'de> Deserialize<'de> for UuidRefDto {
 
 macro_rules! typed_uuid_ref {
     ($name:ident) => {
-        #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+        #[derive(
+            Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+        )]
         #[serde(transparent)]
         pub struct $name(UuidRefDto);
 
@@ -104,7 +106,9 @@ impl<'de> Deserialize<'de> for DigestHex64Dto {
     {
         let value = String::deserialize(deserializer)?;
         if !is_hex64(&value) {
-            return Err(de::Error::custom("digest must be 64 lowercase hexadecimal bytes"));
+            return Err(de::Error::custom(
+                "digest must be 64 lowercase hexadecimal bytes",
+            ));
         }
         Ok(Self(value))
     }
@@ -140,7 +144,9 @@ impl<'de> Deserialize<'de> for ReviewRefDto {
 
         let fields = Fields::deserialize(deserializer)?;
         if fields.revision == 0 || fields.revision > i64::MAX as u64 {
-            return Err(de::Error::custom("review revision must be in range 1..=i64::MAX"));
+            return Err(de::Error::custom(
+                "review revision must be in range 1..=i64::MAX",
+            ));
         }
         Ok(Self {
             id: fields.id,

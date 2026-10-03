@@ -87,8 +87,8 @@ pub use application::personal_sources::{
 };
 pub use application::projection::{CoverageProjection, project_coverage};
 pub use application::remote_sources::{
-    AdmittedRemoteRead, RemoteViewTransport, authorize_remote_dependency, configured_remote_source_selections, read_configured_remote_view,
-    read_selected_remote_view,
+    AdmittedRemoteRead, RemoteViewTransport, authorize_remote_dependency,
+    configured_remote_source_selections, read_configured_remote_view, read_selected_remote_view,
 };
 pub use application::remote_views::{
     LOGISTICS_VIEW, MAIL_VIEW, WORK_VIEW, is_remote_view, remote_view_data_categories,
@@ -104,8 +104,7 @@ pub use application::source_view::SourceView;
 /// The authorization input Context's own coverage entry points take.
 pub use floe_access::{
     DependencyAuthorization, DependencyLiveness, DependencyResolver, RemoteCallWindow,
-    RemoteGrantTransport, RemotePairingIdentity, RemoteSourceQuery,
-    SignedSourcePreview,
+    RemoteGrantTransport, RemotePairingIdentity, RemoteSourceQuery, SignedSourcePreview,
 };
 pub use floe_agent_contract::{HistoryMessageSize, bounded_history_start};
 pub use floe_context_contract::ContextDependency;
@@ -120,8 +119,7 @@ pub use ports::calendar_source::{
 pub use ports::evidence_reader::EvidenceReader;
 pub use ports::personal_source::{
     AcquiredSource, AttentionAcquisition, AttentionAcquisitionMode, PersonalAcquisition,
-    PersonalConnectionReader, PersonalDomain, PersonalSourceDriver,
-    TrustedObservation,
+    PersonalConnectionReader, PersonalDomain, PersonalSourceDriver, TrustedObservation,
 };
 pub use ports::source_reader::{
     SelectedSourceReader, SourceKey, SourceRead, SourceReadRequest, SourceReader,

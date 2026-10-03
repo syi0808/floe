@@ -1,9 +1,9 @@
 package authority
 
 import (
- "floe/server/internal/views"
- "floe/server/internal/trust"
 	"errors"
+	"floe/server/internal/trust"
+	"floe/server/internal/views"
 
 	"floe/server/internal/connections"
 )

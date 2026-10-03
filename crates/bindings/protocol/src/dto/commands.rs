@@ -120,9 +120,7 @@ pub enum AppProductCommandDto {
         operation: super::CalendarActionOperationDto,
     },
     #[serde(rename = "day.refresh")]
-    DayRefresh {
-        day: super::DayQueryDto,
-    },
+    DayRefresh { day: super::DayQueryDto },
     #[serde(rename = "day.mutate")]
     DayMutate {
         day: super::DayQueryDto,
@@ -165,9 +163,7 @@ pub enum AppProductCommandDto {
         retry_of: Option<RunRefDto>,
     },
     #[serde(rename = "conversation.cancel_run")]
-    ConversationCancelRun {
-        run_id: RunRefDto,
-    },
+    ConversationCancelRun { run_id: RunRefDto },
     #[serde(rename = "conversation.interaction.resolve")]
     ConversationInteractionResolve {
         interaction_id: InteractionRefDto,
@@ -225,12 +221,16 @@ impl AppProductCommandDto {
             Self::ConnectionsSourceConfigure {
                 selected_resource_refs,
                 review_ref,
-                expected_revision, ..
+                expected_revision,
+                ..
             } => {
                 validate_revision(*expected_revision)?;
                 review_ref.validate()?;
                 if selected_resource_refs.len() > 4096
-                    || selected_resource_refs.iter().collect::<std::collections::HashSet<_>>().len()
+                    || selected_resource_refs
+                        .iter()
+                        .collect::<std::collections::HashSet<_>>()
+                        .len()
                         != selected_resource_refs.len()
                 {
                     Err("command.selected_resource_refs")
@@ -306,15 +306,10 @@ impl AppProductCommandDto {
                 expected_revision,
                 reviewed_digest: _,
                 ..
-            } => {
-                validate_revision(*expected_revision)
-            }
+            } => validate_revision(*expected_revision),
             Self::ConversationInteractionRefresh {
-                expected_revision,
-                ..
-            } => {
-                validate_revision(*expected_revision)
-            }
+                expected_revision, ..
+            } => validate_revision(*expected_revision),
         }
     }
 }
@@ -368,49 +363,33 @@ pub enum AppCommandResultDto {
     #[serde(rename = "acknowledged")]
     NativeHostAcknowledged {},
     #[serde(rename = "connections.gateway_setup")]
-    ConnectionsGatewaySetup {
-        setup: super::GatewaySetupDto,
-    },
+    ConnectionsGatewaySetup { setup: super::GatewaySetupDto },
     #[serde(rename = "connections.gateway")]
-    ConnectionsGateway {
-        gateway: super::GatewaySummaryDto,
-    },
+    ConnectionsGateway { gateway: super::GatewaySummaryDto },
     #[serde(rename = "connections.pairing")]
-    ConnectionsPairing {
-        pairing: super::PairingSnapshotDto,
-    },
+    ConnectionsPairing { pairing: super::PairingSnapshotDto },
     #[serde(rename = "connections.overview")]
     ConnectionsOverview {
         overview: super::ConnectionsOverviewDto,
     },
     #[serde(rename = "connections.integration_review")]
-    ConnectionsIntegrationReview {
-        review: super::IntegrationReviewDto,
-    },
+    ConnectionsIntegrationReview { review: super::IntegrationReviewDto },
     #[serde(rename = "connections.operation")]
     ConnectionsOperation {
         operation: super::ConnectionOperationSnapshotDto,
     },
     #[serde(rename = "connections.source")]
-    ConnectionsSource {
-        source: super::SourceSummaryDto,
-    },
+    ConnectionsSource { source: super::SourceSummaryDto },
     #[serde(rename = "connections.source_review")]
-    ConnectionsSourceReview {
-        review: super::SourceReviewDto,
-    },
+    ConnectionsSourceReview { review: super::SourceReviewDto },
     #[serde(rename = "connections.observe_review")]
-    ConnectionsObserveReview {
-        review: super::ObserveReviewDto,
-    },
+    ConnectionsObserveReview { review: super::ObserveReviewDto },
     #[serde(rename = "connections.launch")]
     ConnectionsLaunch {
         launch_action: super::LaunchActionDto,
     },
     #[serde(rename = "day.refresh")]
-    DayRefresh {
-        refresh: super::DayRefreshStateDto,
-    },
+    DayRefresh { refresh: super::DayRefreshStateDto },
     ActionOperation {
         #[serde(flatten)]
         result: super::ActionOperationResultDto,
@@ -427,7 +406,9 @@ pub enum AppCommandResultDto {
         #[serde(flatten)]
         result: super::ExpertOperationResultDto,
     },
-    ConversationSession { session: super::ConversationSessionSnapshotDto },
+    ConversationSession {
+        session: super::ConversationSessionSnapshotDto,
+    },
     VaultOperation {
         #[serde(flatten)]
         result: super::VaultLifecycleResultDto,
@@ -471,7 +452,11 @@ fn valid_gateway_setup_address(value: &str) -> bool {
     let Some((scheme, authority)) = value.split_once("://") else {
         return false;
     };
-    if scheme != "http" || authority.bytes().any(|byte| matches!(byte, b'/' | b'?' | b'#' | b'@')) {
+    if scheme != "http"
+        || authority
+            .bytes()
+            .any(|byte| matches!(byte, b'/' | b'?' | b'#' | b'@'))
+    {
         return false;
     }
     let Some((host, port)) = authority.rsplit_once(':') else {

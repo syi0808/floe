@@ -10,8 +10,14 @@ typedef FloeOpenDart = Pointer<Void> Function(
   Pointer<Utf8> databasePath,
   Pointer<Pointer<Utf8>> errorJson,
 );
-typedef FloeAcquireNativeHostNative = Pointer<Void> Function(Pointer<Void> core, Pointer<Pointer<Utf8>> errorJson);
-typedef FloeAcquireNativeHostDart = Pointer<Void> Function(Pointer<Void> core, Pointer<Pointer<Utf8>> errorJson);
+typedef FloeAcquireNativeHostNative = Pointer<Void> Function(
+  Pointer<Void> core,
+  Pointer<Pointer<Utf8>> errorJson,
+);
+typedef FloeAcquireNativeHostDart = Pointer<Void> Function(
+  Pointer<Void> core,
+  Pointer<Pointer<Utf8>> errorJson,
+);
 typedef FloeCallNative = Pointer<Utf8> Function(
   Pointer<Void> handle,
   Pointer<Utf8> requestJson,
@@ -60,11 +66,19 @@ final class FloeNativeBindings {
   late final FloeFreeCoreDart freeCore;
   late final FloeProtocolVersionDart protocolVersion;
   late final FloeAcquireNativeHostDart acquireNativeHost = _library
-      .lookupFunction<FloeAcquireNativeHostNative, FloeAcquireNativeHostDart>('floe_native_host_acquire');
+      .lookupFunction<FloeAcquireNativeHostNative, FloeAcquireNativeHostDart>(
+        'floe_native_host_acquire',
+      );
   late final FloeCallDart nativeHostCommandV2 = _library
-      .lookupFunction<FloeCallNative, FloeCallDart>('floe_native_host_command_v2');
+      .lookupFunction<FloeCallNative, FloeCallDart>(
+        'floe_native_host_command_v2',
+      );
   late final FloeCallDart nativeHostQueryV2 = _library
-      .lookupFunction<FloeCallNative, FloeCallDart>('floe_native_host_query_v2');
+      .lookupFunction<FloeCallNative, FloeCallDart>(
+        'floe_native_host_query_v2',
+      );
   late final FloeFreeCoreDart freeNativeHost = _library
-      .lookupFunction<FloeFreeCoreNative, FloeFreeCoreDart>('floe_native_host_free');
+      .lookupFunction<FloeFreeCoreNative, FloeFreeCoreDart>(
+        'floe_native_host_free',
+      );
 }

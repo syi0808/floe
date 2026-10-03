@@ -69,8 +69,13 @@ pub fn assemble_context_projection(
     validate_input(&input)?;
     let live = live_context(input.role, input.agent_context);
     let input_data_classes = effective_input_data_classes(&input.input_data_classes, &live)?;
-    if input_data_classes.iter().any(|class| matches!(class, DataClass::Credential | DataClass::DeviceOnlyRaw)
-        || (*class == DataClass::TemporaryAiContext && input.plan.boundary == floe_agent_contract::ProcessingBoundary::Gateway)) { return Err(AgentFailure::PolicyDenied); }
+    if input_data_classes.iter().any(|class| {
+        matches!(class, DataClass::Credential | DataClass::DeviceOnlyRaw)
+            || (*class == DataClass::TemporaryAiContext
+                && input.plan.boundary == floe_agent_contract::ProcessingBoundary::Gateway)
+    }) {
+        return Err(AgentFailure::PolicyDenied);
+    }
     let mut available_capabilities = capability_summaries(input.catalog)?;
     available_capabilities.sort_by(|left, right| left.id.cmp(&right.id));
     let mut active_experts = input.catalog.cards.clone();
@@ -113,39 +118,87 @@ pub fn assemble_context_projection(
     // A transformed Health view is admitted only with the exact still-live
     // host receipt carried by its source dependency. Class labels never attest it.
     for evidence in &live.evidence {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&evidence.untrusted_text) else { continue; };
-        if value.get("view_id").and_then(serde_json::Value::as_str) == Some(floe_context_contract::WELLBEING_VIEW_ID) {
-            let view: floe_context_contract::WellbeingView = serde_json::from_value(value).map_err(|_| AgentFailure::PolicyDenied)?;
-            let DependencyCoverage::Dependent { dependencies } = &coverage else { return Err(AgentFailure::PolicyDenied); };
-            let valid = dependencies.iter().any(|dependency| dependency.source().connector().as_str() == floe_access::WELLBEING_CONNECTOR
-                && dependency.health_transform().is_some_and(|receipt| receipt.validate_view(&input.plan.device_id, &view, chrono::Utc::now()).is_ok()));
-            if !valid || evidence.data_class != DataClass::HighlySensitive { return Err(AgentFailure::PolicyDenied); }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&evidence.untrusted_text) else {
+            continue;
+        };
+        if value.get("view_id").and_then(serde_json::Value::as_str)
+            == Some(floe_context_contract::WELLBEING_VIEW_ID)
+        {
+            let view: floe_context_contract::WellbeingView =
+                serde_json::from_value(value).map_err(|_| AgentFailure::PolicyDenied)?;
+            let DependencyCoverage::Dependent { dependencies } = &coverage else {
+                return Err(AgentFailure::PolicyDenied);
+            };
+            let valid = dependencies.iter().any(|dependency| {
+                dependency.source().connector().as_str() == floe_access::WELLBEING_CONNECTOR
+                    && dependency.health_transform().is_some_and(|receipt| {
+                        receipt
+                            .validate_view(&input.plan.device_id, &view, chrono::Utc::now())
+                            .is_ok()
+                    })
+            });
+            if !valid || evidence.data_class != DataClass::HighlySensitive {
+                return Err(AgentFailure::PolicyDenied);
+            }
         }
     }
     let mut blockers = Vec::new();
     match &coverage {
-        DependencyCoverage::Unknown if input.plan.boundary == floe_agent_contract::ProcessingBoundary::Gateway => return Err(AgentFailure::PolicyDenied),
-        DependencyCoverage::Dependent { dependencies } => for dependency in dependencies {
-            if dependency.person_id().to_string() != input.plan.principal || dependency.expires_at() <= chrono::Utc::now() { return Err(AgentFailure::PolicyDenied); }
-            if dependency.source().connector().as_str() == floe_access::WELLBEING_CONNECTOR {
-                dependency.validate_health_transform(&input.plan.device_id, chrono::Utc::now())?;
-                if !input_data_classes.contains(&DataClass::HighlySensitive) { return Err(AgentFailure::PolicyDenied); }
+        DependencyCoverage::Unknown
+            if input.plan.boundary == floe_agent_contract::ProcessingBoundary::Gateway =>
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        DependencyCoverage::Dependent { dependencies } => {
+            for dependency in dependencies {
+                if dependency.person_id().to_string() != input.plan.principal
+                    || dependency.expires_at() <= chrono::Utc::now()
+                {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                if dependency.source().connector().as_str() == floe_access::WELLBEING_CONNECTOR {
+                    dependency
+                        .validate_health_transform(&input.plan.device_id, chrono::Utc::now())?;
+                    if !input_data_classes.contains(&DataClass::HighlySensitive) {
+                        return Err(AgentFailure::PolicyDenied);
+                    }
+                }
+                if input.plan.boundary == floe_agent_contract::ProcessingBoundary::Gateway
+                    && !dependency
+                        .processing()
+                        .admits_gateway(dependency.categories())
+                {
+                    let blocker =
+                        floe_context_contract::SourceAccessRequirement::from_processing_dependency(
+                            dependency,
+                        )
+                        .map_err(|_| AgentFailure::InvalidInput)?;
+                    if !blockers.contains(&blocker) {
+                        blockers.push(blocker);
+                    }
+                }
             }
-            if input.plan.boundary == floe_agent_contract::ProcessingBoundary::Gateway
-                && !dependency.processing().admits_gateway(dependency.categories()) {
-                let blocker = floe_context_contract::SourceAccessRequirement::from_processing_dependency(dependency).map_err(|_| AgentFailure::InvalidInput)?;
-                if !blockers.contains(&blocker) { blockers.push(blocker); }
-            }
-        },
-        _ => {},
+        }
+        _ => {}
     }
     if !blockers.is_empty() {
         use sha2::Digest;
-        let blockers = floe_context_contract::SourceAccessBlockers::try_new(blockers).map_err(|_| AgentFailure::InvalidInput)?;
-        let target_digest = sha2::Sha256::digest(serde_json::to_vec(&(input.plan, input.projection_operation_id, &blockers)).map_err(|_| AgentFailure::InvalidInput)?).into();
-        return Ok(floe_agent_contract::ModelProjectionOutcome::NeedsSourceReview(floe_agent_contract::SourceProjectionReview {
-            projection_operation_id: input.projection_operation_id, target_digest, blockers,
-        }));
+        let blockers = floe_context_contract::SourceAccessBlockers::try_new(blockers)
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        let target_digest = sha2::Sha256::digest(
+            serde_json::to_vec(&(input.plan, input.projection_operation_id, &blockers))
+                .map_err(|_| AgentFailure::InvalidInput)?,
+        )
+        .into();
+        return Ok(
+            floe_agent_contract::ModelProjectionOutcome::NeedsSourceReview(
+                floe_agent_contract::SourceProjectionReview {
+                    projection_operation_id: input.projection_operation_id,
+                    target_digest,
+                    blockers,
+                },
+            ),
+        );
     }
     let projection = AuthorizedModelProjection {
         plan_id: input.plan.operation_id,
@@ -158,7 +211,9 @@ pub fn assemble_context_projection(
         input_data_classes,
     };
     projection.validate()?;
-    Ok(floe_agent_contract::ModelProjectionOutcome::Ready(projection))
+    Ok(floe_agent_contract::ModelProjectionOutcome::Ready(
+        projection,
+    ))
 }
 
 fn effective_input_data_classes(
@@ -180,7 +235,9 @@ fn effective_input_data_classes(
 
 fn validate_input(input: &ContextProjectionInput<'_>) -> Result<(), AgentFailure> {
     input.plan.validate()?;
-    if input.projection_operation_id.is_nil() || input.purpose != input.plan.purpose { return Err(AgentFailure::InvalidInput); }
+    if input.projection_operation_id.is_nil() || input.purpose != input.plan.purpose {
+        return Err(AgentFailure::InvalidInput);
+    }
     if input.purpose.trim().is_empty()
         || input.purpose.len() > floe_agent_contract::MAX_SCOPED_PURPOSE_BYTES
         || input.response_contract.len() > floe_agent_contract::MAX_RESPONSE_CONTRACT_BYTES

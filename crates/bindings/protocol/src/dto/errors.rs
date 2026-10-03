@@ -67,7 +67,14 @@ impl<T> AppResponseDto<T> {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum OwnerRecoveryDto { None, Reobserve, Reconcile, Unlock, Reopen, NewReview }
+pub enum OwnerRecoveryDto {
+    None,
+    Reobserve,
+    Reconcile,
+    Unlock,
+    Reopen,
+    NewReview,
+}
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OwnerFailureDto {

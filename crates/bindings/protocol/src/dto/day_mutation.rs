@@ -1,7 +1,4 @@
-use super::{
-    ClassificationDto,
-    DomainRefDto, EventScheduleDto, PriorityDto,
-};
+use super::{ClassificationDto, DomainRefDto, EventScheduleDto, PriorityDto};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

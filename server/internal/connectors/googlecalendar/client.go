@@ -1,20 +1,18 @@
 package googlecalendar
 
 import (
- "floe/server/internal/views"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"floe/server/internal/views"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
-
-	
 )
 
 const (
@@ -62,7 +60,6 @@ type eventDateTime struct {
 	DateTime string `json:"dateTime"`
 	Date     string `json:"date"`
 }
-
 
 func New(tokens TokenSource, calendarID, connectionID string) (*Client, error) {
 	return NewWithBaseURL(tokens, defaultBaseURL, calendarID, connectionID)

@@ -5,8 +5,8 @@ use uuid::Uuid;
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
+use floe_agent_contract::ExpertModel;
 use floe_agent_contract::InferencePolicyDecision;
-use floe_agent_contract::{ExpertModel};
 use floe_context_contract::{
     AttentionView, CalendarContextView, WorkContextView, personal_context_evidence,
     validate_attention_view, validate_work_context_view, work_context_evidence,
@@ -87,20 +87,15 @@ pub async fn run_focus_expert_with_views<Model: ExpertModel>(
         expires_at_unix_ms = expires_at_unix_ms.min(view.expires_at_unix_ms);
         evidence.push(work_context_evidence(view)?);
     }
-    let output: FocusOutput = match run_personal_model(
-        model,
-        policy,
-        &invocation,
-        evidence,
-        focus_expert_prompt(),
-    )
-    .await?
-    {
-        ExpertJudgment::Decided(output) => output,
-        ExpertJudgment::Blocked(requirement) => {
-            return Ok(ExpertJudgment::Blocked(requirement));
-        }
-    };
+    let output: FocusOutput =
+        match run_personal_model(model, policy, &invocation, evidence, focus_expert_prompt())
+            .await?
+        {
+            ExpertJudgment::Decided(output) => output,
+            ExpertJudgment::Blocked(requirement) => {
+                return Ok(ExpertJudgment::Blocked(requirement));
+            }
+        };
     validate_judgment(
         &output.summary,
         &output.rationale,

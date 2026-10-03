@@ -1,11 +1,17 @@
-use base64::{Engine as _,engine::general_purpose::URL_SAFE_NO_PAD};
-use floe_access::{AuthorizationSigner,RemoteViewAuthorizationExpectation,RemoteProducerIdentity};
-use floe_agent_contract::AgentFailure;
-use serde::{Deserialize,Serialize};
 use crate::control::PreparedServerSource;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use floe_access::{
+    AuthorizationSigner, RemoteProducerIdentity, RemoteViewAuthorizationExpectation,
+};
+use floe_agent_contract::AgentFailure;
+use serde::{Deserialize, Serialize};
 #[derive(Clone)]
-pub struct GatewayViewsClient{source:PreparedServerSource}
-fn valid_connection_id(value:&str)->bool{uuid::Uuid::parse_str(value).is_ok_and(|id|!id.is_nil()&&id.to_string()==value)}
+pub struct GatewayViewsClient {
+    source: PreparedServerSource,
+}
+fn valid_connection_id(value: &str) -> bool {
+    uuid::Uuid::parse_str(value).is_ok_and(|id| !id.is_nil() && id.to_string() == value)
+}
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ProducerIdentityResponse {
@@ -101,7 +107,7 @@ pub fn parse_remote_view_challenge(
     {
         return Err(AgentFailure::InvalidInput);
     }
-    super::json::strict_json_bytes(&bytes,65536)?;
+    super::json::strict_json_bytes(&bytes, 65536)?;
     serde_json::from_slice(&bytes).map_err(|_| AgentFailure::InvalidInput)
 }
 
@@ -144,9 +150,10 @@ pub struct RemoteViewAuthorizationRequest<'value> {
     pub query: serde_json::Value,
 }
 
-
-impl GatewayViewsClient{
-    pub(crate) fn new(source:PreparedServerSource)->Self{Self{source}}
+impl GatewayViewsClient {
+    pub(crate) fn new(source: PreparedServerSource) -> Self {
+        Self { source }
+    }
     pub async fn producer_identity(
         &self,
         deadline: tokio::time::Instant,
@@ -204,9 +211,10 @@ impl GatewayViewsClient{
                 .source_resources
                 .windows(2)
                 .any(|pair| pair[0] >= pair[1])
-            || response.source_resources.iter().any(|resource| {
-                floe_access::ResourceHandle::try_new(resource.as_str()).is_err()
-            })
+            || response
+                .source_resources
+                .iter()
+                .any(|resource| floe_access::ResourceHandle::try_new(resource.as_str()).is_err())
             || response.expires_at_unix_ms <= 0
         {
             return Err(AgentFailure::CapabilityUnavailable);
@@ -275,7 +283,12 @@ impl GatewayViewsClient{
             return Err(AgentFailure::InvalidInput);
         }
         let signature = keys
-            .sign_authorization(super::proof::authorization_command(expected,&challenge.challenge_b64url,&challenge.producer_signature,access_producer_identity(&challenge.producer))?)
+            .sign_authorization(super::proof::authorization_command(
+                expected,
+                &challenge.challenge_b64url,
+                &challenge.producer_signature,
+                access_producer_identity(&challenge.producer),
+            )?)
             .await?;
         let body = RemoteViewProofRequest {
             schema_version: 1,
@@ -307,7 +320,12 @@ impl GatewayViewsClient{
             return Err(AgentFailure::InvalidInput);
         }
         let signature = keys
-            .sign_authorization(super::proof::authorization_command(expected,&challenge.challenge_b64url,&challenge.producer_signature,access_producer_identity(&challenge.producer))?)
+            .sign_authorization(super::proof::authorization_command(
+                expected,
+                &challenge.challenge_b64url,
+                &challenge.producer_signature,
+                access_producer_identity(&challenge.producer),
+            )?)
             .await?;
         let body = RemoteViewProofRequest {
             schema_version: 1,
@@ -340,18 +358,50 @@ impl GatewayViewsClient{
         }
         serde_json::from_str(response.view.get()).map_err(|_| AgentFailure::CapabilityUnavailable)
     }
-    async fn request<T:for<'de>Deserialize<'de>>(&self,method:&str,path:&str,body:Option<serde_json::Value>,deadline:tokio::time::Instant,cancellation:&floe_execution::Cancellation)->Result<T,AgentFailure>{
+    async fn request<T: for<'de> Deserialize<'de>>(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<serde_json::Value>,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_execution::Cancellation,
+    ) -> Result<T, AgentFailure> {
         self.source.revalidate().await?;
-        let http=super::http::GatewayHttpTransport::new()?;
-        let method=match method{"GET"=>reqwest::Method::GET,"POST"=>reqwest::Method::POST,_=>return Err(AgentFailure::InvalidInput)};
-        let body=body.map(|value|serde_json::to_vec(&value).map_err(|_|AgentFailure::InvalidInput)).transpose()?;
-        let(status,bytes)=http.request(self.source.base_url(),Some(self.source.bearer_token()),method,path,body,deadline,cancellation).await?;
-        if status!=200{return Err(match status{400=>AgentFailure::InvalidInput,401=>AgentFailure::CredentialExpired,403=>AgentFailure::PolicyDenied,409=>AgentFailure::Conflict,_=>AgentFailure::CapabilityUnavailable})}
-        super::json::strict_json_bytes(&bytes,65536)?;
-        let value=serde_json::from_slice(&bytes).map_err(|_|AgentFailure::CapabilityUnavailable)?;
-        self.source.revalidate().await?;Ok(value)
+        let http = super::http::GatewayHttpTransport::new()?;
+        let method = match method {
+            "GET" => reqwest::Method::GET,
+            "POST" => reqwest::Method::POST,
+            _ => return Err(AgentFailure::InvalidInput),
+        };
+        let body = body
+            .map(|value| serde_json::to_vec(&value).map_err(|_| AgentFailure::InvalidInput))
+            .transpose()?;
+        let (status, bytes) = http
+            .request(
+                self.source.base_url(),
+                Some(self.source.bearer_token()),
+                method,
+                path,
+                body,
+                deadline,
+                cancellation,
+            )
+            .await?;
+        if status != 200 {
+            return Err(match status {
+                400 => AgentFailure::InvalidInput,
+                401 => AgentFailure::CredentialExpired,
+                403 => AgentFailure::PolicyDenied,
+                409 => AgentFailure::Conflict,
+                _ => AgentFailure::CapabilityUnavailable,
+            });
+        }
+        super::json::strict_json_bytes(&bytes, 65536)?;
+        let value =
+            serde_json::from_slice(&bytes).map_err(|_| AgentFailure::CapabilityUnavailable)?;
+        self.source.revalidate().await?;
+        Ok(value)
     }
-
 }
 pub fn access_producer_identity(identity: &ProducerIdentityResponse) -> RemoteProducerIdentity {
     RemoteProducerIdentity {

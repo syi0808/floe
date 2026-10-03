@@ -1,5 +1,5 @@
-use floe_kernel::{AgentFailure, PersonId};
 use crate::ports::remote_grants::RemotePairingIdentity;
+use floe_kernel::{AgentFailure, PersonId};
 
 /// That the pairing an enrollment is made under is this Person's own.
 pub fn admit_enrollment_pairing(
@@ -30,4 +30,3 @@ pub fn admit_device_pairing(
     }
     Ok(())
 }
-

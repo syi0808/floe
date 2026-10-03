@@ -12,7 +12,6 @@ import (
 type Admissions struct {
 	mu         sync.Mutex
 	remoteView map[string]remoteViewAdmissionState
-
 }
 
 func NewAdmissions() *Admissions {
@@ -35,4 +34,3 @@ func (admissions *Admissions) RecordRemoteViewAdmission(key string, state remote
 	defer admissions.mu.Unlock()
 	admissions.remoteView[key] = state
 }
-

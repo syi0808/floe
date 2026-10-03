@@ -23,8 +23,20 @@ pub(crate) struct CorePersonalConnections<'a> {
 }
 
 impl floe_context::PersonalConnectionReader for CorePersonalConnections<'_> {
-    fn source_is_fenced<'a>(&'a self, person_id: PersonId, connection_id: &'a ConnectionId) -> floe_execution::BoxFuture<'a, Result<bool, AgentFailure>> {
-        Box::pin(async move { floe_connections::SourceOperationRepository::source_is_fenced(self.core.store.as_ref(), person_id, connection_id).await.map_err(|_| AgentFailure::StorageUnavailable) })
+    fn source_is_fenced<'a>(
+        &'a self,
+        person_id: PersonId,
+        connection_id: &'a ConnectionId,
+    ) -> floe_execution::BoxFuture<'a, Result<bool, AgentFailure>> {
+        Box::pin(async move {
+            floe_connections::SourceOperationRepository::source_is_fenced(
+                self.core.store.as_ref(),
+                person_id,
+                connection_id,
+            )
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)
+        })
     }
     fn load<'a>(
         &'a self,

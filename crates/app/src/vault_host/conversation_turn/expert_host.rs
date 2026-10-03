@@ -3,13 +3,13 @@
 use std::{future::Future, pin::Pin, sync::Mutex};
 
 use floe_agent_contract::{
-    AGENT_VERSION, AgentFailure, AllowedCatalog, DataClass, DependencyCoverage, ExpertModelAnswer,
-    ExpertModelCall, ExpertModelOutcome, ExpertReasoningStep, ExpertStep,
+    AGENT_VERSION, AgentFailure, AllowedCatalog, DataClass, DependencyCoverage, ExecutionJournal,
+    ExpertModelAnswer, ExpertModelCall, ExpertModelOutcome, ExpertReasoningStep, ExpertStep,
     ExpertStepOutcome, ExpertStepResult, ExpertTranscriptEntry, InferencePolicyDecision,
-    InvocationKey, ModelConversation, ModelConversationEntry,
-    ModelRequest, ModelStep, ToolCall, ToolDescriptor, ToolResult,
-    ExecutionJournal, JournalAck, JournalEvent, ModelCapabilities, ModelPlanRequest, ModelPort,
-    ModelProjectionOutcome, ModelResponse, PreparedModelPlan, SourceProjectionReview,
+    InvocationKey, JournalAck, JournalEvent, ModelCapabilities, ModelConversation,
+    ModelConversationEntry, ModelPlanRequest, ModelPort, ModelProjectionOutcome, ModelRequest,
+    ModelResponse, ModelStep, PreparedModelPlan, SourceProjectionReview, ToolCall, ToolDescriptor,
+    ToolResult,
 };
 use floe_context::{
     AttentionView, CalendarContextView, CalendarReviewClassification, NativeContextView,
@@ -275,8 +275,12 @@ enum ExpertGeneration {
 
 impl ExpertModelHost<'_> {
     async fn generate(&self, input: ExpertModelInput) -> Result<ExpertGeneration, AgentFailure> {
-        let child = self.scope.child_scope(input.deadline, input.max_tokens, input.max_cost_micros,
-            TaskId::from_uuid(input.invocation_id));
+        let child = self.scope.child_scope(
+            input.deadline,
+            input.max_tokens,
+            input.max_cost_micros,
+            TaskId::from_uuid(input.invocation_id),
+        );
         let request = ModelPlanRequest {
             principal: input.person_id.to_string(),
             device_id: self.device_id.to_owned(),
@@ -284,74 +288,130 @@ impl ExpertModelHost<'_> {
             consumer: floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
             required_capabilities: ModelCapabilities::chat(),
         };
-        let prepared = child.run(self.model.prepare(request.clone(), &child)).await?;
+        let prepared = child
+            .run(self.model.prepare(request.clone(), &child))
+            .await?;
         let plan = prepared.plan().clone();
         plan.validate()?;
-        if plan.principal != request.principal || plan.device_id != request.device_id
-            || plan.purpose != request.purpose || plan.consumer != request.consumer {
+        if plan.principal != request.principal
+            || plan.device_id != request.device_id
+            || plan.purpose != request.purpose
+            || plan.consumer != request.consumer
+        {
             return Err(AgentFailure::PolicyDenied);
         }
-        let dependencies = self.captured.lock().map_err(|_| AgentFailure::StorageUnavailable)?.clone();
-        let projection = floe_context::assemble_context_projection(floe_context::ContextProjectionInput {
-            role: floe_context::ContextProjectionRole::Expert,
-            plan: &plan,
-            projection_operation_id: Uuid::new_v4(),
-            purpose: &plan.purpose,
-            response_contract: "One bounded Expert reasoning result.",
-            correction: None,
-            prompt: input.prompt,
-            conversation: input.conversation,
-            agent_context: &input.context,
-            catalog: &input.catalog,
-            expert_environment: None,
-            authorized_history_dependencies: &dependencies,
-            input_data_classes: input.data_classes,
-            max_output_bytes: input.max_output_bytes,
-        })?;
+        let dependencies = self
+            .captured
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .clone();
+        let projection =
+            floe_context::assemble_context_projection(floe_context::ContextProjectionInput {
+                role: floe_context::ContextProjectionRole::Expert,
+                plan: &plan,
+                projection_operation_id: Uuid::new_v4(),
+                purpose: &plan.purpose,
+                response_contract: "One bounded Expert reasoning result.",
+                correction: None,
+                prompt: input.prompt,
+                conversation: input.conversation,
+                agent_context: &input.context,
+                catalog: &input.catalog,
+                expert_environment: None,
+                authorized_history_dependencies: &dependencies,
+                input_data_classes: input.data_classes,
+                max_output_bytes: input.max_output_bytes,
+            })?;
         let projection = match projection {
             ModelProjectionOutcome::Ready(projection) => projection,
             ModelProjectionOutcome::NeedsSourceReview(review) => {
                 review.validate()?;
-                let mut blocked = self.model_blocked.lock().map_err(|_| AgentFailure::StorageUnavailable)?;
-                if blocked.is_none() { *blocked = Some(ExpertProjectionBlocker { plan, review: review.clone() }); }
+                let mut blocked = self
+                    .model_blocked
+                    .lock()
+                    .map_err(|_| AgentFailure::StorageUnavailable)?;
+                if blocked.is_none() {
+                    *blocked = Some(ExpertProjectionBlocker {
+                        plan,
+                        review: review.clone(),
+                    });
+                }
                 return Ok(ExpertGeneration::NeedsSourceReview(review));
             }
         };
         let attempt_id = Uuid::new_v4();
-        let reservation_ceiling = floe_execution::budget::ModelReservationCeiling::for_lease(child.budget());
-        let intent = child.run(self.journal.record_intent(JournalEvent::ModelIntent {
-            reservation_ceiling,            parent_task_id: Some(self.task_id),
-            attempt_id,
-            projection_ref: projection.projection_ref,
-            plan: plan.clone(),
-        })).await?;
-        if !matches!(intent, JournalAck::Accepted { .. }) { return Err(AgentFailure::Conflict); }
-        let response = child.run(prepared.generate(ModelRequest {
-            attempt_id,
-            reservation_ceiling,
-            principal: request.principal,
-            device_id: request.device_id,
-            purpose: request.purpose,
-            consumer: request.consumer,
-            projection,
-            catalog: input.catalog,
-            replay: vec![],
-        }, &child)).await;
+        let reservation_ceiling =
+            floe_execution::budget::ModelReservationCeiling::for_lease(child.budget());
+        let intent = child
+            .run(self.journal.record_intent(JournalEvent::ModelIntent {
+                reservation_ceiling,
+                parent_task_id: Some(self.task_id),
+                attempt_id,
+                projection_ref: projection.projection_ref,
+                plan: plan.clone(),
+            }))
+            .await?;
+        if !matches!(intent, JournalAck::Accepted { .. }) {
+            return Err(AgentFailure::Conflict);
+        }
+        let response = child
+            .run(prepared.generate(
+                ModelRequest {
+                    attempt_id,
+                    reservation_ceiling,
+                    principal: request.principal,
+                    device_id: request.device_id,
+                    purpose: request.purpose,
+                    consumer: request.consumer,
+                    projection,
+                    catalog: input.catalog,
+                    replay: vec![],
+                },
+                &child,
+            ))
+            .await;
         let receipt = child.budget().model_attempt_receipt(attempt_id);
-        if receipt.is_none() && (response.is_ok() || child.budget().model_attempt_admitted(attempt_id)) {
+        if receipt.is_none()
+            && (response.is_ok() || child.budget().model_attempt_admitted(attempt_id))
+        {
             return Err(AgentFailure::StorageUnavailable);
         }
         let (usage, accounting) = receipt.map_or_else(
-            || (floe_agent_contract::ModelUsage::default(), floe_agent_contract::ModelAccounting::default()),
-            |receipt| (floe_agent_contract::ModelUsage {
-                tokens: receipt.charged_tokens, cost_micros: receipt.charged_cost_micros,
-            }, receipt.accounting),
+            || {
+                (
+                    floe_agent_contract::ModelUsage::default(),
+                    floe_agent_contract::ModelAccounting::default(),
+                )
+            },
+            |receipt| {
+                (
+                    floe_agent_contract::ModelUsage {
+                        tokens: receipt.charged_tokens,
+                        cost_micros: receipt.charged_cost_micros,
+                    },
+                    receipt.accounting,
+                )
+            },
         );
-        let acknowledgment = self.journal.record_result(JournalEvent::ModelResult { attempt_id, usage, accounting }).await?;
-        if !matches!(acknowledgment, JournalAck::Accepted { .. }) { return Err(AgentFailure::Conflict); }
-        if receipt.is_some() { child.budget().acknowledge_model_attempt(attempt_id)?; }
+        let acknowledgment = self
+            .journal
+            .record_result(JournalEvent::ModelResult {
+                attempt_id,
+                usage,
+                accounting,
+            })
+            .await?;
+        if !matches!(acknowledgment, JournalAck::Accepted { .. }) {
+            return Err(AgentFailure::Conflict);
+        }
+        if receipt.is_some() {
+            child.budget().acknowledge_model_attempt(attempt_id)?;
+        }
         let response = response?;
-        if response.attempt_id != attempt_id || response.usage != usage || response.accounting != accounting {
+        if response.attempt_id != attempt_id
+            || response.usage != usage
+            || response.accounting != accounting
+        {
             return Err(AgentFailure::InvalidModelOutput);
         }
         Ok(ExpertGeneration::Answered(response))
@@ -359,34 +419,55 @@ impl ExpertModelHost<'_> {
 }
 
 impl floe_agent_contract::ExpertModel for ExpertModelHost<'_> {
-    fn answer<'a>(&'a self, call: ExpertModelCall)
-        -> floe_agent_contract::BoxFuture<'a, Result<ExpertModelOutcome, AgentFailure>> {
+    fn answer<'a>(
+        &'a self,
+        call: ExpertModelCall,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<ExpertModelOutcome, AgentFailure>> {
         Box::pin(async move {
-            if call.cancellation.is_cancelled() { return Err(AgentFailure::Cancelled); }
-            if call.deadline <= tokio::time::Instant::now() { return Err(AgentFailure::DeadlineExceeded); }
+            if call.cancellation.is_cancelled() {
+                return Err(AgentFailure::Cancelled);
+            }
+            if call.deadline <= tokio::time::Instant::now() {
+                return Err(AgentFailure::DeadlineExceeded);
+            }
             call.prompt.validate()?;
-            if call.assignment.trim().is_empty() || call.assignment.len() > 2048 { return Err(AgentFailure::InvalidInput); }
-            let outcome = self.generate(ExpertModelInput {
-                person_id: call.person_id,
-                invocation_id: call.invocation_id,
-                prompt: call.prompt,
-                context: call.context,
-                conversation: ModelConversation {
-                    history: vec![],
-                    current_turn: vec![ModelConversationEntry::User { message_id: Uuid::new_v4(), text: call.assignment }],
-                },
-                catalog: AllowedCatalog { cards: vec![], tools: vec![], revision: 1 },
-                data_classes: call.policy.data_classes,
-                max_tokens: call.max_tokens,
-                max_cost_micros: call.max_cost_micros,
-                max_output_bytes: call.max_output_bytes,
-                deadline: call.deadline,
-            }).await?;
+            if call.assignment.trim().is_empty() || call.assignment.len() > 2048 {
+                return Err(AgentFailure::InvalidInput);
+            }
+            let outcome = self
+                .generate(ExpertModelInput {
+                    person_id: call.person_id,
+                    invocation_id: call.invocation_id,
+                    prompt: call.prompt,
+                    context: call.context,
+                    conversation: ModelConversation {
+                        history: vec![],
+                        current_turn: vec![ModelConversationEntry::User {
+                            message_id: Uuid::new_v4(),
+                            text: call.assignment,
+                        }],
+                    },
+                    catalog: AllowedCatalog {
+                        cards: vec![],
+                        tools: vec![],
+                        revision: 1,
+                    },
+                    data_classes: call.policy.data_classes,
+                    max_tokens: call.max_tokens,
+                    max_cost_micros: call.max_cost_micros,
+                    max_output_bytes: call.max_output_bytes,
+                    deadline: call.deadline,
+                })
+                .await?;
             let response = match outcome {
                 ExpertGeneration::Answered(response) => response,
-                ExpertGeneration::NeedsSourceReview(review) => return Ok(ExpertModelOutcome::Blocked(review)),
+                ExpertGeneration::NeedsSourceReview(review) => {
+                    return Ok(ExpertModelOutcome::Blocked(review));
+                }
             };
-            let [ModelStep::Answer { text, .. }] = response.steps.as_slice() else { return Err(AgentFailure::InvalidModelOutput); };
+            let [ModelStep::Answer { text, .. }] = response.steps.as_slice() else {
+                return Err(AgentFailure::InvalidModelOutput);
+            };
             Ok(ExpertModelOutcome::Answered(ExpertModelAnswer {
                 schema_version: AGENT_VERSION,
                 answer: text.clone(),
@@ -398,39 +479,56 @@ impl floe_agent_contract::ExpertModel for ExpertModelHost<'_> {
 }
 
 impl floe_agent_contract::ExpertReasoner for ExpertModelHost<'_> {
-    fn step<'a>(&'a self, step: ExpertReasoningStep)
-        -> floe_agent_contract::BoxFuture<'a, Result<ExpertStepResult, AgentFailure>> {
+    fn step<'a>(
+        &'a self,
+        step: ExpertReasoningStep,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<ExpertStepResult, AgentFailure>> {
         Box::pin(async move {
-            if step.cancellation.is_cancelled() { return Err(AgentFailure::Cancelled); }
-            if step.deadline <= tokio::time::Instant::now() { return Err(AgentFailure::DeadlineExceeded); }
+            if step.cancellation.is_cancelled() {
+                return Err(AgentFailure::Cancelled);
+            }
+            if step.deadline <= tokio::time::Instant::now() {
+                return Err(AgentFailure::DeadlineExceeded);
+            }
             step.prompt.validate()?;
             let catalog = expert_catalog(&step.capabilities)?;
             let conversation = expert_conversation(step.transcript, &catalog)?;
-            let outcome = self.generate(ExpertModelInput {
-                person_id: step.person_id,
-                invocation_id: step.invocation_id,
-                prompt: step.prompt,
-                context: step.context,
-                conversation,
-                catalog,
-                data_classes: step.policy.data_classes,
-                max_tokens: step.remaining_tokens,
-                max_cost_micros: step.remaining_cost_micros,
-                max_output_bytes: step.max_output_bytes,
-                deadline: step.deadline,
-            }).await?;
+            let outcome = self
+                .generate(ExpertModelInput {
+                    person_id: step.person_id,
+                    invocation_id: step.invocation_id,
+                    prompt: step.prompt,
+                    context: step.context,
+                    conversation,
+                    catalog,
+                    data_classes: step.policy.data_classes,
+                    max_tokens: step.remaining_tokens,
+                    max_cost_micros: step.remaining_cost_micros,
+                    max_output_bytes: step.max_output_bytes,
+                    deadline: step.deadline,
+                })
+                .await?;
             let response = match outcome {
                 ExpertGeneration::Answered(response) => response,
-                ExpertGeneration::NeedsSourceReview(review) => return Ok(ExpertStepResult::Blocked(review)),
+                ExpertGeneration::NeedsSourceReview(review) => {
+                    return Ok(ExpertStepResult::Blocked(review));
+                }
             };
             Ok(ExpertStepResult::Stepped(ExpertStepOutcome {
                 schema_version: AGENT_VERSION,
-                steps: response.steps.into_iter().map(|step| match step {
-                    ModelStep::Preamble { text } => Ok(ExpertStep::Preamble { text }),
-                    ModelStep::Answer { text, .. } => Ok(ExpertStep::Answer { text }),
-                    ModelStep::CallTool { tool_id, input, .. } => Ok(ExpertStep::Call { capability_id: tool_id, input }),
-                    ModelStep::Delegate { .. } => Err(AgentFailure::CapabilityDenied),
-                }).collect::<Result<Vec<_>, _>>()?,
+                steps: response
+                    .steps
+                    .into_iter()
+                    .map(|step| match step {
+                        ModelStep::Preamble { text } => Ok(ExpertStep::Preamble { text }),
+                        ModelStep::Answer { text, .. } => Ok(ExpertStep::Answer { text }),
+                        ModelStep::CallTool { tool_id, input, .. } => Ok(ExpertStep::Call {
+                            capability_id: tool_id,
+                            input,
+                        }),
+                        ModelStep::Delegate { .. } => Err(AgentFailure::CapabilityDenied),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
                 replay: None,
                 used_tokens: response.usage.tokens,
                 cost_micros: response.usage.cost_micros,
@@ -898,7 +996,9 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
             let expected_owner = if connector_id == "calendar.event_kit" {
                 self.device_id.to_owned()
             } else {
-                floe_access::GatewayTrustReader::pinned_producer(self.vault).await?.execution_owner
+                floe_access::GatewayTrustReader::pinned_producer(self.vault)
+                    .await?
+                    .execution_owner
             };
             if connection.execution_owner_id().as_str() != expected_owner
                 || selected
@@ -1029,10 +1129,16 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                 result,
                 Err(AgentFailure::AccessReviewRequired | AgentFailure::CredentialExpired)
             ) {
-                let source = floe_context_contract::GrantSourceBinding::try_new(person_id,
-                    connection.connection_id().clone(), connection.connector_id().clone(), connection.execution_owner_id().clone())
-                    .map_err(|_| AgentFailure::InvalidInput)?;
-                let grants = floe_access::GrantRepository::snapshot(self.vault, source).await?.grants;
+                let source = floe_context_contract::GrantSourceBinding::try_new(
+                    person_id,
+                    connection.connection_id().clone(),
+                    connection.connector_id().clone(),
+                    connection.execution_owner_id().clone(),
+                )
+                .map_err(|_| AgentFailure::InvalidInput)?;
+                let grants = floe_access::GrantRepository::snapshot(self.vault, source)
+                    .await?
+                    .grants;
                 let review = classify_calendar_review(
                     &grants,
                     person_id,

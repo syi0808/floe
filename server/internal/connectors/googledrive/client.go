@@ -1,12 +1,12 @@
 package googledrive
 
 import (
- "floe/server/internal/views"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"floe/server/internal/views"
 	"io"
 	"net/http"
 	"net/url"
@@ -14,8 +14,6 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	
 )
 
 const (

@@ -60,25 +60,40 @@ final class PersonalDayController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<DaySnapshot> _refresh(DayQuery query) => _refreshing ??=
-      _refreshOwner(query).whenComplete(() => _refreshing = null);
+  Future<DaySnapshot> _refresh(DayQuery query) =>
+      _refreshing ??= _refreshOwner(query)
+          .whenComplete(() => _refreshing = null);
 
   Future<DaySnapshot> _refreshOwner(DayQuery query) async {
     final refresher = _refreshGateway;
-    if (refresher == null) throw StateError('Day source refresh is not available.');
+    if (refresher == null)
+      throw StateError('Day source refresh is not available.');
     _refreshCommandId ??= newAgentRequestId();
     _refreshQuery ??= query;
-    final first = _refreshOperation ?? await refresher.refreshDay(commandId: _refreshCommandId!, query: _refreshQuery!);
+    final first =
+        _refreshOperation ??
+        await refresher.refreshDay(
+          commandId: _refreshCommandId!,
+          query: _refreshQuery!,
+        );
     _refreshOperation = first;
     try {
-      final result = await awaitDayRefresh(refresher, first, onSnapshot: (value) => _refreshOperation = value, detached: () => _disposed);
-      final matches = result.personId == query.personId && result.date.year == query.date.year &&
-          result.date.month == query.date.month && result.date.day == query.date.day &&
+      final result = await awaitDayRefresh(
+        refresher,
+        first,
+        onSnapshot: (value) => _refreshOperation = value,
+        detached: () => _disposed,
+      );
+      final matches =
+          result.personId == query.personId &&
+          result.date.year == query.date.year &&
+          result.date.month == query.date.month &&
+          result.date.day == query.date.day &&
           result.timezoneOffsetSeconds == query.timezoneOffsetSeconds;
       _refreshCommandId = null;
       _refreshQuery = null;
       _refreshOperation = null;
-      return matches ? result : _refreshOwner(query);
+      return matches ? result : await _refreshOwner(query);
     } on Object {
       if (_refreshOperation?.terminal == true) {
         _refreshCommandId = null;

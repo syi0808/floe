@@ -33,7 +33,9 @@ abstract interface class ConversationRuntimeGateway {
   Future<void> cancelConversationTurn(AgentConversationTurnRequest request);
   Future<void> cancelObservedRun(String runId);
   Future<ConversationTurnCompletion> observeSessionRun(
-    AgentSession session, {required void Function(AppRunSnapshot run) onRun});
+    AgentSession session, {
+    required void Function(AppRunSnapshot run) onRun,
+  });
 }
 
 final class NativeConversationRuntimeGateway
@@ -164,9 +166,12 @@ final class NativeConversationRuntimeGateway
 
   @override
   Future<ConversationTurnCompletion> observeSessionRun(
-    AgentSession session, {required void Function(AppRunSnapshot run) onRun}) async {
+    AgentSession session, {
+    required void Function(AppRunSnapshot run) onRun,
+  }) async {
     final runId = session.activeTurn;
-    if (runId == null || _active != null) throw StateError('No detached session Run is available.');
+    if (runId == null || _active != null)
+      throw StateError('No detached session Run is available.');
     final active = _ActiveConversationTurn(null);
     _active = active;
     try {
@@ -181,7 +186,13 @@ final class NativeConversationRuntimeGateway
     AppCommandReceipt receipt,
     AgentSession session, {
     required void Function(AppRunSnapshot run) onRun,
-  }) => _observeRun(receipt.runId, receipt.sessionRevision, session, onRun: onRun, receipt: receipt);
+  }) => _observeRun(
+    receipt.runId,
+    receipt.sessionRevision,
+    session,
+    onRun: onRun,
+    receipt: receipt,
+  );
 
   Future<ConversationTurnCompletion> _observeRun(
     String runId,

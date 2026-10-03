@@ -174,12 +174,22 @@ class _AgentPanelState extends State<AgentPanel> {
                             ? const NeverScrollableScrollPhysics()
                             : null,
                         padding: const EdgeInsets.all(FloeSpace.base),
-                        itemCount: messages.length + (controller.session?.hasEarlierMessages == true ? 1 : 0),
+                        itemCount:
+                            messages.length +
+                            (controller.session?.hasEarlierMessages == true
+                                ? 1
+                                : 0),
                         separatorBuilder: (_, _) =>
                             const SizedBox(height: FloeSpace.base),
                         itemBuilder: (context, index) {
-                          final offset = controller.session?.hasEarlierMessages == true ? 1 : 0;
-                          if (offset == 1 && index == 0) return const Text('Earlier messages are retained by Conversation.');
+                          final offset =
+                              controller.session?.hasEarlierMessages == true
+                              ? 1
+                              : 0;
+                          if (offset == 1 && index == 0)
+                            return const Text(
+                              'Earlier messages are retained by Conversation.',
+                            );
                           return _message(strings, messages[index - offset]);
                         },
                       );
@@ -281,7 +291,10 @@ class _AgentPanelState extends State<AgentPanel> {
     return output ?? strings.agentConversationSourceUnavailable;
   }
 
-  Widget _composer(AppLocalizations strings, ConversationController controller) {
+  Widget _composer(
+    AppLocalizations strings,
+    ConversationController controller,
+  ) {
     final status = _status(strings, controller);
     final storageLocked =
         controller.usesVault && controller.vaultState != AgentVaultState.ready;

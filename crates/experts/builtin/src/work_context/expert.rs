@@ -5,8 +5,8 @@ use uuid::Uuid;
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
+use floe_agent_contract::ExpertModel;
 use floe_agent_contract::InferencePolicyDecision;
-use floe_agent_contract::{ExpertModel};
 use floe_context_contract::{WorkContextView, validate_work_context_view, work_context_evidence};
 
 use crate::prompts::work_context_expert_prompt;

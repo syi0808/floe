@@ -50,7 +50,11 @@ pub struct InferenceService<Provider, Resolver, Authority> {
 
 impl<Provider, Resolver, Authority> InferenceService<Provider, Resolver, Authority> {
     pub fn new(provider: Provider, resolver: Resolver, authority: Authority) -> Self {
-        Self { provider, resolver: Arc::new(resolver), authority: Arc::new(authority) }
+        Self {
+            provider,
+            resolver: Arc::new(resolver),
+            authority: Arc::new(authority),
+        }
     }
 }
 
@@ -67,42 +71,61 @@ where
     ) -> BoxFuture<'a, Result<Box<dyn PreparedModelCall>, AgentFailure>> {
         Box::pin(async move {
             request.validate()?;
-            scope.run(async {
-                // Only a positively established Primary absence permits local observation.
-                let (selected, expected_boundary) = match self.provider.observe_primary(&request, scope).await
-                    .map_err(AgentFailure::from)? {
-                    PrimaryObservation::Available(selected) => (selected, ProcessingBoundary::Gateway),
-                    PrimaryObservation::Absent(_) => match self.provider.observe_local_fallback(&request, scope).await
-                        .map_err(AgentFailure::from)? {
-                        LocalObservation::Available(selected) => (selected, ProcessingBoundary::Device),
-                        LocalObservation::Unavailable(_) => return Err(AgentFailure::ModelUnavailable),
-                    },
-                };
-                let PreparedModelProfile { capability, transport } = selected;
-                validate_observed_capability(&capability, &request, expected_boundary)?;
-                let target = transport.dispatch_target();
-                validate_target(&target, &capability, &request)?;
-                let plan = PreparedModelPlan {
-                    operation_id: Uuid::new_v4(),
-                    principal: request.principal,
-                    device_id: request.device_id,
-                    purpose: request.purpose,
-                    consumer: request.consumer,
-                    capabilities: capability.capabilities,
-                    boundary: capability.boundary,
-                    binding_digest: capability.binding_digest,
-                };
-                let prepared: Box<dyn PreparedModelCall> = Box::new(PreparedInferenceCall {
-                    plan,
-                    transport,
-                    target,
-                    resolver: self.resolver.clone(),
-                    authority: self.authority.clone(),
-                    preparation_cancellation: scope.cancellation().clone(),
-                    preparation_deadline: scope.deadline(),
-                });
-                Ok(prepared)
-            }).await
+            scope
+                .run(async {
+                    // Only a positively established Primary absence permits local observation.
+                    let (selected, expected_boundary) = match self
+                        .provider
+                        .observe_primary(&request, scope)
+                        .await
+                        .map_err(AgentFailure::from)?
+                    {
+                        PrimaryObservation::Available(selected) => {
+                            (selected, ProcessingBoundary::Gateway)
+                        }
+                        PrimaryObservation::Absent(_) => match self
+                            .provider
+                            .observe_local_fallback(&request, scope)
+                            .await
+                            .map_err(AgentFailure::from)?
+                        {
+                            LocalObservation::Available(selected) => {
+                                (selected, ProcessingBoundary::Device)
+                            }
+                            LocalObservation::Unavailable(_) => {
+                                return Err(AgentFailure::ModelUnavailable);
+                            }
+                        },
+                    };
+                    let PreparedModelProfile {
+                        capability,
+                        transport,
+                    } = selected;
+                    validate_observed_capability(&capability, &request, expected_boundary)?;
+                    let target = transport.dispatch_target();
+                    validate_target(&target, &capability, &request)?;
+                    let plan = PreparedModelPlan {
+                        operation_id: Uuid::new_v4(),
+                        principal: request.principal,
+                        device_id: request.device_id,
+                        purpose: request.purpose,
+                        consumer: request.consumer,
+                        capabilities: capability.capabilities,
+                        boundary: capability.boundary,
+                        binding_digest: capability.binding_digest,
+                    };
+                    let prepared: Box<dyn PreparedModelCall> = Box::new(PreparedInferenceCall {
+                        plan,
+                        transport,
+                        target,
+                        resolver: self.resolver.clone(),
+                        authority: self.authority.clone(),
+                        preparation_cancellation: scope.cancellation().clone(),
+                        preparation_deadline: scope.deadline(),
+                    });
+                    Ok(prepared)
+                })
+                .await
         })
     }
 }
@@ -117,7 +140,8 @@ struct PreparedInferenceCall<Transport, Resolver, Authority> {
     authority: Arc<Authority>,
 }
 
-impl<Transport, Resolver, Authority> PreparedModelCall for PreparedInferenceCall<Transport, Resolver, Authority>
+impl<Transport, Resolver, Authority> PreparedModelCall
+    for PreparedInferenceCall<Transport, Resolver, Authority>
 where
     Transport: PreparedModelTransport,
     Resolver: DependencyResolver,
@@ -134,8 +158,12 @@ where
     ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
         Box::pin(async move {
             let preparation_lifetime = self.preparation_cancellation.child_scope();
-            floe_execution::tasks::run_bounded(scope.run(self.dispatch_selected(request, scope)),
-                self.preparation_deadline, &preparation_lifetime).await
+            floe_execution::tasks::run_bounded(
+                scope.run(self.dispatch_selected(request, scope)),
+                self.preparation_deadline,
+                &preparation_lifetime,
+            )
+            .await
         })
     }
 }
@@ -146,7 +174,11 @@ where
     Resolver: DependencyResolver,
     Authority: GatewayAdmission,
 {
-    async fn dispatch_selected(&self, request: ModelRequest, scope: &ExecutionScope) -> Result<ModelResponse, AgentFailure> {
+    async fn dispatch_selected(
+        &self,
+        request: ModelRequest,
+        scope: &ExecutionScope,
+    ) -> Result<ModelResponse, AgentFailure> {
         request.validate()?;
         if request.principal != self.plan.principal
             || request.device_id != self.plan.device_id
@@ -158,9 +190,11 @@ where
         {
             return Err(AgentFailure::PolicyDenied);
         }
-        let person = Uuid::parse_str(&self.plan.principal).map_err(|_| AgentFailure::InvalidInput)?;
+        let person =
+            Uuid::parse_str(&self.plan.principal).map_err(|_| AgentFailure::InvalidInput)?;
         let dispatch = ModelDispatchRequest {
-            person_id: floe_access::PersonId::from_uuid(person).ok_or(AgentFailure::InvalidInput)?,
+            person_id: floe_access::PersonId::from_uuid(person)
+                .ok_or(AgentFailure::InvalidInput)?,
             device_id: self.plan.device_id.clone(),
             plan_id: self.plan.operation_id,
             binding_digest: self.plan.binding_digest.0,
@@ -174,10 +208,27 @@ where
             deadline: scope.deadline(),
             cancellation: scope.cancellation().clone(),
         };
-        let permit = admit_model_dispatch(dispatch, self.resolver.as_ref(), self.authority.as_ref(), scope).await?;
-        let mut tokens = request.reservation_ceiling.tokens.min(scope.budget().max_tokens()).min(MAX_ATTEMPT_TOKENS);
-        let mut cost = request.reservation_ceiling.cost_micros.min(scope.budget().max_cost_micros()).min(MAX_ATTEMPT_COST_MICROS);
-        let mut attempt = scope.budget().begin_model_attempt(request.attempt_id, &mut tokens, &mut cost)?;
+        let permit = admit_model_dispatch(
+            dispatch,
+            self.resolver.as_ref(),
+            self.authority.as_ref(),
+            scope,
+        )
+        .await?;
+        let mut tokens = request
+            .reservation_ceiling
+            .tokens
+            .min(scope.budget().max_tokens())
+            .min(MAX_ATTEMPT_TOKENS);
+        let mut cost = request
+            .reservation_ceiling
+            .cost_micros
+            .min(scope.budget().max_cost_micros())
+            .min(MAX_ATTEMPT_COST_MICROS);
+        let mut attempt =
+            scope
+                .budget()
+                .begin_model_attempt(request.attempt_id, &mut tokens, &mut cost)?;
         let canonical = CanonicalModelRequest {
             attempt_id: request.attempt_id,
             envelope: request.projection.envelope.clone(),
@@ -185,7 +236,11 @@ where
             input_data_classes: request.projection.input_data_classes.clone(),
             remaining_tokens: tokens,
             remaining_cost_micros: cost,
-            max_output_bytes: request.projection.envelope.attempt.max_output_bytes
+            max_output_bytes: request
+                .projection
+                .envelope
+                .attempt
+                .max_output_bytes
                 .min(floe_agent_contract::MAX_OUTPUT_BYTES),
             deadline: scope.deadline(),
             cancellation: scope.cancellation().clone(),
@@ -207,7 +262,10 @@ where
         Ok(ModelResponse {
             attempt_id: request.attempt_id,
             steps,
-            usage: ModelUsage { tokens: receipt.charged_tokens, cost_micros: receipt.charged_cost_micros },
+            usage: ModelUsage {
+                tokens: receipt.charged_tokens,
+                cost_micros: receipt.charged_cost_micros,
+            },
             accounting: receipt.accounting,
         })
     }
@@ -218,11 +276,16 @@ fn validate_observed_capability(
     request: &ModelPlanRequest,
     expected_boundary: ProcessingBoundary,
 ) -> Result<(), AgentFailure> {
-    capability.capabilities.validate().map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
+    capability
+        .capabilities
+        .validate()
+        .map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
     if capability.purpose.as_str() != request.purpose
         || capability.consumer.as_str() != request.consumer
         || capability.boundary != expected_boundary
-        || !capability.capabilities.includes(&request.required_capabilities)
+        || !capability
+            .capabilities
+            .includes(&request.required_capabilities)
     {
         return Err(AgentFailure::PolicyDenied);
     }
@@ -238,8 +301,10 @@ fn validate_target(
         (ModelDispatchTarget::Device, ProcessingBoundary::Device) => Ok(()),
         (ModelDispatchTarget::Gateway { expected }, ProcessingBoundary::Gateway) => {
             expected.validate()?;
-            if expected.person_id != request.principal || expected.device_id != request.device_id
-                || expected.binding_digest() != capability.binding_digest.0 {
+            if expected.person_id != request.principal
+                || expected.device_id != request.device_id
+                || expected.binding_digest() != capability.binding_digest.0
+            {
                 return Err(AgentFailure::PolicyDenied);
             }
             Ok(())
@@ -248,27 +313,51 @@ fn validate_target(
     }
 }
 
-fn validate_output(output: &[ModelStep], catalog: &AllowedCatalog, max_output_bytes: usize) -> Result<(), AgentFailure> {
-    if output.is_empty() || output.len() > 16
-        || serde_json::to_vec(output).map_err(|_| AgentFailure::ServerModelInvalidOutput)?.len() > max_output_bytes {
+fn validate_output(
+    output: &[ModelStep],
+    catalog: &AllowedCatalog,
+    max_output_bytes: usize,
+) -> Result<(), AgentFailure> {
+    if output.is_empty()
+        || output.len() > 16
+        || serde_json::to_vec(output)
+            .map_err(|_| AgentFailure::ServerModelInvalidOutput)?
+            .len()
+            > max_output_bytes
+    {
         return Err(AgentFailure::ServerModelInvalidOutput);
     }
     for step in output {
         let valid = match step {
-            ModelStep::CallTool { tool_id, definition_revision, input } => {
-                catalog.tools.iter().any(|descriptor| descriptor.id == *tool_id
-                    && descriptor.definition_revision == *definition_revision)
-                    && floe_agent_contract::validate_tool_input(input).is_ok()
+            ModelStep::CallTool {
+                tool_id,
+                definition_revision,
+                input,
+            } => {
+                catalog.tools.iter().any(|descriptor| {
+                    descriptor.id == *tool_id
+                        && descriptor.definition_revision == *definition_revision
+                }) && floe_agent_contract::validate_tool_input(input).is_ok()
             }
-            ModelStep::Delegate { agent_id, definition_revision, message, context_refs } => {
-                catalog.cards.iter().any(|definition| definition.card.id == *agent_id
-                    && definition.definition_revision == *definition_revision)
-                    && !message.trim().is_empty()
+            ModelStep::Delegate {
+                agent_id,
+                definition_revision,
+                message,
+                context_refs,
+            } => {
+                catalog.cards.iter().any(|definition| {
+                    definition.card.id == *agent_id
+                        && definition.definition_revision == *definition_revision
+                }) && !message.trim().is_empty()
                     && floe_agent_contract::valid_context_refs(context_refs)
             }
-            ModelStep::Preamble { text } | ModelStep::Answer { text, .. } => !text.trim().is_empty(),
+            ModelStep::Preamble { text } | ModelStep::Answer { text, .. } => {
+                !text.trim().is_empty()
+            }
         };
-        if !valid { return Err(AgentFailure::ServerModelInvalidOutput); }
+        if !valid {
+            return Err(AgentFailure::ServerModelInvalidOutput);
+        }
     }
     Ok(())
 }

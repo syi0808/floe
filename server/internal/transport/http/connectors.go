@@ -36,7 +36,9 @@ func ServeConnectors(writer http.ResponseWriter, request *http.Request, operatio
 	case len(parts) == 3 && parts[1] == "connection-attempts" && request.Method == http.MethodGet:
 		writeResult(writer, operations.Attempt(request.Context(), parts[0], parts[2]))
 	case len(parts) == 4 && parts[1] == "connection-attempts" && parts[3] == "cancel" && request.Method == http.MethodPost:
-		dispatch(writer,request,func(in connections.CancelSetupRequest)operation.Result{return operations.Cancel(request.Context(),parts[0],parts[2],in)})
+		dispatch(writer, request, func(in connections.CancelSetupRequest) operation.Result {
+			return operations.Cancel(request.Context(), parts[0], parts[2], in)
+		})
 	default:
 		failure(writer, http.StatusNotFound, "not_found")
 	}

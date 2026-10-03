@@ -1,6 +1,9 @@
-use floe_agent_contract::{AgentFailure, AgentMessage as ContractMessage, Artifact as ContractArtifact, ArtifactPart as ContractArtifactPart, DependencyCoverage, EngineStep, MessageRole, RunId};
-use uuid::Uuid;
 use crate::{AgentMessage, RunReceipt, RunTerminal, SessionReceipt};
+use floe_agent_contract::{
+    AgentFailure, AgentMessage as ContractMessage, Artifact as ContractArtifact,
+    ArtifactPart as ContractArtifactPart, DependencyCoverage, EngineStep, MessageRole, RunId,
+};
+use uuid::Uuid;
 
 pub fn project_run_receipt(record: crate::RunRecord) -> Result<RunReceipt, AgentFailure> {
     let receipt = RunReceipt {
@@ -53,10 +56,7 @@ pub fn project_session_receipt(
     Ok(receipt)
 }
 
-pub fn project_transcript(
-    messages: &[AgentMessage],
-    receipt: &RunReceipt,
-) -> Result<Vec<ContractMessage>, AgentFailure> {
+pub fn project_transcript(messages: &[AgentMessage]) -> Result<Vec<ContractMessage>, AgentFailure> {
     messages
         .iter()
         .map(|message| {
@@ -103,7 +103,9 @@ pub fn contract_message(
         ),
         AgentMessage::Delegation { task, .. } => (
             MessageRole::Delegation,
-            task.result.clone().unwrap_or_else(|| format!("{}: {:?}", task.agent_id, task.state)),
+            task.result
+                .clone()
+                .unwrap_or_else(|| format!("{}: {:?}", task.agent_id, task.state)),
             None,
         ),
         // Bare metadata only: the opaque interaction id plus its generic kind
@@ -228,7 +230,6 @@ pub fn terminal_messages(
     Ok(messages)
 }
 
-
 #[derive(Clone, Debug)]
 pub struct RunAccountingProjection {
     pub usage: crate::AgentUsage,
@@ -239,7 +240,10 @@ pub struct RunAccountingProjection {
 
 /// Project acknowledged charges and unresolved conservative ceilings from the
 /// sole journal. No absent observation becomes a reported provider bill.
-pub fn project_run_accounting(receipt: &RunReceipt, entries: &[crate::JournalEntry]) -> Result<RunAccountingProjection, AgentFailure> {
+pub fn project_run_accounting(
+    receipt: &RunReceipt,
+    entries: &[crate::JournalEntry],
+) -> Result<RunAccountingProjection, AgentFailure> {
     use floe_agent_contract::JournalEvent;
     let mut pending = std::collections::HashMap::new();
     let mut attempts = Vec::new();
@@ -247,71 +251,160 @@ pub fn project_run_accounting(receipt: &RunReceipt, entries: &[crate::JournalEnt
     let mut active_tasks = std::collections::HashSet::new();
     let mut usage = crate::AgentUsage::default();
     for (index, entry) in entries.iter().enumerate() {
-        if entry.revision != index as u64 + 1 { return Err(AgentFailure::StorageUnavailable); }
+        if entry.revision != index as u64 + 1 {
+            return Err(AgentFailure::StorageUnavailable);
+        }
         match &entry.event {
-            JournalEvent::ModelIntent { attempt_id, parent_task_id, reservation_ceiling, projection_ref, plan } => {
-                plan.validate()?; reservation_ceiling.validate()?;
-                if attempt_id.is_nil() || projection_ref.as_uuid().is_nil() || attempts.contains(attempt_id)
-                    || plan.principal != receipt.principal || plan.device_id != receipt.device_id
-                    || parent_task_id.is_some_and(|task| !active_tasks.contains(&task)) {
+            JournalEvent::ModelIntent {
+                attempt_id,
+                parent_task_id,
+                reservation_ceiling,
+                projection_ref,
+                plan,
+            } => {
+                plan.validate()?;
+                reservation_ceiling.validate()?;
+                if attempt_id.is_nil()
+                    || projection_ref.as_uuid().is_nil()
+                    || attempts.contains(attempt_id)
+                    || plan.principal != receipt.principal
+                    || plan.device_id != receipt.device_id
+                    || parent_task_id.is_some_and(|task| !active_tasks.contains(&task))
+                {
                     return Err(AgentFailure::StorageUnavailable);
                 }
                 attempts.push(*attempt_id);
                 pending.insert(*attempt_id, (*reservation_ceiling, *parent_task_id));
-                usage.model_attempts = usage.model_attempts.checked_add(1).ok_or(AgentFailure::StorageUnavailable)?;
+                usage.model_attempts = usage
+                    .model_attempts
+                    .checked_add(1)
+                    .ok_or(AgentFailure::StorageUnavailable)?;
             }
-            JournalEvent::ModelResult { attempt_id, usage: charge, accounting } => {
-                let (_, parent) = pending.remove(attempt_id).ok_or(AgentFailure::StorageUnavailable)?;
-                if parent.is_some_and(|task| !active_tasks.contains(&task)) { return Err(AgentFailure::StorageUnavailable); }
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: charge,
+                accounting,
+            } => {
+                let (_, parent) = pending
+                    .remove(attempt_id)
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                if parent.is_some_and(|task| !active_tasks.contains(&task)) {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 accounting.validate_charge(charge.tokens, charge.cost_micros)?;
-                usage.tokens = usage.tokens.checked_add(charge.tokens).ok_or(AgentFailure::StorageUnavailable)?;
-                usage.cost_micros = usage.cost_micros.checked_add(charge.cost_micros).ok_or(AgentFailure::StorageUnavailable)?;
-                if accounting.unknown_tokens { usage.estimated_tokens = usage.estimated_tokens.checked_add(charge.tokens).ok_or(AgentFailure::StorageUnavailable)?; }
-                if accounting.unknown_cost { usage.estimated_cost_micros = usage.estimated_cost_micros.checked_add(charge.cost_micros).ok_or(AgentFailure::StorageUnavailable)?; }
+                usage.tokens = usage
+                    .tokens
+                    .checked_add(charge.tokens)
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                usage.cost_micros = usage
+                    .cost_micros
+                    .checked_add(charge.cost_micros)
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                if accounting.unknown_tokens {
+                    usage.estimated_tokens = usage
+                        .estimated_tokens
+                        .checked_add(charge.tokens)
+                        .ok_or(AgentFailure::StorageUnavailable)?;
+                }
+                if accounting.unknown_cost {
+                    usage.estimated_cost_micros = usage
+                        .estimated_cost_micros
+                        .checked_add(charge.cost_micros)
+                        .ok_or(AgentFailure::StorageUnavailable)?;
+                }
             }
             JournalEvent::DelegationIntent { request } => {
-                if tasks.contains(&request.task_id.as_uuid()) { return Err(AgentFailure::StorageUnavailable); }
-                tasks.push(request.task_id.as_uuid()); active_tasks.insert(request.task_id);
+                if tasks.contains(&request.task_id.as_uuid()) {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                tasks.push(request.task_id.as_uuid());
+                active_tasks.insert(request.task_id);
             }
             JournalEvent::DelegationResult { receipt } => {
-                if !active_tasks.remove(&receipt.task_id) { return Err(AgentFailure::StorageUnavailable); }
+                if !active_tasks.remove(&receipt.task_id) {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
             }
             JournalEvent::ToolIntent { .. } => {
-                usage.capability_calls = usage.capability_calls.checked_add(1).ok_or(AgentFailure::StorageUnavailable)?;
+                usage.capability_calls = usage
+                    .capability_calls
+                    .checked_add(1)
+                    .ok_or(AgentFailure::StorageUnavailable)?;
             }
             JournalEvent::Checkpoint { .. } => {
-                usage.iterations = usage.iterations.checked_add(1).ok_or(AgentFailure::StorageUnavailable)?;
+                usage.iterations = usage
+                    .iterations
+                    .checked_add(1)
+                    .ok_or(AgentFailure::StorageUnavailable)?;
             }
-            _ => {},
+            _ => {}
         }
     }
     let mut unresolved = Vec::new();
     for attempt_id in &attempts {
         if let Some((ceiling, _)) = pending.get(attempt_id) {
-            usage.tokens = usage.tokens.checked_add(ceiling.tokens).ok_or(AgentFailure::StorageUnavailable)?;
-            usage.estimated_tokens = usage.estimated_tokens.checked_add(ceiling.tokens).ok_or(AgentFailure::StorageUnavailable)?;
-            usage.cost_micros = usage.cost_micros.checked_add(ceiling.cost_micros).ok_or(AgentFailure::StorageUnavailable)?;
-            usage.estimated_cost_micros = usage.estimated_cost_micros.checked_add(ceiling.cost_micros).ok_or(AgentFailure::StorageUnavailable)?;
+            usage.tokens = usage
+                .tokens
+                .checked_add(ceiling.tokens)
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            usage.estimated_tokens = usage
+                .estimated_tokens
+                .checked_add(ceiling.tokens)
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            usage.cost_micros = usage
+                .cost_micros
+                .checked_add(ceiling.cost_micros)
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            usage.estimated_cost_micros = usage
+                .estimated_cost_micros
+                .checked_add(ceiling.cost_micros)
+                .ok_or(AgentFailure::StorageUnavailable)?;
             unresolved.push(crate::UnresolvedModelAttempt {
-                attempt_id: *attempt_id, reservation_ceiling: *ceiling,
-                accounting: floe_agent_contract::ModelAccounting { observed_tokens: None, observed_cost_micros: None, unknown_tokens: true, unknown_cost: true },
+                attempt_id: *attempt_id,
+                reservation_ceiling: *ceiling,
+                accounting: floe_agent_contract::ModelAccounting {
+                    observed_tokens: None,
+                    observed_cost_micros: None,
+                    unknown_tokens: true,
+                    unknown_cost: true,
+                },
             });
         }
     }
-    Ok(RunAccountingProjection { usage, attempt_refs: attempts, task_refs: tasks, unresolved_attempts: unresolved })
+    Ok(RunAccountingProjection {
+        usage,
+        attempt_refs: attempts,
+        task_refs: tasks,
+        unresolved_attempts: unresolved,
+    })
 }
 
-pub fn validate_terminal_steps(terminal: &RunTerminal, journal: &[crate::JournalEntry]) -> Result<(), AgentFailure> {
+pub fn validate_terminal_steps(
+    terminal: &RunTerminal,
+    journal: &[crate::JournalEntry],
+) -> Result<(), AgentFailure> {
     use floe_agent_contract::JournalEvent;
     terminal.validate()?;
-    if terminal.output.is_none() && terminal.state != crate::RunState::Blocked { return Ok(()); }
-    let expected = journal.iter().filter_map(|entry| match &entry.event {
-        JournalEvent::ToolResult { result } => Some(EngineStep::Tool(result.clone())),
-        JournalEvent::DelegationResult { receipt } => Some(EngineStep::Delegation(receipt.clone())),
-        JournalEvent::Output { text, artifacts } => Some(EngineStep::Answer { text: text.clone(), artifacts: artifacts.clone() }),
-        _ => None,
-    }).collect::<Vec<_>>();
-    if expected != terminal.steps { return Err(AgentFailure::StorageUnavailable); }
+    if terminal.output.is_none() && terminal.state != crate::RunState::Blocked {
+        return Ok(());
+    }
+    let expected = journal
+        .iter()
+        .filter_map(|entry| match &entry.event {
+            JournalEvent::ToolResult { result } => Some(EngineStep::Tool(result.clone())),
+            JournalEvent::DelegationResult { receipt } => {
+                Some(EngineStep::Delegation(receipt.clone()))
+            }
+            JournalEvent::Output { text, artifacts } => Some(EngineStep::Answer {
+                text: text.clone(),
+                artifacts: artifacts.clone(),
+            }),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if expected != terminal.steps {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     Ok(())
 }
 
@@ -322,38 +415,78 @@ pub fn apply_terminal(
     terminal: &RunTerminal,
     journal: &[crate::JournalEntry],
 ) -> Result<(crate::RunRecord, crate::AgentSession), AgentFailure> {
-    record.validate(session.person_id)?; terminal.validate()?;
+    record.validate(session.person_id)?;
+    terminal.validate()?;
     validate_terminal_steps(terminal, journal)?;
-    if record.state != crate::RunState::Working || record.session_id != session.id
-        || record.session_revision != session.revision || session.active_turn != Some(record.run_id.as_uuid()) {
+    if record.state != crate::RunState::Working
+        || record.session_id != session.id
+        || record.session_revision != session.revision
+        || session.active_turn != Some(record.run_id.as_uuid())
+    {
         return Err(AgentFailure::Conflict);
     }
     let receipt = project_run_receipt(record.clone())?;
     let accounting = project_run_accounting(&receipt, journal)?;
-    if matches!(terminal.state, crate::RunState::Completed | crate::RunState::Blocked)
-        && !accounting.unresolved_attempts.is_empty() { return Err(AgentFailure::Interrupted); }
+    if matches!(
+        terminal.state,
+        crate::RunState::Completed | crate::RunState::Blocked
+    ) && !accounting.unresolved_attempts.is_empty()
+    {
+        return Err(AgentFailure::Interrupted);
+    }
     let mut session = session.clone();
-    session.messages.extend(terminal_messages(record.run_id, terminal)?);
+    session
+        .messages
+        .extend(terminal_messages(record.run_id, terminal)?);
     session.usage = accounting.usage;
     session.active_turn = None;
-    session.continuation = (terminal.output.is_none() && matches!((terminal.state, terminal.issue),
-        (crate::RunState::TimedOut, Some(AgentFailure::DeadlineExceeded))
-        | (crate::RunState::Failed, Some(AgentFailure::BudgetExceeded))))
-        .then(|| record.continuation_level.checked_add(1)).flatten().filter(|level| *level <= 3)
-        .filter(|_| accounting.unresolved_attempts.is_empty())
-        .map(|_| crate::AgentContinuation { turn_id: record.run_id.as_uuid(), level: record.continuation_level, usage: session.usage });
+    session.continuation = (terminal.output.is_none()
+        && matches!(
+            (terminal.state, terminal.issue),
+            (
+                crate::RunState::TimedOut,
+                Some(AgentFailure::DeadlineExceeded)
+            ) | (crate::RunState::Failed, Some(AgentFailure::BudgetExceeded))
+        ))
+    .then(|| record.continuation_level.checked_add(1))
+    .flatten()
+    .filter(|level| *level <= 3)
+    .filter(|_| accounting.unresolved_attempts.is_empty())
+    .map(|_| crate::AgentContinuation {
+        turn_id: record.run_id.as_uuid(),
+        level: record.continuation_level,
+        usage: session.usage,
+    });
     session.last_outcome = Some(match terminal.state {
         crate::RunState::Completed => crate::AgentOutcome::Completed,
         crate::RunState::Blocked => crate::AgentOutcome::Blocked {
-            run_id: record.run_id, review_group_id: terminal.blocked.as_ref().ok_or(AgentFailure::InvalidInput)?.review_group_id,
+            run_id: record.run_id,
+            review_group_id: terminal
+                .blocked
+                .as_ref()
+                .ok_or(AgentFailure::InvalidInput)?
+                .review_group_id,
         },
-        _ => crate::AgentOutcome::Halted { reason: terminal.issue.ok_or(AgentFailure::InvalidInput)? },
+        _ => crate::AgentOutcome::Halted {
+            reason: terminal.issue.ok_or(AgentFailure::InvalidInput)?,
+        },
     });
-    session.revision = session.revision.checked_add(1).ok_or(AgentFailure::Conflict)?;
+    session.revision = session
+        .revision
+        .checked_add(1)
+        .ok_or(AgentFailure::Conflict)?;
     let next = crate::RunRecord {
-        state: terminal.state, output: terminal.output.clone(), coverage: terminal.coverage.clone(), issue: terminal.issue,
-        blocked: terminal.blocked.clone(), session_revision: session.revision,
-        aggregate_revision: record.aggregate_revision.checked_add(1).ok_or(AgentFailure::Conflict)?, ..record.clone()
+        state: terminal.state,
+        output: terminal.output.clone(),
+        coverage: terminal.coverage.clone(),
+        issue: terminal.issue,
+        blocked: terminal.blocked.clone(),
+        session_revision: session.revision,
+        aggregate_revision: record
+            .aggregate_revision
+            .checked_add(1)
+            .ok_or(AgentFailure::Conflict)?,
+        ..record.clone()
     };
     next.validate(record.person_id)?;
     Ok((next, session))
@@ -372,7 +505,12 @@ pub fn interrupt_for_activation(
     }
     let receipt = project_run_receipt(record.clone())?;
     super::recovery::validate_run_journal(&receipt, journal)?;
-    let (mut record, session) = apply_terminal(record, session, &RunTerminal::from_failure(AgentFailure::Interrupted), journal)?;
+    let (mut record, session) = apply_terminal(
+        record,
+        session,
+        &RunTerminal::from_failure(AgentFailure::Interrupted),
+        journal,
+    )?;
     record.executor_generation = next_generation;
     record.validate(session.person_id)?;
     Ok((record, session))

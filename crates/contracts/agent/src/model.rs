@@ -133,7 +133,6 @@ pub struct EngineRequest {
     /// the Conversation owner. Required when a validated batch contains a
     /// Delegate step; absent otherwise.
     pub delegation_context: Option<DelegationExecutionContext>,
-
 }
 
 impl EngineRequest {
@@ -145,7 +144,8 @@ impl EngineRequest {
             purpose: self.purpose.clone(),
             consumer: self.consumer.clone(),
             required_capabilities: crate::ModelCapabilities::chat(),
-        }.validate()?;
+        }
+        .validate()?;
         if self.principal.trim().is_empty()
             || self.purpose.trim().is_empty()
             || self.purpose.len() > 512
@@ -192,7 +192,6 @@ pub struct ModelRequest {
     pub purpose: String,
     pub consumer: String,
     pub replay: Vec<crate::ReplayReceipt>,
-
 }
 
 impl ModelRequest {
@@ -204,7 +203,8 @@ impl ModelRequest {
             purpose: self.purpose.clone(),
             consumer: self.consumer.clone(),
             required_capabilities: crate::ModelCapabilities::chat(),
-        }.validate()?;
+        }
+        .validate()?;
         if self.attempt_id.is_nil()
             || self.principal.trim().is_empty()
             || self.principal.len() > 256

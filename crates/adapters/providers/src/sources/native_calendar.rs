@@ -116,10 +116,25 @@ impl NativeCalendarReadAccess {
     }
 
     async fn require_unfenced(&self) -> Result<(), AgentFailure> {
-        let id=floe_context_contract::ConnectionId::try_new(self.connection_id.clone()).map_err(|_|AgentFailure::PolicyDenied)?;
-        if self.sources.source_is_fenced(self.person_id,&id).await.map_err(|_|AgentFailure::PolicyDenied)? {return Err(AgentFailure::PolicyDenied)}
-        let current=self.sources.load(self.person_id,&id).await.map_err(|_|AgentFailure::PolicyDenied)?.ok_or(AgentFailure::PolicyDenied)?;
-        if current.revision()!=self.connection_revision || !current.is_serving() {return Err(AgentFailure::PolicyDenied)}
+        let id = floe_context_contract::ConnectionId::try_new(self.connection_id.clone())
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        if self
+            .sources
+            .source_is_fenced(self.person_id, &id)
+            .await
+            .map_err(|_| AgentFailure::PolicyDenied)?
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let current = self
+            .sources
+            .load(self.person_id, &id)
+            .await
+            .map_err(|_| AgentFailure::PolicyDenied)?
+            .ok_or(AgentFailure::PolicyDenied)?;
+        if current.revision() != self.connection_revision || !current.is_serving() {
+            return Err(AgentFailure::PolicyDenied);
+        }
         Ok(())
     }
 

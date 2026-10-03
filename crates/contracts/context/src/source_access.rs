@@ -59,7 +59,10 @@ pub struct ObservedGrant {
 }
 
 impl ObservedGrant {
-    pub fn try_new(grant_id: GrantId, authority: GrantAuthority) -> Result<Self, GrantValidationError> {
+    pub fn try_new(
+        grant_id: GrantId,
+        authority: GrantAuthority,
+    ) -> Result<Self, GrantValidationError> {
         let observed = Self {
             grant_id,
             authority,
@@ -154,7 +157,9 @@ impl SourceAccessRequirement {
             ResourceHandle::try_new(resource.as_str().to_owned())?;
         }
         super::ensure_unique(&self.resources, "resource")?;
-        if let Some(crate::ProcessingRestriction::GatewayAllowed { categories }) = &self.requested_processing {
+        if let Some(crate::ProcessingRestriction::GatewayAllowed { categories }) =
+            &self.requested_processing
+        {
             crate::ProcessingRestriction::gateway_allowed(categories.clone())?;
         }
         if (self.reason == SourceAccessRequirementKind::ReviewProcessing)
@@ -172,10 +177,23 @@ impl SourceAccessRequirement {
             observed.validate()?;
         }
         if self.reason == SourceAccessRequirementKind::ReviewProcessing {
-            if !matches!(&self.requested_processing, Some(crate::ProcessingRestriction::GatewayAllowed { .. })) { return Err(GrantValidationError::InvalidState); }
-            if self.source_resources.is_empty() || self.categories.is_empty() || self.policy_digest.is_none_or(|digest| digest == [0; 32])
-                || self.source_authority.is_none() || self.observed_grant.is_none() || self.resources.is_empty()
-                || self.connector_id.is_none() || self.connection_id.is_none() { return Err(GrantValidationError::MissingScope); }
+            if !matches!(
+                &self.requested_processing,
+                Some(crate::ProcessingRestriction::GatewayAllowed { .. })
+            ) {
+                return Err(GrantValidationError::InvalidState);
+            }
+            if self.source_resources.is_empty()
+                || self.categories.is_empty()
+                || self.policy_digest.is_none_or(|digest| digest == [0; 32])
+                || self.source_authority.is_none()
+                || self.observed_grant.is_none()
+                || self.resources.is_empty()
+                || self.connector_id.is_none()
+                || self.connection_id.is_none()
+            {
+                return Err(GrantValidationError::MissingScope);
+            }
             super::ensure_unique(&self.source_resources, "source resource")?;
             super::ensure_unique(&self.categories, "category")?;
         }
@@ -183,36 +201,76 @@ impl SourceAccessRequirement {
         Ok(())
     }
 
-    pub fn from_processing_dependency(dependency: &crate::ContextDependency) -> Result<Self, GrantValidationError> {
-        dependency.validate().map_err(|_| GrantValidationError::InvalidState)?;
-        let policy = crate::ProcessingRestriction::gateway_allowed(dependency.categories().to_vec())?;
-        let resource = dependency.resources().first().ok_or(GrantValidationError::MissingScope)?;
+    pub fn from_processing_dependency(
+        dependency: &crate::ContextDependency,
+    ) -> Result<Self, GrantValidationError> {
+        dependency
+            .validate()
+            .map_err(|_| GrantValidationError::InvalidState)?;
+        let policy =
+            crate::ProcessingRestriction::gateway_allowed(dependency.categories().to_vec())?;
+        let resource = dependency
+            .resources()
+            .first()
+            .ok_or(GrantValidationError::MissingScope)?;
         let connection_id = dependency.source().connection_id();
         let view_id = crate::split_connection_view_resource(resource, &connection_id)?;
-        let source_id = source_access_id_for_capability(view_id).ok_or(GrantValidationError::InvalidState)?;
+        let source_id =
+            source_access_id_for_capability(view_id).ok_or(GrantValidationError::InvalidState)?;
         let mut requirement = Self {
-            source_id: source_id.to_owned(), connector_id: Some(dependency.source().connector().clone()),
-            connection_id: Some(dependency.source().connection_id()), operation: dependency.operation(),
-            consumer: dependency.consumer().clone(), purpose: dependency.purpose(), resources: dependency.resources().to_vec(),
-            requested_processing: Some(policy), reason: SourceAccessRequirementKind::ReviewProcessing,
+            source_id: source_id.to_owned(),
+            connector_id: Some(dependency.source().connector().clone()),
+            connection_id: Some(dependency.source().connection_id()),
+            operation: dependency.operation(),
+            consumer: dependency.consumer().clone(),
+            purpose: dependency.purpose(),
+            resources: dependency.resources().to_vec(),
+            requested_processing: Some(policy),
+            reason: SourceAccessRequirementKind::ReviewProcessing,
             source_authority: Some(dependency.source_authority()),
-            observed_grant: Some(ObservedGrant::try_new(dependency.grant_id(), dependency.grant_authority())?),
-            inline_resolution: true, source_resources: Vec::new(), categories: Vec::new(), policy_digest: None,
+            observed_grant: Some(ObservedGrant::try_new(
+                dependency.grant_id(),
+                dependency.grant_authority(),
+            )?),
+            inline_resolution: true,
+            source_resources: Vec::new(),
+            categories: Vec::new(),
+            policy_digest: None,
         };
         requirement.source_resources = dependency.source_resources().to_vec();
         requirement.categories = dependency.categories().to_vec();
         use sha2::Digest;
-        requirement.policy_digest = Some(sha2::Sha256::digest(serde_json::to_vec(&(
-            dependency.source(), dependency.source_authority(), dependency.resources(), dependency.source_resources(),
-            dependency.grant_id(), dependency.grant_authority(), dependency.categories(), dependency.operation(),
-            dependency.purpose(), dependency.consumer(), dependency.processing(),
-        )).map_err(|_| GrantValidationError::InvalidState)?).into());
+        requirement.policy_digest = Some(
+            sha2::Sha256::digest(
+                serde_json::to_vec(&(
+                    dependency.source(),
+                    dependency.source_authority(),
+                    dependency.resources(),
+                    dependency.source_resources(),
+                    dependency.grant_id(),
+                    dependency.grant_authority(),
+                    dependency.categories(),
+                    dependency.operation(),
+                    dependency.purpose(),
+                    dependency.consumer(),
+                    dependency.processing(),
+                ))
+                .map_err(|_| GrantValidationError::InvalidState)?,
+            )
+            .into(),
+        );
         requirement.validate()?;
         Ok(requirement)
     }
-    pub fn source_resources(&self) -> &[ResourceHandle] { &self.source_resources }
-    pub fn categories(&self) -> &[crate::GrantDataCategory] { &self.categories }
-    pub fn policy_digest(&self) -> Option<[u8; 32]> { self.policy_digest }
+    pub fn source_resources(&self) -> &[ResourceHandle] {
+        &self.source_resources
+    }
+    pub fn categories(&self) -> &[crate::GrantDataCategory] {
+        &self.categories
+    }
+    pub fn policy_digest(&self) -> Option<[u8; 32]> {
+        self.policy_digest
+    }
     pub fn source_id(&self) -> &str {
         &self.source_id
     }

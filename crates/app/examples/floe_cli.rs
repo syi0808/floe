@@ -6,13 +6,17 @@ use std::{
     time::Duration,
 };
 
-use floe_app::{AppComposition, AppHost, VaultLifecycleCommand, VaultLifecycleCommands,
-    VaultLifecycleQueries, VaultLifecycleResult, VaultState};
-use floe_conversation::{CommandReceipt, ConversationOwner, InteractionDecisionKind, InteractionSnapshot,
-    InteractionStatus, RefreshInteraction, ResolveInteraction, RunReceipt,
-    RunState, SessionMessage, SessionSnapshot, StartTurn};
-use floe_kernel::{AgentFailure, CommandId, OwnerActor};
+use floe_app::{
+    AppComposition, AppHost, VaultLifecycleCommand, VaultLifecycleCommands, VaultLifecycleQueries,
+    VaultLifecycleResult, VaultState,
+};
+use floe_conversation::{
+    CommandReceipt, ConversationOwner, InteractionDecisionKind, InteractionSnapshot,
+    InteractionStatus, RefreshInteraction, ResolveInteraction, RunReceipt, RunState,
+    SessionMessage, SessionSnapshot, StartTurn,
+};
 use floe_execution::{BoxFuture, Cancellation, ExecutionScope};
+use floe_kernel::{AgentFailure, CommandId, OwnerActor};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -80,8 +84,6 @@ impl Options {
         }
         Ok(Some(options))
     }
-
-
 }
 
 fn preflight(database: &Path) -> Result<()> {
@@ -176,24 +178,42 @@ fn unlock(host: &Host) -> Result<()> {
     Ok(())
 }
 
-fn owner_call<T>(host: &Host, operation: impl for<'a> FnOnce(&'a dyn ConversationOwner, &'a OwnerActor, &'a ExecutionScope)
-    -> BoxFuture<'a, std::result::Result<T, AgentFailure>>) -> std::result::Result<T, AgentFailure> {
+fn owner_call<T>(
+    host: &Host,
+    operation: impl for<'a> FnOnce(
+        &'a dyn ConversationOwner,
+        &'a OwnerActor,
+        &'a ExecutionScope,
+    ) -> BoxFuture<'a, std::result::Result<T, AgentFailure>>,
+) -> std::result::Result<T, AgentFailure> {
     let request_id = Uuid::new_v4();
-    let request = host.request(request_id).map_err(|_| AgentFailure::PolicyDenied)?;
+    let request = host
+        .request(request_id)
+        .map_err(|_| AgentFailure::PolicyDenied)?;
     let owners = request.services().ready_owners(request.caller())?;
     let actor = request.caller().owner_actor();
     let scope = floe_app::host_scope(request_id, Cancellation::new(), Duration::from_secs(30));
-    request.services().execute_owner(operation(owners.conversation.as_ref(), &actor, &scope))
+    request
+        .services()
+        .execute_owner(operation(owners.conversation.as_ref(), &actor, &scope))
 }
 
 fn session(host: &Host, session_id: Option<Uuid>) -> Result<SessionSnapshot> {
-    owner_call(host, move |owner, actor, scope| Box::pin(async move {
-        let id = match session_id {
-            Some(id) => id,
-            None => owner.start_session(actor, CommandId::new(), scope).await?.session_id,
-        };
-        owner.get_session(actor, id, scope).await
-    })).map_err(|failure| format!("Session: {failure:?}"))
+    owner_call(host, move |owner, actor, scope| {
+        Box::pin(async move {
+            let id = match session_id {
+                Some(id) => id,
+                None => {
+                    owner
+                        .start_session(actor, CommandId::new(), scope)
+                        .await?
+                        .session_id
+                }
+            };
+            owner.get_session(actor, id, scope).await
+        })
+    })
+    .map_err(|failure| format!("Session: {failure:?}"))
 }
 
 fn session_trace(session: &SessionSnapshot) -> Value {
@@ -251,14 +271,22 @@ struct Cli {
 fn admit_turn(host: &Host, command: StartTurn) -> Result<CommandReceipt> {
     loop {
         let attempt = command.clone();
-        match owner_call(host, move |owner, actor, scope| owner.start_turn(actor, attempt, scope)) {
+        match owner_call(host, move |owner, actor, scope| {
+            owner.start_turn(actor, attempt, scope)
+        }) {
             Ok(receipt) => return Ok(receipt),
             Err(AgentFailure::StorageUnavailable) => {
                 let id = command.command_id;
-                match owner_call(host, move |owner, actor, scope| owner.read_command(actor, id, scope)) {
+                match owner_call(host, move |owner, actor, scope| {
+                    owner.read_command(actor, id, scope)
+                }) {
                     Ok(Some(receipt)) => return Ok(CommandReceipt::from(&receipt)),
-                    Ok(None) => {},
-                    Err(failure) => return Err(format!("Admission acknowledgment is uncertain for {id:?}: {failure:?}")),
+                    Ok(None) => {}
+                    Err(failure) => {
+                        return Err(format!(
+                            "Admission acknowledgment is uncertain for {id:?}: {failure:?}"
+                        ));
+                    }
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -270,24 +298,40 @@ fn admit_turn(host: &Host, command: StartTurn) -> Result<CommandReceipt> {
 impl Cli {
     fn interactions(&mut self) -> Result<()> {
         let session_id = self.current.id;
-        let interactions = owner_call(&self.host, move |owner, actor, scope| owner.list_interactions(actor, session_id, scope))
-            .map_err(|failure| format!("Interactions: {failure:?}"))?;
+        let interactions = owner_call(&self.host, move |owner, actor, scope| {
+            owner.list_interactions(actor, session_id, scope)
+        })
+        .map_err(|failure| format!("Interactions: {failure:?}"))?;
         self.reviewed.clear();
         for interaction in interactions {
-            self.output.emit("interaction", serde_json::to_value(&interaction).map_err(|_| "Invalid interaction projection")?)?;
-            self.reviewed.insert(interaction.interaction_id, interaction);
+            self.output.emit(
+                "interaction",
+                serde_json::to_value(&interaction).map_err(|_| "Invalid interaction projection")?,
+            )?;
+            self.reviewed
+                .insert(interaction.interaction_id, interaction);
         }
         Ok(())
     }
 
     fn turn(&mut self, text: String, input: Option<&Receiver<String>>) -> Result<bool> {
-        let command = StartTurn { command_id: CommandId::new(), session_id: self.current.id,
-            expected_revision: self.current.revision, text, continuation_ref: None, retry_of: None };
+        let command = StartTurn {
+            command_id: CommandId::new(),
+            session_id: self.current.id,
+            expected_revision: self.current.revision,
+            text,
+            continuation_ref: None,
+            retry_of: None,
+        };
         let receipt = admit_turn(&self.host, command)?;
         self.observe(receipt, input)
     }
 
-    fn observe(&mut self, receipt: CommandReceipt, input: Option<&Receiver<String>>) -> Result<bool> {
+    fn observe(
+        &mut self,
+        receipt: CommandReceipt,
+        input: Option<&Receiver<String>>,
+    ) -> Result<bool> {
         self.output.emit("admitted", json!({"command_id":receipt.command_id,"run_id":receipt.run_id,"session_id":self.current.id}))?;
         let mut cancellation_requested = false;
         let finished = loop {
@@ -295,50 +339,107 @@ impl Cli {
                 if let Ok(line) = input.try_recv() {
                     if line.trim() == "/cancel" && !cancellation_requested {
                         let run_id = receipt.run_id;
-                        owner_call(&self.host, move |owner, actor, scope| owner.cancel_run(actor, CommandId::new(), run_id, scope))
-                            .map_err(|failure| format!("Cancel: {failure:?}"))?;
+                        owner_call(&self.host, move |owner, actor, scope| {
+                            owner.cancel_run(actor, CommandId::new(), run_id, scope)
+                        })
+                        .map_err(|failure| format!("Cancel: {failure:?}"))?;
                         cancellation_requested = true;
-                        self.output.emit("cancel_requested", json!({"run_id":receipt.run_id}))?;
+                        self.output
+                            .emit("cancel_requested", json!({"run_id":receipt.run_id}))?;
                     } else {
                         self.output.emit("busy", json!({"message":"Wait for this turn, or use /cancel. Input was not submitted."}))?;
                     }
                 }
             }
             let run_id = receipt.run_id;
-            let run = owner_call(&self.host, move |owner, actor, scope| owner.read_run(actor, run_id, scope))
-                .map_err(|failure| format!("Run observation: {failure:?}"))?.ok_or("Admitted Run not found")?;
-            if run.state.is_terminal() { break run; }
+            let run = owner_call(&self.host, move |owner, actor, scope| {
+                owner.read_run(actor, run_id, scope)
+            })
+            .map_err(|failure| format!("Run observation: {failure:?}"))?
+            .ok_or("Admitted Run not found")?;
+            if run.state.is_terminal() {
+                break run;
+            }
             std::thread::sleep(Duration::from_millis(100));
         };
         self.output.emit("run", run_trace(&finished))?;
-        if let Some(text) = &finished.output { self.output.emit("answer", json!({"run_id":receipt.run_id,"text":text}))?; }
+        if let Some(text) = &finished.output {
+            self.output
+                .emit("answer", json!({"run_id":receipt.run_id,"text":text}))?;
+        }
         self.current = session(&self.host, Some(self.current.id))?;
         self.output.emit("session", session_trace(&self.current))?;
         self.interactions()?;
-        let blocked = self.reviewed.values().any(|interaction| interaction.origin_run_id == receipt.run_id
-            && matches!(interaction.state, InteractionStatus::Pending | InteractionStatus::Resolving));
+        let blocked = self.reviewed.values().any(|interaction| {
+            interaction.origin_run_id == receipt.run_id
+                && matches!(
+                    interaction.state,
+                    InteractionStatus::Pending | InteractionStatus::Resolving
+                )
+        });
         Ok(finished.state == RunState::Completed && finished.issue.is_none() && !blocked)
     }
 
-    fn interaction_command(&mut self, command: &str, identifier: &str, input: &Receiver<String>) -> Result<()> {
+    fn interaction_command(
+        &mut self,
+        command: &str,
+        identifier: &str,
+        input: &Receiver<String>,
+    ) -> Result<()> {
         let identifier = Uuid::parse_str(identifier).map_err(|_| "Expected an interaction UUID")?;
-        let reviewed = self.reviewed.get(&identifier).ok_or("Run /interactions and review the target first")?;
+        let reviewed = self
+            .reviewed
+            .get(&identifier)
+            .ok_or("Run /interactions and review the target first")?;
         let session_id = self.current.id;
         let revision = reviewed.revision;
         let digest = reviewed.target_digest;
         let result = if command == "/refresh" {
-            owner_call(&self.host, move |owner, actor, scope| owner.refresh_interaction(actor, RefreshInteraction {
-                command_id: Uuid::new_v4(), interaction_id: identifier, session_id, expected_revision: revision,
-            }, scope))
+            owner_call(&self.host, move |owner, actor, scope| {
+                owner.refresh_interaction(
+                    actor,
+                    RefreshInteraction {
+                        command_id: Uuid::new_v4(),
+                        interaction_id: identifier,
+                        session_id,
+                        expected_revision: revision,
+                    },
+                    scope,
+                )
+            })
         } else {
-            let decision = match command { "/approve" => InteractionDecisionKind::Approve, "/deny" => InteractionDecisionKind::Deny,
-                "/dismiss" => InteractionDecisionKind::Dismiss, _ => return Err("Unknown interaction command".into()) };
-            owner_call(&self.host, move |owner, actor, scope| owner.resolve_interaction(actor, ResolveInteraction {
-                command_id: Uuid::new_v4(), interaction_id: identifier, session_id, expected_revision: revision, decision, target_digest: digest,
-            }, scope))
-        }.map_err(|failure| format!("Interaction: {failure:?}"))?;
-        self.output.emit("interaction_result", serde_json::to_value(&result.interaction).map_err(|_| "Invalid interaction projection")?)?;
-        if let Some(receipt) = result.linked { self.observe(receipt, Some(input))?; } else { self.interactions()?; }
+            let decision = match command {
+                "/approve" => InteractionDecisionKind::Approve,
+                "/deny" => InteractionDecisionKind::Deny,
+                "/dismiss" => InteractionDecisionKind::Dismiss,
+                _ => return Err("Unknown interaction command".into()),
+            };
+            owner_call(&self.host, move |owner, actor, scope| {
+                owner.resolve_interaction(
+                    actor,
+                    ResolveInteraction {
+                        command_id: Uuid::new_v4(),
+                        interaction_id: identifier,
+                        session_id,
+                        expected_revision: revision,
+                        decision,
+                        target_digest: digest,
+                    },
+                    scope,
+                )
+            })
+        }
+        .map_err(|failure| format!("Interaction: {failure:?}"))?;
+        self.output.emit(
+            "interaction_result",
+            serde_json::to_value(&result.interaction)
+                .map_err(|_| "Invalid interaction projection")?,
+        )?;
+        if let Some(receipt) = result.linked {
+            self.observe(receipt, Some(input))?;
+        } else {
+            self.interactions()?;
+        }
         Ok(())
     }
 

@@ -1,12 +1,12 @@
 package microsoftteams
 
 import (
- "floe/server/internal/views"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"floe/server/internal/views"
 	"html"
 	"io"
 	"net/http"
@@ -14,8 +14,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	
 )
 
 const (

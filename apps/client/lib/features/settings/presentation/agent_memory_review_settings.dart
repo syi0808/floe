@@ -5,7 +5,6 @@ import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/conversation/application/conversation_controller.dart';
 import 'package:floe_client/features/knowledge/domain/memory_review.dart';
-import 'package:floe_client/features/knowledge/application/memory_gateway.dart';
 
 final class AgentMemoryReviewSettings extends StatelessWidget {
   const AgentMemoryReviewSettings({super.key, required this.controller});

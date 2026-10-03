@@ -89,6 +89,10 @@ pub fn wellbeing_query_fingerprint(
         view.expires_at_unix_ms,
         transform.operation_id,
         transform.host_epoch,
-        transform.output_sha256.iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        transform
+            .output_sha256
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
     ))
 }

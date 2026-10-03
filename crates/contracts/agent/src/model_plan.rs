@@ -32,7 +32,10 @@ impl ModelCapabilities {
     }
 
     pub fn includes(&self, required: &Self) -> bool {
-        required.0.iter().all(|capability| self.contains(*capability))
+        required
+            .0
+            .iter()
+            .all(|capability| self.contains(*capability))
     }
 
     pub fn validate(&self) -> Result<(), AgentFailure> {
@@ -64,7 +67,10 @@ impl ModelPlanRequest {
         if person.is_nil()
             || person.to_string() != self.principal
             || !valid_identifier(&self.device_id, 256)
-            || !matches!(self.purpose.as_str(), "quick_response" | "everyday_assistance" | "deep_work")
+            || !matches!(
+                self.purpose.as_str(),
+                "quick_response" | "everyday_assistance" | "deep_work"
+            )
             || !valid_identifier(&self.consumer, 128)
         {
             return Err(AgentFailure::InvalidInput);
@@ -97,7 +103,8 @@ impl PreparedModelPlan {
             purpose: self.purpose.clone(),
             consumer: self.consumer.clone(),
             required_capabilities: self.capabilities.clone(),
-        }.validate()
+        }
+        .validate()
     }
 }
 

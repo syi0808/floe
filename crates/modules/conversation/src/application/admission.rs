@@ -1,7 +1,7 @@
 //! Durable original-message lookup for an owner-scheduled linked resume.
+use crate::{ConversationRepository, InteractionResumeRef, RunQuery, RunReceipt, TurnMode};
 use floe_kernel::AgentFailure;
 use uuid::Uuid;
-use crate::{ConversationRepository, InteractionResumeRef, RunQuery, RunReceipt, TurnMode};
 
 /// One linked-resume request to prepare, in Conversation's own terms.
 ///
@@ -58,8 +58,7 @@ where
         return Err(AgentFailure::Conflict);
     }
     let session = sessions.load(request.person_id, request.session_id).await?;
-    if session.scope.is_some()
-        || session.data_classes != [floe_agent_contract::DataClass::Personal]
+    if session.scope.is_some() || session.data_classes != [floe_agent_contract::DataClass::Personal]
     {
         return Err(AgentFailure::Conflict);
     }
@@ -83,8 +82,14 @@ async fn derive_origin_text<Repository: ConversationRepository>(
     if origin.session_id != request.session_id || origin.principal != request.principal {
         return Err(AgentFailure::Conflict);
     }
-    session.messages.iter().find_map(|message| match message {
-        crate::turn::AgentMessage::User { message_id, text, .. } if *message_id == origin.user_message_id => Some(text.clone()),
-        _ => None,
-    }).ok_or(AgentFailure::Conflict)
+    session
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            crate::turn::AgentMessage::User {
+                message_id, text, ..
+            } if *message_id == origin.user_message_id => Some(text.clone()),
+            _ => None,
+        })
+        .ok_or(AgentFailure::Conflict)
 }

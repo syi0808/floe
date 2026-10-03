@@ -2,11 +2,11 @@ use floe_agent_contract::{AgentFailure, ExpertModelOutcome};
 use floe_context_contract::{CalendarContextView, calendar_context_evidence};
 use uuid::Uuid;
 
+use super::{RESULT_MEDIA_TYPE, ScheduleAssessment, ScheduleInsight};
 use crate::prompts::schedule_expert_prompt;
 use crate::shared::{ExpertJudgment, run_expert_model};
 use crate::{BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, StatefulExpertDraft};
 use floe_actions::ExpertCalendarProposalDraft;
-use super::{ScheduleAssessment, ScheduleInsight, RESULT_MEDIA_TYPE};
 
 pub async fn judge<Host: BuiltinExpertHost + ?Sized>(
     host: &Host,

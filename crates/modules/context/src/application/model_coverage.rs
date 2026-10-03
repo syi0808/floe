@@ -57,9 +57,9 @@ pub async fn project_history(
             match resolver {
                 Some(resolver) => match resolver.authorize(&dependency, authorization).await {
                     Ok(()) => Ok(true),
-                    Err(
-                        AgentFailure::PolicyDenied | AgentFailure::AccessReviewRequired,
-                    ) => Ok(false),
+                    Err(AgentFailure::PolicyDenied | AgentFailure::AccessReviewRequired) => {
+                        Ok(false)
+                    }
                     Err(error) => Err(error),
                 },
                 None => Ok(false),

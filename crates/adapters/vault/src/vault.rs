@@ -20,25 +20,26 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 mod access_grants;
-mod connection_reviews;
 mod agent_actions;
+mod authority_keys;
+mod connection_reviews;
 mod context_cleanup;
 mod context_dependencies;
 mod conversation_interactions;
 mod conversations;
 mod expert_actions;
+mod gateway_authority;
 mod keyring;
 mod learning;
 mod registry;
-mod authority_keys;
-mod gateway_authority;
-pub use gateway_authority::{VaultEnrollmentSigner, VaultAuthorizationSigner};
+pub use gateway_authority::{VaultAuthorizationSigner, VaultEnrollmentSigner};
 mod session_archive;
 mod tasks;
 pub use access_grants::AccessGrantCleanup;
-pub use conversations::{VaultConversationActivation, VaultConversationAdmission,
-    VaultConversationCancelAdmission, VaultConversationCancelReceipt, VaultConversationCancelRequest,
-    VaultConversationJournalEntry};
+pub use conversations::{
+    VaultConversationActivation, VaultConversationAdmission, VaultConversationCancelAdmission,
+    VaultConversationCancelReceipt, VaultConversationCancelRequest, VaultConversationJournalEntry,
+};
 pub use floe_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use keyring::KeyringVaultKeys;
 pub use session_archive::*;
@@ -145,7 +146,9 @@ pub use floe_context::{DependencyLiveness, DependencyResolver};
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     /// Seal this exact opened generation. Retained owner handles fail all
     /// existing access fences; no file, key or uncertain effect is removed.
-    pub fn seal(&self) { self.unavailable.store(true, Ordering::Release); }
+    pub fn seal(&self) {
+        self.unavailable.store(true, Ordering::Release);
+    }
 
     pub fn person_id(&self) -> PersonId {
         self.person_id
@@ -397,7 +400,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         self.create_session().await
     }
-
 
     pub fn check_access(&self) -> Result<(), AgentFailure> {
         self.connection().map(|_| ())

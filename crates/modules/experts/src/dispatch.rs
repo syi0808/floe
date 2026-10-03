@@ -154,7 +154,6 @@ fn contract_artifact_to_a2a(artifact: &Artifact) -> Result<A2AArtifact, AgentFai
     })
 }
 
-
 /// Who records how a delegated result depends on the sources behind it.
 pub trait TaskCoverageRecorder: Send + Sync {
     fn record_independent(&self, turn_id: Uuid, result_id: Uuid) -> Result<(), AgentFailure>;
@@ -208,7 +207,9 @@ pub fn task_receipt_to_a2a(
         TaskState::Cancelled => A2ATaskState::Cancelled,
         TaskState::Failed | TaskState::TimedOut | TaskState::Interrupted => A2ATaskState::Failed,
     };
-    receipt.snapshot.validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
+    receipt
+        .snapshot
+        .validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
     let artifacts = if receipt.snapshot.state == TaskState::Completed {
         receipt
             .snapshot

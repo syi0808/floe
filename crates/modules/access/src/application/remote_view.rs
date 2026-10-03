@@ -9,9 +9,8 @@
 use serde::{Deserialize, Serialize};
 
 use floe_context_contract::{
-    ConnectionId, ConnectorId, ContextDependency, ExecutionOwnerId,
-    GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-    GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+    ConnectionId, ConnectorId, ContextDependency, ExecutionOwnerId, GrantOperation, GrantPurpose,
+    GrantSourceBinding, ResourceHandle, SourceAuthority,
 };
 use floe_kernel::{AgentFailure, PersonId};
 
@@ -108,7 +107,10 @@ pub fn admit_remote_view_source(
         || reference.connection_revision == 0
         || reference.provider_identity.is_empty()
         || reference.source_resources.is_empty()
-        || reference.source_resources.windows(2).any(|pair| pair[0] >= pair[1])
+        || reference
+            .source_resources
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
     {
         return Err(AgentFailure::PolicyDenied);
     }

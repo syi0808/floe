@@ -14,8 +14,8 @@ use uuid::Uuid;
 use crate::{
     ConversationInteraction, ConversationRepository, DecisionAdmission, ExpireInteraction,
     ExpireOutcome, InteractionDecision, InteractionDecisionKind, InteractionOrigin,
-    InteractionRepository, InteractionRequirement, InteractionResolution, InteractionState,
-    PublishAdmission, ReviewedTarget, RunState, SupersedeInteraction,
+    InteractionRepository, InteractionRequirement, InteractionState, PublishAdmission,
+    ReviewedTarget, RunState, SupersedeInteraction,
     domain::INTERACTION_PENDING_LIFETIME_MS,
     domain::{canonical_requirement_digest, canonical_target_digest, interaction_publication_id},
 };
@@ -52,8 +52,7 @@ impl PublishInteractionRequest {
             .validate()
             .map_err(|_| AgentFailure::InvalidInput)?;
         if (self.kind == UserInteractionKind::ExpertBinding)
-                != (self.requirement.kind
-                    == crate::InteractionRequirementKind::ConfigureExpertBinding)
+            != (self.requirement.kind == crate::InteractionRequirementKind::ConfigureExpertBinding)
             || (self.kind == UserInteractionKind::ExpertBinding)
                 != matches!(self.target, crate::ReviewedTarget::ExpertBinding(_))
         {

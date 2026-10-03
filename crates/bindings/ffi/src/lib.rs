@@ -6,14 +6,14 @@
 
 mod abi;
 mod app_wire;
-mod connections_wire;
-mod conversation_wire;
 mod bridge;
+mod connections_wire;
 mod context_wire;
-mod native_lane;
+mod conversation_wire;
 pub mod conversion;
 mod day_wire;
 mod diagnostics;
+mod native_lane;
 
 pub use abi::*;
 pub use bridge::{FloeHandle, FloeNativeHostLane};

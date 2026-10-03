@@ -199,7 +199,7 @@ fn project_entries(
     let mut execution_id: Option<Uuid> = None;
     let mut pending: Option<PendingBatch> = None;
     let mut uncheckpointed_completion = false;
-    let mut completed_iterations = 0;
+    let mut completed_iterations: u32 = 0;
     let mut segment_iterations = 0;
     let mut finalization_prior_execution = None;
     let mut usage = floe_execution::budget::ModelUsage::default();
@@ -210,14 +210,30 @@ fn project_entries(
             return Err(AgentFailure::StorageUnavailable);
         }
         match &entry.event {
-            JournalEvent::FinalizationStarted { prior_execution_id, abandoned_cursor, prior_exhaustion } => {
-                let expected_cursor = pending.as_ref().and_then(|state| state.cursor.map(|next_step_index| BatchCursor {
-                    batch_id: state.batch.batch_id, next_step_index,
-                }));
-                if finalization_prior_execution.is_some() || execution_id != Some(*prior_execution_id)
-                    || prior_execution_id.is_nil() || !matches!(prior_exhaustion, AgentFailure::BudgetExceeded | AgentFailure::Stalled)
-                    || expected_cursor != *abandoned_cursor || pending.as_ref().is_some_and(|state| state.cursor.is_none())
-                    || !tools.is_empty() || !delegations.is_empty() || attempts.values().any(|attempt| !attempt.completed) {
+            JournalEvent::FinalizationStarted {
+                prior_execution_id,
+                abandoned_cursor,
+                prior_exhaustion,
+            } => {
+                let expected_cursor = pending.as_ref().and_then(|state| {
+                    state.cursor.map(|next_step_index| BatchCursor {
+                        batch_id: state.batch.batch_id,
+                        next_step_index,
+                    })
+                });
+                if finalization_prior_execution.is_some()
+                    || execution_id != Some(*prior_execution_id)
+                    || prior_execution_id.is_nil()
+                    || !matches!(
+                        prior_exhaustion,
+                        AgentFailure::BudgetExceeded | AgentFailure::Stalled
+                    )
+                    || expected_cursor != *abandoned_cursor
+                    || pending.as_ref().is_some_and(|state| state.cursor.is_none())
+                    || !tools.is_empty()
+                    || !delegations.is_empty()
+                    || attempts.values().any(|attempt| !attempt.completed)
+                {
                     return Err(AgentFailure::StorageUnavailable);
                 }
                 pending = None;
@@ -241,12 +257,15 @@ fn project_entries(
                 if attempt_id.is_nil()
                     || projection_ref.as_uuid().is_nil()
                     || attempts.contains_key(attempt_id)
-                    || attempts.values().any(|prior| !prior.completed && prior.parent_task_id == *parent_task_id)
+                    || attempts
+                        .values()
+                        .any(|prior| !prior.completed && prior.parent_task_id == *parent_task_id)
                     || (parent_task_id.is_none() && pending.is_some())
                     || (parent_task_id.is_none() && uncheckpointed_completion)
                     || parent_task_id.is_some_and(|task_id| !delegations.contains_key(&task_id))
                     || reservation_ceiling.validate().is_err()
-                    || plan.validate().is_err() || plan.principal != source.principal
+                    || plan.validate().is_err()
+                    || plan.principal != source.principal
                     || plan.device_id != source.device_id
                 {
                     return Err(AgentFailure::StorageUnavailable);
@@ -278,16 +297,28 @@ fn project_entries(
                 if state.completed {
                     return Err(AgentFailure::StorageUnavailable);
                 }
-                accounting.validate_charge(result_usage.tokens, result_usage.cost_micros)
+                accounting
+                    .validate_charge(result_usage.tokens, result_usage.cost_micros)
                     .map_err(|_| AgentFailure::StorageUnavailable)?;
-                if state.parent_task_id.is_some_and(|task_id| !delegations.contains_key(&task_id)) {
+                if state
+                    .parent_task_id
+                    .is_some_and(|task_id| !delegations.contains_key(&task_id))
+                {
                     return Err(AgentFailure::StorageUnavailable);
                 }
                 state.completed = true;
-                if accounting.unknown_cost { usage.estimated_cost_micros = usage.estimated_cost_micros
-                    .checked_add(result_usage.cost_micros).ok_or(AgentFailure::StorageUnavailable)?; }
-                if accounting.unknown_tokens { usage.estimated_tokens = usage.estimated_tokens
-                    .checked_add(result_usage.tokens).ok_or(AgentFailure::StorageUnavailable)?; }
+                if accounting.unknown_cost {
+                    usage.estimated_cost_micros = usage
+                        .estimated_cost_micros
+                        .checked_add(result_usage.cost_micros)
+                        .ok_or(AgentFailure::StorageUnavailable)?;
+                }
+                if accounting.unknown_tokens {
+                    usage.estimated_tokens = usage
+                        .estimated_tokens
+                        .checked_add(result_usage.tokens)
+                        .ok_or(AgentFailure::StorageUnavailable)?;
+                }
                 usage.attempts = usage
                     .attempts
                     .checked_add(1)
@@ -489,7 +520,9 @@ fn project_entries(
                 }
             }
             JournalEvent::DelegationResult { receipt } => {
-                if attempts.values().any(|attempt| !attempt.completed && attempt.parent_task_id == Some(receipt.task_id)) {
+                if attempts.values().any(|attempt| {
+                    !attempt.completed && attempt.parent_task_id == Some(receipt.task_id)
+                }) {
                     return Err(AgentFailure::StorageUnavailable);
                 }
                 if matches!(lineage, JournalLineage::ResumeBatchOnly { .. }) {
@@ -608,9 +641,11 @@ fn project_entries(
                     }
                     Some(_) => {}
                     None => {
-                        if finalization_prior_execution == Some(batch.execution_id) { return Err(AgentFailure::StorageUnavailable); }
+                        if finalization_prior_execution == Some(batch.execution_id) {
+                            return Err(AgentFailure::StorageUnavailable);
+                        }
                         execution_id = Some(batch.execution_id);
-                    },
+                    }
                 }
                 batches_seen += 1;
                 match &lineage {
@@ -735,19 +770,24 @@ fn project_entries(
                 }
             }
             JournalEvent::Output { text, artifacts } => {
-                if !storage_validation { return Err(AgentFailure::Conflict); }
+                if !storage_validation {
+                    return Err(AgentFailure::Conflict);
+                }
                 let state = pending.as_ref().ok_or(AgentFailure::StorageUnavailable)?;
-                if state.cursor.is_none() || state.settled_step.is_some()
-                    || !tools.is_empty() || !delegations.is_empty()
+                if state.cursor.is_none()
+                    || state.settled_step.is_some()
+                    || !tools.is_empty()
+                    || !delegations.is_empty()
                     || attempts.values().any(|attempt| !attempt.completed)
                     || state.next_index() + 1 != state.batch.steps.len()
                     || !matches!(state.next_step()?, ModelStep::Answer { text: expected, artifacts: expected_artifacts }
-                        if text == expected && artifacts == expected_artifacts) {
+                        if text == expected && artifacts == expected_artifacts)
+                {
                     return Err(AgentFailure::StorageUnavailable);
                 }
                 output_seen = true;
                 pending = None;
-            },
+            }
         }
     }
     if !storage_validation && attempts.values().any(|state| !state.completed) {
@@ -798,9 +838,14 @@ fn project_entries(
 /// Validate a durable journal prefix, including an acknowledged in-flight
 /// intent. Recovery uses the same parser but additionally refuses reissue of
 /// any model attempt whose terminal result is missing.
-pub fn validate_run_journal(source: &RunReceipt, entries: &[JournalEntry]) -> Result<(), AgentFailure> {
+pub fn validate_run_journal(
+    source: &RunReceipt,
+    entries: &[JournalEntry],
+) -> Result<(), AgentFailure> {
     source.validate()?;
-    if entries.len() > 512 { return Err(AgentFailure::BudgetExceeded); }
+    if entries.len() > 512 {
+        return Err(AgentFailure::BudgetExceeded);
+    }
     project_entries(source, entries, true)?;
     // Every acknowledged intent reserves one journal slot for its settlement.
     // Capacity exhaustion can stop new work, never strand terminal evidence.
@@ -809,13 +854,25 @@ pub fn validate_run_journal(source: &RunReceipt, entries: &[JournalEntry]) -> Re
     let mut pending_tasks = HashSet::new();
     for entry in entries {
         match &entry.event {
-            JournalEvent::ModelIntent { attempt_id, .. } => { pending_models.insert(*attempt_id); }
-            JournalEvent::ModelResult { attempt_id, .. } => { pending_models.remove(attempt_id); }
-            JournalEvent::ToolIntent { call } => { pending_tools.insert(call.call_id); }
-            JournalEvent::ToolResult { result } => { pending_tools.remove(&result.call_id); }
-            JournalEvent::DelegationIntent { request } => { pending_tasks.insert(request.task_id); }
-            JournalEvent::DelegationResult { receipt } => { pending_tasks.remove(&receipt.task_id); }
-            _ => {},
+            JournalEvent::ModelIntent { attempt_id, .. } => {
+                pending_models.insert(*attempt_id);
+            }
+            JournalEvent::ModelResult { attempt_id, .. } => {
+                pending_models.remove(attempt_id);
+            }
+            JournalEvent::ToolIntent { call } => {
+                pending_tools.insert(call.call_id);
+            }
+            JournalEvent::ToolResult { result } => {
+                pending_tools.remove(&result.call_id);
+            }
+            JournalEvent::DelegationIntent { request } => {
+                pending_tasks.insert(request.task_id);
+            }
+            JournalEvent::DelegationResult { receipt } => {
+                pending_tasks.remove(&receipt.task_id);
+            }
+            _ => {}
         }
     }
     if entries.len() + pending_models.len() + pending_tools.len() + pending_tasks.len() > 512 {

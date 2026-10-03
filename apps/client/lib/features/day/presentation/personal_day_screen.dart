@@ -128,7 +128,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       refreshGateway: widget.dayRefreshGateway,
     );
     _loadCalendar();
-    if (widget.calendarActions case final gateway? when widget.dayRefreshGateway != null) {
+    if (widget.calendarActions case final gateway?
+        when widget.dayRefreshGateway != null) {
       actionController = CalendarActionController(
         gateway: gateway,
         personId: widget.query.personId,
@@ -158,11 +159,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   }
 
   Future<void> _loadCalendar() async {
-    await controller.load();
-    await _inspectCalendarSource();
-  }
-
-  Future<void> _reloadCalendarConnection() async {
     await controller.load();
     await _inspectCalendarSource();
   }
@@ -468,7 +464,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
             return AgentPanel(
               controller: agentController!,
               onOpenAction: actionController == null ? null : _openAgentAction,
-              onOpenConnections: () => _selectDestination(_DestinationView.connections),
+              onOpenConnections: () =>
+                  _selectDestination(_DestinationView.connections),
               onOpenSourceReview: _openAgentSourceReview,
               onOpenExpertSettings: _openExpertSettings,
               onClose: _closeAssistant,
@@ -499,8 +496,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                       onOpenAction: actionController == null
                           ? null
                           : _openAgentAction,
-                      onOpenConnections: () => _selectDestination(_DestinationView.connections),
-              onOpenSourceReview: _openAgentSourceReview,
+                      onOpenConnections: () =>
+                          _selectDestination(_DestinationView.connections),
+                      onOpenSourceReview: _openAgentSourceReview,
                       onOpenExpertSettings: _openExpertSettings,
                       onClose: _closeAssistant,
                     )
@@ -560,10 +558,14 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         child: AgentPanel(
           controller: agent,
           onOpenAction: actionController == null ? null : _openAgentAction,
-          onOpenConnections: () => _selectDestination(_DestinationView.connections),
-              onOpenSourceReview: _openAgentSourceReview,
+          onOpenConnections: () =>
+              _selectDestination(_DestinationView.connections),
+          onOpenSourceReview: _openAgentSourceReview,
           onOpenExpertSettings: _openExpertSettings,
-          onClose: () { agent.detachView(); Navigator.pop(context); },
+          onClose: () {
+            agent.detachView();
+            Navigator.pop(context);
+          },
         ),
       ),
     );

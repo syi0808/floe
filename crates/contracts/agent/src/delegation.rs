@@ -35,12 +35,13 @@ pub struct TaskSnapshot {
 impl TaskSnapshot {
     pub fn validate(&self, maximum_bytes: usize) -> Result<(), AgentFailure> {
         let result_valid = match self.state {
-            TaskState::Completed => self
-                .result
-                .as_deref()
-                .is_some_and(|result| crate::message::bounded(result, maximum_bytes))
-                && self.issue.is_none()
-                && self.coverage != DependencyCoverage::Unknown,
+            TaskState::Completed => {
+                self.result
+                    .as_deref()
+                    .is_some_and(|result| crate::message::bounded(result, maximum_bytes))
+                    && self.issue.is_none()
+                    && self.coverage != DependencyCoverage::Unknown
+            }
             TaskState::Submitted | TaskState::Working => {
                 self.result.is_none() && self.issue.is_none()
             }
@@ -64,17 +65,24 @@ impl TaskSnapshot {
                 .artifacts
                 .iter()
                 .any(|artifact| !artifact_ids.insert(artifact.artifact_id))
-            || self.artifacts.iter().any(|artifact| {
-                match (&self.coverage, &artifact.coverage) {
+            || self
+                .artifacts
+                .iter()
+                .any(|artifact| match (&self.coverage, &artifact.coverage) {
                     (_, DependencyCoverage::Unknown) => true,
                     (_, DependencyCoverage::Independent) => false,
                     (
-                        DependencyCoverage::Dependent { dependencies: report },
-                        DependencyCoverage::Dependent { dependencies: artifact },
-                    ) => !artifact.iter().all(|dependency| report.contains(dependency)),
+                        DependencyCoverage::Dependent {
+                            dependencies: report,
+                        },
+                        DependencyCoverage::Dependent {
+                            dependencies: artifact,
+                        },
+                    ) => !artifact
+                        .iter()
+                        .all(|dependency| report.contains(dependency)),
                     _ => true,
-                }
-            })
+                })
             || self.coverage.validate().is_err()
             || serde_json::to_vec(self)
                 .map(|encoded| encoded.len() > maximum_bytes)

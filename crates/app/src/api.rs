@@ -32,7 +32,11 @@ pub struct CallerContext {
 
 impl CallerContext {
     pub fn owner_actor(&self) -> floe_kernel::OwnerActor {
-        floe_kernel::OwnerActor { person_id: floe_kernel::PersonId(self.person_id), device_id: self.device_id.clone(), runtime_epoch: self.runtime_epoch }
+        floe_kernel::OwnerActor {
+            person_id: floe_kernel::PersonId(self.person_id),
+            device_id: self.device_id.clone(),
+            runtime_epoch: self.runtime_epoch,
+        }
     }
 
     pub fn person_id(&self) -> Uuid {

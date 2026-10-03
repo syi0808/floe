@@ -61,13 +61,16 @@ class _FloeAppState extends State<FloeApp> {
     final gateway = widget.connectionsGateway;
     if (gateway != null) connectionsController = ConnectionsController(gateway);
   }
+
   @override
   void didUpdateWidget(FloeApp oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.connectionsGateway != widget.connectionsGateway) {
       connectionsController?.dispose();
       final gateway = widget.connectionsGateway;
-      connectionsController = gateway == null ? null : ConnectionsController(gateway);
+      connectionsController = gateway == null
+          ? null
+          : ConnectionsController(gateway);
     }
   }
 

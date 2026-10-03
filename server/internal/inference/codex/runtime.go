@@ -388,7 +388,13 @@ func (runtime *Runtime) access(ctx context.Context) (*tokenBundle, error) {
 	return next, nil
 }
 
-func accountIdentity(tokens *tokenBundle)string{if tokens==nil{return ""};sum:=sha256.Sum256([]byte(tokens.AccountID+"\x00"+tokens.RefreshToken));return base64.RawURLEncoding.EncodeToString(sum[:])}
+func accountIdentity(tokens *tokenBundle) string {
+	if tokens == nil {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(tokens.AccountID + "\x00" + tokens.RefreshToken))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
 
 type accountIdentityKey struct{}
 

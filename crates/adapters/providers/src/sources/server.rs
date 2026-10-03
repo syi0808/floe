@@ -102,7 +102,10 @@ impl ServerSourceClient {
         person_id: &str,
         device_id: &str,
     ) -> Result<Option<Self>, AgentFailure> {
-        Ok(store.load(person_id, device_id).await.map_err(|_| AgentFailure::PolicyDenied)?
+        Ok(store
+            .load(person_id, device_id)
+            .await
+            .map_err(|_| AgentFailure::PolicyDenied)?
             .map(|connection| Self::new(PreparedServerSource::new(connection, store.clone()))))
     }
 
@@ -320,14 +323,33 @@ impl ServerSourceClient {
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<Response, AgentFailure> {
-        let _permit=self.source_calls.acquire(path.len(),deadline,cancellation).await?;
+        let _permit = self
+            .source_calls
+            .acquire(path.len(), deadline, cancellation)
+            .await?;
         self.source.revalidate().await?;
-        let http=crate::gateway::http::GatewayHttpTransport::new()?;
-        let(status,bytes)=http.request(self.source.base_url(),Some(self.source.bearer_token()),reqwest::Method::GET,path,None,deadline,cancellation).await?;
-        if status!=200{return Err(match status{401=>AgentFailure::CredentialExpired,403=>AgentFailure::PolicyDenied,_=>AgentFailure::CapabilityUnavailable})}
-        crate::gateway::json::strict_json_bytes(&bytes,MAX_CATALOG_BYTES)?;
+        let http = crate::gateway::http::GatewayHttpTransport::new()?;
+        let (status, bytes) = http
+            .request(
+                self.source.base_url(),
+                Some(self.source.bearer_token()),
+                reqwest::Method::GET,
+                path,
+                None,
+                deadline,
+                cancellation,
+            )
+            .await?;
+        if status != 200 {
+            return Err(match status {
+                401 => AgentFailure::CredentialExpired,
+                403 => AgentFailure::PolicyDenied,
+                _ => AgentFailure::CapabilityUnavailable,
+            });
+        }
+        crate::gateway::json::strict_json_bytes(&bytes, MAX_CATALOG_BYTES)?;
         self.source.revalidate().await?;
-        serde_json::from_slice(&bytes).map_err(|_|AgentFailure::CapabilityUnavailable)
+        serde_json::from_slice(&bytes).map_err(|_| AgentFailure::CapabilityUnavailable)
     }
 }
 
@@ -406,7 +428,6 @@ impl<Keys: AuthorizationSigner + ?Sized> floe_access::RemoteGrantTransport
             })
         })
     }
-
 }
 
 impl<Keys: AuthorizationSigner + ?Sized> floe_context::RemoteViewTransport

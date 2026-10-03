@@ -20,17 +20,17 @@ mod day_services;
 mod diagnostics;
 mod error;
 #[cfg(unix)]
-mod owner_handles;
-#[cfg(unix)]
 mod expert_services;
 mod first_party_observe;
 mod host;
-mod native_lane;
 #[cfg(unix)]
 mod knowledge_services;
 mod local_context;
 #[cfg(unix)]
 mod local_operations;
+mod native_lane;
+#[cfg(unix)]
+mod owner_handles;
 mod prompts;
 mod services;
 #[cfg(unix)]
@@ -64,8 +64,8 @@ pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalI
 pub use composition::{AppComposition, AppOpenError, open};
 #[cfg(unix)]
 pub use context_services::{
-    AttentionCompletion, CalendarCompletion, NativeHostCommand, NativeHostQuery, NativeHostCommands,
-    NativeHostQueries, PersonalCompletion,
+    AttentionCompletion, CalendarCompletion, NativeHostCommand, NativeHostCommands,
+    NativeHostQueries, NativeHostQuery, PersonalCompletion,
 };
 pub use core::{Classification, FloeCore};
 #[cfg(unix)]
@@ -85,20 +85,21 @@ pub use floe_provider_adapters::sources::native_acquisition::{
     AttentionAcquisitionMode, AttentionAcquisitionRequest, AttentionAcquisitionResult,
     CalendarAcquisitionMode, CalendarAcquisitionRequest, CalendarAcquisitionResult,
     CalendarSourceFailure, MAX_ACQUISITION_DEADLINE_MS, NativeCalendarBatch, NativeCalendarFailure,
-    NativeCalendarRecord, NativeEventSchedule, PersonalAcquisitionRequest,
-    PersonalAcquisitionResult, PersonalAcquisitionMode, NativeSourceResource, PersonalDomain, attention_failure, personal_failure,
+    NativeCalendarRecord, NativeEventSchedule, NativeSourceResource, PersonalAcquisitionMode,
+    PersonalAcquisitionRequest, PersonalAcquisitionResult, PersonalDomain, attention_failure,
+    personal_failure,
 };
 pub use host::{AppHost, HostRequest};
-pub use native_lane::{NativeHostLane, NativeHostLaneError};
-#[cfg(unix)]
-pub use owner_handles::{ReadyOwners, host_scope};
 #[cfg(unix)]
 pub use knowledge_services::{
     KnowledgeCommands, KnowledgeInspection, KnowledgeOperationResult, KnowledgeQueries,
 };
 pub use local_context::{
-    LocalContextHost, NativeHostKind, NativeHostRegistrationRef, NativeHostOutcome,
+    LocalContextHost, NativeHostKind, NativeHostOutcome, NativeHostRegistrationRef,
 };
+pub use native_lane::{NativeHostLane, NativeHostLaneError};
+#[cfg(unix)]
+pub use owner_handles::{ReadyOwners, host_scope};
 pub use services::CalendarActionsResult;
 pub use services::ServiceError;
 
@@ -108,7 +109,6 @@ pub use vault_services::{
 };
 pub use worker::{
     CalendarActionOperation, CalendarActionProposal, CalendarProposalInspection,
-    MemoryReviewDecision, MemoryReviewResult,
-    VaultState,
+    MemoryReviewDecision, MemoryReviewResult, VaultState,
 };
 pub(crate) use worker::{WorkerAction, WorkerResult};

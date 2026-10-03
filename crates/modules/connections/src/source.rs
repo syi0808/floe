@@ -125,11 +125,28 @@ impl SourceConnection {
 
     /// Establish metadata from a freshly verified Gateway source descriptor.
     /// This does not create a read grant or authorize model processing.
-    pub fn establish_remote(person_id:PersonId,connector_id:ConnectorId,connection_id:ConnectionId,
-        execution_owner_id:ExecutionOwnerId,resources:Vec<ConnectionResource>,authority:SourceAuthority)->Result<Self,SourceConnectionError>{
-        let mut source=Self::establish(person_id,connector_id,connection_id,execution_owner_id,ResourceMode::Selected,resources)?;
-        if source.requires_native_subject()||!authority.is_valid(){return Err(SourceConnectionError::InvalidAuthority)}
-        source.source_authority=authority;source.validate()?;Ok(source)
+    pub fn establish_remote(
+        person_id: PersonId,
+        connector_id: ConnectorId,
+        connection_id: ConnectionId,
+        execution_owner_id: ExecutionOwnerId,
+        resources: Vec<ConnectionResource>,
+        authority: SourceAuthority,
+    ) -> Result<Self, SourceConnectionError> {
+        let mut source = Self::establish(
+            person_id,
+            connector_id,
+            connection_id,
+            execution_owner_id,
+            ResourceMode::Selected,
+            resources,
+        )?;
+        if source.requires_native_subject() || !authority.is_valid() {
+            return Err(SourceConnectionError::InvalidAuthority);
+        }
+        source.source_authority = authority;
+        source.validate()?;
+        Ok(source)
     }
 
     pub fn establish_reviewed_native(
@@ -192,10 +209,21 @@ impl SourceConnection {
     pub fn validate_successor(&self, next: &Self) -> Result<(), SourceConnectionError> {
         self.validate()?;
         next.validate()?;
-        if self.state==SourceState::Disconnected && self.requires_native_subject() && next.state==SourceState::Pending
-            && self.person_id==next.person_id && self.connector_id==next.connector_id && self.connection_id==next.connection_id
-            && self.execution_owner_id==next.execution_owner_id && self.revision.checked_add(1)==Some(next.revision)
-            && next.resource_mode==self.resource_mode && next.resources.is_empty() && next.native_subject_fingerprint.is_none() && next.source_authority.incarnation()!=self.source_authority.incarnation(){return Ok(())}
+        if self.state == SourceState::Disconnected
+            && self.requires_native_subject()
+            && next.state == SourceState::Pending
+            && self.person_id == next.person_id
+            && self.connector_id == next.connector_id
+            && self.connection_id == next.connection_id
+            && self.execution_owner_id == next.execution_owner_id
+            && self.revision.checked_add(1) == Some(next.revision)
+            && next.resource_mode == self.resource_mode
+            && next.resources.is_empty()
+            && next.native_subject_fingerprint.is_none()
+            && next.source_authority.incarnation() != self.source_authority.incarnation()
+        {
+            return Ok(());
+        }
         if self.person_id != next.person_id
             || self.connector_id != next.connector_id
             || self.connection_id != next.connection_id
@@ -378,9 +406,25 @@ impl SourceConnection {
         Ok(true)
     }
 
-    pub fn restart_native_setup(&mut self,expected_revision:u64)->Result<(),SourceConnectionError>{
-        if self.revision!=expected_revision||self.state!=SourceState::Disconnected||!self.requires_native_subject(){return Err(SourceConnectionError::Conflict)}
-        self.revision=self.revision.checked_add(1).ok_or(SourceConnectionError::RevisionExhausted)?;self.source_authority=SourceAuthority::new();self.state=SourceState::Pending;self.resources.clear();self.native_subject_fingerprint=None;self.validate()
+    pub fn restart_native_setup(
+        &mut self,
+        expected_revision: u64,
+    ) -> Result<(), SourceConnectionError> {
+        if self.revision != expected_revision
+            || self.state != SourceState::Disconnected
+            || !self.requires_native_subject()
+        {
+            return Err(SourceConnectionError::Conflict);
+        }
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .ok_or(SourceConnectionError::RevisionExhausted)?;
+        self.source_authority = SourceAuthority::new();
+        self.state = SourceState::Pending;
+        self.resources.clear();
+        self.native_subject_fingerprint = None;
+        self.validate()
     }
 
     pub fn disconnect(&mut self, expected_revision: u64) -> Result<bool, SourceConnectionError> {

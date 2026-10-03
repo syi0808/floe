@@ -178,7 +178,10 @@ impl ConversationSessionTaskDto {
             || self.artifacts.iter().any(|artifact| {
                 !valid_metadata(&artifact.name)
                     || artifact.media_types.len() > MAX_SESSION_MEDIA_TYPES
-                    || artifact.media_types.iter().any(|media_type| !valid_metadata(media_type))
+                    || artifact
+                        .media_types
+                        .iter()
+                        .any(|media_type| !valid_metadata(media_type))
             })
         {
             return Err("conversation.session.task.artifacts");

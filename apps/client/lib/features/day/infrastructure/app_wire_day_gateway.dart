@@ -12,25 +12,33 @@ import 'package:floe_client/features/day/domain/day_models.dart';
 /// The transport, runtime client and read model live in [AppRuntime]; proposals
 /// live in the Actions feature and the sample conversation in Conversation.
 final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
-  AppWireDayGateway(this._runtime, {DateTime Function()? clock}) : _clock = clock ?? DateTime.now;
+  AppWireDayGateway(this._runtime, {DateTime Function()? clock})
+    : _clock = clock ?? DateTime.now;
   final AppRuntime _runtime;
   final DateTime Function() _clock;
 
   @override
-  Future<DayRefreshSnapshot> refreshDay({required String commandId, required DayQuery query}) async {
+  Future<DayRefreshSnapshot> refreshDay({
+    required String commandId,
+    required DayQuery query,
+  }) async {
     final result = await ownerCommand(_runtime.wireTransport, commandId, {
-      'kind': 'day.refresh', 'day': _day(query),
+      'kind': 'day.refresh',
+      'day': _day(query),
     });
     return _refreshSnapshot(result);
   }
 
   @override
   Future<DayRefreshSnapshot> observeDayRefresh(String operationRef) async {
-    final result = await ownerQuery(_runtime.wireTransport, newAgentRequestId(), {
-      'kind': 'day.refresh.get', 'operation_ref': operationRef,
-    });
+    final result = await ownerQuery(
+      _runtime.wireTransport,
+      newAgentRequestId(),
+      {'kind': 'day.refresh.get', 'operation_ref': operationRef},
+    );
     final snapshot = _refreshSnapshot(result);
-    if (snapshot.operationRef != operationRef) throw const FormatException('Day refresh identity changed.');
+    if (snapshot.operationRef != operationRef)
+      throw const FormatException('Day refresh identity changed.');
     return snapshot;
   }
 
@@ -152,27 +160,49 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
 }
 
 DayRefreshSnapshot _refreshSnapshot(Map<String, dynamic> result) {
-  if (result.length != 2 || result['kind'] != 'day.refresh' || result['refresh'] is! Map) {
+  if (result.length != 2 ||
+      result['kind'] != 'day.refresh' ||
+      result['refresh'] is! Map) {
     throw const FormatException('Invalid Day refresh result.');
   }
   final value = _asMap(result['refresh']);
   final state = value['state'];
-  final fields = {'operation_ref','revision','state',
+  final fields = {
+    'operation_ref',
+    'revision',
+    'state',
     if (state == 'completed') 'day',
-    if (state == 'failed' || state == 'interrupted') 'failure'};
+    if (state == 'failed' || state == 'interrupted') 'failure',
+  };
   final operation = value['operation_ref'];
   final revision = value['revision'];
-  if (value.length != fields.length || !value.keys.toSet().containsAll(fields) ||
-      operation is! String || !RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$').hasMatch(operation) ||
-      revision is! int || revision < 1) {
+  if (value.length != fields.length ||
+      !value.keys.toSet().containsAll(fields) ||
+      operation is! String ||
+      !RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+          .hasMatch(operation) ||
+      revision is! int ||
+      revision < 1) {
     throw const FormatException('Invalid Day refresh snapshot.');
   }
   return switch (state) {
     'pending' => PendingDayRefresh(operationRef: operation, revision: revision),
     'running' => RunningDayRefresh(operationRef: operation, revision: revision),
-    'completed' => CompletedDayRefresh(operationRef: operation, revision: revision, day: _decodeSnapshot(_asMap(value['day']))),
-    'failed' => FailedDayRefresh(operationRef: operation, revision: revision, failure: OwnerFailure.fromJson(value['failure'])),
-    'interrupted' => InterruptedDayRefresh(operationRef: operation, revision: revision, failure: OwnerFailure.fromJson(value['failure'])),
+    'completed' => CompletedDayRefresh(
+      operationRef: operation,
+      revision: revision,
+      day: _decodeSnapshot(_asMap(value['day'])),
+    ),
+    'failed' => FailedDayRefresh(
+      operationRef: operation,
+      revision: revision,
+      failure: OwnerFailure.fromJson(value['failure']),
+    ),
+    'interrupted' => InterruptedDayRefresh(
+      operationRef: operation,
+      revision: revision,
+      failure: OwnerFailure.fromJson(value['failure']),
+    ),
     _ => throw const FormatException('Unknown Day refresh state.'),
   };
 }

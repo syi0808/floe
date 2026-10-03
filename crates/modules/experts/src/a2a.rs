@@ -87,10 +87,9 @@ impl A2ATask {
                 self.result.is_none() && self.failure.is_none()
             }
             A2ATaskState::Completed => {
-                self.result
-                    .as_deref()
-                    .is_some_and(|result| bounded_text(result, floe_agent_contract::MAX_OUTPUT_BYTES))
-                    && self.failure.is_none()
+                self.result.as_deref().is_some_and(|result| {
+                    bounded_text(result, floe_agent_contract::MAX_OUTPUT_BYTES)
+                }) && self.failure.is_none()
             }
             A2ATaskState::Failed | A2ATaskState::Cancelled | A2ATaskState::Rejected => {
                 self.result.is_none() && self.failure.is_some()

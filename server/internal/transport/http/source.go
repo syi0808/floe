@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"floe/server/internal/authority"
- "floe/server/internal/trust"
+	"floe/server/internal/trust"
 )
 
 func serveSource(writer http.ResponseWriter, request *http.Request, principal trust.Principal, service *authority.SourceService) {

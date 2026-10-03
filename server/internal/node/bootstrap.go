@@ -2,7 +2,7 @@ package node
 
 import (
 	"errors"
- "floe/server/internal/credentials"
+	"floe/server/internal/credentials"
 	"fmt"
 	"net/http"
 )
@@ -57,4 +57,4 @@ func ConfigureOptional(name string, initialize func() error) ModuleStatus {
 	return status
 }
 
-func(server *LocalServer)Close(){server.Management.Close()}
+func (server *LocalServer) Close() { server.Management.Close() }

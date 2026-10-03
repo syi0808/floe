@@ -18,7 +18,6 @@ abstract interface class AgentInteractionGateway {
   Future<AgentInteractionRefreshResult> refreshInteraction(
     AgentInteractionSnapshot snapshot,
   );
-
 }
 
 final class NativeAgentInteractionGateway implements AgentInteractionGateway {
@@ -43,19 +42,28 @@ final class NativeAgentInteractionGateway implements AgentInteractionGateway {
     AgentInteractionDecision decision,
   ) async {
     final previous = _pendingDecisions[snapshot.id];
-    if (previous != null && (previous.sessionId != snapshot.sessionId || previous.decision != decision)) {
+    if (previous != null &&
+        (previous.sessionId != snapshot.sessionId ||
+            previous.decision != decision)) {
       throw AgentVaultException('conflict', requestId: previous.commandId);
     }
-    final command = previous ?? _client.prepareInteractionResolve(
-      interactionId: snapshot.id, sessionId: snapshot.sessionId,
-      expectedRevision: snapshot.revision, decision: decision, targetDigest: snapshot.targetDigest);
+    final command =
+        previous ??
+        _client.prepareInteractionResolve(
+          interactionId: snapshot.id,
+          sessionId: snapshot.sessionId,
+          expectedRevision: snapshot.revision,
+          decision: decision,
+          targetDigest: snapshot.targetDigest,
+        );
     _pendingDecisions[snapshot.id] = command;
     try {
       final result = await _client.submitInteractionResolve(command);
       _pendingDecisions.remove(snapshot.id);
       return result;
     } on NativeTransportException catch (error) {
-      if (error.code != 'timeout' && error.code != 'ffi') _pendingDecisions.remove(snapshot.id);
+      if (error.code != 'timeout' && error.code != 'ffi')
+        _pendingDecisions.remove(snapshot.id);
       rethrow;
     }
   }
@@ -68,15 +76,21 @@ final class NativeAgentInteractionGateway implements AgentInteractionGateway {
     if (previous != null && previous.sessionId != snapshot.sessionId) {
       throw AgentVaultException('conflict', requestId: previous.commandId);
     }
-    final command = previous ?? _client.prepareInteractionRefresh(
-      interactionId: snapshot.id, sessionId: snapshot.sessionId, expectedRevision: snapshot.revision);
+    final command =
+        previous ??
+        _client.prepareInteractionRefresh(
+          interactionId: snapshot.id,
+          sessionId: snapshot.sessionId,
+          expectedRevision: snapshot.revision,
+        );
     _pendingRefreshes[snapshot.id] = command;
     try {
       final result = await _client.submitInteractionRefresh(command);
       _pendingRefreshes.remove(snapshot.id);
       return result;
     } on NativeTransportException catch (error) {
-      if (error.code != 'timeout' && error.code != 'ffi') _pendingRefreshes.remove(snapshot.id);
+      if (error.code != 'timeout' && error.code != 'ffi')
+        _pendingRefreshes.remove(snapshot.id);
       rethrow;
     }
   }

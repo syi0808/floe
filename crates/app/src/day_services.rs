@@ -1,7 +1,6 @@
 use crate::{
-    AppComposition, CallerContext,
-    CaptureId, Classification, CoreError, DomainRef, ErrorCode, EventId,
-    EventSchedule, NoteId, PersonId, Priority, Revision, TaskId, TimelineItem,
+    AppComposition, CallerContext, CaptureId, Classification, CoreError, DomainRef, ErrorCode,
+    EventId, EventSchedule, NoteId, PersonId, Priority, Revision, TaskId, TimelineItem,
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use floe_day::TimelineRepository;

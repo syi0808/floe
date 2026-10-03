@@ -68,7 +68,8 @@ pub struct GatewaySetupDto {
 
 impl GatewaySetupDto {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
-        if !valid_source_text(&self.display_address, 2048) || !valid_utc_timestamp(&self.expires_at) {
+        if !valid_source_text(&self.display_address, 2048) || !valid_utc_timestamp(&self.expires_at)
+        {
             return Err("connections.gateway_setup");
         }
         Ok(())
@@ -244,8 +245,13 @@ impl PairingSnapshotDto {
             || self.display_code.as_deref().is_some_and(|value| {
                 value.is_empty() || value.len() > 32 || !value.bytes().all(|byte| byte.is_ascii())
             })
-            || self.expires_at.as_deref().is_some_and(|value| !valid_utc_timestamp(value))
-            || self.next_observation_after_ms.is_some_and(|value| value > 60_000)
+            || self
+                .expires_at
+                .as_deref()
+                .is_some_and(|value| !valid_utc_timestamp(value))
+            || self
+                .next_observation_after_ms
+                .is_some_and(|value| value > 60_000)
             || !unique_values(&self.allowed_actions)
         {
             return Err("connections.pairing");
@@ -365,7 +371,9 @@ impl ConnectionOperationSnapshotDto {
             || self.display_code.as_deref().is_some_and(|value| {
                 value.is_empty() || value.len() > 32 || !value.bytes().all(|byte| byte.is_ascii())
             })
-            || self.next_observation_after_ms.is_some_and(|value| value > 60_000)
+            || self
+                .next_observation_after_ms
+                .is_some_and(|value| value > 60_000)
             || !unique_values(&self.allowed_actions)
         {
             return Err("connections.operation");
@@ -379,8 +387,10 @@ impl ConnectionOperationSnapshotDto {
         if let Some(failure) = &self.failure {
             failure.validate()?;
         }
-        if matches!(self.state, ConnectionOperationStateDto::Failed | ConnectionOperationStateDto::RepairRequired)
-            != self.failure.is_some()
+        if matches!(
+            self.state,
+            ConnectionOperationStateDto::Failed | ConnectionOperationStateDto::RepairRequired
+        ) != self.failure.is_some()
             || (self.state == ConnectionOperationStateDto::Completed && self.source.is_none())
             || (self.state == ConnectionOperationStateDto::Cancelled && self.failure.is_some())
         {
@@ -442,15 +452,25 @@ pub struct SourceSummaryDto {
 impl SourceSummaryDto {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         if !valid_revision(self.revision)
-            || self.display_labels.iter().any(|label| !valid_source_text(label, 256))
-            || self.last_observed_at.as_deref().is_some_and(|value| !valid_utc_timestamp(value))
+            || self
+                .display_labels
+                .iter()
+                .any(|label| !valid_source_text(label, 256))
+            || self
+                .last_observed_at
+                .as_deref()
+                .is_some_and(|value| !valid_utc_timestamp(value))
             || self.selected_resources.len() > 4096
             || !unique_values(&self.allowed_actions)
         {
             return Err("connections.source");
         }
         unique_by(&self.selected_resources, |value| value.resource_ref.get())?;
-        if self.selected_resources.iter().any(|resource| !valid_source_text(&resource.label, 256)) {
+        if self
+            .selected_resources
+            .iter()
+            .any(|resource| !valid_source_text(&resource.label, 256))
+        {
             return Err("connections.source.resources");
         }
         Ok(())
@@ -465,7 +485,7 @@ pub struct PermittedResourceChoiceDto {
     pub selected: bool,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewDataCategoryDto {
     Personal,
@@ -485,7 +505,10 @@ impl ProcessingDisclosureDto {
     fn validate(&self) -> Result<(), &'static str> {
         if self.categories.len() > 2
             || self.categories.iter().collect::<HashSet<_>>().len() != self.categories.len()
-            || self.scope_labels.iter().any(|label| !valid_source_text(label, 256))
+            || self
+                .scope_labels
+                .iter()
+                .any(|label| !valid_source_text(label, 256))
         {
             return Err("connections.review.processing_disclosure");
         }
@@ -516,9 +539,15 @@ impl SourceReviewDto {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         self.review_ref.validate()?;
         if !valid_revision(self.source_revision)
-            || self.labels.iter().any(|label| !valid_source_text(label, 256))
+            || self
+                .labels
+                .iter()
+                .any(|label| !valid_source_text(label, 256))
             || self.permitted_choices.len() > 4096
-            || self.permitted_choices.iter().any(|choice| !valid_source_text(&choice.label, 256))
+            || self
+                .permitted_choices
+                .iter()
+                .any(|choice| !valid_source_text(&choice.label, 256))
             || !valid_utc_timestamp(&self.expires_at)
             || !unique_values(&self.allowed_actions)
         {
@@ -626,7 +655,10 @@ impl ObserveReviewDto {
         self.review_ref.validate()?;
         if !valid_revision(self.source_revision)
             || self.display_members.len() > 8
-            || self.display_members.iter().any(|member| !valid_source_text(member, 128))
+            || self
+                .display_members
+                .iter()
+                .any(|member| !valid_source_text(member, 128))
             || !valid_utc_timestamp(&self.expires_at)
             || !unique_values(&self.allowed_actions)
         {
@@ -669,7 +701,8 @@ fn valid_revision(value: u64) -> bool {
 }
 
 fn valid_utc_timestamp(value: &str) -> bool {
-    DateTime::parse_from_rfc3339(value).is_ok_and(|timestamp| timestamp.offset().local_minus_utc() == 0)
+    DateTime::parse_from_rfc3339(value)
+        .is_ok_and(|timestamp| timestamp.offset().local_minus_utc() == 0)
 }
 
 fn valid_safe_action_names(values: &[String]) -> bool {
@@ -726,7 +759,10 @@ fn valid_launch_url(value: &str, purpose: LaunchPurposeDto) -> bool {
     }
 }
 
-fn unique_by<T, K: Eq + std::hash::Hash>(values: &[T], key: impl Fn(&T) -> K) -> Result<(), &'static str> {
+fn unique_by<T, K: Eq + std::hash::Hash>(
+    values: &[T],
+    key: impl Fn(&T) -> K,
+) -> Result<(), &'static str> {
     if values.iter().map(key).collect::<HashSet<_>>().len() == values.len() {
         Ok(())
     } else {

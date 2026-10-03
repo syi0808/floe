@@ -1,12 +1,18 @@
+use super::{
+    ContinuationRef, InteractionOrigin, InteractionResumeRef, MAX_ACTIVE_INTERACTIONS_PER_RUN,
+    MAX_RESUME_LINEAGE,
+};
 use floe_agent_contract::{DependencyCoverage, EngineStep};
 use floe_kernel::{AgentFailure, CommandId, PersonId, RunId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use super::{ContinuationRef, InteractionResumeRef, InteractionOrigin, MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_RESUME_LINEAGE};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum PriorExhaustion { BudgetExceeded, Stalled }
+pub enum PriorExhaustion {
+    BudgetExceeded,
+    Stalled,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -31,24 +37,38 @@ pub struct RunBlockRecord {
 
 impl RunBlockRecord {
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.review_group_id.is_nil() || self.origins.is_empty()
+        if self.review_group_id.is_nil()
+            || self.origins.is_empty()
             || self.origins.len() > MAX_ACTIVE_INTERACTIONS_PER_RUN
-            || self.review_refs.len() != self.origins.len() || self.interaction_refs.len() != self.origins.len()
+            || self.review_refs.len() != self.origins.len()
+            || self.interaction_refs.len() != self.origins.len()
             || self.interaction_refs.iter().any(Uuid::is_nil)
-            || self.interaction_refs.iter().collect::<std::collections::HashSet<_>>().len() != self.interaction_refs.len()
-        { return Err(AgentFailure::StorageUnavailable); }
+            || self
+                .interaction_refs
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != self.interaction_refs.len()
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
         let mut seen = std::collections::HashSet::new();
         for (origin, review) in self.origins.iter().zip(&self.review_refs) {
             origin.origin.validate()?;
             review.validate()?;
-            if origin.session_id.is_nil() || origin.person_id.0.is_nil()
-                || !origin.run_id.is_valid() || origin.executor_generation == 0
-                || origin.device_id.is_empty() || origin.device_id.len() > 256
+            if origin.session_id.is_nil()
+                || origin.person_id.0.is_nil()
+                || !origin.run_id.is_valid()
+                || origin.executor_generation == 0
+                || origin.device_id.is_empty()
+                || origin.device_id.len() > 256
                 || origin.device_id.trim() != origin.device_id
                 || origin.device_id.chars().any(char::is_control)
                 || !seen.insert(review.id)
                 || matches!(&origin.origin, InteractionOrigin::Projection { run_id, .. } if *run_id != origin.run_id)
-            { return Err(AgentFailure::StorageUnavailable); }
+            {
+                return Err(AgentFailure::StorageUnavailable);
+            }
         }
         Ok(())
     }
@@ -113,7 +133,9 @@ impl RunReceipt {
             || self.principal.is_empty()
             || self.principal.len() > 256
             || self.principal.chars().any(char::is_control)
-            || self.device_id.is_empty() || self.device_id.len() > 256 || self.user_message_id.is_nil()
+            || self.device_id.is_empty()
+            || self.device_id.len() > 256
+            || self.user_message_id.is_nil()
             || self.request_digest == [0; 32]
             || self.session_revision == 0
             || self.aggregate_revision == 0
@@ -123,12 +145,17 @@ impl RunReceipt {
             || self.resume_of == Some(self.run_id)
             || self.resume_lineage > MAX_RESUME_LINEAGE
             || self.attempt_refs.len() > floe_execution::budget::MAX_MODEL_ATTEMPTS_PER_SCOPE
-            || (!self.unresolved_attempts.is_empty() && matches!(self.state, RunState::Completed | RunState::Blocked))
+            || (!self.unresolved_attempts.is_empty()
+                && matches!(self.state, RunState::Completed | RunState::Blocked))
             || self.unresolved_attempts.len() > floe_execution::budget::MAX_MODEL_ATTEMPTS_PER_SCOPE
-            || self.unresolved_attempts.iter().any(|attempt| !self.attempt_refs.contains(&attempt.attempt_id)
-                || attempt.reservation_ceiling.validate().is_err()
-                || attempt.accounting.observed_tokens.is_some() || attempt.accounting.observed_cost_micros.is_some()
-                || !attempt.accounting.unknown_tokens || !attempt.accounting.unknown_cost)
+            || self.unresolved_attempts.iter().any(|attempt| {
+                !self.attempt_refs.contains(&attempt.attempt_id)
+                    || attempt.reservation_ceiling.validate().is_err()
+                    || attempt.accounting.observed_tokens.is_some()
+                    || attempt.accounting.observed_cost_micros.is_some()
+                    || !attempt.accounting.unknown_tokens
+                    || !attempt.accounting.unknown_cost
+            })
             || self.task_refs.len() > 64
             || self.attempt_refs.iter().any(Uuid::is_nil)
             || self.task_refs.iter().any(Uuid::is_nil)
@@ -145,7 +172,10 @@ impl RunReceipt {
                 .len()
                 != self.task_refs.len()
             || self.coverage.validate().is_err()
-            || self.blocked.as_ref().is_some_and(|record| record.validate().is_err())
+            || self
+                .blocked
+                .as_ref()
+                .is_some_and(|record| record.validate().is_err())
             || self.blocked.is_some() != (self.state == RunState::Blocked)
             || self
                 .output
@@ -171,7 +201,9 @@ impl RunReceipt {
                     && self.issue.is_none()
                     && self.coverage == DependencyCoverage::Unknown
             }
-            RunState::Blocked => self.output.is_none() && self.issue.is_none() && self.blocked.is_some(),
+            RunState::Blocked => {
+                self.output.is_none() && self.issue.is_none() && self.blocked.is_some()
+            }
             RunState::Completed => {
                 self.output
                     .as_deref()
@@ -255,7 +287,10 @@ impl RunTerminal {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         if !self.state.is_terminal()
             || self.coverage.validate().is_err()
-            || self.blocked.as_ref().is_some_and(|record| record.validate().is_err())
+            || self
+                .blocked
+                .as_ref()
+                .is_some_and(|record| record.validate().is_err())
             || self.blocked.is_some() != (self.state == RunState::Blocked)
             || self
                 .output
@@ -384,8 +419,10 @@ impl RunRecord {
             .checked_add(2)
             .ok_or(AgentFailure::StorageUnavailable)?;
         if self.person_id != person_id
-            || self.device_id.is_empty() || self.device_id.len() > 256
-            || self.device_id.trim() != self.device_id || self.device_id.chars().any(char::is_control)
+            || self.device_id.is_empty()
+            || self.device_id.len() > 256
+            || self.device_id.trim() != self.device_id
+            || self.device_id.chars().any(char::is_control)
             || self.user_message_id.is_nil()
             || !self.run_id.is_valid()
             || !self.command_id.is_valid()
@@ -399,7 +436,10 @@ impl RunRecord {
             || self.resume_of == Some(self.run_id)
             || self.resume_lineage > MAX_RESUME_LINEAGE
             || self.journal_revision > 512
-            || self.blocked.as_ref().is_some_and(|record| record.validate().is_err())
+            || self
+                .blocked
+                .as_ref()
+                .is_some_and(|record| record.validate().is_err())
             || self.blocked.is_some() != (self.state == RunState::Blocked)
             || self.coverage.validate().is_err()
             || self
@@ -429,12 +469,19 @@ impl RunRecord {
                     && self.issue.is_none()
             }
             RunState::Blocked => {
-                self.session_revision == terminal_revision && self.aggregate_revision == 2
-                    && self.output.is_none() && self.issue.is_none()
-                    && self.blocked.as_ref().is_some_and(|record| record.origins.iter().all(|origin|
-                        origin.session_id == self.session_id && origin.person_id == self.person_id
-                        && origin.device_id == self.device_id && origin.run_id == self.run_id
-                        && origin.executor_generation == self.executor_generation))
+                self.session_revision == terminal_revision
+                    && self.aggregate_revision == 2
+                    && self.output.is_none()
+                    && self.issue.is_none()
+                    && self.blocked.as_ref().is_some_and(|record| {
+                        record.origins.iter().all(|origin| {
+                            origin.session_id == self.session_id
+                                && origin.person_id == self.person_id
+                                && origin.device_id == self.device_id
+                                && origin.run_id == self.run_id
+                                && origin.executor_generation == self.executor_generation
+                        })
+                    })
             }
             RunState::Completed => {
                 self.session_revision == terminal_revision
@@ -463,9 +510,7 @@ impl RunRecord {
                         && self.issue.is_some()
                 }
             },
-            RunState::Cancelled
-            | RunState::TimedOut
-            | RunState::Interrupted => {
+            RunState::Cancelled | RunState::TimedOut | RunState::Interrupted => {
                 self.session_revision == terminal_revision
                     && self.aggregate_revision == 2
                     && self.output.is_none()
@@ -486,19 +531,22 @@ impl RunRecord {
             crate::TurnInput::NewMessage(message) => message.message_id,
             crate::TurnInput::ExistingMessage { message_id } => *message_id,
         };
-        self.command_id == request.command_id && self.session_id == request.session_id
-            && self.person_id.to_string() == request.principal && self.device_id == request.device_id
-            && self.user_message_id == message_id && self.initial_session_revision == request.expected_session_revision
-            && self.request_digest == request.request_digest && self.retry_of == request.retry_of
+        self.command_id == request.command_id
+            && self.session_id == request.session_id
+            && self.person_id.to_string() == request.principal
+            && self.device_id == request.device_id
+            && self.user_message_id == message_id
+            && self.initial_session_revision == request.expected_session_revision
+            && self.request_digest == request.request_digest
+            && self.retry_of == request.retry_of
             && self.continuation_of == continuation.map(|value| value.run_id)
-            && self.continuation_executor_generation == continuation.map(|value| value.executor_generation)
+            && self.continuation_executor_generation
+                == continuation.map(|value| value.executor_generation)
             && self.continuation_level == continuation.map_or(0, |value| value.level)
             && self.resume_of == resume.map(|value| value.origin_run_id)
             && self.resume_lineage == resume.map_or(0, |value| value.lineage)
     }
-
 }
-
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnresolvedModelAttempt {

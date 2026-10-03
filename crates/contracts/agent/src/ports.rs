@@ -1,10 +1,9 @@
-
 use uuid::Uuid;
 
 use crate::{
-    AgentFailure, AllowedCatalog, DelegationExecutionContext,
-    DelegationRequest, DependencyCoverage, ModelProjectionRequest, ModelRequest, ModelStep,
-    ProjectionRef, ReplayReceipt, TaskReceipt, ToolCall, ToolResult,
+    AgentFailure, AllowedCatalog, DelegationExecutionContext, DelegationRequest,
+    DependencyCoverage, ModelProjectionRequest, ModelRequest, ModelStep, ProjectionRef,
+    ReplayReceipt, TaskReceipt, ToolCall, ToolResult,
 };
 use serde::{Deserialize, Serialize};
 
