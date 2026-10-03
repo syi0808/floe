@@ -63,8 +63,12 @@ floe_native_artifact() {
           -Xlinker FoundationModels
         )
         local package_bin
-        if xcrun swift build "${package_options[@]}" \
-          && package_bin="$(xcrun swift build "${package_options[@]}" --show-bin-path)"; then
+        local package_host_sdk
+        # SwiftPM compiles its manifest for macOS. Keep Xcode's destination SDK
+        # out of that host process; explicit --triple/--sdk still select the product.
+        if package_host_sdk="$(xcrun --sdk macosx --show-sdk-path)" \
+          && SDKROOT="${package_host_sdk}" xcrun --sdk macosx swift build "${package_options[@]}" \
+          && package_bin="$(SDKROOT="${package_host_sdk}" xcrun --sdk macosx swift build "${package_options[@]}" --show-bin-path)"; then
           cp "${package_bin}/libfloe_local_model.dylib" "${temporary}"
         else
           false

@@ -80,3 +80,10 @@ For subsequent G2 corrections the common full Rust build runs first in cloud. On
 ## Cloud-first retry on 4430c81d
 
 All 13 Vault diagnostics are resolved. Full Rust compilation advances to one App facade re-export of the removed CalendarMirrorInput type. Repository source search confirms it has no remaining definition or caller; remove that stale export without restoring the old arbitrary mirror-publication path. Rust formatting and whitespace passed with no patch; dependency policy passed with 23 nodes and 126 edges, and Go retained exact-input evidence. No lockfile changes occurred. Apple builds were intentionally not repeated against this known common Rust error. Full Rust retry remains necessary before Apple app validation.
+
+
+## Full Rust and macOS pass on 8cb60164
+
+The full cloud Rust workspace/library/binary/example build passed (exit0); the artifact preserves the final log tail and exit/provenance, not all prior interactive chunks. Captured App formatting is integrated. macOS full debug application build passed, with executable, plist, three bundled dylibs, four native ABI exports and signature inspected. The user may personally test this macOS artifact while iOS validation continues; this is not whole-G2 completion or permission to begin automated test reconstruction.
+
+Simulator's generic Xcode invocation selected arm64 and x86_64, but the installed Rust toolchain lacks x86_64-apple-ios. The user subsequently scoped simulator testing to arm64 only; use explicit validation-only Xcode build settings, without changing project architecture defaults or installing the missing target. Device packaging exposed a host/destination SDK mix: SwiftPM's macOS manifest compiler inherited iPhoneOS SDKROOT. The helper now supplies macOS SDKROOT only to its two SwiftPM subprocesses, retaining explicit destination --triple/--sdk arguments. This source fix needs Apple validation. Common Rust inputs otherwise remain unchanged. No tests or model/provider operations ran.

@@ -39,11 +39,11 @@ pub use floe_context_contract::{CalendarProvider, CalendarScope, ResourceHandle,
 /// Values carried by the remaining host service signatures. The S1
 /// Conversation and Connections bindings call their typed owners directly.
 pub use floe_day::{
-    AllDaySchedule, CalendarBatch, CalendarFailure, CalendarMirrorState,
-    CalendarRange, CalendarRecord, CalendarSelection, CalendarSource, CalendarSyncStatus, Capture,
-    CaptureId, CaptureProcessing, CaptureSource, DaySnapshot, DomainError, DomainRef, Event,
-    EventId, EventSchedule, Note, NoteId, Priority, Revision, SourceRef, Task, TaskId,
-    TimedSchedule, TimelineItem,
+    AllDaySchedule, CalendarBatch, CalendarFailure, CalendarMirrorState, CalendarRange,
+    CalendarRecord, CalendarSelection, CalendarSource, CalendarSyncStatus, Capture, CaptureId,
+    CaptureProcessing, CaptureSource, DaySnapshot, DomainError, DomainRef, Event, EventId,
+    EventSchedule, Note, NoteId, Priority, Revision, SourceRef, Task, TaskId, TimedSchedule,
+    TimelineItem,
 };
 pub use floe_diagnostics::{PanicRecord, TraceContext, instrument, panic_record};
 

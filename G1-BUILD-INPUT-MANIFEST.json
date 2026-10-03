@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "G2 4430 resolves all Vault errors; full cloud Rust stops at one obsolete App CalendarMirrorInput export, now removed but not rerun. Complete App facade source scan found no other missing export. Formatting/DAG passed, no lock changes; Go retained exact-input proof. Cloud full Rust precedes Apple retries. Full G2 unpassed; no tests or live operations.",
+  "verification": "Full cloud Rust and macOS app passed on8cb; app executable/bundled libraries/four ABI exports/signature inspected. Captured App formatting integrated. iOS device SwiftPM host SDK isolation prepared, not rerun. Simulator validation explicitly scoped to arm64 by user; project architectures unchanged. Whole G2 still open. User-led macOS testing may proceed; no automated tests or live operations executed by validators.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "5405d0ebb18a12da364f19cc1da67d25e6a519cb",
+  "current_correction_source_commit": "a07cd43dc3615927315d1185a5ee5364aa1d4622",
   "current_status_document": "docs/plans/t0-execution-status.json"
 }

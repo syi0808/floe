@@ -114,7 +114,7 @@
     "implement_go_gateway_slice": "Go credential deadline/pairing repair followup and adversarial adjudication",
     "remove_core_rust_tests": "retained CLI diagnostics, cross-boundary audit and outer Host close lifetime fix"
   },
-  "verification_gate": "G2 remains unpassed. Vault errors resolved; cloud full Rust stops at obsolete App CalendarMirrorInput re-export, now removed. Cloud Rust must pass before Apple retries. No tests.",
+  "verification_gate": "Full cloud Rust and macOS app passed on8cb. Whole G2 remains open for arm64 simulator and unsigned device apps; SDK host/destination fix prepared. User-led macOS behavior testing may begin; automated tests remain held.",
   "ancillary_handoff": "Parent completed partial97baselinefiles+manifest branch codex/handoff-s1-e2890706: commit d0eacbd08dc05dde224a1512d313d2a30845648e, tree5c7ac2f02ab0874f62d82562b9126cf5eecaca77. Not full e289 tree, no active S1 publication. Parent owns remote writes.",
   "day_stage": "Owned multi-source refresh, safe snapshots, product read admission, latest complete interval cache per resource, bounded selected reads, and immutable refresh replay implemented. Manual mutation atomic command receipts are being added; no live provider effects or data reset.",
   "review": "Current source audit and fixes closed across credential, pairing, Access review/Actions invalidation, source device, Go probe/Microsoft identity, safe projections and native callback lifetime. Full static evidence in s1-gateway-current-source-audit-20261002.md and s1-boundary-closure-notes.md. No current runtime validation claim.",
@@ -139,7 +139,7 @@
     "client_day": "Delivered and integrated; current G2 correction/review is native-owned.",
     "client_experts_knowledge": "Delivered and integrated; current G2 correction/review is native-owned."
   },
-  "updated_at": "2026-10-03T14:23:00Z",
+  "updated_at": "2026-10-03T14:57:00Z",
   "publication_identity": {
     "author": "syi0808",
     "email": "66503450+syi0808@users.noreply.github.com",
@@ -155,7 +155,7 @@
     "client_availability": "84df2a3e gates changes on observed writable destinations; no iOS write executor was removed from baseline."
   },
   "g2": {
-    "status": "4430_failed_app_export_correction_ready",
+    "status": "8cb_rust_macos_pass_ios_fix_ready",
     "source_owner_checkpoint": "84df2a3e",
     "command_sheet": "s2-g2-command-sheet.md",
     "formatting_baseline": "229b468fd440e3c0d4b31fa7d0e976806313dcf4",
@@ -164,15 +164,17 @@
       "dependency policy and diff audit",
       "Mac Flutter analysis and same-snapshot macOS/iOS simulator/unsigned device builds"
     ],
-    "next": "Publish stale App export removal. Run full cloud Rust build first, then all Apple app targets on the same passing SHA. Reuse unchanged DAG/Go/native/analyzer only with input proof. No tests.",
+    "next": "Publish SwiftPM host SDK isolation and captured App formatting. Validate affected Apple builds, arm64 simulator explicitly scoped by user. Reuse full Rust with input evidence. No automated tests.",
     "input_commit": "e826ed2d133a6d3ca52b67655e61109c17a55a98",
     "evidence": "2026-10-03-g2-first-attempt.md",
-    "retry_input_commit": "4430c81dfe76ac111c0ae004bd84a934d3017f6e",
+    "retry_input_commit": "8cb601641b0d6b59ce49278278814c02e277a46e",
     "passed_unchanged": [
       "Go packages/executable and DAG with validator input identity proof",
       "Dart analysis:0errors0warnings138infos",
       "Direct FloeAppleWellbeing device+simulator compilation",
-      "Direct local-model device+simulator compilation and four expected C ABI exports"
+      "Direct local-model device+simulator compilation and four expected C ABI exports",
+      "Full cloud Rust workspace/library/binary/example build",
+      "Full macOS debug app with bundled library/ABI/signature inspection"
     ]
   },
   "health_alignment": {
