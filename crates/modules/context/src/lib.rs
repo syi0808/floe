@@ -160,8 +160,8 @@ pub use application::expert_execution::{
     ContextExpertProjection, ContextExpertSources, ExpertContextDependencies,
 };
 
-pub use application::dependency_resolver::ContextDependencyResolver;
 pub use application::ContextTrustedConsumerCatalog;
+pub use application::dependency_resolver::ContextDependencyResolver;
 
 pub use application::source_review::ContextSourceReview;
 pub use ports::source_metadata::SourceMetadataTransport;

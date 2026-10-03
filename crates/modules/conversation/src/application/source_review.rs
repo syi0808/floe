@@ -239,7 +239,7 @@ pub(crate) async fn build_blocked_run_commit<R: ConversationRepository>(
                 .await?;
             if actual != *expected || actual.snapshot != delegated.snapshot
                 || actual.snapshot.principal != receipt.principal || actual.snapshot.parent_run_id.is_none()
-                || !journal.iter().any(|entry| matches!(&entry.event, JournalEvent::DelegationResult { receipt } if receipt == &delegated))
+                || !journal.iter().any(|entry| matches!(&entry.event, JournalEvent::DelegationResult { receipt } if receipt.as_ref() == &delegated))
             { return Err(AgentFailure::PolicyDenied); }
             let blockage = actual
                 .snapshot

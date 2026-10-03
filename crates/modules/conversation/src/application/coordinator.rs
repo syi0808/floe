@@ -16,7 +16,7 @@ use crate::{
 };
 
 use super::finalization::{FinalizationOutcome, finalize_exhausted_run};
-use super::recovery::{JournalLineage, project_journal, project_transcript_history};
+use super::recovery::{JournalLineage, project_transcript_history};
 
 pub(super) enum RunAdmission {
     Existing(RunReceipt),

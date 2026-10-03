@@ -1,5 +1,5 @@
 use floe_agent_contract::{
-    AgentMessage, BatchCursor, DependencyCoverage, JournalEvent, ModelConversation, ReplayReceipt,
+    AgentMessage, BatchCursor, DependencyCoverage, ModelConversation, ReplayReceipt,
     ValidatedModelBatch,
 };
 use floe_kernel::{AgentFailure, CommandId, RunId};

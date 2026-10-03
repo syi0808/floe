@@ -1,7 +1,7 @@
 use crate::{AgentMessage, RunReceipt, RunTerminal, SessionReceipt};
 use floe_agent_contract::{
-    AgentFailure, AgentMessage as ContractMessage, Artifact as ContractArtifact,
-    ArtifactPart as ContractArtifactPart, DependencyCoverage, EngineStep, MessageRole, RunId,
+    AgentFailure, AgentMessage as ContractMessage, DependencyCoverage, EngineStep, MessageRole,
+    RunId,
 };
 use uuid::Uuid;
 

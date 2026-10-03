@@ -8,7 +8,7 @@ use floe_access::{
     AuthorizationProofVerifier, AuthorizationSignature, AuthorizationSigningCommand,
     CalendarProductWirePurpose, ProductCalendarChallenge, ProductCalendarClaims,
     ProductCalendarPageQuery, ProductCalendarPermission, ProductCalendarReadPermit,
-    ProductCalendarResultKind, ProductCalendarSigningCommand, ProductCalendarSourceClaims,
+    CalendarProductResultKind, ProductCalendarSigningCommand, ProductCalendarSourceClaims,
     ProductCalendarSourcePreview, ProductSourceObservation, RemoteProducerIdentity,
     SourceExpectation,
 };
@@ -118,7 +118,7 @@ struct RawReleaseResponse {
 #[serde(deny_unknown_fields)]
 struct RawCalendarPage {
     schema_version: u32,
-    result_kind: ProductCalendarResultKind,
+    result_kind: CalendarProductResultKind,
     refresh_operation_id: Uuid,
     read_operation_id: Uuid,
     page_id: Uuid,
@@ -461,7 +461,7 @@ impl GatewayCalendarMirrorClient {
                 enrollment_id: self.lease.credentials().binding().enrollment_id.clone(),
                 credential_generation: self.lease.credentials().binding().credential_generation,
                 purpose: CalendarProductWirePurpose::DayRefresh,
-                result_kind: ProductCalendarResultKind::CalendarMirror,
+                result_kind: CalendarProductResultKind::CalendarMirror,
                 refresh_operation_id: request.refresh_operation_id,
                 read_operation_id: request.read_operation_id,
                 page_id: Uuid::new_v4(),
@@ -1116,7 +1116,7 @@ fn validate_record(record: &CalendarRecord, calendar_id: &str) -> Result<(), Age
 
 fn validate_raw_page_schedules(page: &RawCalendarPage) -> Result<(), AgentFailure> {
     if page.schema_version != 1
-        || page.result_kind != ProductCalendarResultKind::CalendarMirror
+        || page.result_kind != CalendarProductResultKind::CalendarMirror
         || page.refresh_operation_id.is_nil()
         || page.read_operation_id.is_nil()
         || page.page_id.is_nil()

@@ -349,7 +349,7 @@ where
                     .root_lease(),
                     TraceContext::new(request.command_id.as_uuid()).with_run_id(run_id),
                 );
-                let memories = state
+                let memory_snapshot = state
                     .dependencies
                     .knowledge
                     .read_context(&actor, &read_scope)
@@ -357,8 +357,15 @@ where
                 let context = AgentContext {
                     projection_version: 1,
                     persona: None,
-                    memories,
-                    optional_context_issues: vec![],
+                    memories: memory_snapshot.memories,
+                    optional_context_issues: memory_snapshot
+                        .issue
+                        .map(|reason| floe_agent_contract::ContextIssue {
+                            source: floe_agent_contract::ContextSource::Memory,
+                            reason,
+                        })
+                        .into_iter()
+                        .collect(),
                     evidence: vec![],
                 };
                 context.validate()?;

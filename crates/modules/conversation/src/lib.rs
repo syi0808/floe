@@ -83,8 +83,6 @@ pub use application::{
     PreparedStartTurn, SessionSnapshot, prepare_start_turn, read_session_snapshot,
 };
 
-pub use application::{PublishTaskSourceReview, publish_task_source_review};
-
 pub use application::{
     CommandReceipt, ConversationDependencies, ConversationOwner, InteractionResult,
     RefreshInteraction, ResolveInteraction,
