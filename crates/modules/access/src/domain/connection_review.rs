@@ -677,6 +677,13 @@ pub struct ProjectionReviewOrigin {
     pub requirements_digest: [u8; 32],
 }
 impl ProjectionReviewOrigin {
+    pub fn validate_review_binding(&self, person_id: PersonId, device_id: &str, review: &ConnectionReview) -> Result<(), AgentFailure> {
+        self.validate()?;
+        review.validate()?;
+        review.source.validate_device(device_id)?;
+        if !person_id.is_valid() || review.person_id != person_id || review.device_id != device_id || review.source.source.connection_id() != self.connection_id || review.command_id != self.command_id()? || review.intent_digest != digest(&(person_id, device_id, self))? { return Err(AgentFailure::PolicyDenied); }
+        Ok(())
+    }
     pub fn for_requirements(
         run_id: floe_kernel::RunId,
         projection_operation_id: Uuid,

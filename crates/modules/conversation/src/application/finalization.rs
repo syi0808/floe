@@ -30,6 +30,7 @@ pub(super) async fn finalize_exhausted_run<
     engine: &Engine,
     repository: &Repository,
     connections: &floe_connections::ConnectionsService,
+    experts: &dyn floe_experts::ExpertsOwner,
     actor: &floe_kernel::OwnerActor,
     run_id: RunId,
     root_scope: &ExecutionScope,
@@ -120,6 +121,7 @@ pub(super) async fn finalize_exhausted_run<
     current_turn.push(user_message);
     current_turn.extend(usable.clone());
     let request = EngineRequest {
+        execution_id: uuid::Uuid::new_v5(&run_id.as_uuid(), b"floe.conversation.finalization"),
         principal: work_request.principal.clone(),
         device_id: work_request.device_id.clone(),
         role_spec: RoleSpec {
@@ -164,7 +166,7 @@ pub(super) async fn finalize_exhausted_run<
         return Ok(FinalizationOutcome::AttemptedWithoutReply);
     };
     match outcome {
-        EngineOutcome::NeedsSourceReview(blocked) => {
+        EngineOutcome::Blocked(blocked) => {
             let prior = match issue {
                 AgentFailure::BudgetExceeded => crate::PriorExhaustion::BudgetExceeded,
                 _ => crate::PriorExhaustion::Stalled,
@@ -172,6 +174,7 @@ pub(super) async fn finalize_exhausted_run<
             let commit = super::source_review::build_blocked_run_commit(
                 repository,
                 connections,
+                experts,
                 actor,
                 run_id,
                 blocked,
@@ -269,6 +272,7 @@ fn exchange_barrier(entry: &ModelConversationEntry) -> Option<AgentFailure> {
                 | AgentFailure::CapabilityDenied
                 | AgentFailure::CapabilityUnavailable
                 | AgentFailure::VaultUnavailable
+                | AgentFailure::VaultLocked
                 | AgentFailure::StorageUnavailable
                 | AgentFailure::Cancelled
                 | AgentFailure::DeadlineExceeded

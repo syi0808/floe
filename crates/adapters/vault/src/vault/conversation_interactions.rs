@@ -18,7 +18,7 @@ use floe_conversation::{
     ConversationInteraction, DecisionAdmission, ExpireInteraction, ExpireOutcome,
     InteractionDecision, InteractionOrigin, InteractionResolutionCommit,
     InteractionResolutionReceipt, InteractionState, MAX_ACTIVE_INTERACTIONS_PER_RUN,
-    MAX_STORED_INTERACTIONS_PER_RUN, ProjectionReviewRecord, PublishAdmission, RunRecord, RunState,
+    MAX_STORED_INTERACTIONS_PER_RUN, ReviewAuditRecord, RunRecord, RunState,
     SupersedeInteraction, next_state_after_decision, state_after_resolution,
 };
 use floe_kernel::{PersonId, RunId};
@@ -31,55 +31,6 @@ const SCHEMA_VERSION: i64 = 1;
 const MAX_INTERACTION_PAYLOAD_BYTES: usize = 32 * 1024;
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    pub async fn publish_conversation_interaction(
-        &self,
-        record: ConversationInteraction,
-    ) -> Result<PublishAdmission, AgentFailure> {
-        record
-            .validate()
-            .map_err(|_| AgentFailure::VaultUnavailable)?;
-        if record.person_id != self.person_id {
-            return Err(AgentFailure::CapabilityDenied);
-        }
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(|error| self.registry_transaction_start_error(error))?;
-        let result = async {
-            initialize(&transaction).await?;
-            if let Some(existing) =
-                read_interaction(&transaction, self.person_id, record.id).await?
-            {
-                if !super::conversations::same_publication(&existing, &record) {
-                    return Err(AgentFailure::VaultUnavailable);
-                }
-                return Ok(PublishAdmission::Existing(existing));
-            }
-            self.check_interaction_origin_on(&transaction, &record, false)
-                .await?;
-            let stored = count_interactions(&transaction, record.origin_run_id, false).await?;
-            if stored >= u64::try_from(MAX_STORED_INTERACTIONS_PER_RUN).unwrap_or(u64::MAX) {
-                return Err(AgentFailure::BudgetExceeded);
-            }
-            let active = count_interactions(&transaction, record.origin_run_id, true).await?;
-            if active >= u64::try_from(MAX_ACTIVE_INTERACTIONS_PER_RUN).unwrap_or(u64::MAX) {
-                return Err(AgentFailure::BudgetExceeded);
-            }
-            insert_interaction(&transaction, &record).await?;
-            let run = self
-                .conversation_run_on(&transaction, record.origin_run_id)
-                .await?
-                .ok_or(AgentFailure::StorageUnavailable)?;
-            self.enqueue_resume_on(&transaction, &run).await?;
-            self.check_access()?;
-            Ok(PublishAdmission::Created(record))
-        }
-        .await;
-        self.finish_registry_transaction_checked(transaction, result)
-            .await
-    }
-
     pub async fn conversation_interaction(
         &self,
         interaction_id: Uuid,
@@ -399,7 +350,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         transaction: &Transaction<'_>,
         run: &RunRecord,
-        projection: &ProjectionReviewRecord,
+        projection: &ReviewAuditRecord,
         existing_only: bool,
     ) -> Result<(), AgentFailure> {
         projection.validate()?;
@@ -418,7 +369,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if payload.len() > 128 * 1024 {
                 return Err(AgentFailure::StorageUnavailable);
             }
-            let stored: ProjectionReviewRecord =
+            let stored: ReviewAuditRecord =
                 serde_json::from_str(&payload).map_err(unavailable)?;
             stored.validate()?;
             if stored != *projection

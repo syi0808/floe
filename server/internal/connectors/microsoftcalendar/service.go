@@ -10,10 +10,12 @@ import (
 )
 
 type Service struct {
-	pager     *views.CalendarPager
-	clock     func() time.Time
-	operation sync.Mutex
-	last      *views.CalendarView
+	pager         *views.CalendarPager
+	clock         func() time.Time
+	readGate      chan struct{}
+	cache         sync.Mutex
+	connection    integrations.Connection
+	viewSnapshots []views.ViewSnapshot
 }
 
 func NewService(clients ...*Client) (*Service, error) {
@@ -31,57 +33,199 @@ func NewService(clients ...*Client) (*Service, error) {
 	if err != nil {
 		return nil, ErrInvalidInput
 	}
-	return &Service{pager: pager, clock: time.Now}, nil
+	return &Service{
+		pager:         pager,
+		clock:         time.Now,
+		readGate:      make(chan struct{}, 1),
+		connection:    integrations.Connection{SchemaVersion: 1, ConnectorID: "calendar.microsoft", State: "unavailable", GrantedScopes: []string{}},
+		viewSnapshots: []views.ViewSnapshot{},
+	}, nil
 }
 
-func (service *Service) ReadCalendarView(ctx context.Context, rangeStart, rangeEnd time.Time, cursor string, limit int) (any, error) {
-	service.operation.Lock()
-	defer service.operation.Unlock()
-	view, err := service.pager.Read(ctx, rangeStart, rangeEnd, cursor, limit, service.clock())
+func (service *Service) Read(ctx context.Context, request views.ReadRequest) (views.Result, error) {
+	query := request.Query.Calendar
+	if request.Query.ViewID != views.Calendar || query == nil || request.Query.Mail != nil || request.Query.Work != nil || request.Query.Logistics != nil || !validReadBounds(request.Bounds) {
+		return views.Result{}, views.ReadError{Kind: views.InvalidQuery}
+	}
+	queryValue := *query
+	if err := service.acquireRead(ctx); err != nil {
+		service.recordFailure(err, service.clock())
+		return views.Result{}, err
+	}
+	defer service.releaseRead()
+	now := service.clock()
+	if err := ctx.Err(); err != nil {
+		service.recordFailure(err, service.clock())
+		return views.Result{}, err
+	}
+	limit := queryValue.Limit
+	if limit > int(request.Bounds.MaxItems) {
+		limit = int(request.Bounds.MaxItems)
+	}
+	view, err := service.pager.Read(ctx, time.UnixMilli(queryValue.RangeStartUnixMS), time.UnixMilli(queryValue.RangeEndUnixMS), queryValue.Cursor, limit, now)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		err = ctxErr
+	}
 	if errors.Is(err, views.ErrCalendarCursor) {
-		return nil, ErrInvalidInput
+		err = ErrInvalidInput
 	}
 	if errors.Is(err, views.ErrCalendarResult) {
-		return nil, ErrInvalidResponse
+		err = ErrInvalidResponse
 	}
-	if err == nil {
-		service.last = &view
+	if err != nil {
+		service.recordFailure(err, service.clock())
+		return views.Result{}, normalizeReadError(err)
 	}
-	return view, err
+	result := views.Result{ViewID: views.Calendar, Calendar: &view}
+	if err := ctx.Err(); err != nil {
+		service.recordFailure(err, service.clock())
+		return views.Result{}, err
+	}
+	if _, _, err = views.EncodeBounded(result, request.Bounds); err != nil {
+		service.recordFailure(err, service.clock())
+		return views.Result{}, normalizeReadError(err)
+	}
+	if err := ctx.Err(); err != nil {
+		service.recordFailure(err, service.clock())
+		return views.Result{}, err
+	}
+	snapshot, err := ConnectionSnapshot(view)
+	if err != nil {
+		service.recordFailure(err, service.clock())
+		return views.Result{}, normalizeReadError(err)
+	}
+	if err := ctx.Err(); err != nil {
+		service.recordFailure(err, service.clock())
+		return views.Result{}, err
+	}
+	if err := service.recordSuccess(ctx, snapshot); err != nil {
+		return views.Result{}, err
+	}
+	return result, nil
 }
 
-func (service *Service) ConnectionSnapshot(ctx context.Context) (any, error) {
-	service.operation.Lock()
-	defer service.operation.Unlock()
+func (service *Service) Snapshot(ctx context.Context) (integrations.Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return integrations.Snapshot{}, err
+	}
+	service.cache.Lock()
+	defer service.cache.Unlock()
+	if err := ctx.Err(); err != nil {
+		return integrations.Snapshot{}, err
+	}
 	now := service.clock()
-	view, err := service.pager.Read(ctx, now.Add(-24*time.Hour), now.Add(31*24*time.Hour), "", 25, now)
-	if err == nil {
-		service.last = &view
-		return ConnectionSnapshot(view)
-	}
-	state, kind := "unavailable", "unavailable"
-	switch {
-	case errors.Is(err, ErrCredentialExpired):
-		state, kind = "revoked", "credential_expired"
-	case errors.Is(err, ErrPermissionDenied):
-		kind = "permission_denied"
-	case errors.Is(err, ErrRateLimited):
-		kind = "rate_limited"
-	case errors.Is(err, ErrInvalidResponse), errors.Is(err, views.ErrCalendarResult):
-		kind = "partial_fetch"
-	}
-	observed := now.UnixMilli()
-	snapshot := integrations.Snapshot{Descriptor: ConnectorDescriptor(), Connection: integrations.Connection{SchemaVersion: 1, ConnectorID: "calendar.microsoft", State: state, ObservedAtUnixMS: observed, LastFailure: &integrations.Failure{Kind: kind, ObservedAtUnixMS: observed}}, Views: []views.ViewSnapshot{}}
-	if service.last != nil {
-		snapshot.Connection.State = "degraded"
-		snapshot.Connection.GrantedScopes = []string{observeScope}
-		snapshot.Connection.LastSuccessAtUnixMS = &service.last.ObservedAtUnixMS
-		if service.last.ExpiresAtUnixMS > observed {
-			ready, readyErr := ConnectionSnapshot(*service.last)
-			if readyErr == nil {
-				snapshot.Views = ready.Views
-			}
+	connection := cloneConnection(service.connection)
+	viewSnapshots := append([]views.ViewSnapshot{}, service.viewSnapshots...)
+	if len(viewSnapshots) > 0 && viewSnapshots[0].ExpiresAtUnixMS <= now.UnixMilli() {
+		viewSnapshots = []views.ViewSnapshot{}
+		if connection.LastSuccessAtUnixMS != nil {
+			connection.State = "degraded"
 		}
 	}
+	snapshot := integrations.Snapshot{Descriptor: ConnectorDescriptor(), Connection: connection, Views: viewSnapshots}
+	if err := ctx.Err(); err != nil {
+		return integrations.Snapshot{}, err
+	}
 	return snapshot, nil
+}
+
+func (service *Service) recordSuccess(ctx context.Context, snapshot integrations.Snapshot) error {
+	service.cache.Lock()
+	defer service.cache.Unlock()
+	if err := ctx.Err(); err != nil {
+		service.recordFailureLocked(err, service.clock())
+		return err
+	}
+	service.connection = cloneConnection(snapshot.Connection)
+	service.viewSnapshots = append([]views.ViewSnapshot{}, snapshot.Views...)
+	return nil
+}
+
+func (service *Service) acquireRead(ctx context.Context) error {
+	select {
+	case service.readGate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (service *Service) releaseRead() {
+	<-service.readGate
+}
+
+func (service *Service) recordFailure(err error, observedAt time.Time) {
+	service.cache.Lock()
+	defer service.cache.Unlock()
+	service.recordFailureLocked(err, observedAt)
+}
+
+func (service *Service) recordFailureLocked(err error, observedAt time.Time) {
+	state, kind := readFailureMetadata(err)
+	if service.connection.LastSuccessAtUnixMS != nil {
+		state = "degraded"
+	}
+	observed := observedAt.UnixMilli()
+	service.connection.State = state
+	service.connection.ObservedAtUnixMS = observed
+	service.connection.LastFailure = &integrations.Failure{Kind: kind, ObservedAtUnixMS: observed}
+}
+
+func validReadBounds(bounds views.Bounds) bool {
+	return bounds.MaxItems > 0 && bounds.MaxItems <= maxItems && bounds.MaxBytes > 0 && bounds.MaxBytes <= 65_536
+}
+
+func normalizeReadError(err error) error {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return context.Canceled
+	case errors.Is(err, context.DeadlineExceeded):
+		return context.DeadlineExceeded
+	case errors.Is(err, ErrInvalidInput), errors.Is(err, views.ErrCalendarCursor):
+		return views.ReadError{Kind: views.InvalidQuery}
+	case errors.Is(err, ErrCredentialExpired):
+		return views.ReadError{Kind: views.CredentialExpired}
+	case errors.Is(err, ErrPermissionDenied):
+		return views.ReadError{Kind: views.PermissionDenied}
+	case errors.Is(err, ErrRateLimited):
+		return views.ReadError{Kind: views.RateLimited}
+	case errors.Is(err, ErrInvalidResponse), errors.Is(err, views.ErrCalendarResult), errors.Is(err, views.ErrInvalid):
+		return views.ReadError{Kind: views.InvalidProviderResponse}
+	default:
+		return views.ReadError{Kind: views.Unavailable}
+	}
+}
+
+func readFailureMetadata(err error) (string, string) {
+	switch {
+	case errors.Is(err, ErrCredentialExpired):
+		return "revoked", "credential_expired"
+	case errors.Is(err, ErrPermissionDenied):
+		return "unavailable", "permission_denied"
+	case errors.Is(err, ErrRateLimited):
+		return "unavailable", "rate_limited"
+	case errors.Is(err, ErrInvalidResponse), errors.Is(err, views.ErrCalendarResult), errors.Is(err, views.ErrInvalid):
+		return "unavailable", "partial_fetch"
+	case errors.Is(err, ErrInvalidInput), errors.Is(err, views.ErrCalendarCursor):
+		return "unavailable", "invalid_query"
+	default:
+		return "unavailable", "unavailable"
+	}
+}
+
+func cloneConnection(connection integrations.Connection) integrations.Connection {
+	connection.GrantedScopes = append([]string{}, connection.GrantedScopes...)
+	if connection.LastSuccessAtUnixMS != nil {
+		lastSuccess := *connection.LastSuccessAtUnixMS
+		connection.LastSuccessAtUnixMS = &lastSuccess
+	}
+	if connection.LastFailure != nil {
+		lastFailure := *connection.LastFailure
+		connection.LastFailure = &lastFailure
+	}
+	if connection.DeviceBinding != nil {
+		deviceBinding := *connection.DeviceBinding
+		connection.DeviceBinding = &deviceBinding
+	}
+	return connection
 }

@@ -34,7 +34,7 @@ func serveSource(writer http.ResponseWriter, request *http.Request, principal tr
 			failure(writer, http.StatusBadRequest, "validation")
 			return
 		}
-		writeResult(writer, service.PreviewView(principal, viewID, input))
+		writeResult(writer, service.PreviewView(request.Context(), principal, viewID, input))
 	case "admit":
 		allowed := map[string]struct{}{"schema_version": {}, "connector_id": {}, "connection_id": {}, "connection_revision": {}, "resources": {}, "grant": {}, "purpose": {}, "consumer": {}, "max_items": {}, "max_bytes": {}, "query": {}}
 		var input authority.ViewAdmission
@@ -50,7 +50,7 @@ func serveSource(writer http.ResponseWriter, request *http.Request, principal tr
 			return
 		}
 		if parts[1] == "release" {
-			writeResult(writer, service.Release(principal, proof))
+			writeResult(writer, service.Release(request.Context(), principal, viewID, proof))
 		} else {
 			writeResult(writer, service.ReadView(request.Context(), principal, viewID, proof))
 		}

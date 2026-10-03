@@ -35,6 +35,11 @@ pub fn decide_action(record:&ActionRecord,decision:&ActionDecision,authority:&Ac
         || decision.action_id!=record.id || decision.expected_revision!=record.revision || decision.review_ref!=record.review
         || record.execution.is_some() || authority.person_id!=record.person_id {return Err(AgentFailure::Conflict);}
     let mut updated=next(record)?;
+    if decision.now>=record.expires_at && matches!(record.state,ActionState::PendingReview|ActionState::Approved) {
+        updated.state=ActionState::Expired;
+        updated.validate()?;
+        return Ok(updated);
+    }
     match decision.decision {
         ActionDecisionKind::Approve if record.state==ActionState::PendingReview=>{
             if authority.revision!=record.review.authority_revision || authority.calendar_create==ActionAuthorityMode::Deny
@@ -150,6 +155,7 @@ pub fn change_action_authority(current:&ActionsAuthority,change:&AuthorityChange
     if change.command_id.is_nil() || change.person_id!=current.person_id || change.expected_revision!=current.revision {
         return Err(AgentFailure::Conflict);
     }
+    if change.mode==current.calendar_create{return Ok(current.clone());}
     Ok(ActionsAuthority{person_id:current.person_id,revision:current.revision.checked_add(1).ok_or(AgentFailure::Conflict)?,calendar_create:change.mode})
 }
 

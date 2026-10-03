@@ -99,7 +99,12 @@ impl ValidatedModelBatch {
             return Err(AgentFailure::InvalidInput);
         }
         match &self.delegation_context {
-            Some(context) => context.validate()?,
+            Some(context) => {
+                context.validate()?;
+                if context.projection_coverage != self.projection_coverage {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+            }
             None => {
                 if self
                     .steps

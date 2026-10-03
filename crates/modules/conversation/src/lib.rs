@@ -16,18 +16,18 @@ pub use application::{
     CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
     CancelRunStatus, ConversationModelProjection, ConversationService, DecideInteractionCommand,
     GovernedSessionRepository, GovernedSessionStore, HistoryProjection, PreparedResume,
-    ProjectedModelConversation, PublishInteractionRequest, ResumePreparationRequest,
+    ProjectedModelConversation, ResumePreparationRequest,
     ResumeSuppression, RunCancellationRegistry, admit_unscoped_session, admitted_session,
     cancel_run_command, compact_session, continuation, decide_interaction, expire_interaction,
     get_command, get_run, get_session, list_run_interactions, load_interaction, prepare_resume,
-    project_continuation, project_model_conversation_history, publish_interaction,
-    publish_task_projection_review, read_archive, recover_session, recovered_session,
+    project_continuation, project_model_conversation_history, 
+    read_archive, recover_session, recovered_session,
     resolve_interaction, resume_gate, resume_session, start_session, supersede_interaction,
 };
 pub use domain::{
     AdmittedExecution, AdmittedTurn, CommandQuery, CompactionReceipt, CompactionRequest,
     ContinuationRef, ContinuationSnapshot, ContinuationToken, ConversationInteraction,
-    DecisionAdmission, ExpertBindingTarget, ExpireInteraction, ExpireOutcome,
+    DecisionAdmission, ExpireInteraction, ExpireOutcome,
     INTERACTION_PENDING_LIFETIME_MS, InteractionDecision, InteractionDecisionKind,
     InteractionOrigin, InteractionRefresh, InteractionRequirement, InteractionRequirementKind,
     InteractionResolution, InteractionResolutionReceipt, InteractionResumeRef, InteractionState,
@@ -35,8 +35,8 @@ pub use domain::{
     MAX_RESUME_LINEAGE, MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES,
     MAX_REVIEWED_SOURCE_BYTES, MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN,
     MAX_TARGET_BUNDLE_MEMBERS, MAX_TURN_TEXT_BYTES, NavigationDestination, NavigationOnlyTarget,
-    PriorExhaustion, PublishAdmission, RecoveryReceipt, RecoveryRequest, ReviewedTarget,
-    RunBlockOrigin, RunBlockRecord, RunQuery, RunReceipt, RunRecord, RunState, RunTerminal,
+    PriorExhaustion, RecoveryReceipt, RecoveryRequest, ReviewedTarget,
+    BlockedInteractionLink, RunBlockOrigin, RunBlockRecord, RunQuery, RunReceipt, RunRecord, RunState, RunTerminal,
     SessionReadRequest, SessionReceipt, SessionRequest, StartSessionRequest, StartTurn,
     SupersedeInteraction, TurnAdmission, TurnAdmissionRequest, TurnMode, UnresolvedModelAttempt,
     canonical_requirement_digest, canonical_target_digest, decision_owner_command_id,
@@ -62,7 +62,7 @@ pub use turn::{
 
 pub use domain::{
     BlockedRunCommit, InteractionResolutionCommit, OwnerResolutionReceipt,
-    ProjectionReviewPublication, ProjectionReviewRecord, PublishTaskProjectionReview,
+    BlockedReviewEvidence, SourceReviewLink, ReviewPublication, ReviewAuditRecord,
     ResumeChildAdmission, ResumeRequired, TurnInput,
 };
 
@@ -90,7 +90,6 @@ pub use application::{
     RefreshInteraction, ResolveInteraction,
 };
 
-pub use application::{interaction_ref_artifacts, publish_expert_binding_blockers};
 
 pub use application::{ArtifactSummary, SessionMessage, TaskSummary};
 

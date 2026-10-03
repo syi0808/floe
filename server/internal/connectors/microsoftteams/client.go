@@ -156,7 +156,16 @@ func (client *Client) WorkContext(ctx context.Context, team, channel string, now
 
 func (client *Client) get(ctx context.Context, path string, output any) error {
 	token, err := client.tokens.Token(ctx)
-	if err != nil || !validOpaque(token, 4096) || len(token) < 8 {
+	if err != nil {
+		if contextErr := contextReadError(ctx, err); contextErr != nil {
+			return contextErr
+		}
+		return ErrCredentialExpired
+	}
+	if contextErr := contextReadError(ctx, nil); contextErr != nil {
+		return contextErr
+	}
+	if !validOpaque(token, 4096) || len(token) < 8 {
 		return ErrCredentialExpired
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.baseURL+path, nil)
@@ -166,6 +175,9 @@ func (client *Client) get(ctx context.Context, path string, output any) error {
 	request.Header.Set("Authorization", "Bearer "+token)
 	response, err := client.http.Do(request)
 	if err != nil {
+		if contextErr := contextReadError(ctx, err); contextErr != nil {
+			return contextErr
+		}
 		return ErrUnavailable
 	}
 	defer response.Body.Close()
@@ -183,6 +195,19 @@ func (client *Client) get(ctx context.Context, path string, output any) error {
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponse+1))
 	if err != nil || len(data) > maxResponse || json.Unmarshal(data, output) != nil {
 		return ErrInvalidResponse
+	}
+	return nil
+}
+
+func contextReadError(ctx context.Context, err error) error {
+	if contextErr := ctx.Err(); contextErr != nil {
+		return contextErr
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
 	}
 	return nil
 }

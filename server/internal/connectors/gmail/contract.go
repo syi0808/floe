@@ -20,19 +20,17 @@ func ConnectorDescriptor() integrations.Descriptor {
 		Capabilities: []integrations.Capability{
 			capability("mail.search", "mail.communication"),
 			capability("mail.threads.read", "mail.communication"),
-			capability("mail.messages.read", "mail.body"),
 			capability("mail.changes", "mail.communication"),
 			capability("mail.logistics.read", "life.logistics"),
 		},
 		Views: []views.ViewDescriptor{
 			{SchemaVersion: 1, ID: "mail.communication", Version: "1.0.0", DataClass: "personal", Retention: "index_on_demand", FreshnessTTLMS: 300_000, MaxItems: 100, MaxBytes: 65_536, ProvenanceRequired: true},
-			{SchemaVersion: 1, ID: "mail.body", Version: "1.0.0", DataClass: "personal", Retention: "ephemeral", FreshnessTTLMS: 60_000, MaxItems: 1, MaxBytes: MaxBodyBytes, ProvenanceRequired: true},
 			{SchemaVersion: 1, ID: "life.logistics", Version: "1.0.0", DataClass: "personal", Retention: "short_lived_cache", FreshnessTTLMS: 300_000, MaxItems: maxLogisticsItems, MaxBytes: 65_536, ProvenanceRequired: true},
 		},
 	}
 }
 
-func ConnectionSnapshot(connectionID, state string, now time.Time, lastSuccess *time.Time, failureKind string) (integrations.Snapshot, error) {
+func snapshotForConnection(connectionID, state string, now time.Time, lastSuccess *time.Time, failureKind string) (integrations.Snapshot, error) {
 	if !validID(connectionID) || !validState(state) || (failureKind != "" && !validFailure(failureKind)) {
 		return integrations.Snapshot{}, ErrInvalidInput
 	}
@@ -77,7 +75,7 @@ func validState(value string) bool {
 
 func validFailure(value string) bool {
 	switch value {
-	case "credential_expired", "permission_denied", "partial_fetch", "rate_limited", "stale", "no_data", "unsupported_entitlement", "unsupported_region", "source_disagreement", "unavailable":
+	case "credential_expired", "permission_denied", "partial_fetch", "rate_limited", "stale", "no_data", "unsupported_entitlement", "unsupported_region", "source_disagreement", "invalid_query", "unavailable":
 		return true
 	}
 	return false

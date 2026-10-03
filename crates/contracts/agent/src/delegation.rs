@@ -120,11 +120,46 @@ pub const MAX_DELEGATION_EXECUTION_CONTEXT_BYTES: usize = 96 * 1024;
 /// changed host state can never reuse a prior Task result.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct DelegationContextInput {
+    pub session_id: Uuid,
+    pub device_id: String,
+    pub agent_context: AgentContext,
+    pub max_output_bytes: usize,
+}
+
+impl DelegationContextInput {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.session_id.is_nil() || self.device_id.trim().is_empty()
+            || self.device_id.len() > MAX_DELEGATION_DEVICE_ID_BYTES
+            || self.max_output_bytes == 0 || self.max_output_bytes > crate::MAX_OUTPUT_BYTES
+        { return Err(AgentFailure::InvalidInput); }
+        self.agent_context.validate()?;
+        if serde_json::to_vec(self).map_err(|_| AgentFailure::InvalidInput)?.len()
+            > MAX_DELEGATION_EXECUTION_CONTEXT_BYTES
+        { return Err(AgentFailure::BudgetExceeded); }
+        Ok(())
+    }
+
+    pub fn bind_projection(self, projection_coverage: DependencyCoverage)
+        -> Result<DelegationExecutionContext, AgentFailure>
+    {
+        self.validate()?;
+        let context = DelegationExecutionContext { session_id: self.session_id,
+            device_id: self.device_id, agent_context: self.agent_context,
+            max_output_bytes: self.max_output_bytes, projection_coverage };
+        context.validate()?;
+        Ok(context)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DelegationExecutionContext {
     pub session_id: Uuid,
     pub device_id: String,
     pub agent_context: AgentContext,
     pub max_output_bytes: usize,
+    pub projection_coverage: DependencyCoverage,
 }
 
 impl DelegationExecutionContext {
@@ -138,6 +173,8 @@ impl DelegationExecutionContext {
             return Err(AgentFailure::InvalidInput);
         }
         self.agent_context.validate()?;
+        self.projection_coverage.validate().map_err(|_| AgentFailure::InvalidInput)?;
+        if self.projection_coverage == DependencyCoverage::Unknown { return Err(AgentFailure::PolicyDenied); }
         if serde_json::to_vec(self)
             .map(|encoded| encoded.len() > MAX_DELEGATION_EXECUTION_CONTEXT_BYTES)
             .unwrap_or(true)

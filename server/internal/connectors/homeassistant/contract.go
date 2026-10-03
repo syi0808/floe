@@ -37,7 +37,7 @@ func ConnectorDescriptor() integrations.Descriptor {
 	}
 }
 
-func ConnectionSnapshot(view views.LogisticsView) (integrations.Snapshot, error) {
+func snapshotFromView(view views.LogisticsView) (integrations.Snapshot, error) {
 	encoded, err := json.Marshal(view)
 	if err != nil || len(encoded) > 65_536 || len(view.Items) > maxEntities {
 		return integrations.Snapshot{}, ErrInvalidResponse

@@ -13,16 +13,40 @@ impl ActionsService {
         if let Some(record)=self.repository.find_admission(actor.person_id,command_id,request_digest).await? {
             self.validate_record_actor(actor,&record)?;
             if record.state==ActionState::Approved {self.spawn(record.id,false,scope)?;}
-            return ActionSnapshot::from_record(&record,self.clock.now());
+            return self.project(&record);
         }
+        intent.validate()?;
         let now=self.clock.now();
         let authority=self.repository.read_authority(actor.person_id).await?;
         let (effect,origin,dependency,expires_at)=match intent {
-            ActionIntent::Direct{effect}=>{
+            ActionIntent::DirectCreate{destination_ref,title,schedule}=>{
+                let destination=self.resolve_destination(actor,destination_ref,scope).await?;
+                let effect=CalendarEffect::Create{destination,title,schedule};
                 effect.validate(actor.person_id)?;
                 (effect,ActionOrigin::Direct{command_id,actor_device_id:actor.device_id.clone()},None,now+chrono::Duration::minutes(15))
             },
-            ActionIntent::ExpertProposal{receipt,artifact_id,destination,timezone}=>{
+            ActionIntent::DirectUpdate{event_ref,expected_revision,title,schedule}=>{
+                let original=self.day.calendar_event(actor,event_ref,scope).await.map_err(super::owner::day_failure)?.ok_or(AgentFailure::NotFound)?;
+                if original.revision!=expected_revision{return Err(AgentFailure::Conflict);}
+                let target=CalendarTarget{original};
+                let source=target.source()?;
+                let destination=self.target_destination(actor,&source.connection_id,&source.calendar_id,scope).await?;
+                let effect=CalendarEffect::Update{destination,target,title,schedule};
+                effect.validate(actor.person_id)?;
+                (effect,ActionOrigin::Direct{command_id,actor_device_id:actor.device_id.clone()},None,now+chrono::Duration::minutes(15))
+            },
+            ActionIntent::DirectDelete{event_ref,expected_revision}=>{
+                let original=self.day.calendar_event(actor,event_ref,scope).await.map_err(super::owner::day_failure)?.ok_or(AgentFailure::NotFound)?;
+                if original.revision!=expected_revision{return Err(AgentFailure::Conflict);}
+                let target=CalendarTarget{original};
+                let source=target.source()?;
+                let destination=self.target_destination(actor,&source.connection_id,&source.calendar_id,scope).await?;
+                let effect=CalendarEffect::Delete{destination,target};
+                effect.validate(actor.person_id)?;
+                (effect,ActionOrigin::Direct{command_id,actor_device_id:actor.device_id.clone()},None,now+chrono::Duration::minutes(15))
+            },
+            ActionIntent::ExpertProposal{receipt,artifact_id,destination_ref,timezone}=>{
+                let destination=self.resolve_destination(actor,destination_ref,scope).await?;
                 receipt.validate()?;
                 if artifact_id.is_nil() || !crate::domain::record::bounded(&timezone,128){return Err(AgentFailure::InvalidInput);}
                 let evidence=self.proposals.read(actor,&receipt,artifact_id,scope).await?;
@@ -81,6 +105,6 @@ impl ActionsService {
             execution_id,source,dependency,review,authorization,created_at:now,expires_at,state,execution:None,collection:None};
         let record=self.repository.admit(ActionAdmission{command_id,request_digest,record}).await?.record;
         if record.state==ActionState::Approved {self.spawn(record.id,false,scope)?;}
-        ActionSnapshot::from_record(&record,self.clock.now())
+        self.project(&record)
     }
 }

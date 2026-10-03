@@ -155,7 +155,16 @@ func (client *Client) Communication(ctx context.Context, query string, cursor, l
 
 func (client *Client) get(ctx context.Context, path string, output any) error {
 	token, err := client.tokens.Token(ctx)
-	if err != nil || len(token) < 8 || len(token) > 16_384 || strings.ContainsAny(token, "\r\n") {
+	if err != nil {
+		if contextErr := contextReadError(ctx, err); contextErr != nil {
+			return contextErr
+		}
+		return ErrCredentialExpired
+	}
+	if contextErr := contextReadError(ctx, nil); contextErr != nil {
+		return contextErr
+	}
+	if len(token) < 8 || len(token) > 16_384 || strings.ContainsAny(token, "\r\n") {
 		return ErrCredentialExpired
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.baseURL+path, nil)
@@ -168,6 +177,9 @@ func (client *Client) get(ctx context.Context, path string, output any) error {
 	}
 	response, err := client.http.Do(request)
 	if err != nil {
+		if contextErr := contextReadError(ctx, err); contextErr != nil {
+			return contextErr
+		}
 		return ErrUnavailable
 	}
 	defer response.Body.Close()
@@ -185,6 +197,19 @@ func (client *Client) get(ctx context.Context, path string, output any) error {
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponse+1))
 	if err != nil || len(data) > maxResponse || json.Unmarshal(data, output) != nil {
 		return ErrInvalidResponse
+	}
+	return nil
+}
+
+func contextReadError(ctx context.Context, err error) error {
+	if contextErr := ctx.Err(); contextErr != nil {
+		return contextErr
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
 	}
 	return nil
 }

@@ -24,7 +24,7 @@ func ConnectorDescriptor() integrations.Descriptor {
 	}
 }
 
-func ConnectionSnapshot(view views.WorkContextView) (integrations.Snapshot, error) {
+func snapshotFromView(view views.WorkContextView) (integrations.Snapshot, error) {
 	encoded, err := json.Marshal(view)
 	if err != nil || len(encoded) > 65_536 || len(view.Items) > maxMessages {
 		return integrations.Snapshot{}, ErrInvalidResponse

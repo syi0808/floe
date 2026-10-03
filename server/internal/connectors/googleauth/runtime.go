@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+    "floe/server/internal/integrations"
 	"html"
 	"io"
 	"net"
@@ -83,7 +84,7 @@ type Runtime struct {
 	allowTestEndpoints           bool
 }
 
-func New(store Store, config Config) (*Runtime, error) {
+func New(store Store, config Config, boundCredential string) (*Runtime, error) {
 	if store == nil || !validCredential(config.ClientID, 512) || len(config.ClientSecret) > 2048 || strings.ContainsAny(config.ClientSecret, "\r\n") {
 		return nil, ErrUnavailable
 	}
@@ -91,43 +92,28 @@ func New(store Store, config Config) (*Runtime, error) {
 	if name == "" && len(scopes) == 0 {
 		name, scopes = credentialName, []string{readonlyScope}
 	}
-	if !validGoogleCredentialProfile(name, scopes) {
+	if !validGoogleCredentialProfile(name, scopes) || !validBoundCredential(name, boundCredential) {
 		return nil, ErrUnavailable
 	}
 	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 5 * time.Second, MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second}
-	return &Runtime{store: store, config: config, client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, authURL: defaultAuthURL, tokenURL: defaultTokenURL, revokeURL: defaultRevokeURL, userinfoURL: defaultUserInfoURL, callbackAddress: "127.0.0.1:0", credentialName: name, credentialNamespace: name, scopes: scopes}, nil
+	runtime := &Runtime{store: store, config: config, client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, authURL: defaultAuthURL, tokenURL: defaultTokenURL, revokeURL: defaultRevokeURL, userinfoURL: defaultUserInfoURL, callbackAddress: "127.0.0.1:0", credentialName: boundCredential, credentialNamespace: name, scopes: scopes}
+    runtime.load()
+    return runtime, nil
 }
 
-func NewDrive(store Store, config Config) (*Runtime, error) {
+func NewDrive(store Store, config Config, boundCredential string) (*Runtime, error) {
 	config.CredentialName = "FLOE_DRIVE_OAUTH"
 	config.Scopes = []string{driveReadonlyScope}
-	return New(store, config)
+	return New(store, config, boundCredential)
 }
 
-func NewCalendar(store Store, config Config) (*Runtime, error) {
+func NewCalendar(store Store, config Config, boundCredential string) (*Runtime, error) {
 	config.CredentialName = "FLOE_GOOGLE_CALENDAR_OAUTH"
 	config.Scopes = []string{calendarReadonlyScope, openidScope}
-	return New(store, config)
+	return New(store, config, boundCredential)
 }
 
-func (runtime *Runtime) Ready() bool { return runtime.load() != nil }
-
-func (runtime *Runtime) BindCredential(name string) error {
-	if !validBoundCredential(runtime.credentialNamespace, name) {
-		return ErrUnavailable
-	}
-	runtime.operation.Lock()
-	defer runtime.operation.Unlock()
-	runtime.cancelLogin()
-	runtime.identityFence.Lock()
-	runtime.mu.Lock()
-	runtime.credentialName = name
-	runtime.credentialGeneration++
-	runtime.tokens = nil
-	runtime.mu.Unlock()
-	runtime.identityFence.Unlock()
-	return nil
-}
+func (runtime *Runtime) Ready() bool { runtime.mu.RLock(); defer runtime.mu.RUnlock(); return runtime.tokens != nil }
 
 func (runtime *Runtime) credentialKey() string {
 	runtime.mu.RLock()
@@ -234,17 +220,6 @@ func (runtime *Runtime) ProviderIdentity(ctx context.Context) (string, error) {
 	return identity, nil
 }
 
-func (runtime *Runtime) ProviderIdentityStatus() (string, bool) {
-	runtime.identityFence.RLock()
-	defer runtime.identityFence.RUnlock()
-	runtime.mu.RLock()
-	defer runtime.mu.RUnlock()
-	if runtime.tokens == nil {
-		return "", false
-	}
-	return runtime.tokens.ProviderIdentity, runtime.tokens.IdentityVerified && !runtime.tokens.IdentityReviewRequired
-}
-
 func (runtime *Runtime) WithVerifiedProviderIdentity(expectedCredential, expectedIdentity string, consume func() error) error {
 	if consume == nil {
 		return ErrCredentialExpired
@@ -261,32 +236,39 @@ func (runtime *Runtime) WithVerifiedProviderIdentity(expectedCredential, expecte
 	return consume()
 }
 
-func (runtime *Runtime) Action(ctx context.Context, action string) (any, error) {
-	if action != "status" && action != "login" && action != "cancel" && action != "logout" {
-		return nil, ErrUnavailable
+type authorizationCommand uint8
+const ( authorizationStatus authorizationCommand = iota; authorizationBegin; authorizationCancel; authorizationDisconnect )
+func (runtime *Runtime) BeginAuthorization(ctx context.Context) (integrations.AuthorizationProgress,error) {return runtime.authorization(ctx,authorizationBegin)}
+func (runtime *Runtime) PollAuthorization(ctx context.Context) (integrations.AuthorizationProgress,error) {return runtime.authorization(ctx,authorizationStatus)}
+func (runtime *Runtime) CancelAuthorization(ctx context.Context) error {_,err:=runtime.authorization(ctx,authorizationCancel);return err}
+func (runtime *Runtime) DisconnectAuthorization(ctx context.Context) error {_,err:=runtime.authorization(ctx,authorizationDisconnect);return err}
+
+func (runtime *Runtime) authorization(ctx context.Context, action authorizationCommand) (integrations.AuthorizationProgress, error) {
+	if action != authorizationStatus && action != authorizationBegin && action != authorizationCancel && action != authorizationDisconnect {
+		return integrations.AuthorizationProgress{}, ErrUnavailable
 	}
 	if !runtime.operation.TryLock() {
-		return nil, ErrUnavailable
+		return integrations.AuthorizationProgress{}, ErrUnavailable
 	}
 	defer runtime.operation.Unlock()
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return integrations.AuthorizationProgress{}, ctx.Err()
 	}
-	if action == "logout" {
+	if action == authorizationDisconnect {
 		if err := runtime.logout(ctx); err != nil {
-			return nil, err
+			return integrations.AuthorizationProgress{}, err
 		}
 	}
-	if action == "cancel" {
+	if action == authorizationCancel {
 		runtime.cancelLogin()
 	}
-	if action == "login" && (runtime.load() == nil || runtime.requiresProviderIdentity() && !runtime.identityReady()) {
+	if action == authorizationBegin && (runtime.load() == nil || runtime.requiresProviderIdentity() && !runtime.identityReady()) {
 		runtime.mu.RLock()
 		pending := runtime.flow != nil && runtime.flow.expires.After(time.Now())
 		runtime.mu.RUnlock()
 		if !pending {
 			if err := runtime.startLogin(); err != nil {
-				return nil, err
+				return integrations.AuthorizationProgress{}, err
 			}
 		}
 	}
@@ -299,9 +281,8 @@ func (runtime *Runtime) Action(ctx context.Context, action string) (any, error) 
 	} else if flow != nil && flow.expires.After(time.Now()) {
 		status, authURL = "pending", flow.authURL
 	}
-	return map[string]any{"status": status, "auth_url": authURL, "scope": strings.Join(runtime.scopes, " ")}, nil
+return integrations.AuthorizationProgress{State:integrations.AuthorizationState(status),AuthorizationURL:authURL}, nil
 }
-
 func (runtime *Runtime) startLogin() error {
 	runtime.cancelLogin()
 	state, err := randomValue()
@@ -650,9 +631,6 @@ func validGoogleCredentialProfile(name string, scopes []string) bool {
 }
 
 func validBoundCredential(namespace, name string) bool {
-	if name == namespace {
-		return true
-	}
 	prefix := namespace + ":"
 	if !strings.HasPrefix(name, prefix) || len(name) != len(prefix)+64 {
 		return false

@@ -20,48 +20,6 @@ use crate::{
     domain::{canonical_requirement_digest, canonical_target_digest, interaction_publication_id},
 };
 
-#[derive(Clone, Debug)]
-pub struct PublishInteractionRequest {
-    pub principal: String,
-    pub session_id: Uuid,
-    pub origin_run_id: RunId,
-    pub origin: InteractionOrigin,
-    pub kind: UserInteractionKind,
-    pub requirement: InteractionRequirement,
-    pub target: ReviewedTarget,
-}
-
-impl PublishInteractionRequest {
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.principal.trim() != self.principal
-            || self.principal.is_empty()
-            || self.principal.len() > 256
-            || self.principal.chars().any(char::is_control)
-            || self.session_id.is_nil()
-            || !self.origin_run_id.is_valid()
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        self.origin
-            .validate()
-            .map_err(|_| AgentFailure::InvalidInput)?;
-        self.requirement
-            .validate()
-            .map_err(|_| AgentFailure::InvalidInput)?;
-        self.target
-            .validate()
-            .map_err(|_| AgentFailure::InvalidInput)?;
-        if (self.kind == UserInteractionKind::ExpertBinding)
-            != (self.requirement.kind == crate::InteractionRequirementKind::ConfigureExpertBinding)
-            || (self.kind == UserInteractionKind::ExpertBinding)
-                != matches!(self.target, crate::ReviewedTarget::ExpertBinding(_))
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        Ok(())
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecideInteractionCommand {
     pub command_id: Uuid,
@@ -87,87 +45,6 @@ impl DecideInteractionCommand {
         }
         Ok(())
     }
-}
-
-/// Publish the interaction for an admitted origin, or replay it.
-///
-/// A replay of the identical publication returns the same row without
-/// re-verifying the origin journal: the stored row already binds the verified
-/// origin, and its digests are rechecked on load. A new publication verifies
-/// Person/Session/Run binding, rejects a cancelled origin Run, and requires
-/// the origin call/task/attempt in the Run's durable journal.
-pub async fn publish_interaction<Runs, Interactions>(
-    runs: &Runs,
-    interactions: &Interactions,
-    request: PublishInteractionRequest,
-    now_unix_ms: i64,
-) -> Result<PublishAdmission, AgentFailure>
-where
-    Runs: ConversationRepository + ?Sized,
-    Interactions: InteractionRepository + ?Sized,
-{
-    request.validate()?;
-    if now_unix_ms < 0 {
-        return Err(AgentFailure::InvalidInput);
-    }
-    let person_id = parse_principal(&request.principal)?;
-    let requirement_digest = canonical_requirement_digest(&request.requirement)?;
-    let target_digest = canonical_target_digest(&request.target)?;
-    let id = interaction_publication_id(
-        request.origin_run_id,
-        &request.origin,
-        &requirement_digest,
-        &target_digest,
-    )?;
-    if let Some(existing) = interactions.get_interaction(person_id, id).await? {
-        if existing.requirement_digest != requirement_digest
-            || existing.target_digest != target_digest
-            || existing.session_id != request.session_id
-            || existing.origin_run_id != request.origin_run_id
-            || existing.origin != request.origin
-            || existing.kind != request.kind
-        {
-            return Err(AgentFailure::StorageUnavailable);
-        }
-        return Ok(PublishAdmission::Existing(existing));
-    }
-    let receipt = runs
-        .load_receipt(request.origin_run_id)
-        .await?
-        .ok_or(AgentFailure::NotFound)?;
-    if receipt.principal != request.principal || receipt.session_id != request.session_id {
-        return Err(AgentFailure::Conflict);
-    }
-    if receipt.state != RunState::Working {
-        return Err(AgentFailure::Conflict);
-    }
-    let journal = runs.load_journal(request.origin_run_id).await?;
-    if !origin_admitted(&journal, &request.origin) {
-        return Err(AgentFailure::Conflict);
-    }
-    let expires_at_unix_ms = now_unix_ms
-        .checked_add(INTERACTION_PENDING_LIFETIME_MS)
-        .ok_or(AgentFailure::InvalidInput)?;
-    let record = ConversationInteraction {
-        id,
-        person_id,
-        session_id: request.session_id,
-        origin_run_id: request.origin_run_id,
-        origin_turn_id: request.origin_run_id.as_uuid(),
-        origin: request.origin,
-        projection: None,
-        kind: request.kind,
-        requirement: request.requirement,
-        requirement_digest,
-        target: request.target,
-        target_digest,
-        state: InteractionState::Pending,
-        revision: 1,
-        created_at_unix_ms: now_unix_ms,
-        expires_at_unix_ms,
-    };
-    record.validate().map_err(|_| AgentFailure::InvalidInput)?;
-    interactions.publish_interaction(record).await
 }
 
 /// Decide a Pending interaction, or rejoin an identical recorded decision.
@@ -281,18 +158,6 @@ where
     interactions
         .list_run_interactions(person_id, origin_run_id)
         .await
-}
-
-pub(crate) fn origin_admitted(journal: &[crate::JournalEntry], origin: &InteractionOrigin) -> bool {
-    journal.iter().any(|entry| match (&entry.event, origin) {
-        (JournalEvent::ToolIntent { call }, InteractionOrigin::Tool { call_id }) => {
-            call.call_id == *call_id
-        }
-        (JournalEvent::DelegationIntent { request }, InteractionOrigin::Task { task_id, .. }) => {
-            request.task_id.as_uuid() == *task_id
-        }
-        _ => false,
-    })
 }
 
 fn parse_principal(principal: &str) -> Result<PersonId, AgentFailure> {

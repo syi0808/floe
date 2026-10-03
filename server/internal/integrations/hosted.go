@@ -3,7 +3,6 @@ package integrations
 import (
 	"context"
 	"errors"
-	"floe/server/internal/connections"
 	"floe/server/internal/operation"
 	"floe/server/internal/trust"
 	"strings"
@@ -106,11 +105,11 @@ func (s *Service) BeginHostedSetup(ctx context.Context, operator trust.OperatorP
 	if a.Revision != expectedRevision {
 		return SetupPresentation{}, operation.Fail(operation.Conflict, "operation_changed")
 	}
-	d, ok := connections.DefinitionFor(a.ConnectorID)
-	if !ok || connections.InvalidConnectorToken(secret) || d.AuthKind == "secret" && secret == "" || d.AuthKind != "secret" && secret != "" {
+	d, ok := DefinitionFor(a.ConnectorID)
+	if !ok || InvalidConnectorToken(secret) || d.AuthKind == "secret" && secret == "" || d.AuthKind != "secret" && secret != "" {
 		return SetupPresentation{}, operation.Fail(operation.Invalid, "validation")
 	}
-	selectedScope, scopeErr := connections.ValidatedConnectorScope(d, scope)
+	selectedScope, scopeErr := ValidatedConnectorScope(d, scope)
 	if scopeErr != nil {
 		return SetupPresentation{}, operation.Fail(operation.Invalid, "invalid_scope")
 	}
@@ -238,7 +237,7 @@ func (s *Service) hostedFailure(ctx context.Context, operator trust.OperatorPrin
 		current.UserCode = ""
 		st.Attempts[a.ID] = current
 		if current.Started {
-			queueCleanup(st, []connections.Record{current.Record}, nil)
+			queueCleanup(st, []Record{current.Record}, nil)
 		}
 		a = current
 		return nil
@@ -253,7 +252,7 @@ func presentation(a attemptRecord) SetupPresentation {
 	name := a.ConnectorID
 	secret := false
 	fields := []SetupScopeField{}
-	if d, ok := connections.DefinitionFor(a.ConnectorID); ok {
+	if d, ok := DefinitionFor(a.ConnectorID); ok {
 		name = d.Name
 		secret = d.AuthKind == "secret"
 		for _, key := range d.ScopeFields {
@@ -264,7 +263,7 @@ func presentation(a attemptRecord) SetupPresentation {
 			case []string:
 				value = strings.Join(v, ", ")
 			case []any:
-				items, _ := connections.ConnectorScopeStrings(v)
+				items, _ := ConnectorScopeStrings(v)
 				value = strings.Join(items, ", ")
 			}
 			fields = append(fields, SetupScopeField{Name: key, Value: value})

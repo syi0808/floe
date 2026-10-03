@@ -127,7 +127,7 @@ impl ConversationEventBuffer {
                 interaction_refs: receipt
                     .blocked
                     .as_ref()
-                    .map_or_else(Vec::new, |block| block.interaction_refs.clone()),
+                    .map_or_else(Vec::new, |block| block.interaction_refs()),
             }),
         )
     }

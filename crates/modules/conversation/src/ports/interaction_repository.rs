@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     ConversationInteraction, DecisionAdmission, ExpireInteraction, ExpireOutcome,
-    InteractionDecision, PublishAdmission, SupersedeInteraction,
+    InteractionDecision, SupersedeInteraction,
 };
 
 /// Durable Conversation interaction storage.
@@ -36,13 +36,6 @@ pub trait InteractionRepository: Send + Sync {
         &'a self,
         request: crate::ResumeChildAdmission,
     ) -> BoxFuture<'a, Result<crate::TurnAdmission, AgentFailure>>;
-
-    /// Atomically create the interaction or replay the identical publication.
-    /// Races on the same stable id return the same row exactly once.
-    fn publish_interaction<'a>(
-        &'a self,
-        record: ConversationInteraction,
-    ) -> BoxFuture<'a, Result<PublishAdmission, AgentFailure>>;
 
     /// Trusted lookup by Person and id. A forged well-formed id reads back
     /// `None`; reference shape is never authorization.

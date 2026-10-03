@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+    "floe/server/internal/inference"
 	"html"
 	"io"
 	"net"
@@ -147,36 +148,36 @@ func (runtime *Runtime) ReplayIdentity() string {
 	return accountIdentity(tokens)
 }
 
-func (runtime *Runtime) Action(ctx context.Context, action string) (any, error) {
-	if action != "status" && action != "login" && action != "cancel" && action != "logout" {
-		return nil, unavailable
+func (runtime *Runtime) Authorize(ctx context.Context, action inference.AccountCommand) (inference.AccountProgress, error) {
+	if action != inference.AccountStatus && action != inference.AccountLogin && action != inference.AccountCancel && action != inference.AccountLogout {
+		return inference.AccountProgress{}, unavailable
 	}
 	if !runtime.operation.TryLock() {
-		return nil, unavailable
+		return inference.AccountProgress{}, unavailable
 	}
 	defer runtime.operation.Unlock()
 	if ctx.Err() != nil {
-		return nil, unavailable
+		return inference.AccountProgress{}, unavailable
 	}
-	if action == "logout" {
+	if action == inference.AccountLogout {
 		runtime.cancelLogin()
 		if runtime.store == nil || runtime.store.Delete(credentialName) != nil {
-			return nil, unavailable
+			return inference.AccountProgress{}, unavailable
 		}
 		runtime.mu.Lock()
 		runtime.tokens = nil
 		runtime.mu.Unlock()
 	}
-	if action == "cancel" {
+	if action == inference.AccountCancel {
 		runtime.cancelLogin()
 	}
-	if action == "login" && runtime.load() == nil {
+	if action == inference.AccountLogin && runtime.load() == nil {
 		runtime.mu.RLock()
 		pending := runtime.flow != nil && runtime.flow.expires.After(time.Now())
 		runtime.mu.RUnlock()
 		if !pending {
 			if err := runtime.startLogin(); err != nil {
-				return nil, err
+				return inference.AccountProgress{}, err
 			}
 		}
 	}
@@ -189,9 +190,8 @@ func (runtime *Runtime) Action(ctx context.Context, action string) (any, error) 
 	} else if flow != nil && flow.expires.After(time.Now()) {
 		status, authURL = "pending", flow.authURL
 	}
-	return map[string]any{"status": status, "auth_url": authURL, "inference_enabled": status == "connected"}, nil
+    return inference.AccountProgress{Status:status,AuthorizationURL:authURL,InferenceEnabled:status=="connected"},nil
 }
-
 func (runtime *Runtime) startLogin() error {
 	runtime.cancelLogin()
 	state, err := randomValue()

@@ -12,11 +12,7 @@ use floe_agent_contract::{
 };
 use uuid::Uuid;
 
-#[derive(Clone, Debug)]
-pub struct ValidatedFinalPayload {
-    pub text: String,
-    pub artifacts: Vec<floe_agent_contract::Artifact>,
-}
+pub use floe_agent_contract::ValidatedFinalPayload;
 
 pub trait FinalPayloadValidator: Sync {
     fn validate(
@@ -652,7 +648,8 @@ impl ActiveDrive<'_> {
                 self.request
                     .delegation_context
                     .clone()
-                    .ok_or(AgentFailure::InvalidInput)?,
+                    .ok_or(AgentFailure::InvalidInput)?
+                    .bind_projection(projection.coverage.clone())?,
             )
         } else {
             None

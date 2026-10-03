@@ -18,7 +18,7 @@
 //! display labels. Model-safe artifacts carry only the opaque
 //! [`UserInteractionRef`].
 
-use floe_agent_contract::{AgentFailure, PackageKind, PackageRef, UserInteractionKind};
+use floe_agent_contract::{AgentFailure, TaskExecutionReceiptRef, UserInteractionKind};
 use floe_kernel::{CommandId, PersonId, RunId};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -52,11 +52,8 @@ pub const INTERACTION_OPERATION_NAMESPACE: Uuid =
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "origin", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InteractionOrigin {
-    Tool {
-        call_id: Uuid,
-    },
     Task {
-        task_id: Uuid,
+        execution: TaskExecutionReceiptRef,
         capability_call_id: Option<Uuid>,
     },
     Projection {
@@ -69,11 +66,10 @@ pub enum InteractionOrigin {
 impl InteractionOrigin {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         let valid = match self {
-            Self::Tool { call_id } => !call_id.is_nil(),
             Self::Task {
-                task_id,
+                execution,
                 capability_call_id,
-            } => !task_id.is_nil() && capability_call_id.is_none_or(|call_id| !call_id.is_nil()),
+            } => execution.validate().is_ok() && capability_call_id.is_none_or(|call_id| !call_id.is_nil()),
             Self::Projection {
                 run_id,
                 projection_operation_id,
@@ -115,6 +111,30 @@ pub struct InteractionRequirement {
 }
 
 impl InteractionRequirement {
+    pub fn from_source(blocker: &floe_context_contract::SourceAccessRequirement, inline: bool) -> Self {
+    use floe_context_contract::SourceAccessRequirementKind as Reason;
+    InteractionRequirement {
+        kind: match blocker.reason() {
+            Reason::EnableObserve => InteractionRequirementKind::EnableObserve,
+            Reason::ReviewChangedSource => InteractionRequirementKind::ReviewChangedSource,
+            Reason::RequestSystemPermission => InteractionRequirementKind::RequestSystemPermission,
+            Reason::Reconnect => InteractionRequirementKind::Reconnect,
+            Reason::ReviewProcessing => InteractionRequirementKind::ReviewProcessing,
+            Reason::SelectResource => InteractionRequirementKind::SelectResource,
+        },
+        source_id: blocker.source_id().to_owned(),
+        connection_id: blocker.connection_id().map(|id| id.as_str().to_owned()),
+        consumer: blocker.consumer().identifier().to_owned(),
+        purpose: match blocker.purpose() {
+            floe_context_contract::GrantPurpose::Assistant => "assistant",
+            floe_context_contract::GrantPurpose::Scheduling => "scheduling",
+            floe_context_contract::GrantPurpose::Summarization => "summarization",
+        }
+        .into(),
+        inline,
+    }
+    }
+
     pub fn validate(&self) -> Result<(), AgentFailure> {
         if validate_identifier(&self.source_id, MAX_REVIEWED_SOURCE_BYTES).is_err()
             || self.connection_id.as_ref().is_some_and(|value| {
@@ -168,54 +188,13 @@ impl NavigationOnlyTarget {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ExpertBindingTarget {
-    pub registry_instance_id: Uuid,
-    pub assignment_id: Uuid,
-    pub package: PackageRef,
-    pub definition_revision: u64,
-    pub requirement_key: String,
-    pub capability: String,
-    pub contract_version: u32,
-    pub minimum_sources: u8,
-    pub maximum_sources: u8,
-    pub expected_binding_revision: u64,
-    pub admitted_selection_digest: [u8; 32],
-}
-
-impl ExpertBindingTarget {
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.registry_instance_id.is_nil()
-            || self.assignment_id.is_nil()
-            || self.package.kind != PackageKind::Expert
-            || validate_identifier(&self.package.id, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
-            || validate_identifier(&self.package.version, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
-            || self.definition_revision == 0
-            || validate_identifier(&self.requirement_key, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
-            || validate_identifier(&self.capability, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
-            || self.contract_version == 0
-            || self.minimum_sources > self.maximum_sources
-            || self.maximum_sources > 16
-            || self.expected_binding_revision == 0
-            || self.admitted_selection_digest == [0; 32]
-            || serde_json::to_vec(self)
-                .map(|encoded| encoded.len() > MAX_REVIEWED_TARGET_BYTES)
-                .unwrap_or(true)
-        {
-            return Err(AgentFailure::StorageUnavailable);
-        }
-        Ok(())
-    }
-}
-
 /// The immutable reviewed descriptor a decision binds.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum ReviewedTarget {
     NavigationOnly(NavigationOnlyTarget),
     SourceReview(floe_access::ReviewRef),
-    ExpertBinding(ExpertBindingTarget),
+    ExpertBinding(floe_experts::BindingReviewRef),
 }
 
 impl ReviewedTarget {
@@ -333,7 +312,7 @@ pub struct ConversationInteraction {
     pub origin_run_id: RunId,
     pub origin_turn_id: Uuid,
     pub origin: InteractionOrigin,
-    pub projection: Option<super::ProjectionReviewRecord>,
+    pub audit: super::ReviewAuditRecord,
     pub kind: UserInteractionKind,
     pub requirement: InteractionRequirement,
     pub requirement_digest: [u8; 32],
@@ -348,18 +327,25 @@ pub struct ConversationInteraction {
 impl ConversationInteraction {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         self.origin.validate()?;
-        if let Some(record) = &self.projection {
-            record.validate()?;
-            if record.person_id != self.person_id
-                || record.session_id != self.session_id
-                || record.run_id != self.origin_run_id
-            {
-                return Err(AgentFailure::StorageUnavailable);
-            }
-        }
-        if matches!(self.origin, InteractionOrigin::Projection { .. }) && self.projection.is_none()
-        {
-            return Err(AgentFailure::StorageUnavailable);
+        self.audit.validate()?;
+        if self.audit.person_id != self.person_id || self.audit.session_id != self.session_id
+            || self.audit.run_id != self.origin_run_id || !self.audit.targets().contains(&self.target)
+            || !self.audit.matches_requirement(&self.requirement, &self.target)
+        { return Err(AgentFailure::StorageUnavailable); }
+        match (&self.origin, &self.audit.evidence) {
+            (InteractionOrigin::Projection { run_id, projection_operation_id, target_digest },
+                super::BlockedReviewEvidence::ModelProjection { review, .. })
+                if *run_id == self.origin_run_id && *projection_operation_id == review.projection_operation_id
+                    && *target_digest == review.target_digest => {},
+            (InteractionOrigin::Task { execution, capability_call_id },
+                super::BlockedReviewEvidence::SourceRead { execution: evidence, tool_call_id, .. })
+                if execution == evidence && *capability_call_id == Some(*tool_call_id) => {},
+            (InteractionOrigin::Task { execution, capability_call_id: None },
+                super::BlockedReviewEvidence::ExpertBinding { execution: evidence, .. }) if execution == evidence => {},
+            (InteractionOrigin::Task { execution, .. },
+                super::BlockedReviewEvidence::Navigation { execution: evidence, .. }) if execution == evidence => {},
+            (InteractionOrigin::Task { execution, capability_call_id: None }, super::BlockedReviewEvidence::TaskModelProjection { execution: evidence, .. }) if execution == evidence => {},
+            _ => return Err(AgentFailure::StorageUnavailable),
         }
         self.requirement.validate()?;
         self.target.validate()?;
@@ -397,10 +383,15 @@ impl ConversationInteraction {
         {
             return Err(AgentFailure::StorageUnavailable);
         }
-        if let InteractionState::Resolved { receipt } = &self.state
-            && receipt.resolved_at_unix_ms < self.created_at_unix_ms
-        {
-            return Err(AgentFailure::StorageUnavailable);
+        if let InteractionState::Resolved { receipt } = &self.state {
+            if receipt.resolved_at_unix_ms < self.created_at_unix_ms { return Err(AgentFailure::StorageUnavailable); }
+            let matches_owner = match (&self.target, &receipt.owner_receipt) {
+                (ReviewedTarget::SourceReview(reference), super::OwnerResolutionReceipt::SourceProcessing { receipt }) =>
+                    matches!(&receipt.kind, floe_access::GrantCommitKind::Reviewed { review } if review == reference),
+                (ReviewedTarget::ExpertBinding(reference), super::OwnerResolutionReceipt::ExpertBinding { receipt }) => &receipt.review_ref == reference,
+                _ => false,
+            };
+            if !matches_owner { return Err(AgentFailure::StorageUnavailable); }
         }
         Ok(())
     }
@@ -651,18 +642,8 @@ pub fn canonical_target_digest(target: &ReviewedTarget) -> Result<[u8; 32], Agen
         }
         ReviewedTarget::ExpertBinding(target) => {
             bytes.push(4);
-            bytes.extend_from_slice(target.registry_instance_id.as_bytes());
-            bytes.extend_from_slice(target.assignment_id.as_bytes());
-            append_str(&mut bytes, &target.package.id);
-            append_str(&mut bytes, &target.package.version);
-            bytes.extend_from_slice(&target.definition_revision.to_be_bytes());
-            append_str(&mut bytes, &target.requirement_key);
-            append_str(&mut bytes, &target.capability);
-            bytes.extend_from_slice(&target.contract_version.to_be_bytes());
-            bytes.push(target.minimum_sources);
-            bytes.push(target.maximum_sources);
-            bytes.extend_from_slice(&target.expected_binding_revision.to_be_bytes());
-            bytes.extend_from_slice(&target.admitted_selection_digest);
+            bytes.extend_from_slice(target.id.as_bytes());
+            bytes.extend_from_slice(&target.digest);
         }
     }
     Ok(Sha256::digest(bytes).into())
@@ -688,16 +669,17 @@ pub fn interaction_publication_id(
     bytes.extend_from_slice(b"floe.conversation.interaction-publication\0");
     bytes.extend_from_slice(origin_run_id.as_uuid().as_bytes());
     match origin {
-        InteractionOrigin::Tool { call_id } => {
-            bytes.push(1);
-            bytes.extend_from_slice(call_id.as_bytes());
-        }
         InteractionOrigin::Task {
-            task_id,
+            execution,
             capability_call_id,
         } => {
             bytes.push(2);
-            bytes.extend_from_slice(task_id.as_bytes());
+            bytes.extend_from_slice(execution.execution.task_id.as_uuid().as_bytes());
+            bytes.extend_from_slice(execution.execution.execution_id.as_bytes());
+            bytes.extend_from_slice(&execution.execution.executor_generation.to_be_bytes());
+            bytes.extend_from_slice(&execution.task_revision.to_be_bytes());
+            bytes.extend_from_slice(&execution.journal_revision.to_be_bytes());
+            bytes.extend_from_slice(&execution.digest);
             match capability_call_id {
                 Some(call_id) => {
                     bytes.push(1);
@@ -723,12 +705,6 @@ pub fn interaction_publication_id(
     bytes.extend_from_slice(requirement_digest);
     bytes.extend_from_slice(target_digest);
     Ok(Uuid::new_v5(&INTERACTION_ID_NAMESPACE, &bytes))
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PublishAdmission {
-    Created(ConversationInteraction),
-    Existing(ConversationInteraction),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

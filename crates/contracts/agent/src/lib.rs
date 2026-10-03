@@ -22,7 +22,6 @@ mod projection;
 pub mod prompts;
 mod replay;
 mod task_execution;
-mod timeline_view;
 
 pub use archive::{
     ArchivePointer, ArchiveReadRequest, ArchiveReader, ArchiveSnapshot, ArchivedMessage,
@@ -33,7 +32,7 @@ pub use capability::{
 };
 pub use context::{AgentContext, InferencePolicyDecision, MAX_CONTEXT_ISSUES};
 pub use delegation::{
-    DelegationExecutionContext, DelegationRequest, MAX_DELEGATION_DEVICE_ID_BYTES,
+    DelegationContextInput, DelegationExecutionContext, DelegationRequest, MAX_DELEGATION_DEVICE_ID_BYTES,
     MAX_DELEGATION_EXECUTION_CONTEXT_BYTES, TaskReceipt, TaskSnapshot, TaskState,
     delegation_request_digest, valid_context_refs,
 };
@@ -76,7 +75,7 @@ pub use message::{
 };
 pub use model::{
     AgentDefinition, AllowedCatalog, EngineRequest, EngineResumeState, EngineStep, ModelRequest,
-    ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall, ToolDescriptor, validate_tool_input,
+    ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall, ToolDescriptor, ValidatedFinalPayload, validate_tool_input,
 };
 pub use model_conversation::{
     MAX_CONTEXT_REFS, MAX_MODEL_CONVERSATION_BYTES, ModelConversation, ModelConversationEntry,
@@ -94,7 +93,6 @@ pub use projection::{
 pub use replay::{AttemptId, InvocationKey, ReplayReceipt, input_digest};
 pub use task_execution::{TaskBlockage, TaskExecutionEvidence, TaskExecutionKey,
     TaskExecutionReceipt, TaskExecutionReceiptRef, TaskModelAccounting, UnresolvedModelAttempt};
-pub use timeline_view::TimelineViewRead;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionProtection {

@@ -3,7 +3,6 @@ package integrations
 import (
 	"encoding/json"
 	"errors"
-	"floe/server/internal/connections"
 	"floe/server/internal/credentials"
 	"floe/server/internal/storage"
 	"floe/server/internal/trust"
@@ -14,7 +13,7 @@ import (
 
 type attemptRecord struct {
 	ID, ClientID, PersonID, DeviceID, ConnectorID string
-	Record                                        connections.Record
+	Record                                        Record
 	Status                                        AuthorizationState
 	AuthorizationURL, UserCode, ErrorCode         string
 	CreatedAt                                     int64
@@ -26,7 +25,7 @@ type attemptRecord struct {
 type cleanupRecord struct {
 	ID          string
 	Ticket      *trust.CleanupTicket
-	Records     []connections.Record
+	Records     []Record
 	RuntimeDone map[string]bool
 	VaultDone   map[string]bool
 }
@@ -38,7 +37,7 @@ type disconnectOperation struct {
 type diskState struct {
 	SchemaVersion int                             `json:"schema_version"`
 	Revision      uint64                          `json:"revision"`
-	Connections   map[string]connections.Record   `json:"connections"`
+	Connections   map[string]Record   `json:"connections"`
 	Attempts      map[string]attemptRecord        `json:"attempts"`
 	Cleanup       map[string]cleanupRecord        `json:"cleanup"`
 	Receipts      map[string]trust.CleanupReceipt `json:"receipts"`
@@ -46,7 +45,7 @@ type diskState struct {
 }
 
 func initialState() diskState {
-	return diskState{1, 1, map[string]connections.Record{}, map[string]attemptRecord{}, map[string]cleanupRecord{}, map[string]trust.CleanupReceipt{}, map[string]disconnectOperation{}}
+	return diskState{1, 1, map[string]Record{}, map[string]attemptRecord{}, map[string]cleanupRecord{}, map[string]trust.CleanupReceipt{}, map[string]disconnectOperation{}}
 }
 func clone(st diskState) diskState {
 	out := initialState()
@@ -56,11 +55,11 @@ func clone(st diskState) diskState {
 	}
 	for k, a := range st.Attempts {
 		a.Record = cloneRecord(a.Record)
-		a.RequestedScope = connections.CloneConnectorScope(a.RequestedScope)
+		a.RequestedScope = CloneConnectorScope(a.RequestedScope)
 		out.Attempts[k] = a
 	}
 	for k, c := range st.Cleanup {
-		c.Records = append([]connections.Record(nil), c.Records...)
+		c.Records = append([]Record(nil), c.Records...)
 		for i := range c.Records {
 			c.Records[i] = cloneRecord(c.Records[i])
 		}
@@ -86,23 +85,23 @@ func clone(st diskState) diskState {
 	}
 	return out
 }
-func cloneRecord(r connections.Record) connections.Record {
-	r.Scope = connections.CloneConnectorScope(r.Scope)
+func cloneRecord(r Record) Record {
+	r.Scope = CloneConnectorScope(r.Scope)
 	if r.Device != nil {
 		d := *r.Device
 		r.Device = &d
 	}
 	return r
 }
-func binding(r connections.Record) CredentialBinding {
+func binding(r Record) CredentialBinding {
 	return CredentialBinding{r.Credential, r.ConnectionID, r.PersonID, r.Incarnation, 1}
 }
-func validateRecord(r connections.Record) bool {
-	d, ok := connections.DefinitionFor(r.ConnectorID)
+func validateRecord(r Record) bool {
+	d, ok := DefinitionFor(r.ConnectorID)
 	if !ok || !trust.ValidID(r.ConnectionID) || !trust.ValidID(r.PersonID) || !trust.ValidID(r.Incarnation) || r.Revision == 0 || r.Epoch == 0 || r.Device != nil && !trust.ValidDevice(r.Device.DeviceID) {
 		return false
 	}
-	if canonical, err := connections.ValidatedConnectorScope(d, r.Scope); err != nil || !reflect.DeepEqual(canonical, r.Scope) {
+	if canonical, err := ValidatedConnectorScope(d, r.Scope); err != nil || !reflect.DeepEqual(canonical, CloneConnectorScope(r.Scope)) {
 		return false
 	}
 	namespace := d.CredentialName
@@ -135,6 +134,13 @@ func readState(directory string) (diskState, error) {
 			return st, errors.New("invalid integration attempt")
 		}
 	}
+    for _,attempt:=range st.Attempts {
+        if len(attempt.RequestedScope)>0 {
+            definition,ok:=DefinitionFor(attempt.ConnectorID)
+            canonical,err:=ValidatedConnectorScope(definition,attempt.RequestedScope)
+            if !ok || err!=nil || !reflect.DeepEqual(canonical,CloneConnectorScope(attempt.RequestedScope)){return st,errors.New("invalid integration request identity")}
+        }
+    }
 	for id, c := range st.Cleanup {
 		if id != c.ID || !trust.ValidID(id) || c.RuntimeDone == nil || c.VaultDone == nil {
 			return st, errors.New("invalid integration cleanup")
@@ -150,7 +156,7 @@ func readState(directory string) (diskState, error) {
 			return st, errors.New("invalid disconnect operation")
 		}
 	}
-	return st, nil
+	return clone(st), nil
 }
 func (s *Service) persist(st diskState) error {
 	if s.unavailable {
@@ -172,8 +178,8 @@ func (s *Service) persist(st diskState) error {
 	return nil
 }
 
-func validAttemptIdentity(r connections.Record) bool {
-	d, ok := connections.DefinitionFor(r.ConnectorID)
+func validAttemptIdentity(r Record) bool {
+	d, ok := DefinitionFor(r.ConnectorID)
 	if !ok || !trust.ValidID(r.ConnectionID) || !trust.ValidID(r.PersonID) || !trust.ValidID(r.Incarnation) || r.Revision != 1 || r.Epoch != 1 {
 		return false
 	}

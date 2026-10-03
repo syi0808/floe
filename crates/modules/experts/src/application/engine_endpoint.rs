@@ -140,6 +140,8 @@ impl ModelProjectionPort for ExpertProjection<'_> {
                 actor: self.endpoint.actor.clone(), execution: self.invocation.execution,
                 request, context: self.invocation.request.execution_context.agent_context.clone(),
                 prompt: self.spec.prompt.clone(), observations: self.evidence.observations()?,
+                package_data_class: self.endpoint.manifest.data_class,
+                inherited_coverage: self.invocation.request.execution_context.projection_coverage.clone(),
             }, scope).await
         })
     }

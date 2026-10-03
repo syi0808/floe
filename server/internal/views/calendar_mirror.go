@@ -64,6 +64,10 @@ func ValidateMirrorResult(result CalendarMirrorResult,request ReadRequest)error{
     seen:=map[string]bool{}
     for _,r:=range result.Records{
         if r.CanModify || r.CalendarID!=q.CalendarID || !validMirrorText(r.ExternalID,512) || seen[r.ExternalID] || len(r.Title)>4096 || !utf8.ValidString(r.Title) || !validMirrorRevision(r.ExternalRevision) || !validMirrorSchedule(r.Schedule){return ErrInvalid}
+        if r.Schedule.Kind=="timed" {
+            start,_:=time.Parse(time.RFC3339Nano,r.Schedule.StartsAt);end,_:=time.Parse(time.RFC3339Nano,r.Schedule.EndsAt)
+            if !start.Before(time.UnixMilli(q.RangeEndUnixMS)) || !end.After(time.UnixMilli(q.RangeStartUnixMS)){return ErrInvalid}
+        }
         seen[r.ExternalID]=true
     }
     raw,err:=json.Marshal(result.Records)
@@ -96,7 +100,9 @@ func validMirrorText(s string,max int)bool{return strings.TrimSpace(s)!="" && le
 
 // ObservationRevision never claims a provider conditional-write token.
 func ObservationRevision(record CalendarRecord) CalendarExternalRevision {
-    raw,_:=json.Marshal(struct{CalendarID,ExternalID,Title string;Schedule CalendarSchedule}{record.CalendarID,record.ExternalID,record.Title,record.Schedule})
+    raw,_:=json.Marshal(struct{CalendarID string `json:"calendar_id"`;ExternalID string `json:"external_id"`;Title string `json:"title"`;Schedule CalendarSchedule `json:"schedule"`}{record.CalendarID,record.ExternalID,record.Title,record.Schedule})
     digest:=sha256.Sum256(raw)
     return CalendarExternalRevision{Kind:"observation_fingerprint",SHA256:hex.EncodeToString(digest[:])}
 }
+
+func CalendarMirrorDescriptor()ViewDescriptor{return ViewDescriptor{SchemaVersion:1,ID:string(CalendarMirror),Version:"1.0.0",DataClass:"personal",Retention:"ephemeral",FreshnessTTLMS:60000,MaxItems:128,MaxBytes:1<<20,ProvenanceRequired:true}}

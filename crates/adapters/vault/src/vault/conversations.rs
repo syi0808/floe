@@ -810,28 +810,18 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 )
                 .await?;
                 for interaction in &publication.interactions {
-                    let index = block
-                        .interaction_refs
-                        .iter()
-                        .position(|id| *id == interaction.id)
+                    let link = block.interactions.iter()
+                        .find(|link| link.interaction_id == interaction.id)
                         .ok_or(AgentFailure::Conflict)?;
-                    let origin = block.origins.get(index).ok_or(AgentFailure::Conflict)?;
+                    let origin = &link.origin;
                     if origin.run_id != current.run_id
                         || origin.session_id != current.session_id
                         || origin.person_id != current.person_id
                         || origin.device_id != current.device_id
                         || origin.executor_generation != current.executor_generation
                         || origin.origin != interaction.origin
+                        || link.target != interaction.target
                     {
-                        return Err(AgentFailure::Conflict);
-                    }
-                    if let floe_conversation::ReviewedTarget::SourceReview(reference) =
-                        &interaction.target
-                    {
-                        if block.review_refs.get(index) != Some(reference) {
-                            return Err(AgentFailure::Conflict);
-                        }
-                    } else {
                         return Err(AgentFailure::Conflict);
                     }
                     if let Some(existing) = super::conversation_interactions::read_interaction(

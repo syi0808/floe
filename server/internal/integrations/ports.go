@@ -2,7 +2,6 @@ package integrations
 
 import (
 	"context"
-	"floe/server/internal/connections"
 	"floe/server/internal/trust"
 	"floe/server/internal/views"
 )
@@ -61,7 +60,7 @@ type IdentityVerifier interface {
 	WithVerified(CredentialBinding, ProviderIdentity, func() error) error
 }
 type RuntimeConfig struct {
-	Record  connections.Record
+	Record  Record
 	Binding CredentialBinding
 }
 type RuntimeFactory interface {
@@ -71,17 +70,23 @@ type FactoryFunc func(context.Context, RuntimeConfig) (Runtime, error)
 
 func (f FactoryFunc) Open(c context.Context, r RuntimeConfig) (Runtime, error) { return f(c, r) }
 
-// Read ports are bounded S2 adapters. Every runtime is connection-scoped and owns its immutable credential binding.
+// SnapshotSource exposes cached normalized metadata only. It performs no provider I/O.
+type SnapshotSource interface {
+    Snapshot(context.Context) (Snapshot, error)
+}
+
+// Runtime is scoped to one immutable credential binding and selected resource set.
+type ReaderRegistration struct {
+    Reader views.Reader
+    Descriptor views.ViewDescriptor
+}
 type Runtime struct {
-	Descriptor        Descriptor
-	Readers           map[views.ID]views.Reader
-	Setup             Setup
-	Identity          IdentityVerifier
-	IdentitySupported bool
-	Snapshot          connections.SnapshotSource
-	Calendar          connections.CalendarRuntime
-	Communication     connections.CommunicationRuntime
-	Work              connections.WorkContextRuntime
-	Logistics         connections.LogisticsRuntime
-	Close             func()
+    Descriptor Descriptor
+    Readers map[views.ID]ReaderRegistration
+    Setup Setup
+    Identity IdentityVerifier
+    IdentitySupported bool
+    Snapshot SnapshotSource
+    Cleanup func(context.Context) error
+    Close func()
 }

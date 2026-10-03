@@ -13,6 +13,8 @@ mod engine_endpoint;
 pub use engine_endpoint::EngineExpertEndpoint;
 #[path = "application/binding.rs"]
 mod binding;
+pub use binding::{binding_review_digest, project_binding_mutation_receipt, project_binding_review,
+    project_expert_directory, validate_binding_review_descriptor};
 pub use service::{ExpertsDependencies, ExpertsService};
 mod bundle_install;
 mod directory;

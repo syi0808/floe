@@ -10,43 +10,54 @@ import (
 	"strings"
 )
 
-type ProviderTarget struct {
-	Provider  string `json:"provider"`
-	BaseURL   string `json:"base_url"`
-	Model     string `json:"model"`
-	APIKeyEnv string `json:"api_key_env,omitempty"`
-}
 type CodexClient interface {
 	Ready() bool
 	ReplayIdentity() string
 	Generate(context.Context, string, string, string, json.RawMessage, json.RawMessage) (string, error)
 }
-type Registry struct{ targets map[string]*provider }
 
-func NewRegistry(targets map[string]ProviderTarget, lookup func(string) (string, error), codex CodexClient) (*Registry, error) {
-	if len(targets) > 32 || lookup == nil {
-		return nil, errors.New("invalid provider config")
+type Factory struct {
+	lookup func(string) (string, error)
+	codex  CodexClient
+}
+
+func NewFactory(lookup func(string) (string, error), codex CodexClient) *Factory {
+	return &Factory{lookup: lookup, codex: codex}
+}
+
+type registry struct{ targets map[string]*provider }
+
+func (f *Factory) ValidateTarget(target inference.ProviderTarget) error {
+	if strings.TrimSpace(target.Model) == "" || len(target.Model) > 128 {
+		return errors.New("invalid model")
 	}
-	r := &Registry{targets: map[string]*provider{}}
+	_, err := newProvider(target, func(string) (string, error) { return "validation-placeholder", nil }, nil)
+	if target.Provider == "codex_oauth" && target.BaseURL == "https://chatgpt.com/backend-api/codex" && target.APIKeyEnv == "" {
+		return nil
+	}
+	return err
+}
+
+func (f *Factory) Open(targets map[string]inference.ProviderTarget) (map[string]inference.ModelAccount, inference.ModelExecutor, error) {
+	if f == nil || f.lookup == nil || len(targets) > 32 {
+		return nil, nil, errors.New("invalid provider config")
+	}
+	r := &registry{targets: make(map[string]*provider, len(targets))}
+	accounts := make(map[string]inference.ModelAccount, len(targets))
 	for id, target := range targets {
 		if !inference.ValidAlias(id) {
-			return nil, errors.New("invalid target")
+			return nil, nil, errors.New("invalid target")
 		}
-		adapter, err := newProvider(target, lookup, codex)
+		adapter, err := newProvider(target, f.lookup, f.codex)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		r.targets[id] = adapter
+		accounts[id] = adapter
 	}
-	return r, nil
+	return accounts, r, nil
 }
-func (r *Registry) Accounts() map[string]inference.ModelAccount {
-	out := map[string]inference.ModelAccount{}
-	for k, v := range r.targets {
-		out[k] = v
-	}
-	return out
-}
+
 func (p *provider) Ready(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -65,6 +76,7 @@ func (p *provider) Ready(ctx context.Context) error {
 	}
 	return nil
 }
+
 func (p *provider) ReplayIdentity() string {
 	identity := ""
 	if p.codex != nil {
@@ -74,33 +86,25 @@ func (p *provider) ReplayIdentity() string {
 		}
 	}
 	raw, _ := json.Marshal(struct {
-		Target               ProviderTarget
+		Target               inference.ProviderTarget
 		Credential, Identity string
 	}{p.target, p.credential, identity})
 	h := sha256.Sum256(raw)
 	return hex.EncodeToString(h[:])
 }
-func (r *Registry) InvokeAgent(ctx context.Context, target inference.ResolvedModelTarget, in inference.AgentInvocation) (inference.AgentResult, error) {
+
+func (r *registry) InvokeAgent(ctx context.Context, target inference.ResolvedModelTarget, in inference.AgentInvocation) (inference.AgentResult, error) {
 	p := r.targets[target.TargetID()]
 	if p == nil || p.ReplayIdentity() != target.AccountIdentity() {
 		return inference.AgentResult{}, inference.Failure{Code: inference.CapabilityChanged}
 	}
 	return p.agent(ctx, in, target.ReasoningEffort())
 }
-func (r *Registry) InvokeStructured(ctx context.Context, target inference.ResolvedModelTarget, in inference.StructuredInvocation) (inference.StructuredResult, error) {
+
+func (r *registry) InvokeStructured(ctx context.Context, target inference.ResolvedModelTarget, in inference.StructuredInvocation) (inference.StructuredResult, error) {
 	p := r.targets[target.TargetID()]
 	if p == nil || p.ReplayIdentity() != target.AccountIdentity() {
 		return inference.StructuredResult{}, inference.Failure{Code: inference.CapabilityChanged}
 	}
 	return p.structured(ctx, in, target.ReasoningEffort())
-}
-func ValidateTarget(target ProviderTarget) error {
-	if strings.TrimSpace(target.Model) == "" || len(target.Model) > 128 {
-		return errors.New("invalid model")
-	}
-	_, err := newProvider(target, func(string) (string, error) { return "validation-placeholder", nil }, nil)
-	if target.Provider == "codex_oauth" && target.BaseURL == "https://chatgpt.com/backend-api/codex" && target.APIKeyEnv == "" {
-		return nil
-	}
-	return err
 }

@@ -13,7 +13,7 @@ use floe_conversation::{
     AdmittedTurn, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CompactionReceipt,
     CompactionRequest, ConversationInteraction, ConversationRepository, DecisionAdmission,
     ExpireInteraction, ExpireOutcome, InteractionDecision, InteractionRepository, JournalEntry,
-    PublishAdmission, RecoveryReceipt, RecoveryRequest, RunReceipt, RunTerminal,
+    RecoveryReceipt, RecoveryRequest, RunReceipt, RunTerminal,
     SessionArchiveRepository, SessionReadRequest, SessionReceipt, SessionRepository,
     SessionRequest, SupersedeInteraction, TurnAdmission, TurnAdmissionRequest,
 };
@@ -422,19 +422,6 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
 }
 
 impl<Keys: VaultKeyProvider + 'static> InteractionRepository for VaultConversationRepository<Keys> {
-    fn publish_interaction<'a>(
-        &'a self,
-        record: ConversationInteraction,
-    ) -> BoxFuture<'a, Result<PublishAdmission, AgentFailure>> {
-        Box::pin(async move {
-            record.validate()?;
-            if record.person_id != self.vault.person_id() {
-                return Err(AgentFailure::CapabilityDenied);
-            }
-            self.vault.publish_conversation_interaction(record).await
-        })
-    }
-
     fn get_interaction<'a>(
         &'a self,
         person_id: floe_kernel::PersonId,

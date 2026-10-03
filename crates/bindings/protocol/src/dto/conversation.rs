@@ -42,6 +42,7 @@ pub enum ConversationSessionOutcomeDto {
 pub enum ConversationTaskStateDto {
     Submitted,
     Working,
+    Blocked,
     Completed,
     Failed,
     Cancelled,

@@ -3,7 +3,7 @@ package node
 import (
 	"context"
 	"errors"
-	"floe/server/internal/connections"
+	"floe/server/internal/integrations"
 	githubconnector "floe/server/internal/connectors/github"
 	"floe/server/internal/connectors/gmail"
 	googleauth "floe/server/internal/connectors/googleauth"
@@ -18,24 +18,19 @@ import (
 	slackconnector "floe/server/internal/connectors/slack"
 	workoauth "floe/server/internal/connectors/workoauth"
 	"floe/server/internal/credentials"
-	"floe/server/internal/integrations"
+    "floe/server/internal/views"
 	"path/filepath"
 )
 
 type sourceOAuth interface {
-	connections.DriveAuthRuntime
-	Close()
-}
-type identifiedOAuth interface {
-	sourceOAuth
-	connections.ProviderIdentityRuntime
-	connections.ProviderIdentityStatusRuntime
-	connections.ProviderIdentityFenceRuntime
+    lifecycle.OAuth
+    Token(context.Context) (string,error)
+    Close()
 }
 
 func integrationFactories(directory string, vault credentials.Store, env func(string) string) map[string]integrations.RuntimeFactory {
 	factories := map[string]integrations.RuntimeFactory{}
-	for _, d := range connections.Definitions {
+	for _, d := range integrations.Definitions() {
 		d := d
 		available := false
 		switch d.ID {
@@ -63,37 +58,44 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 	r := c.Record
 	scope := r.Scope
 	var auth sourceOAuth
+    var identity lifecycle.IdentityDriver
+    var reader views.Reader
+    var mirror views.Reader
 	switch r.ConnectorID {
 	case "gmail", "google_drive.files", "calendar.google":
 		cfg := googleauth.Config{ClientID: env("FLOE_GOOGLE_OAUTH_CLIENT_ID"), ClientSecret: env("FLOE_GOOGLE_OAUTH_CLIENT_SECRET")}
 		switch r.ConnectorID {
 		case "gmail":
-			auth, err = googleauth.New(vault, cfg)
+			auth, err = googleauth.New(vault, cfg, c.Binding.Slot)
 		case "google_drive.files":
-			auth, err = googleauth.NewDrive(vault, cfg)
+			auth, err = googleauth.NewDrive(vault, cfg, c.Binding.Slot)
 		case "calendar.google":
-			auth, err = googleauth.NewCalendar(vault, cfg)
+			var concrete *googleauth.Runtime
+            concrete,err=googleauth.NewCalendar(vault,cfg,c.Binding.Slot)
+            auth,identity=concrete,concrete
 		}
 	case "microsoft.mail", "calendar.microsoft", "microsoft.teams":
 		cfg := microsoftauth.Config{ClientID: env("FLOE_MICROSOFT_OAUTH_CLIENT_ID"), ClientSecret: env("FLOE_MICROSOFT_OAUTH_CLIENT_SECRET")}
 		switch r.ConnectorID {
 		case "microsoft.mail":
-			auth, err = microsoftauth.New(vault, cfg)
+			auth, err = microsoftauth.New(vault, cfg, c.Binding.Slot)
 		case "calendar.microsoft":
-			auth, err = microsoftauth.NewCalendar(vault, cfg)
+			var concrete *microsoftauth.Runtime
+            concrete,err=microsoftauth.NewCalendar(vault,cfg,c.Binding.Slot)
+            auth,identity=concrete,concrete
 		case "microsoft.teams":
-			auth, err = microsoftauth.NewTeams(vault, cfg)
+			auth, err = microsoftauth.NewTeams(vault, cfg, c.Binding.Slot)
 		}
 	case "github.issues":
-		auth, err = workoauth.NewGitHub(vault, workoauth.Config{ClientID: env("FLOE_GITHUB_OAUTH_CLIENT_ID")})
+		auth, err = workoauth.NewGitHub(vault, workoauth.Config{ClientID: env("FLOE_GITHUB_OAUTH_CLIENT_ID")}, c.Binding.Slot)
 	case "slack.conversations":
-		auth, err = workoauth.NewSlack(vault, workoauth.Config{ClientID: env("FLOE_SLACK_OAUTH_CLIENT_ID"), ClientSecret: env("FLOE_SLACK_OAUTH_CLIENT_SECRET")})
+		auth, err = workoauth.NewSlack(vault, workoauth.Config{ClientID: env("FLOE_SLACK_OAUTH_CLIENT_ID"), ClientSecret: env("FLOE_SLACK_OAUTH_CLIENT_SECRET")}, c.Binding.Slot)
 	case "home_assistant.states":
 		client, e := homeconnector.New(vaultTokenSource{vault, c.Binding.Slot}, scope["base_url"].(string), r.ConnectionID)
 		if e != nil {
 			return out, e
 		}
-		entities, ok := connections.ConnectorScopeStrings(scope["entities"])
+		entities, ok := integrations.ConnectorScopeStrings(scope["entities"])
 		if !ok {
 			return out, errors.New("invalid scope")
 		}
@@ -103,29 +105,16 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 		}
 		out.Setup = lifecycle.NewSecret(vault, c.Binding)
 		out.Snapshot = service
-		out.Logistics = service
-		return lifecycle.RegisterReaders(out, c, homeconnector.ConnectorDescriptor()), nil
+		return registeredRuntime(out, homeconnector.ConnectorDescriptor(), service), nil
 	default:
 		return out, errors.New("connector unavailable")
 	}
 	if err != nil {
 		return out, err
 	}
-	if err = auth.BindCredential(c.Binding.Slot); err != nil {
-		auth.Close()
-		return out, err
-	}
 	out.Close = auth.Close
 	out.Setup = lifecycle.NewOAuth(auth, c.Binding)
-	if r.ConnectorID == "calendar.google" || r.ConnectorID == "calendar.microsoft" {
-		identity, ok := auth.(identifiedOAuth)
-		if !ok {
-			auth.Close()
-			return out, errors.New("identity unavailable")
-		}
-		out.Identity = lifecycle.NewIdentity(identity, c.Binding, r.ConnectorID)
-		out.IdentitySupported = true
-	}
+    if identity!=nil {out.Identity=lifecycle.NewIdentity(identity,c.Binding,r.ConnectorID);out.IdentitySupported=true}
 	defer func() {
 		if err != nil && out.Close != nil {
 			out.Close()
@@ -140,10 +129,9 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 		var service *gmail.Service
 		service, err = gmail.NewService(filepath.Join(directory, "connectors", r.ConnectionID), r.ConnectionID, query, auth)
 		if err == nil {
-			adapter := gmail.Reader{Service: service}
-			out.Snapshot = adapter
-			out.Communication = adapter
-			out.Logistics = adapter
+			out.Snapshot = service
+            reader = service
+            out.Cleanup = service.Cleanup
 		}
 	case "microsoft.mail":
 		var client *microsoftmail.Client
@@ -152,7 +140,7 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 			var service *microsoftmail.Service
 			service, err = microsoftmail.NewService(client)
 			out.Snapshot = service
-			out.Communication = service
+			reader = service
 		}
 	case "github.issues":
 		var client *githubconnector.Client
@@ -161,7 +149,7 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 			var service *githubconnector.Service
 			service, err = githubconnector.NewService(client, scope["owner"].(string), scope["repository"].(string))
 			out.Snapshot = service
-			out.Work = service
+			reader = service
 		}
 	case "slack.conversations":
 		var client *slackconnector.Client
@@ -170,7 +158,7 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 			var service *slackconnector.Service
 			service, err = slackconnector.NewService(client, scope["channel"].(string), scope["thread"].(string))
 			out.Snapshot = service
-			out.Work = service
+			reader = service
 		}
 	case "google_drive.files":
 		var client *driveconnector.Client
@@ -179,7 +167,7 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 			var service *driveconnector.Service
 			service, err = driveconnector.NewService(client, scope["folder_id"].(string))
 			out.Snapshot = service
-			out.Work = service
+			reader = service
 		}
 	case "microsoft.teams":
 		var client *microsoftteamsconnector.Client
@@ -188,10 +176,10 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 			var service *microsoftteamsconnector.Service
 			service, err = microsoftteamsconnector.NewService(client, scope["team_id"].(string), scope["channel_id"].(string))
 			out.Snapshot = service
-			out.Work = service
+			reader = service
 		}
 	case "calendar.google":
-		ids, ok := connections.ConnectorScopeStrings(scope["calendar_ids"])
+		ids, ok := integrations.ConnectorScopeStrings(scope["calendar_ids"])
 		if !ok {
 			return out, errors.New("invalid scope")
 		}
@@ -204,10 +192,11 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 		}
 		var service *calendarconnector.Service
 		service, err = calendarconnector.NewService(clients...)
+        if err==nil {mirror,err=calendarconnector.NewMirrorReader(clients...)}
 		out.Snapshot = service
-		out.Calendar = service
+		reader = service
 	case "calendar.microsoft":
-		ids, ok := connections.ConnectorScopeStrings(scope["calendar_ids"])
+		ids, ok := integrations.ConnectorScopeStrings(scope["calendar_ids"])
 		if !ok {
 			return out, errors.New("invalid scope")
 		}
@@ -220,8 +209,9 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 		}
 		var service *microsoftcalendarconnector.Service
 		service, err = microsoftcalendarconnector.NewService(clients...)
+        if err==nil {mirror,err=microsoftcalendarconnector.NewMirrorReader(clients...)}
 		out.Snapshot = service
-		out.Calendar = service
+		reader = service
 	}
 	if err == nil {
 		var descriptor integrations.Descriptor
@@ -243,7 +233,8 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 		case "calendar.microsoft":
 			descriptor = microsoftcalendarconnector.ConnectorDescriptor()
 		}
-		out = lifecycle.RegisterReaders(out, c, descriptor)
+		out = registeredRuntime(out, descriptor, reader)
+        if mirror!=nil {out.Readers[views.CalendarMirror]=integrations.ReaderRegistration{Reader:mirror,Descriptor:views.CalendarMirrorDescriptor()}}
 	}
 	return out, err
 }
@@ -253,10 +244,19 @@ type vaultTokenSource struct {
 	name  string
 }
 
-func (v vaultTokenSource) Token(context.Context) (string, error) {
+func (v vaultTokenSource) Token(ctx context.Context) (string, error) {
+    if err:=ctx.Err();err!=nil{return "",err}
 	token, err := v.vault.Get(v.name)
+    if ctxErr:=ctx.Err();ctxErr!=nil{return "",ctxErr}
 	if err != nil || token == "" {
 		return "", errors.New("credential unavailable")
 	}
 	return token, nil
+}
+
+func registeredRuntime(runtime integrations.Runtime, descriptor integrations.Descriptor, reader views.Reader) integrations.Runtime {
+    runtime.Descriptor=descriptor
+    runtime.Readers=map[views.ID]integrations.ReaderRegistration{}
+    if reader!=nil {for _,view:=range descriptor.Views {runtime.Readers[views.ID(view.ID)]=integrations.ReaderRegistration{Reader:reader,Descriptor:view}}}
+    return runtime
 }

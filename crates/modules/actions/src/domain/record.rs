@@ -92,6 +92,14 @@ impl CalendarEffect {
     pub fn write(&self) -> Option<(&str, &TimedSchedule)> {
         match self { Self::Create{title,schedule,..}|Self::Update{title,schedule,..}=>Some((title,schedule)), Self::Delete{..}=>None }
     }
+    pub fn window(&self)->Result<&TimedSchedule,AgentFailure>{
+        match self {
+            Self::Create{schedule,..}|Self::Update{schedule,..}=>Ok(schedule),
+            Self::Delete{target,..}=>match &target.original.schedule {
+                floe_day::EventSchedule::Timed(schedule)=>Ok(schedule),_=>Err(AgentFailure::InvalidInput),
+            },
+        }
+    }
     pub fn validate(&self, person: PersonId) -> Result<(), AgentFailure> {
         self.destination().validate()?;
         if let Some((title, schedule)) = self.write() {
@@ -149,15 +157,19 @@ pub struct ActionSourceFence {
 }
 
 impl ActionSourceFence {
-    pub fn validate(&self, effect: &CalendarEffect, device: &str) -> Result<(), AgentFailure> {
-        let destination = effect.destination();
-        if self.connection_id != destination.connection_id || self.revision != destination.connection_revision
-            || self.revision == 0 || !self.authority.is_valid()
+    pub fn validate_identity(&self,device:&str)->Result<(),AgentFailure>{
+        if self.revision == 0 || !self.authority.is_valid() || !bounded(self.connection_id.as_str(),256)
             || !matches!(self.execution_owner.strip_prefix("apple:").or_else(||self.execution_owner.strip_prefix("macos:")), Some(owner) if owner == device)
             || !bounded(&self.native_subject_fingerprint, 512) || self.resources.is_empty()
-            || !self.resources.iter().any(|value|value == &destination.calendar_id)
             || self.resources.iter().any(|value|!bounded(value,512))
             || self.resources.windows(2).any(|pair|pair[0]>=pair[1]) { return Err(AgentFailure::PolicyDenied); }
+        Ok(())
+    }
+    pub fn validate(&self, effect: &CalendarEffect, device: &str) -> Result<(), AgentFailure> {
+        self.validate_identity(device)?;
+        let destination = effect.destination();
+        if self.connection_id!=destination.connection_id || self.revision!=destination.connection_revision
+            || !self.resources.iter().any(|value|value==&destination.calendar_id){return Err(AgentFailure::PolicyDenied);}
         Ok(())
     }
     pub fn digest(&self) -> Result<ActionDigest, AgentFailure> { action_digest(b"floe.actions.source.v1\0",self) }
@@ -191,13 +203,14 @@ impl ActionAuthorization {
         let valid = match self {
             Self::DirectInstruction{command_id,person_id,device_id,effect_digest,authority_revision,expires_at} =>
                 matches!(&record.origin,ActionOrigin::Direct{command_id:original,actor_device_id} if original==command_id && actor_device_id==device_id)
-                && *person_id==record.person_id && device_id==&record.device_id && *effect_digest==record.effect_digest && *authority_revision>0 && *expires_at==record.expires_at,
+                && *person_id==record.person_id && device_id==&record.device_id && *effect_digest==record.effect_digest
+                && *authority_revision==record.review.authority_revision && *expires_at==record.expires_at,
             Self::ReviewedDecision{command_id,person_id,device_id,review,decided_at}=>!command_id.is_nil()
                 && *person_id==record.person_id && device_id==&record.device_id && review==&record.review
                 && *decided_at>=record.created_at && *decided_at<record.expires_at,
             Self::StandingPolicy{person_id,effect_digest,authority_revision,expires_at}=>matches!(record.origin,ActionOrigin::Expert{..})
                 && matches!(record.effect,CalendarEffect::Create{..}) && *person_id==record.person_id && *effect_digest==record.effect_digest
-                && *authority_revision>0 && *expires_at==record.expires_at,
+                && *authority_revision==record.review.authority_revision && *expires_at==record.expires_at,
         };
         if !valid || now<record.created_at || now>=record.expires_at { return Err(AgentFailure::PolicyDenied); }
         Ok(())
@@ -269,7 +282,8 @@ impl CalendarEffectReceipt {
         match &self.evidence {
             CalendarReceiptEvidence::NativeAcknowledgement{host_epoch,receipt_id} if !host_epoch.is_nil() && !receipt_id.is_nil()=>{},
             CalendarReceiptEvidence::UniqueCreateMarker{observed_at,marker} if matches!(intent.effect,CalendarEffect::Create{..})
-                && *observed_at>=intent.prepared_at && marker==&format!("floe://calendar-action/{}/{}",intent.person_id,intent.execution_id)=>{},
+                && *observed_at==self.committed_at && *observed_at>=intent.prepared_at
+                && marker==&format!("floe://calendar-action/{}/{}",intent.person_id,intent.execution_id)=>{},
             _=>return Err(AgentFailure::PolicyDenied),
         }
         let result = match (&intent.effect,&self.effect) {
@@ -420,6 +434,8 @@ impl ActionRecord {
         }
         if matches!(self.state,ActionState::PendingReview) && self.authorization.is_some()
             || matches!(self.state,ActionState::Approved) && self.authorization.is_none() {return Err(AgentFailure::InvalidInput);}
+        if matches!(self.origin,ActionOrigin::Direct{..}) && (self.authorization.is_none()
+            || matches!(self.state,ActionState::PendingReview|ActionState::Rejected)) {return Err(AgentFailure::InvalidInput);}
         if let Some(authorization)=&self.authorization {authorization.validate_for(self,self.created_at)?;}
         action_digest(b"floe.actions.record.v1\0",self)?;
         Ok(())

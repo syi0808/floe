@@ -171,6 +171,7 @@ pub struct ConversationDependencies<R, S, T> {
     pub evidence: Arc<dyn EvidenceReader>,
     pub resolver: Arc<dyn DependencyResolver>,
     pub connections: Arc<floe_connections::ConnectionsService>,
+    pub experts_owner: Arc<dyn floe_experts::ExpertsOwner>,
     pub runtime_epoch: u64,
 }
 
@@ -213,6 +214,7 @@ where
             dependencies.repository.clone(),
             config.clone(),
             dependencies.connections.clone(),
+            dependencies.experts_owner.clone(),
         )?;
         let events = ConversationEventBuffer::new(dependencies.runtime_epoch)?;
         Ok(Self {
@@ -758,6 +760,7 @@ where
             };
             super::interaction_projection::project_interaction(
                 self.inner.dependencies.connections.as_ref(),
+                self.inner.dependencies.experts_owner.as_ref(),
                 actor,
                 &record,
                 chrono::Utc::now().timestamp_millis(),
@@ -830,6 +833,7 @@ where
                 snapshots.push(
                     super::interaction_projection::project_interaction(
                         self.inner.dependencies.connections.as_ref(),
+                        self.inner.dependencies.experts_owner.as_ref(),
                         actor,
                         &record,
                         chrono::Utc::now().timestamp_millis(),

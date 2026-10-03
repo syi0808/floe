@@ -12,8 +12,15 @@ use super::repository::DispatchAdmission;
 
 /// Source facts and the outstanding-operation barrier. This port grants no write permission.
 pub trait ActionSourceReader:Send+Sync {
+    fn list_calendar_sources<'a>(&'a self,person_id:PersonId)->BoxFuture<'a,Result<Vec<SourceConnection>,AgentFailure>>;
     fn load<'a>(&'a self,person_id:PersonId,connection_id:&'a ConnectionId)->BoxFuture<'a,Result<Option<SourceConnection>,AgentFailure>>;
     fn source_is_fenced<'a>(&'a self,person_id:PersonId,connection_id:&'a ConnectionId)->BoxFuture<'a,Result<bool,AgentFailure>>;
+}
+
+#[derive(Clone,Debug,serde::Deserialize,Eq,PartialEq,serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarDestinationObservation {
+    pub calendar_id:String,pub calendar_name:String,pub can_modify:bool,
 }
 
 #[derive(Clone, Debug)]
@@ -35,13 +42,20 @@ pub trait ExpertProposalReader:Send+Sync {
         ->BoxFuture<'a,Result<ExpertProposalEvidence,AgentFailure>>;
 }
 
+/// UTC millisecond timestamps match the native receipt codec without rounding a
+/// fast prewrite rejection to a time before its immutable dispatch admission.
 pub trait ActionsClock:Send+Sync {fn now(&self)->chrono::DateTime<chrono::Utc>;}
 pub struct SystemActionsClock;
-impl ActionsClock for SystemActionsClock {fn now(&self)->chrono::DateTime<chrono::Utc>{chrono::Utc::now()}}
+impl ActionsClock for SystemActionsClock {fn now(&self)->chrono::DateTime<chrono::Utc>{
+    let now=chrono::Utc::now();
+    now-chrono::Duration::nanoseconds(i64::from(now.timestamp_subsec_nanos()%1_000_000))
+}}
 
 /// Preparation is bounded external inspection. It never invokes save/remove.
 /// Its returned capability retains exact source, event and host observations.
 pub trait ActionCalendarExecutor:Send+Sync {
+    fn destinations<'a>(&'a self,actor:&'a OwnerActor,source:&'a ActionSourceFence,scope:&'a ExecutionScope)
+        ->BoxFuture<'a,Result<Vec<CalendarDestinationObservation>,ActionBlockedReason>>;
     fn prepare<'a>(&'a self,actor:&'a OwnerActor,record:&'a ActionRecord,local_events:&'a [Event],scope:&'a ExecutionScope)
         ->BoxFuture<'a,Result<Box<dyn PreparedCalendarEffect>,ActionBlockedReason>>;
     /// Recovery is lookup-only, including exact historical native receipt readback.

@@ -27,36 +27,40 @@ pub struct RunBlockOrigin {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct BlockedInteractionLink {
+    pub interaction_id: Uuid,
+    pub origin: RunBlockOrigin,
+    pub target: super::ReviewedTarget,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RunBlockRecord {
     pub review_group_id: Uuid,
-    pub origins: Vec<RunBlockOrigin>,
-    pub review_refs: Vec<floe_access::ReviewRef>,
-    pub interaction_refs: Vec<Uuid>,
+    pub interactions: Vec<BlockedInteractionLink>,
     pub prior_exhaustion: Option<PriorExhaustion>,
 }
 
 impl RunBlockRecord {
+    pub fn interaction_refs(&self) -> Vec<Uuid> {
+        self.interactions.iter().map(|link| link.interaction_id).collect()
+    }
+
     pub fn validate(&self) -> Result<(), AgentFailure> {
         if self.review_group_id.is_nil()
-            || self.origins.is_empty()
-            || self.origins.len() > MAX_ACTIVE_INTERACTIONS_PER_RUN
-            || self.review_refs.len() != self.origins.len()
-            || self.interaction_refs.len() != self.origins.len()
-            || self.interaction_refs.iter().any(Uuid::is_nil)
-            || self
-                .interaction_refs
-                .iter()
-                .collect::<std::collections::HashSet<_>>()
-                .len()
-                != self.interaction_refs.len()
+            || self.interactions.is_empty()
+            || self.interactions.len() > MAX_ACTIVE_INTERACTIONS_PER_RUN
         {
             return Err(AgentFailure::StorageUnavailable);
         }
         let mut seen = std::collections::HashSet::new();
-        for (origin, review) in self.origins.iter().zip(&self.review_refs) {
+        for link in &self.interactions {
+            let origin = &link.origin;
             origin.origin.validate()?;
-            review.validate()?;
-            if origin.session_id.is_nil()
+            link.target.validate()?;
+            if link.interaction_id.is_nil()
+                || !seen.insert(link.interaction_id)
+                || origin.session_id.is_nil()
                 || origin.person_id.0.is_nil()
                 || !origin.run_id.is_valid()
                 || origin.executor_generation == 0
@@ -64,7 +68,6 @@ impl RunBlockRecord {
                 || origin.device_id.len() > 256
                 || origin.device_id.trim() != origin.device_id
                 || origin.device_id.chars().any(char::is_control)
-                || !seen.insert(review.id)
                 || matches!(&origin.origin, InteractionOrigin::Projection { run_id, .. } if *run_id != origin.run_id)
             {
                 return Err(AgentFailure::StorageUnavailable);
@@ -474,7 +477,8 @@ impl RunRecord {
                     && self.output.is_none()
                     && self.issue.is_none()
                     && self.blocked.as_ref().is_some_and(|record| {
-                        record.origins.iter().all(|origin| {
+                        record.interactions.iter().all(|link| {
+                            let origin = &link.origin;
                             origin.session_id == self.session_id
                                 && origin.person_id == self.person_id
                                 && origin.device_id == self.device_id
@@ -548,9 +552,4 @@ impl RunRecord {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct UnresolvedModelAttempt {
-    pub attempt_id: Uuid,
-    pub reservation_ceiling: floe_execution::budget::ModelReservationCeiling,
-    pub accounting: floe_execution::budget::ModelAccounting,
-}
+pub use floe_agent_contract::UnresolvedModelAttempt;

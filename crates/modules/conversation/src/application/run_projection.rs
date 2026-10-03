@@ -66,7 +66,7 @@ pub fn project_run_snapshot(run: &RunReceipt) -> Result<RunSnapshot, AgentFailur
         interaction_refs: run
             .blocked
             .as_ref()
-            .map_or_else(Vec::new, |blocked| blocked.interaction_refs.clone()),
+            .map_or_else(Vec::new, |blocked| blocked.interaction_refs()),
     })
 }
 

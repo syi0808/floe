@@ -224,6 +224,9 @@ func (client *Client) Changes(ctx context.Context, startHistoryID, cursor string
 
 func (client *Client) get(ctx context.Context, path string, output any) error {
 	token, err := client.tokens.Token(ctx)
+	if contextErr := contextFailure(ctx, err); contextErr != nil {
+		return contextErr
+	}
 	if err != nil || strings.TrimSpace(token) == "" || len(token) > 8192 || strings.ContainsAny(token, "\r\n") {
 		return ErrCredentialExpired
 	}
@@ -234,8 +237,8 @@ func (client *Client) get(ctx context.Context, path string, output any) error {
 	request.Header.Set("Authorization", "Bearer "+token)
 	response, err := client.http.Do(request)
 	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if contextErr := contextFailure(ctx, err); contextErr != nil {
+			return contextErr
 		}
 		return ErrUnavailable
 	}
@@ -256,12 +259,28 @@ func (client *Client) get(ctx context.Context, path string, output any) error {
 		}
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxEnvelope+1))
+	if contextErr := contextFailure(ctx, err); contextErr != nil {
+		return contextErr
+	}
 	if err != nil || len(body) > maxEnvelope {
 		return ErrInvalidResponse
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	if decoder.Decode(output) != nil || decoder.Decode(new(any)) != io.EOF {
 		return ErrInvalidResponse
+	}
+	return nil
+}
+
+func contextFailure(ctx context.Context, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
 	}
 	return nil
 }

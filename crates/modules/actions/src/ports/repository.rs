@@ -20,7 +20,8 @@ pub enum ActionStoreError {
 impl From<ActionStoreError> for floe_kernel::AgentFailure {
     fn from(value:ActionStoreError)->Self {
         match value {
-            ActionStoreError::VaultLocked|ActionStoreError::CorruptRecord=>Self::VaultUnavailable,
+            ActionStoreError::VaultLocked=>Self::VaultLocked,
+            ActionStoreError::CorruptRecord=>Self::VaultUnavailable,
             ActionStoreError::Unavailable=>Self::StorageUnavailable,
             ActionStoreError::NotFound=>Self::NotFound,
             ActionStoreError::Conflict=>Self::Conflict,

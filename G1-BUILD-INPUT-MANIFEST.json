@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "HistoricalG1 complete665df6b3. S2 frozen safe Day snapshots, builtin program and mirror Reader contracts, review-receipt reads and explicit VaultLocked failure; incomplete/uncompiled, no intermediate checks.",
+  "verification": "Historical G1 completed at 665df6b3. S2 owner contracts, Task-bound Conversation review integration, Context inverse adapters, reviewed Experts binding owner and complete Go source checkpoint are incomplete and uncompiled. No S2 formatter, compiler, build or tests have run.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "04d2c0df86a21c5db5c1106794b2dbae222ee3cd",
+  "current_correction_source_commit": "98f6ece1e8893bf1ae09040cef1a93033f80d62d",
   "current_status_document": "docs/plans/2026-10-03-g1-first-pass.md"
 }

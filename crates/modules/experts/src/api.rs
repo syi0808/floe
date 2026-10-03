@@ -107,6 +107,9 @@ pub trait ExpertsOwner: Send + Sync {
     fn read_task_execution_receipt<'a>(&'a self, actor: &'a OwnerActor,
         reference: &'a TaskExecutionReceiptRef, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<floe_agent_contract::TaskExecutionReceipt, AgentFailure>>;
+    fn recover_delegation<'a>(&'a self, actor: &'a OwnerActor,
+        request: &'a floe_agent_contract::DelegationRequest, scope: &'a ExecutionScope)
+        -> BoxFuture<'a, Result<floe_agent_contract::TaskReceipt, AgentFailure>>;
     fn directory<'a>(&'a self, actor: &'a OwnerActor, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<ExpertDirectorySnapshot, AgentFailure>>;
     fn set_installation_enabled<'a>(&'a self, actor: &'a OwnerActor, command_id: CommandId,

@@ -7,7 +7,6 @@ import (
 )
 
 // SourceResolver and SourceFence are the inward ports for normalized Readers.
-// The bounded reference-based source adapter is removed in S2.1.
 type SourceResolver interface {
 	ResolveSource(context.Context, trust.Principal, views.SourceTarget) (ResolvedSource, error)
 	PreflightSource(context.Context, trust.Principal, views.SourceSnapshot) error

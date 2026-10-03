@@ -21,7 +21,15 @@ type Descriptor struct {
 	Views         []views.ViewDescriptor `json:"views"`
 }
 
+type SourceAuthority struct {
+    ExecutionOwner string `json:"execution_owner"`
+    Incarnation string `json:"incarnation"`
+    Epoch uint64 `json:"epoch"`
+    IdentityUnverified bool `json:"identity_unverified"`
+}
+
 type Connection struct {
+    Authority *SourceAuthority `json:"authority,omitempty"`
 	SchemaVersion       int            `json:"schema_version"`
 	ConnectorID         string         `json:"connector_id"`
 	ConnectionID        string         `json:"connection_id,omitempty"`

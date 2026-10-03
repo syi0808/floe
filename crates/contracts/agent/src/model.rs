@@ -1,10 +1,16 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[derive(Clone, Debug)]
+pub struct ValidatedFinalPayload {
+    pub text: String,
+    pub artifacts: Vec<crate::Artifact>,
+}
+
 use floe_execution::ExecutionScope;
 
 use crate::{
-    AgentCard, AgentFailure, Artifact, AuthorizedModelProjection, DelegationExecutionContext,
+    AgentCard, AgentFailure, Artifact, AuthorizedModelProjection,
     InvocationKey, ModelConversation, ToolResult,
 };
 
@@ -133,7 +139,7 @@ pub struct EngineRequest {
     /// The explicit host context delegate steps execute under, supplied by
     /// the Conversation owner. Required when a validated batch contains a
     /// Delegate step; absent otherwise.
-    pub delegation_context: Option<DelegationExecutionContext>,
+    pub delegation_context: Option<crate::DelegationContextInput>,
 }
 
 impl EngineRequest {

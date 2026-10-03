@@ -20,9 +20,6 @@ mod resume;
 mod session;
 mod source_review;
 mod storage_projection;
-pub use source_review::{
-    PublishTaskSourceReview, publish_task_projection_review, publish_task_source_review,
-};
 pub use storage_projection::{
     RunAccountingProjection, apply_terminal, contract_message, interrupt_for_activation,
     project_run_accounting, project_run_receipt, project_session_receipt, project_transcript,
@@ -41,8 +38,8 @@ pub use history_projection::{
     HistoryProjection, ProjectedModelConversation, project_model_conversation_history,
 };
 pub use interactions::{
-    DecideInteractionCommand, PublishInteractionRequest, decide_interaction, expire_interaction,
-    list_run_interactions, load_interaction, publish_interaction, resolve_interaction,
+    DecideInteractionCommand, decide_interaction, expire_interaction,
+    list_run_interactions, load_interaction,  resolve_interaction,
     supersede_interaction,
 };
 pub use model_projection::ConversationModelProjection;
@@ -66,7 +63,6 @@ pub use service::{
 };
 
 mod task_interactions;
-pub use task_interactions::{interaction_ref_artifacts, publish_expert_binding_blockers};
 
 mod session_projection;
 pub use session_projection::{ArtifactSummary, SessionMessage, SessionSnapshot, TaskSummary};

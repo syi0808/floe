@@ -35,6 +35,7 @@ pub(super) struct RunCoordinator<Repository> {
     engine: Engine,
     config: ManagerConfig,
     connections: Arc<floe_connections::ConnectionsService>,
+    experts: Arc<dyn floe_experts::ExpertsOwner>,
 }
 
 impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<Repository> {
@@ -42,6 +43,7 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
         repository: Arc<Repository>,
         config: ManagerConfig,
         connections: Arc<floe_connections::ConnectionsService>,
+        experts: Arc<dyn floe_experts::ExpertsOwner>,
     ) -> Result<Self, AgentFailure> {
         config.validate()?;
         Ok(Self {
@@ -49,6 +51,7 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
             engine: Engine::default(),
             config,
             connections,
+            experts,
         })
     }
 
@@ -431,7 +434,9 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
             },
         };
         continuation_replay.extend(request.replay);
+        let execution_id = resume.as_ref().map_or(run_id.as_uuid(), |resume: &floe_agent_contract::EngineResumeState| resume.validated_batch.execution_id);
         let engine_request = EngineRequest {
+            execution_id,
             principal: request.principal.clone(),
             device_id: request.device_id.clone(),
             role_spec: self.config.role_spec.clone(),
@@ -536,10 +541,11 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
                     }
                 }
             }
-            Ok(EngineOutcome::NeedsSourceReview(blocked)) => {
+            Ok(EngineOutcome::Blocked(blocked)) => {
                 let commit = super::source_review::build_blocked_run_commit(
                     self.repository.as_ref(),
                     self.connections.as_ref(),
+                    self.experts.as_ref(),
                     actor,
                     run_id,
                     blocked,
@@ -595,6 +601,7 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
             &self.engine,
             self.repository.as_ref(),
             self.connections.as_ref(),
+            self.experts.as_ref(),
             actor,
             run_id,
             scope,
@@ -716,7 +723,8 @@ pub async fn continuation<Repository: ConversationRepository>(
     let mut current_turn = Vec::new();
     let mut replay = Vec::new();
     let mut completed_iterations = 0_u32;
-    let mut usage = floe_execution::budget::ModelUsage::default();
+    let mut own_accounting = Vec::new();
+    let mut delegated_accounting = Vec::new();
     let mut carried: Option<(ValidatedModelBatch, BatchCursor)> = None;
     let mut total_entries = 0_usize;
     let mut seen_exchanges = std::collections::HashSet::new();
@@ -751,26 +759,8 @@ pub async fn continuation<Repository: ConversationRepository>(
         completed_iterations = completed_iterations
             .checked_add(projected.completed_iterations)
             .ok_or(AgentFailure::StorageUnavailable)?;
-        usage.attempts = usage
-            .attempts
-            .checked_add(projected.usage.attempts)
-            .ok_or(AgentFailure::StorageUnavailable)?;
-        usage.tokens = usage
-            .tokens
-            .checked_add(projected.usage.tokens)
-            .ok_or(AgentFailure::StorageUnavailable)?;
-        usage.cost_micros = usage
-            .cost_micros
-            .checked_add(projected.usage.cost_micros)
-            .ok_or(AgentFailure::StorageUnavailable)?;
-        usage.estimated_tokens = usage
-            .estimated_tokens
-            .checked_add(projected.usage.estimated_tokens)
-            .ok_or(AgentFailure::StorageUnavailable)?;
-        usage.estimated_cost_micros = usage
-            .estimated_cost_micros
-            .checked_add(projected.usage.estimated_cost_micros)
-            .ok_or(AgentFailure::StorageUnavailable)?;
+        own_accounting.push(projected.own_accounting);
+        delegated_accounting.extend(projected.delegated_receipts);
         // Cross-run resume lineage: a newer run supersedes an older pending
         // batch only after durably re-recording the exact batch and starting
         // cursor. A child that crashed before takeover leaves the parent
@@ -781,6 +771,7 @@ pub async fn continuation<Repository: ConversationRepository>(
             .zip(projected.cursor.clone());
         carried = reconcile_resume_lineage(carried, &projected.lineage, live)?;
     }
+    let usage = floe_agent_runtime::aggregate_model_accounting(&own_accounting, &delegated_accounting)?.usage;
     let model_conversation = ModelConversation {
         history,
         current_turn,

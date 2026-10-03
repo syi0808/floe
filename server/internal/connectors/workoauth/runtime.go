@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+    "floe/server/internal/integrations"
 	"html"
 	"io"
 	"net"
@@ -86,23 +87,24 @@ type Runtime struct {
 	tokens          *tokenBundle
 	flow            *loginFlow
 	credentialName  string
+    credentialGeneration uint64
 	callbackAddress string
 }
 
-func NewGitHub(store Store, config Config) (*Runtime, error) {
+func NewGitHub(store Store, config Config, boundCredential string) (*Runtime, error) {
 	config.ClientSecret = ""
-	return newRuntime(store, config, githubProfile)
+	return newRuntime(store, config, githubProfile, boundCredential)
 }
 
-func NewSlack(store Store, config Config) (*Runtime, error) {
+func NewSlack(store Store, config Config, boundCredential string) (*Runtime, error) {
 	if len(config.ClientSecret) > 2048 || strings.ContainsAny(config.ClientSecret, "\r\n") {
 		return nil, ErrUnavailable
 	}
-	return newRuntime(store, config, slackProfile)
+	return newRuntime(store, config, slackProfile, boundCredential)
 }
 
-func newRuntime(store Store, config Config, profile providerProfile) (*Runtime, error) {
-	if store == nil || !validCredential(config.ClientID, 512) {
+func newRuntime(store Store, config Config, profile providerProfile, boundCredential string) (*Runtime, error) {
+	if store == nil || !validCredential(config.ClientID, 512) || !validBoundCredential(profile.credential, boundCredential) {
 		return nil, ErrUnavailable
 	}
 	transport := &http.Transport{
@@ -111,27 +113,16 @@ func newRuntime(store Store, config Config, profile providerProfile) (*Runtime, 
 		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
 		TLSHandshakeTimeout: 5 * time.Second, MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second,
 	}
-	return &Runtime{
+	runtime := &Runtime{
 		store: store, config: config, profile: profile,
 		client:         &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-		credentialName: profile.credential, callbackAddress: profile.callbackAddress,
-	}, nil
-}
-
-func (runtime *Runtime) Ready() bool { return runtime.load() != nil }
-
-func (runtime *Runtime) BindCredential(name string) error {
-	if !validBoundCredential(runtime.profile.credential, name) {
-		return ErrUnavailable
+		credentialName: boundCredential, callbackAddress: profile.callbackAddress,
 	}
-	runtime.operation.Lock()
-	defer runtime.operation.Unlock()
-	runtime.cancelLogin()
-	runtime.mu.Lock()
-	runtime.credentialName, runtime.tokens = name, nil
-	runtime.mu.Unlock()
-	return nil
+    runtime.load()
+    return runtime, nil
 }
+
+func (runtime *Runtime) Ready() bool { runtime.mu.RLock(); defer runtime.mu.RUnlock(); return runtime.tokens != nil }
 
 func (runtime *Runtime) Token(ctx context.Context) (string, error) {
 	runtime.operation.Lock()
@@ -153,41 +144,48 @@ func (runtime *Runtime) Token(ctx context.Context) (string, error) {
 	return refreshed.AccessToken, nil
 }
 
-func (runtime *Runtime) Action(ctx context.Context, action string) (any, error) {
-	if action != "status" && action != "login" && action != "cancel" && action != "logout" {
-		return nil, ErrUnavailable
+type authorizationCommand uint8
+const ( authorizationStatus authorizationCommand = iota; authorizationBegin; authorizationCancel; authorizationDisconnect )
+func (runtime *Runtime) BeginAuthorization(ctx context.Context) (integrations.AuthorizationProgress,error) {return runtime.authorization(ctx,authorizationBegin)}
+func (runtime *Runtime) PollAuthorization(ctx context.Context) (integrations.AuthorizationProgress,error) {return runtime.authorization(ctx,authorizationStatus)}
+func (runtime *Runtime) CancelAuthorization(ctx context.Context) error {_,err:=runtime.authorization(ctx,authorizationCancel);return err}
+func (runtime *Runtime) DisconnectAuthorization(ctx context.Context) error {_,err:=runtime.authorization(ctx,authorizationDisconnect);return err}
+
+func (runtime *Runtime) authorization(ctx context.Context, action authorizationCommand) (integrations.AuthorizationProgress, error) {
+	if action != authorizationStatus && action != authorizationBegin && action != authorizationCancel && action != authorizationDisconnect {
+		return integrations.AuthorizationProgress{}, ErrUnavailable
 	}
 	if !runtime.operation.TryLock() {
-		return nil, ErrUnavailable
+		return integrations.AuthorizationProgress{}, ErrUnavailable
 	}
 	defer runtime.operation.Unlock()
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return integrations.AuthorizationProgress{}, ctx.Err()
 	}
-	if action == "logout" {
+	if action == authorizationDisconnect {
 		if err := runtime.logout(ctx); err != nil {
-			return nil, err
+			return integrations.AuthorizationProgress{}, err
 		}
 	}
-	if action == "cancel" {
+	if action == authorizationCancel {
 		runtime.cancelLogin()
 	}
-	if action == "login" && runtime.load() == nil {
+	if action == authorizationBegin && runtime.load() == nil {
 		runtime.mu.RLock()
 		pending := runtime.flow != nil && runtime.flow.expires.After(time.Now())
 		runtime.mu.RUnlock()
 		if !pending {
 			if err := runtime.startLogin(ctx); err != nil {
-				return nil, err
+				return integrations.AuthorizationProgress{}, err
 			}
 		}
 	}
 	runtime.mu.RLock()
 	flow := runtime.flow
 	runtime.mu.RUnlock()
-	if action == "status" && flow != nil && runtime.profile.deviceFlow && !time.Now().Before(flow.nextPoll) {
+	if action == authorizationStatus && flow != nil && runtime.profile.deviceFlow && !time.Now().Before(flow.nextPoll) {
 		if err := runtime.pollDeviceFlow(ctx, flow); err != nil {
-			return nil, err
+			return integrations.AuthorizationProgress{}, err
 		}
 		runtime.mu.RLock()
 		flow = runtime.flow
@@ -200,9 +198,8 @@ func (runtime *Runtime) Action(ctx context.Context, action string) (any, error) 
 	} else if flow != nil && flow.expires.After(time.Now()) {
 		status, authURL, userCode = "pending", flow.authURL, flow.userCode
 	}
-	return map[string]any{"status": status, "auth_url": authURL, "user_code": userCode, "scope": strings.Join(runtime.profile.requiredScopes, " ")}, nil
+return integrations.AuthorizationProgress{State:integrations.AuthorizationState(status),AuthorizationURL:authURL,UserCode:userCode}, nil
 }
-
 func (runtime *Runtime) startLogin(ctx context.Context) error {
 	runtime.cancelLogin()
 	if runtime.profile.deviceFlow {
@@ -504,30 +501,22 @@ func (runtime *Runtime) logout(context.Context) error {
 	}
 	runtime.mu.Lock()
 	runtime.tokens = nil
+    runtime.credentialGeneration++
 	runtime.mu.Unlock()
 	return nil
 }
 
 func (runtime *Runtime) load() *tokenBundle {
-	runtime.mu.RLock()
-	current := runtime.tokens
-	runtime.mu.RUnlock()
-	if current != nil {
-		copy := *current
-		return &copy
-	}
-	encoded, err := runtime.store.Get(runtime.credentialKey())
-	if err != nil || encoded == "" || len(encoded) > 32768 {
-		return nil
-	}
-	var value tokenBundle
-	if json.Unmarshal([]byte(encoded), &value) != nil || value.ClientID != runtime.config.ClientID || !validCredential(value.AccessToken, 16384) {
-		return nil
-	}
-	runtime.mu.Lock()
-	runtime.tokens = &value
-	runtime.mu.Unlock()
-	return &value
+    runtime.mu.RLock(); current:=runtime.tokens; generation:=runtime.credentialGeneration; key:=runtime.credentialName; runtime.mu.RUnlock()
+    if current!=nil {copy:=*current;return &copy}
+    encoded,err:=runtime.store.Get(key)
+    if err!=nil || encoded=="" || len(encoded)>32768{return nil}
+    var value tokenBundle
+    if json.Unmarshal([]byte(encoded),&value)!=nil || value.ClientID!=runtime.config.ClientID || !validCredential(value.AccessToken,16384){return nil}
+    runtime.mu.Lock();defer runtime.mu.Unlock()
+    if runtime.credentialGeneration!=generation || runtime.credentialName!=key {return nil}
+    if runtime.tokens!=nil {copy:=*runtime.tokens;return &copy}
+    runtime.tokens=&value;copy:=value;return &copy
 }
 
 func (runtime *Runtime) save(value *tokenBundle) error {
@@ -608,9 +597,6 @@ func hasAllScopes(value string, required []string) bool {
 }
 
 func validBoundCredential(namespace, name string) bool {
-	if name == namespace {
-		return true
-	}
 	prefix := namespace + ":"
 	if !strings.HasPrefix(name, prefix) || len(name) != len(prefix)+64 {
 		return false

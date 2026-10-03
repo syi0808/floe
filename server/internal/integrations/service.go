@@ -4,8 +4,6 @@ package integrations
 import (
 	"context"
 	"errors"
-	"floe/server/internal/authority"
-	"floe/server/internal/connections"
 	"floe/server/internal/credentials"
 	"floe/server/internal/operation"
 	"floe/server/internal/trust"
@@ -25,26 +23,24 @@ type Service struct {
 	runtimes    map[string]Runtime
 	unavailable bool
 	lifecycles  sync.Map
-	engine      *authority.Engine
-	admissions  *authority.Admissions
 }
 
-func New(ctx context.Context, directory string, t Trust, v credentials.Store, factories map[string]RuntimeFactory, engine *authority.Engine) (*Service, error) {
-	if t == nil || v == nil || engine == nil {
+func New(ctx context.Context, directory string, t Trust, v credentials.Store, factories map[string]RuntimeFactory) (*Service, error) {
+	if t == nil || v == nil {
 		return nil, errors.New("integration dependency unavailable")
 	}
 	state, err := readState(directory)
 	if err != nil {
 		return nil, err
 	}
-	s := &Service{directory: directory, trust: t, vault: v, factories: map[string]RuntimeFactory{}, state: state, runtimes: map[string]Runtime{}, engine: engine, admissions: authority.NewAdmissions()}
+	s := &Service{directory: directory, trust: t, vault: v, factories: map[string]RuntimeFactory{}, state: state, runtimes: map[string]Runtime{}}
 	for k, f := range factories {
 		s.factories[k] = f
 	}
 	// Interrupted authorization never resumes with a provider: journal cleanup before opening sources.
 	for id, a := range s.state.Attempts {
 		if a.Status == Pending {
-			c := cleanupRecord{ID: trust.NewID(), Records: []connections.Record{a.Record}, RuntimeDone: map[string]bool{}, VaultDone: map[string]bool{}}
+			c := cleanupRecord{ID: trust.NewID(), Records: []Record{a.Record}, RuntimeDone: map[string]bool{}, VaultDone: map[string]bool{}}
 			s.state.Cleanup[c.ID] = c
 			a.Status = Failed
 			a.Revision++
@@ -135,8 +131,8 @@ func (s *Service) Catalog(ctx context.Context, p trust.Principal) operation.Resu
 	if err != nil {
 		return trust.Result(err)
 	}
-	for _, d := range connections.Definitions {
-		item := map[string]any{"id": d.ID, "name": d.Name, "auth_kind": d.AuthKind, "available": s.factories[d.ID] != nil, "status": "disconnected", "required_scopes": d.RequiredScopes, "scope_fields": d.ScopeFields, "capabilities": connections.ConnectorCapabilities(d)}
+	for _, d := range Definitions() {
+		item := map[string]any{"id": d.ID, "name": d.Name, "auth_kind": d.AuthKind, "available": s.factories[d.ID] != nil, "status": "disconnected", "required_scopes": d.RequiredScopes, "scope_fields": d.ScopeFields, "capabilities": ConnectorCapabilities(d)}
 		if s.factories[d.ID] == nil {
 			item["status"] = "unavailable"
 		}
@@ -168,8 +164,8 @@ func (s *Service) Catalog(ctx context.Context, p trust.Principal) operation.Resu
 	}
 	return operation.Accept(map[string]any{"schema_version": 1, "person_id": p.PersonID(), "device_id": p.DeviceID(), "connectors": items, "revision": state.Revision})
 }
-func (s *Service) Start(ctx context.Context, p trust.Principal, id string, in connections.ConnectRequest) operation.Result {
-	d, ok := connections.DefinitionFor(id)
+func (s *Service) Start(ctx context.Context, p trust.Principal, id string, in ConnectRequest) operation.Result {
+	d, ok := DefinitionFor(id)
 	if !ok {
 		return operation.Reject(operation.Missing, "connector_not_found")
 	}
@@ -179,7 +175,7 @@ func (s *Service) Start(ctx context.Context, p trust.Principal, id string, in co
 	scope := map[string]any{}
 	var err error
 	if len(in.Scope) != 0 {
-		scope, err = connections.ValidatedConnectorScope(d, in.Scope)
+		scope, err = ValidatedConnectorScope(d, in.Scope)
 		if err != nil {
 			return operation.Reject(operation.Invalid, "invalid_scope")
 		}
@@ -222,7 +218,7 @@ func (s *Service) Start(ctx context.Context, p trust.Principal, id string, in co
 				return operation.Fail(operation.Conflict, "connection_in_progress")
 			}
 		}
-		r := connections.Record{ConnectionID: trust.NewID(), Revision: 1, ConnectorID: id, PersonID: p.PersonID(), Scope: scope, Incarnation: trust.NewID(), Epoch: 1, IdentityUnverified: true}
+		r := Record{ConnectionID: trust.NewID(), Revision: 1, ConnectorID: id, PersonID: p.PersonID(), Scope: scope, Incarnation: trust.NewID(), Epoch: 1, IdentityUnverified: true}
 		namespace := d.CredentialName
 		if namespace == "" {
 			namespace = d.OAuthCredential
@@ -232,7 +228,7 @@ func (s *Service) Start(ctx context.Context, p trust.Principal, id string, in co
 		if err != nil {
 			return err
 		}
-		result = attemptRecord{ID: in.OperationID, ClientID: p.ClientID(), PersonID: p.PersonID(), DeviceID: p.DeviceID(), ConnectorID: id, Record: r, Status: AwaitingUser, CreatedAt: time.Now().UnixMilli(), Revision: 1, CatalogRevision: in.ExpectedCatalogRevision, RequestedScope: connections.CloneConnectorScope(scope)}
+		result = attemptRecord{ID: in.OperationID, ClientID: p.ClientID(), PersonID: p.PersonID(), DeviceID: p.DeviceID(), ConnectorID: id, Record: r, Status: AwaitingUser, CreatedAt: time.Now().UnixMilli(), Revision: 1, CatalogRevision: in.ExpectedCatalogRevision, RequestedScope: CloneConnectorScope(scope)}
 		next := clone(s.state)
 		next.Attempts[result.ID] = result
 		return s.persist(next)
@@ -258,7 +254,7 @@ func (s *Service) Poll(ctx context.Context, p trust.Principal, id, attemptID str
 	}
 	return operation.Accept(attemptResponse(a))
 }
-func (s *Service) Cancel(ctx context.Context, p trust.Principal, id, attemptID string, in connections.CancelSetupRequest) operation.Result {
+func (s *Service) Cancel(ctx context.Context, p trust.Principal, id, attemptID string, in CancelSetupRequest) operation.Result {
 	if in.SchemaVersion != 1 || in.OperationID != attemptID || in.ExpectedRevision == 0 {
 		return operation.Reject(operation.Invalid, "validation")
 	}
@@ -295,7 +291,7 @@ func (s *Service) Cancel(ctx context.Context, p trust.Principal, id, attemptID s
 		a.UserCode = ""
 		next.Attempts[a.ID] = a
 		if a.Started {
-			queueCleanup(&next, []connections.Record{a.Record}, nil)
+			queueCleanup(&next, []Record{a.Record}, nil)
 		}
 		removed = a
 		return s.persist(next)
@@ -306,18 +302,18 @@ func (s *Service) Cancel(ctx context.Context, p trust.Principal, id, attemptID s
 	_ = s.ResumeCleanup(ctx)
 	return operation.Accept(attemptResponse(removed))
 }
-func (s *Service) UpdateScope(ctx context.Context, p trust.Principal, id string, in connections.ScopeRequest) operation.Result {
-	d, ok := connections.DefinitionFor(id)
+func (s *Service) UpdateScope(ctx context.Context, p trust.Principal, id string, in ScopeRequest) operation.Result {
+	d, ok := DefinitionFor(id)
 	if !ok {
 		return operation.Reject(operation.Missing, "connector_not_found")
 	}
-	scope, err := connections.ValidatedConnectorScope(d, in.Scope)
+	scope, err := ValidatedConnectorScope(d, in.Scope)
 	if err != nil || in.SchemaVersion != 1 {
 		return operation.Reject(operation.Invalid, "invalid_scope")
 	}
 	unlock := s.lock(p.PersonID() + "/" + id)
 	defer unlock()
-	var result connections.Record
+	var result Record
 	changedScope := false
 	err = s.commit(p, func(st *diskState) error {
 		r, ok := st.Connections[in.ConnectionID]
@@ -361,7 +357,7 @@ func (s *Service) UpdateScope(ctx context.Context, p trust.Principal, id string,
 	}
 	return operation.Accept(map[string]any{"schema_version": 1, "person_id": p.PersonID(), "device_id": p.DeviceID(), "connection_id": result.ConnectionID, "connection_revision": result.Revision, "connector_id": id, "scope": result.Scope})
 }
-func (s *Service) Disconnect(ctx context.Context, p trust.Principal, id string, in connections.DisconnectRequest) operation.Result {
+func (s *Service) Disconnect(ctx context.Context, p trust.Principal, id string, in DisconnectRequest) operation.Result {
 	if in.SchemaVersion != 1 || !trust.ValidID(in.OperationID) || !trust.ValidID(in.ConnectionID) || in.ConnectionRevision == 0 {
 		return operation.Reject(operation.Invalid, "validation")
 	}
@@ -400,7 +396,7 @@ func (s *Service) Disconnect(ctx context.Context, p trust.Principal, id string, 
 				delete(next.Attempts, key)
 			}
 		}
-		next.Cleanup[in.OperationID] = cleanupRecord{ID: in.OperationID, Records: []connections.Record{r}, RuntimeDone: map[string]bool{}, VaultDone: map[string]bool{}}
+		next.Cleanup[in.OperationID] = cleanupRecord{ID: in.OperationID, Records: []Record{r}, RuntimeDone: map[string]bool{}, VaultDone: map[string]bool{}}
 		next.Disconnects[in.OperationID] = request
 		return s.persist(next)
 	})
@@ -427,7 +423,7 @@ func copyRuntimes(in map[string]Runtime) map[string]Runtime {
 	}
 	return out
 }
-func queueCleanup(st *diskState, records []connections.Record, t *trust.CleanupTicket) string {
+func queueCleanup(st *diskState, records []Record, t *trust.CleanupTicket) string {
 	id := trust.NewID()
 	if t != nil {
 		id = t.ID
@@ -458,7 +454,7 @@ func (s *Service) ApplyRevocation(ctx context.Context, t trust.CleanupTicket) er
 	}
 	if _, ok := s.state.Cleanup[t.ID]; !ok {
 		next := clone(s.state)
-		records := map[string]connections.Record{}
+		records := map[string]Record{}
 		for id, a := range next.Attempts {
 			if a.ClientID == t.ClientID || t.Kind == trust.PersonAllSources && a.PersonID == t.PersonID {
 				if a.Status == Pending {
@@ -475,7 +471,7 @@ func (s *Service) ApplyRevocation(ctx context.Context, t trust.CleanupTicket) er
 				}
 			}
 		}
-		all := []connections.Record{}
+		all := []Record{}
 		for _, r := range records {
 			all = append(all, r)
 		}
@@ -561,6 +557,9 @@ func (s *Service) cleanup(ctx context.Context, id string) error {
 				unlock()
 				return err
 			}
+            if runtime.Cleanup != nil {
+                if err := runtime.Cleanup(ctx); err != nil { unlock(); return err }
+            }
 			if err := s.cleanupProgress(id, r.ConnectionID, true, false); err != nil {
 				unlock()
 				return err

@@ -38,6 +38,8 @@ pub struct ExpertProjectionRequest {
     pub request: ModelProjectionRequest,
     pub context: AgentContext,
     pub prompt: floe_agent_contract::prompts::PromptAssembly,
+    pub package_data_class: floe_agent_contract::DataClass,
+    pub inherited_coverage: DependencyCoverage,
     pub observations: Vec<crate::ExpertToolObservation>,
 }
 

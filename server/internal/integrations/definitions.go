@@ -1,4 +1,4 @@
-package connections
+package integrations
 
 import (
 	"encoding/json"
@@ -20,7 +20,7 @@ type Definition struct {
 	ScopeFields     []string
 }
 
-var Definitions = []Definition{
+var definitions = []Definition{
 	{ID: "gmail", Name: "Gmail", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_GMAIL_OAUTH", RequiredScopes: []string{"https://www.googleapis.com/auth/gmail.readonly"}, ScopeFields: []string{}},
 	{ID: "microsoft.mail", Name: "Microsoft Mail", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_MICROSOFT_MAIL_OAUTH", RequiredScopes: []string{"Mail.Read"}, ScopeFields: []string{}},
 	{ID: "github.issues", Name: "GitHub Issues", AuthKind: "oauth_device", OAuthCredential: "FLOE_GITHUB_OAUTH", RequiredScopes: []string{"github.issues.read"}, ScopeFields: []string{"owner", "repository"}},
@@ -32,8 +32,15 @@ var Definitions = []Definition{
 	{ID: "home_assistant.states", Name: "Home Assistant", AuthKind: "secret", CredentialName: HomeTokenKey, RequiredScopes: []string{"home.states.read"}, ScopeFields: []string{"base_url", "entities"}},
 }
 
+// Definitions returns owned copies of the fixed provider setup inventory.
+func Definitions() []Definition {
+    out:=append([]Definition(nil),definitions...)
+    for i:=range out {out[i].RequiredScopes=append([]string{},out[i].RequiredScopes...);out[i].ScopeFields=append([]string{},out[i].ScopeFields...)}
+    return out
+}
+
 func DefinitionFor(identifier string) (Definition, bool) {
-	for _, definition := range Definitions {
+	for _, definition := range Definitions() {
 		if definition.ID == identifier {
 			return definition, true
 		}
@@ -52,23 +59,6 @@ func ConnectorCapabilities(definition Definition) map[string]any {
 		"disconnect":   true,
 		"scope_update": len(definition.ScopeFields) > 0,
 	}
-}
-
-func OauthActionStatus(value any) (string, string, string, bool) {
-	statusValue, ok := value.(map[string]any)
-	if !ok {
-		return "", "", "", false
-	}
-	status, ok := statusValue["status"].(string)
-	if !ok || status != "pending" && status != "connected" && status != "disconnected" {
-		return "", "", "", false
-	}
-	authorizationURL, _ := statusValue["auth_url"].(string)
-	userCode, _ := statusValue["user_code"].(string)
-	if status == "pending" && authorizationURL == "" {
-		return "", "", "", false
-	}
-	return status, authorizationURL, userCode, true
 }
 
 func IsOAuthAuthKind(value string) bool {
@@ -142,7 +132,7 @@ func ValidatedConnectorScope(definition Definition, scope map[string]any) (map[s
 			}
 			entities = append(entities, value)
 		}
-		if !baseURLOK || !itemsOK || baseURL == "" || len(entities) == 0 || len(entities) > 128 {
+		if !baseURLOK || !itemsOK || baseURL == "" || len(entities) == 0 || len(entities) > 16 {
 			return nil, errors.New("invalid home assistant scope")
 		}
 		sort.Strings(entities)
@@ -160,7 +150,7 @@ func ValidatedConnectorScope(definition Definition, scope map[string]any) (map[s
 		return map[string]any{"folder_id": folderID}, nil
 	case "calendar.google", "calendar.microsoft":
 		calendarIDs, ok := ConnectorScopeStrings(scope["calendar_ids"])
-		if !ok || len(calendarIDs) == 0 {
+		if !ok || len(calendarIDs) == 0 || len(calendarIDs)>256 {
 			return nil, errors.New("invalid calendar scope")
 		}
 		for _, calendarID := range calendarIDs {
@@ -204,8 +194,6 @@ func CloneConnectorScope(scope map[string]any) map[string]any {
 }
 
 const (
-	GithubTokenKey = "FLOE_CONNECTOR_GITHUB_TOKEN"
-	SlackTokenKey  = "FLOE_CONNECTOR_SLACK_TOKEN"
 	HomeTokenKey   = "FLOE_CONNECTOR_HOME_ASSISTANT_TOKEN"
 )
 

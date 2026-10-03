@@ -433,6 +433,7 @@ fn session_message(
                         ConversationTaskStateDto::Submitted
                     }
                     floe_agent_contract::TaskState::Working => ConversationTaskStateDto::Working,
+                    floe_agent_contract::TaskState::Blocked => ConversationTaskStateDto::Blocked,
                     floe_agent_contract::TaskState::Completed => {
                         ConversationTaskStateDto::Completed
                     }

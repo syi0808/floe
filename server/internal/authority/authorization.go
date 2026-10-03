@@ -12,6 +12,8 @@ import (
 	"floe/server/internal/trust"
 	"floe/server/internal/views"
 	"fmt"
+    "context"
+    "reflect"
 	"strings"
 	"sync"
 	"time"
@@ -78,21 +80,26 @@ type GrantReference struct {
 	Epoch       uint64
 }
 
+// Request retains exactly one closed authority policy and a full source fence.
 type Request struct {
-	Audience    string
-	Purpose     string
-	Consumer    string
-	Source      views.SourceReference
-	Grant       GrantReference
-	Resources   []string
-	QueryDigest [32]byte
-	MaxItems    uint32
-	MaxBytes    uint32
+    Source views.SourceSnapshot
+    policy requestPolicy
 }
+type requestPolicy interface {
+    requestBounds() views.Bounds
+    clonePolicy() requestPolicy
+}
+type assistantPolicy struct {
+    Audience, Purpose, Consumer string
+    Grant GrantReference
+    Resources []string
+    QueryDigest [32]byte
+    MaxItems,MaxBytes uint32
+}
+func (p assistantPolicy) requestBounds()views.Bounds{return views.Bounds{MaxItems:p.MaxItems,MaxBytes:p.MaxBytes}}
+func (p assistantPolicy) clonePolicy()requestPolicy{p.Resources=append([]string(nil),p.Resources...);return p}
+func (r Request) bounds()views.Bounds{if r.policy==nil{return views.Bounds{}};return r.policy.requestBounds()}
 
-type SourceAuthority interface {
-	WithCurrentReference(trust.Principal, views.SourceReference, func(views.SourceSnapshot) error) error
-}
 type Challenge struct {
 	ID        string
 	Operation Operation
@@ -188,7 +195,7 @@ func (e *Engine) clientCountLocked(client string) int {
 	}
 	return n
 }
-func (e *Engine) IssueAdmission(p trust.Principal, r Request, source SourceAuthority) (Challenge, error) {
+func (e *Engine) IssueAdmission(p trust.Principal, r Request, source SourceFence) (Challenge, error) {
 	if validatePrincipal(p) != nil || validateRequest(r) != nil || source == nil {
 		return Challenge{}, ErrInvalid
 	}
@@ -197,12 +204,12 @@ func (e *Engine) IssueAdmission(p trust.Principal, r Request, source SourceAutho
 		return Challenge{}, ErrDenied
 	}
 	r = cloneRequest(r)
-	challenge, wire, err := e.makeChallenge(OperationAdmission, p, issuer.KeyID, r, &r.Source)
+	challenge, wire, err := e.makeChallenge(OperationAdmission, p, issuer.KeyID, r, "", "")
 	if err != nil {
 		return Challenge{}, err
 	}
 	consumed := false
-	err = source.WithCurrentReference(p, r.Source, func(s views.SourceSnapshot) error {
+	err = source.WithCurrentSource(p, r.Source, func(s views.SourceSnapshot) error {
 		consumed = true
 		if !sourceMatches(p, r.Source, s) {
 			return ErrDenied
@@ -213,7 +220,7 @@ func (e *Engine) IssueAdmission(p trust.Principal, r Request, source SourceAutho
 		if e.clientCountLocked(p.ClientID()) >= MaxPendingPerClient {
 			return ErrDenied
 		}
-		e.pending[challenge.ID] = &pendingChallenge{wire: append([]byte(nil), wire...), operation: OperationAdmission, principal: p, request: r, keyID: issuer.KeyID, deadline: e.clock.Monotonic() + ChallengeTTL, deadlineWall: challenge.ExpiresAt}
+		e.pending[challenge.ID] = &pendingChallenge{wire: append([]byte(nil), wire...), operation: OperationAdmission, principal: p, request: r, keyID: issuer.KeyID, deadline: e.clock.Monotonic() + challenge.ExpiresAt.Sub(e.clock.Now()), deadlineWall: challenge.ExpiresAt}
 		return nil
 	})
 	if err != nil || !consumed {
@@ -221,14 +228,14 @@ func (e *Engine) IssueAdmission(p trust.Principal, r Request, source SourceAutho
 	}
 	return challenge, nil
 }
-func (e *Engine) ClaimAdmission(p trust.Principal, proof trust.Proof, source SourceAuthority) (string, Request, error) {
+func (e *Engine) ClaimAdmission(p trust.Principal, viewID views.ID, proof trust.Proof, source SourceFence) (string, Request, error) {
 	if source == nil || !p.Valid() {
 		return "", Request{}, ErrDenied
 	}
 	e.mu.Lock()
 	e.sweepExpiredLocked()
 	c, ok := e.pending[proof.ChallengeID]
-	if !ok || c.state != challengePending || !p.Same(c.principal) {
+	if !ok || c.state != challengePending || !p.Same(c.principal) || c.request.Source.Descriptor.ID!=string(viewID) {
 		e.mu.Unlock()
 		return "", Request{}, ErrReplay
 	}
@@ -246,7 +253,7 @@ func (e *Engine) ClaimAdmission(p trust.Principal, proof trust.Proof, source Sou
 		return "", Request{}, ErrDenied
 	}
 	consumed := false
-	err = source.WithCurrentReference(p, copy.request.Source, func(s views.SourceSnapshot) error {
+	err = source.WithCurrentSource(p, copy.request.Source, func(s views.SourceSnapshot) error {
 		consumed = true
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -258,7 +265,7 @@ func (e *Engine) ClaimAdmission(p trust.Principal, proof trust.Proof, source Sou
 		if e.expired(live.deadline) || !sourceMatches(p, copy.request.Source, s) {
 			return ErrDenied
 		}
-		e.admissions[proof.ChallengeID] = &admission{p, cloneRequest(copy.request), copy.keyID, e.clock.Monotonic() + ChallengeTTL}
+		e.admissions[proof.ChallengeID] = &admission{p, cloneRequest(copy.request), copy.keyID, copy.deadline}
 		return nil
 	})
 	if err != nil || !consumed {
@@ -270,31 +277,21 @@ func (e *Engine) ClaimAdmission(p trust.Principal, proof trust.Proof, source Sou
 	}
 	return proof.ChallengeID, cloneRequest(copy.request), nil
 }
-func (e *Engine) StageResult(id string, p trust.Principal, r Request, result []byte, count uint32) (Release, error) {
-	if !p.Valid() || validateRequest(r) != nil || len(result) > MaxStageBytesPerResult || len(result) > int(r.MaxBytes) || count > r.MaxItems {
+func (e *Engine) StageResult(id string, p trust.Principal, r Request, result []byte, count uint32, source SourceFence) (Release, error) {
+	if source == nil || !p.Valid() || validateRequest(r) != nil || len(result) > MaxStageBytesPerResult || len(result) > int(r.bounds().MaxBytes) || count > r.bounds().MaxItems {
 		return Release{}, ErrDenied
 	}
 	issuer, err := e.trust.ActiveIssuer(p)
 	if err != nil {
 		return Release{}, ErrDenied
 	}
-	challenge, wire, err := e.makeChallenge(OperationRelease, p, issuer.KeyID, r, &r.Source)
-	if err != nil {
-		return Release{}, err
-	}
-	parsed, err := decodeChallengeWire(wire)
-	if err != nil {
-		return Release{}, err
-	}
-	hash := sha256.Sum256(result)
-	parsed.ResultDigest = hex.EncodeToString(hash[:])
-	parsed.AdmissionID = id
-	encoded, err := json.Marshal(parsed)
-	if err != nil || validateWire(parsed) != nil {
-		return Release{}, ErrInvalid
-	}
+    hash:=sha256.Sum256(result)
+    resultDigest:=hex.EncodeToString(hash[:])
+    challenge,encoded,err:=e.makeChallenge(OperationRelease,p,issuer.KeyID,r,id,resultDigest)
+    if err!=nil{return Release{},err}
 	var out Release
-	err = e.trust.WithCurrentPrincipal(p, func(trust.PrincipalSnapshot) error {
+	err = source.WithCurrentSource(p, r.Source, func(current views.SourceSnapshot) error {
+        if !sourceMatches(p, r.Source, current) { return ErrDenied }
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		e.sweepExpiredLocked()
@@ -305,7 +302,7 @@ func (e *Engine) StageResult(id string, p trust.Principal, r Request, result []b
 		if e.stagedBytes+len(result) > MaxStageBytesGlobal {
 			return ErrDenied
 		}
-		e.stages[challenge.ID] = &stage{id: challenge.ID, admissionID: id, principal: p, request: cloneRequest(r), result: append([]byte(nil), result...), resultDigest: parsed.ResultDigest, deadline: e.clock.Monotonic() + ChallengeTTL, deadlineWall: challenge.ExpiresAt, challenge: append([]byte(nil), encoded...), keyID: issuer.KeyID}
+		e.stages[challenge.ID] = &stage{id: challenge.ID, admissionID: id, principal: p, request: cloneRequest(r), result: append([]byte(nil), result...), resultDigest: resultDigest, deadline: e.clock.Monotonic() + challenge.ExpiresAt.Sub(e.clock.Now()), deadlineWall: challenge.ExpiresAt, challenge: append([]byte(nil), encoded...), keyID: issuer.KeyID}
 		e.stagedBytes += len(result)
 		delete(e.admissions, id)
 		out = Release{challenge.ID, append([]byte(nil), encoded...), encodeB64(encoded), challenge.ExpiresAt}
@@ -313,8 +310,8 @@ func (e *Engine) StageResult(id string, p trust.Principal, r Request, result []b
 	})
 	return out, err
 }
-func (e *Engine) ClaimRelease(p trust.Principal, proof trust.Proof, source SourceAuthority) ([]byte, error) {
-	if source == nil || !p.Valid() {
+func (e *Engine) ClaimRelease(ctx context.Context, p trust.Principal, viewID views.ID, proof trust.Proof, resolver SourceResolver, source SourceFence) ([]byte, error) {
+	if resolver == nil || source == nil || !p.Valid() {
 		return nil, ErrDenied
 	}
 	e.mu.Lock()
@@ -337,9 +334,13 @@ func (e *Engine) ClaimRelease(p trust.Principal, proof trust.Proof, source Sourc
 		e.CancelRelease(proof.ChallengeID)
 		return nil, ErrDenied
 	}
-	var out []byte
+	if copy.request.Source.Descriptor.ID != string(viewID) || resolver.PreflightSource(ctx, p, copy.request.Source) != nil {
+        e.CancelRelease(proof.ChallengeID)
+        return nil, ErrDenied
+    }
+    var out []byte
 	consumed := false
-	err = source.WithCurrentReference(p, copy.request.Source, func(current views.SourceSnapshot) error {
+	err = source.WithCurrentSource(p, copy.request.Source, func(current views.SourceSnapshot) error {
 		consumed = true
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -395,37 +396,27 @@ func (e *Engine) sweepExpiredLocked() {
 		}
 	}
 }
-func (engine *Engine) makeChallenge(operation Operation, principal trust.Principal, keyID string, request Request, source *views.SourceReference) (Challenge, []byte, error) {
-	if err := validatePrincipal(principal); err != nil {
-		return Challenge{}, nil, err
-	}
-	if operation != OperationEnrollment && source == nil {
-		return Challenge{}, nil, fmt.Errorf("%w: source", ErrInvalid)
-	}
-	id, err := engine.randomUUID()
-	if err != nil {
-		return Challenge{}, nil, err
-	}
-	nonce := make([]byte, 32)
-	if err := engine.random(nonce); err != nil {
-		return Challenge{}, nil, err
-	}
-	now := engine.clock.Now()
-	expires := now.Add(ChallengeTTL)
-	wire := challengeWire{SchemaVersion: SchemaVersion, Operation: string(operation), ChallengeID: id, Nonce: encodeB64(nonce), KeyID: keyID, PersonID: principal.PersonID(), ClientID: principal.ClientID(), DeviceID: principal.DeviceID(), Audience: request.Audience, Purpose: request.Purpose, Consumer: request.Consumer, IssuedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: expires.UnixMilli()}
-	if operation != OperationEnrollment {
-		wire.Source = &sourceWire{ConnectorID: source.ConnectorID, ConnectionID: source.ConnectionID, ExecutionOwner: source.ExecutionOwner, Incarnation: source.Incarnation, Epoch: source.Epoch}
-		wire.Grant = &grantWire{ID: request.Grant.ID, Incarnation: request.Grant.Incarnation, Epoch: request.Grant.Epoch}
-		wire.Resources = append([]string(nil), request.Resources...)
-		wire.QueryDigest = hex.EncodeToString(request.QueryDigest[:])
-		wire.MaxItems = request.MaxItems
-		wire.MaxBytes = request.MaxBytes
-	}
-	data, err := json.Marshal(wire)
-	if err != nil {
-		return Challenge{}, nil, err
-	}
-	return Challenge{ID: id, Operation: operation, Bytes: data, BytesB64: encodeB64(data), ExpiresAt: expires}, data, nil
+func (engine *Engine) makeChallenge(operation Operation, principal trust.Principal, keyID string, request Request, admissionID,resultDigest string) (Challenge, []byte, error) {
+    if validatePrincipal(principal)!=nil || validateRequest(request)!=nil || operation!=OperationAdmission && operation!=OperationRelease{return Challenge{},nil,ErrInvalid}
+    id,err:=engine.randomUUID();if err!=nil{return Challenge{},nil,err}
+    nonce:=make([]byte,32);if err=engine.random(nonce);err!=nil{return Challenge{},nil,err}
+    now:=engine.clock.Now();expires:=now.Add(ChallengeTTL)
+    var payload any
+    switch policy:=request.policy.(type){
+    case assistantPolicy:
+        source:=request.Source
+        wire:=challengeWire{SchemaVersion:SchemaVersion,Operation:string(operation),ChallengeID:id,Nonce:encodeB64(nonce),KeyID:keyID,PersonID:principal.PersonID(),ClientID:principal.ClientID(),DeviceID:principal.DeviceID(),Audience:policy.Audience,Purpose:policy.Purpose,Consumer:policy.Consumer,IssuedAtUnixMS:now.UnixMilli(),ExpiresAtUnixMS:expires.UnixMilli(),Source:&sourceWire{source.ConnectorID,source.ConnectionID,source.ExecutionOwner,source.Incarnation,source.Epoch},Grant:&grantWire{policy.Grant.ID,policy.Grant.Incarnation,policy.Grant.Epoch},Resources:append([]string(nil),policy.Resources...),QueryDigest:hex.EncodeToString(policy.QueryDigest[:]),MaxItems:policy.MaxItems,MaxBytes:policy.MaxBytes,AdmissionID:admissionID,ResultDigest:resultDigest}
+        if validateWire(wire)!=nil{return Challenge{},nil,ErrInvalid};payload=wire
+    case productCalendarPolicy:
+        if policy.expires.Before(expires){expires=policy.expires}
+        if !expires.After(now){return Challenge{},nil,ErrExpired}
+        wire:=ProductCalendarChallenge{Version:1,Operation:"day_calendar_admission",ChallengeID:id,Nonce:encodeB64(nonce),KeyID:keyID,Claims:policy.claims,IssuedAtUnixMS:now.UnixMilli(),ExpiresAtUnixMS:expires.UnixMilli()}
+        if operation==OperationRelease{wire.Operation="day_calendar_release";wire.AdmissionID=admissionID;wire.ResultSHA256=resultDigest}
+        payload=wire
+    default:return Challenge{},nil,ErrInvalid
+    }
+    data,err:=json.Marshal(payload);if err!=nil || len(data)>MaxChallengeBytes{return Challenge{},nil,ErrInvalid}
+    return Challenge{ID:id,Operation:operation,Bytes:data,BytesB64:encodeB64(data),ExpiresAt:expires},data,nil
 }
 
 func (engine *Engine) randomUUID() (string, error) {
@@ -591,73 +582,22 @@ func validateWire(wire challengeWire) error {
 	return nil
 }
 
-func requestFromWire(wire challengeWire) Request {
-	var digest [32]byte
-	digestBytes, _ := decodeHexDigest(wire.QueryDigest)
-	copy(digest[:], digestBytes)
-	return Request{Audience: wire.Audience, Purpose: wire.Purpose, Consumer: wire.Consumer, Source: views.SourceReference{wire.Source.ConnectorID, wire.Source.ConnectionID, wire.Source.ExecutionOwner, wire.Source.Incarnation, wire.Source.Epoch}, Grant: GrantReference{wire.Grant.ID, wire.Grant.Incarnation, wire.Grant.Epoch}, Resources: append([]string(nil), wire.Resources...), QueryDigest: digest, MaxItems: wire.MaxItems, MaxBytes: wire.MaxBytes}
-}
-
-func requestsEqual(a, b Request) bool {
-	return a.Audience == b.Audience && a.Purpose == b.Purpose && a.Consumer == b.Consumer &&
-		a.Source == b.Source && a.Grant == b.Grant &&
-		a.MaxItems == b.MaxItems && a.MaxBytes == b.MaxBytes &&
-		bytes.Equal(a.QueryDigest[:], b.QueryDigest[:]) && slicesEqual(a.Resources, b.Resources)
-}
-
-func cloneRequest(request Request) Request {
-	request.Resources = append([]string(nil), request.Resources...)
-	return request
-}
-
-func slicesEqual(first, second []string) bool {
-	if len(first) != len(second) {
-		return false
-	}
-	for index := range first {
-		if first[index] != second[index] {
-			return false
-		}
-	}
-	return true
-}
-
-func validateRequest(r Request) error {
-	if err := validateBoundString(r.Audience, MaxAudienceBytes); err != nil {
-		return err
-	}
-	if !validPurpose(r.Purpose) {
-		return fmt.Errorf("%w: purpose", ErrInvalid)
-	}
-	if err := validateBoundString(r.Purpose, MaxPurposeBytes); err != nil {
-		return err
-	}
-	if err := validateBoundString(r.Consumer, MaxConsumerBytes); err != nil {
-		return err
-	}
-	if err := validateSource(sourceWire{r.Source.ConnectorID, r.Source.ConnectionID, r.Source.ExecutionOwner, r.Source.Incarnation, r.Source.Epoch}); err != nil {
-		return err
-	}
-	if err := validateGrant(grantWire{r.Grant.ID, r.Grant.Incarnation, r.Grant.Epoch}); err != nil {
-		return err
-	}
-	if len(r.Resources) == 0 || len(r.Resources) > MaxResources {
-		return fmt.Errorf("%w: resources", ErrInvalid)
-	}
-	previous := ""
-	for _, resource := range r.Resources {
-		if err := validateBoundString(resource, MaxResourceBytes); err != nil {
-			return err
-		}
-		if previous != "" && resource <= previous {
-			return fmt.Errorf("%w: resources not sorted", ErrInvalid)
-		}
-		previous = resource
-	}
-	if r.MaxItems == 0 || r.MaxItems > MaxResources*2 || r.MaxBytes == 0 || r.MaxBytes > MaxStageBytesPerResult {
-		return fmt.Errorf("%w: budget", ErrInvalid)
-	}
-	return nil
+func requestsEqual(a,b Request)bool{return reflect.DeepEqual(a,b)}
+func cloneRequest(r Request)Request{r.Source=views.CloneSource(r.Source);if r.policy!=nil{r.policy=r.policy.clonePolicy()};return r}
+func validateRequest(r Request)error{
+    if !r.Source.Active || r.Source.ConnectionRevision==0 || r.Source.PersonID=="" || r.Source.ProviderIdentity=="" || r.Source.IdentityGeneration==0 || r.Source.Descriptor.ID=="" {return ErrInvalid}
+    if err:=validateSource(sourceWire{r.Source.ConnectorID,r.Source.ConnectionID,r.Source.ExecutionOwner,r.Source.Incarnation,r.Source.Epoch});err!=nil{return err}
+    switch policy:=r.policy.(type){
+    case assistantPolicy:
+        if r.Source.Descriptor.ID==string(views.CalendarMirror) || validateBoundString(policy.Audience,MaxAudienceBytes)!=nil || !validPurpose(policy.Purpose) || validateBoundString(policy.Consumer,MaxConsumerBytes)!=nil || validateGrant(grantWire{policy.Grant.ID,policy.Grant.Incarnation,policy.Grant.Epoch})!=nil || len(policy.Resources)==0 || len(policy.Resources)>MaxResources{return ErrInvalid}
+        previous:=""
+        for _,resource:=range policy.Resources{if validateBoundString(resource,MaxResourceBytes)!=nil || previous!="" && resource<=previous{return ErrInvalid};previous=resource}
+    case productCalendarPolicy:
+        if r.Source.Descriptor.ID!=string(views.CalendarMirror) || policy.validateSource(r.Source)!=nil{return ErrInvalid}
+    default:return ErrInvalid
+    }
+    bounds:=r.bounds();if bounds.MaxItems==0 || bounds.MaxItems>128 || bounds.MaxBytes==0 || bounds.MaxBytes>MaxStageBytesPerResult{return ErrInvalid}
+    return nil
 }
 
 func validPurpose(purpose string) bool {
@@ -697,8 +637,8 @@ func validateGrant(g grantWire) error {
 	}
 	return nil
 }
-func sourceMatches(p trust.Principal, want views.SourceReference, got views.SourceSnapshot) bool {
-	return got.Active && got.PersonID == p.PersonID() && got.ConnectorID == want.ConnectorID && got.ConnectionID == want.ConnectionID && got.ExecutionOwner == want.ExecutionOwner && got.Incarnation == want.Incarnation && got.Epoch == want.Epoch
+func sourceMatches(p trust.Principal, want, got views.SourceSnapshot) bool {
+    return got.Active && got.PersonID == p.PersonID() && (got.DeviceID == "" || got.DeviceID == p.DeviceID()) && got.ConnectionRevision > 0 && got.ProviderIdentity != "" && got.IdentityGeneration > 0 && reflect.DeepEqual(want, got)
 }
 func validatePrincipal(p trust.Principal) error {
 	if !p.Valid() {

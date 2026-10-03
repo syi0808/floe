@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"floe/server/internal/authority"
-	"floe/server/internal/connections"
 	"floe/server/internal/trust"
 	"floe/server/internal/views"
 	"reflect"
@@ -12,10 +11,10 @@ import (
 	"strings"
 )
 
-func sourceResources(r connections.Record) []string {
+func sourceResources(r Record) []string {
 	for _, field := range []string{"calendar_ids", "entities"} {
 		if raw, ok := r.Scope[field]; ok {
-			values, _ := connections.ConnectorScopeStrings(raw)
+			values, _ := ConnectorScopeStrings(raw)
 			return append([]string(nil), values...)
 		}
 	}
@@ -32,21 +31,14 @@ func sourceResources(r connections.Record) []string {
 	}
 	return out
 }
-func (s *Service) sourceSnapshotLocked(r connections.Record, id views.ID, owner string) (views.SourceSnapshot, views.Reader, error) {
+func (s *Service) sourceSnapshotLocked(r Record, id views.ID, owner string) (views.SourceSnapshot, views.Reader, error) {
 	runtime, ok := s.runtimes[r.ConnectionID]
 	if !ok || runtime.Identity == nil || !runtime.IdentitySupported || r.IdentityUnverified || r.ProviderIdentity == "" {
 		return views.SourceSnapshot{}, nil, errors.New("source identity unavailable")
 	}
-	reader := runtime.Readers[id]
-	if reader == nil {
-		return views.SourceSnapshot{}, nil, errors.New("view unavailable")
-	}
-	var descriptor views.ViewDescriptor
-	for _, d := range runtime.Descriptor.Views {
-		if d.ID == string(id) {
-			descriptor = d
-		}
-	}
+    registered,ok:=runtime.Readers[id]
+    if !ok || registered.Reader==nil{return views.SourceSnapshot{},nil,errors.New("view unavailable")}
+    reader,descriptor:=registered.Reader,registered.Descriptor
 	if descriptor.SchemaVersion != 1 || descriptor.MaxItems < 1 || descriptor.MaxItems > 128 || descriptor.MaxBytes < 1 || descriptor.MaxBytes > 1<<20 {
 		return views.SourceSnapshot{}, nil, errors.New("view descriptor unavailable")
 	}
@@ -90,12 +82,13 @@ func (s *Service) PreflightSource(ctx context.Context, p trust.Principal, expect
 	if err := s.check(p); err != nil {
 		return err
 	}
-	s.mu.RLock()
-	r, ok := s.state.Connections[expected.ConnectionID]
-	s.mu.RUnlock()
-	if !ok {
-		return errors.New("source unavailable")
-	}
+    metadata,err:=s.trust.ProducerMetadata()
+    if err!=nil{return err}
+    s.mu.RLock()
+    r,ok:=s.state.Connections[expected.ConnectionID]
+    current,_,snapshotErr:=s.sourceSnapshotLocked(r,views.ID(expected.Descriptor.ID),metadata.ExecutionOwner)
+    s.mu.RUnlock()
+    if !ok || snapshotErr!=nil || !reflect.DeepEqual(current,expected){return errors.New("source changed")}
 	if err := s.preflight(ctx, r); err != nil {
 		return err
 	}

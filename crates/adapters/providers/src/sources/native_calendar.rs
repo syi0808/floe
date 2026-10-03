@@ -6,7 +6,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use floe_access::{CalendarReadAccessRequest, CalendarReadAccessStamp};
 use floe_actions::{ActionCalendarExecutor, PreparedCalendarEffect, ActionRecord, ActionSourceFence, CalendarEffect,
     ActionBlockedReason, ActionUnknownReason, EffectIdentity, ExecutionIntent, DispatchAdmission,
-    CalendarEffectOutcome, CalendarReceiptEvidence};
+    CalendarEffectOutcome, CalendarReceiptEvidence, CalendarDestinationObservation};
 use floe_execution::{BoxFuture, ExecutionScope};
 use floe_kernel::OwnerActor;
 use floe_agent_contract::AgentFailure;
@@ -463,7 +463,7 @@ impl NativeCalendarExecutor {
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize,serde::Serialize)]
 #[serde(tag="status",rename_all="snake_case",deny_unknown_fields)]
 enum NativeActionPreparation {
     Ready{schema_version:u32,identity:EffectIdentity,host_epoch:uuid::Uuid,preparation_id:uuid::Uuid,native_subject_fingerprint:String,expires_at:DateTime<Utc>},
@@ -487,6 +487,11 @@ fn action_identity(actor:&OwnerActor,record:&ActionRecord)->EffectIdentity{
 
 async fn require_action_source(sources:&dyn floe_connections::ConnectionsRepository,actor:&OwnerActor,effect:&CalendarEffect,expected:&ActionSourceFence)->Result<(),AgentFailure>{
     expected.validate(effect,&actor.device_id)?;
+    require_source_fence(sources,actor,expected).await
+}
+
+async fn require_source_fence(sources:&dyn floe_connections::ConnectionsRepository,actor:&OwnerActor,expected:&ActionSourceFence)->Result<(),AgentFailure>{
+    expected.validate_identity(&actor.device_id)?;
     if sources.source_is_fenced(actor.person_id,&expected.connection_id).await.map_err(|_|AgentFailure::PolicyDenied)?{return Err(AgentFailure::PolicyDenied);}
     let current=sources.load(actor.person_id,&expected.connection_id).await.map_err(|_|AgentFailure::PolicyDenied)?.ok_or(AgentFailure::PolicyDenied)?;
     let mut resources:Vec<_>=current.resources().iter().map(|resource|resource.handle().as_str().to_owned()).collect();
@@ -507,6 +512,24 @@ fn native_action_deadline(scope:&ExecutionScope)->Result<DateTime<Utc>,AgentFail
 fn unknown(intent:&ExecutionIntent,reason:ActionUnknownReason)->CalendarEffectOutcome{CalendarEffectOutcome::Unknown{identity:intent.identity(),reason}}
 
 impl ActionCalendarExecutor for NativeCalendarExecutor {
+    fn destinations<'a>(&'a self,actor:&'a OwnerActor,source:&'a ActionSourceFence,scope:&'a ExecutionScope)
+        ->BoxFuture<'a,Result<Vec<CalendarDestinationObservation>,ActionBlockedReason>>{
+        Box::pin(async move{
+            if actor!=&self.actor{return Err(ActionBlockedReason::PolicyDenied);}
+            require_source_fence(self.sources.as_ref(),actor,source).await.map_err(|_|ActionBlockedReason::SourceChanged)?;
+            let deadline=native_action_deadline(scope).map_err(|_|ActionBlockedReason::ExecutorUnavailable)?;
+            let request=json!({"schema_version":1,"operation":"action_destinations","person_id":actor.person_id,"device_id":actor.device_id,
+                "executor_generation":actor.runtime_epoch,"source":source,"deadline":deadline});
+            let result:NativeActionDestinations=action_native(request,scope,false).await.map_err(|_|ActionBlockedReason::ExecutorUnavailable)?;
+            if result.schema_version!=1 || result.person_id!=actor.person_id || result.device_id!=actor.device_id
+                || result.executor_generation!=actor.runtime_epoch || result.source!=*source || result.resources.len()!=source.resources.len()
+                || result.resources.iter().map(|item|item.calendar_id.as_str()).collect::<HashSet<_>>().len()!=result.resources.len()
+                || result.resources.iter().any(|item|!source.resources.contains(&item.calendar_id)||item.calendar_name.is_empty()||item.calendar_name.len()>512
+                    ||item.calendar_name.chars().any(char::is_control)) {return Err(ActionBlockedReason::ExecutorUnavailable);}
+            require_source_fence(self.sources.as_ref(),actor,source).await.map_err(|_|ActionBlockedReason::SourceChanged)?;
+            Ok(result.resources)
+        })
+    }
     fn prepare<'a>(&'a self,actor:&'a OwnerActor,record:&'a ActionRecord,local_events:&'a [Event],scope:&'a ExecutionScope)
         ->BoxFuture<'a,Result<Box<dyn PreparedCalendarEffect>,ActionBlockedReason>>{
         Box::pin(async move{
@@ -597,7 +620,14 @@ impl PreparedCalendarEffect for NativePreparedCalendarEffect {
 #[serde(deny_unknown_fields)]
 struct NativeActionEnvelope<T>{data:T}
 
-async fn action_native<T:DeserializeOwned+Send+'static>(request:Value,scope:&ExecutionScope,readback:bool)->Result<T,AgentFailure>{
+#[derive(serde::Deserialize,serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct NativeActionDestinations {
+    schema_version:u32,person_id:PersonId,device_id:String,executor_generation:u64,
+    source:ActionSourceFence,resources:Vec<CalendarDestinationObservation>,
+}
+
+async fn action_native<T:DeserializeOwned+serde::Serialize+Send+'static>(request:Value,scope:&ExecutionScope,readback:bool)->Result<T,AgentFailure>{
     let input=serde_json::to_string(&request).map_err(|_|AgentFailure::InvalidInput)?;
     if input.len()>floe_actions::MAX_ACTION_BYTES{return Err(AgentFailure::BudgetExceeded);}
     if scope.cancellation().is_cancelled(){return Err(AgentFailure::Cancelled);}
@@ -606,13 +636,28 @@ async fn action_native<T:DeserializeOwned+Send+'static>(request:Value,scope:&Exe
         let bridge=if readback{&EVENT_KIT_RECEIPTS}else{&EVENT_KIT};
         let bytes=bridge.call(&input,Some(floe_actions::MAX_ACTION_BYTES)).map_err(|_|AgentFailure::CapabilityUnavailable)?;
         crate::gateway::json::strict_json_bytes(&bytes,floe_actions::MAX_ACTION_BYTES)?;
-        serde_json::from_slice::<NativeActionEnvelope<T>>(&bytes).map(|envelope|envelope.data).map_err(|_|AgentFailure::InvalidModelOutput)
+        let envelope:NativeActionEnvelope<T>=serde_json::from_slice(&bytes).map_err(|_|AgentFailure::CapabilityUnavailable)?;
+        let raw:Value=serde_json::from_slice(&bytes).map_err(|_|AgentFailure::CapabilityUnavailable)?;
+        let normalized=serde_json::to_value(&envelope.data).map_err(|_|AgentFailure::CapabilityUnavailable)?;
+        if !same_action_shape(&raw["data"],&normalized){return Err(AgentFailure::CapabilityUnavailable);}
+        Ok(envelope.data)
     });
     tokio::select!{
         biased;
         _=scope.cancellation().cancelled()=>Err(AgentFailure::Cancelled),
         _=tokio::time::sleep_until(scope.deadline())=>Err(AgentFailure::DeadlineExceeded),
         result=task=>result.map_err(|_|AgentFailure::Interrupted)?,
+    }
+}
+
+// Shared Day values need not make the native codec permissive. Check nested key
+// sets after typed decoding while allowing equivalent RFC3339 spellings.
+fn same_action_shape(raw:&Value,typed:&Value)->bool{
+    match (raw,typed){
+        (Value::Object(raw),Value::Object(typed))=>raw.len()==typed.len() && typed.iter().all(|(key,value)|raw.get(key).is_some_and(|raw|same_action_shape(raw,value))),
+        (Value::Array(raw),Value::Array(typed))=>raw.len()==typed.len() && raw.iter().zip(typed).all(|(raw,typed)|same_action_shape(raw,typed)),
+        (Value::String(_),Value::String(_))|(Value::Number(_),Value::Number(_))|(Value::Bool(_),Value::Bool(_))|(Value::Null,Value::Null)=>true,
+        _=>false,
     }
 }
 
@@ -652,13 +697,6 @@ static EVENT_KIT: floe_native::GatedStringCall =
 static EVENT_KIT_RECEIPTS:floe_native::GatedStringCall=floe_native::GatedStringCall::new(floe_native::NativeLibrary{
     relative_path:"Frameworks/libfloe_eventkit.dylib",invoke_symbol:c"floe_eventkit_action",release_symbol:c"floe_eventkit_free",bundle_parents:floe_native::MACOS_BUNDLE_ROOT,
 });
-
-fn invoke(request: Value) -> Result<Value, NativeReadFailure> {
-    invoke_with_limit(request, None).map_err(|failure| match failure {
-        InvokeFailure::Action(action) => action,
-        InvokeFailure::ResponseTooLarge => NativeReadFailure::UncertainResult,
-    })
-}
 
 fn invoke_with_limit(
     request: Value,

@@ -39,11 +39,7 @@ pub enum InteractionTarget {
         source_label: String,
     },
     ExpertBinding {
-        assignment_id: Uuid,
-        package_id: String,
-        package_version: String,
-        requirement_key: String,
-        capability: String,
+        review: floe_experts::BindingReview,
     },
 }
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
@@ -64,6 +60,7 @@ pub struct InteractionSnapshot {
 
 pub(super) async fn project_interaction(
     connections: &floe_connections::ConnectionsService,
+    experts: &dyn floe_experts::ExpertsOwner,
     actor: &OwnerActor,
     record: &ConversationInteraction,
     now_unix_ms: i64,
@@ -95,12 +92,8 @@ pub(super) async fn project_interaction(
             destination: target.destination,
             source_label: source_label(&target.source_id).into(),
         },
-        ReviewedTarget::ExpertBinding(target) => InteractionTarget::ExpertBinding {
-            assignment_id: target.assignment_id,
-            package_id: target.package.id.clone(),
-            package_version: target.package.version.clone(),
-            requirement_key: target.requirement_key.clone(),
-            capability: target.capability.clone(),
+        ReviewedTarget::ExpertBinding(reference) => InteractionTarget::ExpertBinding {
+            review: experts.inspect_binding_review(actor, reference.clone(), scope).await?,
         },
     };
     let allowed_actions = match (state, &target) {

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -84,13 +85,17 @@ func NewWithBaseURL(tokens TokenSource, baseURL string) (*Client, error) {
 }
 
 func (client *Client) WorkContext(ctx context.Context, folderID string, now time.Time) (views.WorkContextView, error) {
-	if !idPattern.MatchString(folderID) {
+	return client.workContext(ctx, folderID, now, maxFiles)
+}
+
+func (client *Client) workContext(ctx context.Context, folderID string, now time.Time, limit int) (views.WorkContextView, error) {
+	if !idPattern.MatchString(folderID) || limit < 1 || limit > maxFiles {
 		return views.WorkContextView{}, ErrInvalidInput
 	}
 	query := url.Values{
 		"fields":   {"nextPageToken,files(id,name,mimeType,modifiedTime)"},
 		"orderBy":  {"modifiedTime desc"},
-		"pageSize": {"8"},
+		"pageSize": {strconv.Itoa(limit)},
 		"q":        {"'" + folderID + "' in parents and trashed = false"},
 		"spaces":   {"drive"},
 	}
@@ -98,7 +103,7 @@ func (client *Client) WorkContext(ctx context.Context, folderID string, now time
 	if err := client.getJSON(ctx, "/drive/v3/files?"+query.Encode(), &files); err != nil {
 		return views.WorkContextView{}, err
 	}
-	if len(files.Files) > maxFiles {
+	if len(files.Files) > limit {
 		return views.WorkContextView{}, ErrInvalidResponse
 	}
 	view := views.WorkContextView{
@@ -126,7 +131,10 @@ func (client *Client) WorkContext(ctx context.Context, folderID string, now time
 			path = "/drive/v3/files/" + url.PathEscape(file.ID) + "/export?mimeType=" + url.QueryEscape("text/plain")
 		}
 		content, err := client.getBytes(ctx, path, maxFileBytes)
-		if err != nil || !utf8.Valid(content) {
+		if err != nil {
+			return views.WorkContextView{}, err
+		}
+		if !utf8.Valid(content) {
 			return views.WorkContextView{}, ErrInvalidResponse
 		}
 		excerpt := truncate(strings.TrimSpace(string(content)), 2048)
@@ -164,6 +172,9 @@ func (client *Client) getJSON(ctx context.Context, path string, output any) erro
 
 func (client *Client) getBytes(ctx context.Context, path string, maximum int64) ([]byte, error) {
 	token, err := client.tokens.Token(ctx)
+	if contextErr := contextFailure(ctx, err); contextErr != nil {
+		return nil, contextErr
+	}
 	if err != nil || len(token) < 8 || len(token) > 16_384 || strings.ContainsAny(token, "\r\n") {
 		return nil, ErrCredentialExpired
 	}
@@ -174,6 +185,9 @@ func (client *Client) getBytes(ctx context.Context, path string, maximum int64) 
 	request.Header.Set("Authorization", "Bearer "+token)
 	response, err := client.http.Do(request)
 	if err != nil {
+		if contextErr := contextFailure(ctx, err); contextErr != nil {
+			return nil, contextErr
+		}
 		return nil, ErrUnavailable
 	}
 	defer response.Body.Close()
@@ -189,10 +203,26 @@ func (client *Client) getBytes(ctx context.Context, path string, maximum int64) 
 		return nil, ErrUnavailable
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, maximum+1))
+	if contextErr := contextFailure(ctx, err); contextErr != nil {
+		return nil, contextErr
+	}
 	if err != nil || int64(len(data)) > maximum {
 		return nil, ErrInvalidResponse
 	}
 	return data, nil
+}
+
+func contextFailure(ctx context.Context, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 func supportedMIME(value string) bool {

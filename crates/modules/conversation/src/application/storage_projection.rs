@@ -144,29 +144,6 @@ pub fn contract_message(
 /// receipts come from App-owned ports, never from model text. A malformed ref
 /// is corrupt durable state and fails closed rather than projecting a
 /// dangling card.
-fn step_interaction_refs(
-    artifacts: &[ContractArtifact],
-) -> Result<Vec<floe_agent_contract::UserInteractionRef>, AgentFailure> {
-    let mut refs = Vec::new();
-    for artifact in artifacts {
-        for part in &artifact.parts {
-            let ContractArtifactPart::Data { media_type, data } = part else {
-                continue;
-            };
-            if media_type != floe_agent_contract::USER_INTERACTION_MEDIA_TYPE {
-                continue;
-            }
-            let reference: floe_agent_contract::UserInteractionRef =
-                serde_json::from_str(data).map_err(|_| AgentFailure::StorageUnavailable)?;
-            reference
-                .validate()
-                .map_err(|_| AgentFailure::StorageUnavailable)?;
-            refs.push(reference);
-        }
-    }
-    Ok(refs)
-}
-
 pub fn terminal_messages(
     run_id: RunId,
     terminal: &RunTerminal,
@@ -205,9 +182,8 @@ pub fn terminal_messages(
     project_refs(&mut messages, terminal.interactions.clone())?;
     for step in &terminal.steps {
         match step {
-            // Model-authored Answers never project refs: only the explicit
-            // owner-set terminal linkage above and trusted-port step
-            // artifacts become Interaction messages.
+            // Only the owner-authenticated blocked publication above projects
+            // interaction references. No artifact JSON becomes authority.
             EngineStep::Answer { text, .. } => messages.push(AgentMessage::Assistant {
                 turn_id: run_id.as_uuid(),
                 text: text.clone(),
@@ -217,14 +193,8 @@ pub fn terminal_messages(
                     turn_id: run_id.as_uuid(),
                     task: receipt.snapshot.clone(),
                 });
-                project_refs(
-                    &mut messages,
-                    step_interaction_refs(&receipt.snapshot.artifacts)?,
-                )?;
             }
-            EngineStep::Tool(result) => {
-                project_refs(&mut messages, step_interaction_refs(&result.artifacts)?)?;
-            }
+            EngineStep::Tool(_) => {}
         }
     }
     Ok(messages)
@@ -244,138 +214,24 @@ pub fn project_run_accounting(
     receipt: &RunReceipt,
     entries: &[crate::JournalEntry],
 ) -> Result<RunAccountingProjection, AgentFailure> {
-    use floe_agent_contract::JournalEvent;
-    let mut pending = std::collections::HashMap::new();
-    let mut attempts = Vec::new();
-    let mut tasks = Vec::new();
-    let mut active_tasks = std::collections::HashSet::new();
-    let mut usage = crate::AgentUsage::default();
-    for (index, entry) in entries.iter().enumerate() {
-        if entry.revision != index as u64 + 1 {
-            return Err(AgentFailure::StorageUnavailable);
-        }
-        match &entry.event {
-            JournalEvent::ModelIntent {
-                attempt_id,
-                parent_task_id,
-                reservation_ceiling,
-                projection_ref,
-                plan,
-            } => {
-                plan.validate()?;
-                reservation_ceiling.validate()?;
-                if attempt_id.is_nil()
-                    || projection_ref.as_uuid().is_nil()
-                    || attempts.contains(attempt_id)
-                    || plan.principal != receipt.principal
-                    || plan.device_id != receipt.device_id
-                    || parent_task_id.is_some_and(|task| !active_tasks.contains(&task))
-                {
-                    return Err(AgentFailure::StorageUnavailable);
-                }
-                attempts.push(*attempt_id);
-                pending.insert(*attempt_id, (*reservation_ceiling, *parent_task_id));
-                usage.model_attempts = usage
-                    .model_attempts
-                    .checked_add(1)
-                    .ok_or(AgentFailure::StorageUnavailable)?;
-            }
-            JournalEvent::ModelResult {
-                attempt_id,
-                usage: charge,
-                accounting,
-            } => {
-                let (_, parent) = pending
-                    .remove(attempt_id)
-                    .ok_or(AgentFailure::StorageUnavailable)?;
-                if parent.is_some_and(|task| !active_tasks.contains(&task)) {
-                    return Err(AgentFailure::StorageUnavailable);
-                }
-                accounting.validate_charge(charge.tokens, charge.cost_micros)?;
-                usage.tokens = usage
-                    .tokens
-                    .checked_add(charge.tokens)
-                    .ok_or(AgentFailure::StorageUnavailable)?;
-                usage.cost_micros = usage
-                    .cost_micros
-                    .checked_add(charge.cost_micros)
-                    .ok_or(AgentFailure::StorageUnavailable)?;
-                if accounting.unknown_tokens {
-                    usage.estimated_tokens = usage
-                        .estimated_tokens
-                        .checked_add(charge.tokens)
-                        .ok_or(AgentFailure::StorageUnavailable)?;
-                }
-                if accounting.unknown_cost {
-                    usage.estimated_cost_micros = usage
-                        .estimated_cost_micros
-                        .checked_add(charge.cost_micros)
-                        .ok_or(AgentFailure::StorageUnavailable)?;
-                }
-            }
-            JournalEvent::DelegationIntent { request } => {
-                if tasks.contains(&request.task_id.as_uuid()) {
-                    return Err(AgentFailure::StorageUnavailable);
-                }
-                tasks.push(request.task_id.as_uuid());
-                active_tasks.insert(request.task_id);
-            }
-            JournalEvent::DelegationResult { receipt } => {
-                if !active_tasks.remove(&receipt.task_id) {
-                    return Err(AgentFailure::StorageUnavailable);
-                }
-            }
-            JournalEvent::ToolIntent { .. } => {
-                usage.capability_calls = usage
-                    .capability_calls
-                    .checked_add(1)
-                    .ok_or(AgentFailure::StorageUnavailable)?;
-            }
-            JournalEvent::Checkpoint { .. } => {
-                usage.iterations = usage
-                    .iterations
-                    .checked_add(1)
-                    .ok_or(AgentFailure::StorageUnavailable)?;
-            }
-            _ => {}
-        }
-    }
-    let mut unresolved = Vec::new();
-    for attempt_id in &attempts {
-        if let Some((ceiling, _)) = pending.get(attempt_id) {
-            usage.tokens = usage
-                .tokens
-                .checked_add(ceiling.tokens)
-                .ok_or(AgentFailure::StorageUnavailable)?;
-            usage.estimated_tokens = usage
-                .estimated_tokens
-                .checked_add(ceiling.tokens)
-                .ok_or(AgentFailure::StorageUnavailable)?;
-            usage.cost_micros = usage
-                .cost_micros
-                .checked_add(ceiling.cost_micros)
-                .ok_or(AgentFailure::StorageUnavailable)?;
-            usage.estimated_cost_micros = usage
-                .estimated_cost_micros
-                .checked_add(ceiling.cost_micros)
-                .ok_or(AgentFailure::StorageUnavailable)?;
-            unresolved.push(crate::UnresolvedModelAttempt {
-                attempt_id: *attempt_id,
-                reservation_ceiling: *ceiling,
-                accounting: floe_agent_contract::ModelAccounting {
-                    observed_tokens: None,
-                    observed_cost_micros: None,
-                    unknown_tokens: true,
-                    unknown_cost: true,
-                },
-            });
-        }
-    }
+    let projected = floe_agent_runtime::project_execution_journal(
+        &super::recovery::journal_binding(receipt, entries), entries,
+        floe_agent_runtime::JournalProjectionMode::DurablePrefix,
+    )?;
     Ok(RunAccountingProjection {
-        usage,
-        attempt_refs: attempts,
-        task_refs: tasks,
-        unresolved_attempts: unresolved,
+        usage: crate::AgentUsage {
+            model_attempts: projected.usage.attempts,
+            iterations: projected.completed_iterations,
+            capability_calls: u32::try_from(entries.iter().filter(|entry| matches!(entry.event, floe_agent_contract::JournalEvent::ToolIntent { .. })).count())
+                .map_err(|_| AgentFailure::StorageUnavailable)?,
+            tokens: projected.usage.tokens,
+            cost_micros: projected.usage.cost_micros,
+            estimated_tokens: projected.usage.estimated_tokens,
+            estimated_cost_micros: projected.usage.estimated_cost_micros,
+        },
+        attempt_refs: projected.attempt_refs,
+        task_refs: projected.task_refs.into_iter().map(|id| id.as_uuid()).collect(),
+        unresolved_attempts: projected.unresolved_attempts,
     })
 }
 

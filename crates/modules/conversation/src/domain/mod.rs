@@ -12,12 +12,12 @@ mod interaction;
 mod run_record;
 mod source_review;
 pub use run_record::{
-    PriorExhaustion, RunBlockOrigin, RunBlockRecord, RunReceipt, RunRecord, RunState, RunTerminal,
+    PriorExhaustion, BlockedInteractionLink, RunBlockOrigin, RunBlockRecord, RunReceipt, RunRecord, RunState, RunTerminal,
     UnresolvedModelAttempt,
 };
 pub use source_review::{
     BlockedRunCommit, InteractionResolutionCommit, OwnerResolutionReceipt,
-    ProjectionReviewPublication, ProjectionReviewRecord, PublishTaskProjectionReview,
+    BlockedReviewEvidence, SourceReviewLink, ReviewPublication, ReviewAuditRecord,
     ResumeChildAdmission, ResumeRequired,
 };
 
@@ -26,14 +26,14 @@ pub use intent::{
     normalize_turn_text,
 };
 pub use interaction::{
-    ConversationInteraction, DecisionAdmission, ExpertBindingTarget, ExpireInteraction,
+    ConversationInteraction, DecisionAdmission, ExpireInteraction,
     ExpireOutcome, INTERACTION_PENDING_LIFETIME_MS, InteractionDecision, InteractionDecisionKind,
     InteractionOrigin, InteractionRefresh, InteractionRequirement, InteractionRequirementKind,
     InteractionResolution, InteractionResolutionReceipt, InteractionResumeRef, InteractionState,
     MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_RESUME_LINEAGE, MAX_REVIEWED_IDENTIFIER_BYTES,
     MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES, MAX_REVIEWED_TARGET_BYTES,
     MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_BUNDLE_MEMBERS, NavigationDestination,
-    NavigationOnlyTarget, PublishAdmission, ReviewedTarget, SupersedeInteraction,
+    NavigationOnlyTarget, ReviewedTarget, SupersedeInteraction,
     canonical_requirement_digest, canonical_target_digest, decision_owner_command_id,
     interaction_publication_id, next_state_after_decision, resume_command_id,
     state_after_resolution,
@@ -313,11 +313,7 @@ pub struct RecoveryReceipt {
     pub session_revision: u64,
 }
 
-#[derive(Clone, Debug)]
-pub struct JournalEntry {
-    pub revision: u64,
-    pub event: JournalEvent,
-}
+pub use floe_agent_contract::JournalEntry;
 
 #[derive(Clone, Debug)]
 pub struct ContinuationSnapshot {

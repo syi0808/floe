@@ -21,7 +21,7 @@ import (
 var environmentName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 type provider struct {
-	target          ProviderTarget
+	target          inference.ProviderTarget
 	credential      string
 	credentialError error
 	lookup          func(string) (string, error)
@@ -29,7 +29,7 @@ type provider struct {
 	codex           CodexClient
 }
 
-func newProvider(target ProviderTarget, lookup func(string) (string, error), codex CodexClient) (*provider, error) {
+func newProvider(target inference.ProviderTarget, lookup func(string) (string, error), codex CodexClient) (*provider, error) {
 	if strings.TrimSpace(target.Model) == "" || len(target.Model) > 128 || strings.ContainsAny(target.Model, "\r\n") {
 		return nil, errors.New("invalid model")
 	}

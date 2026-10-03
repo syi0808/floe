@@ -1,4 +1,4 @@
-package connections
+package integrations
 
 type ConnectRequest struct {
 	SchemaVersion           int            `json:"schema_version"`
