@@ -38,25 +38,33 @@ final class AppWireConversationGateway implements AgentConversationGateway {
 
   @override
   Future<AgentSession> startConversation(String personId) =>
-      _session(personId, {'kind': 'conversation.session.start'}, command: true);
+      _requiredSession(personId, {'kind': 'conversation.session.start'}, command: true);
   @override
-  Future<AgentSession> resumeConversation(String personId) =>
+  Future<AgentSession?> resumeConversation(String personId) =>
       _session(personId, {'kind': 'conversation.session.resume'});
   @override
   Future<AgentSession> loadConversation(String personId, String sessionId) =>
-      _session(personId, {
+      _requiredSession(personId, {
         'kind': 'conversation.session.get',
         'session_id': sessionId,
       });
   @override
   Future<AgentSession> recoverConversation(AgentSession session) =>
-      _session(session.personId, {
+      _requiredSession(session.personId, {
         'kind': 'conversation.session.recover',
         'session_id': session.id,
         'expected_revision': session.revision,
       }, command: true);
 
-  Future<AgentSession> _session(
+  Future<AgentSession> _requiredSession(
+    String personId,
+    Map<String, Object?> payload, {
+    bool command = false,
+  }) async =>
+      await _session(personId, payload, command: command) ??
+      (throw const FormatException('Missing Conversation session result.'));
+
+  Future<AgentSession?> _session(
     String personId,
     Map<String, Object?> payload, {
     bool command = false,
@@ -81,11 +89,13 @@ final class AppWireConversationGateway implements AgentConversationGateway {
         _pending = pending;
         return await _submit(pending);
       }
-      return _decode(
-        await ownerQuery(_transport, newAgentRequestId(), payload),
-        personId,
-        payload['session_id'] as String?,
-      );
+      final result = await ownerQuery(_transport, newAgentRequestId(), payload);
+      if (payload['kind'] == 'conversation.session.resume' &&
+          result.length == 1 &&
+          result['kind'] == 'conversation_session_absent') {
+        return null;
+      }
+      return _decode(result, personId, payload['session_id'] as String?);
     } on NativeTransportException catch (error) {
       throw AgentVaultException.fromAppWire(
         error.metadata['agent_failure'] ?? error.code,

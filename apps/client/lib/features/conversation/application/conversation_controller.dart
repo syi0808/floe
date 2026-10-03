@@ -460,11 +460,12 @@ final class ConversationController extends ChangeNotifier {
         );
       }
       final conversation = gateway;
-      final saved = newSession
-          ? await conversation.startConversation(personId).timeout(loadTimeout)
-          : await conversation
-                .resumeConversation(personId)
-                .timeout(loadTimeout);
+      final resumed = newSession
+          ? null
+          : await conversation.resumeConversation(personId).timeout(loadTimeout);
+      if (_sealed || _disposed) return;
+      final saved = resumed ??
+          await conversation.startConversation(personId).timeout(loadTimeout);
       _acceptSession(saved);
       await _conversationRuntime
           .synchronizeConversation(saved)
@@ -700,7 +701,9 @@ final class ConversationController extends ChangeNotifier {
           sealSession: true,
         );
       }
-      final saved = await gateway.resumeConversation(personId);
+      final resumed = await gateway.resumeConversation(personId);
+      if (_sealed || _disposed) return;
+      final saved = resumed ?? await gateway.startConversation(personId);
       _acceptSession(saved);
       await _conversationRuntime.synchronizeConversation(saved);
       needsReload = false;

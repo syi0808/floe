@@ -80,7 +80,7 @@ pub trait ConversationOwner: Send + Sync {
         &'a self,
         actor: &'a OwnerActor,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<SessionSnapshot, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<Option<SessionSnapshot>, AgentFailure>>;
     fn get_session<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -504,7 +504,7 @@ where
         &'a self,
         actor: &'a OwnerActor,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<SessionSnapshot, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<Option<SessionSnapshot>, AgentFailure>> {
         Box::pin(async move {
             self.inner.check(actor)?;
             let receipt = scope
@@ -515,7 +515,11 @@ where
                     },
                 ))
                 .await?;
-            self.get_session(actor, receipt.session_id, scope).await
+            self.inner.check(actor)?;
+            match receipt {
+                Some(receipt) => self.get_session(actor, receipt.session_id, scope).await.map(Some),
+                None => Ok(None),
+            }
         })
     }
     fn get_session<'a>(

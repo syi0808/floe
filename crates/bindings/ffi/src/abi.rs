@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
 use super::*;
-use crate::bridge::open_error;
+use crate::bridge::{host_error, open_error};
 use serde::de::DeserializeOwned;
 
 #[cfg(unix)]
@@ -53,13 +53,31 @@ pub unsafe extern "C" fn floe_core_open(
     path: *const c_char,
     error_json_out: *mut *mut c_char,
 ) -> *mut FloeHandle {
+    open_core(path, "path", error_json_out, floe_app::open)
+}
+
+#[unsafe(no_mangle)]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn floe_core_open_default(
+    support_directory: *const c_char,
+    error_json_out: *mut *mut c_char,
+) -> *mut FloeHandle {
+    open_core(support_directory, "support_directory", error_json_out, floe_app::open_default)
+}
+
+fn open_core(
+    path: *const c_char,
+    field: &'static str,
+    error_json_out: *mut *mut c_char,
+    open: impl FnOnce(&str) -> Result<floe_app::AppHost<floe_app::AppComposition>, floe_app::AppOpenError>,
+) -> *mut FloeHandle {
     diagnostics::initialize();
     if !error_json_out.is_null() {
         unsafe { *error_json_out = ptr::null_mut() };
     }
     let operation = || -> WireResult<*mut FloeHandle> {
-        let path = c_input(path, "path")?;
-        let app = floe_app::open(path).map_err(open_error)?;
+        let path = c_input(path, field)?;
+        let app = open(path).map_err(open_error)?;
         Ok(Box::into_raw(Box::new(FloeHandle::new(app))))
     };
     match catch_unwind(AssertUnwindSafe(operation)) {
@@ -77,6 +95,34 @@ pub unsafe extern "C" fn floe_core_open(
             }
             ptr::null_mut()
         }
+    }
+}
+
+#[derive(Serialize)]
+struct CoreIdentityDto {
+    person_id: Uuid,
+    device_id: String,
+    runtime_epoch: u64,
+}
+
+#[unsafe(no_mangle)]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn floe_core_identity(handle_ptr: *mut FloeHandle) -> *mut c_char {
+    diagnostics::initialize();
+    let operation = || -> WireResult<CoreIdentityDto> {
+        let handle = handle(handle_ptr)?;
+        let request = handle.app().request(Uuid::new_v4()).map_err(host_error)?;
+        let caller = request.caller();
+        Ok(CoreIdentityDto {
+            person_id: caller.person_id(),
+            device_id: caller.device_id().to_owned(),
+            runtime_epoch: caller.runtime_epoch(),
+        })
+    };
+    match catch_unwind(AssertUnwindSafe(operation)) {
+        Ok(Ok(value)) => c_output(ResponseEnvelopeDto::ok(value)),
+        Ok(Err(error)) => c_output(ResponseEnvelopeDto::<Value>::error(error)),
+        Err(payload) => c_output(ResponseEnvelopeDto::<Value>::error(diagnostics::panic_error(payload))),
     }
 }
 

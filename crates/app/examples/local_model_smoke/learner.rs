@@ -126,8 +126,8 @@ fn exercise(host: &Host, with_expiry: bool) -> Result<Value, AgentFailure> {
                 return Err(AgentFailure::PolicyDenied);
             }
             match owners.conversation.resume_session(actor, scope).await {
-                Err(AgentFailure::NotFound) => {}
-                Ok(_) => return Err(AgentFailure::Conflict),
+                Ok(None) => {}
+                Ok(Some(_)) => return Err(AgentFailure::Conflict),
                 Err(error) => return Err(error),
             }
             if !owners

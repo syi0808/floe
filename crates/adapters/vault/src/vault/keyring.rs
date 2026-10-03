@@ -8,6 +8,23 @@ const SERVICE: &str = "com.floe.agent-vault.v1";
 #[derive(Clone, Copy)]
 pub struct KeyringVaultKeys;
 
+pub(super) enum VaultKeyReadFailure {
+    Missing,
+    Malformed,
+    Unavailable(AgentFailure),
+}
+
+impl KeyringVaultKeys {
+    pub(super) fn inspect_existing(
+        &self,
+        person_id: PersonId,
+        vault_id: Uuid,
+    ) -> Result<VaultKey, VaultKeyReadFailure> {
+        let entry = entry(person_id, vault_id).map_err(VaultKeyReadFailure::Unavailable)?;
+        read_key_classified(&entry)
+    }
+}
+
 impl VaultKeyProvider for KeyringVaultKeys {
     fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<VaultKey, AgentFailure> {
         read_key(&entry(person_id, vault_id)?)
@@ -54,13 +71,22 @@ fn entry(_: PersonId, _: Uuid) -> Result<Entry, AgentFailure> {
 }
 
 fn read_key(entry: &Entry) -> Result<VaultKey, AgentFailure> {
+    read_key_classified(entry).map_err(|_| AgentFailure::VaultUnavailable)
+}
+
+fn read_key_classified(entry: &Entry) -> Result<VaultKey, VaultKeyReadFailure> {
     let secret = Zeroizing::new(
         entry
             .get_secret()
-            .map_err(|_| AgentFailure::VaultUnavailable)?,
+            .map_err(|error| match error {
+                Error::NoEntry => VaultKeyReadFailure::Missing,
+                // Access denial, locked storage, ambiguity and platform faults
+                // never establish that an existing key is absent or malformed.
+                _ => VaultKeyReadFailure::Unavailable(AgentFailure::VaultUnavailable),
+            })?,
     );
     if secret.len() != 32 {
-        return Err(AgentFailure::VaultUnavailable);
+        return Err(VaultKeyReadFailure::Malformed);
     }
     let mut key = VaultKey::from_bytes([0; 32]);
     key.0.copy_from_slice(&secret);

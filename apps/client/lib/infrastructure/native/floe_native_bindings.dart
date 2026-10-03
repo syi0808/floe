@@ -26,6 +26,9 @@ typedef FloeCallDart = Pointer<Utf8> Function(
   Pointer<Void> handle,
   Pointer<Utf8> requestJson,
 );
+typedef FloeIdentityNative = Pointer<Utf8> Function(Pointer<Void> handle);
+typedef FloeIdentityDart = Pointer<Utf8> Function(Pointer<Void> handle);
+
 typedef FloeFreeStringNative = Void Function(Pointer<Utf8> value);
 typedef FloeFreeStringDart = void Function(Pointer<Utf8> value);
 typedef FloeFreeCoreNative = Void Function(Pointer<Void> handle);
@@ -56,6 +59,10 @@ final class FloeNativeBindings {
 
   final DynamicLibrary _library;
   late final FloeOpenDart open;
+  late final FloeOpenDart openDefault = _library
+      .lookupFunction<FloeOpenNative, FloeOpenDart>('floe_core_open_default');
+  late final FloeIdentityDart identity = _library
+      .lookupFunction<FloeIdentityNative, FloeIdentityDart>('floe_core_identity');
   late final FloeCallDart commandV2 = _library
       .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_command_v2');
   late final FloeCallDart queryV2 = _library

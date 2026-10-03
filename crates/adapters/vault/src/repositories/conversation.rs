@@ -34,13 +34,15 @@ impl<Keys: VaultKeyProvider + 'static> SessionRepository for VaultConversationRe
     fn resume_session<'a>(
         &'a self,
         request: SessionRequest,
-    ) -> BoxFuture<'a, Result<SessionReceipt, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<Option<SessionReceipt>, AgentFailure>> {
         Box::pin(async move {
             request.validate()?;
             self.verify_principal(&request.principal)?;
-            floe_conversation::project_session_receipt(
-                self.vault.resume_conversation_session().await?,
-            )
+            self.vault
+                .resume_conversation_session()
+                .await?
+                .map(floe_conversation::project_session_receipt)
+                .transpose()
         })
     }
 

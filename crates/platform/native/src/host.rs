@@ -85,7 +85,10 @@ pub fn local_identity_for_database(
     identity
         .take(129)
         .read_to_string(&mut device_id)
-        .map_err(|_| NativeIdentityError::Invalid)?;
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::InvalidData => NativeIdentityError::Invalid,
+            _ => NativeIdentityError::Unavailable,
+        })?;
     if device_id.is_empty()
         || device_id.len() > 128
         || device_id.chars().any(char::is_whitespace)

@@ -11,6 +11,11 @@ typedef struct FloeHandle FloeHandle;
 typedef struct FloeNativeHostLane FloeNativeHostLane;
 
 FloeHandle *floe_core_open(const char *database_path, char **error_json_out);
+FloeHandle *floe_core_open_default(const char *support_directory, char **error_json_out);
+/* Read admitted host identity in a schema 1 response envelope. On success,
+ * data contains person_id, device_id and runtime_epoch. Free the returned
+ * string with floe_string_free, including error envelopes. */
+char *floe_core_identity(FloeHandle *handle);
 char *floe_core_command_v2(FloeHandle *handle, const char *request_json);
 char *floe_core_query_v2(FloeHandle *handle, const char *request_json);
 char *floe_core_events_v2(FloeHandle *handle, const char *request_json);

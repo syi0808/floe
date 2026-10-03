@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "Prior8cb full Rust/macOS passes remain historical. Independently confirmed EventKit identity, Device allowance, finalization error and generic UI corrections are prepared, not compiled. Actual reported incident came from a separate app with unknown binary revision; no attribution to verified8cb. Preserve all logs/journals/debug records and original running clients. Whole G2 and coordinated behavior verification remain open; no automated tests/live operations by this correction.",
+  "verification": "Published e027 passed scoped G2 full Rust/Go/macOS/arm64 simulator/unsigned device builds. New ordinary-startup/internal identity, debug-only recoverable archive, explicit Session absence, Vault preflight and dashboard auth-state corrections are statically reviewed but uncompiled. No real-user bootstrap/reset/key operations or log deletion executed. Preserve old app/evidence; close older binaries before any manual development recovery. Next coherent compiler/build gate required.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "18a86c3ac35a62d83f0629c7140639ab94ef4041",
+  "current_correction_source_commit": "64f3a482e041e3bd69ee49900e3d4621cb6ba8b9",
   "current_status_document": "docs/plans/t0-execution-status.json"
 }

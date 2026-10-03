@@ -59,7 +59,7 @@ pub use action_services::{
 };
 pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};
 #[cfg(unix)]
-pub use composition::{AppComposition, AppOpenError, open};
+pub use composition::{AppComposition, AppOpenError, open, open_default};
 #[cfg(unix)]
 pub use context_services::{
     AttentionCompletion, CalendarCompletion, NativeHostCommand, NativeHostCommands,

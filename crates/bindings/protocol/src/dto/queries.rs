@@ -262,6 +262,7 @@ pub enum AppQueryResultDto {
     ConversationSession {
         session: super::ConversationSessionSnapshotDto,
     },
+    ConversationSessionAbsent {},
     VaultOperation {
         #[serde(flatten)]
         result: super::VaultLifecycleResultDto,

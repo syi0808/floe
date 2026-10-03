@@ -54,7 +54,7 @@ final class NativeTransportException implements Exception {
 }
 
 final class NativeTransport implements AppWireTransport {
-  NativeTransport._(this._commands, this._nativeCallbacks) {
+  NativeTransport._(this._commands, this._nativeCallbacks, this.personId, this.deviceId) {
     _disposal = _NativeTransportDisposal(_commands, _nativeCallbacks._commands);
     _finalizer.attach(this, _disposal, detach: this);
   }
@@ -62,6 +62,8 @@ final class NativeTransport implements AppWireTransport {
   static final Finalizer<_NativeTransportDisposal> _finalizer = Finalizer(
     (value) => unawaited(value.close()),
   );
+  final String personId;
+  final String deviceId;
   final SendPort _commands;
   final _NativeCallbackTransport _nativeCallbacks;
   late final _NativeTransportDisposal _disposal;
@@ -72,12 +74,24 @@ final class NativeTransport implements AppWireTransport {
   static Future<NativeTransport> open({
     required String libraryPath,
     required String databasePath,
+  }) => _open(libraryPath: libraryPath, path: databasePath, defaultInstallation: false);
+
+  static Future<NativeTransport> openDefault({
+    required String libraryPath,
+    required String supportDirectory,
+  }) => _open(libraryPath: libraryPath, path: supportDirectory, defaultInstallation: true);
+
+  static Future<NativeTransport> _open({
+    required String libraryPath,
+    required String path,
+    required bool defaultInstallation,
   }) async {
     final ready = ReceivePort();
     final isolate = await Isolate.spawn(_nativeWorkerMain, {
       'ready': ready.sendPort,
       'library_path': libraryPath,
-      'database_path': databasePath,
+      'path': path,
+      'default_installation': defaultInstallation,
     });
     final result = _asMap(await ready.first);
     ready.close();
@@ -91,7 +105,7 @@ final class NativeTransport implements AppWireTransport {
         libraryPath,
         result['native_lane_address']! as int,
       );
-      return NativeTransport._(commands, callbacks);
+      return NativeTransport._(commands, callbacks, result['person_id']! as String, result['device_id']! as String);
     } on Object {
       await _closeNativePort(commands);
       rethrow;
@@ -367,15 +381,19 @@ Future<void> _nativeWorkerMain(Map<String, Object?> configuration) async {
   FloeNativeBindings? bindings;
   Pointer<Void> handle = nullptr;
   Pointer<Void> nativeLane = nullptr;
+  late String personId;
+  late String deviceId;
   try {
     bindings = FloeNativeBindings(configuration['library_path']! as String);
     if (bindings.protocolVersion() != nativeProtocolVersion) {
       throw StateError('Rust protocol version does not match Flutter.');
     }
-    final path = (configuration['database_path']! as String).toNativeUtf8();
+    final path = (configuration['path']! as String).toNativeUtf8();
     final error = calloc<Pointer<Utf8>>();
     try {
-      handle = bindings.open(path, error);
+      handle = configuration['default_installation'] == true
+          ? bindings.openDefault(path, error)
+          : bindings.open(path, error);
       if (handle == nullptr) {
         final pointer = error.value;
         final source = pointer == nullptr ? null : pointer.toDartString();
@@ -387,6 +405,31 @@ Future<void> _nativeWorkerMain(Map<String, Object?> configuration) async {
     } finally {
       calloc.free(error);
       calloc.free(path);
+    }
+    final identityPointer = bindings.identity(handle);
+    if (identityPointer == nullptr) throw StateError('Native host identity is unavailable.');
+    try {
+      final envelope = _asMap(jsonDecode(identityPointer.toDartString()));
+      if (envelope['schema_version'] != nativeProtocolVersion) {
+        throw const FormatException('Invalid native identity version.');
+      }
+      if (envelope['status'] != 'ok') throw _exceptionFromEnvelope(envelope);
+      final identity = _asMap(envelope['data']);
+      final person = identity['person_id'];
+      final device = identity['device_id'];
+      final epoch = identity['runtime_epoch'];
+      if (person is! String ||
+          !RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$').hasMatch(person) ||
+          person == '00000000-0000-0000-0000-000000000000' ||
+          device is! String || device.isEmpty || utf8.encode(device).length > 128 ||
+          device.trim() != device || RegExp(r'[\x00-\x1f\x7f]').hasMatch(device) ||
+          epoch is! int || epoch <= 0 || epoch > 0x7fffffffffffffff) {
+        throw const FormatException('Invalid admitted native identity.');
+      }
+      personId = person;
+      deviceId = device;
+    } finally {
+      bindings.freeString(identityPointer);
     }
     // Independent handle owns only the callback admission lane, never core.
     final laneError = calloc<Pointer<Utf8>>();
@@ -421,6 +464,8 @@ Future<void> _nativeWorkerMain(Map<String, Object?> configuration) async {
     'status': 'ok',
     'commands': commands.sendPort,
     'native_lane_address': nativeLane.address,
+    'person_id': personId,
+    'device_id': deviceId,
   });
   await for (final raw in commands) {
     final message = _asMap(raw);

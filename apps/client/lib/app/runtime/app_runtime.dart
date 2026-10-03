@@ -2,7 +2,7 @@ import 'package:floe_client/features/connections/infrastructure/app_wire_connect
 
 import 'dart:async';
 
-import 'package:floe_client/app/runtime/local_profile_selection.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:floe_client/features/knowledge/infrastructure/app_wire_memory_gateway.dart';
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_gateway.dart';
 import 'package:floe_client/features/actions/application/calendar_action_facade.dart';
@@ -42,7 +42,10 @@ final class AppRuntimeException implements Exception {
 /// These outlive any single screen, so no feature owns them. Features receive
 /// owner gateways built on the admitted AppWire.
 final class AppRuntime {
-  AppRuntime._(this._transport, this.deviceId, this.personId);
+  AppRuntime._(NativeTransport transport)
+    : _transport = transport,
+      deviceId = transport.deviceId,
+      personId = transport.personId;
 
   final NativeTransport _transport;
   final String deviceId;
@@ -73,35 +76,38 @@ final class AppRuntime {
       AppWireNativeContextHostTransport(_transport.nativeCallbacks);
   AppWireTransport get wireTransport => _transport;
 
-  static Future<AppRuntime> openSelected({
-    required String deviceId,
-    required ExistingLocalProfile profile,
-  }) async => AppRuntime._(
-    await _open(
-      NativeTransport.open(
+  static Future<AppRuntime> openDefault() async {
+    final supportDirectory = await getApplicationSupportDirectory();
+    final transport = await _open(
+      NativeTransport.openDefault(
         libraryPath: resolveLibraryPath(),
-        databasePath: profile.databasePath,
+        supportDirectory: supportDirectory.path,
       ),
-    ),
-    deviceId,
-    profile.personId,
-  );
+    );
+    return AppRuntime._(transport);
+  }
 
   static Future<AppRuntime> open({
     required String libraryPath,
     required String databasePath,
     required String deviceId,
     required String personId,
-  }) async => AppRuntime._(
-    await _open(
+  }) async {
+    final transport = await _open(
       NativeTransport.open(
         libraryPath: libraryPath,
         databasePath: databasePath,
       ),
-    ),
-    deviceId,
-    personId,
-  );
+    );
+    if (transport.deviceId != deviceId || transport.personId != personId) {
+      await transport.close();
+      throw const AppRuntimeException(
+        'policy_denied',
+        'The opened profile does not match the requested identity.',
+      );
+    }
+    return AppRuntime._(transport);
+  }
 
   static String resolveLibraryPath() => NativeTransport.resolveLibraryPath();
 

@@ -3,6 +3,10 @@ const purposes = ['quick_response', 'everyday_assistance', 'deep_work'];
 let csrf = '';
 let pairing = null;
 let unlocked = false;
+let stateReady = false;
+let stateRequest = null;
+let sessionGeneration = 0;
+let loginPending = false;
 let polling = false;
 let codexPending = false;
 let editing = false;
@@ -11,27 +15,38 @@ let selectedProvider = 'openai_compatible';
 
 function notice(message) { element('notice').textContent = message; }
 async function api(path, body) {
+  const generation = sessionGeneration;
   const response = await fetch(`/manage/api/${path}`, {
     method: body === undefined ? 'GET' : 'POST', credentials: 'same-origin',
     headers: {'Content-Type': 'application/json', 'X-Floe-CSRF': csrf},
     body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(45000),
   });
-  const value = await response.json();
+  if (response.status === 401 && generation === sessionGeneration) lock();
+  const value = await response.json().catch(() => null);
   if (!response.ok) {
-    if (response.status === 401) lock();
-    throw new Error(value.error?.code || 'request_failed');
+    throw Object.assign(new Error(value?.error?.code || 'request_failed'), {status: response.status, operation: path});
   }
+  if (value === null) throw Object.assign(new Error('invalid_response'), {status: response.status, operation: path});
   return value;
 }
 function lock() {
-  unlocked = false; csrf = ''; codexPending = false;
+  sessionGeneration++;
+  unlocked = false; stateReady = false; csrf = ''; codexPending = false; pairing = null; editing = false;
   element('codex-link').removeAttribute('href'); element('codex-link').hidden = true;
+  element('dashboard-content').hidden = true;
   element('dashboard').hidden = true; element('login-panel').hidden = false;
+}
+function showShell() {
+  element('login-panel').hidden = true; element('dashboard').hidden = false;
+  element('dashboard-content').hidden = !stateReady;
+  element('logout').disabled = !csrf;
 }
 async function action(button, operation) {
   button.disabled = true;
-  try { await operation(); } catch (error) { notice(`Could not complete: ${error.message}. Check the connection and try again.`); }
-  finally { button.disabled = false; }
+  try { await operation(); } catch (error) {
+    if (!error.stateUnavailable) notice(`${error.operation === 'login' ? 'Sign-in failed' : 'Could not complete'}: ${error.message}. Check the connection and try again.`);
+  }
+  finally { button.disabled = button.id === 'logout' && !csrf; }
 }
 function text(tag, value) { const node = document.createElement(tag); node.textContent = value; return node; }
 function button(label, operation) {
@@ -77,9 +92,45 @@ function renderProvider() {
   element('remove-provider').disabled = !state.providers?.[selectedProvider];
 }
 
-async function refresh() {
-  state = await api('state'); csrf = state.csrf; unlocked = true;
-  element('login-panel').hidden = true; element('dashboard').hidden = false;
+function refresh() {
+  if (stateRequest?.generation === sessionGeneration) return stateRequest.promise;
+  const generation = sessionGeneration;
+  const promise = loadState(generation).finally(() => {
+    if (stateRequest?.generation === generation) stateRequest = null;
+  });
+  stateRequest = {generation, promise};
+  return promise;
+}
+async function loadState(generation) {
+  try {
+    const next = await api('state');
+    if (generation !== sessionGeneration) return;
+    if (typeof next.csrf !== 'string' || !next.csrf || !Array.isArray(next.clients)
+        || !next.providers || typeof next.providers !== 'object' || Array.isArray(next.providers)
+        || typeof next.address !== 'string') throw new Error('invalid_state');
+    state = next; csrf = next.csrf; unlocked = true; stateReady = true;
+    showShell();
+    element('state-error').hidden = true;
+    element('refresh').textContent = 'Refresh';
+    renderState();
+  } catch (error) {
+    error.stateUnavailable = true;
+    if (error.status === 401) {
+      if (!unlocked) notice('Your administrator session is unavailable or expired. Sign in to continue.');
+    } else if (generation === sessionGeneration) {
+      stateReady = false;
+      showShell();
+      element('state-error').hidden = false;
+      element('address').textContent = unlocked ? 'Signed in · dashboard unavailable' : 'Dashboard unavailable';
+      element('refresh').textContent = 'Retry loading dashboard';
+      const status = error.status ? ` (HTTP ${error.status})` : '';
+      element('state-error-message').textContent = `${unlocked ? 'Sign-in succeeded, but dashboard state could not be loaded' : 'Dashboard state could not be loaded'}: ${error.message}${status}. Retry checks the existing session without signing in again.`;
+      notice('');
+    }
+    throw error;
+  }
+}
+function renderState() {
   element('address').textContent = state.address; pairing = state.pairing;
   element('pair-panel').hidden = !pairing; element('pair-code').textContent = pairing?.code || '';
   const pairingActions = pairing?.allowed_actions || [];
@@ -105,11 +156,22 @@ async function refresh() {
   }
 }
 
-element('login-form').addEventListener('submit', (event) => {
-  event.preventDefault(); action(event.submitter, async () => {
-    const token = element('admin-token').value; element('admin-token').value = '';
-    await api('login', {token}); await refresh(); notice('Node unlocked.');
-  });
+element('login-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (unlocked || loginPending) return;
+  loginPending = true;
+  try {
+    await action(event.submitter || event.target.querySelector('button'), async () => {
+      const token = element('admin-token').value; element('admin-token').value = '';
+      await api('login', {token});
+      sessionGeneration++; unlocked = true; stateReady = false; csrf = '';
+      element('state-error').hidden = true;
+      element('address').textContent = 'Signed in · loading dashboard';
+      showShell(); notice('Signed in. Loading dashboard…');
+      await refresh();
+      if (stateReady) notice('Node unlocked.');
+    });
+  } finally { loginPending = false; }
 });
 for (const option of document.querySelectorAll('.provider-option')) {
   option.addEventListener('click', () => { selectedProvider = option.dataset.provider; editing = false; renderProvider(); });
@@ -177,8 +239,10 @@ setInterval(async () => {
   if (!unlocked || polling || editing || document.hidden) return;
   polling = true;
   try { await refresh(); if (codexPending) await codex('status'); }
-  catch (error) { notice(`Connection unavailable: ${error.message}.`); }
+  catch (error) { if (!error.stateUnavailable) notice(`Connection unavailable: ${error.message}.`); }
   finally { polling = false; }
 }, 5000);
-refresh().catch(() => lock());
+showShell();
+element('address').textContent = 'Checking administrator session…';
+refresh().catch(() => {});
 renderProvider();

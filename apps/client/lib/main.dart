@@ -8,8 +8,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:floe_client/app/floe_app.dart';
-import 'package:floe_client/app/profile_selection_app.dart';
-import 'package:floe_client/app/runtime/local_profile_selection.dart';
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_primitives.dart';
 import 'package:floe_client/app/floe_theme.dart';
@@ -21,7 +19,6 @@ import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/macos_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/attention_acquisition_broker.dart';
 import 'package:floe_client/infrastructure/native/calendar_acquisition_broker.dart';
-import 'package:floe_client/infrastructure/native/local_device_identity.dart';
 import 'package:floe_client/infrastructure/native/personal_acquisition_broker.dart';
 import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
 import 'package:floe_client/preview/design_feedback_overlay.dart';
@@ -64,29 +61,10 @@ void main() {
 
 Future<void> _start() async {
   try {
-    final selection = await LocalProfileSelection.open();
-    final profile = await selection.selected();
-    if (profile == null) {
-      runApp(
-        ProfileSelectionApp(
-          profiles: await selection.candidates(),
-          onSelect: (profile) async {
-            await selection.select(profile);
-            await _start();
-          },
-          onReload: _start,
-        ),
-      );
-      return;
-    }
-    final androidNative = Platform.isAndroid ? AndroidContextGateway() : null;
-    final device = await LocalDeviceIdentity.openExisting();
-    final calendarHost = EventKitCalendarHost(deviceId: device.id);
     // App-lifetime objects are created once here; no feature owns them.
-    final runtime = await AppRuntime.openSelected(
-      deviceId: device.id,
-      profile: profile,
-    );
+    final runtime = await AppRuntime.openDefault();
+    final androidNative = Platform.isAndroid ? AndroidContextGateway() : null;
+    final calendarHost = EventKitCalendarHost(deviceId: runtime.deviceId);
     final gateway = AppWireDayGateway(runtime);
     CalendarAcquisitionService? calendarAcquisition;
     if (Platform.isMacOS || Platform.isIOS || androidNative != null) {
@@ -119,7 +97,7 @@ Future<void> _start() async {
         reader: (request) async {
           final mode = request['mode'];
           final deviceId = request['device_id'];
-          if (mode is! String || deviceId is! String || deviceId != device.id) {
+          if (mode is! String || deviceId is! String || deviceId != runtime.deviceId) {
             throw PlatformException(code: 'permission_denied');
           }
           final before = await attentionGateway.inspectAttentionSubject(
@@ -166,13 +144,13 @@ Future<void> _start() async {
       }
     }
     final appleNativeGateway = Platform.isIOS
-        ? AppleContextGateway(deviceId: device.id)
+        ? AppleContextGateway(deviceId: runtime.deviceId)
         : null;
     PersonalAcquisitionService? personalAcquisition;
     final personalReader = appleNativeGateway != null
-        ? _applePersonalReader(appleNativeGateway, device.id)
+        ? _applePersonalReader(appleNativeGateway, runtime.deviceId)
         : androidNative != null
-        ? _androidContactsReader(androidNative, device.id)
+        ? _androidContactsReader(androidNative, runtime.deviceId)
         : null;
     if (personalReader != null) {
       final broker = PersonalAcquisitionBroker(

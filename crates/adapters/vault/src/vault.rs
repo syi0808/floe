@@ -33,6 +33,7 @@ pub(crate) mod expert_binding_reviews;
 pub use expert_actions::VaultExpertProposalReader;
 mod gateway_authority;
 mod keyring;
+mod preflight;
 mod learning;
 mod registry;
 pub use gateway_authority::{VaultAuthorizationSigner, VaultEnrollmentSigner};
@@ -44,6 +45,7 @@ pub use conversations::{
     VaultConversationCancelReceipt, VaultConversationCancelRequest, VaultConversationJournalEntry,
 };
 pub use keyring::KeyringVaultKeys;
+pub use preflight::{VaultOpenInspection, VaultResetEvidence, VaultResetReason, inspect_existing_vault};
 pub use session_archive::*;
 
 pub struct VaultKey(Zeroizing<[u8; 32]>);

@@ -1277,10 +1277,10 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             "agent_conversation_commands".to_owned(),
             "agent_conversation_executor".to_owned(),
             "agent_conversation_journal".to_owned(),
-            "agent_conversation_review_audits".to_owned(),
             "agent_conversation_recovery_commands".to_owned(),
             "agent_conversation_resume_requests".to_owned(),
             "agent_conversation_resume_slots".to_owned(),
+            "agent_conversation_review_audits".to_owned(),
             "agent_conversation_runs".to_owned(),
             "agent_conversation_schema".to_owned(),
             "agent_conversation_session_commands".to_owned(),
@@ -1851,14 +1851,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.finish_registry_transaction_checked(transaction, result)
             .await
     }
-    pub async fn resume_conversation_session(&self) -> Result<AgentSession, AgentFailure> {
+    pub async fn resume_conversation_session(&self) -> Result<Option<AgentSession>, AgentFailure> {
         let connection = self.connection()?;
         let mut rows = connection.query("SELECT id FROM agent_sessions WHERE json_extract(payload, '$.scope') IS NULL AND json_extract(payload, '$.data_classes[0]') = 'personal' ORDER BY rowid DESC LIMIT 1", ()).await.map_err(storage)?;
-        let row = rows
-            .next()
-            .await
-            .map_err(storage)?
-            .ok_or(AgentFailure::NotFound)?;
+        let Some(row) = rows.next().await.map_err(storage)? else {
+            self.check_access()?;
+            return Ok(None);
+        };
         let id = Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
         drop(rows);
         let session = self.session_on(&connection, id).await?;
@@ -1869,7 +1868,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::PolicyDenied);
         }
         self.check_access()?;
-        Ok(session)
+        Ok(Some(session))
     }
 }
 async fn session_command_on(

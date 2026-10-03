@@ -17,10 +17,14 @@ pub async fn start_session<Repository: SessionRepository>(
 pub async fn resume_session<Repository: SessionRepository>(
     repository: &Repository,
     request: SessionRequest,
-) -> Result<SessionReceipt, AgentFailure> {
+) -> Result<Option<SessionReceipt>, AgentFailure> {
     request.validate()?;
     let principal = request.principal.clone();
-    verify_receipt(principal, None, repository.resume_session(request).await?)
+    repository
+        .resume_session(request)
+        .await?
+        .map(|receipt| verify_receipt(principal, None, receipt))
+        .transpose()
 }
 
 pub async fn get_session<Repository: SessionRepository>(

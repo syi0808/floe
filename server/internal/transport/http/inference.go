@@ -127,7 +127,7 @@ func (h *InferenceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		out, err := h.Service.Traces(admin, 20)
 		if err != nil {
-			writeInferenceError(w, err)
+			writeInferenceError(w, inferenceTrustFailure(err))
 			return
 		}
 		writeInferenceJSON(w, map[string]any{"schema_version": 2, "traces": out})

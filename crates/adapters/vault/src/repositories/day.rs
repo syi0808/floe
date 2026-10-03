@@ -2,7 +2,7 @@
 
 use crate::{
     StoreError, StoreErrorCode, TursoStore,
-    engine::{require_schema, storage_error, unsupported_profile},
+    engine::{admission_error, require_schema, storage_error, unsupported_profile},
 };
 use floe_day::{CalendarMirror, Event, Note, Task, TimelineItem};
 use floe_kernel::PersonId;
@@ -75,14 +75,14 @@ pub(crate) async fn validate_day_schema(connection: &Connection) -> Result<(), S
     let mut rows = connection
         .query("SELECT version FROM floe_day_schema WHERE id = 1", ())
         .await
-        .map_err(|_| unsupported_profile())?;
+        .map_err(admission_error)?;
     let row = rows
         .next()
         .await
-        .map_err(storage_error)?
+        .map_err(admission_error)?
         .ok_or_else(unsupported_profile)?;
-    if row.get::<i64>(0).map_err(storage_error)? != 1
-        || rows.next().await.map_err(storage_error)?.is_some()
+    if row.get::<i64>(0).map_err(admission_error)? != 1
+        || rows.next().await.map_err(admission_error)?.is_some()
     {
         return Err(unsupported_profile());
     }

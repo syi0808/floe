@@ -43,3 +43,12 @@ pub(crate) fn local_identity_for_database(
             }
         })
 }
+
+pub(crate) fn installation_identity(
+    installation: &floe_provider_adapters::LocalInstallation,
+) -> crate::LocalIdentityClaim {
+    crate::LocalIdentityClaim {
+        person_id: installation.identity().person_id(),
+        device_id: installation.identity().device_id().to_owned(),
+    }
+}

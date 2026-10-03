@@ -302,7 +302,7 @@ func newTraceID() string {
 }
 func (s *Service) Traces(p trust.OperatorPrincipal, limit int) ([]AuditRecord, error) {
 	if err := s.trust.WithCurrentOperator(p, func() error { return nil }); err != nil {
-		return nil, Failure{Code: Unauthorized}
+		return nil, err
 	}
 	if limit < 0 || limit > 20 {
 		limit = 20

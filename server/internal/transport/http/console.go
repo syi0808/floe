@@ -135,7 +135,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	}
 	operator, authErr := handler.Trust.AuthenticateOperatorSession(request.Context(), cookie.Value, request.Header.Get("X-Floe-CSRF"), request.Method != http.MethodGet)
 	if authErr != nil {
-		failure(writer, http.StatusUnauthorized, "unauthorized")
+		writeResult(writer, trust.Result(authErr))
 		return
 	}
 	handler.manage(writer, request, cookie.Value, current, operator)
@@ -315,7 +315,7 @@ func (handler *Handler) managementState(request *http.Request, operator trust.Op
 	}
 	traces, err := handler.Inference.Service.Traces(operator, 20)
 	if err != nil {
-		return operation.Reject(operation.Unauthenticated, "unauthorized")
+		return trust.Result(err)
 	}
 	var inventory any = config.Inventory
 	if !config.InventoryAvailable {
