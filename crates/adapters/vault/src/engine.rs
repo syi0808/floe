@@ -20,9 +20,7 @@ impl TursoStore {
 
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         match Self::create_new(path.as_ref()).await {
-            Err(error) if error.code == StoreErrorCode::Conflict => {
-                Self::open_existing(path).await
-            }
+            Err(error) if error.code == StoreErrorCode::Conflict => Self::open_existing(path).await,
             result => result,
         }
     }
@@ -34,7 +32,10 @@ impl TursoStore {
         match OpenOptions::new().write(true).create_new(true).open(path) {
             Ok(file) => drop(file),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(StoreError::new(StoreErrorCode::Conflict, "local database already exists"));
+                return Err(StoreError::new(
+                    StoreErrorCode::Conflict,
+                    "local database already exists",
+                ));
             }
             Err(error) => return Err(storage_error(error)),
         }
@@ -45,26 +46,42 @@ impl TursoStore {
             .build()
             .await
             .map_err(storage_error)?;
-        let store = Self { database, installation_lock: None };
+        let store = Self {
+            database,
+            installation_lock: None,
+        };
         store.initialize().await?;
         store.validate_existing().await?;
         // Finish the newly created main file before installation.ready can be
         // published. Do not rely on schema pages remaining only in the WAL.
         let connection = store.connection().await?;
-        let mut rows = connection.query("PRAGMA wal_checkpoint(TRUNCATE)", ())
-            .await.map_err(storage_error)?;
-        let row = rows.next().await.map_err(storage_error)?
-            .ok_or_else(|| StoreError::new(StoreErrorCode::Storage, "new database checkpoint returned no result"))?;
+        let mut rows = connection
+            .query("PRAGMA wal_checkpoint(TRUNCATE)", ())
+            .await
+            .map_err(storage_error)?;
+        let row = rows.next().await.map_err(storage_error)?.ok_or_else(|| {
+            StoreError::new(
+                StoreErrorCode::Storage,
+                "new database checkpoint returned no result",
+            )
+        })?;
         if row.get::<i64>(0).map_err(storage_error)? != 0
             || rows.next().await.map_err(storage_error)?.is_some()
         {
-            return Err(StoreError::new(StoreErrorCode::Storage, "new database checkpoint did not complete"));
+            return Err(StoreError::new(
+                StoreErrorCode::Storage,
+                "new database checkpoint did not complete",
+            ));
         }
         drop(rows);
         drop(connection);
-        std::fs::File::open(path).and_then(|file| file.sync_all()).map_err(storage_error)?;
+        std::fs::File::open(path)
+            .and_then(|file| file.sync_all())
+            .map_err(storage_error)?;
         if let Some(parent) = path.parent() {
-            std::fs::File::open(parent).and_then(|directory| directory.sync_all()).map_err(storage_error)?;
+            std::fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(storage_error)?;
         }
         Ok(store)
     }
@@ -210,9 +227,10 @@ pub(crate) fn storage_error(error: impl std::fmt::Display) -> StoreError {
 /// engine errors, busy, permission and I/O failures remain unavailable storage.
 pub(crate) fn admission_error(error: turso::Error) -> StoreError {
     match error {
-        turso::Error::Corrupt(_) | turso::Error::NotAdb(_) => {
-            StoreError::new(StoreErrorCode::Validation, "local database contains corrupt stored data")
-        }
+        turso::Error::Corrupt(_) | turso::Error::NotAdb(_) => StoreError::new(
+            StoreErrorCode::Validation,
+            "local database contains corrupt stored data",
+        ),
         error => storage_error(error),
     }
 }
@@ -249,7 +267,8 @@ pub(crate) async fn require_schema(
             .to_ascii_lowercase()
             .replace("if not exists ", "")
     };
-    if canonical(&sql) != canonical(expected) || rows.next().await.map_err(admission_error)?.is_some()
+    if canonical(&sql) != canonical(expected)
+        || rows.next().await.map_err(admission_error)?.is_some()
     {
         return Err(unsupported_profile());
     }

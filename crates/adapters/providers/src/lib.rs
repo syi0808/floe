@@ -10,10 +10,10 @@ mod local_identity;
 pub mod models;
 pub mod sources;
 
+#[cfg(debug_assertions)]
+pub use local_identity::DevelopmentResetReason;
 pub use local_identity::{
     LocalDatabaseAdmission, LocalIdentityError, LocalInstallation, LocalInstallationLease,
     NativeInstallationError, VerifiedLocalIdentity, local_identity_for_database,
     lock_existing_local_installation, prepare_local_installation,
 };
-#[cfg(debug_assertions)]
-pub use local_identity::DevelopmentResetReason;

@@ -62,14 +62,22 @@ pub unsafe extern "C" fn floe_core_open_default(
     support_directory: *const c_char,
     error_json_out: *mut *mut c_char,
 ) -> *mut FloeHandle {
-    open_core(support_directory, "support_directory", error_json_out, floe_app::open_default)
+    open_core(
+        support_directory,
+        "support_directory",
+        error_json_out,
+        floe_app::open_default,
+    )
 }
 
 fn open_core(
     path: *const c_char,
     field: &'static str,
     error_json_out: *mut *mut c_char,
-    open: impl FnOnce(&str) -> Result<floe_app::AppHost<floe_app::AppComposition>, floe_app::AppOpenError>,
+    open: impl FnOnce(
+        &str,
+    )
+        -> Result<floe_app::AppHost<floe_app::AppComposition>, floe_app::AppOpenError>,
 ) -> *mut FloeHandle {
     diagnostics::initialize();
     if !error_json_out.is_null() {
@@ -122,7 +130,9 @@ pub unsafe extern "C" fn floe_core_identity(handle_ptr: *mut FloeHandle) -> *mut
     match catch_unwind(AssertUnwindSafe(operation)) {
         Ok(Ok(value)) => c_output(ResponseEnvelopeDto::ok(value)),
         Ok(Err(error)) => c_output(ResponseEnvelopeDto::<Value>::error(error)),
-        Err(payload) => c_output(ResponseEnvelopeDto::<Value>::error(diagnostics::panic_error(payload))),
+        Err(payload) => c_output(ResponseEnvelopeDto::<Value>::error(
+            diagnostics::panic_error(payload),
+        )),
     }
 }
 

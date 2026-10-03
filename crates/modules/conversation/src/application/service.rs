@@ -517,7 +517,10 @@ where
                 .await?;
             self.inner.check(actor)?;
             match receipt {
-                Some(receipt) => self.get_session(actor, receipt.session_id, scope).await.map(Some),
+                Some(receipt) => self
+                    .get_session(actor, receipt.session_id, scope)
+                    .await
+                    .map(Some),
                 None => Ok(None),
             }
         })

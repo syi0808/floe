@@ -75,16 +75,12 @@ fn read_key(entry: &Entry) -> Result<VaultKey, AgentFailure> {
 }
 
 fn read_key_classified(entry: &Entry) -> Result<VaultKey, VaultKeyReadFailure> {
-    let secret = Zeroizing::new(
-        entry
-            .get_secret()
-            .map_err(|error| match error {
-                Error::NoEntry => VaultKeyReadFailure::Missing,
-                // Access denial, locked storage, ambiguity and platform faults
-                // never establish that an existing key is absent or malformed.
-                _ => VaultKeyReadFailure::Unavailable(AgentFailure::VaultUnavailable),
-            })?,
-    );
+    let secret = Zeroizing::new(entry.get_secret().map_err(|error| match error {
+        Error::NoEntry => VaultKeyReadFailure::Missing,
+        // Access denial, locked storage, ambiguity and platform faults
+        // never establish that an existing key is absent or malformed.
+        _ => VaultKeyReadFailure::Unavailable(AgentFailure::VaultUnavailable),
+    })?);
     if secret.len() != 32 {
         return Err(VaultKeyReadFailure::Malformed);
     }

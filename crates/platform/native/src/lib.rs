@@ -27,12 +27,12 @@ pub use dylib::{
     BUNDLE_SIBLING, ByteCall, GatedStringCall, MACOS_BUNDLE_ROOT, NativeCallError, NativeLibrary,
 };
 pub use host::{NativeIdentityError, NativeLocalIdentity, local_identity_for_database};
+#[cfg(debug_assertions)]
+pub use installation::DevelopmentResetReason;
 pub use installation::{
     LocalDatabaseAdmission, LocalInstallation, LocalInstallationLease, NativeInstallationError,
     lock_existing_local_installation, prepare_local_installation,
 };
-#[cfg(debug_assertions)]
-pub use installation::DevelopmentResetReason;
 pub use keychain::{
     KeychainError, delete_generic_password, read_generic_password, write_generic_password,
 };

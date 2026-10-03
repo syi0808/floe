@@ -178,9 +178,10 @@ pub(crate) async fn query(
     let service = owners.conversation.as_ref();
     match query {
         AppProductQueryDto::ConversationSessionResume {} => {
-            let session = service.resume_session(actor, scope).await.map_err(
-                |failure| failure_dto(failure, scope.trace_context().request_id()),
-            )?;
+            let session = service
+                .resume_session(actor, scope)
+                .await
+                .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?;
             Ok(match session {
                 Some(session) => AppQueryResultDto::ConversationSession {
                     session: session_snapshot(session)?,

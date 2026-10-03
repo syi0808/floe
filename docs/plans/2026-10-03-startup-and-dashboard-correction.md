@@ -21,3 +21,8 @@ The reported unauthorized message is not yet attributed: the previous UI conflat
 ## Verification boundary
 
 This source batch is newer than e02779bf's scoped G2 pass. It requires coherent Rust/Go compilation, Dart analysis and affected Apple builds before manual use. No automated tests, model/provider calls, real-user bootstrap/reset/key operations or log deletion have been executed. Preserve existing user app processes and evidence until a coordinated manual restart.
+
+
+## Compiler boundary on cbf1c7d0
+
+Full cloud Rust build passed (50.18 seconds), dependency policy passed (23 nodes/126 edges), and Dart analysis passed with zero errors, zero warnings and 128 informational diagnostics. Default VCS-stamped Go executable build passed from an independent clone, recording exact cbf1c7d0 and vcs.modified=false; the earlier linked-worktree VCS failure was environment-related. A single authorized cargo fmt pass produced only 12 Rust source formatting changes, no lock or Go changes; that captured patch is integrated. No rebuild or tests were run solely for formatting. Full Apple application builds await the formatted checkpoint. These are compiler results, not startup/reset or dashboard-authentication behavior verification.

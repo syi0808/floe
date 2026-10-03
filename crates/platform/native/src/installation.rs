@@ -170,8 +170,8 @@ impl LocalInstallation {
         if current != self.identity || read_record(&self.root)? != self.record {
             return Err(NativeInstallationError::Invalid);
         }
-        let metadata = regular_file(&self.database_path)?
-            .ok_or(NativeInstallationError::Incomplete)?;
+        let metadata =
+            regular_file(&self.database_path)?.ok_or(NativeInstallationError::Incomplete)?;
         if metadata.len() == 0 {
             return Err(NativeInstallationError::Incomplete);
         }
@@ -209,13 +209,15 @@ pub fn prepare_local_installation(
     support_directory: &Path,
 ) -> Result<LocalInstallation, NativeInstallationError> {
     if !support_directory.is_absolute()
-        || support_directory.components().any(|part| matches!(part, Component::ParentDir))
+        || support_directory
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
     {
         return Err(NativeInstallationError::Invalid);
     }
     ensure_directory(support_directory)?;
-    let root = fs::canonicalize(support_directory)
-        .map_err(|_| NativeInstallationError::Unavailable)?;
+    let root =
+        fs::canonicalize(support_directory).map_err(|_| NativeInstallationError::Unavailable)?;
     let lock = acquire_installation_lock(&root)?;
 
     #[cfg(debug_assertions)]
@@ -227,9 +229,11 @@ pub fn prepare_local_installation(
     let prepared = prepare_identity(&root);
     #[cfg(debug_assertions)]
     let prepared = match prepared {
-        Err(failure @ (NativeInstallationError::Invalid
+        Err(
+            failure @ (NativeInstallationError::Invalid
             | NativeInstallationError::Ambiguous
-            | NativeInstallationError::Incomplete)) => {
+            | NativeInstallationError::Incomplete),
+        ) => {
             let reason = match failure {
                 NativeInstallationError::Invalid => DevelopmentResetReason::InvalidInstallation,
                 NativeInstallationError::Ambiguous => DevelopmentResetReason::AmbiguousInstallation,
@@ -257,7 +261,10 @@ pub fn lock_existing_local_installation(
     database: &Path,
 ) -> Result<LocalInstallationLease, NativeInstallationError> {
     let expected = read_identity(database)?;
-    let root = database.parent().and_then(Path::parent).and_then(Path::parent)
+    let root = database
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
         .ok_or(NativeInstallationError::Invalid)?;
     let root = fs::canonicalize(root).map_err(|_| NativeInstallationError::Unavailable)?;
     let lock = acquire_installation_lock(&root)?;
@@ -277,7 +284,11 @@ fn acquire_installation_lock(root: &Path) -> Result<File, NativeInstallationErro
         .truncate(false)
         .open(&lock_path)
         .map_err(|_| NativeInstallationError::Unavailable)?;
-    if !lock.metadata().map_err(|_| NativeInstallationError::Unavailable)?.is_file() {
+    if !lock
+        .metadata()
+        .map_err(|_| NativeInstallationError::Unavailable)?
+        .is_file()
+    {
         return Err(NativeInstallationError::Invalid);
     }
     lock.try_lock().map_err(|error| match error {
@@ -300,8 +311,8 @@ fn prepare_identity(root: &Path) -> Result<PreparedInstallation, NativeInstallat
     let (person_id, device_id, admission) = if let Some(saved) = record.as_ref() {
         saved.validate()?;
         if let Some(bytes) = read_bytes(&root.join(READY), MAX_RECORD_BYTES)? {
-            let staged: InstallationRecord = serde_json::from_slice(&bytes)
-                .map_err(|_| NativeInstallationError::Invalid)?;
+            let staged: InstallationRecord =
+                serde_json::from_slice(&bytes).map_err(|_| NativeInstallationError::Invalid)?;
             staged.validate()?;
             if staged.phase != Phase::Ready
                 || staged.person_id != saved.person_id
@@ -310,7 +321,10 @@ fn prepare_identity(root: &Path) -> Result<PreparedInstallation, NativeInstallat
                 return Err(NativeInstallationError::Invalid);
             }
         }
-        if selected.as_ref().is_some_and(|selected| selected != &saved.person_id) {
+        if selected
+            .as_ref()
+            .is_some_and(|selected| selected != &saved.person_id)
+        {
             return Err(NativeInstallationError::Invalid);
         }
         let database = database_path(&root, &saved.person_id);
@@ -346,7 +360,11 @@ fn prepare_identity(root: &Path) -> Result<PreparedInstallation, NativeInstallat
             let database = database_path(&root, &existing);
             let identity = read_identity(&database)?;
             regular_file(&database)?.ok_or(NativeInstallationError::Incomplete)?;
-            (existing, identity.device_id().to_owned(), LocalDatabaseAdmission::Existing)
+            (
+                existing,
+                identity.device_id().to_owned(),
+                LocalDatabaseAdmission::Existing,
+            )
         } else {
             require_fresh_root(&root)?;
             let saved = InstallationRecord {
@@ -378,7 +396,10 @@ fn prepare_identity(root: &Path) -> Result<PreparedInstallation, NativeInstallat
     })
 }
 
-fn initialize_layout(root: &Path, saved: &InstallationRecord) -> Result<(), NativeInstallationError> {
+fn initialize_layout(
+    root: &Path,
+    saved: &InstallationRecord,
+) -> Result<(), NativeInstallationError> {
     let people = root.join("people");
     ensure_directory(&people)?;
     for entry in fs::read_dir(&people).map_err(|_| NativeInstallationError::Unavailable)? {
@@ -396,9 +417,7 @@ fn initialize_layout(root: &Path, saved: &InstallationRecord) -> Result<(), Nati
         }
         Some(_) => {}
         None => {
-            if regular_file(&root.join(ATTEMPT))?.is_some()
-                || !directory_empty(&directory)?
-            {
+            if regular_file(&root.join(ATTEMPT))?.is_some() || !directory_empty(&directory)? {
                 return Err(NativeInstallationError::Incomplete);
             }
             write_new(&device_path, saved.device_id.as_bytes())?;
@@ -438,9 +457,13 @@ fn reserve_database_creation(
     Ok(LocalDatabaseAdmission::CreateNew)
 }
 
-fn require_identity(root: &Path, saved: &InstallationRecord) -> Result<(), NativeInstallationError> {
+fn require_identity(
+    root: &Path,
+    saved: &InstallationRecord,
+) -> Result<(), NativeInstallationError> {
     let identity = read_identity(&database_path(root, &saved.person_id))?;
-    if identity.person_id() != person(&saved.person_id)? || identity.device_id() != saved.device_id {
+    if identity.person_id() != person(&saved.person_id)? || identity.device_id() != saved.device_id
+    {
         return Err(NativeInstallationError::Invalid);
     }
     Ok(())
@@ -454,7 +477,10 @@ fn discover_existing(root: &Path) -> Result<Option<String>, NativeInstallationEr
     let mut selected = None;
     for entry in fs::read_dir(&people).map_err(|_| NativeInstallationError::Unavailable)? {
         let entry = entry.map_err(|_| NativeInstallationError::Unavailable)?;
-        let name = entry.file_name().into_string().map_err(|_| NativeInstallationError::Invalid)?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| NativeInstallationError::Invalid)?;
         person(&name)?;
         if !directory_exists(&entry.path())? {
             return Err(NativeInstallationError::Invalid);
@@ -521,7 +547,9 @@ fn person(value: &str) -> Result<Uuid, NativeInstallationError> {
 fn valid_device(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
-        && !value.chars().any(|value| value.is_whitespace() || value.is_control())
+        && !value
+            .chars()
+            .any(|value| value.is_whitespace() || value.is_control())
 }
 
 fn read_identity(database: &Path) -> Result<NativeLocalIdentity, NativeInstallationError> {
@@ -555,7 +583,9 @@ fn private_options() -> OpenOptions {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
     }
     options
 }
@@ -570,17 +600,26 @@ fn regular_file(path: &Path) -> Result<Option<fs::Metadata>, NativeInstallationE
 }
 
 fn read_bytes(path: &Path, maximum: u64) -> Result<Option<Vec<u8>>, NativeInstallationError> {
-    let Some(metadata) = regular_file(path)? else { return Ok(None); };
+    let Some(metadata) = regular_file(path)? else {
+        return Ok(None);
+    };
     if metadata.len() > maximum {
         return Err(NativeInstallationError::Invalid);
     }
-    let file = private_options().read(true).open(path)
+    let file = private_options()
+        .read(true)
+        .open(path)
         .map_err(|_| NativeInstallationError::Unavailable)?;
-    if !file.metadata().map_err(|_| NativeInstallationError::Unavailable)?.is_file() {
+    if !file
+        .metadata()
+        .map_err(|_| NativeInstallationError::Unavailable)?
+        .is_file()
+    {
         return Err(NativeInstallationError::Invalid);
     }
     let mut bytes = Vec::new();
-    file.take(maximum + 1).read_to_end(&mut bytes)
+    file.take(maximum + 1)
+        .read_to_end(&mut bytes)
         .map_err(|_| NativeInstallationError::Unavailable)?;
     if bytes.len() as u64 > maximum {
         return Err(NativeInstallationError::Invalid);
@@ -589,10 +628,15 @@ fn read_bytes(path: &Path, maximum: u64) -> Result<Option<Vec<u8>>, NativeInstal
 }
 
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), NativeInstallationError> {
-    let mut file = private_options().write(true).create_new(true).open(path)
+    let mut file = private_options()
+        .write(true)
+        .create_new(true)
+        .open(path)
         .map_err(|_| NativeInstallationError::Unavailable)?;
-    file.write_all(bytes).map_err(|_| NativeInstallationError::Unavailable)?;
-    file.sync_all().map_err(|_| NativeInstallationError::Unavailable)?;
+    file.write_all(bytes)
+        .map_err(|_| NativeInstallationError::Unavailable)?;
+    file.sync_all()
+        .map_err(|_| NativeInstallationError::Unavailable)?;
     sync_directory(path.parent().ok_or(NativeInstallationError::Invalid)?)
 }
 
@@ -606,7 +650,10 @@ fn directory_exists(path: &Path) -> Result<bool, NativeInstallationError> {
 }
 
 fn directory_empty(path: &Path) -> Result<bool, NativeInstallationError> {
-    match fs::read_dir(path).map_err(|_| NativeInstallationError::Unavailable)?.next() {
+    match fs::read_dir(path)
+        .map_err(|_| NativeInstallationError::Unavailable)?
+        .next()
+    {
         None => Ok(true),
         Some(Ok(_)) => Ok(false),
         Some(Err(_)) => Err(NativeInstallationError::Unavailable),
@@ -628,7 +675,11 @@ fn ensure_directory(path: &Path) -> Result<(), NativeInstallationError> {
     match builder.create(path) {
         Ok(()) => sync_directory(parent),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            if directory_exists(path)? { Ok(()) } else { Err(NativeInstallationError::Invalid) }
+            if directory_exists(path)? {
+                Ok(())
+            } else {
+                Err(NativeInstallationError::Invalid)
+            }
         }
         Err(_) => Err(NativeInstallationError::Unavailable),
     }
@@ -640,20 +691,32 @@ fn ensure_existing_ancestors(mut path: &Path) -> Result<(), NativeInstallationEr
         if !directory_exists(path)? {
             return Err(NativeInstallationError::Invalid);
         }
-        let Some(parent) = path.parent() else { return Ok(()); };
+        let Some(parent) = path.parent() else {
+            return Ok(());
+        };
         path = parent;
     }
 }
 
 fn sync_directory(path: &Path) -> Result<(), NativeInstallationError> {
-    File::open(path).and_then(|directory| directory.sync_all())
+    File::open(path)
+        .and_then(|directory| directory.sync_all())
         .map_err(|_| NativeInstallationError::Unavailable)
 }
 
 #[cfg(debug_assertions)]
 const ARCHIVE_ENTRIES: &[&str] = &[
-    RECORD, ATTEMPT, READY, DEVICE, SELECTION, "selected_profile.json.tmp", "people",
-    "floe.db", "floe.db-wal", "floe.db-shm", "floe.db.agent-vaults",
+    RECORD,
+    ATTEMPT,
+    READY,
+    DEVICE,
+    SELECTION,
+    "selected_profile.json.tmp",
+    "people",
+    "floe.db",
+    "floe.db-wal",
+    "floe.db-shm",
+    "floe.db.agent-vaults",
 ];
 
 #[cfg(debug_assertions)]
@@ -709,7 +772,9 @@ fn archive_installation(
         use std::os::unix::fs::DirBuilderExt;
         builder.mode(0o700);
     }
-    builder.create(&recovery).map_err(|_| NativeInstallationError::Unavailable)?;
+    builder
+        .create(&recovery)
+        .map_err(|_| NativeInstallationError::Unavailable)?;
     sync_directory(&root.join("recovery"))?;
     let bytes = serde_json::to_vec(&manifest).map_err(|_| NativeInstallationError::Invalid)?;
     write_new(&recovery.join("manifest.json"), &bytes)?;
@@ -720,25 +785,38 @@ fn archive_installation(
 #[cfg(debug_assertions)]
 fn recovery_path(root: &Path, manifest: &ResetManifest) -> PathBuf {
     root.join("recovery").join(format!(
-        "{}-{}", manifest.started_at_millis, manifest.recovery_id,
+        "{}-{}",
+        manifest.started_at_millis, manifest.recovery_id,
     ))
 }
 
 #[cfg(debug_assertions)]
-fn resume_archive(root: &Path, retained_vault_lock: Option<&File>) -> Result<(), NativeInstallationError> {
-    let Some(bytes) = read_bytes(&root.join(RESET), MAX_RECORD_BYTES)? else { return Ok(()); };
-    let manifest: ResetManifest = serde_json::from_slice(&bytes)
-        .map_err(|_| NativeInstallationError::Invalid)?;
+fn resume_archive(
+    root: &Path,
+    retained_vault_lock: Option<&File>,
+) -> Result<(), NativeInstallationError> {
+    let Some(bytes) = read_bytes(&root.join(RESET), MAX_RECORD_BYTES)? else {
+        return Ok(());
+    };
+    let manifest: ResetManifest =
+        serde_json::from_slice(&bytes).map_err(|_| NativeInstallationError::Invalid)?;
     let unique: std::collections::HashSet<_> = manifest.entries.iter().collect();
-    if manifest.schema_version != 1 || manifest.recovery_id.is_nil()
-        || manifest.entries.is_empty() || unique.len() != manifest.entries.len()
-        || manifest.entries.iter().any(|name| !ARCHIVE_ENTRIES.contains(&name.as_str()))
+    if manifest.schema_version != 1
+        || manifest.recovery_id.is_nil()
+        || manifest.entries.is_empty()
+        || unique.len() != manifest.entries.len()
+        || manifest
+            .entries
+            .iter()
+            .any(|name| !ARCHIVE_ENTRIES.contains(&name.as_str()))
     {
         return Err(NativeInstallationError::Invalid);
     }
     let recovery = recovery_path(root, &manifest);
     ensure_existing_ancestors(&recovery)?;
-    if read_bytes(&recovery.join("manifest.json"), MAX_RECORD_BYTES)?.as_deref() != Some(bytes.as_slice()) {
+    if read_bytes(&recovery.join("manifest.json"), MAX_RECORD_BYTES)?.as_deref()
+        != Some(bytes.as_slice())
+    {
         return Err(NativeInstallationError::Invalid);
     }
     // Keep every affected encrypted host excluded across all renames, including
@@ -764,7 +842,8 @@ fn complete_archive(
         match (present(&source)?, present(&destination)?) {
             (true, false) => {
                 // Rename the directory entry itself, never follow a symlink.
-                fs::rename(&source, &destination).map_err(|_| NativeInstallationError::Unavailable)?;
+                fs::rename(&source, &destination)
+                    .map_err(|_| NativeInstallationError::Unavailable)?;
                 sync_directory(&recovery)?;
                 sync_directory(root)?;
             }
@@ -827,13 +906,17 @@ fn archive_vault_locks(
             }
         }
     }
-    let retained_identity = retained.map(|file| {
-        let metadata = file.metadata().map_err(|_| NativeInstallationError::Unavailable)?;
-        if !metadata.file_type().is_file() {
-            return Err(NativeInstallationError::Invalid);
-        }
-        Ok((metadata.dev(), metadata.ino()))
-    }).transpose()?;
+    let retained_identity = retained
+        .map(|file| {
+            let metadata = file
+                .metadata()
+                .map_err(|_| NativeInstallationError::Unavailable)?;
+            if !metadata.file_type().is_file() {
+                return Err(NativeInstallationError::Invalid);
+            }
+            Ok((metadata.dev(), metadata.ino()))
+        })
+        .transpose()?;
     let mut identities = std::collections::HashSet::new();
     let mut locks = Vec::new();
     for directory in directories {
@@ -843,9 +926,14 @@ fn archive_vault_locks(
         if !identities.insert(identity) || retained_identity == Some(identity) {
             continue;
         }
-        let lock = private_options().read(true).write(true).open(&path)
+        let lock = private_options()
+            .read(true)
+            .write(true)
+            .open(&path)
             .map_err(|_| NativeInstallationError::Unavailable)?;
-        let actual = lock.metadata().map_err(|_| NativeInstallationError::Unavailable)?;
+        let actual = lock
+            .metadata()
+            .map_err(|_| NativeInstallationError::Unavailable)?;
         if !actual.file_type().is_file() || (actual.dev(), actual.ino()) != identity {
             return Err(NativeInstallationError::Invalid);
         }
@@ -859,6 +947,10 @@ fn archive_vault_locks(
 }
 
 #[cfg(all(debug_assertions, not(unix)))]
-fn archive_vault_locks(_: &Path, _: &Path, _: Option<&File>) -> Result<Vec<File>, NativeInstallationError> {
+fn archive_vault_locks(
+    _: &Path,
+    _: &Path,
+    _: Option<&File>,
+) -> Result<Vec<File>, NativeInstallationError> {
     Err(NativeInstallationError::Unavailable)
 }

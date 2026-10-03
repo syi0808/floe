@@ -1,11 +1,11 @@
 use std::path::Path;
 
+#[cfg(debug_assertions)]
+pub use floe_native::DevelopmentResetReason;
 pub use floe_native::{
     LocalDatabaseAdmission, LocalInstallation, LocalInstallationLease, NativeInstallationError,
     lock_existing_local_installation, prepare_local_installation,
 };
-#[cfg(debug_assertions)]
-pub use floe_native::DevelopmentResetReason;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedLocalIdentity {
