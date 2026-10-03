@@ -26,3 +26,8 @@ This source batch is newer than e02779bf's scoped G2 pass. It requires coherent 
 ## Compiler boundary on cbf1c7d0
 
 Full cloud Rust build passed (50.18 seconds), dependency policy passed (23 nodes/126 edges), and Dart analysis passed with zero errors, zero warnings and 128 informational diagnostics. Default VCS-stamped Go executable build passed from an independent clone, recording exact cbf1c7d0 and vcs.modified=false; the earlier linked-worktree VCS failure was environment-related. A single authorized cargo fmt pass produced only 12 Rust source formatting changes, no lock or Go changes; that captured patch is integrated. No rebuild or tests were run solely for formatting. Full Apple application builds await the formatted checkpoint. These are compiler results, not startup/reset or dashboard-authentication behavior verification.
+
+
+## Apple build closure on 6dabf448
+
+macOS, arm64 iOS simulator and unsigned device application builds passed on the formatted source. Artifact architecture and four native exports were verified; macOS/simulator signature checks passed. Source and lockfiles remained clean. Full evidence is retained in Library file libfile_361aecfee5848191994efbbb914eaa83. Together with the preceding Rust/Go/DAG/Dart results, this closes build validation for this correction. Startup/development recovery and the reported dashboard authentication sequence still require coordinated behavior observation. No validator launched the apps or reset user state.

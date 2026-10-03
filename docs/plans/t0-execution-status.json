@@ -114,7 +114,7 @@
     "implement_go_gateway_slice": "Go credential deadline/pairing repair followup and adversarial adjudication",
     "remove_core_rust_tests": "retained CLI diagnostics, cross-boundary audit and outer Host close lifetime fix"
   },
-  "verification_gate": "G2 build coverage passed for published e02779bf: cloud full Rust/Go/DAG, macOS app, arm64 iOS simulator and unsigned device app. Startup/development recovery/dashboard correction batch is newer and unverified. No tests/app launches by validators; user behavior verification ongoing.",
+  "verification_gate": "Startup/dashboard correction build validation passed: full Rust/Go/DAG/Dart and6dabmacOS/arm64simulator/unsigneddevice apps. Runtime startup/reset and dashboard authentication remain under user-coordinated behavior verification. No automated tests or validator user-state operations.",
   "ancillary_handoff": "Parent completed partial97baselinefiles+manifest branch codex/handoff-s1-e2890706: commit d0eacbd08dc05dde224a1512d313d2a30845648e, tree5c7ac2f02ab0874f62d82562b9126cf5eecaca77. Not full e289 tree, no active S1 publication. Parent owns remote writes.",
   "day_stage": "Owned multi-source refresh, safe snapshots, product read admission, latest complete interval cache per resource, bounded selected reads, and immutable refresh replay implemented. Manual mutation atomic command receipts are being added; no live provider effects or data reset.",
   "review": "Current source audit and fixes closed across credential, pairing, Access review/Actions invalidation, source device, Go probe/Microsoft identity, safe projections and native callback lifetime. Full static evidence in s1-gateway-current-source-audit-20261002.md and s1-boundary-closure-notes.md. No current runtime validation claim.",
@@ -139,7 +139,7 @@
     "client_day": "Delivered and integrated; current G2 correction/review is native-owned.",
     "client_experts_knowledge": "Delivered and integrated; current G2 correction/review is native-owned."
   },
-  "updated_at": "2026-10-03T16:39:00Z",
+  "updated_at": "2026-10-03T17:04:00Z",
   "publication_identity": {
     "author": "syi0808",
     "email": "66503450+syi0808@users.noreply.github.com",
@@ -191,9 +191,9 @@
     "next": "Compile coherent correction batch, coordinate rebuilt app before user retest; no automated test reconstruction yet."
   },
   "startup_correction": {
-    "status": "cbf_rust_go_dag_dart_pass_format_integrated_apple_pending",
+    "status": "6dab_full_scoped_build_pass_behavior_pending",
     "evidence": "2026-10-03-startup-and-dashboard-correction.md",
     "policy": "No user profile wizard. Internal Rust identity; debug-only recoverable archive of typed invalid state, preserving logs/journals/oldkeys; stable builds never reset.",
-    "verification": "Full Rust, default VCS-stamped Go, DAG and Dart analyzer pass. Captured12fileRustformat integrated; Apple full builds pending. No user-state bootstrap/reset/key operations or tests."
+    "verification": "Full Rust/defaultVCSGo/DAG/Dart plus macOS/arm64simulator/unsigneddevice apps passed; expectedABI/signature/architecture inspected. No app launches/reset/key operations by validators."
   }
 }

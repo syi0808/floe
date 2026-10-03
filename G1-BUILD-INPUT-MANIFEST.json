@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "Startup/dashboard cbf full Rust build, default VCS-stamped Go executable, DAG and Dart analyzer passed. Captured formatting-only12Rustfile patch integrated, no locks or semantics changed. Full Apple builds pending formatted checkpoint; no rebuild/tests solely for formatting. No real-user bootstrap/reset/key/auth operations executed.",
+  "verification": "Startup/dashboard correction full Rust/defaultVCSGo/DAG/Dart and6dabmacOS/arm64simulator/unsigneddevice app builds passed, with expectedABI/architecture/signature inspection. This checkpoint changes only documentation. Runtime behavior and dashboard authentication diagnosis remain pending; no automated tests or validator user-state reset/key/auth operations.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "5f0f75b920a46114ecd246aceaf3f20d1b5883e0",
+  "current_correction_source_commit": "be82eb86f1b7c3b1fe9f89131bfaf4a8adb411cb",
   "current_status_document": "docs/plans/t0-execution-status.json"
 }
