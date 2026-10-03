@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::ContextDependency;
-use floe_agent_contract::{AgentFailure, EndpointSettlement, TaskId, TaskSnapshot};
+use floe_agent_contract::{AgentFailure, EndpointSettlement};
 
 use crate::{ExpertAdmissionIdentity, ExpertPrivateState};
 
@@ -105,11 +105,3 @@ impl ExpertSettlement {
     }
 }
 
-/// One settled Expert Task, ready for atomic assignment-local state commit.
-pub struct ExpertTaskCompletion {
-    pub settlement: ExpertSettlement,
-    pub task_id: TaskId,
-    pub expected_task_revision: u64,
-    pub executor_generation: u64,
-    pub task_snapshot: TaskSnapshot,
-}

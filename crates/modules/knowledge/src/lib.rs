@@ -24,6 +24,7 @@ pub mod application {
     pub mod learner_scheduling;
     pub mod learner_service;
     pub mod memory;
+    pub mod memory_display;
     pub mod playbooks;
     pub mod review;
     pub mod service;
@@ -61,7 +62,7 @@ pub use application::playbooks::{
     PlaybookIndexEntry, PlaybookRef, PlaybookRegistry, PlaybookSession,
 };
 pub use application::review::{
-    ReviewAdmission, ReviewPlan, plan_review, validate_approval_candidate, validate_memory_review_candidate,
+    ReviewAdmission, ReviewPlan, plan_review, plan_memory_review, validate_approval_candidate, validate_memory_review_candidate,
     validate_review_actor, validate_review_candidate,
 };
 
@@ -70,3 +71,6 @@ pub use application::storage_policy::{MemoryStageIdentity, MemoryStagePlan, Memo
     learner_job_key, new_learner_job};
 pub use application::learner_journal::{LearnerClaimJournal, LearnerJournalHead,
     advance_learner_journal, validate_learner_journal, validate_learner_budget, recover_learner_claim, validate_learner_stage};
+
+pub use application::memory_display::{MemoryCandidateSummary, MemoryReviewAction, MemoryReviewDisplay,
+    MemoryDecisionAcknowledgement, project_memory_review, project_memory_decision};

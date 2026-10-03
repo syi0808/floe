@@ -1,6 +1,4 @@
-use std::collections::BTreeMap;
-
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -13,16 +11,6 @@ pub enum CalendarProviderDto {
     #[serde(rename = "microsoft_calendar")]
     Microsoft,
     Android,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CalendarSourceDto {
-    pub can_modify: bool,
-    pub provider: CalendarProviderDto,
-    pub calendar_id: String,
-    pub calendar_name: String,
-    pub external_id: String,
-    pub external_revision: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -56,21 +44,3 @@ pub enum CalendarScopeDto {
     All,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CalendarMirrorStateDto {
-    pub source_connection_id: String,
-    pub provider: CalendarProviderDto,
-    pub last_success_at: Option<DateTime<Utc>>,
-    pub last_range: Option<CalendarRangeDto>,
-    pub error: Option<CalendarFailureDto>,
-    pub error_at: Option<DateTime<Utc>>,
-    pub source_statuses: BTreeMap<String, CalendarSyncStatusDto>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CalendarSyncStatusDto {
-    pub last_success_at: Option<DateTime<Utc>>,
-    pub last_range: Option<CalendarRangeDto>,
-    pub error: Option<CalendarFailureDto>,
-    pub error_at: Option<DateTime<Utc>>,
-}

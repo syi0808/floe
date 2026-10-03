@@ -1,7 +1,6 @@
 mod application {
     pub mod archive;
     pub mod assembler;
-    pub mod calendar_connector;
     pub mod calendar_acquisition;
     mod calendar_lease;
     pub mod consumed;
@@ -47,9 +46,6 @@ mod ports {
 
 pub use application::archive::read_authorized_archive;
 pub use application::assembler::acquire_memory_context;
-pub use application::calendar_connector::{
-    ConnectorProjectionError, project_calendar_connector, validate_connector_device,
-};
 pub use application::calendar_acquisition::{ContextCore, ContextCalendarAcquisition};
 pub use application::consumed::ConsumedLineage;
 pub use application::coverage::{
@@ -73,12 +69,7 @@ pub use application::model_coverage::{
 pub use application::model_projection::{
     ContextProjectionInput, ContextProjectionRole, assemble_context_projection,
 };
-pub use application::native_calendar::{
-    AdmittedNativeCalendarRead, AdmittedNativeCalendarSource, CalendarConnectionReader,
-    NativeCalendarGrantReader, NativeCalendarSourceRequest, NativeCalendarSubjectSource,
-    NativeSubjectObservation, NativeSubjectRequest, admit_current_native_calendar_read,
-    admit_native_calendar_source, preview_native_calendar_subject,
-};
+pub use application::native_calendar::{AdmittedNativeCalendarRead, CalendarConnectionReader, NativeCalendarGrantReader, NativeSubjectObservation, admit_current_native_calendar_read};
 pub use application::native_calendar_view::{
     NativeCalendarViewRead, authorize_native_calendar_dependency, read_native_calendar_view,
 };

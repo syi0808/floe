@@ -50,7 +50,7 @@ impl CalendarAcquisitionPort for ContextCalendarAcquisition {
         Box::pin(async move {
             request.actor.validate().map_err(|_| DayRefreshFailure::InvalidAcquisition)?;
             if request.refresh_operation_id.is_nil() { return Err(DayRefreshFailure::InvalidAcquisition); }
-            let range = request.query.range().map_err(|_| DayRefreshFailure::InvalidAcquisition)?;
+            let range = request.query.refresh_range().map_err(|_| DayRefreshFailure::InvalidAcquisition)?;
             let (starts_at, ends_at) = floe_day::range_bounds(&range).map_err(|_| DayRefreshFailure::InvalidAcquisition)?;
             let sources = self.core.inventory(&request.actor, scope).await?;
             let inventory = sources.iter().map(calendar_source_version).collect::<Result<Vec<_>, _>>()?;

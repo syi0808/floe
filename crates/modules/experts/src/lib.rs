@@ -70,7 +70,7 @@ pub use selection::{
     AdmittedRequirementSelection, EXPERT_EXECUTION_SELECTION_SCHEMA_VERSION,
     ExpertExecutionSelection,
 };
-pub use settlement::{ExpertSettlement, ExpertTaskCompletion, prepare_expert_completion};
+pub use settlement::{ExpertSettlement, prepare_expert_completion};
 pub use task::{RunExpertEnvironment, TaskCoordinator};
 pub use task_record::{TaskRecord, TaskArtifactEvidence, settle_task_execution,
     interrupt_task_execution, validate_task_artifact, advance_task_journal, validate_task_journal,

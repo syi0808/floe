@@ -29,8 +29,8 @@ pub fn specification(request: &ExpertProgramRequest, prompt: floe_agent_contract
                     "limit":{"type":"integer","minimum":1,"maximum":25}
                 },"required":["schema_version","query","cursor","limit"]
             }),
-            // Context resolves confirmed interactions from the earlier admitted people read;
-            // the model never supplies people identity payload as fresh source authority.
+            // A source owner resolves the declared capability. Models cannot
+            // supply identity payloads as fresh source authority.
             _ => serde_json::json!({"type":"object","additionalProperties":false,
                 "properties":{"schema_version":{"const":floe_agent_contract::AGENT_VERSION}},
                 "required":["schema_version"]}),
@@ -61,8 +61,8 @@ pub fn read_one<Value: DeserializeOwned>(observations: &[ExpertToolObservation],
 }
 
 pub fn was_unavailable(observations: &[ExpertToolObservation], key: &str) -> bool {
-    observations.iter().any(|read| read.requirement_key == key
-        && matches!(read.outcome, ExpertSourceObservation::Unavailable { .. }))
+    observations.iter().rev().find(|read| read.requirement_key == key)
+        .is_some_and(|read| matches!(read.outcome, ExpertSourceObservation::Unavailable { .. }))
 }
 
 pub fn coverage(observations: &[ExpertToolObservation]) -> Result<DependencyCoverage, AgentFailure> {
@@ -88,7 +88,7 @@ pub fn result<Result_: serde::Serialize>(request: &ExpertProgramRequest,
     };
     artifact.validate(request.request.execution_context.max_output_bytes)?;
     Ok(ExpertFinalOutput {
-        payload: floe_agent_runtime::ValidatedFinalPayload { text, artifacts: vec![artifact] },
+        payload: floe_agent_contract::ValidatedFinalPayload { text, artifacts: vec![artifact] },
         settlement: None,
     })
 }

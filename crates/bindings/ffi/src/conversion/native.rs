@@ -14,8 +14,8 @@ use floe_app::{
 };
 use floe_protocol::wire::{WireResult, invalid};
 use floe_protocol::{
-    AppCommandResultDto, AppQueryResultDto, CalendarBatchDto, CalendarFailureDto,
-    CalendarProviderDto, EventScheduleDto, LocalContextAcquisitionModeDto,
+    AppCommandResultDto, AppQueryResultDto, NativeCalendarBatchDto, CalendarFailureDto,
+    CalendarProviderDto, NativeEventScheduleDto, LocalContextAcquisitionModeDto,
     LocalContextAcquisitionRequestDto, LocalContextAttentionAcquisitionModeDto,
     LocalContextAttentionAcquisitionRequestDto, LocalContextPersonalAcquisitionModeDto,
     LocalContextPersonalAcquisitionRequestDto, LocalContextPersonalDomainDto,
@@ -23,11 +23,11 @@ use floe_protocol::{
 };
 
 pub fn calendar_provider(value: CalendarProviderDto) -> CalendarProvider {
-    super::day::calendar_provider_from_dto(value)
+    floe_protocol::conversion::calendar_provider_from_dto(value)
 }
 
 pub fn calendar_provider_dto(value: CalendarProvider) -> CalendarProviderDto {
-    super::day::calendar_provider_to_dto(value)
+    floe_protocol::conversion::calendar_provider_to_dto(value)
 }
 
 pub(crate) fn calendar_source_failure(value: CalendarFailureDto) -> CalendarSourceFailure {
@@ -46,9 +46,9 @@ fn native_failure(value: CalendarFailureDto) -> NativeCalendarFailure {
     }
 }
 
-fn native_schedule(value: EventScheduleDto) -> NativeEventSchedule {
+fn native_schedule(value: NativeEventScheduleDto) -> NativeEventSchedule {
     match value {
-        EventScheduleDto::Timed {
+        NativeEventScheduleDto::Timed {
             starts_at,
             ends_at,
             timezone,
@@ -57,7 +57,7 @@ fn native_schedule(value: EventScheduleDto) -> NativeEventSchedule {
             ends_at,
             timezone,
         },
-        EventScheduleDto::AllDay {
+        NativeEventScheduleDto::AllDay {
             start_date,
             end_date_exclusive,
         } => NativeEventSchedule::AllDay {
@@ -67,7 +67,7 @@ fn native_schedule(value: EventScheduleDto) -> NativeEventSchedule {
     }
 }
 
-pub(crate) fn native_batch(value: CalendarBatchDto) -> NativeCalendarBatch {
+pub(crate) fn native_batch(value: NativeCalendarBatchDto) -> NativeCalendarBatch {
     NativeCalendarBatch {
         calendar_id: value.calendar_id,
         records: value

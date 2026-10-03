@@ -142,18 +142,11 @@ Budget Continue instead replays the exact validated batch and cursor without mod
 
 ## Consequential actions
 
-Model or Expert output may produce an Action proposal. It never directly authorizes the external effect.
+`ActionsService` owns Calendar Create, Update and Delete, with manual instructions and Expert proposals admitted through one encrypted `ActionsRepository`. App constructs the owner and forwards typed commands; it does not choose between repositories or run an approve/execute/collect workflow. A locked or unavailable Vault cannot fall back to plaintext state. Model or Expert output may produce an inert proposal artifact; a stored Task receipt proves its provenance but does not authorize an external effect.
 
-```text
-Intelligence
-  -> Action proposal
-  -> Actions policy/review
-  -> exact authority + provider preconditions
-  -> durable execution intent
-  -> adapter write
-  -> receipt or uncertain outcome
-  -> reconciliation
-```
+The product submits safe intent: Create names an opaque owner-issued destination choice; Update/Delete name a Day Event and expected Day revision. Actions privately resolves the current source, native target and exact preconditions. An admitted manual instruction, immutable review decision or current standing policy authorizes the resulting effect. Before native dispatch, the encrypted transaction commits the exact `Executing` intent. Only that first commit may consume the single-use prepared native capability.
+
+Actions owns bounded background execution and shutdown/drain. A receipt settles success or a proven prewrite rejection; insufficient evidence settles `Unknown`. Startup marks retained `Executing` intents as response-lost uncertainty without native I/O or redispatch. Read-only inspection never drives work. Explicit reconciliation reads native evidence, and successful effects retain a durable collection ticket until Day acknowledges the exact execution and receipt digest. Day collection is idempotent and cannot turn a succeeded provider effect back into failure.
 
 See [Authority and recovery](authority-recovery.md).
 
@@ -184,7 +177,7 @@ Local AppWire commands and queries pass through `AppHost::request`, `HostRequest
 
 The existing schema-2 `command_v2/query_v2` carry owner-prefixed intents, not worker action maps. `events_v2` remains Conversation event delivery with principal filtering. FFI strictly validates/converts DTOs, admits the host request, calls a typed service and serializes values; it does not load credentials or decide authorization, routing, eligibility or Action policy. App's private worker/job machinery remains where owners require non-blocking work.
 
-Async local results bind the exact intent and originating Person/device/runtime epoch/owner. Observation and accepted-decode-before-release retain the same operation identity across uncertain acknowledgements, and do not imply cancellation. Flutter has separate owner gateways and mechanical correlation only, not a generic request bus. Day preserves Person ownership and repository CAS. Actions selects the authoritative encrypted/core repository inside App, rejects agent-origin mirrors, and preserves durable intent and lookup-only uncertain-write recovery without client fallback. Context injects admitted identity while retaining native request/epoch/fingerprint evidence; broker disposal is not Run cancellation.
+Async local results bind the exact intent and originating Person/device/runtime epoch/owner. Observation and accepted-decode-before-release retain the same operation identity across uncertain acknowledgements, and do not imply cancellation. Flutter has separate owner gateways and mechanical correlation only, not a generic request bus. Day preserves Person ownership and repository CAS. Actions exposes safe owner snapshots and retains a single encrypted effect record, immutable command receipts and explicit uncertain-write reconciliation; App and Flutter perform no execution or recovery policy. Context injects admitted identity while retaining native request/epoch/fingerprint evidence; broker disposal is not Run cancellation.
 
 App publishes a terminal Conversation Run event only after the owning turn job is marked complete.
 The read-only Conversation Session get operation may also overlap the narrow interval after the

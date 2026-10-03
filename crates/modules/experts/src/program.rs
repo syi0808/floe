@@ -56,7 +56,7 @@ impl ExpertToolObservation {
 }
 
 pub struct ExpertFinalOutput {
-    pub payload: floe_agent_runtime::ValidatedFinalPayload,
+    pub payload: floe_agent_contract::ValidatedFinalPayload,
     pub settlement: Option<floe_agent_contract::EndpointSettlement>,
 }
 

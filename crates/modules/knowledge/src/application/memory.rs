@@ -78,7 +78,12 @@ pub fn project_memory_summary(
 pub fn validate_stage_request(request: &StageMemoryCandidate) -> Result<(), AgentFailure> {
     let digest = request.digest.trim();
     let statement = request.value.statement.trim();
-    if digest.is_empty()
+    if request.session_id.is_nil() || request.expected_session_revision == 0
+        || request.turn_ids.iter().any(uuid::Uuid::is_nil)
+        || !matches!((request.target_id, request.base_revision), (None, None))
+            && !matches!((request.target_id, request.base_revision), (Some(id), Some(revision)) if !id.is_nil() && revision > 0)
+        || matches!(request.actor, KnowledgeActor::Learner { run_id } if run_id.is_nil())
+        || digest.is_empty()
         || digest.len() > MAX_OBSERVATION_DIGEST_BYTES
         || statement.is_empty()
         || statement.len() > MAX_MEMORY_STATEMENT_BYTES

@@ -194,3 +194,6 @@ The coordinator has accepted the durable `refresh_operation_id`, explicit `Mirro
 The remaining private-wire choice is the exact product challenge schema declaration. Implement its Rust/Go codecs together, preserving distinct operation tags and forbidding grant/consumer fields on product proofs. Google/Microsoft readers must acquire the actual revision/civil-date metadata needed by the accepted normalized contract; they must not adapt the existing lossy assistant projection into invented mirror records.
 
 No additional user policy decision is needed for the accepted owner/locked-Vault separation. These design decisions do not authorize S2 production edits before G1 and are not compilation evidence.
+
+
+Refresh range precision: Day display queries retain the existing civil date and endpoint-offset semantics. A new refresh intent additionally requires a nonnegative UTC start and a UTC duration at most 48 hours, matching the frozen Access and private Gateway mirror query. Day validates this before durable admission through `DayQuery::refresh_range`; an invalid global request returns validation failure, never fabricated per-source Unavailable results. The refresh intent digest validates the same range, and display-only `now` remains excluded from replay identity.

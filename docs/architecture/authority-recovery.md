@@ -87,17 +87,15 @@ ADR 0034 separately requires durable post-review automatic resume: a terminal in
 
 ## External writes and uncertain outcomes
 
-Consequential external effects require:
+Consequential external effects require an admitted manual instruction or exact Actions review/standing authority, current target/source checks, and a durable immutable pre-dispatch intent. Manual Calendar effects and Expert proposals share one encrypted Actions record. Missing, locked or corrupt encrypted state never selects an alternate plaintext repository or silently resets policy.
 
-1. validated proposal and approval;
-2. exact target authority and provider preconditions;
-3. durable pre-dispatch execution intent;
-4. idempotency/stable execution identity;
-5. reconciliation when the provider may have succeeded but the response is lost.
+An Expert proposal names an exact immutable `TaskExecutionReceiptRef` and artifact. The Vault adapter loads the actual committed Task receipt and record in the Actions admission/dispatch transaction, and Experts' pure validator proves Person/device, terminal Task, admission, selected sources and exact artifact bytes. Actions validates its proposal schema, captured Calendar contributor and requested effect. Current Registry binding or enable state is separate from historical provenance. The current source/grant and Actions authority still gate first dispatch. One admitted proposal artifact can name only one effect identity; a new command cannot replay it as another write.
 
-For delegated Calendar proposals, Actions owns the proposal schema and media type. The saved delegation must match the exact durable Task and contain exactly one Actions proposal artifact; executable-looking package JSON is inert. Vault checks the artifact's exact contributor against durable Completed Task coverage and pinned selection, its recorded admission instance/assignment/package and exact invocation/artifact identity, then revalidates live source/grant/Action policy and provider preconditions before publication or dispatch. Current Registry binding/enable equality is not historical evidence or Action authority. A source Read grant or proposal artifact is never Act authority. Approval and durable pre-dispatch intent remain separate from publication. Once external intent is durable, later binding changes do not erase it or turn uncertainty into a blind retry; lost-response recovery keeps lookup/reconciliation authoritative.
+The native EventKit boundary retains a preparation bound to the exact effect, source, Person/device, host generation and expiry. After encrypted `Executing` commits, one consumed capability crosses the write boundary. EventKit's recomputed `ObservationFingerprint` is an explicit native prewrite condition; it is never relabeled a provider version and does not claim atomic compare-and-write. Exact target, permission and resource checks still have the native check-to-write race. Gateway mirror fingerprints do not grant write capability.
 
-An unknown outcome is never retried as a blind create/write. Recovery performs a bounded lookup/reconciliation path and preserves uncertainty when identity cannot be proven.
+A known native acknowledgement settles a committed effect even if a later observation becomes unavailable. A positive prewrite rejection proves `NotApplied`; timeout, cancellation after dispatch, malformed receipt or lost response leaves `Unknown`. The bounded native cache retains immutable invocation identity and never redispatches a cached invocation. Explicit recovery reads causal receipts first. Only Create may use a unique matching execution marker as bounded positive recovery evidence; matching Update fields or absent Delete targets do not prove who performed the effect. Insufficient evidence remains uncertain, and startup performs no external replay.
+
+A succeeded effect and its pending Day collection ticket commit together. Day records the exact execution ID, receipt digest and normalized collection intent with its projection change, checking current source revision, incarnation and resource membership. Repeated collection rejoins that receipt. Collection failure leaves the Action succeeded with collection pending; one native acknowledgement does not mark whole-calendar coverage fresh.
 
 ## Cancellation
 

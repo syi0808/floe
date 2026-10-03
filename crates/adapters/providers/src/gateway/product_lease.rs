@@ -117,6 +117,20 @@ impl ProductGatewayLeaseRegistry {
         Ok(())
     }
 
+    /// Retire only the exact generation whose owner is shutting down. A stale
+    /// retained owner cannot close a newer unlock or reopen a closed host.
+    pub fn retire(&self, expected_generation: u64) -> Result<(), AgentFailure> {
+        if expected_generation == 0 { return Err(AgentFailure::InvalidInput); }
+        let mut state = self.core.state.lock().map_err(|_| AgentFailure::Interrupted)?;
+        if let RegistryPhase::Ready(current) = &state.phase {
+            if current.generation == expected_generation {
+                current.cancellation.cancel();
+                state.phase = RegistryPhase::Locked;
+            }
+        }
+        Ok(())
+    }
+
     /// Permanently close this host-lifetime registry and cancel every lease.
     pub fn close(&self) -> Result<(), AgentFailure> {
         let mut state = self

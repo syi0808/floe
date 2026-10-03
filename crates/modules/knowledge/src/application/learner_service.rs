@@ -164,7 +164,12 @@ impl LearnerService {
             device_id: self.actor.device_id.clone(), scope: scope.clone(),
             role_spec: RoleSpec { role_id: "learner".into(), instructions: crate::prompts::LEARNER_ROLE.into(),
                 output_contract: "One bounded candidate-only structured memory review answer.".into() },
-            conversation: ModelConversation { history: vec![], current_turn: vec![] },
+            conversation: ModelConversation { history: vec![], current_turn: vec![
+                floe_agent_contract::ModelConversationEntry::User {
+                    message_id: *job.input.turn_ids.last().ok_or(AgentFailure::InvalidInput)?,
+                    text: job.input.digest.clone(),
+                }
+            ] },
             allowed_catalog: AllowedCatalog { cards: vec![], tools: vec![], revision: 1 },
             purpose: crate::LEARNER_INFERENCE_PURPOSE.into(), consumer: crate::LEARNER_INFERENCE_CONSUMER.into(),
             max_iterations: 1, max_output_bytes: budget.max_output_bytes,
@@ -204,7 +209,19 @@ impl LearnerService {
                         Ok(text) => self.stage_answer(job, claim, &projection, &text, &scope).await,
                         Err(error) => Err(error),
                     };
-                    crate::settlement_for_learner_result(staged, self.clock.now())?
+                    // A validated Output is already durable. A transient staging
+                    // interruption retains this same claim for output recovery;
+                    // Deferred would allocate a new claim and repeat inference.
+                    if projection.output.is_some() {
+                        match staged {
+                            Ok(candidate_id) => crate::LearnerJobSettlement::Completed { candidate_id },
+                            Err(error) if crate::retryable_learner_failure(error)
+                                || matches!(error, AgentFailure::StorageUnavailable | AgentFailure::VaultUnavailable) => return Err(error),
+                            Err(failure) => crate::LearnerJobSettlement::Failed { failure },
+                        }
+                    } else {
+                        crate::settlement_for_learner_result(staged, self.clock.now())?
+                    }
                 }
             }
         };
@@ -269,6 +286,11 @@ impl FinalPayloadValidator for LearnerValidator<'_> {
     fn validate(&self, role: &str, text: &str, artifacts: &[Artifact]) -> Result<ValidatedFinalPayload, AgentFailure> {
         if role != "learner" || !artifacts.is_empty() { return Err(AgentFailure::InvalidModelOutput); }
         if let Some(proposal) = crate::parse_learner_review_output(text)? {
+            if let Some(target_id) = proposal.target_id {
+                if !self.input.current_memories.iter().any(|memory| memory.target_id == target_id
+                    && Some(memory.revision) == proposal.base_revision)
+                { return Err(AgentFailure::InvalidModelOutput); }
+            }
             crate::validate_stage_request(&stage_request(self.input, proposal))
                 .map_err(|_| AgentFailure::InvalidModelOutput)?;
         }

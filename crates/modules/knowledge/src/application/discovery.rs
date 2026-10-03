@@ -8,7 +8,10 @@ pub fn explicit_review_input(snapshot: &LearningSessionSnapshot, memories: &[Con
     now: DateTime<Utc>) -> Result<Option<LearnerReviewInput>, AgentFailure>
 {
     let evidence = &snapshot.evidence;
-    if evidence.active_turn || evidence.pending_output || !evidence.personal
+    evidence.coverage.validate().map_err(|_| AgentFailure::StorageUnavailable)?;
+    if evidence.purpose != crate::EvidenceProjectionPurpose::Learning { return Err(AgentFailure::PolicyDenied); }
+    if evidence.coverage != floe_context_contract::DependencyCoverage::Independent
+        || evidence.active_turn || evidence.pending_output || !evidence.personal
         || evidence.outcome != Some(crate::LearningOutcome::Completed)
     { return Ok(None); }
     let Some((user_index, user_id, user_turn, user_text)) = snapshot.messages.iter().enumerate().rev()
@@ -17,6 +20,7 @@ pub fn explicit_review_input(snapshot: &LearningSessionSnapshot, memories: &[Con
                 Some((index, *message_id, *turn_id, text.trim())),
             _ => None,
         }) else { return Ok(None); };
+    if user_id.is_nil() || user_turn.is_nil() { return Err(AgentFailure::StorageUnavailable); }
     let Some(signal) = crate::explicit_learning_signal(user_text) else { return Ok(None); };
     let Some((answer_turn, answer)) = snapshot.messages[user_index + 1..].iter().rev().find_map(|message| match message {
         LearningTranscriptMessage::Assistant { turn_id, original_user_message_id, text }

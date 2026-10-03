@@ -355,7 +355,8 @@ pub fn validate_learner_input(
         .map(|memory| memory.target_id)
         .collect::<HashSet<_>>();
     if input.schema_version != crate::KNOWLEDGE_VERSION
-        || input.person_id != person_id
+        || input.person_id != person_id || !person_id.is_valid()
+        || input.session_id.is_nil() || input.turn_ids.iter().any(Uuid::is_nil)
         || input.outcome != crate::LearningOutcome::Completed
         || input.session_revision == 0
         || input.turn_ids.is_empty()

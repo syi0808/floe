@@ -23,9 +23,9 @@ Use one short encrypted transaction for stage and for each decision, with no pro
 
 Stage:
 - Validate MemoryStageRequest actor and origin. User requires request.actor == KnowledgeActor::User. Learner requires exact Running job and claim on this device, exact stored LearnerJournalHead and full canonical journal, matching MemoryStageOrigin revision/digest, then call validate_learner_stage(actor,job,journal,revision,digest,request). This proves the exact candidate is the already-validated journal Output; caller JSON is not authority.
-- Acquire LearningEvidenceSnapshot through existing TransactionLearningEvidence. Call memory_stage_identity(person,request,snapshot) to obtain observation hash, candidate key and exact evidence refs.
+- Call memory_stage_identity(person,request) using immutable request identity to obtain observation hash, candidate key and exact evidence refs before fresh mutable source/session observation. The helper uses the required Completed outcome in this key; the stored replay provides its actual prior admission.
 - Exact stored candidate-key replay returns the original candidate before rechecking mutable target revision. Still validate stored ownership/key/observation/source refs/version identity. Preserve first acknowledged proposal for this observation/extractor/prompt/target identity, never create another candidate or autoapprove. Do not turn an unacknowledged changed proposal into a mutation.
-- For a new candidate, read matching observation and actual active target revision when needed, call plan_memory_stage, and insert its exact observation (if absent) and candidate atomically. All hash/content/operation/transition choices come from this owner helper. Preserve existing stored observation IDs on replay.
+- For a new candidate, acquire LearningEvidenceSnapshot through existing TransactionLearningEvidence, read matching observation and actual active target revision when needed, call plan_memory_stage, and insert its exact observation (if absent) and candidate atomically. All hash/content/operation/transition choices come from this owner helper. Preserve existing stored observation IDs on replay.
 
 Read context:
 - Read actual active memory revisions plus authoritative evidence independence in one consistent physical read/transaction. Produce MemoryContextFact for each and call project_memory_context(person,facts,now). This owner helper handles current validity intervals, provenance and bounds. Propagate errors; no fabricated empty success for unavailable storage.
@@ -34,7 +34,7 @@ Read context:
 Decide:
 - Persist immutable command receipt for MemoryDecisionRequest keyed command_id, bounded 4096 per store/generation-independent history. Immutable identity is Person/device/candidate_id/decision kind; decided_at is owner observation time, so replay retains the original stored time rather than requiring a later call's clock to equal it.
 - Check command replay before mutation/current-candidate checks. Exact same command returns exact original KnowledgeDecisionResult; changed identity conflicts. Cross reuse among Knowledge command receipt kinds conflicts. No replay may approve a different candidate.
-- Use validate_review_actor(User), validate_review_candidate and existing actual ReviewAdmission facts, then plan_review. Apply exact returned candidate/decision/revision/mutation/superseded values atomically. Only User approval can create an active memory revision. Learner stages Pending only.
+- Use existing actual ReviewAdmission facts, then plan_memory_review(candidate,actor.person_id,kind,decided_at,admission). This owner helper validates a pending Memory candidate, so product memory commands cannot mutate Playbook candidates. Apply exact returned candidate/decision/revision/mutation/superseded values atomically. Only User approval can create an active memory revision. Learner stages Pending only.
 
 ## Learner jobs and discovery
 

@@ -21,10 +21,10 @@ pub trait KnowledgeOwner: KnowledgeRead {
     fn overview<'a>(&'a self, actor: &'a OwnerActor, limit: usize, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<crate::MemoryOverviewSnapshot, AgentFailure>>;
     fn review<'a>(&'a self, actor: &'a OwnerActor, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<crate::MemoryReviewSnapshot, AgentFailure>>;
+        -> BoxFuture<'a, Result<crate::MemoryReviewDisplay, AgentFailure>>;
     fn decide<'a>(&'a self, actor: &'a OwnerActor, command_id: CommandId, candidate_id: Uuid,
         kind: crate::KnowledgeDecisionKind, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<crate::KnowledgeDecisionResult, AgentFailure>>;
+        -> BoxFuture<'a, Result<crate::MemoryDecisionAcknowledgement, AgentFailure>>;
     fn run_next<'a>(&'a self, cancellation: Cancellation) -> BoxFuture<'a, Result<bool, AgentFailure>>;
 }
 
@@ -115,15 +115,16 @@ impl KnowledgeOwner for KnowledgeService {
     { Box::pin(async move { self.authorize(actor)?; crate::validate_memory_overview_limit(limit)?;
         self.repository.overview(actor, limit, scope).await }) }
     fn review<'a>(&'a self, actor: &'a OwnerActor, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<crate::MemoryReviewSnapshot, AgentFailure>>
-    { Box::pin(async move { self.authorize(actor)?; self.repository.review(actor, scope).await }) }
+        -> BoxFuture<'a, Result<crate::MemoryReviewDisplay, AgentFailure>>
+    { Box::pin(async move { self.authorize(actor)?; crate::project_memory_review(&self.repository.review(actor, scope).await?) }) }
     fn decide<'a>(&'a self, actor: &'a OwnerActor, command_id: CommandId, candidate_id: Uuid,
         kind: crate::KnowledgeDecisionKind, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<crate::KnowledgeDecisionResult, AgentFailure>>
+        -> BoxFuture<'a, Result<crate::MemoryDecisionAcknowledgement, AgentFailure>>
     { Box::pin(async move { self.authorize(actor)?;
         if candidate_id.is_nil() || command_id.as_uuid().is_nil() { return Err(AgentFailure::InvalidInput); }
-        self.repository.decide(actor, crate::MemoryDecisionRequest { command_id, candidate_id,
-            kind, decided_at: self.clock.now() }, scope).await }) }
+        let result = self.repository.decide(actor, crate::MemoryDecisionRequest { command_id, candidate_id,
+            kind, decided_at: self.clock.now() }, scope).await?;
+        crate::project_memory_decision(command_id, &result) }) }
     fn run_next<'a>(&'a self, cancellation: Cancellation) -> BoxFuture<'a, Result<bool, AgentFailure>> {
         Box::pin(async move { self.authorize(&self.actor)?; self.learner.run_next(cancellation).await })
     }

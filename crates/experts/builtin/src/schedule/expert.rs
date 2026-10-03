@@ -95,8 +95,8 @@ impl ExpertProgram for ScheduleProgram {
             text.trim().to_owned(), &assessment)?;
         let (next_state, settlement) = floe_experts::prepare_expert_completion(request, &output.payload.text)?;
         if let Some(draft) = proposal {
-            let captured_dependencies = match &request.coverage {
-                DependencyCoverage::Dependent { dependencies } => dependencies.clone(),
+            let captured_dependencies = match crate::program_support::coverage(observations)? {
+                DependencyCoverage::Dependent { dependencies } => dependencies,
                 _ => return Err(AgentFailure::PolicyDenied),
             };
             let admitted_selections = request.selection.requirements.iter()
@@ -118,7 +118,8 @@ impl ExpertProgram for ScheduleProgram {
 fn captured_calendars(request: &ExpertProgramRequest, observations: &[ExpertToolObservation],
     plan: &super::ScheduleRequestPlan) -> Result<Vec<CalendarContextView>, AgentFailure>
 {
-    let reads = observations.iter().filter(|observation| observation.requirement_key == CALENDAR).collect::<Vec<_>>();
+    let reads = observations.iter().filter(|observation| observation.requirement_key == CALENDAR
+        && matches!(observation.outcome, ExpertSourceObservation::Ready { .. })).collect::<Vec<_>>();
     if reads.is_empty() || reads.len() > MAX_PAGES { return Err(AgentFailure::InvalidModelOutput); }
     let mut pages = BTreeMap::<String, CalendarContextView>::new();
     let mut cursor = None;

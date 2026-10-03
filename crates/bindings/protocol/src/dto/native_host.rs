@@ -1,10 +1,38 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CalendarBatchDto, CalendarFailureDto, CalendarProviderDto, LocalContextAcquisitionModeDto,
+    CalendarFailureDto, CalendarProviderDto, LocalContextAcquisitionModeDto,
     LocalContextAttentionAcquisitionModeDto, LocalContextPersonalAcquisitionModeDto,
     LocalContextPersonalDomainDto, NativeSourceResourceDto, UuidRefDto,
 };
+
+/// Broker-only native records. These private physical identities never occur
+/// in a Day product snapshot or authorize a source read.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum NativeEventScheduleDto {
+    Timed { starts_at: String, ends_at: String, timezone: String },
+    AllDay { start_date: String, end_date_exclusive: String },
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeCalendarRecordDto {
+    pub can_modify: bool,
+    pub calendar_id: String,
+    pub external_id: String,
+    /// Exact native SHA-256 fingerprint text; Context normalizes the tagged
+    /// owner revision only after the real broker receipt is admitted.
+    pub external_revision: String,
+    pub title: String,
+    pub schedule: NativeEventScheduleDto,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeCalendarBatchDto {
+    pub calendar_id: String,
+    pub records: Vec<NativeCalendarRecordDto>,
+    pub failure: Option<CalendarFailureDto>,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -43,7 +71,7 @@ pub struct CalendarCompletionDto {
     pub available_calendar_ids: Vec<String>,
     pub available_calendars: Vec<NativeSourceResourceDto>,
     pub permission_class: String,
-    pub batches: Vec<CalendarBatchDto>,
+    pub batches: Vec<NativeCalendarBatchDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

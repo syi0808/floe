@@ -29,8 +29,16 @@ impl DayQuery {
         if !range.is_valid() { return Err(DayError::validation("invalid day offsets")); }
         Ok(range)
     }
+    /// Product acquisition has its own UTC span ceiling. Display queries keep
+    /// the existing civil-date/offset contract.
+    pub fn refresh_range(&self) -> Result<CalendarRange, DayError> {
+        let range = self.range()?;
+        let (start, end) = crate::range_bounds(&range).map_err(|_| DayError::validation("invalid Day refresh range"))?;
+        if start.timestamp_millis() < 0 || end.signed_duration_since(start) > chrono::Duration::hours(48) { return Err(DayError::validation("Day refresh requires a nonnegative UTC range of at most 48 hours")); }
+        Ok(range)
+    }
     pub fn refresh_intent_digest(&self, person_id: PersonId, device_id: &str, command_id: Uuid) -> Result<[u8; 32], DayError> {
-        self.range()?;
+        self.refresh_range()?;
         // Display time is deliberately excluded. Replays retain the first query.
         digest(&("day_refresh", person_id, device_id, command_id, self.date, self.timezone_offset_seconds, self.end_timezone_offset_seconds.unwrap_or(self.timezone_offset_seconds)))
     }

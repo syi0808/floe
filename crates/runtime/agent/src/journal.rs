@@ -839,6 +839,10 @@ fn append_accounting(total: &mut TaskModelAccounting, value: &TaskModelAccountin
     total.unresolved_attempts.extend_from_slice(&value.unresolved_attempts);
     total.usage.attempts = total.usage.attempts.checked_add(value.usage.attempts)
         .ok_or(AgentFailure::StorageUnavailable)?;
+    total.unknown_token_attempts = total.unknown_token_attempts.checked_add(value.unknown_token_attempts)
+        .ok_or(AgentFailure::StorageUnavailable)?;
+    total.unknown_cost_attempts = total.unknown_cost_attempts.checked_add(value.unknown_cost_attempts)
+        .ok_or(AgentFailure::StorageUnavailable)?;
     checked_add(&mut total.usage.tokens, value.usage.tokens)?;
     checked_add(&mut total.usage.cost_micros, value.usage.cost_micros)?;
     checked_add(&mut total.usage.estimated_tokens, value.usage.estimated_tokens)?;
@@ -886,8 +890,14 @@ fn project_model_accounting(entries: &[JournalEntry])
                 accounting.validate_charge(usage.tokens, usage.cost_micros)?;
                 checked_add(&mut own.usage.tokens, usage.tokens)?;
                 checked_add(&mut own.usage.cost_micros, usage.cost_micros)?;
-                if accounting.unknown_tokens { checked_add(&mut own.usage.estimated_tokens, usage.tokens)?; }
-                if accounting.unknown_cost { checked_add(&mut own.usage.estimated_cost_micros, usage.cost_micros)?; }
+                if accounting.unknown_tokens {
+                    checked_add(&mut own.usage.estimated_tokens, usage.tokens)?;
+                    own.unknown_token_attempts = own.unknown_token_attempts.checked_add(1).ok_or(AgentFailure::StorageUnavailable)?;
+                }
+                if accounting.unknown_cost {
+                    checked_add(&mut own.usage.estimated_cost_micros, usage.cost_micros)?;
+                    own.unknown_cost_attempts = own.unknown_cost_attempts.checked_add(1).ok_or(AgentFailure::StorageUnavailable)?;
+                }
             }
             JournalEvent::DelegationResult { receipt } => {
                 if let TaskExecutionEvidence::Admitted(execution) = &receipt.execution {
@@ -903,6 +913,8 @@ fn project_model_accounting(entries: &[JournalEntry])
             checked_add(&mut own.usage.cost_micros, ceiling.cost_micros)?;
             checked_add(&mut own.usage.estimated_tokens, ceiling.tokens)?;
             checked_add(&mut own.usage.estimated_cost_micros, ceiling.cost_micros)?;
+            own.unknown_token_attempts = own.unknown_token_attempts.checked_add(1).ok_or(AgentFailure::StorageUnavailable)?;
+            own.unknown_cost_attempts = own.unknown_cost_attempts.checked_add(1).ok_or(AgentFailure::StorageUnavailable)?;
             own.unresolved_attempts.push(UnresolvedModelAttempt {
                 attempt_id: *attempt_id,
                 reservation_ceiling: *ceiling,

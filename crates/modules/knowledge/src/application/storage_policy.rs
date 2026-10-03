@@ -22,17 +22,18 @@ pub fn knowledge_content_hash(value: &impl Serialize) -> Result<String, AgentFai
     Ok(Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-pub fn memory_stage_identity(person_id: PersonId, request: &StageMemoryCandidate,
-    snapshot: &LearningEvidenceSnapshot) -> Result<MemoryStageIdentity, AgentFailure>
+pub fn memory_stage_identity(person_id: PersonId, request: &StageMemoryCandidate)
+    -> Result<MemoryStageIdentity, AgentFailure>
 {
     validate_stage_request(request)?;
-    validate_learning_evidence(snapshot, person_id, request.session_id,
-        request.expected_session_revision, &request.turn_ids)?;
+    if !person_id.is_valid() || request.session_id.is_nil() || request.expected_session_revision == 0
+        || request.turn_ids.iter().any(Uuid::is_nil)
+    { return Err(AgentFailure::InvalidInput); }
     let source_refs = request.turn_ids.iter().map(|turn_id| LearningEvidenceRef {
         session_id: request.session_id, turn_id: *turn_id,
     }).collect::<Vec<_>>();
     let observation_hash = knowledge_content_hash(&(person_id, request.session_id, &source_refs,
-        request.observation_kind, request.digest.trim(), snapshot.outcome))?;
+        request.observation_kind, request.digest.trim(), Some(LearningOutcome::Completed)))?;
     let candidate_key = knowledge_content_hash(&(&observation_hash, request.extractor_version.trim(),
         request.prompt_version.trim(), KnowledgeKind::Memory, request.target_id))?;
     Ok(MemoryStageIdentity { observation_hash, candidate_key, source_refs })
@@ -42,7 +43,9 @@ pub fn plan_memory_stage(person_id: PersonId, request: &StageMemoryCandidate,
     snapshot: &LearningEvidenceSnapshot, stored_observation: Option<LearningObservation>,
     current_revision: Option<KnowledgeRevision>) -> Result<MemoryStagePlan, AgentFailure>
 {
-    let identity = memory_stage_identity(person_id, request, snapshot)?;
+    validate_learning_evidence(snapshot, person_id, request.session_id,
+        request.expected_session_revision, &request.turn_ids)?;
+    let identity = memory_stage_identity(person_id, request)?;
     let observation = match stored_observation {
         Some(observation) => {
             if observation.schema_version != KNOWLEDGE_VERSION || observation.person_id != person_id

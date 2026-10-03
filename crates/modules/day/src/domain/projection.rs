@@ -184,6 +184,7 @@ impl DaySnapshot {
             }
             fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
         }
-        serde_json::to_writer(Counter(0), self).map_err(|_| crate::DayError::validation("Day snapshot byte budget"))
+        // Reserve bounded product envelope metadata (including schema version).
+        serde_json::to_writer(Counter(64), self).map_err(|_| crate::DayError::validation("Day snapshot byte budget"))
     }
 }

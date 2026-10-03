@@ -57,6 +57,9 @@ pub struct UnresolvedModelAttempt {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskModelAccounting {
+    /// Exact journal-derived uncertainty counts, including zero-valued charges.
+    pub unknown_token_attempts: u32,
+    pub unknown_cost_attempts: u32,
     pub usage: floe_execution::budget::ModelUsage,
     pub attempt_refs: Vec<Uuid>,
     pub unresolved_attempts: Vec<UnresolvedModelAttempt>,
@@ -69,6 +72,12 @@ impl TaskModelAccounting {
         let mut unresolved = std::collections::HashSet::new();
         if self.attempt_refs.len() > maximum
             || self.usage.attempts as usize != self.attempt_refs.len()
+            || self.unknown_token_attempts > self.usage.attempts
+            || self.unknown_cost_attempts > self.usage.attempts
+            || (self.unknown_token_attempts as usize) < self.unresolved_attempts.len()
+            || (self.unknown_cost_attempts as usize) < self.unresolved_attempts.len()
+            || (self.unknown_token_attempts == 0 && self.usage.estimated_tokens != 0)
+            || (self.unknown_cost_attempts == 0 && self.usage.estimated_cost_micros != 0)
             || self.usage.estimated_tokens > self.usage.tokens
             || self.usage.estimated_cost_micros > self.usage.cost_micros
             || self.attempt_refs.iter().any(|id| id.is_nil() || !attempts.insert(*id))
