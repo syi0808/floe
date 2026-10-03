@@ -8,11 +8,23 @@ use super::{Event, EventSchedule};
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarSource {
     pub can_modify: bool,
+    pub connection_id: floe_context_contract::ConnectionId,
     pub provider: CalendarProvider,
     pub calendar_id: String,
     pub calendar_name: String,
     pub external_id: String,
-    pub external_revision: String,
+    pub external_revision: CalendarExternalRevision,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CalendarExternalRevision {
+    ProviderOpaque(String),
+    ObservationFingerprint([u8; 32]),
+}
+impl CalendarExternalRevision {
+    pub fn is_valid(&self) -> bool { match self { Self::ProviderOpaque(value) => !value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_control), Self::ObservationFingerprint(value) => *value != [0; 32] } }
+    pub fn provider_precondition(&self) -> Option<&str> { match self { Self::ProviderOpaque(value) if self.is_valid() => Some(value), _ => None } }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -21,6 +33,12 @@ pub enum CalendarFailure {
     PermissionDenied,
     CalendarUnavailable,
     ProviderUnavailable,
+    SourceChanged,
+    SourceFenced,
+    VaultLocked,
+    BudgetExceeded,
+    DeadlineExceeded,
+    Cancelled,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -80,21 +98,21 @@ pub struct CalendarSelection {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CalendarMirrorInput {
-    pub source_connection_id: String,
-    pub provider: CalendarProvider,
-    pub calendars: Vec<CalendarSelection>,
+pub struct CalendarMirrorState {
+    pub sources: Vec<CalendarMirrorSourceState>,
+}
+impl CalendarMirrorState {
+    pub fn source_state(&self, connection_id: &str) -> Option<&CalendarMirrorSourceState> { self.sources.iter().find(|state| state.source.source.connection_id().as_str() == connection_id) }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CalendarMirrorState {
-    pub source_connection_id: String,
-    pub provider: CalendarProvider,
+pub struct CalendarMirrorSourceState {
+    pub source: super::refresh::CalendarSourceVersion,
     pub last_success_at: Option<DateTime<Utc>>,
     pub last_range: Option<CalendarRange>,
     pub error: Option<CalendarFailure>,
     pub error_at: Option<DateTime<Utc>>,
-    pub source_statuses: BTreeMap<String, CalendarSyncStatus>,
+    pub calendar_statuses: BTreeMap<String, CalendarSyncStatus>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -105,7 +123,7 @@ pub struct CalendarSyncStatus {
     pub error_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarBatch {
     pub calendar_id: String,
     pub records: Vec<CalendarRecord>,
@@ -119,12 +137,12 @@ pub struct CalendarMirror {
     pub events: Vec<Event>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarRecord {
     pub can_modify: bool,
     pub calendar_id: String,
     pub external_id: String,
-    pub external_revision: String,
+    pub external_revision: CalendarExternalRevision,
     pub title: String,
     pub schedule: EventSchedule,
 }
