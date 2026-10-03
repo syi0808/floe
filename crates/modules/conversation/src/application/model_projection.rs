@@ -126,6 +126,7 @@ where
                 projection_operation_id: request.projection_operation_id,
                 purpose: crate::CONVERSATION_PURPOSE,
                 response_contract: &request.role.output_contract,
+                output_format: &request.role.output_format,
                 correction: request.correction.clone(),
                 prompt,
                 conversation: projected.conversation,

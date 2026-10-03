@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/contracts/kernel",
+    "crates/contracts/model",
     "crates/contracts/context",
     "crates/contracts/agent",
     "crates/runtime/execution",

@@ -16,9 +16,9 @@ pub fn specification(request: &ExpertProgramRequest, prompt: floe_agent_contract
                 "properties":{
                     "range_start_unix_ms":{"type":"integer","minimum":0},
                     "range_end_unix_ms":{"type":"integer","minimum":1},
-                    "cursor":{"type":["string","null"],"maxLength":2048},
+                    "cursor":{"type":"string","maxLength":2048},
                     "limit":{"type":"integer","minimum":1,"maximum":floe_context_contract::MAX_CALENDAR_CONTEXT_ITEMS}
-                },"required":["range_start_unix_ms","range_end_unix_ms","cursor","limit"]
+                },"required":["range_start_unix_ms","range_end_unix_ms","limit"]
             }),
             "mail.communication" => serde_json::json!({
                 "type":"object","additionalProperties":false,

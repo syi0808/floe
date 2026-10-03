@@ -1,11 +1,12 @@
+use crate::models::agent_codec::WireStep;
 use super::{
     credentials::{GatewayConnection, GatewayCredentialError, GatewayCredentialStore},
     http::GatewayHttpTransport,
-    inference_wire::{self, AgentResponse, Inventory, PurposeCapability, WireStep},
+    inference_wire::{self, AgentResponse, Inventory, PurposeCapability},
 };
 use floe_access::ModelDispatchTarget;
 use floe_agent_contract::{
-    AgentFailure, BoxFuture, ModelCapabilities, ModelPlanRequest, ProcessingBoundary,
+    AgentFailure, BoxFuture, ModelPlanRequest, ProcessingBoundary,
 };
 use floe_execution::{
     ExecutionScope,
@@ -87,14 +88,14 @@ impl GatewayModelProvider {
             }
             PurposeCapability::Available {
                 capability_revision,
-                ..
+                capabilities
             } => Ok(PrimaryObservation::Available(PreparedModelProfile {
                 capability: ObservedModelCapability {
                     purpose: ModelPurpose::new(request.purpose.clone())
                         .ok_or(ModelObservationError::InvalidIdentity)?,
                     consumer: ModelConsumer::new(request.consumer.clone())
                         .ok_or(ModelObservationError::InvalidIdentity)?,
-                    capabilities: ModelCapabilities::chat(),
+                    capabilities: inference_wire::model_capabilities(&capabilities).map_err(|_| ModelObservationError::InvalidInventory)?,
                     boundary: ProcessingBoundary::Gateway,
                     binding_digest: connection.binding_digest(),
                 },
@@ -118,6 +119,7 @@ pub struct PreparedGatewayTransport {
     http: GatewayHttpTransport,
 }
 impl PreparedModelTransport for PreparedGatewayTransport {
+    fn validate_request(&self, request: &CanonicalModelRequest) -> Result<(),AgentFailure> { self.render_request(request).map(|_| ()) }
     fn dispatch_target(&self) -> ModelDispatchTarget {
         ModelDispatchTarget::Gateway {
             expected: self.connection.binding.clone(),
@@ -137,34 +139,7 @@ impl PreparedModelTransport for PreparedGatewayTransport {
                 return Err(AgentFailure::PolicyDenied);
             }
             let current = self.current().await?;
-            let instructions = request.envelope.stable_instructions.render();
-            if instructions.trim().is_empty() || instructions.len() > 9_216 {
-                return Err(AgentFailure::BudgetExceeded);
-            }
-            let input = super::agent_codec::encode_agent_input(&request)?;
-            let mut classes = request
-                .input_data_classes
-                .iter()
-                .map(|class| match class {
-                    floe_context_contract::DataClass::Synthetic => Ok("synthetic"),
-                    floe_context_contract::DataClass::Personal => Ok("personal"),
-                    floe_context_contract::DataClass::HighlySensitive => Ok("highly_sensitive"),
-                    _ => Err(AgentFailure::PolicyDenied),
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            classes.sort_unstable();
-            classes.dedup();
-            if classes.is_empty() || classes.len() != request.input_data_classes.len() {
-                return Err(AgentFailure::InvalidInput);
-            }
-            let body = serde_json::to_vec(&serde_json::json!({
-                "schema_version": 2, "purpose": self.purpose,
-                "capability_revision": self.capability_revision,
-                "attempt_id": request.attempt_id.to_string(), "data_classes": classes,
-                "instructions": instructions, "input": input,
-                "max_output_bytes": request.max_output_bytes.min(16_384),
-            }))
-            .map_err(|_| AgentFailure::InvalidInput)?;
+            let body = self.render_request(&request)?;
             let _permit = model_calls()
                 .acquire(body.len(), request.deadline, &request.cancellation)
                 .await?;
@@ -186,7 +161,7 @@ impl PreparedModelTransport for PreparedGatewayTransport {
                 )
                 .await?;
             if status != 200 {
-                return Err(inference_wire::failure(status, &bytes)?.1);
+                return inference_wire::inference_failure(status, &bytes, request.attempt_id, &self.purpose, &self.capability_revision);
             }
             let envelope: AgentResponse = inference_wire::decode(&bytes)?;
             if envelope.schema_version != 2
@@ -212,6 +187,40 @@ impl PreparedModelTransport for PreparedGatewayTransport {
     }
 }
 impl PreparedGatewayTransport {
+    fn render_request(&self, request: &CanonicalModelRequest) -> Result<Vec<u8>, AgentFailure> {
+        request.validate()?;
+        let instructions = request.envelope.stable_instructions.render();
+        if instructions.trim().is_empty() || instructions.len() > 9_216 {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let input = crate::models::agent_codec::encode_agent_input(&request)?;
+        let mut classes = request
+            .input_data_classes
+            .iter()
+            .map(|class| match class {
+                floe_context_contract::DataClass::Synthetic => Ok("synthetic"),
+                floe_context_contract::DataClass::Personal => Ok("personal"),
+                floe_context_contract::DataClass::HighlySensitive => Ok("highly_sensitive"),
+                _ => Err(AgentFailure::PolicyDenied),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        classes.sort_unstable();
+        classes.dedup();
+        if classes.is_empty() || classes.len() != request.input_data_classes.len() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let body = serde_json::to_vec(&serde_json::json!({
+            "schema_version": 2, "purpose": self.purpose,
+            "capability_revision": self.capability_revision,
+            "attempt_id": request.attempt_id.to_string(), "data_classes": classes,
+            "output_format": request.envelope.run_instructions.output_format,
+            "instructions": instructions, "input": input,
+            "max_output_bytes": request.max_output_bytes.min(16_384),
+        }))
+        .map_err(|_| AgentFailure::InvalidInput)?;
+        if body.len() > inference_wire::MAX_REQUEST_BYTES { return Err(AgentFailure::BudgetExceeded); }
+        Ok(body)
+    }
     async fn current(&self) -> Result<GatewayConnection, AgentFailure> {
         let current = self
             .store
@@ -267,7 +276,7 @@ fn decode_output(
                 calls += 1;
             }
         }
-        steps.push(super::agent_codec::decode_agent_step(
+        steps.push(crate::models::agent_codec::decode_agent_step(
             step,
             &request.catalog,
         )?);

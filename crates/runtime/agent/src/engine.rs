@@ -432,7 +432,7 @@ impl ActiveDrive<'_> {
             device_id: self.request.device_id.clone(),
             purpose: self.request.purpose.clone(),
             consumer: self.request.consumer.clone(),
-            required_capabilities: ModelCapabilities::chat(),
+            required_capabilities: ModelCapabilities::for_request(&self.request.role_spec.output_format, &self.request.allowed_catalog)?,
         };
         plan_request.validate()?;
         let prepared = self
@@ -500,7 +500,8 @@ impl ActiveDrive<'_> {
                 }
             };
             projection.validate()?;
-            if projection.projection_operation_id != projection_operation_id
+            if projection.envelope.run_instructions.output_format != self.request.role_spec.output_format
+                || projection.projection_operation_id != projection_operation_id
                 || projection.plan_id != plan.operation_id
                 || projection.binding_digest != plan.binding_digest
             {

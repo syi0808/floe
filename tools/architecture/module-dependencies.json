@@ -13,6 +13,14 @@
       "allowed_internal_dependencies": []
     },
     {
+      "id": "model_contract",
+      "package": "floe-model-contract",
+      "path": "crates/contracts/model",
+      "responsibility": "Neutral bounded model schemas and DeviceModel wire values",
+      "group": "contracts",
+      "allowed_internal_dependencies": []
+    },
+    {
       "id": "context_contract",
       "package": "floe-context-contract",
       "path": "crates/contracts/context",
@@ -41,7 +49,8 @@
       "allowed_internal_dependencies": [
         "kernel",
         "context_contract",
-        "execution"
+        "execution",
+        "model_contract"
       ]
     },
     {
@@ -246,7 +255,8 @@
         "actions",
         "access",
         "day",
-        "kernel"
+        "kernel",
+        "model_contract"
       ]
     },
     {

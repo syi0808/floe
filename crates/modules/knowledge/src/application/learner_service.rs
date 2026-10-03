@@ -163,7 +163,8 @@ impl LearnerService {
             execution_id: claim.execution_id(), principal: self.actor.person_id.to_string(),
             device_id: self.actor.device_id.clone(), scope: scope.clone(),
             role_spec: RoleSpec { role_id: "learner".into(), instructions: crate::prompts::LEARNER_ROLE.into(),
-                output_contract: "One bounded candidate-only structured memory review answer.".into() },
+                output_contract: "One JSON object with schema_version 1 and a proposals array containing zero or one bounded memory proposal.".into(),
+                output_format: crate::prompts::learner_output_format()? },
             conversation: ModelConversation { history: vec![], current_turn: vec![
                 floe_agent_contract::ModelConversationEntry::User {
                     message_id: *job.input.turn_ids.last().ok_or(AgentFailure::InvalidInput)?,

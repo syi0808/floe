@@ -37,16 +37,7 @@ impl ModelFrames {
         messages
     }
 
-    pub fn foundation_prompt(self) -> Result<String, floe_agent_contract::AgentFailure> {
-        let history = serde_json::to_string(&self.history)
-            .map_err(|_| floe_agent_contract::AgentFailure::InvalidInput)?;
-        let current_turn = serde_json::to_string(&self.current_turn)
-            .map_err(|_| floe_agent_contract::AgentFailure::InvalidInput)?;
-        Ok(format!(
-            "{{\"run_frame\":{},\"history\":{},\"attempt_context\":{},\"current_turn\":{}}}",
-            self.run_frame, history, self.attempt_context, current_turn
-        ))
-    }
+
 }
 
 pub fn embedded_json(value: &str) -> Value {

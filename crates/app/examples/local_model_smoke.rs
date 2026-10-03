@@ -159,6 +159,7 @@ async fn main() -> std::process::ExitCode {
             projection_operation_id: Uuid::new_v4(),
             purpose: "everyday_assistance",
             response_contract: floe_conversation::MANAGER_OUTPUT_CONTRACT,
+            output_format: &floe_agent_contract::ModelOutputFormat::Text,
             correction: None,
             prompt: prompt.clone(),
             conversation,

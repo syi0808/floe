@@ -1,5 +1,4 @@
-pub mod foundation;
+pub mod device;
+pub(crate) mod agent_codec;
 pub(crate) mod wire;
-pub use foundation::{
-    FoundationModelProvider, LocalModelAvailability, PreparedFoundationTransport,
-};
+pub use device::{DeviceModelProvider, PreparedDeviceTransport};

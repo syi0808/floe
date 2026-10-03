@@ -210,7 +210,7 @@ impl floe_experts::ExpertProjectionPort for ContextExpertProjection {
             crate::assemble_context_projection(crate::ContextProjectionInput {
                 role: crate::ContextProjectionRole::Expert, plan: &request.plan,
                 projection_operation_id: request.projection_operation_id, purpose: &request.plan.purpose,
-                response_contract: &request.role.output_contract, correction: request.correction.clone(),
+                response_contract: &request.role.output_contract, output_format: &request.role.output_format, correction: request.correction.clone(),
                 prompt: input.prompt, conversation: request.conversation.clone(), agent_context: &input.context,
                 catalog: &request.catalog, expert_environment: None, authorized_history_dependencies: &authorized,
                 input_data_classes: classes, max_output_bytes: request.max_output_bytes,

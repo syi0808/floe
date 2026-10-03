@@ -128,6 +128,7 @@ pub(super) async fn finalize_exhausted_run<
             role_id: FINALIZATION_ROLE_ID.into(),
             instructions: FINALIZATION_ROLE_PROMPT.into(),
             output_contract: FINALIZATION_OUTPUT_CONTRACT.into(),
+            output_format: floe_agent_contract::ModelOutputFormat::Text,
         },
         scope,
         conversation: ModelConversation {

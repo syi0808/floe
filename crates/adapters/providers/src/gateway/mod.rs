@@ -1,4 +1,3 @@
-mod agent_codec;
 pub(crate) mod credentials;
 pub(crate) mod http;
 mod inference;

@@ -1,5 +1,4 @@
-use super::inference_wire::WireStep;
-use super::json::strict_json_bytes;
+use crate::gateway::json::strict_json_bytes;
 use floe_agent_contract::{AgentFailure, MAX_CONTEXT_REFS, MAX_OUTPUT_BYTES, valid_context_refs};
 use serde::Deserialize;
 use serde_json::json;
@@ -265,4 +264,19 @@ fn validate_input(input: &serde_json::Value) -> Result<(), AgentFailure> {
         return Err(AgentFailure::InvalidInput);
     }
     Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum WireStep {
+    Preamble {
+        text: String,
+    },
+    Answer {
+        text: String,
+    },
+    Call {
+        capability_id: String,
+        input: String,
+    },
 }

@@ -107,3 +107,5 @@ pub use model_plan::{
     ModelBindingDigest, ModelCapabilities, ModelCapability, ModelPlanRequest, PreparedModelPlan,
     ProcessingBoundary,
 };
+
+pub use floe_model_contract::{ModelOutputFormat, ModelSchema, strict_json as strict_model_json};

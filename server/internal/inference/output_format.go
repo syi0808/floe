@@ -272,6 +272,16 @@ func validPortableNumbers(value any) bool {
 
 func validPortableNumber(number json.Number) bool {
 	raw := number.String()
+	if !boundedPortableNumberToken(raw) { return false }
+	parsed, err := number.Float64()
+	if err != nil || compareJSONNumbers(number, "-9007199254740991") < 0 || compareJSONNumbers(number, "9007199254740991") > 0 { return false }
+	// Every accepted value must remain valid when another runtime serializes its
+	// canonical double, including that shortest spelling's lexical bounds.
+	shortest := strconv.FormatFloat(parsed, 'g', -1, 64)
+	return boundedPortableNumberToken(shortest) && compareJSONNumbers(number, json.Number(shortest)) == 0
+}
+
+func boundedPortableNumberToken(raw string) bool {
 	if len(raw) > 64 { return false }
 	coefficient := raw
 	if index := strings.IndexAny(raw, "eE"); index >= 0 {
@@ -281,12 +291,7 @@ func validPortableNumber(number json.Number) bool {
 	}
 	digits := 0
 	for _, char := range coefficient { if char >= '0' && char <= '9' { digits++ } }
-	if digits > 32 { return false }
-	parsed, err := number.Float64()
-	if err != nil || compareJSONNumbers(number, "-9007199254740991") < 0 || compareJSONNumbers(number, "9007199254740991") > 0 { return false }
-	// All runtimes expose canonical doubles. Reject tokens that would silently
-	// acquire a different decimal value at that shared boundary.
-	return compareJSONNumbers(number, json.Number(strconv.FormatFloat(parsed, 'g', -1, 64))) == 0
+	return digits <= 32
 }
 
 func ValidateJSONAnswer(format OutputFormat, raw []byte, limit uint64) error {

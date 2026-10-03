@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "G2 first attempt failed. Reviewed shared Transform/Health domain, stateless bridge and Apple acquisition/source separation are saved; generic model contracts/backend/hosts and final same-snapshot native integration remain active. Source review fixed lifetime and library-retention fences. No new executable checks or model calls ran; this intermediate checkpoint is not structural closure or a build pass.",
+  "verification": "G2 first attempt failed. Neutral Rust model contract, explicit reasoning schemas/capabilities, Knowledge deep_work and Health receipt host are saved; independent Rust review and generic Swift contract/backend/host delivery remain pending. Native same-snapshot wiring and obsolete-source deletion are not complete. No new executable checks or model calls ran; this is an intermediate source checkpoint, not build or behavior qualification.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "b9dca29d4c01e6061a23acbd23f8be772d04d5bb",
+  "current_correction_source_commit": "2ea722acac655ed6a1117f75ab1a37e23338b976",
   "current_status_document": "docs/plans/t0-execution-status.json"
 }

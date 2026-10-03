@@ -78,6 +78,7 @@ impl CanonicalModelRequest {
             return Err(AgentFailure::InvalidInput);
         }
         self.envelope.validate()?;
+        ModelCapabilities::for_request(&self.envelope.run_instructions.output_format, &self.catalog)?;
         self.catalog
             .tools
             .iter()
@@ -103,6 +104,9 @@ pub struct CanonicalModelResponse {
 }
 
 pub trait PreparedModelTransport: Send + Sync {
+    /// Pure codec/limits preflight, before the irreversible dispatch fact.
+    fn validate_request(&self, request: &CanonicalModelRequest) -> Result<(), AgentFailure>;
+
     /// The adapter-retained non-secret expected binding; Access verifies it live.
     fn dispatch_target(&self) -> floe_access::ModelDispatchTarget;
 

@@ -23,6 +23,7 @@ pub struct RoleSpec {
     pub role_id: String,
     pub instructions: String,
     pub output_contract: String,
+    pub output_format: crate::ModelOutputFormat,
 }
 
 impl RoleSpec {
@@ -33,7 +34,7 @@ impl RoleSpec {
         {
             return Err(AgentFailure::InvalidInput);
         }
-        Ok(())
+        self.output_format.validate().map_err(|_| AgentFailure::InvalidInput)
     }
 }
 
@@ -150,7 +151,7 @@ impl EngineRequest {
             device_id: self.device_id.clone(),
             purpose: self.purpose.clone(),
             consumer: self.consumer.clone(),
-            required_capabilities: crate::ModelCapabilities::chat(),
+            required_capabilities: crate::ModelCapabilities::for_request(&self.role_spec.output_format, &self.allowed_catalog)?,
         }
         .validate()?;
         if self.execution_id.is_nil()
@@ -213,7 +214,7 @@ impl ModelRequest {
             device_id: self.device_id.clone(),
             purpose: self.purpose.clone(),
             consumer: self.consumer.clone(),
-            required_capabilities: crate::ModelCapabilities::chat(),
+            required_capabilities: crate::ModelCapabilities::for_request(&self.projection.envelope.run_instructions.output_format, &self.catalog)?,
         }
         .validate()?;
         if self.attempt_id.is_nil()

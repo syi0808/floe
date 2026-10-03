@@ -415,7 +415,7 @@ fn report_case(
     let accepted = failure.is_none() && classify_batch(steps, kind, agents);
     json!({
         "schema_version": 1, "case_id": case.id, "repetition": repetition, "stage": metadata.stage, "commit_sha": metadata.commit,
-        "corpus_sha256": digest(CORPUS), "provider": if metadata.boundary == "device" { "foundation" } else { "server" },
+        "corpus_sha256": digest(CORPUS), "provider": if metadata.boundary == "device" { "device" } else { "server" },
         "boundary": metadata.boundary, "model_id": metadata.model_id, "model_id_origin": metadata.model_id_origin,
         "configuration_sha256": metadata.configuration_hash,
         "prompt_components": projection.envelope.manifest.prompt_components,
@@ -440,7 +440,7 @@ fn report_summary(corpus: &Corpus, metadata: &ReportMetadata, all_accepted: bool
     json!({
         "schema_version": 1, "status": if all_accepted { "REVIEW_REQUIRED" } else { "FAIL" },
         "commit_sha": metadata.commit, "corpus_sha256": digest(CORPUS), "stage": metadata.stage,
-        "provider": if metadata.boundary == "device" { "foundation" } else { "server" },
+        "provider": if metadata.boundary == "device" { "device" } else { "server" },
         "boundary": metadata.boundary, "model_id": metadata.model_id, "model_id_origin": metadata.model_id_origin,
         "configuration_sha256": metadata.configuration_hash,
         "cases": corpus.cases.len(), "synthesis_cases": 0, "deferred_synthesis_cases": synthesis_cases,

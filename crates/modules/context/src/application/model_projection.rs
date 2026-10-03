@@ -49,6 +49,7 @@ pub struct ContextProjectionInput<'a> {
     pub projection_operation_id: uuid::Uuid,
     pub purpose: &'a str,
     pub response_contract: &'a str,
+    pub output_format: &'a floe_agent_contract::ModelOutputFormat,
     pub correction: Option<ModelCorrection>,
     /// Stable prompt assembly prepared by the Conversation role owner.
     pub prompt: PromptAssembly,
@@ -86,6 +87,7 @@ pub fn assemble_context_projection(
         run_instructions: RunInstructions {
             purpose: input.purpose.to_owned(),
             response_contract: input.response_contract.to_owned(),
+            output_format: input.output_format.clone(),
         },
         discovery: DiscoveryContext {
             revision: input.catalog.revision,
@@ -235,6 +237,7 @@ fn effective_input_data_classes(
 
 fn validate_input(input: &ContextProjectionInput<'_>) -> Result<(), AgentFailure> {
     input.plan.validate()?;
+    if !input.plan.capabilities.includes(&floe_agent_contract::ModelCapabilities::for_request(input.output_format, input.catalog)?) { return Err(AgentFailure::PolicyDenied); }
     if input.projection_operation_id.is_nil() || input.purpose != input.plan.purpose {
         return Err(AgentFailure::InvalidInput);
     }

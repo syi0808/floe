@@ -14,9 +14,9 @@ pub const LEARNER_JOB_RETRY_DELAY_SECONDS: i64 = 5;
 
 /// The Inference purpose/consumer one Learner review runs under.
 ///
-/// Knowledge owns the scope; Inference selects the device profile behind it
+/// Knowledge owns the scope; Inference selects the shared remote Primary or admitted device Fallback
 /// and Access fences the dispatch. The Learner never names a route.
-pub const LEARNER_INFERENCE_PURPOSE: &str = "everyday_assistance";
+pub const LEARNER_INFERENCE_PURPOSE: &str = "deep_work";
 pub const LEARNER_INFERENCE_CONSUMER: &str = "knowledge.learner";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -33,33 +33,29 @@ pub struct LearnerMemoryProposal {
 /// Parse the single structured answer one Learner review accepts.
 ///
 /// The answer must name the current Knowledge schema and carry an explicit
-/// proposal, even when there is nothing to remember. Unknown fields,
-/// duplicate fields and a missing proposal fail closed: the model did
+/// proposals array, empty when there is nothing to remember. Unknown fields,
+/// duplicate fields and a missing proposals array fail closed: the model did
 /// something this role never asked for.
 pub fn parse_learner_review_output(
     text: &str,
 ) -> Result<Option<LearnerMemoryProposal>, AgentFailure> {
-    let value: serde_json::Value =
-        serde_json::from_str(text).map_err(|_| AgentFailure::InvalidModelOutput)?;
-    if !value
-        .as_object()
-        .is_some_and(|object| object.contains_key("proposal"))
-    {
+    let value = floe_agent_contract::strict_model_json(text.as_bytes(), 4096)
+        .map_err(|_| AgentFailure::InvalidModelOutput)?;
+    crate::prompts::learner_output_schema()?.validate_value(&value)
+        .map_err(|_| AgentFailure::InvalidModelOutput)?;
+    let answer: StructuredLearnerAnswer = serde_json::from_value(value)
+        .map_err(|_| AgentFailure::InvalidModelOutput)?;
+    if answer.schema_version != crate::KNOWLEDGE_VERSION || answer.proposals.len() > 1 {
         return Err(AgentFailure::InvalidModelOutput);
     }
-    let answer: StructuredLearnerAnswer =
-        serde_json::from_str(text).map_err(|_| AgentFailure::InvalidModelOutput)?;
-    if answer.schema_version != crate::KNOWLEDGE_VERSION {
-        return Err(AgentFailure::InvalidModelOutput);
-    }
-    Ok(answer.proposal)
+    Ok(answer.proposals.into_iter().next())
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StructuredLearnerAnswer {
     schema_version: u32,
-    proposal: Option<LearnerMemoryProposal>,
+    proposals: Vec<LearnerMemoryProposal>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

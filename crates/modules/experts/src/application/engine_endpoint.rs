@@ -297,7 +297,7 @@ impl AgentEndpoint for EngineExpertEndpoint {
                 execution_id: invocation.execution.execution_id,
                 principal: request.principal.clone(), device_id: self.actor.device_id.clone(),
                 role_spec: RoleSpec { role_id: self.admission.package.id.clone(),
-                    instructions: spec.prompt.render(), output_contract: spec.output_contract.clone() },
+                    instructions: spec.prompt.render(), output_contract: spec.output_contract.clone(), output_format: floe_agent_contract::ModelOutputFormat::Text },
                 scope: scope.clone(),
                 conversation: ModelConversation { history: vec![], current_turn: vec![ModelConversationEntry::User {
                     message_id: request.invocation_key.as_uuid(), text: request.message.clone(),
