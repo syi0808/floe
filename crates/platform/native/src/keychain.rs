@@ -58,11 +58,26 @@ mod apple {
             ]
         }
     }
-    fn error(code: i32) -> KeychainError {
-        match code {
+    fn error(operation: &'static str, code: i32) -> KeychainError {
+        let failure = match code {
             -25308 | -25293 => KeychainError::Locked,
             _ => KeychainError::Unavailable,
-        }
+        };
+        #[cfg(debug_assertions)]
+        tracing::warn!(
+            operation,
+            os_status = code,
+            kind = match failure {
+                KeychainError::Locked => "locked",
+                KeychainError::Unavailable => "unavailable",
+                KeychainError::Ambiguous => "ambiguous",
+                KeychainError::TooLarge => "too_large",
+            },
+            "native_keychain_failure"
+        );
+        #[cfg(not(debug_assertions))]
+        let _ = operation;
+        failure
     }
     pub fn read(
         service: &str,
@@ -81,7 +96,7 @@ mod apple {
             return Ok(None);
         }
         if code != 0 {
-            return Err(error(code));
+            return Err(error("copy_matching", code));
         }
         if output.is_null() {
             return Err(KeychainError::Unavailable);
@@ -123,7 +138,7 @@ mod apple {
             return Ok(());
         }
         if status != -25300 {
-            return Err(error(status));
+            return Err(error("update", status));
         }
         attributes.extend(fields);
         let add = CFDictionary::from_CFType_pairs(&attributes);
@@ -131,7 +146,7 @@ mod apple {
         if status == 0 {
             Ok(())
         } else {
-            Err(error(status))
+            Err(error("add", status))
         }
     }
     pub fn delete(service: &str, account: &str) -> Result<(), KeychainError> {
@@ -140,7 +155,7 @@ mod apple {
         if status == 0 || status == -25300 {
             Ok(())
         } else {
-            Err(error(status))
+            Err(error("delete", status))
         }
     }
 }

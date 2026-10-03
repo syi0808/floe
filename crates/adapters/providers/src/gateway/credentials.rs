@@ -23,6 +23,55 @@ pub enum GatewayCredentialError {
     ForeignIdentity,
     Conflict,
 }
+
+pub(super) enum SetupStorageStage {
+    Expectation,
+    SlotLock,
+    SlotRead,
+    ExpectationRecheck,
+    Staging,
+    SlotWrite,
+    SlotReadback,
+    SlotWorker,
+}
+
+/// Diagnostic context is supplied only by Prepare; it never changes admission
+/// or the error returned to the owner. No credential values are formatted.
+pub(super) fn setup_failure(
+    target_ref: Option<Uuid>,
+    stage: SetupStorageStage,
+    failure: GatewayCredentialError,
+) -> GatewayCredentialError {
+    #[cfg(debug_assertions)]
+    if let Some(target_ref) = target_ref {
+        tracing::warn!(
+            %target_ref,
+            stage = match stage {
+                SetupStorageStage::Expectation => "expectation",
+                SetupStorageStage::SlotLock => "slot_lock",
+                SetupStorageStage::SlotRead => "slot_read",
+                SetupStorageStage::ExpectationRecheck => "expectation_recheck",
+                SetupStorageStage::Staging => "staging",
+                SetupStorageStage::SlotWrite => "slot_write",
+                SetupStorageStage::SlotReadback => "slot_readback",
+                SetupStorageStage::SlotWorker => "slot_worker",
+            },
+            kind = match failure {
+                GatewayCredentialError::Locked => "locked",
+                GatewayCredentialError::Unavailable => "unavailable",
+                GatewayCredentialError::Timeout => "timeout",
+                GatewayCredentialError::Malformed => "malformed",
+                GatewayCredentialError::Unverified => "unverified",
+                GatewayCredentialError::ForeignIdentity => "foreign_identity",
+                GatewayCredentialError::Conflict => "conflict",
+            },
+            "gateway_setup_storage_failure"
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (target_ref, stage);
+    failure
+}
 #[derive(Clone)]
 pub struct GatewayCredentialStore {
     trust: Arc<dyn GatewayTrustReader>,
@@ -171,50 +220,67 @@ impl GatewayCredentialStore {
         &self,
         update: impl FnOnce(&mut SecureGatewayRecord) -> Result<T, GatewayCredentialError>,
     ) -> Result<T, GatewayCredentialError> {
+        self.mutate_record(None, update).await
+    }
+    pub(super) async fn mutate_setup<T: Send + 'static>(
+        &self,
+        target_ref: Uuid,
+        update: impl FnOnce(&mut SecureGatewayRecord) -> Result<T, GatewayCredentialError>,
+    ) -> Result<T, GatewayCredentialError> {
+        self.mutate_record(Some(target_ref), update).await
+    }
+    async fn mutate_record<T: Send + 'static>(
+        &self,
+        target_ref: Option<Uuid>,
+        update: impl FnOnce(&mut SecureGatewayRecord) -> Result<T, GatewayCredentialError>,
+    ) -> Result<T, GatewayCredentialError> {
         let guard = tokio::time::timeout(
             std::time::Duration::from_secs(3),
             store_lock().clone().lock_owned(),
         )
         .await
-        .map_err(|_| GatewayCredentialError::Timeout)?;
-        let mut record = read_record().await?;
+        .map_err(|_| setup_failure(target_ref, SetupStorageStage::SlotLock, GatewayCredentialError::Timeout))?;
+        let mut record = read_record().await
+            .map_err(|failure| setup_failure(target_ref, SetupStorageStage::SlotRead, failure))?;
         let floor = match self
             .trust
             .credential_expectation()
             .await
-            .map_err(|_| GatewayCredentialError::Unavailable)?
+            .map_err(|_| setup_failure(target_ref, SetupStorageStage::ExpectationRecheck, GatewayCredentialError::Unavailable))?
         {
             floe_access::GatewayCredentialExpectation::Committed { generation, .. }
             | floe_access::GatewayCredentialExpectation::Forgotten { generation, .. } => generation,
             _ => 0,
         };
         record.generation = record.generation.max(floor);
-        let result = update(&mut record)?;
+        let result = update(&mut record)
+            .map_err(|failure| setup_failure(target_ref, SetupStorageStage::Staging, failure))?;
         let bytes = Zeroizing::new(
-            serde_json::to_vec(&record).map_err(|_| GatewayCredentialError::Malformed)?,
+            serde_json::to_vec(&record).map_err(|_| setup_failure(target_ref, SetupStorageStage::Staging, GatewayCredentialError::Malformed))?,
         );
         if bytes.len() > MAX_RECORD_BYTES {
-            return Err(GatewayCredentialError::Malformed);
+            return Err(setup_failure(target_ref, SetupStorageStage::Staging, GatewayCredentialError::Malformed));
         }
         // The owned guard stays with the worker even if the observer times out.
         // A late OS write cannot race a subsequent mutation or become absence.
         let work = tokio::task::spawn_blocking(move || {
             let _guard = guard;
-            floe_native::write_generic_password(SERVICE, ACCOUNT, &bytes).map_err(native_error)?;
+            floe_native::write_generic_password(SERVICE, ACCOUNT, &bytes)
+                .map_err(|error| setup_failure(target_ref, SetupStorageStage::SlotWrite, native_error(error)))?;
             let readback = Zeroizing::new(
                 floe_native::read_generic_password(SERVICE, ACCOUNT, MAX_RECORD_BYTES)
-                    .map_err(native_error)?
-                    .ok_or(GatewayCredentialError::Unavailable)?,
+                    .map_err(|error| setup_failure(target_ref, SetupStorageStage::SlotReadback, native_error(error)))?
+                    .ok_or_else(|| setup_failure(target_ref, SetupStorageStage::SlotReadback, GatewayCredentialError::Unavailable))?,
             );
             if readback.as_slice() != bytes.as_slice() {
-                return Err(GatewayCredentialError::Conflict);
+                return Err(setup_failure(target_ref, SetupStorageStage::SlotReadback, GatewayCredentialError::Conflict));
             }
             Ok(result)
         });
         tokio::time::timeout(std::time::Duration::from_secs(3), work)
             .await
-            .map_err(|_| GatewayCredentialError::Timeout)?
-            .map_err(|_| GatewayCredentialError::Unavailable)?
+            .map_err(|_| setup_failure(target_ref, SetupStorageStage::SlotWorker, GatewayCredentialError::Timeout))?
+            .map_err(|_| setup_failure(target_ref, SetupStorageStage::SlotWorker, GatewayCredentialError::Unavailable))?
     }
     pub async fn current_binding(
         &self,

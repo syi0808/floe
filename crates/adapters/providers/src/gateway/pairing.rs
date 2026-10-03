@@ -1,7 +1,8 @@
 //! Pairing wire secrets live only in the single OS-protected adapter record.
 use super::{
     credentials::{
-        GatewayConnection, GatewayCredentialError, GatewayCredentialStore, read_record, valid_token,
+        GatewayConnection, GatewayCredentialError, GatewayCredentialStore, SetupStorageStage,
+        read_record, setup_failure, valid_token,
     },
     http::GatewayHttpTransport,
     proof,
@@ -357,9 +358,11 @@ impl GatewayPairingPort for GatewayPairingAdapter {
                 return Err(PairingError::InvalidInput);
             }
             let address = address.trim_end_matches('/').to_owned();
-            let expectation = self.store.expectation().await.map_err(credential_failure)?;
+            let expectation = self.store.expectation().await.map_err(|failure| {
+                credential_failure(setup_failure(Some(command_id), SetupStorageStage::Expectation, failure))
+            })?;
             self.store
-                .mutate(|record| {
+                .mutate_setup(command_id, |record| {
                     if let Some(stage) = &record.staging {
                         if stage.target_ref == command_id {
                             if stage.address != address {

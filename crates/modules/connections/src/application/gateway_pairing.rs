@@ -216,7 +216,9 @@ impl GatewayPairingService {
             command_id,
         );
         let address_digest = Sha256::digest(address.as_bytes()).into();
-        if let Some(record) = self.repository.setup(target_ref).await? {
+        if let Some(record) = self.repository.setup(target_ref).await.map_err(|error| {
+            trace_prepare_failure(command_id, target_ref, "setup_receipt_lookup", error)
+        })? {
             if record.command_id != command_id
                 || record.person_id != actor.person_id
                 || record.device_id != actor.device_id
@@ -229,7 +231,9 @@ impl GatewayPairingService {
         let setup = self
             .transport
             .prepare_setup(target_ref, address, scope)
-            .await?;
+            .await.map_err(|error| {
+                trace_prepare_failure(command_id, target_ref, "adapter_prepare", error)
+            })?;
         let record = self
             .repository
             .store_setup(GatewaySetupRecord {
@@ -239,7 +243,9 @@ impl GatewayPairingService {
                 address_digest,
                 setup,
             })
-            .await?;
+            .await.map_err(|error| {
+                trace_prepare_failure(command_id, target_ref, "setup_receipt_store", error)
+            })?;
         Ok(record.setup)
     }
     pub async fn start_pairing(
@@ -572,4 +578,26 @@ fn pairing_failure_projection(record: &PairingRecord) -> Option<crate::Connectio
             vec![]
         },
     })
+}
+
+// Only closed failure kinds and opaque correlation IDs are emitted. Never log
+// the address, credential record, proof, service/account or SQL error text.
+fn trace_prepare_failure(
+    command_id: Uuid,
+    target_ref: Uuid,
+    stage: &'static str,
+    error: PairingError,
+) -> PairingError {
+    #[cfg(debug_assertions)]
+    tracing::warn!(
+        component = "gateway_prepare",
+        %command_id,
+        %target_ref,
+        stage,
+        error_kind = ?error,
+        "gateway_prepare_failed"
+    );
+    #[cfg(not(debug_assertions))]
+    let _ = (command_id, target_ref, stage);
+    error
 }
