@@ -1,23 +1,52 @@
 //! One physical transaction for a Day-owned manual transition and exact replay.
-use floe_day::{Capture, DayError, DayMutationCommand, DayMutationPrior, DayMutationResult, DayMutationTarget, DomainRef, Event, Note, Task, TimelineItem};
+use super::day_refresh::{finish_transaction, mirror_on, require_executor};
+use crate::{StoreError, TursoStore};
+use floe_day::{
+    Capture, DayError, DayMutationCommand, DayMutationPrior, DayMutationResult, DayMutationTarget,
+    DomainRef, Event, Note, Task, TimelineItem,
+};
 use serde::{Deserialize, Serialize};
 use turso::Connection;
-use crate::{StoreError, TursoStore};
-use super::day_refresh::{finish_transaction, mirror_on, require_executor};
 
 const TABLE: &str = "CREATE TABLE day_mutation_receipts (person_id TEXT NOT NULL, command_id TEXT NOT NULL, device_id TEXT NOT NULL, intent_digest TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(person_id,command_id))";
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Receipt { command: DayMutationCommand, intent_digest: [u8; 32], result: DayMutationResult }
-pub(super) async fn initialize_mutation_schema(connection: &Connection) -> Result<(), StoreError> { connection.execute(&TABLE.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS "), ()).await.map_err(crate::engine::storage_error)?; Ok(()) }
-pub(super) async fn validate_mutation_schema(connection: &Connection) -> Result<(), StoreError> { crate::engine::require_schema(connection, "day_mutation_receipts", TABLE).await }
-fn storage(error: impl std::fmt::Display) -> DayError { DayError::storage(error.to_string()) }
-fn hex(value: &[u8; 32]) -> String { value.iter().map(|byte| format!("{byte:02x}")).collect() }
+struct Receipt {
+    command: DayMutationCommand,
+    intent_digest: [u8; 32],
+    result: DayMutationResult,
+}
+pub(super) async fn initialize_mutation_schema(connection: &Connection) -> Result<(), StoreError> {
+    connection
+        .execute(
+            &TABLE.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS "),
+            (),
+        )
+        .await
+        .map_err(crate::engine::storage_error)?;
+    Ok(())
+}
+pub(super) async fn validate_mutation_schema(connection: &Connection) -> Result<(), StoreError> {
+    crate::engine::require_schema(connection, "day_mutation_receipts", TABLE).await
+}
+fn storage(error: impl std::fmt::Display) -> DayError {
+    DayError::storage(error.to_string())
+}
+fn hex(value: &[u8; 32]) -> String {
+    value.iter().map(|byte| format!("{byte:02x}")).collect()
+}
 
-pub(super) async fn mutate(store: &TursoStore, command: DayMutationCommand, fence: &floe_day::DayWriteFence) -> Result<DayMutationResult, DayError> {
+pub(super) async fn mutate(
+    store: &TursoStore,
+    command: DayMutationCommand,
+    fence: &floe_day::DayWriteFence,
+) -> Result<DayMutationResult, DayError> {
     let intent_digest = command.intent_digest()?;
     let connection = store.connection().await.map_err(storage)?;
-    connection.execute("BEGIN IMMEDIATE", ()).await.map_err(storage)?;
+    connection
+        .execute("BEGIN IMMEDIATE", ())
+        .await
+        .map_err(storage)?;
     let result = async {
         let person = command.person_id.to_string(); let command_id = command.request.command_id.to_string();
         let mut rows = connection.query("SELECT person_id,command_id,device_id,intent_digest,payload FROM day_mutation_receipts WHERE person_id=? AND command_id=?", (person.clone(), command_id.clone())).await.map_err(storage)?;
@@ -74,18 +103,71 @@ pub(super) async fn mutate(store: &TursoStore, command: DayMutationCommand, fenc
         if inserted != 1 { return Err(DayError::conflict("Day receipt raced another command")); }
         Ok(result)
     }.await;
-    let result = result.and_then(|result| { fence.check(command.person_id, &command.device_id, command.executor_generation)?; Ok(result) });
+    let result = result.and_then(|result| {
+        fence.check(
+            command.person_id,
+            &command.device_id,
+            command.executor_generation,
+        )?;
+        Ok(result)
+    });
     finish_transaction(&connection, result).await
 }
-async fn exact_payload(connection: &Connection, table: &str, id: &str, person: &str) -> Result<Option<String>, DayError> {
-    let mut rows = connection.query(&format!("SELECT payload FROM {table} WHERE id=? AND person_id=?"), (id,person)).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else { return Ok(None); };
+async fn exact_payload(
+    connection: &Connection,
+    table: &str,
+    id: &str,
+    person: &str,
+) -> Result<Option<String>, DayError> {
+    let mut rows = connection
+        .query(
+            &format!("SELECT payload FROM {table} WHERE id=? AND person_id=?"),
+            (id, person),
+        )
+        .await
+        .map_err(storage)?;
+    let Some(row) = rows.next().await.map_err(storage)? else {
+        return Ok(None);
+    };
     let payload: String = row.get(0).map_err(storage)?;
-    if payload.len() > floe_day::MAX_DAY_SNAPSHOT_BYTES || rows.next().await.map_err(storage)?.is_some() { return Err(storage("invalid Day target payload")); }
+    if payload.len() > floe_day::MAX_DAY_SNAPSHOT_BYTES
+        || rows.next().await.map_err(storage)?.is_some()
+    {
+        return Err(storage("invalid Day target payload"));
+    }
     Ok(Some(payload))
 }
-async fn write_record(connection: &Connection, table: &str, id: String, person: &str, payload: String, previous: Option<&str>, expects_existing: bool) -> Result<(), DayError> {
-    if previous.is_some() != expects_existing || payload.len() > floe_day::MAX_DAY_SNAPSHOT_BYTES { return Err(DayError::validation("invalid Day physical transition")); }
-    let changed = if let Some(previous) = previous { connection.execute(&format!("UPDATE {table} SET payload=? WHERE id=? AND person_id=? AND payload=?"), (payload,id,person.to_owned(),previous.to_owned())).await.map_err(storage)? } else { connection.execute(&format!("INSERT OR IGNORE INTO {table}(id,person_id,payload) VALUES (?,?,?)"), (id,person.to_owned(),payload)).await.map_err(storage)? };
-    if changed != 1 { return Err(DayError::conflict("Day target changed")); } Ok(())
+async fn write_record(
+    connection: &Connection,
+    table: &str,
+    id: String,
+    person: &str,
+    payload: String,
+    previous: Option<&str>,
+    expects_existing: bool,
+) -> Result<(), DayError> {
+    if previous.is_some() != expects_existing || payload.len() > floe_day::MAX_DAY_SNAPSHOT_BYTES {
+        return Err(DayError::validation("invalid Day physical transition"));
+    }
+    let changed = if let Some(previous) = previous {
+        connection
+            .execute(
+                &format!("UPDATE {table} SET payload=? WHERE id=? AND person_id=? AND payload=?"),
+                (payload, id, person.to_owned(), previous.to_owned()),
+            )
+            .await
+            .map_err(storage)?
+    } else {
+        connection
+            .execute(
+                &format!("INSERT OR IGNORE INTO {table}(id,person_id,payload) VALUES (?,?,?)"),
+                (id, person.to_owned(), payload),
+            )
+            .await
+            .map_err(storage)?
+    };
+    if changed != 1 {
+        return Err(DayError::conflict("Day target changed"));
+    }
+    Ok(())
 }

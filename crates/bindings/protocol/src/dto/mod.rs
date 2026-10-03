@@ -21,8 +21,9 @@ mod local_context;
 mod native_host;
 mod refs;
 pub use native_host::{
-    AttentionCompletionDto, CalendarCompletionDto, NativeHostCommandDto, NativeHostQueryDto,
-    NativeHostRegistrationDto, PersonalCompletionDto, NativeCalendarBatchDto, NativeCalendarRecordDto, NativeEventScheduleDto,
+    AttentionCompletionDto, CalendarCompletionDto, NativeCalendarBatchDto, NativeCalendarRecordDto,
+    NativeEventScheduleDto, NativeHostCommandDto, NativeHostQueryDto, NativeHostRegistrationDto,
+    PersonalCompletionDto,
 };
 pub use refs::{
     ActionRefDto, AssignmentRefDto, AttemptRefDto, CommandIdDto, ConnectionsSourceRefDto,
@@ -39,13 +40,15 @@ pub use vault::VaultLifecycleResultDto;
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const APP_WIRE_VERSION: u32 = 2;
 
-pub use agent::{ActionAuthorityModeDto, AgentFailureCategory, AgentFailureDomain,
-    AgentFailureSafeAction, AgentMemoryOriginDto, AgentMemoryOverviewDto,
-    AgentMemoryReviewDecisionKindDto, AgentMemorySummaryDto, AgentRetryPolicy,
-    AgentVaultFailureDto, AgentVaultRecoveryActionDto, AgentVaultStateDto};
+pub use agent::{
+    ActionAuthorityModeDto, AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction,
+    AgentMemoryOriginDto, AgentMemoryOverviewDto, AgentMemoryReviewDecisionKindDto,
+    AgentMemorySummaryDto, AgentRetryPolicy, AgentVaultFailureDto, AgentVaultRecoveryActionDto,
+    AgentVaultStateDto,
+};
 pub use calendar::{
-    CalendarFailureDto, CalendarProviderDto, CalendarRangeDto,
-    CalendarScopeDto, CalendarSelectionDto,
+    CalendarFailureDto, CalendarProviderDto, CalendarRangeDto, CalendarScopeDto,
+    CalendarSelectionDto,
 };
 pub use commands::{
     AppCancelRunOutcomeDto, AppCommandDto, AppCommandReceiptDto, AppCommandRequestDto,

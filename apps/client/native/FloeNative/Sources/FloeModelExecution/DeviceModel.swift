@@ -690,7 +690,8 @@ private enum DeviceModelBounds {
 
 private enum DeviceModelWire {
     static func exactObject(_ value: JSONValue, keys: [String]) throws -> JSONObject {
-        guard case .object(let fields) = value, fields.keySet == Set(keys.map(JSONUTF8Key.init)) else {
+        let expectedKeys: Set<JSONUTF8Key> = Set(keys.map { JSONUTF8Key($0) })
+        guard case .object(let fields) = value, fields.keySet == expectedKeys else {
             throw DeviceModelContractError.invalidValue
         }
         return fields

@@ -660,6 +660,7 @@ dependencies = [
  "floe-context-contract",
  "floe-execution",
  "floe-kernel",
+ "floe-model-contract",
  "serde",
  "serde_json",
  "sha2",
@@ -675,6 +676,7 @@ dependencies = [
  "floe-execution",
  "jsonschema",
  "serde_json",
+ "sha2",
  "tokio",
  "uuid",
 ]
@@ -744,8 +746,10 @@ dependencies = [
  "floe-context-contract",
  "floe-day",
  "floe-execution",
+ "floe-experts",
  "floe-kernel",
  "floe-knowledge",
+ "jsonschema",
  "serde",
  "serde_json",
  "sha2",
@@ -796,9 +800,13 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "floe-context-contract",
+ "floe-execution",
  "floe-kernel",
  "serde",
+ "serde_json",
+ "sha2",
  "thiserror",
+ "tokio",
  "uuid",
 ]
 
@@ -830,6 +838,7 @@ dependencies = [
  "floe-agent-runtime",
  "floe-context-contract",
  "floe-execution",
+ "floe-kernel",
  "serde",
  "serde_json",
  "sha2",
@@ -846,11 +855,9 @@ dependencies = [
  "floe-agent-contract",
  "floe-context-contract",
  "floe-day",
- "floe-execution",
  "floe-experts",
  "serde",
  "serde_json",
- "tokio",
  "uuid",
 ]
 
@@ -908,12 +915,23 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "floe-agent-contract",
+ "floe-agent-runtime",
  "floe-context-contract",
  "floe-execution",
  "floe-kernel",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "floe-model-contract"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
  "uuid",
 ]
 
@@ -963,6 +981,7 @@ dependencies = [
  "floe-execution",
  "floe-inference",
  "floe-kernel",
+ "floe-model-contract",
  "floe-native",
  "reqwest",
  "ring",

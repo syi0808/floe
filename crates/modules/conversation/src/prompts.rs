@@ -20,7 +20,7 @@ pub fn manager_role_spec() -> RoleSpec {
         role_id: "manager".into(),
         instructions: MANAGER_ROLE.into(),
         output_contract: MANAGER_OUTPUT_CONTRACT.into(),
-            output_format: floe_agent_contract::ModelOutputFormat::Text,
+        output_format: floe_agent_contract::ModelOutputFormat::Text,
     }
 }
 

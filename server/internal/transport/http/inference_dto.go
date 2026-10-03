@@ -67,11 +67,11 @@ type InferenceErrorDTO struct {
 	Error         struct {
 		Code inference.FailureCode `json:"code"`
 	} `json:"error"`
-	TraceID *string `json:"trace_id"`
-	AttemptID *string `json:"attempt_id"`
-	Purpose *inference.Purpose `json:"purpose"`
-	CapabilityRevision *string `json:"capability_revision"`
-	Usage inference.UsageObservation `json:"usage"`
+	TraceID            *string                    `json:"trace_id"`
+	AttemptID          *string                    `json:"attempt_id"`
+	Purpose            *inference.Purpose         `json:"purpose"`
+	CapabilityRevision *string                    `json:"capability_revision"`
+	Usage              inference.UsageObservation `json:"usage"`
 }
 
 func exactObject(data []byte, required []string, optional ...string) (map[string]json.RawMessage, bool) {
@@ -122,7 +122,9 @@ func decodeAgentRequest(data []byte) (inference.AgentInvocation, error) {
 		return inference.AgentInvocation{}, inference.Failure{Code: inference.Validation}
 	}
 	format, err := inference.DecodeOutputFormat(dto.OutputFormat)
-	if err != nil { return inference.AgentInvocation{}, err }
+	if err != nil {
+		return inference.AgentInvocation{}, err
+	}
 	out := inference.AgentInvocation{Purpose: dto.Purpose, CapabilityRevision: dto.CapabilityRevision, AttemptID: dto.AttemptID, DataClasses: dto.DataClasses, Instructions: dto.Instructions, Input: input, OutputFormat: format, MaxOutputBytes: dto.MaxOutputBytes}
 	if err := inference.ValidateAgentInvocation(out); err != nil {
 		return inference.AgentInvocation{}, err

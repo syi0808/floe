@@ -1,14 +1,21 @@
-use floe_agent_contract::{AgentFailure, BoxFuture, CommandId, ExecutionScope, OwnerActor,
-    PackageRef, PersonId, TaskExecutionReceiptRef};
+use floe_agent_contract::{
+    AgentFailure, BoxFuture, CommandId, ExecutionScope, OwnerActor, PackageRef, PersonId,
+    TaskExecutionReceiptRef,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct BindingReviewRef { pub id: Uuid, pub digest: [u8; 32] }
+pub struct BindingReviewRef {
+    pub id: Uuid,
+    pub digest: [u8; 32],
+}
 impl BindingReviewRef {
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.id.is_nil() || self.digest == [0; 32] { return Err(AgentFailure::InvalidInput); }
+        if self.id.is_nil() || self.digest == [0; 32] {
+            return Err(AgentFailure::InvalidInput);
+        }
         Ok(())
     }
 }
@@ -27,7 +34,11 @@ pub struct BindingPrepareIdentity {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ReviewedCandidate { pub candidate_ref: Uuid, pub candidate: crate::Candidate, pub selected: bool }
+pub struct ReviewedCandidate {
+    pub candidate_ref: Uuid,
+    pub candidate: crate::Candidate,
+    pub selected: bool,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -64,16 +75,38 @@ pub struct ReviewedBindingReplacement {
 }
 
 pub trait BindingReviewRepository: Send + Sync {
-    fn find_prepare<'a>(&'a self, actor: &'a OwnerActor, command_id: CommandId, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<Option<BindingReviewDescriptor>, AgentFailure>>;
-    fn prepare<'a>(&'a self, descriptor: BindingReviewDescriptor, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<BindingReviewDescriptor, AgentFailure>>;
-    fn get<'a>(&'a self, actor: &'a OwnerActor, reference: BindingReviewRef, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<BindingReviewDescriptor, AgentFailure>>;
-    fn find_replacement<'a>(&'a self, actor: &'a OwnerActor, command_id: CommandId, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<Option<BindingReplacementReceipt>, AgentFailure>>;
-    fn find_review_replacement<'a>(&'a self, actor: &'a OwnerActor, reference: BindingReviewRef,
-        scope: &'a ExecutionScope) -> BoxFuture<'a, Result<Option<BindingReplacementReceipt>, AgentFailure>>;
-    fn commit_replacement<'a>(&'a self, replacement: ReviewedBindingReplacement, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<BindingReplacementReceipt, AgentFailure>>;
+    fn find_prepare<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        command_id: CommandId,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<Option<BindingReviewDescriptor>, AgentFailure>>;
+    fn prepare<'a>(
+        &'a self,
+        descriptor: BindingReviewDescriptor,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<BindingReviewDescriptor, AgentFailure>>;
+    fn get<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        reference: BindingReviewRef,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<BindingReviewDescriptor, AgentFailure>>;
+    fn find_replacement<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        command_id: CommandId,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<Option<BindingReplacementReceipt>, AgentFailure>>;
+    fn find_review_replacement<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        reference: BindingReviewRef,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<Option<BindingReplacementReceipt>, AgentFailure>>;
+    fn commit_replacement<'a>(
+        &'a self,
+        replacement: ReviewedBindingReplacement,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<BindingReplacementReceipt, AgentFailure>>;
 }

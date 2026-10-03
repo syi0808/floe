@@ -145,12 +145,24 @@ pub(super) fn project_session_snapshot(
                     result: result.clone(),
                 }
             }
-            AgentMessage::Delegation { task, execution_receipt, .. } => {
+            AgentMessage::Delegation {
+                task,
+                execution_receipt,
+                ..
+            } => {
                 task.validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
                 match execution_receipt {
-                    Some(reference) => { reference.validate()?; if reference.execution.task_id != task.task_id { return Err(AgentFailure::StorageUnavailable); } }
-                    None if task.state == TaskState::Rejected && task.issue.is_some() && task.artifacts.is_empty()
-                        && task.coverage == floe_agent_contract::DependencyCoverage::Independent => {},
+                    Some(reference) => {
+                        reference.validate()?;
+                        if reference.execution.task_id != task.task_id {
+                            return Err(AgentFailure::StorageUnavailable);
+                        }
+                    }
+                    None if task.state == TaskState::Rejected
+                        && task.issue.is_some()
+                        && task.artifacts.is_empty()
+                        && task.coverage
+                            == floe_agent_contract::DependencyCoverage::Independent => {}
                     None => return Err(AgentFailure::StorageUnavailable),
                 }
                 bounded(&task.agent_id, 256, &mut bytes)?;

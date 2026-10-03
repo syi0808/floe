@@ -21,10 +21,10 @@ mod session;
 mod source_review;
 mod storage_projection;
 pub use storage_projection::{
-    RunAccountingProjection, apply_terminal, contract_message,
-    project_run_accounting, project_run_receipt, project_session_receipt, project_transcript,
-    terminal_messages, validate_terminal_steps,
-    unresolved_run_delegations, project_lineage_accounting, defer_run_terminal,
+    RunAccountingProjection, apply_terminal, contract_message, defer_run_terminal,
+    project_lineage_accounting, project_run_accounting, project_run_receipt,
+    project_session_receipt, project_transcript, terminal_messages, unresolved_run_delegations,
+    validate_terminal_steps,
 };
 
 pub use admission::{PreparedResume, ResumePreparationRequest, prepare_resume};
@@ -39,9 +39,8 @@ pub use history_projection::{
     HistoryProjection, ProjectedModelConversation, project_model_conversation_history,
 };
 pub use interactions::{
-    DecideInteractionCommand, decide_interaction, expire_interaction,
-    list_run_interactions, load_interaction,  resolve_interaction,
-    supersede_interaction,
+    DecideInteractionCommand, decide_interaction, expire_interaction, list_run_interactions,
+    load_interaction, resolve_interaction, supersede_interaction,
 };
 pub use model_projection::ConversationModelProjection;
 pub use query::{get_command, get_run};

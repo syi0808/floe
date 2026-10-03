@@ -14,11 +14,11 @@ use floe_app::{
 };
 use floe_protocol::wire::{WireResult, invalid};
 use floe_protocol::{
-    AppCommandResultDto, AppQueryResultDto, NativeCalendarBatchDto, CalendarFailureDto,
-    CalendarProviderDto, NativeEventScheduleDto, LocalContextAcquisitionModeDto,
-    LocalContextAcquisitionRequestDto, LocalContextAttentionAcquisitionModeDto,
-    LocalContextAttentionAcquisitionRequestDto, LocalContextPersonalAcquisitionModeDto,
-    LocalContextPersonalAcquisitionRequestDto, LocalContextPersonalDomainDto,
+    AppCommandResultDto, AppQueryResultDto, CalendarFailureDto, CalendarProviderDto,
+    LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,
+    LocalContextAttentionAcquisitionModeDto, LocalContextAttentionAcquisitionRequestDto,
+    LocalContextPersonalAcquisitionModeDto, LocalContextPersonalAcquisitionRequestDto,
+    LocalContextPersonalDomainDto, NativeCalendarBatchDto, NativeEventScheduleDto,
     NativeHostRegistrationDto, UuidRefDto,
 };
 

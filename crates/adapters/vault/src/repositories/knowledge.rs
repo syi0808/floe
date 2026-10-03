@@ -71,7 +71,9 @@ impl<Keys: VaultKeyProvider + 'static> KnowledgeRepository for VaultKnowledgeRep
         Box::pin(async move {
             self.authorize(actor)?;
             check_scope(scope)?;
-            let result = scope.run(self.vault.knowledge_read_context(actor, now, scope)).await;
+            let result = scope
+                .run(self.vault.knowledge_read_context(actor, now, scope))
+                .await;
             self.after_scoped(result, scope)
         })
     }
@@ -85,7 +87,9 @@ impl<Keys: VaultKeyProvider + 'static> KnowledgeRepository for VaultKnowledgeRep
         Box::pin(async move {
             self.authorize(actor)?;
             check_scope(scope)?;
-            let result = scope.run(self.vault.knowledge_overview(actor, limit, scope)).await;
+            let result = scope
+                .run(self.vault.knowledge_overview(actor, limit, scope))
+                .await;
             self.after_scoped(result, scope)
         })
     }
@@ -112,7 +116,9 @@ impl<Keys: VaultKeyProvider + 'static> KnowledgeRepository for VaultKnowledgeRep
         Box::pin(async move {
             self.authorize(actor)?;
             check_scope(scope)?;
-            let result = scope.run(self.vault.knowledge_decide(actor, request, scope)).await;
+            let result = scope
+                .run(self.vault.knowledge_decide(actor, request, scope))
+                .await;
             self.after_scoped(result, scope)
         })
     }
@@ -141,7 +147,9 @@ impl<Keys: VaultKeyProvider + 'static> LearnerJobRepository for VaultKnowledgeRe
         Box::pin(async move {
             self.authorize(actor)?;
             check_scope(scope)?;
-            let result = scope.run(self.vault.learner_discovery_sessions(actor, limit, scope)).await;
+            let result = scope
+                .run(self.vault.learner_discovery_sessions(actor, limit, scope))
+                .await;
             self.after_scoped(result, scope)
         })
     }
@@ -156,7 +164,12 @@ impl<Keys: VaultKeyProvider + 'static> LearnerJobRepository for VaultKnowledgeRe
         Box::pin(async move {
             self.authorize(actor)?;
             check_scope(scope)?;
-            let result = scope.run(self.vault.learner_enqueue(actor, input, available_at, scope)).await;
+            let result = scope
+                .run(
+                    self.vault
+                        .learner_enqueue(actor, input, available_at, scope),
+                )
+                .await;
             self.after_scoped(result, scope)
         })
     }
@@ -171,7 +184,9 @@ impl<Keys: VaultKeyProvider + 'static> LearnerJobRepository for VaultKnowledgeRe
         Box::pin(async move {
             self.authorize(actor)?;
             check_scope(scope)?;
-            let result = scope.run(self.vault.learner_claim_review(actor, budget, now, scope)).await;
+            let result = scope
+                .run(self.vault.learner_claim_review(actor, budget, now, scope))
+                .await;
             self.after_scoped(result, scope)
         })
     }
@@ -197,7 +212,9 @@ impl<Keys: VaultKeyProvider + 'static> LearnerJobRepository for VaultKnowledgeRe
     }
 }
 
-impl<Keys: VaultKeyProvider + 'static> LearnerEvidenceRepository for VaultKnowledgeRepository<Keys> {
+impl<Keys: VaultKeyProvider + 'static> LearnerEvidenceRepository
+    for VaultKnowledgeRepository<Keys>
+{
     fn read_claim<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -207,7 +224,9 @@ impl<Keys: VaultKeyProvider + 'static> LearnerEvidenceRepository for VaultKnowle
         Box::pin(async move {
             self.authorize(actor)?;
             check_scope(scope)?;
-            let result = scope.run(self.vault.learner_read_claim(actor, claim, scope)).await;
+            let result = scope
+                .run(self.vault.learner_read_claim(actor, claim, scope))
+                .await;
             self.after_scoped(result, scope)
         })
     }

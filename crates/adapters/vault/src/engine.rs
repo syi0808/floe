@@ -20,7 +20,10 @@ impl TursoStore {
             Err(error) => return Err(storage_error(error)),
         }
         let path = path.to_string_lossy().into_owned();
-        let database = Builder::new_local(&path).build().await.map_err(storage_error)?;
+        let database = Builder::new_local(&path)
+            .build()
+            .await
+            .map_err(storage_error)?;
         let store = Self { database };
         store.initialize().await?;
         Ok(store)
@@ -87,10 +90,7 @@ impl TursoStore {
             return Err(unsupported_profile());
         }
         drop(rows);
-        for table in [
-            "calendar_actions",
-            "action_authorities",
-        ] {
+        for table in ["calendar_actions", "action_authorities"] {
             require_schema(&connection,table,&format!("CREATE TABLE {table} (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, payload TEXT NOT NULL)")).await?;
             require_schema(
                 &connection,
@@ -105,7 +105,12 @@ impl TursoStore {
         require_schema(&connection,"source_connections_person_connector","CREATE INDEX source_connections_person_connector ON source_connections(person_id, connector_id)").await?;
         require_schema(&connection,"source_operations","CREATE TABLE source_operations (operation_id TEXT PRIMARY KEY, command_id TEXT NOT NULL, person_id TEXT NOT NULL, connection_id TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision > 0), fence INTEGER NOT NULL CHECK(fence IN (0,1)), payload TEXT NOT NULL, UNIQUE(person_id,command_id))").await?;
         require_schema(&connection,"source_operation_fence","CREATE UNIQUE INDEX source_operation_fence ON source_operations(connection_id) WHERE fence = 1").await?;
-        require_schema(&connection,"source_operation_history","CREATE INDEX source_operation_history ON source_operations(connection_id)").await?;
+        require_schema(
+            &connection,
+            "source_operation_history",
+            "CREATE INDEX source_operation_history ON source_operations(connection_id)",
+        )
+        .await?;
         Ok(())
     }
 
@@ -136,8 +141,7 @@ impl TursoStore {
                 .await
                 .map_err(storage_error)?;
         }
-        crate::repositories::initialize_day_schema(&connection)
-            .await?;
+        crate::repositories::initialize_day_schema(&connection).await?;
         connection.execute(
             "CREATE TABLE IF NOT EXISTS source_connections (connection_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, connector_id TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL)",
             (),
@@ -151,8 +155,6 @@ impl TursoStore {
             .map_err(storage_error)?;
         Ok(())
     }
-
-
 }
 
 pub(crate) fn storage_error(error: impl std::fmt::Display) -> StoreError {

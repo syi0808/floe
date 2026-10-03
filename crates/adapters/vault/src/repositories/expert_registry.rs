@@ -2,15 +2,13 @@ use std::sync::Arc;
 
 use crate::{EncryptedAgentVault, VaultKeyProvider};
 use floe_agent_contract::{AgentFailure, BoxFuture, ExecutionScope, OwnerActor};
-use floe_experts::{
-    AgentRegistry, RegistryCommit, RegistryCommitReceipt, RegistryRepository,
-};
+use floe_experts::{AgentRegistry, RegistryCommit, RegistryCommitReceipt, RegistryRepository};
 use turso::transaction::TransactionBehavior;
 
 use crate::vault::expert_binding_reviews::{
     EXPERT_COMMAND_LIMIT, EXPERT_COMMAND_REGISTRY, count_expert_command_admissions_on,
-    ensure_expert_binding_tables_on, insert_expert_command_admission_on,
-    map_unique_conflict, read_expert_command_admission_on, read_registry_receipt_on, validate_registry_receipt,
+    ensure_expert_binding_tables_on, insert_expert_command_admission_on, map_unique_conflict,
+    read_expert_command_admission_on, read_registry_receipt_on, validate_registry_receipt,
     validate_registry_snapshot, validate_registry_successor,
 };
 
@@ -114,8 +112,7 @@ impl<Keys: VaultKeyProvider> RegistryRepository for VaultExpertRegistryRepositor
                 if admission.family != EXPERT_COMMAND_REGISTRY {
                     return Err(AgentFailure::Conflict);
                 }
-                if admission.person_id != actor.person_id
-                    || admission.device_id != actor.device_id
+                if admission.person_id != actor.person_id || admission.device_id != actor.device_id
                 {
                     return Err(AgentFailure::CapabilityDenied);
                 }

@@ -58,18 +58,51 @@ impl SourceServices {
             pairing_adapter.clone(),
             pairing_adapter,
         ));
-        let trusted = floe_experts_builtin::manifests().into_iter().map(|manifest| {
-            let consumer = floe_access::GrantConsumer::builtin(manifest.package.id.clone()).map_err(|_| AgentFailure::InvalidInput)?;
-            Ok((consumer, manifest))
-        }).collect::<Result<Vec<_>, AgentFailure>>()?;
-        let access = Arc::new(AccessService::new(vault.clone(), Arc::new(floe_context::ContextTrustedConsumerCatalog::new(trusted)?), Arc::new(floe_access::SystemAccessClock)));
+        let trusted = floe_experts_builtin::manifests()
+            .into_iter()
+            .map(|manifest| {
+                let consumer = floe_access::GrantConsumer::builtin(manifest.package.id.clone())
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+                Ok((consumer, manifest))
+            })
+            .collect::<Result<Vec<_>, AgentFailure>>()?;
+        let access = Arc::new(AccessService::new(
+            vault.clone(),
+            Arc::new(floe_context::ContextTrustedConsumerCatalog::new(trusted)?),
+            Arc::new(floe_access::SystemAccessClock),
+        ));
         let personal = Arc::new(floe_provider_adapters::sources::NativePersonalDriver {
-            attention: local_context.attention_handle(), personal: local_context.personal_handle(), observations: local_context.observations_handle(),
+            attention: local_context.attention_handle(),
+            personal: local_context.personal_handle(),
+            observations: local_context.observations_handle(),
         });
-        let transport: Arc<dyn floe_context::ExpertSourceTransport> = Arc::new(floe_provider_adapters::sources::ExpertSourceAdapter::new(local_context.calendar_handle(), core.store.clone(), core.product_gateway.clone()));
-        let metadata = Arc::new(floe_provider_adapters::sources::NativeSourceMetadataAdapter::new(local_context.calendar_handle(), local_context.personal_handle(), local_context.attention_handle()));
-        let evidence = Arc::new(floe_context::ContextSourceReview::new(metadata.clone(), personal.clone(), transport.clone()));
-        let dependency_resolver: Arc<dyn floe_access::DependencyResolver> = Arc::new(floe_context::ContextDependencyResolver::new(actor, core.store.clone(), vault.clone(), personal.clone(), transport.clone(), core.lease_registry.clone())?);
+        let transport: Arc<dyn floe_context::ExpertSourceTransport> =
+            Arc::new(floe_provider_adapters::sources::ExpertSourceAdapter::new(
+                local_context.calendar_handle(),
+                core.store.clone(),
+                core.product_gateway.clone(),
+            ));
+        let metadata = Arc::new(
+            floe_provider_adapters::sources::NativeSourceMetadataAdapter::new(
+                local_context.calendar_handle(),
+                local_context.personal_handle(),
+                local_context.attention_handle(),
+            ),
+        );
+        let evidence = Arc::new(floe_context::ContextSourceReview::new(
+            metadata.clone(),
+            personal.clone(),
+            transport.clone(),
+        ));
+        let dependency_resolver: Arc<dyn floe_access::DependencyResolver> =
+            Arc::new(floe_context::ContextDependencyResolver::new(
+                actor,
+                core.store.clone(),
+                vault.clone(),
+                personal.clone(),
+                transport.clone(),
+                core.lease_registry.clone(),
+            )?);
         let cleanup = Arc::new(GatewaySourceCleanup::new(
             gateway_credentials.as_ref().clone(),
         ));

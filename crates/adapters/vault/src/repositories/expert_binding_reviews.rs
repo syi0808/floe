@@ -3,18 +3,18 @@ use std::sync::Arc;
 use crate::{EncryptedAgentVault, VaultKeyProvider};
 use floe_agent_contract::{AgentFailure, BoxFuture, CommandId, ExecutionScope, OwnerActor};
 use floe_experts::{
-    BindingReplacementReceipt, BindingReviewDescriptor,
-    BindingReviewRef, BindingReviewRepository, ReviewedBindingReplacement,
+    BindingReplacementReceipt, BindingReviewDescriptor, BindingReviewRef, BindingReviewRepository,
+    ReviewedBindingReplacement,
 };
 use turso::transaction::TransactionBehavior;
 
 use crate::vault::expert_binding_reviews::{
     EXPERT_COMMAND_LIMIT, EXPERT_COMMAND_PREPARE, EXPERT_COMMAND_REPLACEMENT,
-    count_expert_command_admissions_on, ensure_expert_binding_tables_on,
-    expert_binding_tables_on, insert_expert_command_admission_on,
-    read_binding_replacement_by_command_on, read_binding_replacement_for_review_on,
-    read_binding_review_on, read_expert_command_admission_on,
-    validate_binding_registry_successor, validate_registry_snapshot, verify_prepare_identity,
+    count_expert_command_admissions_on, ensure_expert_binding_tables_on, expert_binding_tables_on,
+    insert_expert_command_admission_on, read_binding_replacement_by_command_on,
+    read_binding_replacement_for_review_on, read_binding_review_on,
+    read_expert_command_admission_on, validate_binding_registry_successor,
+    validate_registry_snapshot, verify_prepare_identity,
 };
 
 const MAX_REVIEW_PAYLOAD_BYTES: usize = 256 * 1024;
@@ -107,9 +107,7 @@ impl<Keys: VaultKeyProvider> VaultExpertBindingReviewRepository<Keys> {
     }
 }
 
-impl<Keys: VaultKeyProvider> BindingReviewRepository
-    for VaultExpertBindingReviewRepository<Keys>
-{
+impl<Keys: VaultKeyProvider> BindingReviewRepository for VaultExpertBindingReviewRepository<Keys> {
     fn find_prepare<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -131,8 +129,7 @@ impl<Keys: VaultKeyProvider> BindingReviewRepository
                 if admission.family != EXPERT_COMMAND_PREPARE {
                     return Err(AgentFailure::Conflict);
                 }
-                if admission.person_id != actor.person_id
-                    || admission.device_id != actor.device_id
+                if admission.person_id != actor.person_id || admission.device_id != actor.device_id
                 {
                     return Err(AgentFailure::CapabilityDenied);
                 }
@@ -278,7 +275,8 @@ impl<Keys: VaultKeyProvider> BindingReviewRepository
             }
             let result = async {
                 let connection = self.vault.connection()?;
-                self.read_replacement_by_command(&connection, command_id).await
+                self.read_replacement_by_command(&connection, command_id)
+                    .await
             }
             .await;
             self.after_access(result)

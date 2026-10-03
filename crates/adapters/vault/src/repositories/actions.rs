@@ -3,10 +3,10 @@
 use std::sync::Arc;
 
 use floe_actions::{
-    ActionAdmission, ActionDecision, ActionPage, ActionReconciliation, ActionStoreError,
-    ActionsAuthority, ActionsRepository, AuthorityChange, CollectionAck, CollectionTicket,
-    DispatchAdmission, DispatchIntent, ExecutionSettlement, PreDispatchStop, RecoveryPage,
-    AdmittedAction, ActionRecord,
+    ActionAdmission, ActionDecision, ActionPage, ActionReconciliation, ActionRecord,
+    ActionStoreError, ActionsAuthority, ActionsRepository, AdmittedAction, AuthorityChange,
+    CollectionAck, CollectionTicket, DispatchAdmission, DispatchIntent, ExecutionSettlement,
+    PreDispatchStop, RecoveryPage,
 };
 use floe_execution::BoxFuture;
 use floe_kernel::PersonId;
@@ -15,24 +15,61 @@ use uuid::Uuid;
 use crate::{EncryptedAgentVault, VaultKeyProvider};
 
 impl floe_actions::ActionSourceReader for crate::TursoStore {
-    fn load<'a>(&'a self,person_id:PersonId,connection_id:&'a floe_context_contract::ConnectionId)
-        ->BoxFuture<'a,Result<Option<floe_connections::SourceConnection>,floe_kernel::AgentFailure>>{
-        Box::pin(async move{floe_connections::SourceRepository::load(self,person_id,connection_id).await.map_err(|_|floe_kernel::AgentFailure::StorageUnavailable)})
-    }
-    fn list_calendar_sources<'a>(&'a self,person_id:PersonId)
-        ->BoxFuture<'a,Result<Vec<floe_connections::SourceConnection>,floe_kernel::AgentFailure>>{
-        Box::pin(async move{
-            let connector=floe_context_contract::ConnectorId::try_new("calendar.event_kit").map_err(|_|floe_kernel::AgentFailure::InvalidInput)?;
-            floe_connections::SourceRepository::list_current(self,person_id,&connector).await.map_err(|_|floe_kernel::AgentFailure::StorageUnavailable)
+    fn load<'a>(
+        &'a self,
+        person_id: PersonId,
+        connection_id: &'a floe_context_contract::ConnectionId,
+    ) -> BoxFuture<'a, Result<Option<floe_connections::SourceConnection>, floe_kernel::AgentFailure>>
+    {
+        Box::pin(async move {
+            floe_connections::SourceRepository::load(self, person_id, connection_id)
+                .await
+                .map_err(|_| floe_kernel::AgentFailure::StorageUnavailable)
         })
     }
-    fn read_reservation_fence<'a>(&'a self,person_id:PersonId,connection_id:&'a floe_context_contract::ConnectionId)
-        ->BoxFuture<'a,Result<floe_connections::SourceReservationFence,floe_kernel::AgentFailure>>{
-        Box::pin(async move{floe_connections::SourceOperationRepository::read_reservation_fence(self,person_id,connection_id).await.map_err(|_|floe_kernel::AgentFailure::StorageUnavailable)})
+    fn list_calendar_sources<'a>(
+        &'a self,
+        person_id: PersonId,
+    ) -> BoxFuture<'a, Result<Vec<floe_connections::SourceConnection>, floe_kernel::AgentFailure>>
+    {
+        Box::pin(async move {
+            let connector = floe_context_contract::ConnectorId::try_new("calendar.event_kit")
+                .map_err(|_| floe_kernel::AgentFailure::InvalidInput)?;
+            floe_connections::SourceRepository::list_current(self, person_id, &connector)
+                .await
+                .map_err(|_| floe_kernel::AgentFailure::StorageUnavailable)
+        })
     }
-    fn source_is_fenced<'a>(&'a self,person_id:PersonId,connection_id:&'a floe_context_contract::ConnectionId)
-        ->BoxFuture<'a,Result<bool,floe_kernel::AgentFailure>>{
-        Box::pin(async move{floe_connections::SourceOperationRepository::source_is_fenced(self,person_id,connection_id).await.map_err(|_|floe_kernel::AgentFailure::StorageUnavailable)})
+    fn read_reservation_fence<'a>(
+        &'a self,
+        person_id: PersonId,
+        connection_id: &'a floe_context_contract::ConnectionId,
+    ) -> BoxFuture<'a, Result<floe_connections::SourceReservationFence, floe_kernel::AgentFailure>>
+    {
+        Box::pin(async move {
+            floe_connections::SourceOperationRepository::read_reservation_fence(
+                self,
+                person_id,
+                connection_id,
+            )
+            .await
+            .map_err(|_| floe_kernel::AgentFailure::StorageUnavailable)
+        })
+    }
+    fn source_is_fenced<'a>(
+        &'a self,
+        person_id: PersonId,
+        connection_id: &'a floe_context_contract::ConnectionId,
+    ) -> BoxFuture<'a, Result<bool, floe_kernel::AgentFailure>> {
+        Box::pin(async move {
+            floe_connections::SourceOperationRepository::source_is_fenced(
+                self,
+                person_id,
+                connection_id,
+            )
+            .await
+            .map_err(|_| floe_kernel::AgentFailure::StorageUnavailable)
+        })
     }
 }
 

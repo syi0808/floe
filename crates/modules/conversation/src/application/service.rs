@@ -10,7 +10,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use tokio::sync::{Mutex, RwLock, Notify};
+use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
@@ -339,10 +339,21 @@ where
             let mut request = request;
             let outcome = async {
                 let _foreground = state.dependencies.knowledge.foreground_lease()?;
-                let read_scope = ExecutionScope::root(request.cancellation.child_scope(), request.deadline,
-                    BudgetLedger::new(floe_execution::budget::BudgetConfig::new(0,0), Default::default()).root_lease(),
-                    TraceContext::new(request.command_id.as_uuid()).with_run_id(run_id));
-                let memories = state.dependencies.knowledge.read_context(&actor, &read_scope).await?;
+                let read_scope = ExecutionScope::root(
+                    request.cancellation.child_scope(),
+                    request.deadline,
+                    BudgetLedger::new(
+                        floe_execution::budget::BudgetConfig::new(0, 0),
+                        Default::default(),
+                    )
+                    .root_lease(),
+                    TraceContext::new(request.command_id.as_uuid()).with_run_id(run_id),
+                );
+                let memories = state
+                    .dependencies
+                    .knowledge
+                    .read_context(&actor, &read_scope)
+                    .await?;
                 let context = AgentContext {
                     projection_version: 1,
                     persona: None,
@@ -359,13 +370,12 @@ where
                     session.data_classes,
                     environment.identity(),
                 )?;
-                request.delegation_context =
-                    Some(floe_agent_contract::DelegationContextInput {
-                        session_id: request.session_id,
-                        device_id: actor.device_id.clone(),
-                        agent_context: context,
-                        max_output_bytes: state.config.max_output_bytes,
-                    });
+                request.delegation_context = Some(floe_agent_contract::DelegationContextInput {
+                    session_id: request.session_id,
+                    device_id: actor.device_id.clone(),
+                    agent_context: context,
+                    max_output_bytes: state.config.max_output_bytes,
+                });
                 state
                     .coordinator
                     .drive_run(
@@ -875,18 +885,36 @@ where
                         }),
                 )
                 .await?;
-            let stored = self.inner.interaction(actor, request.interaction_id, Some(request.session_id), scope)
-                .await?.ok_or(AgentFailure::NotFound)?;
+            let stored = self
+                .inner
+                .interaction(
+                    actor,
+                    request.interaction_id,
+                    Some(request.session_id),
+                    scope,
+                )
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
             let interaction = if matches!(stored.target, ReviewedTarget::ExpertBinding(_)) {
                 super::interaction_resolution::recover_binding_interaction(
                     self.inner.dependencies.repository.as_ref(),
-                    self.inner.dependencies.experts_owner.as_ref(), actor, &request,
-                    chrono::Utc::now().timestamp_millis(), scope,
-                ).await?
+                    self.inner.dependencies.experts_owner.as_ref(),
+                    actor,
+                    &request,
+                    chrono::Utc::now().timestamp_millis(),
+                    scope,
+                )
+                .await?
             } else {
-                recover_source_interaction(self.inner.dependencies.repository.as_ref(),
-                    self.inner.dependencies.connections.as_ref(), actor, request.interaction_id,
-                    chrono::Utc::now().timestamp_millis(), scope).await?
+                recover_source_interaction(
+                    self.inner.dependencies.repository.as_ref(),
+                    self.inner.dependencies.connections.as_ref(),
+                    actor,
+                    request.interaction_id,
+                    chrono::Utc::now().timestamp_millis(),
+                    scope,
+                )
+                .await?
             };
             drop(admission);
             self.inner.recovery_wake.notify_one();

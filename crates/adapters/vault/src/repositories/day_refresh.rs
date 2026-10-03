@@ -4,11 +4,10 @@ use crate::TursoStore;
 use floe_connections::{SourceConnection, SourceState};
 use floe_context_contract::{CalendarProvider, GrantSourceBinding};
 use floe_day::{
-    CalendarAcquisition, CalendarMirror, CalendarSourceOutcome,
-    CalendarSourceVersion, CalendarSelection, DayError, DayRefreshFailure,
-    DayRefreshState, MirrorExpectation, RefreshAdmission,
-    RefreshAdmissionResult, RefreshCommit, RefreshExecutorReplacement, RefreshLookup, RefreshRecord,
-    RefreshTransition, MAX_REFRESH_SOURCES,
+    CalendarAcquisition, CalendarMirror, CalendarSelection, CalendarSourceOutcome,
+    CalendarSourceVersion, DayError, DayRefreshFailure, DayRefreshState, MAX_REFRESH_SOURCES,
+    MirrorExpectation, RefreshAdmission, RefreshAdmissionResult, RefreshCommit,
+    RefreshExecutorReplacement, RefreshLookup, RefreshRecord, RefreshTransition,
 };
 use floe_execution::BoxFuture;
 use floe_kernel::PersonId;
@@ -38,22 +37,20 @@ pub(super) async fn finish_transaction<T>(
     result: Result<T, DayError>,
 ) -> Result<T, DayError> {
     match result {
-        Ok(value) => {
-            match connection
-                .execute("COMMIT", ())
-                .await
-            {
-                Ok(_) => Ok(value),
-                Err(error) => {
-                    let _ = connection.execute("ROLLBACK", ()).await;
-                    Err(storage_error(error))
-                }
+        Ok(value) => match connection.execute("COMMIT", ()).await {
+            Ok(_) => Ok(value),
+            Err(error) => {
+                let _ = connection.execute("ROLLBACK", ()).await;
+                Err(storage_error(error))
             }
-        }
+        },
         Err(error) => {
             // A definite rejection is returned only after its transaction is
             // known to have rolled back. Otherwise clients retain uncertainty.
-            connection.execute("ROLLBACK", ()).await.map_err(storage_error)?;
+            connection
+                .execute("ROLLBACK", ())
+                .await
+                .map_err(storage_error)?;
             Err(error)
         }
     }
@@ -83,7 +80,9 @@ async fn refresh_by_id(
 
 fn decode_refresh_row(row: &Row) -> Result<(RefreshRecord, String), DayError> {
     let payload: String = row.get(6).map_err(storage_error)?;
-    if payload.len() > floe_day::MAX_DAY_SNAPSHOT_BYTES + 16_384 { return Err(storage_error("Day refresh byte budget")); }
+    if payload.len() > floe_day::MAX_DAY_SNAPSHOT_BYTES + 16_384 {
+        return Err(storage_error("Day refresh byte budget"));
+    }
     let record: RefreshRecord = serde_json::from_str(&payload).map_err(storage_error)?;
     record
         .validate()
@@ -122,7 +121,9 @@ pub(super) async fn mirror_on(
         return Ok(None);
     };
     let payload: String = row.get(0).map_err(storage_error)?;
-    if payload.len() > floe_day::MAX_DAY_SNAPSHOT_BYTES { return Err(storage_error("Day mirror byte budget")); }
+    if payload.len() > floe_day::MAX_DAY_SNAPSHOT_BYTES {
+        return Err(storage_error("Day mirror byte budget"));
+    }
     let mirror = serde_json::from_str(&payload).map_err(storage_error)?;
     if rows.next().await.map_err(storage_error)?.is_some() {
         return Err(storage_error("duplicate Day calendar mirror identity"));
@@ -139,7 +140,11 @@ pub(super) async fn persist_mirror_on(
     mirror: &CalendarMirror,
     payload: String,
 ) -> Result<(), DayError> {
-    if payload.len() > floe_day::MAX_DAY_SNAPSHOT_BYTES || mirror.events.len() > floe_day::MAX_DAY_SNAPSHOT_ITEMS { return Err(DayError::budget("Day mirror budget")); }
+    if payload.len() > floe_day::MAX_DAY_SNAPSHOT_BYTES
+        || mirror.events.len() > floe_day::MAX_DAY_SNAPSHOT_ITEMS
+    {
+        return Err(DayError::budget("Day mirror budget"));
+    }
     if mirror.mirror_revision == 0 {
         return Err(DayError::validation("invalid calendar mirror revision"));
     }
@@ -184,9 +189,7 @@ pub(super) async fn persist_mirror_on(
     }
 }
 
-fn calendar_source_version(
-    source: &SourceConnection,
-) -> Result<CalendarSourceVersion, DayError> {
+fn calendar_source_version(source: &SourceConnection) -> Result<CalendarSourceVersion, DayError> {
     source.validate().map_err(storage_error)?;
     let provider = match source.connector_id().as_str() {
         "calendar.event_kit" => CalendarProvider::EventKit,
@@ -267,10 +270,10 @@ pub(super) async fn current_calendar_sources_on(
             continue;
         }
         if current.len() == MAX_REFRESH_SOURCES {
-            return Err(conflict(
-                "current Calendar source inventory exceeds the maximum of 64",
-            )
-            .with_metadata("limit", MAX_REFRESH_SOURCES.to_string()));
+            return Err(
+                conflict("current Calendar source inventory exceeds the maximum of 64")
+                    .with_metadata("limit", MAX_REFRESH_SOURCES.to_string()),
+            );
         }
         let version = calendar_source_version(&source)?;
         current.push(CurrentCalendarSource { source, version });
@@ -285,9 +288,7 @@ pub(super) async fn current_calendar_sources_on(
     Ok(current)
 }
 
-pub(super) fn versions_of(
-    sources: &[CurrentCalendarSource],
-) -> Vec<CalendarSourceVersion> {
+pub(super) fn versions_of(sources: &[CurrentCalendarSource]) -> Vec<CalendarSourceVersion> {
     sources
         .iter()
         .map(|source| source.version.clone())
@@ -345,10 +346,25 @@ async fn ensure_successful_sources_unfenced(
     Ok(())
 }
 
-pub(super) async fn require_executor(connection: &Connection, person_id: PersonId, device_id: &str, generation: uuid::Uuid) -> Result<(), DayError> {
+pub(super) async fn require_executor(
+    connection: &Connection,
+    person_id: PersonId,
+    device_id: &str,
+    generation: uuid::Uuid,
+) -> Result<(), DayError> {
     let mut rows = connection.query("SELECT executor_generation,active FROM day_executors WHERE person_id=? AND device_id=?", (person_id.to_string(),device_id.to_owned())).await.map_err(storage_error)?;
-    let row = rows.next().await.map_err(storage_error)?.ok_or_else(|| conflict("Day executor is unavailable"))?;
-    if row.get::<String>(0).map_err(storage_error)? != generation.to_string() || row.get::<i64>(1).map_err(storage_error)? != 1 || rows.next().await.map_err(storage_error)?.is_some() { return Err(conflict("Day executor changed")); } Ok(())
+    let row = rows
+        .next()
+        .await
+        .map_err(storage_error)?
+        .ok_or_else(|| conflict("Day executor is unavailable"))?;
+    if row.get::<String>(0).map_err(storage_error)? != generation.to_string()
+        || row.get::<i64>(1).map_err(storage_error)? != 1
+        || rows.next().await.map_err(storage_error)?.is_some()
+    {
+        return Err(conflict("Day executor changed"));
+    }
+    Ok(())
 }
 
 async fn update_refresh_on(
@@ -510,9 +526,7 @@ impl floe_day::DayRefreshRepository for TursoStore {
             };
             let (record, _) = decode_refresh_row(&row)?;
             if rows.next().await.map_err(storage_error)?.is_some() {
-                return Err(storage_error(
-                    "duplicate actor-scoped Day refresh identity",
-                ));
+                return Err(storage_error("duplicate actor-scoped Day refresh identity"));
             }
             Ok(Some(record))
         })
@@ -536,11 +550,15 @@ impl floe_day::DayRefreshRepository for TursoStore {
                     return Err(conflict("Day refresh no longer exists"));
                 };
                 if current != transition.previous {
-                    return Err(conflict(
-                        "Day refresh changed; reload and retry",
-                    ));
+                    return Err(conflict("Day refresh changed; reload and retry"));
                 }
-                require_executor(&connection, transition.previous.person_id, &transition.previous.device_id, transition.previous.executor_generation).await?;
+                require_executor(
+                    &connection,
+                    transition.previous.person_id,
+                    &transition.previous.device_id,
+                    transition.previous.executor_generation,
+                )
+                .await?;
                 update_refresh_on(
                     &connection,
                     &transition.previous,
@@ -574,27 +592,25 @@ impl floe_day::DayRefreshRepository for TursoStore {
                     return Err(conflict("Day refresh no longer exists"));
                 };
                 if current_refresh != commit.previous {
-                    return Err(conflict(
-                        "Day refresh changed; reload and retry",
-                    ));
+                    return Err(conflict("Day refresh changed; reload and retry"));
                 }
 
-                require_executor(&connection, commit.previous.person_id, &commit.previous.device_id, commit.previous.executor_generation).await?;
-                let current_mirror = mirror_on(&connection, commit.previous.person_id).await?;
-                let actual_expectation = MirrorExpectation::of(
-                    current_mirror.as_ref().map(|(mirror, _)| mirror),
-                )?;
-                if actual_expectation != commit.previous.expected_mirror_revision {
-                    return Err(conflict(
-                        "calendar mirror changed after refresh admission",
-                    ));
-                }
-
-                let current_sources = current_calendar_sources_on(
+                require_executor(
                     &connection,
                     commit.previous.person_id,
+                    &commit.previous.device_id,
+                    commit.previous.executor_generation,
                 )
                 .await?;
+                let current_mirror = mirror_on(&connection, commit.previous.person_id).await?;
+                let actual_expectation =
+                    MirrorExpectation::of(current_mirror.as_ref().map(|(mirror, _)| mirror))?;
+                if actual_expectation != commit.previous.expected_mirror_revision {
+                    return Err(conflict("calendar mirror changed after refresh admission"));
+                }
+
+                let current_sources =
+                    current_calendar_sources_on(&connection, commit.previous.person_id).await?;
                 let current_versions = versions_of(&current_sources);
                 if current_versions != commit.acquisition.inventory {
                     return Err(conflict(
@@ -603,24 +619,23 @@ impl floe_day::DayRefreshRepository for TursoStore {
                 }
                 validate_mirror_inventory(&commit.mirror, &current_versions)?;
 
-                for (source, outcome) in
-                    current_sources.iter().zip(&commit.acquisition.sources)
-                {
+                for (source, outcome) in current_sources.iter().zip(&commit.acquisition.sources) {
                     if source.source.state() == SourceState::Pending
                         && !matches!(outcome, CalendarSourceOutcome::Unavailable { .. })
                     {
-                        return Err(conflict(
-                            "Pending Calendar sources must remain unavailable",
-                        )
-                        .with_metadata(
-                            "connection_id",
-                            source.version.source.connection_id().to_string(),
-                        ));
+                        return Err(conflict("Pending Calendar sources must remain unavailable")
+                            .with_metadata(
+                                "connection_id",
+                                source.version.source.connection_id().to_string(),
+                            ));
                     }
                 }
                 ensure_successful_sources_unfenced(&connection, &commit.acquisition).await?;
 
-                commit.validate(current_mirror.as_ref().map(|(mirror, _)| mirror), chrono::Utc::now())?;
+                commit.validate(
+                    current_mirror.as_ref().map(|(mirror, _)| mirror),
+                    chrono::Utc::now(),
+                )?;
                 let mirror_payload =
                     serde_json::to_string(&commit.mirror).map_err(storage_error)?;
                 persist_mirror_on(
@@ -710,11 +725,22 @@ impl floe_day::DayRefreshRepository for TursoStore {
             finish_transaction(&connection, result).await
         })
     }
-    fn retire_refresh_executor<'a>(&'a self, expected: RefreshExecutorReplacement) -> BoxFuture<'a, Result<(), DayError>> {
+    fn retire_refresh_executor<'a>(
+        &'a self,
+        expected: RefreshExecutorReplacement,
+    ) -> BoxFuture<'a, Result<(), DayError>> {
         Box::pin(async move {
-            if !expected.person_id.is_valid() || expected.device_id.is_empty() || expected.executor_generation.is_nil() { return Err(DayError::validation("invalid Day executor retirement")); }
+            if !expected.person_id.is_valid()
+                || expected.device_id.is_empty()
+                || expected.executor_generation.is_nil()
+            {
+                return Err(DayError::validation("invalid Day executor retirement"));
+            }
             let connection = self.connection().await.map_err(storage_error)?;
-            connection.execute("BEGIN IMMEDIATE", ()).await.map_err(storage_error)?;
+            connection
+                .execute("BEGIN IMMEDIATE", ())
+                .await
+                .map_err(storage_error)?;
             let result = async {
                 let changed = connection.execute("UPDATE day_executors SET active=0 WHERE person_id=? AND device_id=? AND executor_generation=? AND active=1", (expected.person_id.to_string(),expected.device_id.clone(),expected.executor_generation.to_string())).await.map_err(storage_error)?;
                 if changed == 0 { return Ok(()); }
@@ -726,5 +752,4 @@ impl floe_day::DayRefreshRepository for TursoStore {
             finish_transaction(&connection, result).await
         })
     }
-
 }

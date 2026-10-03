@@ -1,7 +1,9 @@
-use floe_agent_contract::{AgentMessage, JournalEvent, MessageRole, ModelConversation, ModelConversationEntry};
-use floe_kernel::AgentFailure;
 use crate::{AdmittedTurn, ContinuationSnapshot, JournalEntry, RunReceipt, RunState};
-pub(super) use floe_agent_runtime::{JournalProjection, JournalLineage};
+use floe_agent_contract::{
+    AgentMessage, JournalEvent, MessageRole, ModelConversation, ModelConversationEntry,
+};
+pub(super) use floe_agent_runtime::{JournalLineage, JournalProjection};
+use floe_kernel::AgentFailure;
 
 /// Durable transcript history as basic typed model history.
 ///
@@ -101,9 +103,10 @@ pub(super) fn project_active_journal(
     project_entries(source, entries, true)
 }
 
-pub(crate) fn journal_binding(source: &RunReceipt, entries: &[JournalEntry])
-    -> floe_agent_runtime::JournalExecutionBinding
-{
+pub(crate) fn journal_binding(
+    source: &RunReceipt,
+    entries: &[JournalEntry],
+) -> floe_agent_runtime::JournalExecutionBinding {
     let execution_id = match entries.first().map(|entry| &entry.event) {
         Some(JournalEvent::ValidatedBatch { batch }) => batch.execution_id,
         _ => source.run_id.as_uuid(),
@@ -118,21 +121,28 @@ pub(crate) fn journal_binding(source: &RunReceipt, entries: &[JournalEntry])
     }
 }
 
-fn project_entries(source: &RunReceipt, entries: &[JournalEntry], durable: bool)
-    -> Result<JournalProjection, AgentFailure>
-{
+fn project_entries(
+    source: &RunReceipt,
+    entries: &[JournalEntry],
+    durable: bool,
+) -> Result<JournalProjection, AgentFailure> {
     floe_agent_runtime::project_execution_journal(
-        &journal_binding(source, entries), entries,
-        if durable { floe_agent_runtime::JournalProjectionMode::DurablePrefix }
-        else { floe_agent_runtime::JournalProjectionMode::Recoverable },
+        &journal_binding(source, entries),
+        entries,
+        if durable {
+            floe_agent_runtime::JournalProjectionMode::DurablePrefix
+        } else {
+            floe_agent_runtime::JournalProjectionMode::Recoverable
+        },
     )
 }
 
 /// Root admission/continuation policy remains here; event ordering, reserved
 /// settlement capacity and accounting are validated by the common runtime.
-pub fn validate_run_journal(source: &RunReceipt, entries: &[JournalEntry])
-    -> Result<(), AgentFailure>
-{
+pub fn validate_run_journal(
+    source: &RunReceipt,
+    entries: &[JournalEntry],
+) -> Result<(), AgentFailure> {
     source.validate()?;
     project_entries(source, entries, true)?;
     Ok(())

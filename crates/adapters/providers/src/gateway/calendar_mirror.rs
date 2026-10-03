@@ -752,7 +752,7 @@ impl GatewayCalendarMirrorClient {
                 ChallengeKind::Release { admission_id },
                 ProductCalendarChallenge::Release {
                     admission_id: actual,
-                    ..,
+                    ..
                 },
             ) if actual == admission_id => {}
             _ => return Err(AgentFailure::PolicyDenied),

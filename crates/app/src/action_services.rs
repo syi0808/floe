@@ -35,13 +35,8 @@ pub enum ActionsCommand {
 pub enum ActionsQuery {
     Destinations,
     Authority,
-    Inspect {
-        action_ref: Uuid,
-    },
-    List {
-        cursor: Option<Uuid>,
-        limit: u16,
-    },
+    Inspect { action_ref: Uuid },
+    List { cursor: Option<Uuid>, limit: u16 },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -88,20 +83,49 @@ impl ActionsCommands for AppComposition {
         let scope = crate::host_scope(command_id, Cancellation::new(), Duration::from_secs(35));
         self.execute_owner(async {
             match command {
-                ActionsCommand::Submit { intent } => owners.actions
+                ActionsCommand::Submit { intent } => owners
+                    .actions
                     .submit(&actor, command_id, intent, &scope)
                     .await
                     .map(ActionsCommandResult::Action),
-                ActionsCommand::Decide { action_ref, review_ref, decision, expected_revision } => owners.actions
-                    .decide(&actor, command_id, action_ref, review_ref, decision, expected_revision, &scope)
+                ActionsCommand::Decide {
+                    action_ref,
+                    review_ref,
+                    decision,
+                    expected_revision,
+                } => owners
+                    .actions
+                    .decide(
+                        &actor,
+                        command_id,
+                        action_ref,
+                        review_ref,
+                        decision,
+                        expected_revision,
+                        &scope,
+                    )
                     .await
                     .map(ActionsCommandResult::Action),
-                ActionsCommand::Reconcile { action_ref, expected_revision } => owners.actions
+                ActionsCommand::Reconcile {
+                    action_ref,
+                    expected_revision,
+                } => owners
+                    .actions
                     .reconcile(&actor, command_id, action_ref, expected_revision, &scope)
                     .await
                     .map(ActionsCommandResult::Action),
-                ActionsCommand::SetAuthority { mode, expected_revision } => owners.actions
-                    .set_calendar_create_authority(&actor, command_id, mode, expected_revision, &scope)
+                ActionsCommand::SetAuthority {
+                    mode,
+                    expected_revision,
+                } => owners
+                    .actions
+                    .set_calendar_create_authority(
+                        &actor,
+                        command_id,
+                        mode,
+                        expected_revision,
+                        &scope,
+                    )
                     .await
                     .map(ActionsCommandResult::Authority),
             }
@@ -121,19 +145,23 @@ impl ActionsQueries for AppComposition {
         let scope = crate::host_scope(request_id, Cancellation::new(), Duration::from_secs(35));
         self.execute_owner(async {
             match query {
-                ActionsQuery::Destinations => owners.actions
+                ActionsQuery::Destinations => owners
+                    .actions
                     .destinations(&actor, &scope)
                     .await
                     .map(ActionsQueryResult::Destinations),
-                ActionsQuery::Authority => owners.actions
+                ActionsQuery::Authority => owners
+                    .actions
                     .inspect_authority(&actor, &scope)
                     .await
                     .map(ActionsQueryResult::Authority),
-                ActionsQuery::Inspect { action_ref } => owners.actions
+                ActionsQuery::Inspect { action_ref } => owners
+                    .actions
                     .inspect(&actor, action_ref, &scope)
                     .await
                     .map(ActionsQueryResult::Action),
-                ActionsQuery::List { cursor, limit } => owners.actions
+                ActionsQuery::List { cursor, limit } => owners
+                    .actions
                     .list(&actor, cursor, limit, &scope)
                     .await
                     .map(ActionsQueryResult::Page),

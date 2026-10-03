@@ -78,7 +78,8 @@ pub fn project_memory_summary(
 pub fn validate_stage_request(request: &StageMemoryCandidate) -> Result<(), AgentFailure> {
     let digest = request.digest.trim();
     let statement = request.value.statement.trim();
-    if request.session_id.is_nil() || request.expected_session_revision == 0
+    if request.session_id.is_nil()
+        || request.expected_session_revision == 0
         || request.turn_ids.iter().any(uuid::Uuid::is_nil)
         || !matches!((request.target_id, request.base_revision), (None, None))
             && !matches!((request.target_id, request.base_revision), (Some(id), Some(revision)) if !id.is_nil() && revision > 0)

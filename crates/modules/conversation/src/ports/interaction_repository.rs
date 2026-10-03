@@ -31,7 +31,10 @@ pub trait InteractionRepository: Send + Sync {
         actor: &'a OwnerActor,
         after: Option<InteractionRecoveryCursor>,
         limit: usize,
-    ) -> BoxFuture<'a, Result<RecoveryPage<ConversationInteraction, InteractionRecoveryCursor>, AgentFailure>>;
+    ) -> BoxFuture<
+        'a,
+        Result<RecoveryPage<ConversationInteraction, InteractionRecoveryCursor>, AgentFailure>,
+    >;
     fn admit_refresh<'a>(
         &'a self,
         request: crate::InteractionRefresh,
@@ -46,11 +49,17 @@ pub trait InteractionRepository: Send + Sync {
         after: Option<RunId>,
         limit: usize,
     ) -> BoxFuture<'a, Result<RecoveryPage<crate::ResumeRequired, RunId>, AgentFailure>>;
-    fn pending_resume_request<'a>(&'a self, actor: &'a OwnerActor, origin: RunId)
-        -> BoxFuture<'a, Result<Option<crate::ResumeRequired>, AgentFailure>>;
+    fn pending_resume_request<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        origin: RunId,
+    ) -> BoxFuture<'a, Result<Option<crate::ResumeRequired>, AgentFailure>>;
     /// Retire only a request whose exact Session has moved on; no child is admitted.
-    fn reconcile_resume_request<'a>(&'a self, actor: &'a OwnerActor, origin: RunId)
-        -> BoxFuture<'a, Result<Option<crate::ResumeRequired>, AgentFailure>>;
+    fn reconcile_resume_request<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        origin: RunId,
+    ) -> BoxFuture<'a, Result<Option<crate::ResumeRequired>, AgentFailure>>;
     fn claim_resume<'a>(
         &'a self,
         request: crate::ResumeChildAdmission,

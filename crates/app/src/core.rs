@@ -1,7 +1,7 @@
-use std::sync::Arc;
+use crate::{CoreError, ErrorCode};
 use floe_context::SourceLeaseRegistry;
 use floe_vault::TursoStore;
-use crate::{CoreError, ErrorCode};
+use std::sync::Arc;
 
 pub struct FloeCore {
     pub(crate) store: Arc<TursoStore>,
@@ -11,7 +11,9 @@ pub struct FloeCore {
 }
 pub use floe_day::Classification;
 impl FloeCore {
-    pub fn day_service(&self) -> Arc<floe_day::DayService> { self.day.clone() }
+    pub fn day_service(&self) -> Arc<floe_day::DayService> {
+        self.day.clone()
+    }
     pub fn source_service(&self) -> floe_connections::SourceConnectionService<'_, TursoStore> {
         floe_connections::SourceConnectionService::new(self.store.as_ref())
     }

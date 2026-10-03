@@ -1,10 +1,12 @@
 //! Claim identity and the authenticated head of the sole Learner execution journal.
+use crate::*;
 use chrono::{DateTime, Utc};
 use floe_agent_contract::{AgentFailure, JournalEntry, JournalEvent, OwnerActor, PersonId, RunId};
-use floe_agent_runtime::{JournalExecutionBinding, JournalProjection, JournalProjectionMode,
-    journal_digest, project_execution_journal};
+use floe_agent_runtime::{
+    JournalExecutionBinding, JournalProjection, JournalProjectionMode, journal_digest,
+    project_execution_journal,
+};
 use serde::{Deserialize, Serialize};
-use crate::*;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -28,34 +30,68 @@ impl LearnerJournalHead {
         if job.state != LearnerJobState::Running || job.input.run_id != job.id {
             return Err(AgentFailure::Conflict);
         }
-        Ok(Self { claim: LearnerClaimRef { job_id: job.id, claim_attempt: job.attempts },
+        Ok(Self {
+            claim: LearnerClaimRef {
+                job_id: job.id,
+                claim_attempt: job.attempts,
+            },
             person_id: job.input.person_id,
-            device_id: job.claimed_device_id.clone().ok_or(AgentFailure::Conflict)?, budget,
-            journal_revision: 0, journal_digest: journal_digest(&[])? })
+            device_id: job
+                .claimed_device_id
+                .clone()
+                .ok_or(AgentFailure::Conflict)?,
+            budget,
+            journal_revision: 0,
+            journal_digest: journal_digest(&[])?,
+        })
     }
     fn binding(&self) -> Result<JournalExecutionBinding, AgentFailure> {
         self.claim.validate()?;
         validate_learner_budget(&self.budget)?;
-        if !self.person_id.is_valid() || self.device_id.trim().is_empty() || self.device_id.len() > 128
-            || self.journal_revision > 64 || self.journal_digest == [0; 32]
-        { return Err(AgentFailure::StorageUnavailable); }
-        Ok(JournalExecutionBinding { principal: self.person_id.to_string(), device_id: self.device_id.clone(),
-            execution_id: self.claim.execution_id(), catalog_revision: 1,
-            root_run_id: RunId::from_uuid(self.claim.job_id), owning_task_id: None })
+        if !self.person_id.is_valid()
+            || self.device_id.trim().is_empty()
+            || self.device_id.len() > 128
+            || self.journal_revision > 64
+            || self.journal_digest == [0; 32]
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        Ok(JournalExecutionBinding {
+            principal: self.person_id.to_string(),
+            device_id: self.device_id.clone(),
+            execution_id: self.claim.execution_id(),
+            catalog_revision: 1,
+            root_run_id: RunId::from_uuid(self.claim.job_id),
+            owning_task_id: None,
+        })
     }
 }
 
 pub fn validate_learner_budget(budget: &LearnerBudget) -> Result<(), AgentFailure> {
-    if budget.max_input_bytes == 0 || budget.max_input_bytes > 16 * 1024
-        || budget.max_output_bytes == 0 || budget.max_output_bytes > 4 * 1024
-        || budget.max_model_tokens == 0 || budget.max_model_cost_micros == 0
-        || budget.deadline_ms == 0 || budget.deadline_ms > 30_000
-    { return Err(AgentFailure::InvalidInput); }
+    if budget.max_input_bytes == 0
+        || budget.max_input_bytes > 16 * 1024
+        || budget.max_output_bytes == 0
+        || budget.max_output_bytes > 4 * 1024
+        || budget.max_model_tokens == 0
+        || budget.max_model_cost_micros == 0
+        || budget.deadline_ms == 0
+        || budget.deadline_ms > 30_000
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
     Ok(())
 }
 
-fn project(head: &LearnerJournalHead, entries: &[JournalEntry]) -> Result<JournalProjection, AgentFailure> {
-    if entries.len() > 64 || serde_json::to_vec(entries).map_err(|_| AgentFailure::StorageUnavailable)?.len() > 512 * 1024 {
+fn project(
+    head: &LearnerJournalHead,
+    entries: &[JournalEntry],
+) -> Result<JournalProjection, AgentFailure> {
+    if entries.len() > 64
+        || serde_json::to_vec(entries)
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .len()
+            > 512 * 1024
+    {
         return Err(AgentFailure::BudgetExceeded);
     }
     let binding = head.binding()?;
@@ -88,27 +124,32 @@ fn project(head: &LearnerJournalHead, entries: &[JournalEntry]) -> Result<Journa
             _ => return Err(AgentFailure::CapabilityDenied),
         }
     }
-    let projection = project_execution_journal(&binding, entries, JournalProjectionMode::DurablePrefix)?;
+    let projection =
+        project_execution_journal(&binding, entries, JournalProjectionMode::DurablePrefix)?;
     if entries.len() + projection.unresolved_attempts.len() > 64 {
         return Err(AgentFailure::BudgetExceeded);
     }
     Ok(projection)
 }
 
-pub fn validate_learner_journal(head: &LearnerJournalHead, entries: &[JournalEntry])
-    -> Result<JournalProjection, AgentFailure>
-{
+pub fn validate_learner_journal(
+    head: &LearnerJournalHead,
+    entries: &[JournalEntry],
+) -> Result<JournalProjection, AgentFailure> {
     let projection = project(head, entries)?;
-    if projection.journal_revision != head.journal_revision || projection.journal_digest != head.journal_digest {
+    if projection.journal_revision != head.journal_revision
+        || projection.journal_digest != head.journal_digest
+    {
         return Err(AgentFailure::StorageUnavailable);
     }
     Ok(projection)
 }
 
 /// Call with the entire next prefix; storage atomically persists this head and its one new event.
-pub fn advance_learner_journal(head: &LearnerJournalHead, entries: &[JournalEntry])
-    -> Result<LearnerJournalHead, AgentFailure>
-{
+pub fn advance_learner_journal(
+    head: &LearnerJournalHead,
+    entries: &[JournalEntry],
+) -> Result<LearnerJournalHead, AgentFailure> {
     let (_, previous) = entries.split_last().ok_or(AgentFailure::InvalidInput)?;
     validate_learner_journal(head, previous)?;
     let projection = project(head, entries)?;
@@ -118,17 +159,29 @@ pub fn advance_learner_journal(head: &LearnerJournalHead, entries: &[JournalEntr
     Ok(next)
 }
 
-pub fn recover_learner_claim(job: &LearnerReviewJob, journal: &LearnerClaimJournal,
-    device_id: &str, now: DateTime<Utc>) -> Result<LearnerJobLifecycle, AgentFailure>
-{
+pub fn recover_learner_claim(
+    job: &LearnerReviewJob,
+    journal: &LearnerClaimJournal,
+    device_id: &str,
+    now: DateTime<Utc>,
+) -> Result<LearnerJobLifecycle, AgentFailure> {
     validate_claim_identity(job, &journal.head)?;
-    if job.state != LearnerJobState::Running || job.available_at > now { return Err(AgentFailure::Conflict); }
+    if job.state != LearnerJobState::Running || job.available_at > now {
+        return Err(AgentFailure::Conflict);
+    }
     let projection = validate_learner_journal(&journal.head, &journal.entries)?;
-    let reusable = device_id == journal.head.device_id && !uncertain(&journal.entries, &projection)
+    let reusable = device_id == journal.head.device_id
+        && !uncertain(&journal.entries, &projection)
         && (journal.entries.is_empty() || projection.output.is_some());
     if !reusable {
-        return settle_learner_job(&job.lifecycle(), job.attempts,
-            LearnerJobSettlement::Failed { failure: AgentFailure::Interrupted }, now);
+        return settle_learner_job(
+            &job.lifecycle(),
+            job.attempts,
+            LearnerJobSettlement::Failed {
+                failure: AgentFailure::Interrupted,
+            },
+            now,
+        );
     }
     let mut resumed = job.lifecycle();
     resumed.available_at = now + chrono::Duration::seconds(LEARNER_JOB_LEASE_SECONDS);
@@ -136,30 +189,48 @@ pub fn recover_learner_claim(job: &LearnerReviewJob, journal: &LearnerClaimJourn
     Ok(resumed)
 }
 
-pub fn validate_learner_stage(actor: &OwnerActor, job: &LearnerReviewJob, journal: &LearnerClaimJournal,
-    expected_revision: u64, expected_digest: [u8; 32], request: &StageMemoryCandidate)
-    -> Result<(), AgentFailure>
-{
+pub fn validate_learner_stage(
+    actor: &OwnerActor,
+    job: &LearnerReviewJob,
+    journal: &LearnerClaimJournal,
+    expected_revision: u64,
+    expected_digest: [u8; 32],
+    request: &StageMemoryCandidate,
+) -> Result<(), AgentFailure> {
     actor.validate()?;
     validate_claim_identity(job, &journal.head)?;
     let projection = validate_learner_journal(&journal.head, &journal.entries)?;
-    if job.state != LearnerJobState::Running || actor.person_id != journal.head.person_id
-        || actor.device_id != journal.head.device_id || expected_revision != journal.head.journal_revision
-        || expected_digest != journal.head.journal_digest || uncertain(&journal.entries, &projection)
-    { return Err(AgentFailure::PolicyDenied); }
+    if job.state != LearnerJobState::Running
+        || actor.person_id != journal.head.person_id
+        || actor.device_id != journal.head.device_id
+        || expected_revision != journal.head.journal_revision
+        || expected_digest != journal.head.journal_digest
+        || uncertain(&journal.entries, &projection)
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
     let (text, _) = projection.output.ok_or(AgentFailure::Conflict)?;
     let proposal = parse_learner_review_output(&text)?.ok_or(AgentFailure::InvalidInput)?;
     let expected = super::learner_service::stage_request(&job.input, proposal);
-    if &expected != request { return Err(AgentFailure::Conflict); }
+    if &expected != request {
+        return Err(AgentFailure::Conflict);
+    }
     Ok(())
 }
 
-fn validate_claim_identity(job: &LearnerReviewJob, head: &LearnerJournalHead) -> Result<(), AgentFailure> {
+fn validate_claim_identity(
+    job: &LearnerReviewJob,
+    head: &LearnerJournalHead,
+) -> Result<(), AgentFailure> {
     validate_learner_input(&job.input, head.person_id)?;
     validate_learner_job_lifecycle(&job.lifecycle())?;
-    if job.id != head.claim.job_id || job.input.run_id != job.id || job.attempts != head.claim.claim_attempt
+    if job.id != head.claim.job_id
+        || job.input.run_id != job.id
+        || job.attempts != head.claim.claim_attempt
         || job.claimed_device_id.as_deref() != Some(head.device_id.as_str())
-    { return Err(AgentFailure::Conflict); }
+    {
+        return Err(AgentFailure::Conflict);
+    }
     Ok(())
 }
 fn uncertain(entries: &[JournalEntry], projection: &JournalProjection) -> bool {
@@ -168,59 +239,91 @@ fn uncertain(entries: &[JournalEntry], projection: &JournalProjection) -> bool {
 }
 
 /// Validate terminal evidence before the repository applies its lifecycle CAS.
-pub fn validate_learner_settlement(job: &LearnerReviewJob, journal: &LearnerClaimJournal,
-    settlement: &LearnerJobSettlement, candidate: Option<&KnowledgeCandidate>) -> Result<(), AgentFailure>
-{
+pub fn validate_learner_settlement(
+    job: &LearnerReviewJob,
+    journal: &LearnerClaimJournal,
+    settlement: &LearnerJobSettlement,
+    candidate: Option<&KnowledgeCandidate>,
+) -> Result<(), AgentFailure> {
     validate_claim_identity(job, &journal.head)?;
-    if job.state != LearnerJobState::Running { return Err(AgentFailure::Conflict); }
+    if job.state != LearnerJobState::Running {
+        return Err(AgentFailure::Conflict);
+    }
     let projection = validate_learner_journal(&journal.head, &journal.entries)?;
     let is_uncertain = uncertain(&journal.entries, &projection);
     match settlement {
         LearnerJobSettlement::Completed { candidate_id } => {
-            if is_uncertain { return Err(AgentFailure::Interrupted); }
+            if is_uncertain {
+                return Err(AgentFailure::Interrupted);
+            }
             let (text, _) = projection.output.ok_or(AgentFailure::Conflict)?;
             match (parse_learner_review_output(&text)?, candidate_id, candidate) {
                 (None, None, None) => {}
                 (Some(proposal), Some(candidate_id), Some(candidate)) => {
                     let expected = super::learner_service::stage_request(&job.input, proposal);
                     let identity = memory_stage_identity(journal.head.person_id, &expected)?;
-                    if candidate.id != *candidate_id || candidate.person_id != journal.head.person_id
-                        || candidate.kind != KnowledgeKind::Memory || candidate.actor != expected.actor
-                        || candidate.idempotency_key != identity.candidate_key || candidate.source_refs != identity.source_refs
-                        || candidate.payload != (KnowledgePayload::Memory { value: expected.value })
+                    if candidate.id != *candidate_id
+                        || candidate.person_id != journal.head.person_id
+                        || candidate.kind != KnowledgeKind::Memory
+                        || candidate.actor != expected.actor
+                        || candidate.idempotency_key != identity.candidate_key
+                        || candidate.source_refs != identity.source_refs
+                        || candidate.payload
+                            != (KnowledgePayload::Memory {
+                                value: expected.value,
+                            })
                         || candidate.base_revision != expected.base_revision
                         || candidate.extractor_version != expected.extractor_version
                         || candidate.prompt_version != expected.prompt_version
                         || candidate.created_at != expected.created_at
                         || match expected.target_id {
-                            Some(target) => candidate.operation != KnowledgeOperation::Revise || candidate.target_id != Some(target),
-                            None => candidate.operation != KnowledgeOperation::Create
-                                || (candidate.state != KnowledgeCandidateState::Approved && candidate.target_id.is_some()),
+                            Some(target) => {
+                                candidate.operation != KnowledgeOperation::Revise
+                                    || candidate.target_id != Some(target)
+                            }
+                            None => {
+                                candidate.operation != KnowledgeOperation::Create
+                                    || (candidate.state != KnowledgeCandidateState::Approved
+                                        && candidate.target_id.is_some())
+                            }
                         }
-                    { return Err(AgentFailure::PolicyDenied); }
+                    {
+                        return Err(AgentFailure::PolicyDenied);
+                    }
                 }
                 _ => return Err(AgentFailure::Conflict),
             }
         }
         LearnerJobSettlement::Blocked { blockage } => {
             blockage.validate()?;
-            if candidate.is_some() || is_uncertain || projection.output.is_some() || projection.pending_batch.is_some()
+            if candidate.is_some()
+                || is_uncertain
+                || projection.output.is_some()
+                || projection.pending_batch.is_some()
                 || blockage.plan.principal != journal.head.person_id.to_string()
                 || blockage.plan.device_id != journal.head.device_id
-            { return Err(AgentFailure::PolicyDenied); }
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
         }
         LearnerJobSettlement::Deferred { .. } => {
-            if candidate.is_some() || is_uncertain || projection.output.is_some() { return Err(AgentFailure::Interrupted); }
+            if candidate.is_some() || is_uncertain || projection.output.is_some() {
+                return Err(AgentFailure::Interrupted);
+            }
         }
         LearnerJobSettlement::Failed { .. } => {
-            if candidate.is_some() { return Err(AgentFailure::InvalidInput); }
+            if candidate.is_some() {
+                return Err(AgentFailure::InvalidInput);
+            }
         }
     }
     Ok(())
 }
 
 /// A later claim may follow only a settled, known, output-free deferred execution.
-pub fn validate_learner_deferred_journal(journal: &LearnerClaimJournal) -> Result<(), AgentFailure> {
+pub fn validate_learner_deferred_journal(
+    journal: &LearnerClaimJournal,
+) -> Result<(), AgentFailure> {
     let projection = validate_learner_journal(&journal.head, &journal.entries)?;
     if projection.output.is_some() || uncertain(&journal.entries, &projection) {
         return Err(AgentFailure::StorageUnavailable);

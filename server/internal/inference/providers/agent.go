@@ -25,7 +25,9 @@ func (p *provider) agent(ctx context.Context, in inference.AgentInvocation, effo
 		}
 		ctx = codexauth.WithAccountIdentity(ctx, identity)
 		raw, usage, e := p.codex.GenerateAgent(ctx, p.target.Model, effort, in.Instructions, input, in.OutputFormat.Schema)
-		if inference.ValidateUsage(usage) != nil { return out, inference.Failure{Code: inference.InvalidOutput} }
+		if inference.ValidateUsage(usage) != nil {
+			return out, inference.Failure{Code: inference.InvalidOutput}
+		}
 		out.Usage = usage
 		if e != nil {
 			return out, classifyCodexError(e)
@@ -69,7 +71,9 @@ func (p *provider) agent(ctx context.Context, in inference.AgentInvocation, effo
 				Message map[string]any `json:"message"`
 			}
 			data, e := p.postJSON(ctx, "/api/chat", payload)
-			if e != nil { return out, e }
+			if e != nil {
+				return out, e
+			}
 			out.Usage, err = agentUsage(data, true)
 			if err != nil {
 				return out, err
@@ -97,7 +101,9 @@ func (p *provider) agent(ctx context.Context, in inference.AgentInvocation, effo
 				} `json:"choices"`
 			}
 			data, e := p.postJSON(ctx, "/chat/completions", payload)
-			if e != nil { return out, e }
+			if e != nil {
+				return out, e
+			}
 			out.Usage, err = agentUsage(data, false)
 			if err != nil {
 				return out, err
@@ -125,28 +131,46 @@ func agentUsage(data []byte, ollama bool) (inference.UsageObservation, error) {
 	unknown := inference.UsageObservation{}
 	bad := inference.Failure{Code: inference.InvalidOutput}
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(data, &fields) != nil || fields == nil { return unknown, bad }
+	if json.Unmarshal(data, &fields) != nil || fields == nil {
+		return unknown, bad
+	}
 	if ollama {
 		prompt, err := usageCount(fields["prompt_eval_count"])
-		if err != nil { return unknown, err }
+		if err != nil {
+			return unknown, err
+		}
 		output, err := usageCount(fields["eval_count"])
-		if err != nil { return unknown, err }
-		if prompt != nil && output != nil && *output > trust.MaxJSONInteger-*prompt { return unknown, bad }
+		if err != nil {
+			return unknown, err
+		}
+		if prompt != nil && output != nil && *output > trust.MaxJSONInteger-*prompt {
+			return unknown, bad
+		}
 		return inference.UsageObservation{Tokens: sumUsage(prompt, output)}, nil
 	}
 	raw := fields["usage"]
-	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" { return unknown, nil }
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return unknown, nil
+	}
 	var usage map[string]json.RawMessage
-	if json.Unmarshal(raw, &usage) != nil || usage == nil { return unknown, bad }
+	if json.Unmarshal(raw, &usage) != nil || usage == nil {
+		return unknown, bad
+	}
 	tokens, err := usageCount(usage["total_tokens"])
-	if err != nil { return unknown, err }
+	if err != nil {
+		return unknown, err
+	}
 	return inference.UsageObservation{Tokens: tokens}, nil
 }
 
 func usageCount(raw json.RawMessage) (*uint64, error) {
-	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" { return nil, nil }
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return nil, nil
+	}
 	var value uint64
-	if json.Unmarshal(raw, &value) != nil || value > trust.MaxJSONInteger { return nil, inference.Failure{Code: inference.InvalidOutput} }
+	if json.Unmarshal(raw, &value) != nil || value > trust.MaxJSONInteger {
+		return nil, inference.Failure{Code: inference.InvalidOutput}
+	}
 	return &value, nil
 }
 

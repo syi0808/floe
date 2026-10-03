@@ -16,8 +16,7 @@ use crate::prompts::work_context_expert_prompt;
 use crate::shared::{valid_text, validate_summary};
 
 const MAX_MODEL_OUTPUT_BYTES: usize = 8192;
-const ROLE_APPENDIX: &str =
-    "\n\nRead every required evidence tool before making your final judgment. Return the final answer as one JSON object matching this package output schema:\n";
+const ROLE_APPENDIX: &str = "\n\nRead every required evidence tool before making your final judgment. Return the final answer as one JSON object matching this package output schema:\n";
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WorkContextProgram;
@@ -92,7 +91,12 @@ impl ExpertProgram for WorkContextProgram {
             None => return Err(AgentFailure::InvalidModelOutput),
         };
         validate_work_context_view(&view, request.now_unix_ms)?;
-        if text.len() > request.request.execution_context.max_output_bytes.min(MAX_MODEL_OUTPUT_BYTES)
+        if text.len()
+            > request
+                .request
+                .execution_context
+                .max_output_bytes
+                .min(MAX_MODEL_OUTPUT_BYTES)
         {
             return Err(AgentFailure::BudgetExceeded);
         }

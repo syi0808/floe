@@ -8,10 +8,9 @@ use std::{
 use floe_agent_contract::{
     A2A_PROTOCOL_VERSION, AGENT_SCHEMA_VERSION, AgentCard, AgentContext, AgentDefinition,
     AgentFailure, AllowedCatalog, AuthorizedModelProjection, BoxFuture, DataClass,
-    DependencyCoverage,
-    ModelCapabilities, ModelConversation, ModelConversationEntry, ModelPlanRequest, ModelPort,
-    ModelProjectionOutcome, ModelProjectionPort, ModelProjectionRequest, ModelRequest, ModelStep,
-    PreparedModelPlan, ProcessingBoundary,
+    DependencyCoverage, ModelCapabilities, ModelConversation, ModelConversationEntry,
+    ModelPlanRequest, ModelPort, ModelProjectionOutcome, ModelProjectionPort,
+    ModelProjectionRequest, ModelRequest, ModelStep, PreparedModelPlan, ProcessingBoundary,
 };
 use floe_conversation::{ConversationModelProjection, prompts::manager_role_spec};
 use floe_execution::{
@@ -319,7 +318,10 @@ async fn project_case(
         vec![DataClass::Synthetic],
         floe_experts::RunExpertEnvironmentIdentity {
             revision: catalog.revision,
-            digest: Sha256::digest(serde_json::to_vec(catalog).map_err(|_| AgentFailure::InvalidInput)?).into(),
+            digest: Sha256::digest(
+                serde_json::to_vec(catalog).map_err(|_| AgentFailure::InvalidInput)?,
+            )
+            .into(),
         },
     )?;
     let projection = projector
@@ -532,11 +534,14 @@ async fn run_case(
         shape_ok
     };
     if case.result_fixture.is_some() {
-        println!("{}", json!({
-            "schema_version":1, "case_id":case.id, "repetition":repetition,
-            "phase":"synthesis", "status":"UNVERIFIED", "reason":"s3_real_task_receipt_reconstruction",
-            "synthetic_result_replay":false, "real_expert_execution":false, "personal_data":false,
-        }));
+        println!(
+            "{}",
+            json!({
+                "schema_version":1, "case_id":case.id, "repetition":repetition,
+                "phase":"synthesis", "status":"UNVERIFIED", "reason":"s3_real_task_receipt_reconstruction",
+                "synthetic_result_replay":false, "real_expert_execution":false, "personal_data":false,
+            })
+        );
     }
     Ok(accepted)
 }
@@ -584,8 +589,13 @@ pub(super) async fn run(mode: Mode) -> std::process::ExitCode {
                 Ok(profile) => profile,
                 Err(_) => return unverified("isolated_profile_unavailable"),
             };
-            (profile.actor.person_id.to_string(), profile.actor.device_id.clone(), profile.model(), Some(profile))
-        },
+            (
+                profile.actor.person_id.to_string(),
+                profile.actor.device_id.clone(),
+                profile.model(),
+                Some(profile),
+            )
+        }
         Mode::Server => {
             let Some(database) = std::env::var_os("FLOE_MANAGER_EVAL_DATABASE") else {
                 return unverified("explicit_existing_database_required");

@@ -1,31 +1,41 @@
+pub(crate) mod action_collection;
 mod calendar;
 mod capture;
 mod entity;
+mod product;
 mod projection;
 mod refresh;
-mod product;
-pub(crate) mod action_collection;
 
-pub use calendar::{
-    CalendarBatch, CalendarExternalRevision, CalendarFailure, CalendarMirror, CalendarMirrorState, CalendarMirrorSourceState,
-    CalendarRange, CalendarRecord, CalendarSelection, CalendarSource, CalendarSyncStatus,
+pub use action_collection::{
+    ActionCollectionSource, CalendarActionCollection, DayCollectionCommit, DayCollectionReceipt,
 };
-pub use refresh::*;
-pub use product::*;
-pub use action_collection::{ActionCollectionSource, CalendarActionCollection, DayCollectionCommit, DayCollectionReceipt};
+pub use calendar::{
+    CalendarBatch, CalendarExternalRevision, CalendarFailure, CalendarMirror,
+    CalendarMirrorSourceState, CalendarMirrorState, CalendarRange, CalendarRecord,
+    CalendarSelection, CalendarSource, CalendarSyncStatus,
+};
 pub use capture::{Capture, CaptureProcessing, CaptureSource, DomainRef};
 pub use entity::{
     AllDaySchedule, DomainError, Event, EventSchedule, Note, Priority, SourceRef, Task,
     TimedSchedule,
 };
 pub use floe_kernel::{CaptureId, EventId, NoteId, PersonId, Revision, TaskId};
-pub use projection::{MAX_DAY_SNAPSHOT_ITEMS, MAX_DAY_SNAPSHOT_BYTES, DaySnapshot, TimelineItem, project_day, project_day_with_end_offset};
+pub use product::*;
+pub use projection::{
+    DaySnapshot, MAX_DAY_SNAPSHOT_BYTES, MAX_DAY_SNAPSHOT_ITEMS, TimelineItem, project_day,
+    project_day_with_end_offset,
+};
+pub use refresh::*;
 
 mod read;
 pub use read::{DayReadQuery, DayReadSelection};
 
 mod mutation;
-pub use mutation::{Classification, DayMutation, DayMutationRequest, DayMutationResult, DayMutationCommand, DayMutationTarget, DayMutationPrior, DayMutationApplied, MAX_DAY_COMMAND_RECEIPTS, MAX_DAY_MUTATION_BYTES, MAX_DAY_MUTATION_RECEIPT_BYTES};
+pub use mutation::{
+    Classification, DayMutation, DayMutationApplied, DayMutationCommand, DayMutationPrior,
+    DayMutationRequest, DayMutationResult, DayMutationTarget, MAX_DAY_COMMAND_RECEIPTS,
+    MAX_DAY_MUTATION_BYTES, MAX_DAY_MUTATION_RECEIPT_BYTES,
+};
 
 mod cache_status;
 pub use cache_status::{CalendarCacheInspection, CalendarCacheSourceStatus};

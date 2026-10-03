@@ -8,5 +8,9 @@ pub(crate) fn valid_text(value: &str, maximum: usize) -> bool {
 }
 
 pub(crate) fn validate_summary(summary: &str) -> Result<(), AgentFailure> {
-    if valid_text(summary, 2048) { Ok(()) } else { Err(AgentFailure::InvalidModelOutput) }
+    if valid_text(summary, 2048) {
+        Ok(())
+    } else {
+        Err(AgentFailure::InvalidModelOutput)
+    }
 }

@@ -37,11 +37,15 @@ async fn main() -> std::process::ExitCode {
             [_] => None,
             [_, flag, path] if flag == "--profile" => Some(std::path::PathBuf::from(path)),
             _ => {
-                eprintln!("Learner modes accept --profile /absolute/path/to/an/isolated/prepared/people/PERSON/floe.db");
+                eprintln!(
+                    "Learner modes accept --profile /absolute/path/to/an/isolated/prepared/people/PERSON/floe.db"
+                );
                 return std::process::ExitCode::FAILURE;
             }
         }
-    } else { None };
+    } else {
+        None
+    };
     if arguments != ["--availability"]
         && arguments != ["--exercise"]
         && !optional_memory
@@ -57,8 +61,11 @@ async fn main() -> std::process::ExitCode {
         return match learner::run(learner_expiry, learner_profile).await {
             Ok(result) => {
                 println!("{result}");
-                if result["status"] == "passed" { std::process::ExitCode::SUCCESS }
-                else { std::process::ExitCode::FAILURE }
+                if result["status"] == "passed" {
+                    std::process::ExitCode::SUCCESS
+                } else {
+                    std::process::ExitCode::FAILURE
+                }
             }
             Err(failure) => {
                 println!(
@@ -109,7 +116,10 @@ async fn main() -> std::process::ExitCode {
     let profile = match support::SyntheticProfile::create().await {
         Ok(profile) => profile,
         Err(failure) => {
-            println!("{}", json!({"schema_version":1,"failure":failure,"personal_data":false}));
+            println!(
+                "{}",
+                json!({"schema_version":1,"failure":failure,"personal_data":false})
+            );
             return std::process::ExitCode::FAILURE;
         }
     };

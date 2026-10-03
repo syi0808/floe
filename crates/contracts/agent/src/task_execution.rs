@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{AgentFailure, PreparedModelPlan, SourceProjectionReview, TaskId, TaskSnapshot, TaskState};
+use crate::{
+    AgentFailure, PreparedModelPlan, SourceProjectionReview, TaskId, TaskSnapshot, TaskState,
+};
 
 /// A bounded snapshot plus the whole Task's accounting and immutable identity.
 /// This envelope is independent of the model/output payload allowance.
@@ -80,7 +82,10 @@ impl TaskModelAccounting {
             || (self.unknown_cost_attempts == 0 && self.usage.estimated_cost_micros != 0)
             || self.usage.estimated_tokens > self.usage.tokens
             || self.usage.estimated_cost_micros > self.usage.cost_micros
-            || self.attempt_refs.iter().any(|id| id.is_nil() || !attempts.insert(*id))
+            || self
+                .attempt_refs
+                .iter()
+                .any(|id| id.is_nil() || !attempts.insert(*id))
         {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -116,21 +121,35 @@ impl TaskExecutionReceipt {
         self.accounting.validate()?;
         if self.reference.execution.task_id != self.snapshot.task_id
             || self.journal_digest == [0; 32]
-            || matches!(self.snapshot.state, TaskState::Submitted | TaskState::Working)
-            || (matches!(self.snapshot.state, TaskState::Completed | TaskState::Blocked)
-                && !self.accounting.unresolved_attempts.is_empty())
+            || matches!(
+                self.snapshot.state,
+                TaskState::Submitted | TaskState::Working
+            )
+            || (matches!(
+                self.snapshot.state,
+                TaskState::Completed | TaskState::Blocked
+            ) && !self.accounting.unresolved_attempts.is_empty())
         {
             return Err(AgentFailure::StorageUnavailable);
         }
-        if serde_json::to_vec(self).map_err(|_| AgentFailure::StorageUnavailable)?.len()
+        if serde_json::to_vec(self)
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .len()
             > MAX_TASK_EXECUTION_RECEIPT_BYTES
-        { return Err(AgentFailure::BudgetExceeded); }
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
         Ok(())
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", content = "receipt", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    content = "receipt",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum TaskExecutionEvidence {
     Unadmitted,
     Admitted(TaskExecutionReceipt),
@@ -155,8 +174,13 @@ pub enum TaskBlockage {
 impl TaskBlockage {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         match self {
-            Self::SourceRead { tool_call_id, blockers } => {
-                if tool_call_id.is_nil() { return Err(AgentFailure::InvalidInput); }
+            Self::SourceRead {
+                tool_call_id,
+                blockers,
+            } => {
+                if tool_call_id.is_nil() {
+                    return Err(AgentFailure::InvalidInput);
+                }
                 blockers.validate().map_err(|_| AgentFailure::InvalidInput)
             }
             Self::ModelProjection { plan, review } => {
@@ -165,9 +189,11 @@ impl TaskBlockage {
             }
             Self::Binding { requirement_keys } => {
                 let mut keys = std::collections::HashSet::new();
-                if requirement_keys.is_empty() || requirement_keys.len() > 64
-                    || requirement_keys.iter().any(|key| key.trim().is_empty()
-                        || key.len() > 128 || !keys.insert(key))
+                if requirement_keys.is_empty()
+                    || requirement_keys.len() > 64
+                    || requirement_keys
+                        .iter()
+                        .any(|key| key.trim().is_empty() || key.len() > 128 || !keys.insert(key))
                 {
                     return Err(AgentFailure::InvalidInput);
                 }

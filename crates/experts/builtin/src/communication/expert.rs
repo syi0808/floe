@@ -4,10 +4,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::prompts::{PromptAssembly, PromptComponentKind};
-use floe_agent_contract::{AGENT_VERSION, AgentFailure, AgentContext};
+use floe_agent_contract::{AGENT_VERSION, AgentContext, AgentFailure};
 use floe_context_contract::{
-    CommunicationView, communication_context_evidence, validate_communication_view,
-    MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS,
+    CommunicationView, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS,
+    communication_context_evidence, validate_communication_view,
 };
 use floe_experts::{
     ExpertFinalOutput, ExpertProgram, ExpertProgramRequest, ExpertProgramSpec,
@@ -120,7 +120,9 @@ impl ExpertProgram for CommunicationProgram {
             MAX_COMMUNICATION_BYTES,
         )?;
         let mut context: AgentContext = request.context.clone();
-        context.evidence.push(communication_context_evidence(&view)?);
+        context
+            .evidence
+            .push(communication_context_evidence(&view)?);
         context.validate()?;
 
         let mut output: CommunicationModelOutput =

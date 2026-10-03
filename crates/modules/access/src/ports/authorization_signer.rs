@@ -71,7 +71,10 @@ pub struct VerifiedAuthorizationClaims {
 }
 
 pub trait AuthorizationProofVerifier: Send + Sync {
-    fn verify_product(&self, command: &crate::ProductCalendarSigningCommand<'_>) -> Result<crate::ProductCalendarChallenge, AgentFailure>;
+    fn verify_product(
+        &self,
+        command: &crate::ProductCalendarSigningCommand<'_>,
+    ) -> Result<crate::ProductCalendarChallenge, AgentFailure>;
 
     fn verify(
         &self,

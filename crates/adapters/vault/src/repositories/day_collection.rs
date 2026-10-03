@@ -1,26 +1,54 @@
 //! Exact idempotent projection of an Actions-owned causal receipt into Day.
+use super::day_refresh::{
+    current_calendar_sources_on, finish_transaction, mirror_on, persist_mirror_on,
+    require_executor, versions_of,
+};
+use crate::{StoreError, TursoStore};
 use floe_day::{DayCollectionCommit, DayCollectionReceipt, DayError, MirrorExpectation};
 use serde::{Deserialize, Serialize};
 use turso::Connection;
-use crate::{StoreError, TursoStore};
-use super::day_refresh::{current_calendar_sources_on, finish_transaction, mirror_on, persist_mirror_on, versions_of, require_executor};
 
 const TABLE: &str = "CREATE TABLE day_action_collections (execution_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, device_id TEXT NOT NULL, receipt_digest TEXT NOT NULL, intent_digest TEXT NOT NULL, payload TEXT NOT NULL)";
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct CollectionRecord { command: DayCollectionCommit, receipt: DayCollectionReceipt }
-
-pub(super) async fn initialize_collection_schema(connection: &Connection) -> Result<(), StoreError> {
-    connection.execute(&TABLE.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS "), ()).await.map_err(crate::engine::storage_error)?; Ok(())
+struct CollectionRecord {
+    command: DayCollectionCommit,
+    receipt: DayCollectionReceipt,
 }
-pub(super) async fn validate_collection_schema(connection: &Connection) -> Result<(), StoreError> { crate::engine::require_schema(connection, "day_action_collections", TABLE).await }
-fn storage(error: impl std::fmt::Display) -> DayError { DayError::storage(error.to_string()) }
-fn hex(digest: &[u8; 32]) -> String { digest.iter().map(|byte| format!("{byte:02x}")).collect() }
 
-pub(super) async fn collect(store: &TursoStore, commit: DayCollectionCommit, fence: &floe_day::DayWriteFence) -> Result<DayCollectionReceipt, DayError> {
+pub(super) async fn initialize_collection_schema(
+    connection: &Connection,
+) -> Result<(), StoreError> {
+    connection
+        .execute(
+            &TABLE.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS "),
+            (),
+        )
+        .await
+        .map_err(crate::engine::storage_error)?;
+    Ok(())
+}
+pub(super) async fn validate_collection_schema(connection: &Connection) -> Result<(), StoreError> {
+    crate::engine::require_schema(connection, "day_action_collections", TABLE).await
+}
+fn storage(error: impl std::fmt::Display) -> DayError {
+    DayError::storage(error.to_string())
+}
+fn hex(digest: &[u8; 32]) -> String {
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+pub(super) async fn collect(
+    store: &TursoStore,
+    commit: DayCollectionCommit,
+    fence: &floe_day::DayWriteFence,
+) -> Result<DayCollectionReceipt, DayError> {
     commit.validate()?;
     let connection = store.connection().await.map_err(storage)?;
-    connection.execute("BEGIN IMMEDIATE", ()).await.map_err(storage)?;
+    connection
+        .execute("BEGIN IMMEDIATE", ())
+        .await
+        .map_err(storage)?;
     let result = async {
         let mut rows = connection.query("SELECT person_id,device_id,receipt_digest,intent_digest,payload FROM day_action_collections WHERE execution_id=?", (commit.execution_id.to_string(),)).await.map_err(storage)?;
         if let Some(row) = rows.next().await.map_err(storage)? {
@@ -50,6 +78,13 @@ pub(super) async fn collect(store: &TursoStore, commit: DayCollectionCommit, fen
         if changed != 1 { return Err(DayError::conflict("Day collection receipt raced")); }
         Ok(receipt)
     }.await;
-    let result = result.and_then(|result| { fence.check(commit.person_id, &commit.device_id, commit.executor_generation)?; Ok(result) });
+    let result = result.and_then(|result| {
+        fence.check(
+            commit.person_id,
+            &commit.device_id,
+            commit.executor_generation,
+        )?;
+        Ok(result)
+    });
     finish_transaction(&connection, result).await
 }

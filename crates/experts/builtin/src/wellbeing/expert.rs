@@ -2,11 +2,9 @@
 
 use floe_agent_contract::{AGENT_VERSION, AgentFailure, Artifact};
 use floe_context_contract::{
-    CalendarContextView, WellbeingView, validate_calendar_context_view,
-    validate_wellbeing_view,
+    CalendarContextView, WellbeingView, validate_calendar_context_view, validate_wellbeing_view,
 };
-use floe_experts::{ExpertProgram, ExpertProgramRequest, ExpertProgramSpec,
-    ExpertToolObservation};
+use floe_experts::{ExpertProgram, ExpertProgramRequest, ExpertProgramSpec, ExpertToolObservation};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -90,23 +88,21 @@ impl ExpertProgram for WellbeingProgram {
         }
 
         let wellbeing_key = crate::BuiltinContextSource::Wellbeing.source_id();
-        let wellbeing = match crate::program_support::read_one::<WellbeingView>(
-            observations,
-            wellbeing_key,
-        )? {
-            Some(view) => view,
-            None if crate::program_support::was_unavailable(observations, wellbeing_key) => {
-                return crate::program_support::unavailable(
-                    request,
-                    observations,
-                    wellbeing_key,
-                    crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
-                    super::RESULT_MEDIA_TYPE,
-                    UNAVAILABLE_SUMMARY,
-                );
-            }
-            None => return Err(AgentFailure::InvalidModelOutput),
-        };
+        let wellbeing =
+            match crate::program_support::read_one::<WellbeingView>(observations, wellbeing_key)? {
+                Some(view) => view,
+                None if crate::program_support::was_unavailable(observations, wellbeing_key) => {
+                    return crate::program_support::unavailable(
+                        request,
+                        observations,
+                        wellbeing_key,
+                        crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
+                        super::RESULT_MEDIA_TYPE,
+                        UNAVAILABLE_SUMMARY,
+                    );
+                }
+                None => return Err(AgentFailure::InvalidModelOutput),
+            };
 
         validate_wellbeing_view(&wellbeing, request.now_unix_ms)?;
         let mut available = wellbeing.evidence_handles.clone();

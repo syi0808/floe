@@ -10,10 +10,10 @@ import (
 )
 
 type ProviderTarget struct {
-	Provider  string `json:"provider"`
-	BaseURL   string `json:"base_url"`
-	Model     string `json:"model"`
-	APIKeyEnv string `json:"api_key_env,omitempty"`
+	Provider     string   `json:"provider"`
+	BaseURL      string   `json:"base_url"`
+	Model        string   `json:"model"`
+	APIKeyEnv    string   `json:"api_key_env,omitempty"`
 	Capabilities []string `json:"capabilities"`
 }
 

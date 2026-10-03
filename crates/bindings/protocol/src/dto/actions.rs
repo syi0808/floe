@@ -3,9 +3,7 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use super::day::TimedScheduleDto;
-use super::{
-    ActionAuthorityModeDto, ActionRefDto, DigestHex64Dto, TaskRefDto, UuidRefDto,
-};
+use super::{ActionAuthorityModeDto, ActionRefDto, DigestHex64Dto, TaskRefDto, UuidRefDto};
 
 const MAX_ACTION_TITLE_BYTES: usize = 1_024;
 const MAX_DESTINATION_LABEL_BYTES: usize = 512;
@@ -37,7 +35,8 @@ impl TaskExecutionReceiptRefDto {
         if self.execution.executor_generation == 0
             || self.task_revision < 2
             || self.journal_revision > MAX_TASK_JOURNAL_REVISION
-            || self.digest.as_str() == "0000000000000000000000000000000000000000000000000000000000000000"
+            || self.digest.as_str()
+                == "0000000000000000000000000000000000000000000000000000000000000000"
         {
             return Err("actions.task_execution_receipt_ref");
         }
@@ -74,7 +73,9 @@ pub enum ActionIntentDto {
 impl ActionIntentDto {
     pub fn validate(&self) -> Result<(), &'static str> {
         match self {
-            Self::DirectCreate { title, schedule, .. } => {
+            Self::DirectCreate {
+                title, schedule, ..
+            } => {
                 validate_new_title(title)?;
                 schedule.validate_new_action()
             }
@@ -164,7 +165,10 @@ pub struct ActionReviewRefDto {
 
 impl ActionReviewRefDto {
     pub fn validate(&self) -> Result<(), &'static str> {
-        positive_revision(self.authority_revision, "actions.review_ref.authority_revision")?;
+        positive_revision(
+            self.authority_revision,
+            "actions.review_ref.authority_revision",
+        )?;
         parse_instant(&self.expires_at, "actions.review_ref.expires_at")?;
         Ok(())
     }
@@ -313,10 +317,18 @@ pub enum ActionStatusDto {
     Cancelled,
     Expired,
     Executing,
-    Blocked { reason: ActionBlockedReasonDto },
-    Failed { reason: ActionNotAppliedReasonDto },
-    Unknown { reason: ActionUnknownReasonDto },
-    Succeeded { collection: ActionCollectionStatusDto },
+    Blocked {
+        reason: ActionBlockedReasonDto,
+    },
+    Failed {
+        reason: ActionNotAppliedReasonDto,
+    },
+    Unknown {
+        reason: ActionUnknownReasonDto,
+    },
+    Succeeded {
+        collection: ActionCollectionStatusDto,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -344,10 +356,8 @@ impl ActionSnapshotDto {
         }
         let created_at = parse_instant(&self.created_at, "actions.snapshot.created_at")?;
         let expires_at = parse_instant(&self.expires_at, "actions.snapshot.expires_at")?;
-        let review_expires_at = parse_instant(
-            &self.review_ref.expires_at,
-            "actions.review_ref.expires_at",
-        )?;
+        let review_expires_at =
+            parse_instant(&self.review_ref.expires_at, "actions.review_ref.expires_at")?;
         if expires_at <= created_at || expires_at != review_expires_at {
             return Err("actions.snapshot.expires_at");
         }

@@ -237,7 +237,16 @@ fn effective_input_data_classes(
 
 fn validate_input(input: &ContextProjectionInput<'_>) -> Result<(), AgentFailure> {
     input.plan.validate()?;
-    if !input.plan.capabilities.includes(&floe_agent_contract::ModelCapabilities::for_request(input.output_format, input.catalog)?) { return Err(AgentFailure::PolicyDenied); }
+    if !input
+        .plan
+        .capabilities
+        .includes(&floe_agent_contract::ModelCapabilities::for_request(
+            input.output_format,
+            input.catalog,
+        )?)
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
     if input.projection_operation_id.is_nil() || input.purpose != input.plan.purpose {
         return Err(AgentFailure::InvalidInput);
     }

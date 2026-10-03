@@ -17,11 +17,11 @@ type RouteUpdate struct {
 }
 
 type TargetUpdate struct {
-	ID       string
-	Provider string
-	BaseURL  string
-	Model    string
-	APIKey   string
+	ID           string
+	Provider     string
+	BaseURL      string
+	Model        string
+	APIKey       string
 	Capabilities []string
 }
 
@@ -33,11 +33,11 @@ type ProviderUpdate struct {
 }
 
 type OperatorPurposeProfile struct {
-	Model           string `json:"model"`
-	ReasoningEffort string `json:"reasoning_effort"`
-	Active          bool   `json:"active"`
-	Available       bool   `json:"available"`
-	Capabilities []string `json:"capabilities"`
+	Model           string   `json:"model"`
+	ReasoningEffort string   `json:"reasoning_effort"`
+	Active          bool     `json:"active"`
+	Available       bool     `json:"available"`
+	Capabilities    []string `json:"capabilities"`
 }
 
 type OperatorProviderProfile struct {
@@ -204,7 +204,7 @@ func (c *Configuration) Snapshot(ctx context.Context, operator trust.OperatorPri
 					ReasoningEffort: model.ReasoningEffort,
 					Active:          route.TargetID == targetID && route.Enabled,
 					Available:       available,
-					Capabilities: append([]string(nil), model.Capabilities...),
+					Capabilities:    append([]string(nil), model.Capabilities...),
 				}
 			}
 			profiles[provider] = OperatorProviderProfile{BaseURL: configured.BaseURL, HasCredential: configured.APIKeyEnv != "", Purposes: purposes}

@@ -1,6 +1,8 @@
-use serde::{Deserialize,Serialize};
-use super::{EpistemicStatusDto,PersonalMemoryKindDto};
-pub use floe_agent_contract::{AgentFailureCategory,AgentFailureDomain,AgentFailureSafeAction,AgentRetryPolicy};
+use super::{EpistemicStatusDto, PersonalMemoryKindDto};
+pub use floe_agent_contract::{
+    AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction, AgentRetryPolicy,
+};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -95,4 +97,3 @@ pub enum ActionAuthorityModeDto {
     Ask,
     Deny,
 }
-

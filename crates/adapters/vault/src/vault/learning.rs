@@ -9,23 +9,21 @@ use floe_agent_contract::{
 };
 use floe_conversation::{AgentOutcome, AgentSession};
 use floe_knowledge::{
-    KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState, KnowledgeDecisionKind,
-    KnowledgeDecisionResult, KnowledgeKind, KnowledgeOperation,
-    KnowledgeRevision, KnowledgeRevisionState, LearnerBudget,
-    LearnerClaimJournal, LearnerClaimRef, LearnerJobClaim, LearnerJobSettlement,
-    LearnerJobState, LearnerJournalHead, LearnerReviewInput, LearnerReviewJob,
-    MAX_LEARNER_JOB_ATTEMPTS,
-    LearningEvidenceRef, LearningEvidenceSnapshot, LearningObservation, LearningOutcome,
-    LearningSessionSnapshot, LearningTranscriptMessage, MemoryContextFact, MemoryDecisionRequest, MemoryOverviewSnapshot,
-    MemoryReviewSnapshot, MemoryStageOrigin, MemoryStageReceipt, MemoryStageRequest, StageMemoryCandidate,
+    EvidenceReader, KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState,
+    KnowledgeDecisionKind, KnowledgeDecisionResult, KnowledgeKind, KnowledgeOperation,
+    KnowledgeRevision, KnowledgeRevisionState, LearnerBudget, LearnerClaimJournal, LearnerClaimRef,
+    LearnerJobClaim, LearnerJobSettlement, LearnerJobState, LearnerJournalHead, LearnerReviewInput,
+    LearnerReviewJob, LearningEvidenceRef, LearningEvidenceSnapshot, LearningObservation,
+    LearningOutcome, LearningSessionSnapshot, LearningTranscriptMessage, MAX_LEARNER_JOB_ATTEMPTS,
+    MemoryContextFact, MemoryDecisionRequest, MemoryOverviewSnapshot, MemoryReviewSnapshot,
+    MemoryStageOrigin, MemoryStageReceipt, MemoryStageRequest, StageMemoryCandidate,
     admit_learning_evidence, advance_learner_journal, claim_learner_job, learner_job_key,
-    memory_stage_identity, memory_stage_receipt, new_learner_job, plan_memory_review, plan_memory_stage,
-    project_memory_context, project_memory_summary, recover_learner_claim,
-    reject_learner_claim, settle_learner_job, validate_learner_budget,
-    validate_learner_input, validate_learner_journal, validate_learner_settlement,
-    validate_learner_stage,
-    validate_memory_overview_limit, validate_memory_review_candidate, validate_memory_stage_replay, validate_review_actor,
-    validate_review_candidate, validate_stage_request, EvidenceReader,
+    memory_stage_identity, memory_stage_receipt, new_learner_job, plan_memory_review,
+    plan_memory_stage, project_memory_context, project_memory_summary, recover_learner_claim,
+    reject_learner_claim, settle_learner_job, validate_learner_budget, validate_learner_input,
+    validate_learner_journal, validate_learner_settlement, validate_learner_stage,
+    validate_memory_overview_limit, validate_memory_review_candidate, validate_memory_stage_replay,
+    validate_review_actor, validate_review_candidate, validate_stage_request,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -41,58 +39,135 @@ const MAX_KNOWLEDGE_STAGE_RECEIPTS: i64 = 4096;
 const MAX_MEMORY_REVIEW_ITEMS: usize = 100;
 
 const KNOWLEDGE_STORAGE_SCHEMA: &[(&str, &str)] = &[
-    ("knowledge_store_schema", "CREATE TABLE knowledge_store_schema (id INTEGER PRIMARY KEY CHECK(id = 1), version INTEGER NOT NULL CHECK(version = 1))"),
-    ("learning_observations", "CREATE TABLE learning_observations (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, content_hash TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(person_id, content_hash))"),
-    ("knowledge_candidates", "CREATE TABLE knowledge_candidates (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, target_id TEXT, created_at TEXT NOT NULL, payload TEXT NOT NULL, stage_payload TEXT NOT NULL, UNIQUE(person_id, idempotency_key))"),
-    ("knowledge_candidates_review", "CREATE INDEX knowledge_candidates_review ON knowledge_candidates(person_id, kind, state, created_at)"),
-    ("knowledge_stage_receipts", "CREATE TABLE knowledge_stage_receipts (person_id TEXT NOT NULL, candidate_key TEXT NOT NULL, candidate_id TEXT NOT NULL UNIQUE, observation_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(person_id, candidate_key))"),
-    ("knowledge_candidate_decisions", "CREATE TABLE knowledge_candidate_decisions (id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL)"),
-    ("knowledge_revisions", "CREATE TABLE knowledge_revisions (target_id TEXT NOT NULL, revision INTEGER NOT NULL, person_id TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(target_id, revision))"),
-    ("knowledge_revisions_active", "CREATE INDEX knowledge_revisions_active ON knowledge_revisions(person_id, kind, state)"),
-    ("knowledge_mutations", "CREATE TABLE knowledge_mutations (id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL UNIQUE, target_id TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL)"),
-    ("knowledge_command_receipts", "CREATE TABLE knowledge_command_receipts (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, device_id TEXT NOT NULL, command_kind TEXT NOT NULL, candidate_id TEXT NOT NULL, decision_kind TEXT NOT NULL, payload TEXT NOT NULL)"),
-    ("learner_review_jobs", "CREATE TABLE learner_review_jobs (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL, available_at TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(person_id, idempotency_key))"),
-    ("learner_review_jobs_ready", "CREATE INDEX learner_review_jobs_ready ON learner_review_jobs(person_id, state, available_at)"),
-    ("learner_execution_journal", "CREATE TABLE learner_execution_journal (job_id TEXT NOT NULL, person_id TEXT NOT NULL, claim_attempt INTEGER NOT NULL, sequence INTEGER NOT NULL, event_key TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(job_id, person_id, claim_attempt, sequence), UNIQUE(job_id, person_id, claim_attempt, event_key))"),
-    ("learner_journal_heads", "CREATE TABLE learner_journal_heads (job_id TEXT NOT NULL, person_id TEXT NOT NULL, claim_attempt INTEGER NOT NULL, device_id TEXT NOT NULL, journal_revision INTEGER NOT NULL, journal_digest TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(job_id, person_id, claim_attempt))"),
-    ("learner_settlement_receipts", "CREATE TABLE learner_settlement_receipts (job_id TEXT NOT NULL, person_id TEXT NOT NULL, claim_attempt INTEGER NOT NULL, device_id TEXT NOT NULL, settlement TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(job_id, person_id, claim_attempt))"),
+    (
+        "knowledge_store_schema",
+        "CREATE TABLE knowledge_store_schema (id INTEGER PRIMARY KEY CHECK(id = 1), version INTEGER NOT NULL CHECK(version = 1))",
+    ),
+    (
+        "learning_observations",
+        "CREATE TABLE learning_observations (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, content_hash TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(person_id, content_hash))",
+    ),
+    (
+        "knowledge_candidates",
+        "CREATE TABLE knowledge_candidates (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, target_id TEXT, created_at TEXT NOT NULL, payload TEXT NOT NULL, stage_payload TEXT NOT NULL, UNIQUE(person_id, idempotency_key))",
+    ),
+    (
+        "knowledge_candidates_review",
+        "CREATE INDEX knowledge_candidates_review ON knowledge_candidates(person_id, kind, state, created_at)",
+    ),
+    (
+        "knowledge_stage_receipts",
+        "CREATE TABLE knowledge_stage_receipts (person_id TEXT NOT NULL, candidate_key TEXT NOT NULL, candidate_id TEXT NOT NULL UNIQUE, observation_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(person_id, candidate_key))",
+    ),
+    (
+        "knowledge_candidate_decisions",
+        "CREATE TABLE knowledge_candidate_decisions (id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL)",
+    ),
+    (
+        "knowledge_revisions",
+        "CREATE TABLE knowledge_revisions (target_id TEXT NOT NULL, revision INTEGER NOT NULL, person_id TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(target_id, revision))",
+    ),
+    (
+        "knowledge_revisions_active",
+        "CREATE INDEX knowledge_revisions_active ON knowledge_revisions(person_id, kind, state)",
+    ),
+    (
+        "knowledge_mutations",
+        "CREATE TABLE knowledge_mutations (id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL UNIQUE, target_id TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL)",
+    ),
+    (
+        "knowledge_command_receipts",
+        "CREATE TABLE knowledge_command_receipts (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, device_id TEXT NOT NULL, command_kind TEXT NOT NULL, candidate_id TEXT NOT NULL, decision_kind TEXT NOT NULL, payload TEXT NOT NULL)",
+    ),
+    (
+        "learner_review_jobs",
+        "CREATE TABLE learner_review_jobs (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL, available_at TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(person_id, idempotency_key))",
+    ),
+    (
+        "learner_review_jobs_ready",
+        "CREATE INDEX learner_review_jobs_ready ON learner_review_jobs(person_id, state, available_at)",
+    ),
+    (
+        "learner_execution_journal",
+        "CREATE TABLE learner_execution_journal (job_id TEXT NOT NULL, person_id TEXT NOT NULL, claim_attempt INTEGER NOT NULL, sequence INTEGER NOT NULL, event_key TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(job_id, person_id, claim_attempt, sequence), UNIQUE(job_id, person_id, claim_attempt, event_key))",
+    ),
+    (
+        "learner_journal_heads",
+        "CREATE TABLE learner_journal_heads (job_id TEXT NOT NULL, person_id TEXT NOT NULL, claim_attempt INTEGER NOT NULL, device_id TEXT NOT NULL, journal_revision INTEGER NOT NULL, journal_digest TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(job_id, person_id, claim_attempt))",
+    ),
+    (
+        "learner_settlement_receipts",
+        "CREATE TABLE learner_settlement_receipts (job_id TEXT NOT NULL, person_id TEXT NOT NULL, claim_attempt INTEGER NOT NULL, device_id TEXT NOT NULL, settlement TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(job_id, person_id, claim_attempt))",
+    ),
 ];
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub(super) async fn initialize_learning_store(&self, create: bool) -> Result<(), AgentFailure> {
         let mut connection = self.connection()?;
         if create {
-            let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)
-                .await.map_err(storage)?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .await
+                .map_err(storage)?;
             let result = async {
                 for (_, sql) in KNOWLEDGE_STORAGE_SCHEMA {
                     transaction.execute(sql, ()).await.map_err(storage)?;
                 }
-                transaction.execute("INSERT INTO knowledge_store_schema (id, version) VALUES (1, 1)", ())
-                    .await.map_err(storage)?;
+                transaction
+                    .execute(
+                        "INSERT INTO knowledge_store_schema (id, version) VALUES (1, 1)",
+                        (),
+                    )
+                    .await
+                    .map_err(storage)?;
                 self.check_access()
-            }.await;
+            }
+            .await;
             finish_transaction(self, transaction, result).await?;
         }
         // Existing profiles must already carry the exact current schema. No
         // missing table is created during reopen and no old row is migrated.
         for (name, expected) in KNOWLEDGE_STORAGE_SCHEMA {
-            let mut rows = connection.query(
-                "SELECT sql FROM sqlite_master WHERE name = ? AND type IN ('table', 'index')", [*name],
-            ).await.map_err(|_| AgentFailure::UnsupportedVersion)?;
-            let row = rows.next().await.map_err(storage)?.ok_or(AgentFailure::UnsupportedVersion)?;
+            let mut rows = connection
+                .query(
+                    "SELECT sql FROM sqlite_master WHERE name = ? AND type IN ('table', 'index')",
+                    [*name],
+                )
+                .await
+                .map_err(|_| AgentFailure::UnsupportedVersion)?;
+            let row = rows
+                .next()
+                .await
+                .map_err(storage)?
+                .ok_or(AgentFailure::UnsupportedVersion)?;
             let actual = row.get::<String>(0).map_err(storage)?;
-            let normalize = |sql: &str| sql.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase();
-            if rows.next().await.map_err(storage)?.is_some() || normalize(&actual) != normalize(expected) {
+            let normalize = |sql: &str| {
+                sql.split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_ascii_lowercase()
+            };
+            if rows.next().await.map_err(storage)?.is_some()
+                || normalize(&actual) != normalize(expected)
+            {
                 return Err(AgentFailure::UnsupportedVersion);
             }
         }
-        let mut rows = connection.query("SELECT id, version FROM knowledge_store_schema", ())
-            .await.map_err(|_| AgentFailure::UnsupportedVersion)?;
-        let row = rows.next().await.map_err(storage)?.ok_or(AgentFailure::UnsupportedVersion)?;
-        if row.get::<i64>(0).map_err(storage)? != 1 || row.get::<i64>(1).map_err(storage)? != 1
+        let mut rows = connection
+            .query("SELECT id, version FROM knowledge_store_schema", ())
+            .await
+            .map_err(|_| AgentFailure::UnsupportedVersion)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(storage)?
+            .ok_or(AgentFailure::UnsupportedVersion)?;
+        if row.get::<i64>(0).map_err(storage)? != 1
+            || row.get::<i64>(1).map_err(storage)? != 1
             || rows.next().await.map_err(storage)?.is_some()
-        { return Err(AgentFailure::UnsupportedVersion); }
+        {
+            return Err(AgentFailure::UnsupportedVersion);
+        }
         self.check_access()
     }
 
@@ -201,7 +276,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             })
         }.await;
         let acknowledged = finish_transaction(self, transaction, result).await;
-        if acknowledged.is_ok() { self.check_access()?; }
+        if acknowledged.is_ok() {
+            self.check_access()?;
+        }
         acknowledged
     }
 
@@ -492,63 +569,78 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .await
             .map_err(storage)?;
-        let result = async {
-            let mut rows = transaction.query(
+        let result =
+            async {
+                let mut rows = transaction.query(
                 "SELECT id, revision, payload FROM agent_sessions ORDER BY rowid DESC LIMIT ?",
                 [i64::try_from(limit).map_err(|_| AgentFailure::InvalidInput)?],
             ).await.map_err(storage)?;
-            let mut snapshots = Vec::new();
-            while let Some(row) = rows.next().await.map_err(storage)? {
-                let stored_id = row.get::<String>(0).map_err(storage)?;
-                let stored_revision = row.get::<i64>(1).map_err(storage)?;
-                let session: AgentSession = decode(&row.get::<String>(2).map_err(storage)?)?;
-                if session.person_id != self.person_id || session.id.to_string() != stored_id
-                    || i64::try_from(session.revision).map_err(|_| AgentFailure::StorageUnavailable)? != stored_revision
-                { return Err(AgentFailure::VaultUnavailable); }
-                self.payload(&session)?;
-                let messages = learning_transcript_messages(self, &transaction, &session).await?;
-                let actual_turns = floe_knowledge::explicit_learning_evidence_turns(&messages)?;
-                let evidence_reader = TransactionLearningEvidence { vault: self, transaction: &transaction };
-                let evidence = if actual_turns.is_empty() {
-                    LearningEvidenceSnapshot {
-                        person_id: session.person_id,
-                        session_id: session.id,
-                        revision: session.revision,
-                        outcome: session.last_outcome.map(learning_outcome),
-                        personal: session.scope.is_none() && session.data_classes == [DataClass::Personal],
-                        active_turn: session.active_turn.is_some(),
-                        pending_output: session.pending_output.is_some(),
-                        turn_ids: Vec::new(),
-                        coverage: DependencyCoverage::Unknown,
-                        purpose: floe_knowledge::EvidenceProjectionPurpose::Learning,
+                let mut snapshots = Vec::new();
+                while let Some(row) = rows.next().await.map_err(storage)? {
+                    let stored_id = row.get::<String>(0).map_err(storage)?;
+                    let stored_revision = row.get::<i64>(1).map_err(storage)?;
+                    let session: AgentSession = decode(&row.get::<String>(2).map_err(storage)?)?;
+                    if session.person_id != self.person_id
+                        || session.id.to_string() != stored_id
+                        || i64::try_from(session.revision)
+                            .map_err(|_| AgentFailure::StorageUnavailable)?
+                            != stored_revision
+                    {
+                        return Err(AgentFailure::VaultUnavailable);
                     }
-                } else {
-                    evidence_reader.read_learning_evidence(
-                        self.person_id,
-                        session.id,
-                        &actual_turns,
-                    ).await?
-                };
-                if evidence.session_id != session.id || evidence.revision != session.revision
-                    || evidence.person_id != self.person_id
-                { return Err(AgentFailure::StorageUnavailable); }
-                let snapshot = LearningSessionSnapshot { evidence, messages };
-                let bounded_bytes = snapshot.messages.iter().fold(0usize, |total, message| {
-                    total.saturating_add(match message {
-                        LearningTranscriptMessage::User { text, .. }
-                        | LearningTranscriptMessage::Assistant { text, .. } => text.len().saturating_add(64),
-                        LearningTranscriptMessage::Other => 8,
-                    })
-                });
-                if bounded_bytes > 512 * 1024 {
-                    return Err(AgentFailure::BudgetExceeded);
+                    self.payload(&session)?;
+                    let messages =
+                        learning_transcript_messages(self, &transaction, &session).await?;
+                    let actual_turns = floe_knowledge::explicit_learning_evidence_turns(&messages)?;
+                    let evidence_reader = TransactionLearningEvidence {
+                        vault: self,
+                        transaction: &transaction,
+                    };
+                    let evidence = if actual_turns.is_empty() {
+                        LearningEvidenceSnapshot {
+                            person_id: session.person_id,
+                            session_id: session.id,
+                            revision: session.revision,
+                            outcome: session.last_outcome.map(learning_outcome),
+                            personal: session.scope.is_none()
+                                && session.data_classes == [DataClass::Personal],
+                            active_turn: session.active_turn.is_some(),
+                            pending_output: session.pending_output.is_some(),
+                            turn_ids: Vec::new(),
+                            coverage: DependencyCoverage::Unknown,
+                            purpose: floe_knowledge::EvidenceProjectionPurpose::Learning,
+                        }
+                    } else {
+                        evidence_reader
+                            .read_learning_evidence(self.person_id, session.id, &actual_turns)
+                            .await?
+                    };
+                    if evidence.session_id != session.id
+                        || evidence.revision != session.revision
+                        || evidence.person_id != self.person_id
+                    {
+                        return Err(AgentFailure::StorageUnavailable);
+                    }
+                    let snapshot = LearningSessionSnapshot { evidence, messages };
+                    let bounded_bytes = snapshot.messages.iter().fold(0usize, |total, message| {
+                        total.saturating_add(match message {
+                            LearningTranscriptMessage::User { text, .. }
+                            | LearningTranscriptMessage::Assistant { text, .. } => {
+                                text.len().saturating_add(64)
+                            }
+                            LearningTranscriptMessage::Other => 8,
+                        })
+                    });
+                    if bounded_bytes > 512 * 1024 {
+                        return Err(AgentFailure::BudgetExceeded);
+                    }
+                    snapshots.push(snapshot);
                 }
-                snapshots.push(snapshot);
+                drop(rows);
+                self.check_learning_scope(scope)?;
+                Ok(snapshots)
             }
-            drop(rows);
-            self.check_learning_scope(scope)?;
-            Ok(snapshots)
-        }.await;
+            .await;
         finish_transaction(self, transaction, result).await
     }
 
@@ -701,7 +793,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         now: DateTime<Utc>,
     ) -> Result<(), AgentFailure> {
         self.validate_learning_actor(actor)?;
-        let claim = LearnerClaimRef { job_id, claim_attempt: expected_attempt };
+        let claim = LearnerClaimRef {
+            job_id,
+            claim_attempt: expected_attempt,
+        };
         claim.validate()?;
         let mut connection = self.connection()?;
         let transaction = connection
@@ -788,19 +883,28 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(storage)?;
         let result = async {
             let job = learner_job_by_id(&transaction, self.person_id, claim.job_id)
-                .await?.ok_or(AgentFailure::NotFound)?;
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
             validate_running_claim(&job, claim, actor)?;
             let journals = load_all_learner_journals(&transaction, &job).await?;
-            let journal = journals.get(&claim.claim_attempt).ok_or(AgentFailure::StorageUnavailable)?;
-            if journal.head.device_id != actor.device_id { return Err(AgentFailure::CapabilityDenied); }
+            let journal = journals
+                .get(&claim.claim_attempt)
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            if journal.head.device_id != actor.device_id {
+                return Err(AgentFailure::CapabilityDenied);
+            }
             validate_learner_source(self, &transaction, &job.input).await?;
             let confirmed = learner_job_by_id(&transaction, self.person_id, claim.job_id)
-                .await?.ok_or(AgentFailure::NotFound)?;
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
             validate_running_claim(&confirmed, claim, actor)?;
-            if confirmed != job { return Err(AgentFailure::Conflict); }
+            if confirmed != job {
+                return Err(AgentFailure::Conflict);
+            }
             self.check_learning_scope(scope)?;
             Ok(job.input)
-        }.await;
+        }
+        .await;
         finish_transaction(self, transaction, result).await
     }
 
@@ -818,16 +922,25 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(storage)?;
         let result = async {
             let job = learner_job_by_id(&transaction, self.person_id, claim.job_id)
-                .await?.ok_or(AgentFailure::NotFound)?;
-            if claim.claim_attempt > job.attempts { return Err(AgentFailure::NotFound); }
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            if claim.claim_attempt > job.attempts {
+                return Err(AgentFailure::NotFound);
+            }
             let journals = load_all_learner_journals(&transaction, &job).await?;
-            let journal = journals.get(&claim.claim_attempt).cloned().ok_or(AgentFailure::StorageUnavailable)?;
-            if journal.head.person_id != actor.person_id || journal.head.device_id != actor.device_id {
+            let journal = journals
+                .get(&claim.claim_attempt)
+                .cloned()
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            if journal.head.person_id != actor.person_id
+                || journal.head.device_id != actor.device_id
+            {
                 return Err(AgentFailure::CapabilityDenied);
             }
             self.check_access()?;
             Ok(journal)
-        }.await;
+        }
+        .await;
         let loaded = finish_transaction(self, transaction, result).await;
         self.check_access()?;
         loaded
@@ -843,7 +956,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         claim.validate()?;
         let event_key = learner_event_key(claim, &event)?;
         let encoded_event = payload(&event)?;
-        if encoded_event.len() > MAX_LEARNER_EVENT_BYTES { return Err(AgentFailure::BudgetExceeded); }
+        if encoded_event.len() > MAX_LEARNER_EVENT_BYTES {
+            return Err(AgentFailure::BudgetExceeded);
+        }
         let mut connection = self.connection()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -898,7 +1013,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             Ok(next_head.journal_revision)
         }.await;
         let acknowledged = finish_transaction(self, transaction, result).await;
-        if acknowledged.is_ok() { self.check_access()?; }
+        if acknowledged.is_ok() {
+            self.check_access()?;
+        }
         acknowledged
     }
 }
@@ -906,17 +1023,36 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum StoredLearnerSettlement {
-    Blocked { blockage: floe_knowledge::LearnerProjectionBlock },
-    Completed { candidate_id: Option<Uuid> },
-    Deferred { available_at: DateTime<Utc>, failure: AgentFailure },
-    Failed { failure: AgentFailure },
+    Blocked {
+        blockage: floe_knowledge::LearnerProjectionBlock,
+    },
+    Completed {
+        candidate_id: Option<Uuid>,
+    },
+    Deferred {
+        available_at: DateTime<Utc>,
+        failure: AgentFailure,
+    },
+    Failed {
+        failure: AgentFailure,
+    },
 }
 impl From<&LearnerJobSettlement> for StoredLearnerSettlement {
     fn from(value: &LearnerJobSettlement) -> Self {
         match value {
-            LearnerJobSettlement::Blocked { blockage } => Self::Blocked { blockage: blockage.clone() },
-            LearnerJobSettlement::Completed { candidate_id } => Self::Completed { candidate_id: *candidate_id },
-            LearnerJobSettlement::Deferred { available_at, failure } => Self::Deferred { available_at: *available_at, failure: *failure },
+            LearnerJobSettlement::Blocked { blockage } => Self::Blocked {
+                blockage: blockage.clone(),
+            },
+            LearnerJobSettlement::Completed { candidate_id } => Self::Completed {
+                candidate_id: *candidate_id,
+            },
+            LearnerJobSettlement::Deferred {
+                available_at,
+                failure,
+            } => Self::Deferred {
+                available_at: *available_at,
+                failure: *failure,
+            },
             LearnerJobSettlement::Failed { failure } => Self::Failed { failure: *failure },
         }
     }
@@ -928,28 +1064,43 @@ fn validate_settlement_result(
 ) -> Result<(), AgentFailure> {
     let matches = match settlement {
         LearnerJobSettlement::Blocked { blockage } => {
-            job.state == LearnerJobState::Blocked && job.blocked.as_ref() == Some(blockage)
-                && job.candidate_id.is_none() && job.last_failure.is_none()
+            job.state == LearnerJobState::Blocked
+                && job.blocked.as_ref() == Some(blockage)
+                && job.candidate_id.is_none()
+                && job.last_failure.is_none()
         }
         LearnerJobSettlement::Completed { candidate_id } => {
-            job.state == LearnerJobState::Completed && job.candidate_id == *candidate_id
-                && job.blocked.is_none() && job.last_failure.is_none()
+            job.state == LearnerJobState::Completed
+                && job.candidate_id == *candidate_id
+                && job.blocked.is_none()
+                && job.last_failure.is_none()
         }
-        LearnerJobSettlement::Deferred { available_at, failure } => {
+        LearnerJobSettlement::Deferred {
+            available_at,
+            failure,
+        } => {
             if job.attempts >= MAX_LEARNER_JOB_ATTEMPTS {
-                job.state == LearnerJobState::Failed && job.last_failure == Some(*failure)
+                job.state == LearnerJobState::Failed
+                    && job.last_failure == Some(*failure)
                     && job.finished_at.is_some()
             } else {
-                job.state == LearnerJobState::Deferred && job.available_at == *available_at
-                    && job.last_failure == Some(*failure) && job.finished_at.is_none()
+                job.state == LearnerJobState::Deferred
+                    && job.available_at == *available_at
+                    && job.last_failure == Some(*failure)
+                    && job.finished_at.is_none()
             }
         }
         LearnerJobSettlement::Failed { failure } => {
-            job.state == LearnerJobState::Failed && job.last_failure == Some(*failure)
+            job.state == LearnerJobState::Failed
+                && job.last_failure == Some(*failure)
                 && job.finished_at.is_some()
         }
     };
-    if matches { Ok(()) } else { Err(AgentFailure::StorageUnavailable) }
+    if matches {
+        Ok(())
+    } else {
+        Err(AgentFailure::StorageUnavailable)
+    }
 }
 
 async fn learning_transcript_messages<Keys: VaultKeyProvider>(
@@ -960,8 +1111,14 @@ async fn learning_transcript_messages<Keys: VaultKeyProvider>(
     let mut output = Vec::with_capacity(session.messages.len());
     for message in &session.messages {
         match message {
-            floe_conversation::AgentMessage::User { turn_id, message_id, text } => {
-                if turn_id.is_nil() || message_id.is_nil() { return Err(AgentFailure::VaultUnavailable); }
+            floe_conversation::AgentMessage::User {
+                turn_id,
+                message_id,
+                text,
+            } => {
+                if turn_id.is_nil() || message_id.is_nil() {
+                    return Err(AgentFailure::VaultUnavailable);
+                }
                 output.push(LearningTranscriptMessage::User {
                     message_id: *message_id,
                     turn_id: *turn_id,
@@ -970,10 +1127,15 @@ async fn learning_transcript_messages<Keys: VaultKeyProvider>(
             }
             floe_conversation::AgentMessage::Assistant { turn_id, text } => {
                 let run_id = RunId::from_uuid(*turn_id).ok_or(AgentFailure::VaultUnavailable)?;
-                let run = vault.conversation_run_on(transaction, run_id)
-                    .await?.ok_or(AgentFailure::StorageUnavailable)?;
+                let run = vault
+                    .conversation_run_on(transaction, run_id)
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
                 run.validate(vault.person_id)?;
-                if run.session_id != session.id || run.run_id != run_id || run.user_message_id.is_nil() {
+                if run.session_id != session.id
+                    || run.run_id != run_id
+                    || run.user_message_id.is_nil()
+                {
                     return Err(AgentFailure::VaultUnavailable);
                 }
                 output.push(LearningTranscriptMessage::Assistant {
@@ -992,7 +1154,10 @@ fn validate_stage_origin_actor(request: &MemoryStageRequest) -> Result<(), Agent
     match (&request.origin, &request.request.actor) {
         (MemoryStageOrigin::User, KnowledgeActor::User) => Ok(()),
         (MemoryStageOrigin::Learner { claim, .. }, KnowledgeActor::Learner { run_id })
-            if *run_id == claim.job_id => claim.validate(),
+            if *run_id == claim.job_id =>
+        {
+            claim.validate()
+        }
         _ => Err(AgentFailure::PolicyDenied),
     }
 }
@@ -1002,11 +1167,15 @@ fn validate_running_claim(
     claim: LearnerClaimRef,
     actor: &OwnerActor,
 ) -> Result<(), AgentFailure> {
-    if job.state != LearnerJobState::Running || job.id != claim.job_id
-        || job.attempts != claim.claim_attempt || job.input.run_id != job.id
+    if job.state != LearnerJobState::Running
+        || job.id != claim.job_id
+        || job.attempts != claim.claim_attempt
+        || job.input.run_id != job.id
         || job.input.person_id != actor.person_id
         || job.claimed_device_id.as_deref() != Some(actor.device_id.as_str())
-    { return Err(AgentFailure::Conflict); }
+    {
+        return Err(AgentFailure::Conflict);
+    }
     Ok(())
 }
 
@@ -1100,7 +1269,12 @@ async fn finish_transaction<Keys: VaultKeyProvider, T>(
                 vault.unavailable.store(true, Ordering::Release);
                 return Err(AgentFailure::VaultUnavailable);
             }
-            if matches!(failure, AgentFailure::StorageUnavailable | AgentFailure::VaultUnavailable | AgentFailure::UnsupportedVersion) {
+            if matches!(
+                failure,
+                AgentFailure::StorageUnavailable
+                    | AgentFailure::VaultUnavailable
+                    | AgentFailure::UnsupportedVersion
+            ) {
                 vault.unavailable.store(true, Ordering::Release);
             }
             Err(failure)
@@ -1113,8 +1287,15 @@ async fn count_on(
     sql: &str,
     parameter: &str,
 ) -> Result<i64, AgentFailure> {
-    let mut rows = transaction.query(sql, [parameter.to_owned()]).await.map_err(storage)?;
-    let row = rows.next().await.map_err(storage)?.ok_or(AgentFailure::StorageUnavailable)?;
+    let mut rows = transaction
+        .query(sql, [parameter.to_owned()])
+        .await
+        .map_err(storage)?;
+    let row = rows
+        .next()
+        .await
+        .map_err(storage)?
+        .ok_or(AgentFailure::StorageUnavailable)?;
     let count = row.get::<i64>(0).map_err(storage)?;
     if rows.next().await.map_err(storage)?.is_some() || count < 0 {
         return Err(AgentFailure::StorageUnavailable);
@@ -1127,7 +1308,11 @@ async fn count_all_on(
     sql: &str,
 ) -> Result<i64, AgentFailure> {
     let mut rows = transaction.query(sql, ()).await.map_err(storage)?;
-    let row = rows.next().await.map_err(storage)?.ok_or(AgentFailure::StorageUnavailable)?;
+    let row = rows
+        .next()
+        .await
+        .map_err(storage)?
+        .ok_or(AgentFailure::StorageUnavailable)?;
     let count = row.get::<i64>(0).map_err(storage)?;
     if rows.next().await.map_err(storage)?.is_some() || count < 0 {
         return Err(AgentFailure::StorageUnavailable);
@@ -1140,25 +1325,30 @@ fn decode_revision_row(
     person_id: floe_kernel::PersonId,
     expected_state: KnowledgeRevisionState,
 ) -> Result<KnowledgeRevision, AgentFailure> {
-    let target_id = Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
-        .map_err(unavailable)?;
+    let target_id =
+        Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
     let revision_number = row.get::<i64>(1).map_err(storage)?;
     let stored_person = row.get::<String>(2).map_err(storage)?;
     let stored_kind = row.get::<String>(3).map_err(storage)?;
     let stored_state = row.get::<String>(4).map_err(storage)?;
     let encoded = row.get::<String>(5).map_err(storage)?;
-    if encoded.len() > MAX_LEARNER_JOB_BYTES { return Err(AgentFailure::BudgetExceeded); }
+    if encoded.len() > MAX_LEARNER_JOB_BYTES {
+        return Err(AgentFailure::BudgetExceeded);
+    }
     let revision: KnowledgeRevision = decode(&encoded)?;
     if revision.schema_version != floe_knowledge::KNOWLEDGE_VERSION
         || revision.target_id != target_id
-        || i64::try_from(revision.revision).map_err(|_| AgentFailure::VaultUnavailable)? != revision_number
+        || i64::try_from(revision.revision).map_err(|_| AgentFailure::VaultUnavailable)?
+            != revision_number
         || stored_person != person_id.to_string()
         || revision.person_id != person_id
         || stored_kind != kind_name(revision.kind)
         || stored_state != revision_state_name(revision.state)
         || revision.state != expected_state
         || revision.kind != KnowledgeKind::Memory
-    { return Err(AgentFailure::VaultUnavailable); }
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
     project_memory_summary(&revision, person_id)?;
     Ok(revision)
 }
@@ -1177,27 +1367,36 @@ fn decode_candidate_row(
     row: &turso::Row,
     person_id: floe_kernel::PersonId,
 ) -> Result<KnowledgeCandidate, AgentFailure> {
-    let stored_id = Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
-        .map_err(unavailable)?;
+    let stored_id =
+        Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
     let stored_person = row.get::<String>(1).map_err(storage)?;
     let stored_key = row.get::<String>(2).map_err(storage)?;
     let stored_kind = row.get::<String>(3).map_err(storage)?;
     let stored_state = row.get::<String>(4).map_err(storage)?;
-    let stored_target = row.get::<Option<String>>(5).map_err(storage)?
-        .map(|value| Uuid::parse_str(&value).map_err(unavailable)).transpose()?;
+    let stored_target = row
+        .get::<Option<String>>(5)
+        .map_err(storage)?
+        .map(|value| Uuid::parse_str(&value).map_err(unavailable))
+        .transpose()?;
     let stored_created = row.get::<String>(6).map_err(storage)?;
     let encoded = row.get::<String>(7).map_err(storage)?;
-    if encoded.len() > MAX_LEARNER_JOB_BYTES { return Err(AgentFailure::BudgetExceeded); }
+    if encoded.len() > MAX_LEARNER_JOB_BYTES {
+        return Err(AgentFailure::BudgetExceeded);
+    }
     let candidate: KnowledgeCandidate = decode(&encoded)?;
     if candidate.schema_version != floe_knowledge::KNOWLEDGE_VERSION
-        || candidate.id != stored_id || candidate.person_id != person_id
+        || candidate.id != stored_id
+        || candidate.person_id != person_id
         || stored_person != person_id.to_string()
-        || candidate.idempotency_key != stored_key || candidate.kind != KnowledgeKind::Memory
+        || candidate.idempotency_key != stored_key
+        || candidate.kind != KnowledgeKind::Memory
         || stored_kind != kind_name(candidate.kind)
         || stored_state != state_name(candidate.state)
         || candidate.target_id != stored_target
         || timestamp(candidate.created_at) != stored_created
-    { return Err(AgentFailure::VaultUnavailable); }
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
     Ok(candidate)
 }
 
@@ -1215,10 +1414,16 @@ async fn stage_candidate_by_key(
     let current = if let Some(row) = rows.next().await.map_err(storage)? {
         let current = decode_candidate_row(&row, person_id)?;
         let encoded_stage = row.get::<String>(8).map_err(storage)?;
-        if encoded_stage.len() > MAX_LEARNER_JOB_BYTES { return Err(AgentFailure::BudgetExceeded); }
+        if encoded_stage.len() > MAX_LEARNER_JOB_BYTES {
+            return Err(AgentFailure::BudgetExceeded);
+        }
         Some((current, decode::<KnowledgeCandidate>(&encoded_stage)?))
-    } else { None };
-    if rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::VaultUnavailable); }
+    } else {
+        None
+    };
+    if rows.next().await.map_err(storage)?.is_some() {
+        return Err(AgentFailure::VaultUnavailable);
+    }
     drop(rows);
 
     let receipt = memory_stage_receipt_by_key(transaction, person_id, candidate_key).await?;
@@ -1228,26 +1433,38 @@ async fn stage_candidate_by_key(
         (Some((current, stage)), Some(receipt)) => (current, stage, receipt),
     };
     validate_memory_review_candidate(&stage, person_id)?;
-    if stage.id.is_nil() || stage.observation_id.is_nil() { return Err(AgentFailure::StorageUnavailable); }
+    if stage.id.is_nil() || stage.observation_id.is_nil() {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     let target_matches = current.target_id == stage.target_id
         || (stage.operation == KnowledgeOperation::Create
             && stage.target_id.is_none()
             && current.state == KnowledgeCandidateState::Approved
             && current.target_id.is_some());
-    if current.id != stage.id || current.person_id != stage.person_id
+    if current.id != stage.id
+        || current.person_id != stage.person_id
         || current.idempotency_key != stage.idempotency_key
-        || current.observation_id != stage.observation_id || current.kind != stage.kind
-        || current.operation != stage.operation || current.base_revision != stage.base_revision
-        || current.payload != stage.payload || current.source_refs != stage.source_refs
-        || current.before_hash != stage.before_hash || current.after_hash != stage.after_hash
+        || current.observation_id != stage.observation_id
+        || current.kind != stage.kind
+        || current.operation != stage.operation
+        || current.base_revision != stage.base_revision
+        || current.payload != stage.payload
+        || current.source_refs != stage.source_refs
+        || current.before_hash != stage.before_hash
+        || current.after_hash != stage.after_hash
         || current.extractor_version != stage.extractor_version
-        || current.prompt_version != stage.prompt_version || current.actor != stage.actor
+        || current.prompt_version != stage.prompt_version
+        || current.actor != stage.actor
         || current.created_at != stage.created_at
         || !target_matches
-        || stage.idempotency_key != candidate_key || stage.source_refs != source_refs
-    { return Err(AgentFailure::StorageUnavailable); }
+        || stage.idempotency_key != candidate_key
+        || stage.source_refs != source_refs
+    {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     let observation = observation_by_id(transaction, person_id, stage.observation_id)
-        .await?.ok_or(AgentFailure::StorageUnavailable)?;
+        .await?
+        .ok_or(AgentFailure::StorageUnavailable)?;
     validate_memory_stage_replay(request, &receipt, &observation, &stage)?;
     Ok(Some(stage))
 }
@@ -1261,21 +1478,30 @@ async fn memory_stage_receipt_by_key(
         "SELECT person_id, candidate_key, candidate_id, observation_id, payload FROM knowledge_stage_receipts WHERE person_id = ? AND candidate_key = ?",
         (person_id.to_string(), candidate_key.to_owned()),
     ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else { return Ok(None); };
+    let Some(row) = rows.next().await.map_err(storage)? else {
+        return Ok(None);
+    };
     let stored_person = row.get::<String>(0).map_err(storage)?;
     let stored_key = row.get::<String>(1).map_err(storage)?;
     let stored_candidate = row.get::<String>(2).map_err(storage)?;
     let stored_observation = row.get::<String>(3).map_err(storage)?;
     let encoded = row.get::<String>(4).map_err(storage)?;
-    if rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::VaultUnavailable); }
+    if rows.next().await.map_err(storage)?.is_some() {
+        return Err(AgentFailure::VaultUnavailable);
+    }
     drop(rows);
-    if encoded.len() > MAX_LEARNER_JOB_BYTES { return Err(AgentFailure::BudgetExceeded); }
+    if encoded.len() > MAX_LEARNER_JOB_BYTES {
+        return Err(AgentFailure::BudgetExceeded);
+    }
     let receipt: MemoryStageReceipt = decode(&encoded)?;
-    if stored_person != person_id.to_string() || stored_key != candidate_key
+    if stored_person != person_id.to_string()
+        || stored_key != candidate_key
         || stored_candidate != receipt.candidate_id.to_string()
         || stored_observation != receipt.observation_id.to_string()
         || receipt.person_id != person_id
-    { return Err(AgentFailure::StorageUnavailable); }
+    {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     Ok(Some(receipt))
 }
 
@@ -1287,13 +1513,17 @@ fn validate_observation_identity(
     source_refs: &[LearningEvidenceRef],
 ) -> Result<(), AgentFailure> {
     if observation.schema_version != floe_knowledge::KNOWLEDGE_VERSION
-        || observation.id.is_nil() || observation.person_id != person_id
+        || observation.id.is_nil()
+        || observation.person_id != person_id
         || observation.session_id != request.session_id
-        || observation.evidence != source_refs || observation.outcome != LearningOutcome::Completed
+        || observation.evidence != source_refs
+        || observation.outcome != LearningOutcome::Completed
         || observation.kind != request.observation_kind
         || observation.digest != request.digest.trim()
         || observation.content_hash != expected_hash
-    { return Err(AgentFailure::StorageUnavailable); }
+    {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     Ok(())
 }
 
@@ -1306,19 +1536,27 @@ async fn observation_by_hash(
         "SELECT id, person_id, content_hash, payload FROM learning_observations WHERE person_id = ? AND content_hash = ?",
         (person_id.to_string(), content_hash.to_owned()),
     ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else { return Ok(None); };
-    let stored_id = Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
-        .map_err(unavailable)?;
+    let Some(row) = rows.next().await.map_err(storage)? else {
+        return Ok(None);
+    };
+    let stored_id =
+        Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
     let stored_person = row.get::<String>(1).map_err(storage)?;
     let stored_hash = row.get::<String>(2).map_err(storage)?;
     let encoded = row.get::<String>(3).map_err(storage)?;
-    if encoded.len() > MAX_LEARNER_JOB_BYTES { return Err(AgentFailure::StorageUnavailable); }
+    if encoded.len() > MAX_LEARNER_JOB_BYTES {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     let observation: LearningObservation = decode(&encoded)?;
     if rows.next().await.map_err(storage)?.is_some()
-        || stored_id != observation.id || stored_person != person_id.to_string()
-        || stored_hash != content_hash || observation.person_id != person_id
+        || stored_id != observation.id
+        || stored_person != person_id.to_string()
+        || stored_hash != content_hash
+        || observation.person_id != person_id
         || observation.content_hash != content_hash
-    { return Err(AgentFailure::VaultUnavailable); }
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
     Ok(Some(observation))
 }
 
@@ -1331,19 +1569,27 @@ async fn observation_by_id(
         "SELECT id, person_id, content_hash, payload FROM learning_observations WHERE person_id = ? AND id = ?",
         (person_id.to_string(), observation_id.to_string()),
     ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else { return Ok(None); };
-    let stored_id = Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
-        .map_err(unavailable)?;
+    let Some(row) = rows.next().await.map_err(storage)? else {
+        return Ok(None);
+    };
+    let stored_id =
+        Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
     let stored_person = row.get::<String>(1).map_err(storage)?;
     let stored_hash = row.get::<String>(2).map_err(storage)?;
     let encoded = row.get::<String>(3).map_err(storage)?;
-    if encoded.len() > MAX_LEARNER_JOB_BYTES { return Err(AgentFailure::StorageUnavailable); }
+    if encoded.len() > MAX_LEARNER_JOB_BYTES {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     let observation: LearningObservation = decode(&encoded)?;
     if rows.next().await.map_err(storage)?.is_some()
-        || stored_id != observation_id || stored_person != person_id.to_string()
-        || observation.id != observation_id || observation.person_id != person_id
+        || stored_id != observation_id
+        || stored_person != person_id.to_string()
+        || observation.id != observation_id
+        || observation.person_id != person_id
         || observation.content_hash != stored_hash
-    { return Err(AgentFailure::VaultUnavailable); }
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
     Ok(Some(observation))
 }
 
@@ -1356,9 +1602,13 @@ async fn active_revision_on(
         "SELECT target_id, revision, person_id, kind, state, payload FROM knowledge_revisions WHERE target_id = ? AND person_id = ? AND kind = 'memory' AND state = 'active'",
         (target_id.to_string(), person_id.to_string()),
     ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else { return Ok(None); };
+    let Some(row) = rows.next().await.map_err(storage)? else {
+        return Ok(None);
+    };
     let revision = decode_revision_row(&row, person_id, KnowledgeRevisionState::Active)?;
-    if rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::VaultUnavailable); }
+    if rows.next().await.map_err(storage)?.is_some() {
+        return Err(AgentFailure::VaultUnavailable);
+    }
     Ok(Some(revision))
 }
 
@@ -1366,10 +1616,13 @@ async fn revision_exists_on(
     transaction: &turso::transaction::Transaction<'_>,
     target_id: Uuid,
 ) -> Result<bool, AgentFailure> {
-    let mut rows = transaction.query(
-        "SELECT 1 FROM knowledge_revisions WHERE target_id = ? LIMIT 1",
-        [target_id.to_string()],
-    ).await.map_err(storage)?;
+    let mut rows = transaction
+        .query(
+            "SELECT 1 FROM knowledge_revisions WHERE target_id = ? LIMIT 1",
+            [target_id.to_string()],
+        )
+        .await
+        .map_err(storage)?;
     Ok(rows.next().await.map_err(storage)?.is_some())
 }
 
@@ -1378,7 +1631,9 @@ async fn evidence_is_independent(
     person_id: floe_kernel::PersonId,
     evidence: &[LearningEvidenceRef],
 ) -> Result<bool, AgentFailure> {
-    if evidence.is_empty() { return Ok(false); }
+    if evidence.is_empty() {
+        return Ok(false);
+    }
     for reference in evidence {
         if reference.session_id.is_nil() || reference.turn_id.is_nil() {
             return Err(AgentFailure::InvalidInput);
@@ -1389,9 +1644,12 @@ async fn evidence_is_independent(
                 person_id,
                 reference.session_id,
                 reference.turn_id,
-            ).await?,
+            )
+            .await?,
             DependencyCoverage::Independent
-        ) { return Ok(false); }
+        ) {
+            return Ok(false);
+        }
     }
     Ok(true)
 }
@@ -1411,28 +1669,43 @@ impl<Keys: VaultKeyProvider> floe_knowledge::EvidenceReader
         turn_ids: &[Uuid],
     ) -> Result<LearningEvidenceSnapshot, AgentFailure> {
         self.vault.check_access()?;
-        if person_id != self.vault.person_id { return Err(AgentFailure::PolicyDenied); }
+        if person_id != self.vault.person_id {
+            return Err(AgentFailure::PolicyDenied);
+        }
         let session = self.vault.session_on(self.transaction, session_id).await?;
-        let mut coverage = if turn_ids.is_empty() { DependencyCoverage::Unknown } else { DependencyCoverage::Independent };
+        let mut coverage = if turn_ids.is_empty() {
+            DependencyCoverage::Unknown
+        } else {
+            DependencyCoverage::Independent
+        };
         for turn_id in turn_ids {
             let current = super::context_dependencies::read_context_dependency_coverage(
                 self.transaction,
                 person_id,
                 session_id,
                 *turn_id,
-            ).await?;
+            )
+            .await?;
             coverage = match coverage.merge(&current) {
                 Ok(merged) => merged,
                 // Historical turns may name different epochs of one source.
                 // Their union is ineligible for learning, not Vault corruption.
-                Err(floe_context_contract::ContextDependencyError::Conflict) => DependencyCoverage::Unknown,
-                Err(floe_context_contract::ContextDependencyError::TooLarge
-                    | floe_context_contract::ContextDependencyError::DependencyCount) => return Err(AgentFailure::BudgetExceeded),
+                Err(floe_context_contract::ContextDependencyError::Conflict) => {
+                    DependencyCoverage::Unknown
+                }
+                Err(
+                    floe_context_contract::ContextDependencyError::TooLarge
+                    | floe_context_contract::ContextDependencyError::DependencyCount,
+                ) => return Err(AgentFailure::BudgetExceeded),
                 Err(_) => return Err(AgentFailure::VaultUnavailable),
             };
         }
-        let mut actual_turn_ids = session.messages.iter()
-            .filter(|message| !matches!(message, floe_conversation::AgentMessage::Compaction { .. }))
+        let mut actual_turn_ids = session
+            .messages
+            .iter()
+            .filter(|message| {
+                !matches!(message, floe_conversation::AgentMessage::Compaction { .. })
+            })
             .map(floe_conversation::AgentMessage::turn_id)
             .collect::<HashSet<_>>()
             .into_iter()
@@ -1466,17 +1739,29 @@ async fn validate_learner_source<Keys: VaultKeyProvider>(
         input.session_id,
         input.session_revision,
         &input.turn_ids,
-    ).await.map_err(|failure| match failure {
+    )
+    .await
+    .map_err(|failure| match failure {
         AgentFailure::Conflict => AgentFailure::StaleContext,
         other => other,
     })?;
     for expected in &input.current_memories {
         let revision = active_revision_on(transaction, input.person_id, expected.target_id)
-            .await?.ok_or(AgentFailure::StaleContext)?;
-        if revision.revision != expected.revision { return Err(AgentFailure::StaleContext); }
-        let independent = evidence_is_independent(transaction, input.person_id, &revision.source_refs).await?;
-        let projected = project_memory_context(input.person_id,
-            vec![MemoryContextFact { revision, evidence_independent: independent }], input.observed_at)?;
+            .await?
+            .ok_or(AgentFailure::StaleContext)?;
+        if revision.revision != expected.revision {
+            return Err(AgentFailure::StaleContext);
+        }
+        let independent =
+            evidence_is_independent(transaction, input.person_id, &revision.source_refs).await?;
+        let projected = project_memory_context(
+            input.person_id,
+            vec![MemoryContextFact {
+                revision,
+                evidence_independent: independent,
+            }],
+            input.observed_at,
+        )?;
         if projected.memories.as_slice() != std::slice::from_ref(expected) {
             return Err(AgentFailure::StaleContext);
         }
@@ -1487,7 +1772,13 @@ async fn validate_learner_source<Keys: VaultKeyProvider>(
 fn learning_outcome(outcome: AgentOutcome) -> LearningOutcome {
     match outcome {
         AgentOutcome::Completed => LearningOutcome::Completed,
-        AgentOutcome::Blocked { run_id, review_group_id } => LearningOutcome::Blocked { run_id, review_group_id },
+        AgentOutcome::Blocked {
+            run_id,
+            review_group_id,
+        } => LearningOutcome::Blocked {
+            run_id,
+            review_group_id,
+        },
         AgentOutcome::Halted { reason } => LearningOutcome::Halted { reason },
     }
 }
@@ -1508,25 +1799,37 @@ async fn knowledge_decision_receipt(
         "SELECT person_id, device_id, command_kind, candidate_id, decision_kind, payload FROM knowledge_command_receipts WHERE command_id = ?",
         [command_id.as_uuid().to_string()],
     ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else { return Ok(None); };
+    let Some(row) = rows.next().await.map_err(storage)? else {
+        return Ok(None);
+    };
     let stored_person = row.get::<String>(0).map_err(storage)?;
     let stored_device = row.get::<String>(1).map_err(storage)?;
     let command_kind = row.get::<String>(2).map_err(storage)?;
-    let candidate_id = Uuid::parse_str(&row.get::<String>(3).map_err(storage)?)
-        .map_err(unavailable)?;
+    let candidate_id =
+        Uuid::parse_str(&row.get::<String>(3).map_err(storage)?).map_err(unavailable)?;
     let decision_kind = row.get::<String>(4).map_err(storage)?;
     let encoded = row.get::<String>(5).map_err(storage)?;
-    if encoded.len() > MAX_LEARNER_JOB_BYTES { return Err(AgentFailure::StorageUnavailable); }
+    if encoded.len() > MAX_LEARNER_JOB_BYTES {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     let result: KnowledgeDecisionResult = decode(&encoded)?;
-    if rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::VaultUnavailable); }
-    if command_kind != "memory_decision" || stored_person != person_id.to_string()
+    if rows.next().await.map_err(storage)?.is_some() {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    if command_kind != "memory_decision"
+        || stored_person != person_id.to_string()
         || stored_device != device_id
-    { return Err(AgentFailure::Conflict); }
-    if result.candidate.person_id != person_id || result.candidate.id != candidate_id
+    {
+        return Err(AgentFailure::Conflict);
+    }
+    if result.candidate.person_id != person_id
+        || result.candidate.id != candidate_id
         || result.decision.candidate_id != candidate_id
         || result.decision.decision != decision_kind_value(&decision_kind)?
         || result.decision.actor != KnowledgeActor::User
-    { return Err(AgentFailure::StorageUnavailable); }
+    {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     floe_knowledge::project_memory_decision(command_id, &result)?;
     Ok(Some(MemoryDecisionReceipt {
         candidate_id,
@@ -1552,10 +1855,18 @@ async fn candidate_by_id(
         "SELECT id, person_id, idempotency_key, kind, state, target_id, created_at, payload FROM knowledge_candidates WHERE id = ? AND person_id = ?",
         (candidate_id.to_string(), person_id.to_string()),
     ).await.map_err(storage)?;
-    let row = rows.next().await.map_err(storage)?.ok_or(AgentFailure::NotFound)?;
+    let row = rows
+        .next()
+        .await
+        .map_err(storage)?
+        .ok_or(AgentFailure::NotFound)?;
     let candidate = decode_candidate_row(&row, person_id)?;
-    if rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::VaultUnavailable); }
-    if candidate.id != candidate_id { return Err(AgentFailure::VaultUnavailable); }
+    if rows.next().await.map_err(storage)?.is_some() {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    if candidate.id != candidate_id {
+        return Err(AgentFailure::VaultUnavailable);
+    }
     Ok(candidate)
 }
 
@@ -1568,10 +1879,16 @@ async fn learner_job_by_key(
         "SELECT id, person_id, idempotency_key, state, attempts, available_at, payload FROM learner_review_jobs WHERE person_id = ? AND idempotency_key = ?",
         (person_id.to_string(), idempotency_key.to_owned()),
     ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else { return Ok(None); };
+    let Some(row) = rows.next().await.map_err(storage)? else {
+        return Ok(None);
+    };
     let job = decode_job_row(&row, person_id)?;
-    if rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::VaultUnavailable); }
-    if job.idempotency_key != idempotency_key { return Err(AgentFailure::VaultUnavailable); }
+    if rows.next().await.map_err(storage)?.is_some() {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    if job.idempotency_key != idempotency_key {
+        return Err(AgentFailure::VaultUnavailable);
+    }
     Ok(Some(job))
 }
 
@@ -1584,10 +1901,16 @@ async fn learner_job_by_id(
         "SELECT id, person_id, idempotency_key, state, attempts, available_at, payload FROM learner_review_jobs WHERE id = ? AND person_id = ?",
         (job_id.to_string(), person_id.to_string()),
     ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else { return Ok(None); };
+    let Some(row) = rows.next().await.map_err(storage)? else {
+        return Ok(None);
+    };
     let job = decode_job_row(&row, person_id)?;
-    if rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::VaultUnavailable); }
-    if job.id != job_id { return Err(AgentFailure::VaultUnavailable); }
+    if rows.next().await.map_err(storage)?.is_some() {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    if job.id != job_id {
+        return Err(AgentFailure::VaultUnavailable);
+    }
     Ok(Some(job))
 }
 
@@ -1595,22 +1918,27 @@ fn decode_job_row(
     row: &turso::Row,
     person_id: floe_kernel::PersonId,
 ) -> Result<LearnerReviewJob, AgentFailure> {
-    let id = Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
-        .map_err(unavailable)?;
+    let id = Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
     let stored_person = row.get::<String>(1).map_err(storage)?;
     let stored_key = row.get::<String>(2).map_err(storage)?;
     let stored_state = row.get::<String>(3).map_err(storage)?;
     let stored_attempts = row.get::<i64>(4).map_err(storage)?;
     let stored_available = row.get::<String>(5).map_err(storage)?;
     let encoded = row.get::<String>(6).map_err(storage)?;
-    if encoded.len() > MAX_LEARNER_JOB_BYTES { return Err(AgentFailure::BudgetExceeded); }
+    if encoded.len() > MAX_LEARNER_JOB_BYTES {
+        return Err(AgentFailure::BudgetExceeded);
+    }
     let job: LearnerReviewJob = decode(&encoded)?;
     validate_learner_job_rowless(&job, person_id)?;
-    if stored_person != person_id.to_string() || job.id != id || job.idempotency_key != stored_key
+    if stored_person != person_id.to_string()
+        || job.id != id
+        || job.idempotency_key != stored_key
         || learner_job_state(job.state) != stored_state
         || i64::from(job.attempts) != stored_attempts
         || timestamp(job.available_at) != stored_available
-    { return Err(AgentFailure::VaultUnavailable); }
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
     Ok(job)
 }
 
@@ -1620,10 +1948,15 @@ fn validate_learner_job_rowless(
 ) -> Result<(), AgentFailure> {
     validate_learner_input(&job.input, person_id).map_err(|_| AgentFailure::VaultUnavailable)?;
     floe_knowledge::validate_learner_job_lifecycle(&job.lifecycle())?;
-    if job.schema_version != floe_knowledge::KNOWLEDGE_VERSION || job.id.is_nil()
-        || job.input.run_id != job.id || job.idempotency_key.is_empty()
-        || learner_job_key(&job.input).map_err(|_| AgentFailure::VaultUnavailable)? != job.idempotency_key
-    { return Err(AgentFailure::VaultUnavailable); }
+    if job.schema_version != floe_knowledge::KNOWLEDGE_VERSION
+        || job.id.is_nil()
+        || job.input.run_id != job.id
+        || job.idempotency_key.is_empty()
+        || learner_job_key(&job.input).map_err(|_| AgentFailure::VaultUnavailable)?
+            != job.idempotency_key
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
     Ok(())
 }
 
@@ -1664,15 +1997,21 @@ async fn settlement_receipt(
         "SELECT device_id, settlement, result FROM learner_settlement_receipts WHERE job_id = ? AND person_id = ? AND claim_attempt = ?",
         (job_id.to_string(), person_id.to_string(), i64::from(attempt)),
     ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else { return Ok(None); };
+    let Some(row) = rows.next().await.map_err(storage)? else {
+        return Ok(None);
+    };
     let receipt = (
         row.get::<String>(0).map_err(storage)?,
         row.get::<String>(1).map_err(storage)?,
         row.get::<String>(2).map_err(storage)?,
     );
-    if rows.next().await.map_err(storage)?.is_some() || receipt.0.len() > 128
-        || receipt.1.len() > MAX_LEARNER_EVENT_BYTES || receipt.2.len() > MAX_LEARNER_JOB_BYTES
-    { return Err(AgentFailure::VaultUnavailable); }
+    if rows.next().await.map_err(storage)?.is_some()
+        || receipt.0.len() > 128
+        || receipt.1.len() > MAX_LEARNER_EVENT_BYTES
+        || receipt.2.len() > MAX_LEARNER_JOB_BYTES
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
     Ok(Some(receipt))
 }
 
@@ -1686,7 +2025,9 @@ async fn learner_journal_head(
         "SELECT job_id, person_id, claim_attempt, device_id, journal_revision, journal_digest, payload FROM learner_journal_heads WHERE job_id = ? AND person_id = ? AND claim_attempt = ?",
         (job_id.to_string(), person_id.to_string(), i64::from(attempt)),
     ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else { return Ok(None); };
+    let Some(row) = rows.next().await.map_err(storage)? else {
+        return Ok(None);
+    };
     let stored_job = row.get::<String>(0).map_err(storage)?;
     let stored_person = row.get::<String>(1).map_err(storage)?;
     let stored_attempt = row.get::<i64>(2).map_err(storage)?;
@@ -1694,16 +2035,24 @@ async fn learner_journal_head(
     let stored_revision = row.get::<i64>(4).map_err(storage)?;
     let stored_digest = row.get::<String>(5).map_err(storage)?;
     let encoded_head = row.get::<String>(6).map_err(storage)?;
-    if encoded_head.len() > 4096 { return Err(AgentFailure::StorageUnavailable); }
+    if encoded_head.len() > 4096 {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     let head: LearnerJournalHead = decode(&encoded_head)?;
     if rows.next().await.map_err(storage)?.is_some()
-        || stored_job != job_id.to_string() || stored_person != person_id.to_string()
-        || stored_attempt != i64::from(attempt) || stored_device != head.device_id
-        || stored_revision != i64::try_from(head.journal_revision).map_err(|_| AgentFailure::StorageUnavailable)?
+        || stored_job != job_id.to_string()
+        || stored_person != person_id.to_string()
+        || stored_attempt != i64::from(attempt)
+        || stored_device != head.device_id
+        || stored_revision
+            != i64::try_from(head.journal_revision).map_err(|_| AgentFailure::StorageUnavailable)?
         || stored_digest != digest_hex(&head.journal_digest)
-        || head.claim.job_id != job_id || head.claim.claim_attempt != attempt
+        || head.claim.job_id != job_id
+        || head.claim.claim_attempt != attempt
         || head.person_id != person_id
-    { return Err(AgentFailure::StorageUnavailable); }
+    {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     Ok(Some(head))
 }
 
@@ -1725,16 +2074,26 @@ async fn load_all_learner_journals(
         let stored_revision = row.get::<i64>(4).map_err(storage)?;
         let stored_digest = row.get::<String>(5).map_err(storage)?;
         let encoded_head = row.get::<String>(6).map_err(storage)?;
-        if encoded_head.len() > 4096 { return Err(AgentFailure::StorageUnavailable); }
+        if encoded_head.len() > 4096 {
+            return Err(AgentFailure::StorageUnavailable);
+        }
         let head: LearnerJournalHead = decode(&encoded_head)?;
-        if stored_job != job.id.to_string() || stored_person != job.input.person_id.to_string()
-            || attempt == 0 || attempt > job.attempts || stored_device != head.device_id
-            || stored_revision != i64::try_from(head.journal_revision).map_err(|_| AgentFailure::StorageUnavailable)?
+        if stored_job != job.id.to_string()
+            || stored_person != job.input.person_id.to_string()
+            || attempt == 0
+            || attempt > job.attempts
+            || stored_device != head.device_id
+            || stored_revision
+                != i64::try_from(head.journal_revision)
+                    .map_err(|_| AgentFailure::StorageUnavailable)?
             || stored_digest != digest_hex(&head.journal_digest)
-            || head.claim.job_id != job.id || head.claim.claim_attempt != attempt
+            || head.claim.job_id != job.id
+            || head.claim.claim_attempt != attempt
             || head.person_id != job.input.person_id
             || heads.insert(attempt, head).is_some()
-        { return Err(AgentFailure::StorageUnavailable); }
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
     }
     drop(head_rows);
     if heads.len() != usize::from(job.attempts) {
@@ -1756,7 +2115,9 @@ async fn load_all_learner_journals(
             .map_err(|_| AgentFailure::StorageUnavailable)?;
         let event_key = row.get::<String>(3).map_err(storage)?;
         let encoded = row.get::<String>(4).map_err(storage)?;
-        if attempt == 0 || attempt > job.attempts || event_key.len() > 256
+        if attempt == 0
+            || attempt > job.attempts
+            || event_key.len() > 256
             || encoded.len() > MAX_LEARNER_EVENT_BYTES
             || stored_person != job.input.person_id.to_string()
             || !event_keys.insert((attempt, event_key.clone()))
@@ -1765,52 +2126,90 @@ async fn load_all_learner_journals(
         }
         let event: JournalEvent = decode(&encoded)?;
         let canonical_key = learner_event_key(
-            LearnerClaimRef { job_id: job.id, claim_attempt: attempt },
+            LearnerClaimRef {
+                job_id: job.id,
+                claim_attempt: attempt,
+            },
             &event,
-        ).map_err(|_| AgentFailure::StorageUnavailable)?;
-        if event_key != canonical_key { return Err(AgentFailure::StorageUnavailable); }
+        )
+        .map_err(|_| AgentFailure::StorageUnavailable)?;
+        if event_key != canonical_key {
+            return Err(AgentFailure::StorageUnavailable);
+        }
         let entries = entry_map.entry(attempt).or_default();
         let total_bytes = entry_bytes.entry(attempt).or_default();
         if entries.len() >= 64 || (*total_bytes).saturating_add(encoded.len()) > 512 * 1024 {
             return Err(AgentFailure::StorageUnavailable);
         }
         *total_bytes += encoded.len();
-        let expected = u64::try_from(entries.len()).map_err(|_| AgentFailure::StorageUnavailable)?
-            .checked_add(1).ok_or(AgentFailure::StorageUnavailable)?;
-        if sequence != expected { return Err(AgentFailure::StorageUnavailable); }
-        entries.push(JournalEntry { revision: sequence, event });
+        let expected = u64::try_from(entries.len())
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .checked_add(1)
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        if sequence != expected {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        entries.push(JournalEntry {
+            revision: sequence,
+            event,
+        });
     }
     drop(event_rows);
 
     let mut journals = HashMap::new();
     for attempt in 1..=job.attempts {
-        let head = heads.remove(&attempt).ok_or(AgentFailure::StorageUnavailable)?;
+        let head = heads
+            .remove(&attempt)
+            .ok_or(AgentFailure::StorageUnavailable)?;
         let entries = entry_map.remove(&attempt).unwrap_or_default();
-        if usize::try_from(head.journal_revision).map_err(|_| AgentFailure::StorageUnavailable)? != entries.len() {
+        if usize::try_from(head.journal_revision).map_err(|_| AgentFailure::StorageUnavailable)?
+            != entries.len()
+        {
             return Err(AgentFailure::StorageUnavailable);
         }
         validate_learner_journal(&head, &entries)?;
         let journal = LearnerClaimJournal { head, entries };
-        if attempt < job.attempts || (attempt == job.attempts && job.state == LearnerJobState::Deferred) {
+        if attempt < job.attempts
+            || (attempt == job.attempts && job.state == LearnerJobState::Deferred)
+        {
             floe_knowledge::validate_learner_deferred_journal(&journal)?;
-            let (device, encoded_settlement, encoded_result) = settlement_receipt(
-                transaction, job.id, job.input.person_id, attempt,
-            ).await?.ok_or(AgentFailure::StorageUnavailable)?;
-            let StoredLearnerSettlement::Deferred { available_at, failure } = decode(&encoded_settlement)?
-                else { return Err(AgentFailure::StorageUnavailable); };
+            let (device, encoded_settlement, encoded_result) =
+                settlement_receipt(transaction, job.id, job.input.person_id, attempt)
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+            let StoredLearnerSettlement::Deferred {
+                available_at,
+                failure,
+            } = decode(&encoded_settlement)?
+            else {
+                return Err(AgentFailure::StorageUnavailable);
+            };
             let settled: LearnerReviewJob = decode(&encoded_result)?;
             validate_learner_job_rowless(&settled, job.input.person_id)?;
-            if device != journal.head.device_id || settled.id != job.id || settled.attempts != attempt
-                || settled.input != job.input || settled.idempotency_key != job.idempotency_key
+            if device != journal.head.device_id
+                || settled.id != job.id
+                || settled.attempts != attempt
+                || settled.input != job.input
+                || settled.idempotency_key != job.idempotency_key
                 || settled.state != LearnerJobState::Deferred
                 || settled.claimed_device_id.as_deref() != Some(device.as_str())
                 || (attempt == job.attempts && settled != *job)
-            { return Err(AgentFailure::StorageUnavailable); }
-            validate_settlement_result(&LearnerJobSettlement::Deferred { available_at, failure }, &settled)?;
+            {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            validate_settlement_result(
+                &LearnerJobSettlement::Deferred {
+                    available_at,
+                    failure,
+                },
+                &settled,
+            )?;
         }
         journals.insert(attempt, journal);
     }
-    if !entry_map.is_empty() || !heads.is_empty() { return Err(AgentFailure::StorageUnavailable); }
+    if !entry_map.is_empty() || !heads.is_empty() {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     if let Some(latest) = journals.get(&job.attempts) {
         if job.claimed_device_id.as_deref() != Some(latest.head.device_id.as_str()) {
             return Err(AgentFailure::StorageUnavailable);
@@ -1821,13 +2220,25 @@ async fn load_all_learner_journals(
 
 fn learner_event_key(claim: LearnerClaimRef, event: &JournalEvent) -> Result<String, AgentFailure> {
     let key = match event {
-        JournalEvent::ModelIntent { attempt_id, .. } if !attempt_id.is_nil() => format!("model-intent:{attempt_id}"),
-        JournalEvent::ModelResult { attempt_id, .. } if !attempt_id.is_nil() => format!("model-result:{attempt_id}"),
+        JournalEvent::ModelIntent { attempt_id, .. } if !attempt_id.is_nil() => {
+            format!("model-intent:{attempt_id}")
+        }
+        JournalEvent::ModelResult { attempt_id, .. } if !attempt_id.is_nil() => {
+            format!("model-result:{attempt_id}")
+        }
         JournalEvent::Output { .. } => format!("output:{}:{}", claim.claim_attempt, hash(event)?),
-        JournalEvent::Checkpoint { iteration } => format!("checkpoint:{}:{iteration}", claim.claim_attempt),
-        JournalEvent::ValidatedBatch { .. } => format!("validated-batch:{}:{}", claim.claim_attempt, hash(event)?),
-        JournalEvent::BatchProgress { .. } => format!("batch-progress:{}:{}", claim.claim_attempt, hash(event)?),
-        JournalEvent::ModelIntent { .. } | JournalEvent::ModelResult { .. } => return Err(AgentFailure::InvalidInput),
+        JournalEvent::Checkpoint { iteration } => {
+            format!("checkpoint:{}:{iteration}", claim.claim_attempt)
+        }
+        JournalEvent::ValidatedBatch { .. } => {
+            format!("validated-batch:{}:{}", claim.claim_attempt, hash(event)?)
+        }
+        JournalEvent::BatchProgress { .. } => {
+            format!("batch-progress:{}:{}", claim.claim_attempt, hash(event)?)
+        }
+        JournalEvent::ModelIntent { .. } | JournalEvent::ModelResult { .. } => {
+            return Err(AgentFailure::InvalidInput);
+        }
         _ => return Err(AgentFailure::CapabilityDenied),
     };
     Ok(key)

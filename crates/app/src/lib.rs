@@ -29,11 +29,11 @@ mod native_lane;
 mod owner_handles;
 mod prompts;
 #[cfg(unix)]
-mod vault_services;
+mod ready_generation;
 #[cfg(unix)]
 mod vault_lifecycle;
 #[cfg(unix)]
-mod ready_generation;
+mod vault_services;
 
 pub use floe_context_contract::{CalendarProvider, CalendarScope, ResourceHandle, SourceAuthority};
 /// Values carried by the remaining host service signatures. The S1
@@ -53,7 +53,10 @@ pub use floe_kernel::{AgentFailure, CommandId, PersonId, RunId};
 pub use floe_knowledge::{KnowledgeDecisionKind, MemoryOrigin, MemoryOverviewSnapshot};
 
 #[cfg(unix)]
-pub use action_services::{ActionsCommand, ActionsCommandResult, ActionsCommands, ActionsQuery, ActionsQueryResult, ActionsQueries};
+pub use action_services::{
+    ActionsCommand, ActionsCommandResult, ActionsCommands, ActionsQueries, ActionsQuery,
+    ActionsQueryResult,
+};
 pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};
 #[cfg(unix)]
 pub use composition::{AppComposition, AppOpenError, open};
@@ -65,12 +68,15 @@ pub use context_services::{
 pub use core::{Classification, FloeCore};
 #[cfg(unix)]
 pub use day_services::{DayCommands, DayQueries};
-pub use floe_day::{DayQuery, DayMutation, DayMutationRequest, DayMutationResult};
 pub use error::{CoreError, ErrorCode};
 #[cfg(unix)]
-pub use expert_services::{ExpertCommand, ExpertCommandResult, ExpertCommands, ExpertQuery, ExpertQueryResult, ExpertQueries};
+pub use expert_services::{
+    ExpertCommand, ExpertCommandResult, ExpertCommands, ExpertQueries, ExpertQuery,
+    ExpertQueryResult,
+};
 /// The acquisition values one local-context command carries.
 pub use floe_context::valid_native_subject_fingerprint;
+pub use floe_day::{DayMutation, DayMutationRequest, DayMutationResult, DayQuery};
 pub use floe_provider_adapters::sources::native_acquisition::{
     AttentionAcquisitionMode, AttentionAcquisitionRequest, AttentionAcquisitionResult,
     CalendarAcquisitionMode, CalendarAcquisitionRequest, CalendarAcquisitionResult,
@@ -81,7 +87,9 @@ pub use floe_provider_adapters::sources::native_acquisition::{
 };
 pub use host::{AppHost, HostRequest};
 #[cfg(unix)]
-pub use knowledge_services::{KnowledgeCommands, KnowledgeQuery, KnowledgeQueryResult, KnowledgeQueries};
+pub use knowledge_services::{
+    KnowledgeCommands, KnowledgeQueries, KnowledgeQuery, KnowledgeQueryResult,
+};
 pub use local_context::{
     LocalContextHost, NativeHostKind, NativeHostOutcome, NativeHostRegistrationRef,
 };
@@ -91,6 +99,6 @@ pub use owner_handles::{ReadyOwners, host_scope};
 
 #[cfg(unix)]
 pub use vault_services::{
-    VaultLifecycleCommand, VaultLifecycleCommands, VaultLifecycleFailureProjection, VaultLifecycleQueries,
-    VaultLifecycleRecovery, VaultLifecycleResult, VaultState,
+    VaultLifecycleCommand, VaultLifecycleCommands, VaultLifecycleFailureProjection,
+    VaultLifecycleQueries, VaultLifecycleRecovery, VaultLifecycleResult, VaultState,
 };

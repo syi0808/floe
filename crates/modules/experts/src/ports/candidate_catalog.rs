@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CandidateAvailability { Available, Unavailable }
+pub enum CandidateAvailability {
+    Available,
+    Unavailable,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -43,6 +46,9 @@ pub struct CandidateSnapshot {
 }
 
 pub trait CandidateCatalog: Send + Sync {
-    fn inspect<'a>(&'a self, query: CandidateQuery, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<CandidateSnapshot, AgentFailure>>;
+    fn inspect<'a>(
+        &'a self,
+        query: CandidateQuery,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<CandidateSnapshot, AgentFailure>>;
 }

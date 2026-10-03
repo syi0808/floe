@@ -11,9 +11,13 @@ pub async fn acquire_memory_context(
     actor: &floe_kernel::OwnerActor,
     scope: &floe_execution::ExecutionScope,
 ) -> Result<floe_knowledge::MemoryContextSnapshot, AgentFailure> {
-    let acquired = acquire_optional_source(ContextSource::Memory, reader.read_context(actor, scope)).await?;
+    let acquired =
+        acquire_optional_source(ContextSource::Memory, reader.read_context(actor, scope)).await?;
     match acquired.value {
         Some(value) => Ok(value),
-        None => Ok(floe_knowledge::MemoryContextSnapshot { memories: vec![], issue: acquired.issue.map(|issue| issue.reason) }),
+        None => Ok(floe_knowledge::MemoryContextSnapshot {
+            memories: vec![],
+            issue: acquired.issue.map(|issue| issue.reason),
+        }),
     }
 }

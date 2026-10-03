@@ -428,7 +428,10 @@ fn session_message(
             message_id: reference!(MessageRefDto, message_id),
             turn_id: reference!(UuidRefDto, turn_id),
             task: ConversationSessionTaskDto {
-                execution_receipt: task.execution_receipt.map(task_receipt_reference).transpose()?,
+                execution_receipt: task
+                    .execution_receipt
+                    .map(task_receipt_reference)
+                    .transpose()?,
                 task_id: reference!(TaskRefDto, task.task_id.as_uuid()),
                 agent_id: task.agent_id,
                 state: match task.state {
@@ -808,16 +811,27 @@ pub(crate) fn failure_dto(reason: AgentFailure, correlation_id: Uuid) -> AppWire
     error
 }
 
-fn task_receipt_reference(value: floe_agent_contract::TaskExecutionReceiptRef) -> AppWireResult<TaskExecutionReceiptRefDto> {
+fn task_receipt_reference(
+    value: floe_agent_contract::TaskExecutionReceiptRef,
+) -> AppWireResult<TaskExecutionReceiptRefDto> {
     value.validate().map_err(|_| internal_error())?;
-    let digest=value.digest.iter().map(|byte|format!("{byte:02x}")).collect::<String>();
-    let result=TaskExecutionReceiptRefDto {
-        execution:TaskExecutionKeyDto {
-            task_id:TaskRefDto::new(value.execution.task_id.as_uuid()).ok_or_else(internal_error)?,
-            execution_id:UuidRefDto::new(value.execution.execution_id).ok_or_else(internal_error)?,
-            executor_generation:value.execution.executor_generation,
-        }, task_revision:value.task_revision,journal_revision:value.journal_revision,
-        digest:DigestHex64Dto::new(digest).ok_or_else(internal_error)?,
+    let digest = value
+        .digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let result = TaskExecutionReceiptRefDto {
+        execution: TaskExecutionKeyDto {
+            task_id: TaskRefDto::new(value.execution.task_id.as_uuid())
+                .ok_or_else(internal_error)?,
+            execution_id: UuidRefDto::new(value.execution.execution_id)
+                .ok_or_else(internal_error)?,
+            executor_generation: value.execution.executor_generation,
+        },
+        task_revision: value.task_revision,
+        journal_revision: value.journal_revision,
+        digest: DigestHex64Dto::new(digest).ok_or_else(internal_error)?,
     };
-    result.validate().map_err(|_|internal_error())?; Ok(result)
+    result.validate().map_err(|_| internal_error())?;
+    Ok(result)
 }

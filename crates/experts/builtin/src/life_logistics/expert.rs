@@ -16,8 +16,7 @@ use crate::prompts::life_logistics_expert_prompt;
 use crate::shared::{valid_text, validate_summary};
 
 const MAX_MODEL_OUTPUT_BYTES: usize = 8192;
-const ROLE_APPENDIX: &str =
-    "\n\nRead every required evidence tool before making your final judgment. Return the final answer as one JSON object matching this package output schema:\n";
+const ROLE_APPENDIX: &str = "\n\nRead every required evidence tool before making your final judgment. Return the final answer as one JSON object matching this package output schema:\n";
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LifeLogisticsProgram;
@@ -79,25 +78,29 @@ impl ExpertProgram for LifeLogisticsProgram {
         }
 
         let requirement_key = BuiltinContextSource::Logistics.source_id();
-        let view = match crate::program_support::read_one::<LogisticsView>(
-            observations,
-            requirement_key,
-        )? {
-            Some(view) => view,
-            None if crate::program_support::was_unavailable(observations, requirement_key) => {
-                return crate::program_support::unavailable(
-                    request,
-                    observations,
-                    requirement_key,
-                    crate::BuiltinExpertKind::LifeLogistics.result_artifact_name(),
-                    super::RESULT_MEDIA_TYPE,
-                    "Logistics are temporarily unavailable, so there is no logistics plan.",
-                );
-            }
-            None => return Err(AgentFailure::InvalidModelOutput),
-        };
+        let view =
+            match crate::program_support::read_one::<LogisticsView>(observations, requirement_key)?
+            {
+                Some(view) => view,
+                None if crate::program_support::was_unavailable(observations, requirement_key) => {
+                    return crate::program_support::unavailable(
+                        request,
+                        observations,
+                        requirement_key,
+                        crate::BuiltinExpertKind::LifeLogistics.result_artifact_name(),
+                        super::RESULT_MEDIA_TYPE,
+                        "Logistics are temporarily unavailable, so there is no logistics plan.",
+                    );
+                }
+                None => return Err(AgentFailure::InvalidModelOutput),
+            };
         validate_logistics_view(&view, request.now_unix_ms)?;
-        if text.len() > request.request.execution_context.max_output_bytes.min(MAX_MODEL_OUTPUT_BYTES)
+        if text.len()
+            > request
+                .request
+                .execution_context
+                .max_output_bytes
+                .min(MAX_MODEL_OUTPUT_BYTES)
         {
             return Err(AgentFailure::BudgetExceeded);
         }

@@ -7,8 +7,8 @@ use floe_agent_contract::{
     ModelConversation, ModelConversationEntry, ModelCorrection, ModelPlanRequest, ModelPort,
     ModelProjectionOutcome, ModelProjectionPort, ModelProjectionRequest, ModelRequest,
     ModelResponse, ModelStep, ModelUsage, PinnedAgentRevision, PinnedToolRevision, ReplayReceipt,
-    SourceProjectionReview, TaskId, TaskReceipt, ToolCall, ToolInvocationOutcome, ToolPort, ToolResult,
-    ValidatedModelBatch,
+    SourceProjectionReview, TaskId, TaskReceipt, ToolCall, ToolInvocationOutcome, ToolPort,
+    ToolResult, ValidatedModelBatch,
 };
 use uuid::Uuid;
 
@@ -40,7 +40,10 @@ impl FinalPayloadValidator for ContractValidator {
                 .validate()
                 .map_err(|_| AgentFailure::InvalidModelOutput)
         })?;
-        Ok(ValidatedFinalPayload { text: text.to_owned(), artifacts: artifacts.to_owned() })
+        Ok(ValidatedFinalPayload {
+            text: text.to_owned(),
+            artifacts: artifacts.to_owned(),
+        })
     }
 }
 
@@ -104,9 +107,17 @@ pub struct EngineBlock {
 
 #[derive(Clone, Debug)]
 pub enum EngineBlockage {
-    ModelProjection { plan: floe_agent_contract::PreparedModelPlan, review: SourceProjectionReview },
-    SourceRead { call_id: Uuid, blockers: floe_agent_contract::SourceAccessBlockers },
-    Delegation { receipt: TaskReceipt },
+    ModelProjection {
+        plan: floe_agent_contract::PreparedModelPlan,
+        review: SourceProjectionReview,
+    },
+    SourceRead {
+        call_id: Uuid,
+        blockers: floe_agent_contract::SourceAccessBlockers,
+    },
+    Delegation {
+        receipt: TaskReceipt,
+    },
 }
 
 /// Which step kind a stable invocation identity belongs to.
@@ -432,7 +443,10 @@ impl ActiveDrive<'_> {
             device_id: self.request.device_id.clone(),
             purpose: self.request.purpose.clone(),
             consumer: self.request.consumer.clone(),
-            required_capabilities: ModelCapabilities::for_request(&self.request.role_spec.output_format, &self.request.allowed_catalog)?,
+            required_capabilities: ModelCapabilities::for_request(
+                &self.request.role_spec.output_format,
+                &self.request.allowed_catalog,
+            )?,
         };
         plan_request.validate()?;
         let prepared = self
@@ -487,7 +501,10 @@ impl ActiveDrive<'_> {
                         return Err(AgentFailure::PolicyDenied);
                     }
                     return Ok(BatchOutcome::Blocked(EngineBlock {
-                        blockage: EngineBlockage::ModelProjection { plan: plan.clone(), review },
+                        blockage: EngineBlockage::ModelProjection {
+                            plan: plan.clone(),
+                            review,
+                        },
                         report: EngineReport {
                             steps: self.steps.clone(),
                             output: None,
@@ -500,7 +517,8 @@ impl ActiveDrive<'_> {
                 }
             };
             projection.validate()?;
-            if projection.envelope.run_instructions.output_format != self.request.role_spec.output_format
+            if projection.envelope.run_instructions.output_format
+                != self.request.role_spec.output_format
                 || projection.projection_operation_id != projection_operation_id
                 || projection.plan_id != plan.operation_id
                 || projection.binding_digest != plan.binding_digest
@@ -610,32 +628,44 @@ impl ActiveDrive<'_> {
         let mut validated_steps = response.steps.clone();
         for step in &mut validated_steps {
             if let ModelStep::Answer { text, artifacts } = step {
-                let payload = self.ports
-                    .validator
-                    .validate(&self.request.role_spec.role_id, text, artifacts)?;
+                let payload = self.ports.validator.validate(
+                    &self.request.role_spec.role_id,
+                    text,
+                    artifacts,
+                )?;
                 *text = payload.text;
                 *artifacts = payload.artifacts;
                 if text.trim().is_empty() || text.len() > self.request.max_output_bytes {
                     return Err(AgentFailure::InvalidModelOutput);
                 }
-                if artifacts
-                    .iter()
-                    .any(|artifact| artifact.validate(self.request.max_output_bytes).is_err()
+                if artifacts.iter().any(|artifact| {
+                    artifact.validate(self.request.max_output_bytes).is_err()
                         || match (&projection.coverage, &artifact.coverage) {
                             (_, DependencyCoverage::Independent) => false,
-                            (DependencyCoverage::Dependent { dependencies: admitted },
-                                DependencyCoverage::Dependent { dependencies: claimed }) =>
-                                claimed.iter().any(|dependency| !admitted.contains(dependency)),
+                            (
+                                DependencyCoverage::Dependent {
+                                    dependencies: admitted,
+                                },
+                                DependencyCoverage::Dependent {
+                                    dependencies: claimed,
+                                },
+                            ) => claimed
+                                .iter()
+                                .any(|dependency| !admitted.contains(dependency)),
                             _ => true,
-                        })
-                {
+                        }
+                }) {
                     return Err(AgentFailure::InvalidModelOutput);
                 }
             }
         }
-        if serde_json::to_vec(&validated_steps).map_err(|_| AgentFailure::InvalidModelOutput)?.len()
+        if serde_json::to_vec(&validated_steps)
+            .map_err(|_| AgentFailure::InvalidModelOutput)?
+            .len()
             > self.request.max_output_bytes
-        { return Err(AgentFailure::BudgetExceeded); }
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
         let (tool_revisions, agent_revisions) =
             pin_revisions(&response.steps, &self.request.allowed_catalog);
         // A delegating batch binds the exact execution context before anything
@@ -732,17 +762,20 @@ impl ActiveDrive<'_> {
                     definition_revision,
                     input,
                 } => {
-                    if let Some(blockage) = self.execute_tool(
-                        batch,
-                        ordinal,
-                        corrections.get(step_index).and_then(Option::as_ref),
-                        tool_id,
-                        *definition_revision,
-                        input,
-                    )
-                    .await? {
+                    if let Some(blockage) = self
+                        .execute_tool(
+                            batch,
+                            ordinal,
+                            corrections.get(step_index).and_then(Option::as_ref),
+                            tool_id,
+                            *definition_revision,
+                            input,
+                        )
+                        .await?
+                    {
                         return Ok(Some(EngineOutcome::Blocked(EngineBlock {
-                            blockage, report: self.report(None, None),
+                            blockage,
+                            report: self.report(None, None),
                         })));
                     }
                 }
@@ -752,17 +785,20 @@ impl ActiveDrive<'_> {
                     message,
                     context_refs,
                 } => {
-                    if let Some(blockage) = self.execute_delegation(
-                        batch,
-                        ordinal,
-                        agent_id,
-                        *definition_revision,
-                        message,
-                        context_refs,
-                    )
-                    .await? {
+                    if let Some(blockage) = self
+                        .execute_delegation(
+                            batch,
+                            ordinal,
+                            agent_id,
+                            *definition_revision,
+                            message,
+                            context_refs,
+                        )
+                        .await?
+                    {
                         return Ok(Some(EngineOutcome::Blocked(EngineBlock {
-                            blockage, report: self.report(None, None),
+                            blockage,
+                            report: self.report(None, None),
                         })));
                     }
                 }
@@ -883,12 +919,23 @@ impl ActiveDrive<'_> {
                 .await
             {
                 Ok(ToolInvocationOutcome::NeedsSourceReview { call_id, blockers }) => {
-                    if call_id != call.call_id { return Err(AgentFailure::PolicyDenied); }
-                    blockers.validate().map_err(|_| AgentFailure::InvalidInput)?;
-                    let ack = self.ports.journal.record_result(JournalEvent::ToolReviewRequired {
-                        call_id, blockers: blockers.clone(),
-                    }).await?;
-                    if !matches!(ack, JournalAck::Accepted { .. }) { return Err(AgentFailure::Conflict); }
+                    if call_id != call.call_id {
+                        return Err(AgentFailure::PolicyDenied);
+                    }
+                    blockers
+                        .validate()
+                        .map_err(|_| AgentFailure::InvalidInput)?;
+                    let ack = self
+                        .ports
+                        .journal
+                        .record_result(JournalEvent::ToolReviewRequired {
+                            call_id,
+                            blockers: blockers.clone(),
+                        })
+                        .await?;
+                    if !matches!(ack, JournalAck::Accepted { .. }) {
+                        return Err(AgentFailure::Conflict);
+                    }
                     return Ok(Some(EngineBlockage::SourceRead { call_id, blockers }));
                 }
                 Ok(ToolInvocationOutcome::Completed(result)) => {
@@ -1059,7 +1106,8 @@ impl ActiveDrive<'_> {
             )
             .await?;
         if receipt.snapshot.state == floe_agent_contract::TaskState::Blocked {
-            self.steps.push(EngineStep::Delegation(Box::new(receipt.clone())));
+            self.steps
+                .push(EngineStep::Delegation(Box::new(receipt.clone())));
             return Ok(Some(EngineBlockage::Delegation { receipt }));
         }
         self.checkpoint(JournalEvent::BatchProgress {
@@ -1253,13 +1301,18 @@ fn replay_resumed_task(
     restored_task_receipt(request, receipt, maximum_bytes)
 }
 
-fn restored_task_receipt(request: &DelegationRequest, replay: &ReplayReceipt, maximum_bytes: usize)
-    -> Result<TaskReceipt, AgentFailure>
-{
+fn restored_task_receipt(
+    request: &DelegationRequest,
+    replay: &ReplayReceipt,
+    maximum_bytes: usize,
+) -> Result<TaskReceipt, AgentFailure> {
     let (snapshot, execution) = match &replay.task_execution {
         Some(execution) => {
             execution.validate(maximum_bytes)?;
-            (execution.snapshot.clone(), floe_agent_contract::TaskExecutionEvidence::Admitted(execution.clone()))
+            (
+                execution.snapshot.clone(),
+                floe_agent_contract::TaskExecutionEvidence::Admitted(execution.clone()),
+            )
         }
         None => (
             floe_agent_contract::TaskSnapshot {
@@ -1269,21 +1322,31 @@ fn restored_task_receipt(request: &DelegationRequest, replay: &ReplayReceipt, ma
                 agent_id: request.selected_agent_id.clone(),
                 definition_revision: request.selected_definition_revision,
                 state: replay.task_state.ok_or(AgentFailure::StorageUnavailable)?,
-                result: replay.task_result.clone(), artifacts: replay.task_artifacts.clone(),
-                coverage: replay.task_coverage.clone(), issue: replay.task_issue, blockage: None,
+                result: replay.task_result.clone(),
+                artifacts: replay.task_artifacts.clone(),
+                coverage: replay.task_coverage.clone(),
+                issue: replay.task_issue,
+                blockage: None,
             },
             floe_agent_contract::TaskExecutionEvidence::Unadmitted,
         ),
     };
-    if snapshot.task_id != request.task_id || snapshot.principal != request.principal
+    if snapshot.task_id != request.task_id
+        || snapshot.principal != request.principal
         || snapshot.agent_id != request.selected_agent_id
         || snapshot.definition_revision != request.selected_definition_revision
-        || snapshot.result != replay.task_result || Some(snapshot.state) != replay.task_state
-        || snapshot.artifacts != replay.task_artifacts || snapshot.coverage != replay.task_coverage
+        || snapshot.result != replay.task_result
+        || Some(snapshot.state) != replay.task_state
+        || snapshot.artifacts != replay.task_artifacts
+        || snapshot.coverage != replay.task_coverage
         || snapshot.issue != replay.task_issue
-    { return Err(AgentFailure::Conflict); }
+    {
+        return Err(AgentFailure::Conflict);
+    }
     let task = TaskReceipt {
-        task_id: request.task_id, snapshot, replay: Some(replay.clone()),
+        task_id: request.task_id,
+        snapshot,
+        replay: Some(replay.clone()),
         execution,
     };
     task.validate(maximum_bytes)?;
@@ -1419,8 +1482,12 @@ fn verify_resumed_task_replay(
         && receipt.task_coverage.validate().is_ok()
         && receipt.input_digest == {
             let mut original = request.clone();
-            original.parent_run_id = receipt.task_execution.as_ref()
-                .map_or(receipt.run_id.map(|id| id.as_uuid()), |execution| execution.snapshot.parent_run_id);
+            original.parent_run_id = receipt
+                .task_execution
+                .as_ref()
+                .map_or(receipt.run_id.map(|id| id.as_uuid()), |execution| {
+                    execution.snapshot.parent_run_id
+                });
             floe_agent_contract::delegation_request_digest(&original)
         })
     .then_some(())

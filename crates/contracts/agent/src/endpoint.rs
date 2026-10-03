@@ -62,8 +62,13 @@ pub struct EndpointResources {
 }
 impl EndpointResources {
     pub fn retain(&self, resource: Box<dyn Send>) -> Result<(), AgentFailure> {
-        let mut held = self.held.lock().map_err(|_| AgentFailure::StorageUnavailable)?;
-        if held.len() >= 64 { return Err(AgentFailure::BudgetExceeded); }
+        let mut held = self
+            .held
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        if held.len() >= 64 {
+            return Err(AgentFailure::BudgetExceeded);
+        }
         held.push(resource);
         Ok(())
     }
@@ -166,7 +171,9 @@ pub enum ExpertExecutionOutcome {
 impl ExpertBlockReport {
     pub fn validate(&self, invocation: &EndpointInvocation) -> Result<(), AgentFailure> {
         self.blockage.validate()?;
-        self.coverage.validate().map_err(|_| AgentFailure::InvalidModelOutput)?;
+        self.coverage
+            .validate()
+            .map_err(|_| AgentFailure::InvalidModelOutput)?;
         if self.task_id != invocation.request.task_id
             || self.principal != invocation.request.principal
             || self.agent_id != invocation.request.selected_agent_id

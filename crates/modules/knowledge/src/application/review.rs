@@ -184,10 +184,19 @@ pub fn plan_review(
 }
 
 /// The public memory decision route admits only an actual pending Memory candidate.
-pub fn plan_memory_review(candidate: KnowledgeCandidate, expected_person_id: floe_kernel::PersonId,
-    decision: KnowledgeDecisionKind, decided_at: DateTime<Utc>, admission: Option<ReviewAdmission>)
-    -> Result<ReviewPlan, AgentFailure>
-{
+pub fn plan_memory_review(
+    candidate: KnowledgeCandidate,
+    expected_person_id: floe_kernel::PersonId,
+    decision: KnowledgeDecisionKind,
+    decided_at: DateTime<Utc>,
+    admission: Option<ReviewAdmission>,
+) -> Result<ReviewPlan, AgentFailure> {
     validate_memory_review_candidate(&candidate, expected_person_id)?;
-    plan_review(candidate, decision, KnowledgeActor::User, decided_at, admission)
+    plan_review(
+        candidate,
+        decision,
+        KnowledgeActor::User,
+        decided_at,
+        admission,
+    )
 }

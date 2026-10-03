@@ -56,9 +56,8 @@ pub use ports::remote_grants::{
 };
 
 pub use application::calendar_read::{
-    CalendarReadAccessAdmission, CalendarReadAccessRequest,
-    admission_matches_dependency, admits_native_calendar_read, current_native_calendar_grant,
-    native_calendar_resource,
+    CalendarReadAccessAdmission, CalendarReadAccessRequest, admission_matches_dependency,
+    admits_native_calendar_read, current_native_calendar_grant, native_calendar_resource,
 };
 pub use floe_context_contract::{CalendarProvider, CalendarReadAccessStamp, CalendarScope};
 
@@ -71,8 +70,8 @@ pub use application::source_policy::{
 };
 pub use domain::gateway_identity::{RemoteOwnerPublicKey, RemoteViewAuthorizationExpectation};
 pub use ports::authorization_signer::{
-    AuthorizationProofVerifier, AuthorizationSignature, AuthorizationSigner,
-    AuthorizationSigningCommand, AssistantAuthorizationSigningCommand, VerifiedAuthorizationClaims,
+    AssistantAuthorizationSigningCommand, AuthorizationProofVerifier, AuthorizationSignature,
+    AuthorizationSigner, AuthorizationSigningCommand, VerifiedAuthorizationClaims,
 };
 pub use ports::gateway_trust::{GatewayCredentialExpectation, GatewayTrustReader};
 pub use ports::grant_repository::GrantRepository;
@@ -81,8 +80,8 @@ pub use ports::trusted_consumer_catalog::{
     TrustedConsumerCatalog, TrustedConsumerRegistration, TrustedViewCapability,
 };
 
+pub use application::product_calendar_read::ProductCalendarReadAuthority;
 pub use domain::product_calendar_read::*;
 pub use ports::product_source_authority::ProductSourceAuthority;
-pub use application::product_calendar_read::ProductCalendarReadAuthority;
 
 pub use domain::product_calendar_authorization::*;

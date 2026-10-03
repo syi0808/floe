@@ -95,7 +95,9 @@ impl AppInteractionSnapshotDto {
             (
                 AppInteractionKindDto::ExpertBinding,
                 AppInteractionTargetDto::ExpertBinding { review },
-            ) => { review.validate()?; }
+            ) => {
+                review.validate()?;
+            }
             _ => return Err("interaction.target.kind"),
         }
         if self.actions.len() > 16

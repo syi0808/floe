@@ -10,8 +10,8 @@ pub struct ValidatedFinalPayload {
 use floe_execution::ExecutionScope;
 
 use crate::{
-    AgentCard, AgentFailure, Artifact, AuthorizedModelProjection,
-    InvocationKey, ModelConversation, ToolResult,
+    AgentCard, AgentFailure, Artifact, AuthorizedModelProjection, InvocationKey, ModelConversation,
+    ToolResult,
 };
 
 /// Role-specific instructions only: never the rendered behavior kernel, persona,
@@ -34,7 +34,9 @@ impl RoleSpec {
         {
             return Err(AgentFailure::InvalidInput);
         }
-        self.output_format.validate().map_err(|_| AgentFailure::InvalidInput)
+        self.output_format
+            .validate()
+            .map_err(|_| AgentFailure::InvalidInput)
     }
 }
 
@@ -151,7 +153,10 @@ impl EngineRequest {
             device_id: self.device_id.clone(),
             purpose: self.purpose.clone(),
             consumer: self.consumer.clone(),
-            required_capabilities: crate::ModelCapabilities::for_request(&self.role_spec.output_format, &self.allowed_catalog)?,
+            required_capabilities: crate::ModelCapabilities::for_request(
+                &self.role_spec.output_format,
+                &self.allowed_catalog,
+            )?,
         }
         .validate()?;
         if self.execution_id.is_nil()
@@ -214,7 +219,10 @@ impl ModelRequest {
             device_id: self.device_id.clone(),
             purpose: self.purpose.clone(),
             consumer: self.consumer.clone(),
-            required_capabilities: crate::ModelCapabilities::for_request(&self.projection.envelope.run_instructions.output_format, &self.catalog)?,
+            required_capabilities: crate::ModelCapabilities::for_request(
+                &self.projection.envelope.run_instructions.output_format,
+                &self.catalog,
+            )?,
         }
         .validate()?;
         if self.attempt_id.is_nil()

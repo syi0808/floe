@@ -69,7 +69,10 @@ impl InteractionOrigin {
             Self::Task {
                 execution,
                 capability_call_id,
-            } => execution.validate().is_ok() && capability_call_id.is_none_or(|call_id| !call_id.is_nil()),
+            } => {
+                execution.validate().is_ok()
+                    && capability_call_id.is_none_or(|call_id| !call_id.is_nil())
+            }
             Self::Projection {
                 run_id,
                 projection_operation_id,
@@ -111,28 +114,33 @@ pub struct InteractionRequirement {
 }
 
 impl InteractionRequirement {
-    pub fn from_source(blocker: &floe_context_contract::SourceAccessRequirement, inline: bool) -> Self {
-    use floe_context_contract::SourceAccessRequirementKind as Reason;
-    InteractionRequirement {
-        kind: match blocker.reason() {
-            Reason::EnableObserve => InteractionRequirementKind::EnableObserve,
-            Reason::ReviewChangedSource => InteractionRequirementKind::ReviewChangedSource,
-            Reason::RequestSystemPermission => InteractionRequirementKind::RequestSystemPermission,
-            Reason::Reconnect => InteractionRequirementKind::Reconnect,
-            Reason::ReviewProcessing => InteractionRequirementKind::ReviewProcessing,
-            Reason::SelectResource => InteractionRequirementKind::SelectResource,
-        },
-        source_id: blocker.source_id().to_owned(),
-        connection_id: blocker.connection_id().map(|id| id.as_str().to_owned()),
-        consumer: blocker.consumer().identifier().to_owned(),
-        purpose: match blocker.purpose() {
-            floe_context_contract::GrantPurpose::Assistant => "assistant",
-            floe_context_contract::GrantPurpose::Scheduling => "scheduling",
-            floe_context_contract::GrantPurpose::Summarization => "summarization",
+    pub fn from_source(
+        blocker: &floe_context_contract::SourceAccessRequirement,
+        inline: bool,
+    ) -> Self {
+        use floe_context_contract::SourceAccessRequirementKind as Reason;
+        InteractionRequirement {
+            kind: match blocker.reason() {
+                Reason::EnableObserve => InteractionRequirementKind::EnableObserve,
+                Reason::ReviewChangedSource => InteractionRequirementKind::ReviewChangedSource,
+                Reason::RequestSystemPermission => {
+                    InteractionRequirementKind::RequestSystemPermission
+                }
+                Reason::Reconnect => InteractionRequirementKind::Reconnect,
+                Reason::ReviewProcessing => InteractionRequirementKind::ReviewProcessing,
+                Reason::SelectResource => InteractionRequirementKind::SelectResource,
+            },
+            source_id: blocker.source_id().to_owned(),
+            connection_id: blocker.connection_id().map(|id| id.as_str().to_owned()),
+            consumer: blocker.consumer().identifier().to_owned(),
+            purpose: match blocker.purpose() {
+                floe_context_contract::GrantPurpose::Assistant => "assistant",
+                floe_context_contract::GrantPurpose::Scheduling => "scheduling",
+                floe_context_contract::GrantPurpose::Summarization => "summarization",
+            }
+            .into(),
+            inline,
         }
-        .into(),
-        inline,
-    }
     }
 
     pub fn validate(&self) -> Result<(), AgentFailure> {
@@ -216,7 +224,9 @@ pub enum InteractionResolutionCause {
 }
 impl InteractionResolutionCause {
     pub fn command_id(&self) -> Uuid {
-        match self { Self::Decision { command_id } | Self::Refresh { command_id } => *command_id }
+        match self {
+            Self::Decision { command_id } | Self::Refresh { command_id } => *command_id,
+        }
     }
 }
 
@@ -236,9 +246,16 @@ pub struct InteractionResolutionReceipt {
 impl InteractionResolutionReceipt {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         self.owner_receipt.validate()?;
-        if !matches!((&self.cause, &self.owner_receipt),
-            (InteractionResolutionCause::Decision { .. }, super::OwnerResolutionReceipt::SourceProcessing { .. })
-            | (InteractionResolutionCause::Refresh { .. }, super::OwnerResolutionReceipt::ExpertBinding { .. })) {
+        if !matches!(
+            (&self.cause, &self.owner_receipt),
+            (
+                InteractionResolutionCause::Decision { .. },
+                super::OwnerResolutionReceipt::SourceProcessing { .. }
+            ) | (
+                InteractionResolutionCause::Refresh { .. },
+                super::OwnerResolutionReceipt::ExpertBinding { .. }
+            )
+        ) {
             return Err(AgentFailure::StorageUnavailable);
         }
         if self.cause.command_id().is_nil()
@@ -346,23 +363,65 @@ impl ConversationInteraction {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         self.origin.validate()?;
         self.audit.validate()?;
-        if self.audit.person_id != self.person_id || self.audit.session_id != self.session_id
-            || self.audit.run_id != self.origin_run_id || !self.audit.targets().contains(&self.target)
-            || !self.audit.matches_requirement(&self.requirement, &self.target)
-        { return Err(AgentFailure::StorageUnavailable); }
+        if self.audit.person_id != self.person_id
+            || self.audit.session_id != self.session_id
+            || self.audit.run_id != self.origin_run_id
+            || !self.audit.targets().contains(&self.target)
+            || !self
+                .audit
+                .matches_requirement(&self.requirement, &self.target)
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
         match (&self.origin, &self.audit.evidence) {
-            (InteractionOrigin::Projection { run_id, projection_operation_id, target_digest },
-                super::BlockedReviewEvidence::ModelProjection { review, .. })
-                if *run_id == self.origin_run_id && *projection_operation_id == review.projection_operation_id
-                    && *target_digest == review.target_digest => {},
-            (InteractionOrigin::Task { execution, capability_call_id },
-                super::BlockedReviewEvidence::SourceRead { execution: evidence, tool_call_id, .. })
-                if execution == evidence && *capability_call_id == Some(*tool_call_id) => {},
-            (InteractionOrigin::Task { execution, capability_call_id: None },
-                super::BlockedReviewEvidence::ExpertBinding { execution: evidence, .. }) if execution == evidence => {},
-            (InteractionOrigin::Task { execution, .. },
-                super::BlockedReviewEvidence::Navigation { execution: evidence, .. }) if execution == evidence => {},
-            (InteractionOrigin::Task { execution, capability_call_id: None }, super::BlockedReviewEvidence::TaskModelProjection { execution: evidence, .. }) if execution == evidence => {},
+            (
+                InteractionOrigin::Projection {
+                    run_id,
+                    projection_operation_id,
+                    target_digest,
+                },
+                super::BlockedReviewEvidence::ModelProjection { review, .. },
+            ) if *run_id == self.origin_run_id
+                && *projection_operation_id == review.projection_operation_id
+                && *target_digest == review.target_digest => {}
+            (
+                InteractionOrigin::Task {
+                    execution,
+                    capability_call_id,
+                },
+                super::BlockedReviewEvidence::SourceRead {
+                    execution: evidence,
+                    tool_call_id,
+                    ..
+                },
+            ) if execution == evidence && *capability_call_id == Some(*tool_call_id) => {}
+            (
+                InteractionOrigin::Task {
+                    execution,
+                    capability_call_id: None,
+                },
+                super::BlockedReviewEvidence::ExpertBinding {
+                    execution: evidence,
+                    ..
+                },
+            ) if execution == evidence => {}
+            (
+                InteractionOrigin::Task { execution, .. },
+                super::BlockedReviewEvidence::Navigation {
+                    execution: evidence,
+                    ..
+                },
+            ) if execution == evidence => {}
+            (
+                InteractionOrigin::Task {
+                    execution,
+                    capability_call_id: None,
+                },
+                super::BlockedReviewEvidence::TaskModelProjection {
+                    execution: evidence,
+                    ..
+                },
+            ) if execution == evidence => {}
             _ => return Err(AgentFailure::StorageUnavailable),
         }
         self.requirement.validate()?;
@@ -402,14 +461,25 @@ impl ConversationInteraction {
             return Err(AgentFailure::StorageUnavailable);
         }
         if let InteractionState::Resolved { receipt } = &self.state {
-            if receipt.resolved_at_unix_ms < self.created_at_unix_ms { return Err(AgentFailure::StorageUnavailable); }
+            if receipt.resolved_at_unix_ms < self.created_at_unix_ms {
+                return Err(AgentFailure::StorageUnavailable);
+            }
             let matches_owner = match (&self.target, &receipt.owner_receipt) {
-                (ReviewedTarget::SourceReview(reference), super::OwnerResolutionReceipt::SourceProcessing { receipt }) =>
-                    matches!(&receipt.kind, floe_access::GrantCommitKind::Reviewed { review } if review == reference),
-                (ReviewedTarget::ExpertBinding(reference), super::OwnerResolutionReceipt::ExpertBinding { receipt }) => &receipt.review_ref == reference,
+                (
+                    ReviewedTarget::SourceReview(reference),
+                    super::OwnerResolutionReceipt::SourceProcessing { receipt },
+                ) => {
+                    matches!(&receipt.kind, floe_access::GrantCommitKind::Reviewed { review } if review == reference)
+                }
+                (
+                    ReviewedTarget::ExpertBinding(reference),
+                    super::OwnerResolutionReceipt::ExpertBinding { receipt },
+                ) => &receipt.review_ref == reference,
                 _ => false,
             };
-            if !matches_owner { return Err(AgentFailure::StorageUnavailable); }
+            if !matches_owner {
+                return Err(AgentFailure::StorageUnavailable);
+            }
         }
         Ok(())
     }
@@ -575,7 +645,10 @@ pub fn state_after_resolution(
         InteractionState::Resolving {
             decision_id,
             owner_command_id,
-        } if resolution.cause == (InteractionResolutionCause::Decision { command_id: *decision_id })
+        } if resolution.cause
+            == (InteractionResolutionCause::Decision {
+                command_id: *decision_id,
+            })
             && *owner_command_id == resolution.owner_command_id
             && owner_receipt.command_id() == *owner_command_id
             && owner_receipt.operation_id() == resolution.owner_operation_id =>
@@ -592,17 +665,22 @@ pub fn state_after_resolution(
         }
         InteractionState::Pending
             if matches!(resolution.cause, InteractionResolutionCause::Refresh { .. })
-                && matches!(owner_receipt, super::OwnerResolutionReceipt::ExpertBinding { .. })
+                && matches!(
+                    owner_receipt,
+                    super::OwnerResolutionReceipt::ExpertBinding { .. }
+                )
                 && owner_receipt.command_id() == resolution.owner_command_id
                 && owner_receipt.operation_id() == resolution.owner_operation_id =>
         {
-            Ok(InteractionState::Resolved { receipt: InteractionResolutionReceipt {
-                cause: resolution.cause.clone(),
-                owner_command_id: resolution.owner_command_id,
-                owner_operation_id: resolution.owner_operation_id,
-                owner_receipt: owner_receipt.clone(),
-                resolved_at_unix_ms: resolution.resolved_at_unix_ms,
-            } })
+            Ok(InteractionState::Resolved {
+                receipt: InteractionResolutionReceipt {
+                    cause: resolution.cause.clone(),
+                    owner_command_id: resolution.owner_command_id,
+                    owner_operation_id: resolution.owner_operation_id,
+                    owner_receipt: owner_receipt.clone(),
+                    resolved_at_unix_ms: resolution.resolved_at_unix_ms,
+                },
+            })
         }
         _ => Err(AgentFailure::Conflict),
     }

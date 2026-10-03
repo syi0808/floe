@@ -5,12 +5,12 @@ use floe_execution::{
     budget::{BudgetConfig, BudgetLedger, ModelUsage},
 };
 use floe_kernel::{AgentFailure, OwnerActor, TraceContext};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use uuid::Uuid;
 
 pub struct ReadyOwners {
@@ -35,7 +35,10 @@ impl ReadyOwners {
             actor,
             available: AtomicBool::new(true),
             connections,
-            conversation, experts, knowledge, actions,
+            conversation,
+            experts,
+            knowledge,
+            actions,
         }
     }
     pub(crate) fn check(&self, actor: &OwnerActor) -> Result<(), AgentFailure> {
@@ -56,7 +59,11 @@ impl ReadyOwners {
         let knowledge = close_owner(|| self.knowledge.close_admission());
         let actions = close_owner(|| self.actions.shutdown());
         let connections = close_owner(|| self.connections.shutdown());
-        conversation.and(experts).and(knowledge).and(actions).and(connections)
+        conversation
+            .and(experts)
+            .and(knowledge)
+            .and(actions)
+            .and(connections)
     }
 }
 fn close_owner(close: impl FnOnce()) -> Result<(), AgentFailure> {

@@ -88,11 +88,14 @@ where
                             .observe_local_fallback(&request, scope)
                             .await
                             .map_err(|error| match error {
-                                crate::ModelObservationError::InvalidInventory => AgentFailure::LocalModelInvalidOutput,
-                                crate::ModelObservationError::TransportUnavailable => AgentFailure::LocalModelUnavailable,
+                                crate::ModelObservationError::InvalidInventory => {
+                                    AgentFailure::LocalModelInvalidOutput
+                                }
+                                crate::ModelObservationError::TransportUnavailable => {
+                                    AgentFailure::LocalModelUnavailable
+                                }
                                 error => AgentFailure::from(error),
-                            })?
-                        {
+                            })? {
                             LocalObservation::Available(selected) => {
                                 (selected, ProcessingBoundary::Device)
                             }
@@ -184,7 +187,16 @@ where
         scope: &ExecutionScope,
     ) -> Result<ModelResponse, AgentFailure> {
         request.validate()?;
-        if !self.plan.capabilities.includes(&ModelCapabilities::for_request(&request.projection.envelope.run_instructions.output_format, &request.catalog)?) { return Err(AgentFailure::PolicyDenied); }
+        if !self
+            .plan
+            .capabilities
+            .includes(&ModelCapabilities::for_request(
+                &request.projection.envelope.run_instructions.output_format,
+                &request.catalog,
+            )?)
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
         if request.principal != self.plan.principal
             || request.device_id != self.plan.device_id
             || request.purpose != self.plan.purpose
@@ -264,7 +276,12 @@ where
         let receipt = attempt.settle_observed(response.usage.tokens, response.usage.cost_micros)?;
         revalidate_model_dispatch(&fence).await?;
         let steps = response.output?;
-        validate_output(&steps, &request.catalog, &request.projection.envelope.run_instructions.output_format, max_output_bytes)?;
+        validate_output(
+            &steps,
+            &request.catalog,
+            &request.projection.envelope.run_instructions.output_format,
+            max_output_bytes,
+        )?;
         Ok(ModelResponse {
             attempt_id: request.attempt_id,
             steps,
@@ -326,11 +343,17 @@ fn validate_output(
     max_output_bytes: usize,
 ) -> Result<(), AgentFailure> {
     if let floe_agent_contract::ModelOutputFormat::Json { schema } = output_format {
-        let [ModelStep::Answer { text, artifacts }] = output else { return Err(AgentFailure::InvalidModelOutput); };
-        if !artifacts.is_empty() || !catalog.tools.is_empty() || !catalog.cards.is_empty() { return Err(AgentFailure::InvalidModelOutput); }
+        let [ModelStep::Answer { text, artifacts }] = output else {
+            return Err(AgentFailure::InvalidModelOutput);
+        };
+        if !artifacts.is_empty() || !catalog.tools.is_empty() || !catalog.cards.is_empty() {
+            return Err(AgentFailure::InvalidModelOutput);
+        }
         let value = floe_agent_contract::strict_model_json(text.as_bytes(), max_output_bytes)
             .map_err(|_| AgentFailure::InvalidModelOutput)?;
-        schema.validate_value(&value).map_err(|_| AgentFailure::InvalidModelOutput)?;
+        schema
+            .validate_value(&value)
+            .map_err(|_| AgentFailure::InvalidModelOutput)?;
     }
     if output.is_empty()
         || output.len() > 16

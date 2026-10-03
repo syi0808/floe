@@ -48,7 +48,10 @@ pub enum AppProductQueryDto {
     #[serde(rename = "actions.authority.get")]
     ActionsAuthority {},
     #[serde(rename = "actions.list")]
-    ActionsList { cursor: Option<super::ActionRefDto>, limit: u16 },
+    ActionsList {
+        cursor: Option<super::ActionRefDto>,
+        limit: u16,
+    },
     #[serde(rename = "actions.inspect")]
     ActionsInspect { action_ref: super::ActionRefDto },
     #[serde(rename = "day.refresh.get")]
@@ -76,9 +79,14 @@ pub enum AppProductQueryDto {
     #[serde(rename = "experts.directory")]
     ExpertsDirectory {},
     #[serde(rename = "experts.binding.inspect")]
-    ExpertsInspectBinding { assignment_ref: super::AssignmentRefDto, requirement_ref: String },
+    ExpertsInspectBinding {
+        assignment_ref: super::AssignmentRefDto,
+        requirement_ref: String,
+    },
     #[serde(rename = "experts.binding.inspect_review")]
-    ExpertsInspectBindingReview { review_ref: super::BindingReviewRefDto },
+    ExpertsInspectBindingReview {
+        review_ref: super::BindingReviewRefDto,
+    },
     #[serde(rename = "conversation.session.get")]
     ConversationSessionGet { session_id: SessionRefDto },
     #[serde(rename = "conversation.session.resume")]
@@ -102,8 +110,16 @@ pub enum AppProductQueryDto {
 impl AppProductQueryDto {
     fn validate(&self) -> Result<(), &'static str> {
         let (field, id) = match self {
-            Self::ActionsDestinations {} | Self::ActionsAuthority {} | Self::ActionsInspect { .. } => return Ok(()),
-            Self::ActionsList { limit, .. } => return if (1..=100).contains(limit) { Ok(()) } else { Err("query.limit") },
+            Self::ActionsDestinations {}
+            | Self::ActionsAuthority {}
+            | Self::ActionsInspect { .. } => return Ok(()),
+            Self::ActionsList { limit, .. } => {
+                return if (1..=100).contains(limit) {
+                    Ok(())
+                } else {
+                    Err("query.limit")
+                };
+            }
             Self::DayRefreshGet { .. } => return Ok(()),
             Self::DaySnapshot { .. } => return Ok(()),
             Self::KnowledgeMemoryOverview {}
@@ -117,7 +133,19 @@ impl AppProductQueryDto {
             | Self::ConnectionsSourceInspectReview { review_ref }
             | Self::ConnectionsObserveInspectReview { review_ref } => return review_ref.validate(),
             Self::ExpertsDirectory {} => return Ok(()),
-            Self::ExpertsInspectBinding { requirement_ref, .. } => return if requirement_ref.is_empty() || requirement_ref.len()>128 || requirement_ref.trim()!=requirement_ref || requirement_ref.chars().any(char::is_control) { Err("query.requirement_ref") } else { Ok(()) },
+            Self::ExpertsInspectBinding {
+                requirement_ref, ..
+            } => {
+                return if requirement_ref.is_empty()
+                    || requirement_ref.len() > 128
+                    || requirement_ref.trim() != requirement_ref
+                    || requirement_ref.chars().any(char::is_control)
+                {
+                    Err("query.requirement_ref")
+                } else {
+                    Ok(())
+                };
+            }
             Self::ExpertsInspectBindingReview { review_ref } => return review_ref.validate(),
             Self::ConversationSessionGet { .. } => return Ok(()),
             Self::ConversationSessionResume {} => return Ok(()),
@@ -149,13 +177,21 @@ pub enum AppQueryResultDto {
         acquisitions: Vec<super::LocalContextPersonalAcquisitionRequestDto>,
     },
     #[serde(rename = "actions.destinations")]
-    ActionsDestinations { destinations: Vec<super::ActionDestinationChoiceDto> },
+    ActionsDestinations {
+        destinations: Vec<super::ActionDestinationChoiceDto>,
+    },
     #[serde(rename = "actions.authority")]
-    ActionsAuthority { authority: super::ActionsAuthorityDto },
+    ActionsAuthority {
+        authority: super::ActionsAuthorityDto,
+    },
     #[serde(rename = "actions.action")]
-    Action { action: super::ActionSnapshotDto },
+    Action {
+        action: super::ActionSnapshotDto,
+    },
     #[serde(rename = "actions.page")]
-    ActionsPage { page: super::ActionsPageDto },
+    ActionsPage {
+        page: super::ActionsPageDto,
+    },
     DaySnapshot {
         snapshot: super::DaySnapshotDto,
     },
@@ -163,10 +199,14 @@ pub enum AppQueryResultDto {
     DayRefresh {
         refresh: super::DayRefreshStateDto,
     },
-    #[serde(rename="knowledge.memory.overview")]
-    KnowledgeOverview { overview: super::AgentMemoryOverviewDto },
-    #[serde(rename="knowledge.memory.review")]
-    KnowledgeReview { review: super::MemoryReviewDisplayDto },
+    #[serde(rename = "knowledge.memory.overview")]
+    KnowledgeOverview {
+        overview: super::AgentMemoryOverviewDto,
+    },
+    #[serde(rename = "knowledge.memory.review")]
+    KnowledgeReview {
+        review: super::MemoryReviewDisplayDto,
+    },
     #[serde(rename = "connections.gateway_setup")]
     ConnectionsGatewaySetup {
         setup: super::GatewaySetupDto,
@@ -208,11 +248,17 @@ pub enum AppQueryResultDto {
         launch_action: super::LaunchActionDto,
     },
     #[serde(rename = "experts.directory")]
-    ExpertsDirectory { directory: super::ExpertDirectorySnapshotDto },
+    ExpertsDirectory {
+        directory: super::ExpertDirectorySnapshotDto,
+    },
     #[serde(rename = "experts.binding")]
-    ExpertsBinding { binding: super::BindingInspectionDto },
+    ExpertsBinding {
+        binding: super::BindingInspectionDto,
+    },
     #[serde(rename = "experts.binding_review")]
-    ExpertsBindingReview { review: super::BindingReviewDto },
+    ExpertsBindingReview {
+        review: super::BindingReviewDto,
+    },
     ConversationSession {
         session: super::ConversationSessionSnapshotDto,
     },

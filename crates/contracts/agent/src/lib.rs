@@ -10,7 +10,6 @@ mod delegation;
 mod endpoint;
 mod envelope;
 mod expert;
-mod capability;
 mod history;
 mod interaction;
 mod message;
@@ -27,18 +26,16 @@ pub use archive::{
     ArchivePointer, ArchiveReadRequest, ArchiveReader, ArchiveSnapshot, ArchivedMessage,
     MAX_ARCHIVE_PROJECTION_BYTES, MAX_ARCHIVE_PROJECTION_MESSAGES,
 };
-pub use capability::{
-    CapabilityExecution, CapabilityExecutionState, CapabilityJournal, ModelReplay, ProviderReplay,
-};
+pub use capability::CapabilityDescriptor;
 pub use context::{AgentContext, InferencePolicyDecision, MAX_CONTEXT_ISSUES};
 pub use delegation::{
-    DelegationContextInput, DelegationExecutionContext, DelegationRequest, MAX_DELEGATION_DEVICE_ID_BYTES,
-    MAX_DELEGATION_EXECUTION_CONTEXT_BYTES, TaskReceipt, TaskSnapshot, TaskState,
-    delegation_request_digest, valid_context_refs,
+    DelegationContextInput, DelegationExecutionContext, DelegationRequest,
+    MAX_DELEGATION_DEVICE_ID_BYTES, MAX_DELEGATION_EXECUTION_CONTEXT_BYTES, TaskReceipt,
+    TaskSnapshot, TaskState, delegation_request_digest, valid_context_refs,
 };
 pub use endpoint::{
-    AgentEndpoint, EndpointInvocation, EndpointResources, EndpointSettlement, ExpertBlockReport, ExpertExecutionOutcome, ExpertReport,
-    MAX_ENDPOINT_SETTLEMENT_BYTES,
+    AgentEndpoint, EndpointInvocation, EndpointResources, EndpointSettlement, ExpertBlockReport,
+    ExpertExecutionOutcome, ExpertReport, MAX_ENDPOINT_SETTLEMENT_BYTES,
 };
 pub use envelope::{
     AgentCardManifestEntry, AttemptContext, CONTEXT_ENVELOPE_SCHEMA_VERSION, ContextEnvelope,
@@ -47,14 +44,14 @@ pub use envelope::{
     MemoryManifestEntry, PromptManifestEntry, RunInstructions, content_sha256,
 };
 pub use expert::{PackageKind, PackageRef};
-pub use capability::CapabilityDescriptor;
 pub use floe_context_contract::{
     CalendarProvider, CalendarReadAccessStamp, CalendarScope, ContextDependency, ContextEvidence,
     ContextIssue, ContextIssueReason, ContextMemory, ContextSource, DataClass, DependencyCoverage,
     EpistemicStatus, ExpertTimelineView, LearningEvidenceRef, MAX_CONTEXT_EVIDENCE,
     MAX_CONTEXT_EVIDENCE_BYTES, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES,
     MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS, MAX_TIMELINE_VIEW_ITEMS,
-    MemoryContextSnapshot, PersonalMemoryKind, SourceAccessBlockers, SourceAuthority, SourceGrant, TimelineViewItem,
+    MemoryContextSnapshot, PersonalMemoryKind, SourceAccessBlockers, SourceAuthority, SourceGrant,
+    TimelineViewItem,
 };
 pub use floe_execution::budget::ModelAccounting;
 pub use floe_execution::{BoxFuture, CancelReason, Cancellation, ExecutionScope};
@@ -71,15 +68,16 @@ pub use message::{
 };
 pub use model::{
     AgentDefinition, AllowedCatalog, EngineRequest, EngineResumeState, EngineStep, ModelRequest,
-    ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall, ToolDescriptor, ValidatedFinalPayload, validate_tool_input,
+    ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall, ToolDescriptor,
+    ValidatedFinalPayload, validate_tool_input,
 };
 pub use model_conversation::{
     MAX_CONTEXT_REFS, MAX_MODEL_CONVERSATION_BYTES, ModelConversation, ModelConversationEntry,
 };
 pub use ports::{
-    BatchCursor, DelegationPort, ExecutionJournal, JournalAck, JournalEntry, JournalEvent, ModelPort,
-    ModelProjectionPort, PinnedAgentRevision, PinnedToolRevision, PreparedModelCall, ToolPort,
-    ToolInvocationOutcome, ValidatedModelBatch,
+    BatchCursor, DelegationPort, ExecutionJournal, JournalAck, JournalEntry, JournalEvent,
+    ModelPort, ModelProjectionPort, PinnedAgentRevision, PinnedToolRevision, PreparedModelCall,
+    ToolInvocationOutcome, ToolPort, ValidatedModelBatch,
 };
 pub use projection::{
     AuthorizedModelProjection, MAX_CORRECTION_BYTES, MAX_INPUT_DATA_CLASSES, MODEL_CORRECTION_TEXT,
@@ -87,9 +85,11 @@ pub use projection::{
     SourceProjectionReview,
 };
 pub use replay::{AttemptId, InvocationKey, ReplayReceipt, input_digest};
-pub use task_execution::{TaskBlockage, TaskExecutionEvidence, TaskExecutionKey,
-    TaskExecutionReceipt, TaskExecutionReceiptRef, TaskModelAccounting, UnresolvedModelAttempt,
-    MAX_TASK_EXECUTION_RECEIPT_BYTES, MAX_TASK_RECEIPT_BYTES};
+pub use task_execution::{
+    MAX_TASK_EXECUTION_RECEIPT_BYTES, MAX_TASK_RECEIPT_BYTES, TaskBlockage, TaskExecutionEvidence,
+    TaskExecutionKey, TaskExecutionReceipt, TaskExecutionReceiptRef, TaskModelAccounting,
+    UnresolvedModelAttempt,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionProtection {

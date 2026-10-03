@@ -5,10 +5,8 @@
 //! typed requests invoke the owning service API and return its safe projection.
 
 mod abi;
-mod app_wire;
 mod actions_wire;
-mod experts_wire;
-mod knowledge_wire;
+mod app_wire;
 mod bridge;
 mod connections_wire;
 mod context_wire;
@@ -16,6 +14,8 @@ mod conversation_wire;
 pub mod conversion;
 mod day_wire;
 mod diagnostics;
+mod experts_wire;
+mod knowledge_wire;
 mod native_lane;
 
 pub use abi::*;

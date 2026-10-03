@@ -77,7 +77,16 @@ impl ModelProjectionRequest {
             return Err(AgentFailure::InvalidInput);
         }
         self.role.validate()?;
-        if !self.plan.capabilities.includes(&crate::ModelCapabilities::for_request(&self.role.output_format, &self.catalog)?) { return Err(AgentFailure::PolicyDenied); }
+        if !self
+            .plan
+            .capabilities
+            .includes(&crate::ModelCapabilities::for_request(
+                &self.role.output_format,
+                &self.catalog,
+            )?)
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
         self.conversation.validate()?;
         self.catalog
             .tools

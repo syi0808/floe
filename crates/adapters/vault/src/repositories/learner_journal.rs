@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use floe_agent_contract::{AgentFailure, BoxFuture, ExecutionJournal, JournalAck, JournalEvent, OwnerActor, PersonId};
+use floe_agent_contract::{
+    AgentFailure, BoxFuture, ExecutionJournal, JournalAck, JournalEvent, OwnerActor, PersonId,
+};
 use floe_knowledge::{LearnerClaimJournal, LearnerClaimRef, LearnerJournalFactory};
 
 use crate::{EncryptedAgentVault, VaultKeyProvider};

@@ -13,12 +13,14 @@ mod vault;
 pub use engine::TursoStore;
 pub use error::{StoreError, StoreErrorCode};
 #[cfg(unix)]
-pub use repositories::{ContextEvidenceReader, VaultConversationRepository, VaultTaskRepository, VaultActionsRepository};
+pub use repositories::{
+    ContextEvidenceReader, VaultActionsRepository, VaultConversationRepository, VaultTaskRepository,
+};
 #[cfg(unix)]
 pub use vault::*;
 
 #[cfg(unix)]
-pub use repositories::{VaultLearnerJournalFactory, VaultKnowledgeRepository};
+pub use repositories::{VaultKnowledgeRepository, VaultLearnerJournalFactory};
 
 #[cfg(unix)]
 pub use vault::{VaultAuthorizationSigner, VaultEnrollmentSigner};

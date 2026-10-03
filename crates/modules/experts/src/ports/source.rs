@@ -1,5 +1,7 @@
-use floe_agent_contract::{AgentFailure, AgentContext, BoxFuture, DependencyCoverage,
-    ExecutionScope, ModelProjectionOutcome, ModelProjectionRequest, OwnerActor, TaskExecutionKey, ToolCall};
+use floe_agent_contract::{
+    AgentContext, AgentFailure, BoxFuture, DependencyCoverage, ExecutionScope,
+    ModelProjectionOutcome, ModelProjectionRequest, OwnerActor, TaskExecutionKey, ToolCall,
+};
 use floe_context_contract::SourceReadOutcome;
 
 pub struct ExpertSourceRequest {
@@ -18,18 +20,31 @@ pub struct ExpertSourceRead {
     _retention: Box<dyn Send>,
 }
 impl ExpertSourceRead {
-    pub fn new(payload: serde_json::Value, coverage: DependencyCoverage, retention: Box<dyn Send>)
-        -> Result<Self, AgentFailure>
-    {
-        coverage.validate().map_err(|_| AgentFailure::InvalidInput)?;
-        if coverage == DependencyCoverage::Unknown { return Err(AgentFailure::PolicyDenied); }
-        Ok(Self { payload, coverage, _retention: retention })
+    pub fn new(
+        payload: serde_json::Value,
+        coverage: DependencyCoverage,
+        retention: Box<dyn Send>,
+    ) -> Result<Self, AgentFailure> {
+        coverage
+            .validate()
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        if coverage == DependencyCoverage::Unknown {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        Ok(Self {
+            payload,
+            coverage,
+            _retention: retention,
+        })
     }
 }
 
 pub trait ExpertSourcePort: Send + Sync {
-    fn read<'a>(&'a self, request: ExpertSourceRequest, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<SourceReadOutcome<ExpertSourceRead>, AgentFailure>>;
+    fn read<'a>(
+        &'a self,
+        request: ExpertSourceRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<SourceReadOutcome<ExpertSourceRead>, AgentFailure>>;
 }
 
 pub struct ExpertProjectionRequest {
@@ -44,6 +59,9 @@ pub struct ExpertProjectionRequest {
 }
 
 pub trait ExpertProjectionPort: Send + Sync {
-    fn project<'a>(&'a self, request: ExpertProjectionRequest, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<ModelProjectionOutcome, AgentFailure>>;
+    fn project<'a>(
+        &'a self,
+        request: ExpertProjectionRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<ModelProjectionOutcome, AgentFailure>>;
 }

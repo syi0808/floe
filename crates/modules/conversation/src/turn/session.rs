@@ -4,9 +4,9 @@ use floe_kernel::PersonId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_agent_contract::{AgentFailure, ModelStep, ProcessingBoundary, SessionProtection};
-
-use floe_agent_contract::{AGENT_VERSION, CapabilityExecution, ProviderReplay};
+use floe_agent_contract::{
+    AGENT_VERSION, AgentFailure, ModelStep, ProcessingBoundary, SessionProtection,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -19,8 +19,6 @@ pub struct AgentSession {
     pub data_classes: Vec<floe_agent_contract::DataClass>,
     pub messages: Vec<AgentMessage>,
     pub usage: AgentUsage,
-    pub capability_executions: Vec<CapabilityExecution>,
-    pub delegation_executions: Vec<DelegationExecution>,
     pub pending_output: Option<Vec<ModelStep>>,
     pub active_turn: Option<Uuid>,
     pub last_outcome: Option<AgentOutcome>,
@@ -66,34 +64,12 @@ impl AgentSession {
             data_classes: vec![floe_agent_contract::DataClass::Personal],
             messages: vec![],
             usage: AgentUsage::default(),
-            capability_executions: vec![],
-            delegation_executions: vec![],
             pending_output: None,
             active_turn: None,
             last_outcome: None,
             continuation: None,
         }
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DelegationExecution {
-    pub turn_id: Uuid,
-    pub task_id: Uuid,
-    pub agent_id: String,
-    pub message: String,
-    pub state: DelegationExecutionState,
-    pub task: Option<floe_agent_contract::TaskSnapshot>,
-    pub replay: Option<ProviderReplay>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DelegationExecutionState {
-    Started,
-    Settled,
-    Interrupted,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

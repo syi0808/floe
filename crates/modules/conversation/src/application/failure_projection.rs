@@ -73,12 +73,7 @@ pub fn project_conversation_failure(
             ConversationRecovery::Reopen,
             vec![AgentFailureSafeAction::ReopenVault],
         ),
-        F::VaultLocked => (
-            true,
-            true,
-            ConversationRecovery::Unlock,
-            vec![],
-        ),
+        F::VaultLocked => (true, true, ConversationRecovery::Unlock, vec![]),
         _ => (false, false, ConversationRecovery::None, vec![]),
     };
     ConversationFailure {

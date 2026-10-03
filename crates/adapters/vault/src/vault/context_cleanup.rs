@@ -1,13 +1,13 @@
 use floe_access::{DependencyCoverage, MAX_CONTEXT_DEPENDENCY_BYTES};
 use floe_agent_contract::AgentFailure;
-use floe_conversation::AgentSession;
 use turso::{Row, transaction::Transaction};
 use uuid::Uuid;
 
 use super::access_grants::AccessGrantCleanup;
 use super::*;
 
-const CONTEXT_CLEANUP_SCHEMA_VERSION: i64 = 1;
+// Version 2 retains coverage invalidation evidence; Session replay caches no longer exist.
+const CONTEXT_CLEANUP_SCHEMA_VERSION: i64 = 2;
 const MAX_CONTEXT_CLEANUP_BATCH: usize = 16;
 const MAX_CONTEXT_CLEANUP_ROWS: i64 = 4096;
 const MAX_CONTEXT_CLEANUP_BYTES: i64 = 4 * 1024 * 1024;
@@ -74,14 +74,14 @@ pub(super) async fn initialize_context_cleanup_store(
         }
         transaction
             .execute(
-                "CREATE TABLE agent_context_cleanup_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))",
+                "CREATE TABLE agent_context_cleanup_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))",
                 (),
             )
             .await
             .map_err(storage)?;
         transaction
             .execute(
-                "CREATE TABLE agent_context_cleanup_applied (cleanup_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, grant_id TEXT NOT NULL, invalidated_incarnation TEXT NOT NULL, invalidated_epoch INTEGER NOT NULL, payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 65536), coverage_cursor INTEGER NOT NULL DEFAULT 0, session_cursor INTEGER NOT NULL DEFAULT 0, coverage_complete INTEGER NOT NULL CHECK (coverage_complete IN (0, 1)), session_complete INTEGER NOT NULL CHECK (session_complete IN (0, 1)))",
+                "CREATE TABLE agent_context_cleanup_applied (cleanup_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, grant_id TEXT NOT NULL, invalidated_incarnation TEXT NOT NULL, invalidated_epoch INTEGER NOT NULL, payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 65536), coverage_cursor INTEGER NOT NULL DEFAULT 0, coverage_complete INTEGER NOT NULL CHECK (coverage_complete IN (0, 1)))",
                 (),
             )
             .await
@@ -102,7 +102,7 @@ pub(super) async fn initialize_context_cleanup_store(
             .map_err(storage)?;
         transaction
             .execute(
-                "INSERT INTO agent_context_cleanup_schema (id, version) VALUES (1, 1)",
+                "INSERT INTO agent_context_cleanup_schema (id, version) VALUES (1, 2)",
                 (),
             )
             .await
@@ -144,7 +144,7 @@ async fn validate_context_cleanup_store(
     }
     let mut applied = transaction
         .query(
-            "SELECT cleanup_id, person_id, grant_id, invalidated_incarnation, invalidated_epoch, payload, coverage_cursor, session_cursor, coverage_complete, session_complete FROM agent_context_cleanup_applied LIMIT ?",
+            "SELECT cleanup_id, person_id, grant_id, invalidated_incarnation, invalidated_epoch, payload, coverage_cursor, coverage_complete FROM agent_context_cleanup_applied LIMIT ?",
             [MAX_CONTEXT_CLEANUP_ROWS + 1],
         )
         .await
@@ -195,7 +195,7 @@ async fn validate_context_cleanup_runtime(
         return Err(AgentFailure::VaultUnavailable);
     }
     for query in [
-        "SELECT cleanup_id, person_id, grant_id, invalidated_incarnation, invalidated_epoch, payload, coverage_cursor, session_cursor, coverage_complete, session_complete FROM agent_context_cleanup_applied LIMIT 0",
+        "SELECT cleanup_id, person_id, grant_id, invalidated_incarnation, invalidated_epoch, payload, coverage_cursor, coverage_complete FROM agent_context_cleanup_applied LIMIT 0",
         "SELECT cleanup_id, person_id, session_id, turn_id, grant_id, invalidated_incarnation, invalidated_epoch, payload FROM agent_context_cleanup_suppression LIMIT 0",
     ] {
         transaction.query(query, ()).await.map_err(storage)?;
@@ -261,99 +261,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    pub(super) async fn context_cleanup_applies_to_turn(
-        &self,
-        transaction: &Transaction<'_>,
-        session_id: Uuid,
-        turn_id: Uuid,
-    ) -> Result<bool, AgentFailure> {
-        validate_context_cleanup_runtime(transaction).await?;
-        let mut rows = transaction
-            .query(
-                "SELECT 1 FROM agent_context_cleanup_suppression WHERE person_id = ? AND session_id = ? AND turn_id = ? LIMIT 1",
-                (
-                    self.person_id.to_string(),
-                    session_id.to_string(),
-                    turn_id.to_string(),
-                ),
-            )
-            .await
-            .map_err(storage)?;
-        if rows.next().await.map_err(storage)?.is_some() {
-            return Ok(true);
-        }
-        let mut coverage = transaction
-            .query(
-                "SELECT payload FROM agent_context_dependency_coverage WHERE person_id = ? AND session_id = ? AND turn_id = ?",
-                (
-                    self.person_id.to_string(),
-                    session_id.to_string(),
-                    turn_id.to_string(),
-                ),
-            )
-            .await
-            .map_err(storage)?;
-        let Some(row) = coverage.next().await.map_err(storage)? else {
-            return Ok(true);
-        };
-        if coverage.next().await.map_err(storage)?.is_some() {
-            return Err(AgentFailure::VaultUnavailable);
-        }
-        let payload = row.get::<String>(0).map_err(storage)?;
-        let parsed = DependencyCoverage::from_persisted_bytes(payload.as_bytes())
-            .map_err(|_| AgentFailure::VaultUnavailable)?;
-        let dependencies = match parsed {
-            DependencyCoverage::Dependent { dependencies } => dependencies,
-            DependencyCoverage::Independent => return Ok(false),
-            DependencyCoverage::Unknown => return Ok(true),
-        };
-        for dependency in dependencies {
-            let mut invalidations = transaction
-                .query(
-                    "SELECT 1 FROM agent_context_cleanup_applied WHERE person_id = ? AND grant_id = ? AND invalidated_incarnation = ? AND invalidated_epoch = ? LIMIT 1",
-                    (
-                        self.person_id.to_string(),
-                        dependency.grant_id().as_uuid().to_string(),
-                        dependency.grant_authority().incarnation().to_string(),
-                        i64::try_from(dependency.grant_authority().access_epoch().get())
-                            .map_err(|_| AgentFailure::VaultUnavailable)?,
-                    ),
-                )
-                .await
-                .map_err(storage)?;
-            if invalidations.next().await.map_err(storage)?.is_some() {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    pub(super) async fn sanitize_session_for_context_cleanup(
-        &self,
-        transaction: &Transaction<'_>,
-        session: &mut AgentSession,
-    ) -> Result<(), AgentFailure> {
-        for execution in &mut session.capability_executions {
-            if execution.replay.is_some()
-                && self
-                    .context_cleanup_applies_to_turn(transaction, session.id, execution.turn_id)
-                    .await?
-            {
-                execution.replay = None;
-            }
-        }
-        for execution in &mut session.delegation_executions {
-            if execution.replay.is_some()
-                && self
-                    .context_cleanup_applies_to_turn(transaction, session.id, execution.turn_id)
-                    .await?
-            {
-                execution.replay = None;
-            }
-        }
-        Ok(())
-    }
-
     async fn apply_cleanup(
         &self,
         transaction: &Transaction<'_>,
@@ -364,12 +271,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let payload = serde_json::to_string(item).map_err(storage)?;
         let mut existing = transaction
             .query(
-                "SELECT person_id, grant_id, invalidated_incarnation, invalidated_epoch, payload, coverage_cursor, session_cursor, coverage_complete, session_complete FROM agent_context_cleanup_applied WHERE cleanup_id = ?",
+                "SELECT person_id, grant_id, invalidated_incarnation, invalidated_epoch, payload, coverage_cursor, coverage_complete FROM agent_context_cleanup_applied WHERE cleanup_id = ?",
                 [cleanup_id.clone()],
             )
             .await
             .map_err(storage)?;
-        let (mut coverage_cursor, mut session_cursor, mut coverage_complete, mut session_complete);
+        let (mut coverage_cursor, mut coverage_complete);
         if let Some(row) = existing.next().await.map_err(storage)? {
             if existing.next().await.map_err(storage)?.is_some()
                 || row.get::<String>(4).map_err(storage)? != payload
@@ -377,14 +284,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 return Err(AgentFailure::VaultUnavailable);
             }
             coverage_cursor = row.get::<i64>(5).map_err(storage)?;
-            session_cursor = row.get::<i64>(6).map_err(storage)?;
-            coverage_complete = row.get::<i64>(7).map_err(storage)? != 0;
-            session_complete = row.get::<i64>(8).map_err(storage)? != 0;
-            if coverage_cursor < 0
-                || session_cursor < 0
-                || row.get::<i64>(7).map_err(storage)? > 1
-                || row.get::<i64>(8).map_err(storage)? > 1
-            {
+            let stored_complete = row.get::<i64>(6).map_err(storage)?;
+            coverage_complete = stored_complete != 0;
+            if coverage_cursor < 0 || ![0, 1].contains(&stored_complete) {
                 return Err(AgentFailure::VaultUnavailable);
             }
         } else {
@@ -407,7 +309,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             transaction
                 .execute(
-                    "INSERT INTO agent_context_cleanup_applied (cleanup_id, person_id, grant_id, invalidated_incarnation, invalidated_epoch, payload, coverage_cursor, session_cursor, coverage_complete, session_complete) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, 0)",
+                    "INSERT INTO agent_context_cleanup_applied (cleanup_id, person_id, grant_id, invalidated_incarnation, invalidated_epoch, payload, coverage_cursor, coverage_complete) VALUES (?, ?, ?, ?, ?, ?, 0, 0)",
                     (
                         cleanup_id.clone(),
                         self.person_id.to_string(),
@@ -421,9 +323,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .await
                 .map_err(storage)?;
             coverage_cursor = 0;
-            session_cursor = 0;
             coverage_complete = false;
-            session_complete = false;
         }
 
         if !coverage_complete {
@@ -451,21 +351,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
         }
 
-        if !session_complete {
-            let (next_cursor, complete) = self
-                .scrub_session_replays(transaction, session_cursor, budget)
-                .await?;
-            session_cursor = next_cursor;
-            session_complete = complete;
-            transaction
-                .execute(
-                    "UPDATE agent_context_cleanup_applied SET session_cursor = ?, session_complete = ? WHERE cleanup_id = ?",
-                    (session_cursor, i64::from(session_complete), cleanup_id),
-                )
-                .await
-                .map_err(storage)?;
-        }
-        Ok(coverage_complete && session_complete)
+        Ok(coverage_complete)
     }
 
     async fn index_cleanup_coverage(
@@ -531,78 +417,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         Ok((last_cursor, !stopped_for_budget && scanned < limit))
     }
-
-    async fn scrub_session_replays(
-        &self,
-        transaction: &Transaction<'_>,
-        cursor: i64,
-        budget: &mut CleanupBudget,
-    ) -> Result<(i64, bool), AgentFailure> {
-        let limit = i64::try_from(budget.rows.min(MAX_CONTEXT_CLEANUP_ROWS as usize))
-            .map_err(|_| AgentFailure::BudgetExceeded)?;
-        let mut rows = transaction
-            .query(
-                "SELECT rowid, id, revision, payload FROM agent_sessions WHERE rowid > ? ORDER BY rowid LIMIT ?",
-                (
-                    cursor,
-                    limit,
-                ),
-            )
-            .await
-            .map_err(storage)?;
-        let mut scanned = 0;
-        let mut last_cursor = cursor;
-        let mut stopped_for_budget = false;
-        while let Some(row) = rows.next().await.map_err(storage)? {
-            let payload = row.get::<String>(3).map_err(storage)?;
-            if !budget.take(payload.len()) {
-                stopped_for_budget = true;
-                break;
-            }
-            scanned += 1;
-            last_cursor = row.get::<i64>(0).map_err(storage)?;
-            if payload.len() > AgentBudget::default().max_session_bytes {
-                return Err(AgentFailure::BudgetExceeded);
-            }
-            let mut session: AgentSession = serde_json::from_str(&payload).map_err(storage)?;
-            let mut changed = false;
-            for execution in &mut session.capability_executions {
-                if execution.replay.is_some()
-                    && self
-                        .context_cleanup_applies_to_turn(transaction, session.id, execution.turn_id)
-                        .await?
-                {
-                    execution.replay = None;
-                    changed = true;
-                }
-            }
-            for execution in &mut session.delegation_executions {
-                if execution.replay.is_some()
-                    && self
-                        .context_cleanup_applies_to_turn(transaction, session.id, execution.turn_id)
-                        .await?
-                {
-                    execution.replay = None;
-                    changed = true;
-                }
-            }
-            if changed {
-                let next_payload = self.payload(&session)?;
-                transaction
-                    .execute(
-                        "UPDATE agent_sessions SET payload = ? WHERE id = ? AND revision = ?",
-                        (
-                            next_payload,
-                            row.get::<String>(1).map_err(storage)?,
-                            row.get::<i64>(2).map_err(storage)?,
-                        ),
-                    )
-                    .await
-                    .map_err(storage)?;
-            }
-        }
-        Ok((last_cursor, !stopped_for_budget && scanned < limit))
-    }
 }
 
 fn cleanup_id(item: &AccessGrantCleanup) -> String {
@@ -633,9 +447,7 @@ fn decode_applied_row(
             != i64::try_from(item.invalidated_authority.access_epoch().get())
                 .map_err(|_| AgentFailure::VaultUnavailable)?
         || row.get::<i64>(6).map_err(storage)? < 0
-        || row.get::<i64>(7).map_err(storage)? < 0
-        || ![0, 1].contains(&row.get::<i64>(8).map_err(storage)?)
-        || ![0, 1].contains(&row.get::<i64>(9).map_err(storage)?)
+        || ![0, 1].contains(&row.get::<i64>(7).map_err(storage)?)
     {
         return Err(AgentFailure::VaultUnavailable);
     }

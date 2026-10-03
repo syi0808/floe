@@ -1,10 +1,12 @@
 //! One role-neutral parser for canonical execution journals.
-use std::collections::{HashMap, HashSet};
-use floe_agent_contract::{AgentFailure, Artifact, BatchCursor, DependencyCoverage, JournalEntry,
-    JournalEvent, ModelConversation, ModelConversationEntry, ModelStep, ProjectionRef,
-    ReplayReceipt, RunId, TaskExecutionEvidence, TaskExecutionReceipt, TaskId, TaskModelAccounting,
-    TaskReceipt, TaskState, UnresolvedModelAttempt, ValidatedModelBatch, input_digest};
+use floe_agent_contract::{
+    AgentFailure, Artifact, BatchCursor, DependencyCoverage, JournalEntry, JournalEvent,
+    ModelConversation, ModelConversationEntry, ModelStep, ProjectionRef, ReplayReceipt, RunId,
+    TaskExecutionEvidence, TaskExecutionReceipt, TaskId, TaskModelAccounting, TaskReceipt,
+    TaskState, UnresolvedModelAttempt, ValidatedModelBatch, input_digest,
+};
 use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
@@ -18,11 +20,15 @@ pub struct JournalExecutionBinding {
 }
 impl JournalExecutionBinding {
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.principal.is_empty() || self.device_id.is_empty() || self.execution_id.is_nil()
+        if self.principal.is_empty()
+            || self.device_id.is_empty()
+            || self.execution_id.is_nil()
             || (self.owning_task_id.is_some() && self.catalog_revision == 0)
             || self.root_run_id.is_some_and(|id| !id.is_valid())
             || self.owning_task_id.is_some_and(|id| !id.is_valid())
-        { return Err(AgentFailure::InvalidInput); }
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
         Ok(())
     }
 }
@@ -36,8 +42,13 @@ pub enum JournalProjectionMode {
 
 #[derive(Clone, Debug)]
 pub enum JournalBlockage {
-    SourceRead { call_id: Uuid, blockers: floe_agent_contract::SourceAccessBlockers },
-    Delegation { receipt: TaskReceipt },
+    SourceRead {
+        call_id: Uuid,
+        blockers: floe_agent_contract::SourceAccessBlockers,
+    },
+    Delegation {
+        receipt: TaskReceipt,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -65,8 +76,13 @@ pub struct JournalProjection {
 pub enum JournalLineage {
     Empty,
     Fresh,
-    ResumeBatchOnly { batch: ValidatedModelBatch },
-    ResumeClaimed { batch: ValidatedModelBatch, cursor: BatchCursor },
+    ResumeBatchOnly {
+        batch: ValidatedModelBatch,
+    },
+    ResumeClaimed {
+        batch: ValidatedModelBatch,
+        cursor: BatchCursor,
+    },
 }
 
 struct PendingTool {
@@ -277,11 +293,8 @@ pub fn project_execution_journal(
                     ordinal,
                     crate::InvocationKind::Tool,
                 );
-                let expected_call = crate::stable_call_id(
-                    state.batch.execution_id,
-                    state.batch.batch_id,
-                    ordinal,
-                );
+                let expected_call =
+                    crate::stable_call_id(state.batch.execution_id, state.batch.batch_id, ordinal);
                 if call.invocation_key != expected_key || call.call_id != expected_call {
                     return Err(AgentFailure::StorageUnavailable);
                 }
@@ -351,14 +364,21 @@ pub fn project_execution_journal(
                 replay.push(receipt);
             }
             JournalEvent::ToolReviewRequired { call_id, blockers } => {
-                blockers.validate().map_err(|_| AgentFailure::StorageUnavailable)?;
-                let settled = tools.remove(call_id).ok_or(AgentFailure::StorageUnavailable)?;
+                blockers
+                    .validate()
+                    .map_err(|_| AgentFailure::StorageUnavailable)?;
+                let settled = tools
+                    .remove(call_id)
+                    .ok_or(AgentFailure::StorageUnavailable)?;
                 let state = pending.as_mut().ok_or(AgentFailure::StorageUnavailable)?;
                 if state.cursor != Some(settled.ordinal) || state.settled_step.is_some() {
                     return Err(AgentFailure::StorageUnavailable);
                 }
                 state.settled_step = Some(settled.ordinal);
-                blockage = Some(JournalBlockage::SourceRead { call_id: *call_id, blockers: blockers.clone() });
+                blockage = Some(JournalBlockage::SourceRead {
+                    call_id: *call_id,
+                    blockers: blockers.clone(),
+                });
             }
             JournalEvent::DelegationIntent { request } => {
                 if matches!(lineage, JournalLineage::ResumeBatchOnly { .. }) {
@@ -406,11 +426,8 @@ pub fn project_execution_journal(
                     ordinal,
                     crate::InvocationKind::Delegation,
                 );
-                let expected_task = crate::stable_task_id(
-                    state.batch.execution_id,
-                    state.batch.batch_id,
-                    ordinal,
-                );
+                let expected_task =
+                    crate::stable_task_id(state.batch.execution_id, state.batch.batch_id, ordinal);
                 if request.invocation_key != expected_key || request.task_id != expected_task {
                     return Err(AgentFailure::StorageUnavailable);
                 }
@@ -469,21 +486,31 @@ pub fn project_execution_journal(
                     return Err(AgentFailure::StorageUnavailable);
                 }
                 if receipt.snapshot.parent_run_id != request.parent_run_id {
-                    let replayed = receipt.replay.as_ref().ok_or(AgentFailure::StorageUnavailable)?;
+                    let replayed = receipt
+                        .replay
+                        .as_ref()
+                        .ok_or(AgentFailure::StorageUnavailable)?;
                     let mut original = request.clone();
                     original.parent_run_id = receipt.snapshot.parent_run_id;
                     if replayed.invocation_key != request.invocation_key
                         || replayed.task_id != Some(request.task_id)
-                        || replayed.input_digest != floe_agent_contract::delegation_request_digest(&original)
+                        || replayed.input_digest
+                            != floe_agent_contract::delegation_request_digest(&original)
                         || match &receipt.execution {
-                            TaskExecutionEvidence::Admitted(execution) => replayed.task_execution.as_ref() != Some(execution),
+                            TaskExecutionEvidence::Admitted(execution) => {
+                                replayed.task_execution.as_ref() != Some(execution)
+                            }
                             TaskExecutionEvidence::Unadmitted => replayed.task_execution.is_some(),
                         }
-                    { return Err(AgentFailure::StorageUnavailable); }
+                    {
+                        return Err(AgentFailure::StorageUnavailable);
+                    }
                 }
                 let blocked = receipt.snapshot.state == TaskState::Blocked;
                 if blocked {
-                    blockage = Some(JournalBlockage::Delegation { receipt: receipt.as_ref().clone() });
+                    blockage = Some(JournalBlockage::Delegation {
+                        receipt: receipt.as_ref().clone(),
+                    });
                 }
                 let text = receipt
                     .snapshot
@@ -492,7 +519,8 @@ pub fn project_execution_journal(
                     .unwrap_or_else(|| format!("task {:?}", receipt.snapshot.state));
                 let mut original_request = request.clone();
                 original_request.parent_run_id = receipt.snapshot.parent_run_id;
-                let input_digest = floe_agent_contract::delegation_request_digest(&original_request);
+                let input_digest =
+                    floe_agent_contract::delegation_request_digest(&original_request);
                 if !blocked {
                     exchanges.push(ModelConversationEntry::DelegationExchange {
                         request: original_request,
@@ -580,8 +608,10 @@ pub fn project_execution_journal(
                     }
                     Some(_) => {}
                     None => {
-                        if (finalization_prior_execution.is_none() && batch.execution_id != source.execution_id)
-                            || finalization_prior_execution == Some(batch.execution_id) {
+                        if (finalization_prior_execution.is_none()
+                            && batch.execution_id != source.execution_id)
+                            || finalization_prior_execution == Some(batch.execution_id)
+                        {
                             return Err(AgentFailure::StorageUnavailable);
                         }
                         execution_id = Some(batch.execution_id);
@@ -731,10 +761,13 @@ pub fn project_execution_journal(
             }
         }
     }
-    if !storage_validation && blockage.is_some()
+    if !storage_validation
+        && blockage.is_some()
         && !(mode == JournalProjectionMode::ContinueSettledDelegation
             && matches!(&blockage, Some(JournalBlockage::Delegation { .. })))
-    { return Err(AgentFailure::AccessReviewRequired); }
+    {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
     if !storage_validation && attempts.values().any(|state| !state.completed) {
         // A model attempt that never produced a result leaves nothing to resume.
         return Err(AgentFailure::Interrupted);
@@ -766,9 +799,13 @@ pub fn project_execution_journal(
         })
         .unwrap_or((None, None));
     let (own_accounting, delegated_receipts, total) = project_model_accounting(entries)?;
-    let task_refs = entries.iter().filter_map(|entry| match &entry.event {
-        JournalEvent::DelegationIntent { request } => Some(request.task_id), _ => None,
-    }).collect();
+    let task_refs = entries
+        .iter()
+        .filter_map(|entry| match &entry.event {
+            JournalEvent::DelegationIntent { request } => Some(request.task_id),
+            _ => None,
+        })
+        .collect();
     Ok(JournalProjection {
         journal_revision: entries.last().map_or(0, |entry| entry.revision),
         journal_digest: journal_digest(entries)?,
@@ -793,7 +830,6 @@ pub fn project_execution_journal(
     })
 }
 
-
 pub fn journal_digest(entries: &[JournalEntry]) -> Result<[u8; 32], AgentFailure> {
     let encoded = serde_json::to_vec(&("floe.execution-journal.sha256.v1", entries))
         .map_err(|_| AgentFailure::StorageUnavailable)?;
@@ -807,13 +843,27 @@ pub fn validate_journal_capacity(entries: &[JournalEntry]) -> Result<(), AgentFa
     let mut tasks = HashSet::new();
     for entry in entries {
         match &entry.event {
-            JournalEvent::ModelIntent { attempt_id, .. } => { models.insert(*attempt_id); }
-            JournalEvent::ModelResult { attempt_id, .. } => { models.remove(attempt_id); }
-            JournalEvent::ToolIntent { call } => { tools.insert(call.call_id); }
-            JournalEvent::ToolResult { result } => { tools.remove(&result.call_id); }
-            JournalEvent::ToolReviewRequired { call_id, .. } => { tools.remove(call_id); }
-            JournalEvent::DelegationIntent { request } => { tasks.insert(request.task_id); }
-            JournalEvent::DelegationResult { receipt } => { tasks.remove(&receipt.task_id); }
+            JournalEvent::ModelIntent { attempt_id, .. } => {
+                models.insert(*attempt_id);
+            }
+            JournalEvent::ModelResult { attempt_id, .. } => {
+                models.remove(attempt_id);
+            }
+            JournalEvent::ToolIntent { call } => {
+                tools.insert(call.call_id);
+            }
+            JournalEvent::ToolResult { result } => {
+                tools.remove(&result.call_id);
+            }
+            JournalEvent::ToolReviewRequired { call_id, .. } => {
+                tools.remove(call_id);
+            }
+            JournalEvent::DelegationIntent { request } => {
+                tasks.insert(request.task_id);
+            }
+            JournalEvent::DelegationResult { receipt } => {
+                tasks.remove(&receipt.task_id);
+            }
             _ => {}
         }
     }
@@ -824,29 +874,51 @@ pub fn validate_journal_capacity(entries: &[JournalEntry]) -> Result<(), AgentFa
 }
 
 fn checked_add(value: &mut u64, amount: u64) -> Result<(), AgentFailure> {
-    *value = value.checked_add(amount).ok_or(AgentFailure::StorageUnavailable)?;
+    *value = value
+        .checked_add(amount)
+        .ok_or(AgentFailure::StorageUnavailable)?;
     Ok(())
 }
 
-fn append_accounting(total: &mut TaskModelAccounting, value: &TaskModelAccounting)
-    -> Result<(), AgentFailure>
-{
+fn append_accounting(
+    total: &mut TaskModelAccounting,
+    value: &TaskModelAccounting,
+) -> Result<(), AgentFailure> {
     value.validate()?;
-    if value.attempt_refs.iter().any(|id| total.attempt_refs.contains(id)) {
+    if value
+        .attempt_refs
+        .iter()
+        .any(|id| total.attempt_refs.contains(id))
+    {
         return Err(AgentFailure::StorageUnavailable);
     }
     total.attempt_refs.extend_from_slice(&value.attempt_refs);
-    total.unresolved_attempts.extend_from_slice(&value.unresolved_attempts);
-    total.usage.attempts = total.usage.attempts.checked_add(value.usage.attempts)
+    total
+        .unresolved_attempts
+        .extend_from_slice(&value.unresolved_attempts);
+    total.usage.attempts = total
+        .usage
+        .attempts
+        .checked_add(value.usage.attempts)
         .ok_or(AgentFailure::StorageUnavailable)?;
-    total.unknown_token_attempts = total.unknown_token_attempts.checked_add(value.unknown_token_attempts)
+    total.unknown_token_attempts = total
+        .unknown_token_attempts
+        .checked_add(value.unknown_token_attempts)
         .ok_or(AgentFailure::StorageUnavailable)?;
-    total.unknown_cost_attempts = total.unknown_cost_attempts.checked_add(value.unknown_cost_attempts)
+    total.unknown_cost_attempts = total
+        .unknown_cost_attempts
+        .checked_add(value.unknown_cost_attempts)
         .ok_or(AgentFailure::StorageUnavailable)?;
     checked_add(&mut total.usage.tokens, value.usage.tokens)?;
     checked_add(&mut total.usage.cost_micros, value.usage.cost_micros)?;
-    checked_add(&mut total.usage.estimated_tokens, value.usage.estimated_tokens)?;
-    checked_add(&mut total.usage.estimated_cost_micros, value.usage.estimated_cost_micros)?;
+    checked_add(
+        &mut total.usage.estimated_tokens,
+        value.usage.estimated_tokens,
+    )?;
+    checked_add(
+        &mut total.usage.estimated_cost_micros,
+        value.usage.estimated_cost_micros,
+    )?;
     total.validate()
 }
 
@@ -857,12 +929,16 @@ pub fn aggregate_model_accounting(
     delegated: &[TaskExecutionReceipt],
 ) -> Result<TaskModelAccounting, AgentFailure> {
     let mut total = TaskModelAccounting::default();
-    for value in own { append_accounting(&mut total, value)?; }
+    for value in own {
+        append_accounting(&mut total, value)?;
+    }
     let mut executions = HashMap::new();
     for receipt in delegated {
         receipt.validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
         if let Some(prior) = executions.insert(receipt.reference.execution, receipt) {
-            if prior != receipt { return Err(AgentFailure::StorageUnavailable); }
+            if prior != receipt {
+                return Err(AgentFailure::StorageUnavailable);
+            }
             continue;
         }
         append_accounting(&mut total, &receipt.accounting)?;
@@ -870,33 +946,61 @@ pub fn aggregate_model_accounting(
     Ok(total)
 }
 
-fn project_model_accounting(entries: &[JournalEntry])
-    -> Result<(TaskModelAccounting, Vec<TaskExecutionReceipt>, TaskModelAccounting), AgentFailure>
-{
+fn project_model_accounting(
+    entries: &[JournalEntry],
+) -> Result<
+    (
+        TaskModelAccounting,
+        Vec<TaskExecutionReceipt>,
+        TaskModelAccounting,
+    ),
+    AgentFailure,
+> {
     let mut own = TaskModelAccounting::default();
     let mut pending = HashMap::new();
     let mut delegated = Vec::new();
     for entry in entries {
         match &entry.event {
-            JournalEvent::ModelIntent { attempt_id, reservation_ceiling, .. } => {
-                if own.attempt_refs.contains(attempt_id) { return Err(AgentFailure::StorageUnavailable); }
+            JournalEvent::ModelIntent {
+                attempt_id,
+                reservation_ceiling,
+                ..
+            } => {
+                if own.attempt_refs.contains(attempt_id) {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 own.attempt_refs.push(*attempt_id);
-                own.usage.attempts = own.usage.attempts.checked_add(1)
+                own.usage.attempts = own
+                    .usage
+                    .attempts
+                    .checked_add(1)
                     .ok_or(AgentFailure::StorageUnavailable)?;
                 pending.insert(*attempt_id, *reservation_ceiling);
             }
-            JournalEvent::ModelResult { attempt_id, usage, accounting } => {
-                pending.remove(attempt_id).ok_or(AgentFailure::StorageUnavailable)?;
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage,
+                accounting,
+            } => {
+                pending
+                    .remove(attempt_id)
+                    .ok_or(AgentFailure::StorageUnavailable)?;
                 accounting.validate_charge(usage.tokens, usage.cost_micros)?;
                 checked_add(&mut own.usage.tokens, usage.tokens)?;
                 checked_add(&mut own.usage.cost_micros, usage.cost_micros)?;
                 if accounting.unknown_tokens {
                     checked_add(&mut own.usage.estimated_tokens, usage.tokens)?;
-                    own.unknown_token_attempts = own.unknown_token_attempts.checked_add(1).ok_or(AgentFailure::StorageUnavailable)?;
+                    own.unknown_token_attempts = own
+                        .unknown_token_attempts
+                        .checked_add(1)
+                        .ok_or(AgentFailure::StorageUnavailable)?;
                 }
                 if accounting.unknown_cost {
                     checked_add(&mut own.usage.estimated_cost_micros, usage.cost_micros)?;
-                    own.unknown_cost_attempts = own.unknown_cost_attempts.checked_add(1).ok_or(AgentFailure::StorageUnavailable)?;
+                    own.unknown_cost_attempts = own
+                        .unknown_cost_attempts
+                        .checked_add(1)
+                        .ok_or(AgentFailure::StorageUnavailable)?;
                 }
             }
             JournalEvent::DelegationResult { receipt } => {
@@ -913,14 +1017,22 @@ fn project_model_accounting(entries: &[JournalEntry])
             checked_add(&mut own.usage.cost_micros, ceiling.cost_micros)?;
             checked_add(&mut own.usage.estimated_tokens, ceiling.tokens)?;
             checked_add(&mut own.usage.estimated_cost_micros, ceiling.cost_micros)?;
-            own.unknown_token_attempts = own.unknown_token_attempts.checked_add(1).ok_or(AgentFailure::StorageUnavailable)?;
-            own.unknown_cost_attempts = own.unknown_cost_attempts.checked_add(1).ok_or(AgentFailure::StorageUnavailable)?;
+            own.unknown_token_attempts = own
+                .unknown_token_attempts
+                .checked_add(1)
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            own.unknown_cost_attempts = own
+                .unknown_cost_attempts
+                .checked_add(1)
+                .ok_or(AgentFailure::StorageUnavailable)?;
             own.unresolved_attempts.push(UnresolvedModelAttempt {
                 attempt_id: *attempt_id,
                 reservation_ceiling: *ceiling,
                 accounting: floe_agent_contract::ModelAccounting {
-                    observed_tokens: None, observed_cost_micros: None,
-                    unknown_tokens: true, unknown_cost: true,
+                    observed_tokens: None,
+                    observed_cost_micros: None,
+                    unknown_tokens: true,
+                    unknown_cost: true,
                 },
             });
         }

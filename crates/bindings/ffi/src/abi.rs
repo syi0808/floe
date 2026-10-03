@@ -130,7 +130,9 @@ pub unsafe extern "C" fn floe_core_free(handle: *mut FloeHandle) {
         // The host's retirement worker retains service state after a failed or
         // timed-out drain. No borrowed core pointer enters that worker.
         let result = catch_unwind(AssertUnwindSafe(|| unsafe { drop(Box::from_raw(handle)) }));
-        if let Err(payload) = result { report_free_panic(payload); }
+        if let Err(payload) = result {
+            report_free_panic(payload);
+        }
     }
 }
 
@@ -251,5 +253,7 @@ fn report_free_panic(payload: Box<dyn std::any::Any + Send>) {
     // custom panic payload destructor, must not unwind across an extern ABI.
     if let Err(secondary) = catch_unwind(AssertUnwindSafe(|| {
         let _ = diagnostics::panic_error(payload);
-    })) { std::mem::forget(secondary); }
+    })) {
+        std::mem::forget(secondary);
+    }
 }

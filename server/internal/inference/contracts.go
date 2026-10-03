@@ -63,7 +63,7 @@ type AgentInvocation struct {
 	MaxOutputBytes                uint64
 }
 type OutputFormat struct {
-	Kind string `json:"kind"`
+	Kind   string          `json:"kind"`
 	Schema json.RawMessage `json:"schema,omitempty"`
 }
 type StructuredInvocation struct {
@@ -151,13 +151,13 @@ const (
 )
 
 type Failure struct {
-	Code       FailureCode
-	TraceID    string
-	AttemptID string
-	Purpose Purpose
+	Code               FailureCode
+	TraceID            string
+	AttemptID          string
+	Purpose            Purpose
 	CapabilityRevision string
-	Usage      UsageObservation
-	Dispatched bool
+	Usage              UsageObservation
+	Dispatched         bool
 }
 
 func (f Failure) Error() string { return string(f.Code) }

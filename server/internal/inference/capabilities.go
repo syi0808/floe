@@ -3,9 +3,9 @@ package inference
 import "sort"
 
 const (
-	ChatCapability = "chat"
+	ChatCapability             = "chat"
 	StructuredOutputCapability = "structured_output"
-	ToolProposalsCapability = "tool_proposals"
+	ToolProposalsCapability    = "tool_proposals"
 )
 
 // Capabilities are declared by the operator for the configured model. Provider

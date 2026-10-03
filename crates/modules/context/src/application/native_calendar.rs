@@ -8,7 +8,11 @@
 
 use std::future::Future;
 
-use floe_access::{CalendarReadAccessAdmission, CalendarReadAccessRequest, ReadAuthorityEvidence, ReadAuthorityIdentity, RemoteCallWindow, admits_native_calendar_read, is_native_calendar, validate_read_authority};
+use floe_access::{
+    CalendarReadAccessAdmission, CalendarReadAccessRequest, ReadAuthorityEvidence,
+    ReadAuthorityIdentity, RemoteCallWindow, admits_native_calendar_read, is_native_calendar,
+    validate_read_authority,
+};
 use floe_agent_contract::{AgentFailure, PersonId};
 use floe_connections::SourceConnection;
 use floe_context_contract::{CalendarProvider, CalendarReadAccessStamp};
@@ -192,4 +196,3 @@ fn native_provider(connection: &SourceConnection) -> Result<CalendarProvider, Ag
         _ => Err(AgentFailure::CapabilityUnavailable),
     }
 }
-

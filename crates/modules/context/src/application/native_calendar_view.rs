@@ -239,9 +239,7 @@ fn project_native_items(
         if let Some(failure) = batch.failure {
             return Err(match failure {
                 CalendarFailure::PermissionDenied => AgentFailure::AccessReviewRequired,
-                _ => {
-                    AgentFailure::CapabilityUnavailable
-                }
+                _ => AgentFailure::CapabilityUnavailable,
             });
         }
         for record in batch.records {

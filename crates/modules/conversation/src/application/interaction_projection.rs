@@ -93,7 +93,9 @@ pub(super) async fn project_interaction(
             source_label: source_label(&target.source_id).into(),
         },
         ReviewedTarget::ExpertBinding(reference) => InteractionTarget::ExpertBinding {
-            review: experts.inspect_binding_review(actor, reference.clone(), scope).await?,
+            review: experts
+                .inspect_binding_review(actor, reference.clone(), scope)
+                .await?,
         },
     };
     let allowed_actions = match (state, &target) {

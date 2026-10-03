@@ -25,9 +25,9 @@ mod authority_keys;
 mod connection_reviews;
 mod context_cleanup;
 mod context_dependencies;
+mod conversation_delegation_recovery;
 mod conversation_interactions;
 mod conversations;
-mod conversation_delegation_recovery;
 mod expert_actions;
 pub(crate) mod expert_binding_reviews;
 pub use expert_actions::VaultExpertProposalReader;
@@ -568,7 +568,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 _ => AgentFailure::StorageUnavailable,
             })?;
         let result = async {
-            let mut candidate = session.clone();
+            let candidate = session.clone();
             let stored = self.session_on(&transaction, session.id).await?;
             if stored.revision != previous_revision
                 || stored.scope != candidate.scope
@@ -620,8 +620,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     .await?;
                 }
             }
-            self.sanitize_session_for_context_cleanup(&transaction, &mut candidate)
-                .await?;
             let payload = self.payload(&candidate)?;
             for permit in release_permits {
                 floe_access::consume_release(permit).await?;

@@ -11,8 +11,15 @@ use super::{
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NativeEventScheduleDto {
-    Timed { starts_at: String, ends_at: String, timezone: String },
-    AllDay { start_date: String, end_date_exclusive: String },
+    Timed {
+        starts_at: String,
+        ends_at: String,
+        timezone: String,
+    },
+    AllDay {
+        start_date: String,
+        end_date_exclusive: String,
+    },
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

@@ -486,7 +486,9 @@ func (runtime *Runtime) generate(ctx context.Context, model, reasoningEffort, in
 			requestBody["tool_choice"] = "auto"
 			delete(requestBody, "text")
 		} else {
-			if len(tools) != 0 { return "", inference.UsageObservation{}, invalidOutput }
+			if len(tools) != 0 {
+				return "", inference.UsageObservation{}, invalidOutput
+			}
 			requestBody["parallel_tool_calls"] = false
 			requestBody["text"] = map[string]any{"format": map[string]any{"type": "json_schema", "name": "floe_result", "strict": false, "schema": schema}}
 		}

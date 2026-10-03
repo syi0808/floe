@@ -4,24 +4,38 @@ use floe_experts::{
     ExpertSourceRequirement,
 };
 
-use std::sync::Arc;
-use floe_experts::ExpertProgram;
 use crate::BuiltinExpertKind;
+use floe_experts::ExpertProgram;
+use std::sync::Arc;
 
 pub fn registrations() -> Vec<ExpertRegistration<Arc<dyn ExpertProgram>>> {
-    BuiltinExpertKind::ALL.into_iter().map(|kind| {
-        let program: Arc<dyn ExpertProgram> = match kind {
-            BuiltinExpertKind::Schedule => Arc::new(crate::schedule::ScheduleProgram),
-            BuiltinExpertKind::Commitments => Arc::new(crate::commitments::CommitmentsProgram),
-            BuiltinExpertKind::Communication => Arc::new(crate::communication::CommunicationProgram),
-            BuiltinExpertKind::Relationships => Arc::new(crate::relationships::RelationshipsProgram),
-            BuiltinExpertKind::FocusAttention => Arc::new(crate::focus_attention::FocusAttentionProgram),
-            BuiltinExpertKind::Wellbeing => Arc::new(crate::wellbeing::WellbeingProgram),
-            BuiltinExpertKind::WorkContext => Arc::new(crate::work_context::WorkContextProgram),
-            BuiltinExpertKind::LifeLogistics => Arc::new(crate::life_logistics::LifeLogisticsProgram),
-        };
-        ExpertRegistration { manifest: manifest(kind), runner: program }
-    }).collect()
+    BuiltinExpertKind::ALL
+        .into_iter()
+        .map(|kind| {
+            let program: Arc<dyn ExpertProgram> = match kind {
+                BuiltinExpertKind::Schedule => Arc::new(crate::schedule::ScheduleProgram),
+                BuiltinExpertKind::Commitments => Arc::new(crate::commitments::CommitmentsProgram),
+                BuiltinExpertKind::Communication => {
+                    Arc::new(crate::communication::CommunicationProgram)
+                }
+                BuiltinExpertKind::Relationships => {
+                    Arc::new(crate::relationships::RelationshipsProgram)
+                }
+                BuiltinExpertKind::FocusAttention => {
+                    Arc::new(crate::focus_attention::FocusAttentionProgram)
+                }
+                BuiltinExpertKind::Wellbeing => Arc::new(crate::wellbeing::WellbeingProgram),
+                BuiltinExpertKind::WorkContext => Arc::new(crate::work_context::WorkContextProgram),
+                BuiltinExpertKind::LifeLogistics => {
+                    Arc::new(crate::life_logistics::LifeLogisticsProgram)
+                }
+            };
+            ExpertRegistration {
+                manifest: manifest(kind),
+                runner: program,
+            }
+        })
+        .collect()
 }
 
 pub fn manifests() -> Vec<ExpertManifest> {

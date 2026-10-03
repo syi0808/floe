@@ -186,7 +186,9 @@ func writeInferenceError(w http.ResponseWriter, err error) {
 		out.AttemptID = &f.AttemptID
 		out.Purpose = &f.Purpose
 		out.CapabilityRevision = &f.CapabilityRevision
-		if inference.ValidateUsage(f.Usage) == nil { out.Usage = f.Usage }
+		if inference.ValidateUsage(f.Usage) == nil {
+			out.Usage = f.Usage
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

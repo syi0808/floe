@@ -1,10 +1,14 @@
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use sha2::{Digest, Sha256};
-use uuid::Uuid;
+use crate::{
+    BindingReviewRepository, CandidateCatalog, ExpertClock, ExpertProgram, ExpertProjectionPort,
+    ExpertRegistration, ExpertSourcePort, RegistryRepository, TaskCoordinator, TaskRepository,
+};
 use floe_agent_contract::{AgentFailure, ExecutionScope, ModelPort, OwnerActor};
-use crate::{BindingReviewRepository, CandidateCatalog, ExpertClock, ExpertProgram,
-    ExpertProjectionPort, ExpertRegistration, ExpertSourcePort, RegistryRepository,
-    TaskCoordinator, TaskRepository};
+use sha2::{Digest, Sha256};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use uuid::Uuid;
 
 pub struct ExpertsDependencies<Tasks> {
     pub actor: OwnerActor,
@@ -25,34 +29,53 @@ pub struct ExpertsService<Tasks> {
     pub(crate) operations: tokio::sync::RwLock<()>,
 }
 impl<Tasks> Drop for ExpertsService<Tasks> {
-    fn drop(&mut self) { self.closing.store(true, Ordering::Release); self.dependencies.tasks.close_admission(); }
+    fn drop(&mut self) {
+        self.closing.store(true, Ordering::Release);
+        self.dependencies.tasks.close_admission();
+    }
 }
 
 impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
     pub fn new(dependencies: ExpertsDependencies<Tasks>) -> Result<Self, AgentFailure> {
         dependencies.actor.validate()?;
         let mut ids = std::collections::HashSet::new();
-        if dependencies.programs.len() > 64 { return Err(AgentFailure::BudgetExceeded); }
+        if dependencies.programs.len() > 64 {
+            return Err(AgentFailure::BudgetExceeded);
+        }
         for registration in &dependencies.programs {
             registration.manifest.validate()?;
-            if !ids.insert(&registration.manifest.package.id) { return Err(AgentFailure::Conflict); }
+            if !ids.insert(&registration.manifest.package.id) {
+                return Err(AgentFailure::Conflict);
+            }
         }
-        Ok(Self { dependencies, closing: AtomicBool::new(false), operations: tokio::sync::RwLock::new(()) })
+        Ok(Self {
+            dependencies,
+            closing: AtomicBool::new(false),
+            operations: tokio::sync::RwLock::new(()),
+        })
     }
 
-    pub fn task_coordinator(&self) -> Arc<TaskCoordinator<Tasks>> { Arc::clone(&self.dependencies.tasks) }
+    pub fn task_coordinator(&self) -> Arc<TaskCoordinator<Tasks>> {
+        Arc::clone(&self.dependencies.tasks)
+    }
 
     pub(crate) fn authorize(&self, actor: &OwnerActor) -> Result<(), AgentFailure> {
         actor.validate()?;
-        if actor != &self.dependencies.actor || self.closing.load(Ordering::Acquire) { return Err(AgentFailure::PolicyDenied); }
+        if actor != &self.dependencies.actor || self.closing.load(Ordering::Acquire) {
+            return Err(AgentFailure::PolicyDenied);
+        }
         Ok(())
     }
 
-    pub(crate) async fn begin_operation<'a>(&'a self, actor: &OwnerActor, scope: &ExecutionScope)
-        -> Result<tokio::sync::RwLockReadGuard<'a, ()>, AgentFailure>
-    {
+    pub(crate) async fn begin_operation<'a>(
+        &'a self,
+        actor: &OwnerActor,
+        scope: &ExecutionScope,
+    ) -> Result<tokio::sync::RwLockReadGuard<'a, ()>, AgentFailure> {
         self.authorize(actor)?;
-        let guard = scope.run(async { Ok(self.operations.read().await) }).await?;
+        let guard = scope
+            .run(async { Ok(self.operations.read().await) })
+            .await?;
         self.authorize(actor)?;
         Ok(guard)
     }
@@ -61,41 +84,78 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
         let actor = &self.dependencies.actor;
         let _operation = self.begin_operation(actor, scope).await?;
         let mut snapshot = self.dependencies.registry.read(actor, scope).await?;
-        let manifests = self.dependencies.programs.iter().map(|program| program.manifest.clone()).collect::<Vec<_>>();
+        let manifests = self
+            .dependencies
+            .programs
+            .iter()
+            .map(|program| program.manifest.clone())
+            .collect::<Vec<_>>();
         if !manifests.is_empty() {
             let manifest_digest = crate::manifest_set_digest(&manifests)?;
-            if !snapshot.install_receipts.iter().any(|receipt| receipt.person_id == actor.person_id
-                && receipt.manifest_digest == manifest_digest)
-            {
-                let identity = serde_json::to_vec(&("floe.experts.activate.bundle.v1", actor.person_id,
-                    &actor.device_id, snapshot.instance_id, &manifest_digest))
-                    .map_err(|_| AgentFailure::InvalidInput)?;
-                let command_id = floe_agent_contract::CommandId::from_uuid(
-                    Uuid::new_v5(&snapshot.instance_id, &identity)).ok_or(AgentFailure::InvalidInput)?;
+            if !snapshot.install_receipts.iter().any(|receipt| {
+                receipt.person_id == actor.person_id && receipt.manifest_digest == manifest_digest
+            }) {
+                let identity = serde_json::to_vec(&(
+                    "floe.experts.activate.bundle.v1",
+                    actor.person_id,
+                    &actor.device_id,
+                    snapshot.instance_id,
+                    &manifest_digest,
+                ))
+                .map_err(|_| AgentFailure::InvalidInput)?;
+                let command_id = floe_agent_contract::CommandId::from_uuid(Uuid::new_v5(
+                    &snapshot.instance_id,
+                    &identity,
+                ))
+                .ok_or(AgentFailure::InvalidInput)?;
                 let request_digest: [u8; 32] = Sha256::digest(&identity).into();
-                let mut registry = crate::AgentRegistry::restore(snapshot.clone(), snapshot.instance_id)?;
-                registry.install_bundle(actor.person_id, &crate::ExpertInstallOperation {
-                    instance_id: snapshot.instance_id, expected_revision: snapshot.revision,
-                    operation_id: command_id.as_uuid(),
-                }, &manifests)?;
+                let mut registry =
+                    crate::AgentRegistry::restore(snapshot.clone(), snapshot.instance_id)?;
+                registry.install_bundle(
+                    actor.person_id,
+                    &crate::ExpertInstallOperation {
+                        instance_id: snapshot.instance_id,
+                        expected_revision: snapshot.revision,
+                        operation_id: command_id.as_uuid(),
+                    },
+                    &manifests,
+                )?;
                 let next = registry.snapshot();
                 self.authorize(actor)?;
-                match self.dependencies.registry.commit(crate::RegistryCommit {
-                    actor: actor.clone(), command_id, request_digest,
-                    expected_revision: snapshot.revision, next: next.clone(),
-                }, scope).await {
+                match self
+                    .dependencies
+                    .registry
+                    .commit(
+                        crate::RegistryCommit {
+                            actor: actor.clone(),
+                            command_id,
+                            request_digest,
+                            expected_revision: snapshot.revision,
+                            next: next.clone(),
+                        },
+                        scope,
+                    )
+                    .await
+                {
                     Ok(receipt) => {
-                        if receipt.command_id != command_id || receipt.person_id != actor.person_id
-                            || receipt.device_id != actor.device_id || receipt.request_digest != request_digest
+                        if receipt.command_id != command_id
+                            || receipt.person_id != actor.person_id
+                            || receipt.device_id != actor.device_id
+                            || receipt.request_digest != request_digest
                             || receipt.snapshot != next
-                        { return Err(AgentFailure::StorageUnavailable); }
+                        {
+                            return Err(AgentFailure::StorageUnavailable);
+                        }
                         snapshot = receipt.snapshot;
                     }
                     Err(AgentFailure::Conflict) => {
                         snapshot = self.dependencies.registry.read(actor, scope).await?;
-                        if !snapshot.install_receipts.iter().any(|receipt| receipt.person_id == actor.person_id
-                            && receipt.manifest_digest == manifest_digest)
-                        { return Err(AgentFailure::Conflict); }
+                        if !snapshot.install_receipts.iter().any(|receipt| {
+                            receipt.person_id == actor.person_id
+                                && receipt.manifest_digest == manifest_digest
+                        }) {
+                            return Err(AgentFailure::Conflict);
+                        }
                     }
                     Err(failure) => return Err(failure),
                 }
@@ -110,27 +170,50 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
         let admissions = registry.enabled_expert_admissions(self.dependencies.actor.person_id)?;
         let mut entries = Vec::new();
         for (_, admission) in admissions {
-            let registration = self.dependencies.programs.iter()
+            let registration = self
+                .dependencies
+                .programs
+                .iter()
                 .find(|registration| registration.manifest.package == admission.package)
                 .ok_or(AgentFailure::CapabilityUnavailable)?;
-            let resolved = registry.resolve_admitted(self.dependencies.actor.person_id, &admission)?;
-            if resolved.manifest != registration.manifest { return Err(AgentFailure::Conflict); }
-            let selection = crate::ExpertExecutionSelection::from_binding(&resolved.manifest, &resolved.assignment.binding)?;
+            let resolved =
+                registry.resolve_admitted(self.dependencies.actor.person_id, &admission)?;
+            if resolved.manifest != registration.manifest {
+                return Err(AgentFailure::Conflict);
+            }
+            let selection = crate::ExpertExecutionSelection::from_binding(
+                &resolved.manifest,
+                &resolved.assignment.binding,
+            )?;
             let endpoint = crate::EngineExpertEndpoint::new(
-                self.dependencies.actor.clone(), admission.clone(), selection.clone(),
-                registration.manifest.clone(), Arc::clone(&registration.runner),
-                Arc::clone(&self.dependencies.registry), Arc::clone(&self.dependencies.model),
-                Arc::clone(&self.dependencies.sources), Arc::clone(&self.dependencies.projection),
+                self.dependencies.actor.clone(),
+                admission.clone(),
+                selection.clone(),
+                registration.manifest.clone(),
+                Arc::clone(&registration.runner),
+                Arc::clone(&self.dependencies.registry),
+                Arc::clone(&self.dependencies.model),
+                Arc::clone(&self.dependencies.sources),
+                Arc::clone(&self.dependencies.projection),
                 Arc::clone(&self.dependencies.clock),
             )?;
-            entries.push((crate::DirectoryEntry {
-                definition: resolved.manifest.definition,
-                admission, selection, reviewed: true, enabled: true,
-                admitted_principals: vec![self.dependencies.actor.person_id.to_string()],
-                purposes: vec!["everyday_assistance".into()],
-            }, Arc::new(endpoint) as Arc<dyn floe_agent_contract::AgentEndpoint>));
+            entries.push((
+                crate::DirectoryEntry {
+                    definition: resolved.manifest.definition,
+                    admission,
+                    selection,
+                    reviewed: true,
+                    enabled: true,
+                    admitted_principals: vec![self.dependencies.actor.person_id.to_string()],
+                    purposes: vec!["everyday_assistance".into()],
+                },
+                Arc::new(endpoint) as Arc<dyn floe_agent_contract::AgentEndpoint>,
+            ));
         }
-        self.dependencies.tasks.directory().publish("floe.experts.registry", entries)?;
+        self.dependencies
+            .tasks
+            .directory()
+            .publish("floe.experts.registry", entries)?;
         Ok(())
     }
 }

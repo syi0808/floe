@@ -21,12 +21,15 @@ impl HostServices for AppComposition {
         let gateway = self.core.product_gateway.close();
         #[cfg(unix)]
         let vault = self.agent_vault.shutdown();
-        let scope = crate::host_scope(uuid::Uuid::new_v4(), floe_execution::Cancellation::new(), std::time::Duration::from_secs(35));
+        let scope = crate::host_scope(
+            uuid::Uuid::new_v4(),
+            floe_execution::Cancellation::new(),
+            std::time::Duration::from_secs(35),
+        );
         let day = self.runtime.block_on(self.core.day.shutdown(&scope));
         vault.map_err(|_| crate::HostError::Shutdown)?;
         gateway.map_err(|_| crate::HostError::Shutdown)?;
         day.map_err(|_| crate::HostError::Shutdown)
-
     }
 }
 
@@ -48,20 +51,38 @@ pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
         .map_err(AppOpenError::Host)?;
     let store = Arc::new(store);
     let local_context = Arc::new(crate::local_context::LocalContextHost::default());
-    let product_gateway = Arc::new(floe_provider_adapters::gateway::ProductGatewayLeaseRegistry::new());
-    let transport = Arc::new(floe_provider_adapters::sources::CalendarProductAdapter::new(
-        local_context.calendar_handle(), product_gateway.clone(),
+    let product_gateway =
+        Arc::new(floe_provider_adapters::gateway::ProductGatewayLeaseRegistry::new());
+    let transport = Arc::new(
+        floe_provider_adapters::sources::CalendarProductAdapter::new(
+            local_context.calendar_handle(),
+            product_gateway.clone(),
+        ),
+    );
+    let context = Arc::new(floe_context::ContextCore::new(
+        store.clone(),
+        transport,
+        Arc::new(floe_access::SystemAccessClock),
     ));
-    let context = Arc::new(floe_context::ContextCore::new(store.clone(), transport,
-        Arc::new(floe_access::SystemAccessClock)));
-    let day = Arc::new(floe_day::DayService::new(store.clone(),
+    let day = Arc::new(floe_day::DayService::new(
+        store.clone(),
         Arc::new(floe_context::ContextCalendarAcquisition::new(context)),
-        Arc::new(floe_day::SystemDayClock)));
-    let scope = crate::host_scope(uuid::Uuid::new_v4(), floe_execution::Cancellation::new(), std::time::Duration::from_secs(35));
-    runtime.block_on(day.activate(&caller.owner_actor(), &scope))
+        Arc::new(floe_day::SystemDayClock),
+    ));
+    let scope = crate::host_scope(
+        uuid::Uuid::new_v4(),
+        floe_execution::Cancellation::new(),
+        std::time::Duration::from_secs(35),
+    );
+    runtime
+        .block_on(day.activate(&caller.owner_actor(), &scope))
         .map_err(|error| AppOpenError::Store(error.to_string()))?;
-    let core = Arc::new(crate::FloeCore { store,
-        lease_registry: Arc::new(floe_context::SourceLeaseRegistry::new()), day, product_gateway });
+    let core = Arc::new(crate::FloeCore {
+        store,
+        lease_registry: Arc::new(floe_context::SourceLeaseRegistry::new()),
+        day,
+        product_gateway,
+    });
     let services = AppComposition {
         runtime,
         core: core.clone(),

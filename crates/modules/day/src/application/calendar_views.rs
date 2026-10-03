@@ -1,6 +1,6 @@
+use crate::CalendarRange;
 use chrono::{DateTime, Utc};
 use floe_kernel::AgentFailure;
-use crate::CalendarRange;
 
 /// The UTC interval a calendar range covers, honouring its timezone offsets.
 pub fn range_bounds(range: &CalendarRange) -> Result<(DateTime<Utc>, DateTime<Utc>), AgentFailure> {

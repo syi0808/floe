@@ -1,7 +1,7 @@
 use crate::bridge::FloeHandle;
 use floe_app::{
-    DayCommands, DayQueries, NativeHostCommands, NativeHostQueries,
-    VaultLifecycleCommands, VaultLifecycleQueries,
+    DayCommands, DayQueries, NativeHostCommands, NativeHostQueries, VaultLifecycleCommands,
+    VaultLifecycleQueries,
 };
 use floe_kernel::AgentFailure;
 use floe_protocol::*;
@@ -91,8 +91,11 @@ pub(crate) fn command(
                     )?,
                     changed_item: result
                         .changed_item
-                        .map(crate::conversion::timeline_item_to_dto).transpose()
-                        .map_err(|failure| structural_error(floe_protocol::wire::conversion_error(failure)))?,
+                        .map(crate::conversion::timeline_item_to_dto)
+                        .transpose()
+                        .map_err(|failure| {
+                            structural_error(floe_protocol::wire::conversion_error(failure))
+                        })?,
                     capture: result.capture.map(crate::conversion::capture_to_dto),
                 },
             })
@@ -118,9 +121,16 @@ pub(crate) fn command(
             })
         }
         AppProductCommandDto::DayRefresh { day } => {
-            let refresh = services.refresh_day(caller, command_id, crate::day_wire::read(day).map_err(structural_error)?)
+            let refresh = services
+                .refresh_day(
+                    caller,
+                    command_id,
+                    crate::day_wire::read(day).map_err(structural_error)?,
+                )
                 .map_err(day_error)?;
-            Ok(AppCommandResultDto::DayRefresh { refresh: crate::day_wire::refresh(refresh).map_err(structural_error)? })
+            Ok(AppCommandResultDto::DayRefresh {
+                refresh: crate::day_wire::refresh(refresh).map_err(structural_error)?,
+            })
         }
         _ => Err(validation("command")),
     }
@@ -221,8 +231,12 @@ pub(crate) fn query(
             })
         }
         AppProductQueryDto::DayRefreshGet { operation_ref } => {
-            let refresh = services.get_day_refresh(caller, operation_ref.get()).map_err(day_error)?;
-            Ok(AppQueryResultDto::DayRefresh { refresh: crate::day_wire::refresh(refresh).map_err(structural_error)? })
+            let refresh = services
+                .get_day_refresh(caller, operation_ref.get())
+                .map_err(day_error)?;
+            Ok(AppQueryResultDto::DayRefresh {
+                refresh: crate::day_wire::refresh(refresh).map_err(structural_error)?,
+            })
         }
         _ => Err(validation("query")),
     }

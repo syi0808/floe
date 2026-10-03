@@ -41,7 +41,8 @@ pub fn learner_prompt() -> PromptAssembly {
 }
 
 /// Knowledge owns the exact candidate-only structured answer contract.
-pub fn learner_output_schema() -> Result<floe_agent_contract::ModelSchema, floe_kernel::AgentFailure> {
+pub fn learner_output_schema() -> Result<floe_agent_contract::ModelSchema, floe_kernel::AgentFailure>
+{
     use serde_json::json;
     floe_agent_contract::ModelSchema::new(json!({
         "type":"object","additionalProperties":false,
@@ -73,6 +74,9 @@ pub fn learner_output_schema() -> Result<floe_agent_contract::ModelSchema, floe_
         },"required":["schema_version","proposals"]
     })).map_err(|_| floe_kernel::AgentFailure::InvalidInput)
 }
-pub fn learner_output_format() -> Result<floe_agent_contract::ModelOutputFormat, floe_kernel::AgentFailure> {
-    Ok(floe_agent_contract::ModelOutputFormat::Json { schema: learner_output_schema()? })
+pub fn learner_output_format()
+-> Result<floe_agent_contract::ModelOutputFormat, floe_kernel::AgentFailure> {
+    Ok(floe_agent_contract::ModelOutputFormat::Json {
+        schema: learner_output_schema()?,
+    })
 }

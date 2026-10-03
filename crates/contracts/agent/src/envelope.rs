@@ -170,7 +170,9 @@ pub struct RunInstructions {
 
 impl RunInstructions {
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        self.output_format.validate().map_err(|_| AgentFailure::InvalidInput)?;
+        self.output_format
+            .validate()
+            .map_err(|_| AgentFailure::InvalidInput)?;
         if self.purpose.trim().is_empty()
             || self.purpose.len() > MAX_SCOPED_PURPOSE_BYTES
             || self.response_contract.len() > MAX_RESPONSE_CONTRACT_BYTES

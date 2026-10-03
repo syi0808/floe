@@ -1,8 +1,8 @@
 use floe_agent_contract::{AgentFailure, CommandId, OwnerActor};
 use floe_experts::{
-    AgentRegistry, BindingReplacementReceipt, BindingReviewDescriptor,
-    BindingReviewRef, RegistryCommitReceipt, RegistrySnapshot,
-    binding_review_digest, project_binding_mutation_receipt, validate_binding_review_descriptor,
+    AgentRegistry, BindingReplacementReceipt, BindingReviewDescriptor, BindingReviewRef,
+    RegistryCommitReceipt, RegistrySnapshot, binding_review_digest,
+    project_binding_mutation_receipt, validate_binding_review_descriptor,
 };
 use floe_kernel::PersonId;
 use turso::{Connection, Row};
@@ -30,9 +30,7 @@ pub(crate) struct ExpertCommandAdmission {
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     /// Called only while explicitly creating a new Vault.
-    pub(super) async fn initialize_expert_binding_reviews(
-        &self,
-    ) -> Result<(), AgentFailure> {
+    pub(super) async fn initialize_expert_binding_reviews(&self) -> Result<(), AgentFailure> {
         self.check_access()?;
         let mut connection = self.connection()?;
         let transaction = connection
@@ -45,13 +43,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 
     /// Reopen validates durable evidence without creating missing tables.
-    pub(super) async fn validate_expert_binding_reviews(&self)->Result<(),AgentFailure>{
+    pub(super) async fn validate_expert_binding_reviews(&self) -> Result<(), AgentFailure> {
         self.check_access()?;
-        let mut connection=self.connection()?;
-        let transaction=connection.transaction_with_behavior(turso::transaction::TransactionBehavior::Deferred).await
-            .map_err(|error|self.registry_transaction_start_error(error))?;
-        let result=ensure_expert_binding_tables_on(&transaction).await;
-        self.finish_registry_transaction_checked(transaction,result).await
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(turso::transaction::TransactionBehavior::Deferred)
+            .await
+            .map_err(|error| self.registry_transaction_start_error(error))?;
+        let result = ensure_expert_binding_tables_on(&transaction).await;
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
     }
 
     /// Conversation calls this with its open turn transaction so the review and
@@ -85,15 +86,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     ) -> Result<Option<BindingReplacementReceipt>, AgentFailure> {
         self.check_access()?;
         let result = async {
-            let descriptor =
-                read_binding_review_on(
-                    connection,
-                    self.person_id,
-                    device_id,
-                    reference,
-                    self.registry_instance_id(),
-                )
-                .await?;
+            let descriptor = read_binding_review_on(
+                connection,
+                self.person_id,
+                device_id,
+                reference,
+                self.registry_instance_id(),
+            )
+            .await?;
             read_binding_replacement_for_review_on(
                 connection,
                 self.person_id,
@@ -110,47 +110,86 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 }
 
 const EXPERT_BINDING_TABLES: &[(&str, &str)] = &[
-    ("agent_expert_command_admissions", "CREATE TABLE agent_expert_command_admissions (command_id TEXT PRIMARY KEY, family TEXT NOT NULL CHECK (family IN ('binding_prepare', 'registry', 'binding_replacement')), person_id TEXT NOT NULL, device_id TEXT NOT NULL, request_digest TEXT NOT NULL CHECK (length(request_digest) = 64), review_id TEXT NOT NULL CHECK ((family = 'registry' AND review_id = '') OR (family != 'registry' AND length(review_id) = 36)))"),
-    ("agent_expert_binding_reviews", "CREATE TABLE agent_expert_binding_reviews (review_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, device_id TEXT NOT NULL, command_id TEXT NOT NULL UNIQUE, assignment_id TEXT NOT NULL, requirement_key TEXT NOT NULL, review_digest TEXT NOT NULL CHECK (length(review_digest) = 64), payload TEXT NOT NULL, UNIQUE (person_id, command_id))"),
-    ("agent_expert_registry_receipts", "CREATE TABLE agent_expert_registry_receipts (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, device_id TEXT NOT NULL, request_digest TEXT NOT NULL CHECK (length(request_digest) = 64), snapshot_revision INTEGER NOT NULL, payload TEXT NOT NULL)"),
-    ("agent_expert_binding_review_consumptions", "CREATE TABLE agent_expert_binding_review_consumptions (review_id TEXT PRIMARY KEY, command_id TEXT NOT NULL UNIQUE, person_id TEXT NOT NULL, device_id TEXT NOT NULL, review_digest TEXT NOT NULL CHECK (length(review_digest) = 64), request_digest TEXT NOT NULL CHECK (length(request_digest) = 64), committed_at_unix_ms INTEGER NOT NULL)"),
-    ("agent_expert_binding_replacement_receipts", "CREATE TABLE agent_expert_binding_replacement_receipts (command_id TEXT PRIMARY KEY, consumed_review_id TEXT NOT NULL UNIQUE, person_id TEXT NOT NULL, device_id TEXT NOT NULL, review_digest TEXT NOT NULL CHECK (length(review_digest) = 64), request_digest TEXT NOT NULL CHECK (length(request_digest) = 64), committed_at_unix_ms INTEGER NOT NULL, payload TEXT NOT NULL)"),
+    (
+        "agent_expert_command_admissions",
+        "CREATE TABLE agent_expert_command_admissions (command_id TEXT PRIMARY KEY, family TEXT NOT NULL CHECK (family IN ('binding_prepare', 'registry', 'binding_replacement')), person_id TEXT NOT NULL, device_id TEXT NOT NULL, request_digest TEXT NOT NULL CHECK (length(request_digest) = 64), review_id TEXT NOT NULL CHECK ((family = 'registry' AND review_id = '') OR (family != 'registry' AND length(review_id) = 36)))",
+    ),
+    (
+        "agent_expert_binding_reviews",
+        "CREATE TABLE agent_expert_binding_reviews (review_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, device_id TEXT NOT NULL, command_id TEXT NOT NULL UNIQUE, assignment_id TEXT NOT NULL, requirement_key TEXT NOT NULL, review_digest TEXT NOT NULL CHECK (length(review_digest) = 64), payload TEXT NOT NULL, UNIQUE (person_id, command_id))",
+    ),
+    (
+        "agent_expert_registry_receipts",
+        "CREATE TABLE agent_expert_registry_receipts (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, device_id TEXT NOT NULL, request_digest TEXT NOT NULL CHECK (length(request_digest) = 64), snapshot_revision INTEGER NOT NULL, payload TEXT NOT NULL)",
+    ),
+    (
+        "agent_expert_binding_review_consumptions",
+        "CREATE TABLE agent_expert_binding_review_consumptions (review_id TEXT PRIMARY KEY, command_id TEXT NOT NULL UNIQUE, person_id TEXT NOT NULL, device_id TEXT NOT NULL, review_digest TEXT NOT NULL CHECK (length(review_digest) = 64), request_digest TEXT NOT NULL CHECK (length(request_digest) = 64), committed_at_unix_ms INTEGER NOT NULL)",
+    ),
+    (
+        "agent_expert_binding_replacement_receipts",
+        "CREATE TABLE agent_expert_binding_replacement_receipts (command_id TEXT PRIMARY KEY, consumed_review_id TEXT NOT NULL UNIQUE, person_id TEXT NOT NULL, device_id TEXT NOT NULL, review_digest TEXT NOT NULL CHECK (length(review_digest) = 64), request_digest TEXT NOT NULL CHECK (length(request_digest) = 64), committed_at_unix_ms INTEGER NOT NULL, payload TEXT NOT NULL)",
+    ),
 ];
 
-async fn create_expert_binding_tables_on(connection:&Connection)->Result<(),AgentFailure>{
+async fn create_expert_binding_tables_on(connection: &Connection) -> Result<(), AgentFailure> {
     match expert_binding_tables_on(connection).await? {
-        0=>{},
-        5=>return ensure_expert_binding_tables_on(connection).await,
-        _=>return Err(AgentFailure::VaultUnavailable),
+        0 => {}
+        5 => return ensure_expert_binding_tables_on(connection).await,
+        _ => return Err(AgentFailure::VaultUnavailable),
     }
-    for (_,statement) in EXPERT_BINDING_TABLES {
-        connection.execute(statement,()).await.map_err(storage)?;
+    for (_, statement) in EXPERT_BINDING_TABLES {
+        connection.execute(statement, ()).await.map_err(storage)?;
     }
     ensure_expert_binding_tables_on(connection).await
 }
 
 /// The schema is created only with a new Vault. Missing receipts on an existing
 /// Vault cannot become permission to repeat a registry or binding command.
-pub(crate) async fn ensure_expert_binding_tables_on(connection:&Connection)->Result<(),AgentFailure>{
-    if expert_binding_tables_on(connection).await?!=5{return Err(AgentFailure::VaultUnavailable);}
-    for (name,statement) in EXPERT_BINDING_TABLES {
-        let mut rows=connection.query("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?",(*name,)).await.map_err(storage)?;
-        let row=rows.next().await.map_err(storage)?.ok_or(AgentFailure::VaultUnavailable)?;
-        let actual=row.get::<String>(0).map_err(storage)?;
-        if normalize_schema(&actual)!=normalize_schema(statement) || rows.next().await.map_err(storage)?.is_some(){return Err(AgentFailure::VaultUnavailable);}
+pub(crate) async fn ensure_expert_binding_tables_on(
+    connection: &Connection,
+) -> Result<(), AgentFailure> {
+    if expert_binding_tables_on(connection).await? != 5 {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    for (name, statement) in EXPERT_BINDING_TABLES {
+        let mut rows = connection
+            .query(
+                "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?",
+                (*name,),
+            )
+            .await
+            .map_err(storage)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(storage)?
+            .ok_or(AgentFailure::VaultUnavailable)?;
+        let actual = row.get::<String>(0).map_err(storage)?;
+        if normalize_schema(&actual) != normalize_schema(statement)
+            || rows.next().await.map_err(storage)?.is_some()
+        {
+            return Err(AgentFailure::VaultUnavailable);
+        }
     }
     let mut rows=connection.query("SELECT name FROM sqlite_schema WHERE type IN ('trigger', 'view') AND (name GLOB 'agent_expert_binding_*' OR name GLOB 'agent_expert_command_*' OR name = 'agent_expert_registry_receipts' OR tbl_name GLOB 'agent_expert_binding_*' OR tbl_name GLOB 'agent_expert_command_*' OR tbl_name = 'agent_expert_registry_receipts')",()).await.map_err(storage)?;
-    if rows.next().await.map_err(storage)?.is_some(){return Err(AgentFailure::VaultUnavailable);}
+    if rows.next().await.map_err(storage)?.is_some() {
+        return Err(AgentFailure::VaultUnavailable);
+    }
     drop(rows);
     count_expert_command_admissions_on(connection).await?;
     Ok(())
 }
 
-fn normalize_schema(value:&str)->String{value.chars().filter(|character|!character.is_whitespace() && *character!=';').flat_map(char::to_lowercase).collect()}
+fn normalize_schema(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_whitespace() && *character != ';')
+        .flat_map(char::to_lowercase)
+        .collect()
+}
 
-pub(crate) async fn expert_binding_tables_on(
-    connection: &Connection,
-) -> Result<i64, AgentFailure> {
+pub(crate) async fn expert_binding_tables_on(connection: &Connection) -> Result<i64, AgentFailure> {
     let mut rows = connection
         .query(
             "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name IN ('agent_expert_command_admissions', 'agent_expert_binding_reviews', 'agent_expert_registry_receipts', 'agent_expert_binding_review_consumptions', 'agent_expert_binding_replacement_receipts')",
@@ -212,7 +251,9 @@ pub(crate) async fn read_expert_command_admission_on(
     let Some(row) = rows.next().await.map_err(storage)? else {
         drop(rows);
         let mut orphans=connection.query("SELECT command_id FROM agent_expert_binding_reviews WHERE command_id = ? UNION ALL SELECT command_id FROM agent_expert_registry_receipts WHERE command_id = ? UNION ALL SELECT command_id FROM agent_expert_binding_replacement_receipts WHERE command_id = ? UNION ALL SELECT command_id FROM agent_expert_binding_review_consumptions WHERE command_id = ? LIMIT 1",(command_id.as_uuid().to_string(),command_id.as_uuid().to_string(),command_id.as_uuid().to_string(),command_id.as_uuid().to_string())).await.map_err(storage)?;
-        if orphans.next().await.map_err(storage)?.is_some(){return Err(AgentFailure::VaultUnavailable);}
+        if orphans.next().await.map_err(storage)?.is_some() {
+            return Err(AgentFailure::VaultUnavailable);
+        }
         return Ok(None);
     };
     let admission = decode_admission(&row)?;
@@ -283,7 +324,9 @@ pub(crate) async fn read_binding_review_on(
     let Some(row) = rows.next().await.map_err(storage)? else {
         drop(rows);
         let mut linked=connection.query("SELECT command_id FROM agent_expert_command_admissions WHERE family = 'binding_prepare' AND review_id = ? LIMIT 1",(reference.id.to_string(),)).await.map_err(storage)?;
-        if linked.next().await.map_err(storage)?.is_some(){return Err(AgentFailure::VaultUnavailable);}
+        if linked.next().await.map_err(storage)?.is_some() {
+            return Err(AgentFailure::VaultUnavailable);
+        }
         return Err(AgentFailure::NotFound);
     };
     let stored_person = parse_person_id(&row.get::<String>(0).map_err(storage)?)?;
@@ -299,11 +342,11 @@ pub(crate) async fn read_binding_review_on(
         return Err(AgentFailure::VaultUnavailable);
     }
     let descriptor: BindingReviewDescriptor = decode_canonical(&payload)?;
-    validate_binding_review_descriptor(&descriptor)
-        .map_err(|_| AgentFailure::VaultUnavailable)?;
+    validate_binding_review_descriptor(&descriptor).map_err(|_| AgentFailure::VaultUnavailable)?;
     if descriptor.review_ref.id != reference.id
         || descriptor.review_ref.digest != stored_digest
-        || stored_digest != binding_review_digest(&descriptor).map_err(|_| AgentFailure::VaultUnavailable)?
+        || stored_digest
+            != binding_review_digest(&descriptor).map_err(|_| AgentFailure::VaultUnavailable)?
         || descriptor.identity.person_id != stored_person
         || descriptor.identity.device_id != stored_device
         || descriptor.identity.command_id != command_id
@@ -625,8 +668,14 @@ fn decode_admission(row: &Row) -> Result<ExpertCommandAdmission, AgentFailure> {
     if request_digest == [0; 32] {
         return Err(AgentFailure::VaultUnavailable);
     }
-    let device_id=row.get::<String>(3).map_err(storage)?;
-    if device_id.is_empty() || device_id.trim()!=device_id || device_id.len()>128 || device_id.chars().any(char::is_control){return Err(AgentFailure::VaultUnavailable);}
+    let device_id = row.get::<String>(3).map_err(storage)?;
+    if device_id.is_empty()
+        || device_id.trim() != device_id
+        || device_id.len() > 128
+        || device_id.chars().any(char::is_control)
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
     Ok(ExpertCommandAdmission {
         command_id,
         family,
@@ -664,7 +713,10 @@ pub(crate) fn validate_registry_snapshot(
     person_id: PersonId,
 ) -> Result<(), AgentFailure> {
     if snapshot.instance_id != registry_instance_id
-        || snapshot.assignments.iter().any(|entry| entry.person_id != person_id)
+        || snapshot
+            .assignments
+            .iter()
+            .any(|entry| entry.person_id != person_id)
         || snapshot
             .install_receipts
             .iter()
@@ -693,17 +745,18 @@ pub(crate) fn validate_registry_successor(
     if previous.revision != expected_revision
         || expected_revision.checked_add(1) != Some(next.revision)
         || previous.instance_id != next.instance_id
-        || next.assignments.iter().any(|entry| entry.person_id != person_id)
+        || next
+            .assignments
+            .iter()
+            .any(|entry| entry.person_id != person_id)
         || next
             .install_receipts
             .iter()
             .any(|entry| entry.person_id != person_id)
-        || previous.install_receipts.iter().any(|before| {
-            !next
-                .install_receipts
-                .iter()
-                .any(|after| before == after)
-        })
+        || previous
+            .install_receipts
+            .iter()
+            .any(|before| !next.install_receipts.iter().any(|after| before == after))
         || previous.assignments.iter().any(|before| {
             !next.assignments.iter().any(|after| {
                 before.id == after.id
@@ -851,7 +904,11 @@ pub(crate) fn validate_binding_registry_successor(
             return Err(AgentFailure::StorageUnavailable);
         }
     }
-    validate_registry_snapshot(next, descriptor.registry_instance_id, descriptor.identity.person_id)?;
+    validate_registry_snapshot(
+        next,
+        descriptor.registry_instance_id,
+        descriptor.identity.person_id,
+    )?;
     verify_binding_candidate_selection(descriptor, candidate_refs, next)
 }
 
@@ -971,8 +1028,12 @@ pub(crate) fn map_unique_conflict(error: turso::Error) -> AgentFailure {
     }
 }
 
-fn decode_canonical<T:serde::de::DeserializeOwned+serde::Serialize>(payload:&str)->Result<T,AgentFailure>{
-    let value:T=serde_json::from_str(payload).map_err(|_|AgentFailure::VaultUnavailable)?;
-    if serde_json::to_string(&value).map_err(|_|AgentFailure::VaultUnavailable)?!=payload{return Err(AgentFailure::VaultUnavailable);}
+fn decode_canonical<T: serde::de::DeserializeOwned + serde::Serialize>(
+    payload: &str,
+) -> Result<T, AgentFailure> {
+    let value: T = serde_json::from_str(payload).map_err(|_| AgentFailure::VaultUnavailable)?;
+    if serde_json::to_string(&value).map_err(|_| AgentFailure::VaultUnavailable)? != payload {
+        return Err(AgentFailure::VaultUnavailable);
+    }
     Ok(value)
 }

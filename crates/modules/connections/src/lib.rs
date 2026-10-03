@@ -29,7 +29,10 @@ pub use application::connected_context::{
 
 pub use floe_context_contract::{ConnectionId, ConnectorId};
 
-pub use ports::{ConnectionsRepository, SourceOperationRepository, SourceReservationFence, SourceReservationWatermark};
+pub use ports::{
+    ConnectionsRepository, SourceOperationRepository, SourceReservationFence,
+    SourceReservationWatermark,
+};
 
 pub use application::source_operation::{
     ConnectionsDependencies, ConnectionsService, PrepareProjectionReviews, PrepareSourceReviews,

@@ -1,7 +1,7 @@
 //! Immutable capability descriptions carried by model projections.
-use serde::{Deserialize, Serialize};
 use floe_context_contract::DataClass;
 use floe_kernel::AgentFailure;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -30,4 +30,3 @@ impl CapabilityDescriptor {
         Ok(())
     }
 }
-

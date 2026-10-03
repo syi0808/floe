@@ -3,19 +3,17 @@ mod application {
     pub mod assembler;
     pub mod calendar_acquisition;
     mod calendar_lease;
+    pub mod candidate_catalog;
     pub mod consumed;
     pub mod coverage;
     pub mod day_context_views;
     pub mod dependency_resolver;
-    mod source_adapters;
-    mod trusted_consumers;
     pub mod expert_context;
     pub mod expert_execution;
-    pub mod candidate_catalog;
     pub mod expert_sources;
     pub mod history;
-    pub mod leases;
     pub mod learner_projection;
+    pub mod leases;
     pub mod model_coverage;
     pub mod model_projection;
     pub mod native_calendar;
@@ -28,25 +26,27 @@ mod application {
     pub mod remote_views;
     pub mod routing;
     pub mod service;
+    mod source_adapters;
     pub mod source_candidates;
-    pub mod source_view;
     pub mod source_review;
+    pub mod source_view;
+    mod trusted_consumers;
 }
 
 mod ports {
     pub mod archive_reader;
-    pub mod calendar_source;
     pub mod calendar_product;
+    pub mod calendar_source;
     pub mod evidence_reader;
     pub mod expert_execution;
     pub mod personal_source;
-    pub mod source_reader;
     pub mod source_metadata;
+    pub mod source_reader;
 }
 
 pub use application::archive::read_authorized_archive;
 pub use application::assembler::acquire_memory_context;
-pub use application::calendar_acquisition::{ContextCore, ContextCalendarAcquisition};
+pub use application::calendar_acquisition::{ContextCalendarAcquisition, ContextCore};
 pub use application::consumed::ConsumedLineage;
 pub use application::coverage::{
     CoverageAccumulator, CoverageMessageFact, CoverageRegistry, message_coverage,
@@ -59,24 +59,26 @@ pub use application::expert_sources::{
     current_calendar_connector, observe_calendar_binding, read_declared_source,
 };
 pub use application::history::read_history_coverage;
+pub use application::learner_projection::ContextLearnerProjection;
 pub use application::leases::{
     MAX_LEASE_BYTES, MAX_LIVE_LEASES, SourceLeaseRegistry, SourceLeaseReservation,
 };
-pub use application::learner_projection::ContextLearnerProjection;
 pub use application::model_coverage::{
     TurnCoverageDecision, project_history, revalidate_turn_coverage,
 };
 pub use application::model_projection::{
     ContextProjectionInput, ContextProjectionRole, assemble_context_projection,
 };
-pub use application::native_calendar::{AdmittedNativeCalendarRead, CalendarConnectionReader, NativeCalendarGrantReader, NativeSubjectObservation, admit_current_native_calendar_read};
+pub use application::native_calendar::{
+    AdmittedNativeCalendarRead, CalendarConnectionReader, NativeCalendarGrantReader,
+    NativeSubjectObservation, admit_current_native_calendar_read,
+};
 pub use application::native_calendar_view::{
     NativeCalendarViewRead, authorize_native_calendar_dependency, read_native_calendar_view,
 };
 pub use application::observations::{
-    ALLOWED_VIEW_IDS, ObservationEntry, ObservationRegistry,
-    TrustedPersonalObservation, valid_native_subject_fingerprint,
-    validate_view,
+    ALLOWED_VIEW_IDS, ObservationEntry, ObservationRegistry, TrustedPersonalObservation,
+    valid_native_subject_fingerprint, validate_view,
 };
 pub use application::personal_lineage::{
     attention_query_fingerprint, attention_subject_fingerprint, people_query_fingerprint,
@@ -114,11 +116,11 @@ pub use floe_context_contract::{OptionalSource, acquire_optional_source, record_
 pub use ports::archive_reader::{
     ArchiveProjection, ArchiveReader, MAX_ARCHIVE_PROJECTION_BYTES, MAX_ARCHIVE_PROJECTION_MESSAGES,
 };
-pub use ports::calendar_source::{
-    CalendarObservation, CalendarObserveRequest, CalendarSource,
-};
+pub use ports::calendar_source::{CalendarObservation, CalendarObserveRequest, CalendarSource};
 pub use ports::evidence_reader::EvidenceReader;
-pub use ports::expert_execution::{ExpertSourceTransport, ExpertRemoteTransport, ExpertRemoteSource};
+pub use ports::expert_execution::{
+    ExpertRemoteSource, ExpertRemoteTransport, ExpertSourceTransport,
+};
 pub use ports::personal_source::{
     AcquiredSource, AttentionAcquisition, AttentionAcquisitionMode, PersonalAcquisition,
     PersonalConnectionReader, PersonalDomain, PersonalSourceDriver, TrustedObservation,
@@ -146,10 +148,15 @@ pub use floe_context_contract::{
     ContextMemory, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES, MemoryContextSnapshot,
 };
 
-pub use ports::calendar_product::{CalendarProductTransport, CalendarProductReadResult, CalendarProductPage, CalendarProductPageOutcome};
+pub use ports::calendar_product::{
+    CalendarProductPage, CalendarProductPageOutcome, CalendarProductReadResult,
+    CalendarProductTransport,
+};
 
-pub use application::expert_execution::{ExpertContextDependencies, ContextExpertSources, ContextExpertProjection};
 pub use application::candidate_catalog::ContextCandidateCatalog;
+pub use application::expert_execution::{
+    ContextExpertProjection, ContextExpertSources, ExpertContextDependencies,
+};
 
 pub use application::dependency_resolver::ContextDependencyResolver;
 pub use application::trusted_consumers::ContextTrustedConsumerCatalog;

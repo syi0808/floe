@@ -77,8 +77,12 @@ func newProvider(ctx context.Context, target inference.ProviderTarget, lookup fu
 }
 func (p *provider) post(ctx context.Context, path string, payload, output any) error {
 	data, err := p.postJSON(ctx, path, payload)
-	if err != nil { return err }
-	if json.Unmarshal(data, output) != nil { return inference.Failure{Code: inference.InvalidOutput} }
+	if err != nil {
+		return err
+	}
+	if json.Unmarshal(data, output) != nil {
+		return inference.Failure{Code: inference.InvalidOutput}
+	}
 	return nil
 }
 func (p *provider) postJSON(ctx context.Context, path string, payload any) ([]byte, error) {

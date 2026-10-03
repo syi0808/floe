@@ -633,9 +633,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return if pending.failure == terminal.issue.ok_or(AgentFailure::Conflict)?
                 && pending.requested_from_revision == expected_aggregate_revision
                 && terminal.state == RunTerminal::from_failure(pending.failure).state
-                && terminal.output.is_none() && terminal.steps.is_empty() && terminal.interactions.is_empty() {
+                && terminal.output.is_none()
+                && terminal.steps.is_empty()
+                && terminal.interactions.is_empty()
+            {
                 Ok(current)
-            } else { Err(AgentFailure::Conflict) };
+            } else {
+                Err(AgentFailure::Conflict)
+            };
         }
         if current.executor_generation
             != self
@@ -646,38 +651,70 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::Conflict);
         }
         let journal = self.conversation_journal_on(transaction, &current).await?;
-        if !floe_conversation::unresolved_run_delegations(&floe_conversation::project_run_receipt(current.clone())?, &journal)?.is_empty() {
+        if !floe_conversation::unresolved_run_delegations(
+            &floe_conversation::project_run_receipt(current.clone())?,
+            &journal,
+        )?
+        .is_empty()
+        {
             let failure = terminal.issue.ok_or(AgentFailure::Conflict)?;
-            if terminal.output.is_some() || !terminal.steps.is_empty() || !terminal.interactions.is_empty()
-                || terminal.state != RunTerminal::from_failure(failure).state { return Err(AgentFailure::Conflict); }
+            if terminal.output.is_some()
+                || !terminal.steps.is_empty()
+                || !terminal.interactions.is_empty()
+                || terminal.state != RunTerminal::from_failure(failure).state
+            {
+                return Err(AgentFailure::Conflict);
+            }
             let next = floe_conversation::defer_run_terminal(&current, failure)?;
-            if write_run(transaction, &next, current.aggregate_revision, current.executor_generation).await? != 1 {
+            if write_run(
+                transaction,
+                &next,
+                current.aggregate_revision,
+                current.executor_generation,
+            )
+            .await?
+                != 1
+            {
                 return Err(AgentFailure::Conflict);
             }
             self.check_access()?;
             return Ok(next);
         }
-        self.apply_conversation_terminal_on(transaction, &current, terminal, digest).await
+        self.apply_conversation_terminal_on(transaction, &current, terminal, digest)
+            .await
     }
 
-    pub(super) async fn apply_conversation_terminal_on(&self, transaction: &Transaction<'_>,
-        current: &RunRecord, terminal: RunTerminal, digest: String) -> Result<RunRecord, AgentFailure> {
+    pub(super) async fn apply_conversation_terminal_on(
+        &self,
+        transaction: &Transaction<'_>,
+        current: &RunRecord,
+        terminal: RunTerminal,
+        digest: String,
+    ) -> Result<RunRecord, AgentFailure> {
         let run_id = current.run_id;
         let session = self.session_on(transaction, current.session_id).await?;
         let journal = self.conversation_journal_on(transaction, current).await?;
         floe_conversation::validate_terminal_steps(&terminal, &journal)?;
         let (next, mut next_session) =
             floe_conversation::apply_terminal(current, &session, &terminal, &journal)?;
-        let accounting = self.conversation_lineage_accounting_on(transaction, current, &journal).await?;
-        if (!accounting.unresolved_attempts.is_empty() || !accounting.unresolved_delegations.is_empty())
-            && matches!(terminal.state, RunState::Completed | RunState::Blocked) {
+        let accounting = self
+            .conversation_lineage_accounting_on(transaction, current, &journal)
+            .await?;
+        if (!accounting.unresolved_attempts.is_empty()
+            || !accounting.unresolved_delegations.is_empty())
+            && matches!(terminal.state, RunState::Completed | RunState::Blocked)
+        {
             return Err(AgentFailure::Conflict);
         }
         next_session.usage = accounting.usage;
-        if !accounting.unresolved_attempts.is_empty() || !accounting.unresolved_delegations.is_empty() {
+        if !accounting.unresolved_attempts.is_empty()
+            || !accounting.unresolved_delegations.is_empty()
+        {
             next_session.continuation = None;
         }
-        if let Some(continuation) = &mut next_session.continuation { continuation.usage = accounting.usage; }
+        if let Some(continuation) = &mut next_session.continuation {
+            continuation.usage = accounting.usage;
+        }
         let changed = transaction
             .execute(
                 "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
@@ -772,20 +809,18 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .blocked
                 .as_ref()
                 .ok_or(AgentFailure::InvalidInput)?;
-            self.validate_blocked_task_audits_on(&transaction, &commit).await?;
+            self.validate_blocked_task_audits_on(&transaction, &commit)
+                .await?;
             for publication in &commit.publications {
                 if publication.record.device_id != current.device_id {
                     return Err(AgentFailure::Conflict);
                 }
-                self.store_review_audit_on(
-                    &transaction,
-                    &current,
-                    &publication.record,
-                    replay,
-                )
-                .await?;
+                self.store_review_audit_on(&transaction, &current, &publication.record, replay)
+                    .await?;
                 for interaction in &publication.interactions {
-                    let link = block.interactions.iter()
+                    let link = block
+                        .interactions
+                        .iter()
                         .find(|link| link.interaction_id == interaction.id)
                         .ok_or(AgentFailure::Conflict)?;
                     let origin = &link.origin;
@@ -1601,7 +1636,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         limit: usize,
     ) -> Result<floe_conversation::RecoveryPage<ResumeRequired, RunId>, AgentFailure> {
         actor.validate()?;
-        if actor.person_id != self.person_id { return Err(AgentFailure::PolicyDenied); }
+        if actor.person_id != self.person_id {
+            return Err(AgentFailure::PolicyDenied);
+        }
         if limit == 0 || limit > 64 || after.is_some_and(|id| !id.is_valid()) {
             return Err(AgentFailure::InvalidInput);
         }
@@ -1620,34 +1657,57 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if let Some((request, state, _)) =
                 resume_request_on(&connection, self.person_id, id).await?
             {
-                if request.device_id != actor.device_id { return Err(AgentFailure::StorageUnavailable); }
+                if request.device_id != actor.device_id {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 if state == "pending" {
                     result.push(request);
                 }
             }
         }
         self.check_access()?;
-        Ok(floe_conversation::RecoveryPage { items: result, next_cursor })
+        Ok(floe_conversation::RecoveryPage {
+            items: result,
+            next_cursor,
+        })
     }
-    pub async fn pending_conversation_resume_request(&self, actor: &floe_kernel::OwnerActor, origin: RunId)
-        -> Result<Option<ResumeRequired>, AgentFailure> {
+    pub async fn pending_conversation_resume_request(
+        &self,
+        actor: &floe_kernel::OwnerActor,
+        origin: RunId,
+    ) -> Result<Option<ResumeRequired>, AgentFailure> {
         actor.validate()?;
-        if actor.person_id != self.person_id || !origin.is_valid() { return Err(AgentFailure::PolicyDenied); }
+        if actor.person_id != self.person_id || !origin.is_valid() {
+            return Err(AgentFailure::PolicyDenied);
+        }
         let connection = self.connection()?;
         let result = match resume_request_on(&connection, self.person_id, origin).await? {
-            Some((request, state, _)) if request.device_id == actor.device_id && state == "pending" => Some(request),
-            Some((request, _, _)) if request.device_id != actor.device_id => return Err(AgentFailure::PolicyDenied),
+            Some((request, state, _))
+                if request.device_id == actor.device_id && state == "pending" =>
+            {
+                Some(request)
+            }
+            Some((request, _, _)) if request.device_id != actor.device_id => {
+                return Err(AgentFailure::PolicyDenied);
+            }
             _ => None,
         };
         self.check_access()?;
         Ok(result)
     }
-    pub async fn reconcile_conversation_resume_request(&self, actor: &floe_kernel::OwnerActor, origin: RunId)
-        -> Result<Option<ResumeRequired>, AgentFailure> {
+    pub async fn reconcile_conversation_resume_request(
+        &self,
+        actor: &floe_kernel::OwnerActor,
+        origin: RunId,
+    ) -> Result<Option<ResumeRequired>, AgentFailure> {
         actor.validate()?;
-        if actor.person_id != self.person_id || !origin.is_valid() { return Err(AgentFailure::PolicyDenied); }
+        if actor.person_id != self.person_id || !origin.is_valid() {
+            return Err(AgentFailure::PolicyDenied);
+        }
         let mut connection = self.connection()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).await
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
             self.active_conversation_executor_generation(&transaction).await?;
@@ -1663,7 +1723,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             self.check_access()?;
             Ok(Some(request))
         }.await;
-        self.finish_registry_transaction_checked(transaction, result).await
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
     }
     pub async fn claim_conversation_resume(
         &self,

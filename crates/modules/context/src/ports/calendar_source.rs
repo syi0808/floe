@@ -50,5 +50,4 @@ pub trait CalendarSource: Sync {
     ) -> impl Future<Output = Result<Option<CalendarObservation>, AgentFailure>> + Send {
         async { Ok(None) }
     }
-
 }

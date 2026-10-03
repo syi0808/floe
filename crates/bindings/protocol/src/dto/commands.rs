@@ -118,12 +118,22 @@ pub enum AppProductCommandDto {
     #[serde(rename = "actions.submit")]
     ActionsSubmit { intent: super::ActionIntentDto },
     #[serde(rename = "actions.decide")]
-    ActionsDecide { action_ref: super::ActionRefDto, review_ref: super::ActionReviewRefDto,
-        decision: super::ActionDecisionKindDto, expected_revision: u64 },
+    ActionsDecide {
+        action_ref: super::ActionRefDto,
+        review_ref: super::ActionReviewRefDto,
+        decision: super::ActionDecisionKindDto,
+        expected_revision: u64,
+    },
     #[serde(rename = "actions.reconcile")]
-    ActionsReconcile { action_ref: super::ActionRefDto, expected_revision: u64 },
+    ActionsReconcile {
+        action_ref: super::ActionRefDto,
+        expected_revision: u64,
+    },
     #[serde(rename = "actions.authority.set_calendar_create")]
-    ActionsSetAuthority { mode: super::ActionAuthorityModeDto, expected_revision: u64 },
+    ActionsSetAuthority {
+        mode: super::ActionAuthorityModeDto,
+        expected_revision: u64,
+    },
     #[serde(rename = "day.refresh")]
     DayRefresh { day: super::DayQueryDto },
     #[serde(rename = "day.mutate")]
@@ -137,11 +147,23 @@ pub enum AppProductCommandDto {
         decision: super::AgentMemoryReviewDecisionKindDto,
     },
     #[serde(rename = "experts.installation.set_enabled")]
-    ExpertsSetInstallationEnabled { installation_ref: super::UuidRefDto, expected_revision: u64, enabled: bool },
+    ExpertsSetInstallationEnabled {
+        installation_ref: super::UuidRefDto,
+        expected_revision: u64,
+        enabled: bool,
+    },
     #[serde(rename = "experts.binding.prepare_review")]
-    ExpertsPrepareBindingReview { assignment_ref: super::AssignmentRefDto, requirement_ref: String, expected_binding_revision: u64 },
+    ExpertsPrepareBindingReview {
+        assignment_ref: super::AssignmentRefDto,
+        requirement_ref: String,
+        expected_binding_revision: u64,
+    },
     #[serde(rename = "experts.binding.replace")]
-    ExpertsBindingReplace { review_ref: super::BindingReviewRefDto, expected_binding_revision: u64, candidate_refs: Vec<super::UuidRefDto> },
+    ExpertsBindingReplace {
+        review_ref: super::BindingReviewRefDto,
+        expected_binding_revision: u64,
+        candidate_refs: Vec<super::UuidRefDto>,
+    },
     #[serde(rename = "conversation.session.start")]
     ConversationSessionStart {},
     #[serde(rename = "conversation.session.recover")]
@@ -251,10 +273,20 @@ impl AppProductCommandDto {
             }
             Self::ConnectionsObserveSet { mutation } => mutation.validate(),
             Self::ActionsSubmit { intent } => intent.validate(),
-            Self::ActionsDecide { review_ref, expected_revision, .. } => {
-                validate_revision(*expected_revision)?; review_ref.validate()
+            Self::ActionsDecide {
+                review_ref,
+                expected_revision,
+                ..
+            } => {
+                validate_revision(*expected_revision)?;
+                review_ref.validate()
             }
-            Self::ActionsReconcile { expected_revision, .. } | Self::ActionsSetAuthority { expected_revision, .. } => validate_revision(*expected_revision),
+            Self::ActionsReconcile {
+                expected_revision, ..
+            }
+            | Self::ActionsSetAuthority {
+                expected_revision, ..
+            } => validate_revision(*expected_revision),
             Self::DayRefresh { .. } => Ok(()),
             Self::DayMutate { mutation, .. } => mutation.validate(),
             Self::KnowledgeMemoryDecide { candidate_id, .. } => {
@@ -264,16 +296,36 @@ impl AppProductCommandDto {
                     Ok(())
                 }
             }
-            Self::ExpertsSetInstallationEnabled { expected_revision, .. } => validate_revision(*expected_revision),
-            Self::ExpertsPrepareBindingReview { requirement_ref, expected_binding_revision, .. } => {
+            Self::ExpertsSetInstallationEnabled {
+                expected_revision, ..
+            } => validate_revision(*expected_revision),
+            Self::ExpertsPrepareBindingReview {
+                requirement_ref,
+                expected_binding_revision,
+                ..
+            } => {
                 validate_revision(*expected_binding_revision)?;
-                if !valid_text(requirement_ref,128) { return Err("command.requirement_ref"); } Ok(())
+                if !valid_text(requirement_ref, 128) {
+                    return Err("command.requirement_ref");
+                }
+                Ok(())
             }
-            Self::ExpertsBindingReplace { review_ref, expected_binding_revision, candidate_refs } => {
-                review_ref.validate()?; validate_revision(*expected_binding_revision)?;
-                if candidate_refs.len() > 16 || candidate_refs.iter().enumerate().any(|(i,id)| candidate_refs[i+1..].contains(id)) {
+            Self::ExpertsBindingReplace {
+                review_ref,
+                expected_binding_revision,
+                candidate_refs,
+            } => {
+                review_ref.validate()?;
+                validate_revision(*expected_binding_revision)?;
+                if candidate_refs.len() > 16
+                    || candidate_refs
+                        .iter()
+                        .enumerate()
+                        .any(|(i, id)| candidate_refs[i + 1..].contains(id))
+                {
                     return Err("command.candidate_refs");
-                } Ok(())
+                }
+                Ok(())
             }
             Self::ConversationSessionStart {} => Ok(()),
             Self::ConversationSessionRecover {
@@ -395,15 +447,21 @@ pub enum AppCommandResultDto {
     #[serde(rename = "actions.action")]
     Action { action: super::ActionSnapshotDto },
     #[serde(rename = "actions.authority")]
-    ActionsAuthority { authority: super::ActionsAuthorityDto },
+    ActionsAuthority {
+        authority: super::ActionsAuthorityDto,
+    },
     DayMutation {
         command_id: Uuid,
         mutation: super::MutationResultDto,
     },
-    #[serde(rename="knowledge.memory.decision")]
-    KnowledgeDecision { acknowledgement: super::MemoryDecisionAcknowledgementDto },
+    #[serde(rename = "knowledge.memory.decision")]
+    KnowledgeDecision {
+        acknowledgement: super::MemoryDecisionAcknowledgementDto,
+    },
     #[serde(rename = "experts.directory")]
-    ExpertsDirectory { directory: super::ExpertDirectorySnapshotDto },
+    ExpertsDirectory {
+        directory: super::ExpertDirectorySnapshotDto,
+    },
     #[serde(rename = "experts.binding_review")]
     ExpertsBindingReview { review: super::BindingReviewDto },
     ConversationSession {

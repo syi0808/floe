@@ -1,6 +1,6 @@
 mod dependency_sources;
+mod destinations;
+mod execution;
 mod owner;
 mod submit;
-mod execution;
-mod destinations;
-pub use owner::{ActionsService,ActionsDependencies};
+pub use owner::{ActionsDependencies, ActionsService};

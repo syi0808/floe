@@ -20,7 +20,6 @@ const MAX_RECORD: usize = 131_072;
 const PRODUCT_RECEIPT_TABLE_SQL: &str = "CREATE TABLE gateway_product_authorization_receipts(challenge_id TEXT PRIMARY KEY,request_digest TEXT NOT NULL,operation TEXT NOT NULL CHECK(operation IN ('day_calendar_admission','day_calendar_release')),admission_id TEXT NOT NULL,person_id TEXT NOT NULL,device_id TEXT NOT NULL,owner_key_id TEXT NOT NULL,gateway_runtime_generation INTEGER NOT NULL CHECK(gateway_runtime_generation>0),expires_at_unix_ms INTEGER NOT NULL,payload TEXT NOT NULL)";
 const PRODUCT_RELEASE_INDEX_SQL: &str = "CREATE UNIQUE INDEX gateway_product_one_release ON gateway_product_authorization_receipts(admission_id) WHERE operation='day_calendar_release'";
 
-
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct ProductAuthorizationReceipt {
@@ -580,11 +579,29 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
             if person != self.person_id || limit == 0 || limit > 64 {
                 return Err(PairingError::InvalidInput);
             }
-            let connection=self.connection().map_err(pairing_storage)?;
-            let mut expectation_rows=connection.query("SELECT payload FROM gateway_credential_expectation WHERE id=1",()).await.map_err(|_|PairingError::StorageUnavailable)?;
-            let expectation:floe_access::GatewayCredentialExpectation=bounded_decode(&expectation_rows.next().await.map_err(|_|PairingError::StorageUnavailable)?.ok_or(PairingError::StorageUnavailable)?.get::<String>(0).map_err(|_|PairingError::StorageUnavailable)?).map_err(pairing_storage)?;
+            let connection = self.connection().map_err(pairing_storage)?;
+            let mut expectation_rows = connection
+                .query(
+                    "SELECT payload FROM gateway_credential_expectation WHERE id=1",
+                    (),
+                )
+                .await
+                .map_err(|_| PairingError::StorageUnavailable)?;
+            let expectation: floe_access::GatewayCredentialExpectation = bounded_decode(
+                &expectation_rows
+                    .next()
+                    .await
+                    .map_err(|_| PairingError::StorageUnavailable)?
+                    .ok_or(PairingError::StorageUnavailable)?
+                    .get::<String>(0)
+                    .map_err(|_| PairingError::StorageUnavailable)?,
+            )
+            .map_err(pairing_storage)?;
             drop(expectation_rows);
-            let floe_access::GatewayCredentialExpectation::Pending{operation_id}=expectation else{return Ok(Vec::new())};
+            let floe_access::GatewayCredentialExpectation::Pending { operation_id } = expectation
+            else {
+                return Ok(Vec::new());
+            };
             let mut rows=connection.query("SELECT payload FROM gateway_pairing_operations WHERE person_id=? AND operation_id=? AND state IN ('pending','awaiting_local_confirmation','awaiting_approval','verifying','committing','repair_required')",(person.to_string(),operation_id.to_string())).await.map_err(|_|PairingError::StorageUnavailable)?;
             let mut output = Vec::new();
             while let Some(row) = rows
@@ -599,9 +616,12 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                 )
                 .map_err(pairing_storage)?;
                 record.validate()?;
-                if record.person_id!=person || record.operation_id!=operation_id{return Err(PairingError::ForeignIdentity)}
-                if record.state!=PairingState::RepairRequired || record.can_reconcile_repair(){output.push(record);}
-
+                if record.person_id != person || record.operation_id != operation_id {
+                    return Err(PairingError::ForeignIdentity);
+                }
+                if record.state != PairingState::RepairRequired || record.can_reconcile_repair() {
+                    output.push(record);
+                }
             }
             Ok(output)
         })
@@ -655,10 +675,7 @@ fn validate_pairing_successor(
         ) | (
             PairingState::Committing,
             PairingState::Verifying | PairingState::Paired
-        ) | (
-            PairingState::RepairRequired,
-            PairingState::Verifying
-        )
+        ) | (PairingState::RepairRequired, PairingState::Verifying)
     ) || next.state == current.state
         || matches!(
             next.state,
@@ -889,13 +906,16 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
             Ok(())
         }
         .await;
-        self.vault.finish_access_grant_transaction(tx, result).await?;
+        self.vault
+            .finish_access_grant_transaction(tx, result)
+            .await?;
         self.vault.validate_owner_key().await?;
         let (key, key_id) = self.vault.load_owner_key().await?;
         if key_id != owner.key_id {
             return Err(AgentFailure::PolicyDenied);
         }
-        let mut bytes = Vec::with_capacity(OWNER_SIGNATURE_DOMAIN.len() + command.canonical_bytes.len());
+        let mut bytes =
+            Vec::with_capacity(OWNER_SIGNATURE_DOMAIN.len() + command.canonical_bytes.len());
         bytes.extend_from_slice(OWNER_SIGNATURE_DOMAIN);
         bytes.extend_from_slice(&command.canonical_bytes);
         let signature = key.sign(&bytes);
@@ -1198,7 +1218,10 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
             Ok(receipt.signature)
         }
         .await;
-        let signature = self.vault.finish_access_grant_transaction(tx, result).await?;
+        let signature = self
+            .vault
+            .finish_access_grant_transaction(tx, result)
+            .await?;
         let current_owner = self.vault.remote_owner_public_key().await?;
         if current_owner != owner {
             return Err(AgentFailure::PolicyDenied);
@@ -1274,9 +1297,9 @@ fn validate_product_result_digest(
 ) -> Result<(), AgentFailure> {
     if let ProductCalendarChallenge::Release { result_sha256, .. } = challenge {
         if result_sha256.len() != 64
-            || !result_sha256.bytes().all(|byte| {
-                byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
-            })
+            || !result_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
             || result_sha256.bytes().all(|byte| byte == b'0')
         {
             return Err(AgentFailure::PolicyDenied);
@@ -1322,10 +1345,9 @@ fn verify_owner_receipt_signature(
     canonical_bytes: &[u8],
     encoded_signature: &str,
 ) -> Result<(), AgentFailure> {
-    let public_key = decode_exact(&owner.public_key, 32)
-        .map_err(|_| AgentFailure::VaultUnavailable)?;
-    let proof = decode_exact(encoded_signature, 64)
-        .map_err(|_| AgentFailure::VaultUnavailable)?;
+    let public_key =
+        decode_exact(&owner.public_key, 32).map_err(|_| AgentFailure::VaultUnavailable)?;
+    let proof = decode_exact(encoded_signature, 64).map_err(|_| AgentFailure::VaultUnavailable)?;
     let mut message = Vec::with_capacity(OWNER_SIGNATURE_DOMAIN.len() + canonical_bytes.len());
     message.extend_from_slice(OWNER_SIGNATURE_DOMAIN);
     message.extend_from_slice(canonical_bytes);
@@ -1391,10 +1413,11 @@ async fn validate_product_credential_in_transaction(
     {
         return Err(AgentFailure::PolicyDenied);
     }
-    pairing
-        .validate()
-        .map_err(|_| AgentFailure::PolicyDenied)?;
-    let enrollment = pairing.enrollment.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+    pairing.validate().map_err(|_| AgentFailure::PolicyDenied)?;
+    let enrollment = pairing
+        .enrollment
+        .as_ref()
+        .ok_or(AgentFailure::PolicyDenied)?;
     enrollment
         .binding
         .validate()
@@ -1567,11 +1590,39 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
 }
 
 async fn validate_product_receipt_schema(tx: &Transaction<'_>) -> Result<(), AgentFailure> {
-    for (name, expected) in [("gateway_product_authorization_receipts", PRODUCT_RECEIPT_TABLE_SQL), ("gateway_product_one_release", PRODUCT_RELEASE_INDEX_SQL)] {
-        let mut rows = tx.query("SELECT sql FROM sqlite_master WHERE name=? AND type IN ('table','index')", (name,)).await.map_err(storage)?;
-        let actual: String = rows.next().await.map_err(storage)?.ok_or(AgentFailure::UnsupportedVersion)?.get(0).map_err(storage)?;
-        let canonical = |value: &str| value.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase();
-        if canonical(&actual) != canonical(expected) || rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::UnsupportedVersion); }
+    for (name, expected) in [
+        (
+            "gateway_product_authorization_receipts",
+            PRODUCT_RECEIPT_TABLE_SQL,
+        ),
+        ("gateway_product_one_release", PRODUCT_RELEASE_INDEX_SQL),
+    ] {
+        let mut rows = tx
+            .query(
+                "SELECT sql FROM sqlite_master WHERE name=? AND type IN ('table','index')",
+                (name,),
+            )
+            .await
+            .map_err(storage)?;
+        let actual: String = rows
+            .next()
+            .await
+            .map_err(storage)?
+            .ok_or(AgentFailure::UnsupportedVersion)?
+            .get(0)
+            .map_err(storage)?;
+        let canonical = |value: &str| {
+            value
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_ascii_lowercase()
+        };
+        if canonical(&actual) != canonical(expected)
+            || rows.next().await.map_err(storage)?.is_some()
+        {
+            return Err(AgentFailure::UnsupportedVersion);
+        }
     }
     Ok(())
 }

@@ -16,8 +16,8 @@ pub mod schedule;
 pub mod wellbeing;
 pub mod work_context;
 
-mod shared;
 mod program_support;
+mod shared;
 
 pub use catalog::{
     BUILTIN_EXPERT_PACKAGE_VERSION, BUILTIN_EXPERT_PUBLISHER, BUILTIN_EXPERT_STATE_SCHEMA_VERSION,

@@ -86,7 +86,9 @@ pub fn project_run_event(run: RunEventRecord) -> Result<RunSnapshot, AgentFailur
             && (run.generated_reply || run.issue.is_some() || run.interaction_refs.is_empty())
         || run.state != RunState::Blocked && !run.interaction_refs.is_empty()
         || run.state == RunState::Working && (run.generated_reply || run.issue.is_some())
-        || run.pending_terminal.is_some_and(|pending| pending.validate().is_err() || run.state != RunState::Working)
+        || run
+            .pending_terminal
+            .is_some_and(|pending| pending.validate().is_err() || run.state != RunState::Working)
         || run.state == RunState::Completed && (!run.generated_reply || run.issue.is_some())
     {
         return Err(AgentFailure::StorageUnavailable);
@@ -120,7 +122,13 @@ pub fn project_run_event(run: RunEventRecord) -> Result<RunSnapshot, AgentFailur
         revision: run.aggregate_revision,
         executor_generation: run.executor_generation,
         state: match run.state {
-            RunState::Working if run.pending_terminal.is_some_and(|pending| pending.failure == AgentFailure::Cancelled) => PublicRunState::Cancelling,
+            RunState::Working
+                if run
+                    .pending_terminal
+                    .is_some_and(|pending| pending.failure == AgentFailure::Cancelled) =>
+            {
+                PublicRunState::Cancelling
+            }
             RunState::Working if run.pending_terminal.is_some() => PublicRunState::Finalizing,
             RunState::Working => PublicRunState::Executing,
             RunState::Blocked => PublicRunState::Blocked,

@@ -21,11 +21,11 @@ type RouteRequest struct {
 	ReasoningEffort string `json:"reasoning_effort"`
 }
 type TargetRequest struct {
-	ID       string `json:"id"`
-	Provider string `json:"provider"`
-	BaseURL  string `json:"base_url"`
-	Model    string `json:"model"`
-	APIKey   string `json:"api_key"`
+	ID           string   `json:"id"`
+	Provider     string   `json:"provider"`
+	BaseURL      string   `json:"base_url"`
+	Model        string   `json:"model"`
+	APIKey       string   `json:"api_key"`
 	Capabilities []string `json:"capabilities"`
 }
 type ProviderRequest struct {

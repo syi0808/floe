@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "Approved Transform/DeviceModel structural refinement is integrated and statically reviewed. Obsolete Swift monoliths are removed; one SwiftPM image owns both independent hosts and Foundation is the first neutral backend. G2 retry is READY, NOT RUN, on this exact published snapshot using docs/plans/s2-g2-command-sheet.md. Prior G2 failed. iOS full app destination remains blocked unless resolved; direct SwiftPM builds cover only named native targets. No new executable checks/model calls ran. Joint isolated behavior verification precedes S3 tests.",
+  "verification": "G2 retry40e64 passed Go packages/executable, dependency policy and whitespace with captured formatting. Rust/Dart/Swift failed; returned format/lock patches and coherent known compiler corrections are integrated but not rerun. Obsolete capability executor/Session replay caches are removed; canonical journal recovery remains. iOS tools are now recognized, unsigned device exit255 still needs diagnostic. Next affected Rust and Apple/Dart batch is READY, NOT RUN. No tests/model calls.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "5a136900cdfc3ca7cd3149b9b2c938f460d7658b",
+  "current_correction_source_commit": "a1e6ad3d6594efe7f439af9f93162279dacd4161",
   "current_status_document": "docs/plans/t0-execution-status.json"
 }

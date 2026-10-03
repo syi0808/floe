@@ -101,8 +101,12 @@ impl ValidatedModelBatch {
         match &self.delegation_context {
             Some(context) => {
                 context.validate()?;
-                if !self.steps.iter().any(|step| matches!(step, ModelStep::Delegate { .. }))
-                    || context.projection_coverage != self.projection_coverage {
+                if !self
+                    .steps
+                    .iter()
+                    .any(|step| matches!(step, ModelStep::Delegate { .. }))
+                    || context.projection_coverage != self.projection_coverage
+                {
                     return Err(AgentFailure::PolicyDenied);
                 }
             }

@@ -13,18 +13,33 @@ pub struct ActionDependencySourceFence {
 
 impl ActionDependencySourceFence {
     pub fn validate(&self, person: PersonId) -> Result<(), AgentFailure> {
-        self.dependency.validate().map_err(|_| AgentFailure::PolicyDenied)?;
-        self.source.validate().map_err(|_| AgentFailure::PolicyDenied)?;
-        self.reservation.validate().map_err(|_| AgentFailure::PolicyDenied)?;
-        if self.reservation.fenced || self.dependency.person_id() != person
-            || self.source.person_id() != person || !self.source.is_serving()
+        self.dependency
+            .validate()
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        self.source
+            .validate()
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        self.reservation
+            .validate()
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        if self.reservation.fenced
+            || self.dependency.person_id() != person
+            || self.source.person_id() != person
+            || !self.source.is_serving()
             || self.source.connection_id() != &self.dependency.source().connection_id()
             || self.source.connector_id() != self.dependency.source().connector()
             || self.source.execution_owner_id() != self.dependency.source().execution_owner()
             || self.source.source_authority() != self.dependency.source_authority()
-            || self.dependency.source_resources().iter().any(|resource|
-                !self.source.resources().iter().any(|current| current.handle() == resource))
-        { return Err(AgentFailure::PolicyDenied); }
+            || self.dependency.source_resources().iter().any(|resource| {
+                !self
+                    .source
+                    .resources()
+                    .iter()
+                    .any(|current| current.handle() == resource)
+            })
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
         Ok(())
     }
 }

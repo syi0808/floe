@@ -142,7 +142,8 @@ impl ConversationSessionSnapshotDto {
             return Err("conversation.session.revision");
         }
         if self.usage.unknown_token_attempts > self.usage.model_attempts
-            || self.usage.unknown_cost_attempts > self.usage.model_attempts {
+            || self.usage.unknown_cost_attempts > self.usage.model_attempts
+        {
             return Err("conversation.session.usage");
         }
         if self.messages.len() > MAX_SESSION_MESSAGES {
@@ -183,8 +184,15 @@ impl ConversationSessionTaskDto {
     fn validate(&self) -> Result<(), &'static str> {
         validate_metadata(&self.agent_id, "agent_id")?;
         match &self.execution_receipt {
-            Some(reference) => { reference.validate()?; if reference.execution.task_id != self.task_id { return Err("conversation.session.task.execution_receipt"); } }
-            None if self.state == ConversationTaskStateDto::Rejected && self.issue.is_some() && self.artifacts.is_empty() => {},
+            Some(reference) => {
+                reference.validate()?;
+                if reference.execution.task_id != self.task_id {
+                    return Err("conversation.session.task.execution_receipt");
+                }
+            }
+            None if self.state == ConversationTaskStateDto::Rejected
+                && self.issue.is_some()
+                && self.artifacts.is_empty() => {}
             None => return Err("conversation.session.task.execution_receipt"),
         }
         if self.artifacts.len() > MAX_SESSION_ARTIFACTS

@@ -6,11 +6,13 @@
 //! identical command rejoins its receipt; owner resolution commits the durable
 //! resume request in the same encrypted transaction.
 
+use crate::{
+    ConversationInteraction, DecisionAdmission, ExpireInteraction, ExpireOutcome,
+    InteractionDecision, InteractionDecisionKind, InteractionRepository, SupersedeInteraction,
+};
 use floe_agent_contract::AgentFailure;
 use floe_kernel::{PersonId, RunId};
 use uuid::Uuid;
-use crate::{ConversationInteraction, DecisionAdmission, ExpireInteraction, ExpireOutcome,
-    InteractionDecision, InteractionDecisionKind, InteractionRepository, SupersedeInteraction};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecideInteractionCommand {

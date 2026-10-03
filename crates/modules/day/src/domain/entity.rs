@@ -98,9 +98,32 @@ pub struct Event {
 impl Event {
     /// Provider observations preserve an absent or whitespace-only title.
     /// Requiring a title remains a rule for locally authored Event::new.
-    pub(crate) fn observed_calendar(person_id: PersonId, title: String, schedule: EventSchedule, source: CalendarSource, now: DateTime<Utc>) -> Result<Self, DomainError> {
-        match &schedule { EventSchedule::Timed(value) => { TimedSchedule::new(value.starts_at, value.ends_at, &value.timezone)?; }, EventSchedule::AllDay(value) => { AllDaySchedule::new(value.start_date, value.end_date_exclusive)?; } }
-        Ok(Self { id: EventId::new(), person_id, title, schedule, source: SourceRef::Calendar(source), created_at: now, updated_at: now, revision: Revision(1), deleted_at: None })
+    pub(crate) fn observed_calendar(
+        person_id: PersonId,
+        title: String,
+        schedule: EventSchedule,
+        source: CalendarSource,
+        now: DateTime<Utc>,
+    ) -> Result<Self, DomainError> {
+        match &schedule {
+            EventSchedule::Timed(value) => {
+                TimedSchedule::new(value.starts_at, value.ends_at, &value.timezone)?;
+            }
+            EventSchedule::AllDay(value) => {
+                AllDaySchedule::new(value.start_date, value.end_date_exclusive)?;
+            }
+        }
+        Ok(Self {
+            id: EventId::new(),
+            person_id,
+            title,
+            schedule,
+            source: SourceRef::Calendar(source),
+            created_at: now,
+            updated_at: now,
+            revision: Revision(1),
+            deleted_at: None,
+        })
     }
     pub fn new(
         person_id: PersonId,

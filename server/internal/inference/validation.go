@@ -180,7 +180,9 @@ func ValidateAgentInvocation(in AgentInvocation) error {
 	if err != nil || len(encoded) > 32768 || len(in.Input.Messages) < 1 || len(in.Input.Messages) > 256 || in.Input.Tools == nil || len(in.Input.Tools) > 64 {
 		return Failure{Code: Validation}
 	}
-	if err := ValidateAgentOutputFrame(in); err != nil { return err }
+	if err := ValidateAgentOutputFrame(in); err != nil {
+		return err
+	}
 	names := map[string]bool{}
 	for _, t := range in.Input.Tools {
 		f := t.Function
@@ -237,7 +239,9 @@ func ValidateAgentResult(in AgentInvocation, out AgentResult) error {
 		if len(in.Input.Tools) != 0 || len(out.Output) != 1 || out.Output[0].Kind != "answer" || len(out.CallIDs) != 0 {
 			return Failure{Code: InvalidOutput}
 		}
-		if err := ValidateJSONAnswer(in.OutputFormat, []byte(out.Output[0].Text), in.MaxOutputBytes); err != nil { return err }
+		if err := ValidateJSONAnswer(in.OutputFormat, []byte(out.Output[0].Text), in.MaxOutputBytes); err != nil {
+			return err
+		}
 	}
 	if len(out.Output) < 1 || len(out.Output) > 16 || out.CallIDs == nil {
 		return Failure{Code: InvalidOutput}

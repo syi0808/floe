@@ -43,4 +43,3 @@ pub enum CalendarScopeDto {
     Selected,
     All,
 }
-

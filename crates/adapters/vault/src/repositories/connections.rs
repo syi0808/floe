@@ -215,7 +215,8 @@ fn storage_error(_: impl std::fmt::Display) -> SourceRepositoryError {
 
 use floe_connections::{
     SourceOperationAdmission, SourceOperationChange, SourceOperationPhase, SourceOperationRecord,
-    SourceOperationRepository, SourceOperationReservation, SourceReservationFence, SourceReservationWatermark,
+    SourceOperationRepository, SourceOperationReservation, SourceReservationFence,
+    SourceReservationWatermark,
 };
 use uuid::Uuid;
 const MAX_OPERATION_BYTES: usize = 16_384;
@@ -411,12 +412,20 @@ impl SourceOperationRepository for TursoStore {
             Ok(records)
         })
     }
-    fn read_reservation_fence<'a>(&'a self,person_id:PersonId,connection_id:&'a ConnectionId)
-        ->BoxFuture<'a,Result<SourceReservationFence,SourceRepositoryError>>{
+    fn read_reservation_fence<'a>(
+        &'a self,
+        person_id: PersonId,
+        connection_id: &'a ConnectionId,
+    ) -> BoxFuture<'a, Result<SourceReservationFence, SourceRepositoryError>> {
         Box::pin(async move {
-            if !person_id.is_valid(){return Err(SourceRepositoryError::Conflict);}
-            let connection=self.connection().await.map_err(storage_error)?;
-            connection.execute("BEGIN",()).await.map_err(storage_error)?;
+            if !person_id.is_valid() {
+                return Err(SourceRepositoryError::Conflict);
+            }
+            let connection = self.connection().await.map_err(storage_error)?;
+            connection
+                .execute("BEGIN", ())
+                .await
+                .map_err(storage_error)?;
             let result=async {
                 // New reservations are inserted with fence=1 in one immediate
                 // transaction. Rows are retained; command replay never inserts.
@@ -441,7 +450,7 @@ impl SourceOperationRepository for TursoStore {
                 fence.validate()?;
                 Ok(fence)
             }.await;
-            finish_source_transaction(&connection,result).await
+            finish_source_transaction(&connection, result).await
         })
     }
     fn source_is_fenced<'a>(

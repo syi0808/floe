@@ -5,6 +5,6 @@ mod application;
 mod domain;
 mod ports;
 
-pub use application::{ActionsDependencies,ActionsService};
+pub use application::{ActionsDependencies, ActionsService};
 pub use domain::*;
 pub use ports::*;

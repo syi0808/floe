@@ -55,16 +55,18 @@ pub struct TimedScheduleDto {
 }
 
 impl TimedScheduleDto {
-    fn parsed_bounds(&self) -> Result<(DateTime<FixedOffset>, DateTime<FixedOffset>), &'static str> {
+    fn parsed_bounds(
+        &self,
+    ) -> Result<(DateTime<FixedOffset>, DateTime<FixedOffset>), &'static str> {
         if self.starts_at.len() > MAX_DAY_TIMESTAMP_BYTES
             || self.ends_at.len() > MAX_DAY_TIMESTAMP_BYTES
         {
             return Err("day.schedule.timestamp");
         }
-        let starts_at = DateTime::parse_from_rfc3339(&self.starts_at)
-            .map_err(|_| "day.schedule.starts_at")?;
-        let ends_at = DateTime::parse_from_rfc3339(&self.ends_at)
-            .map_err(|_| "day.schedule.ends_at")?;
+        let starts_at =
+            DateTime::parse_from_rfc3339(&self.starts_at).map_err(|_| "day.schedule.starts_at")?;
+        let ends_at =
+            DateTime::parse_from_rfc3339(&self.ends_at).map_err(|_| "day.schedule.ends_at")?;
         if starts_at.offset().local_minus_utc() != 0
             || ends_at.offset().local_minus_utc() != 0
             || ends_at <= starts_at
@@ -104,7 +106,10 @@ pub struct DayEventTargetDto {
 
 impl DayEventTargetDto {
     pub fn validate(&self) -> Result<(), &'static str> {
-        positive_day_revision(self.expected_revision, "day.event.action_target.expected_revision")
+        positive_day_revision(
+            self.expected_revision,
+            "day.event.action_target.expected_revision",
+        )
     }
 }
 
@@ -169,10 +174,7 @@ impl EventScheduleDto {
                 end_date_exclusive,
             } => {
                 let start = parse_civil_date(start_date, "day.schedule.start_date")?;
-                let end = parse_civil_date(
-                    end_date_exclusive,
-                    "day.schedule.end_date_exclusive",
-                )?;
+                let end = parse_civil_date(end_date_exclusive, "day.schedule.end_date_exclusive")?;
                 if end <= start {
                     return Err("day.schedule.interval");
                 }
@@ -212,7 +214,11 @@ impl EventDto {
         self.source.validate()?;
         parse_instant(&self.created_at, "day.event.created_at")?;
         parse_instant(&self.updated_at, "day.event.updated_at")?;
-        if self.deleted_at.as_deref().is_some_and(|value| parse_instant(value, "day.event.deleted_at").is_err()) {
+        if self
+            .deleted_at
+            .as_deref()
+            .is_some_and(|value| parse_instant(value, "day.event.deleted_at").is_err())
+        {
             return Err("day.event.deleted_at");
         }
         positive_day_revision(self.revision, "day.event.revision")?;
@@ -355,9 +361,19 @@ pub struct DayCalendarResourceCoverageDto {
 impl DayCalendarResourceCoverageDto {
     fn validate(&self) -> Result<(), &'static str> {
         validate_calendar_label(&self.label)?;
-        parse_optional_instant(self.last_success_at.as_deref(), "day.calendar.resource.last_success_at")?;
-        parse_optional_instant(self.failure_at.as_deref(), "day.calendar.resource.failure_at")?;
-        if self.last_range.as_ref().is_some_and(|range| validate_calendar_range(range).is_err()) {
+        parse_optional_instant(
+            self.last_success_at.as_deref(),
+            "day.calendar.resource.last_success_at",
+        )?;
+        parse_optional_instant(
+            self.failure_at.as_deref(),
+            "day.calendar.resource.failure_at",
+        )?;
+        if self
+            .last_range
+            .as_ref()
+            .is_some_and(|range| validate_calendar_range(range).is_err())
+        {
             return Err("day.calendar.resource.last_range");
         }
         Ok(())
@@ -380,9 +396,16 @@ pub struct DayCalendarSourceCoverageDto {
 impl DayCalendarSourceCoverageDto {
     fn validate(&self) -> Result<(), &'static str> {
         validate_calendar_label(&self.label)?;
-        parse_optional_instant(self.last_success_at.as_deref(), "day.calendar.source.last_success_at")?;
+        parse_optional_instant(
+            self.last_success_at.as_deref(),
+            "day.calendar.source.last_success_at",
+        )?;
         parse_optional_instant(self.failure_at.as_deref(), "day.calendar.source.failure_at")?;
-        if self.last_range.as_ref().is_some_and(|range| validate_calendar_range(range).is_err()) {
+        if self
+            .last_range
+            .as_ref()
+            .is_some_and(|range| validate_calendar_range(range).is_err())
+        {
             return Err("day.calendar.source.last_range");
         }
         for resource in &self.resources {
@@ -452,9 +475,9 @@ impl DaySnapshotDto {
         parse_instant(&self.generated_at, "day.snapshot.generated_at")?;
         if self.timezone_offset_seconds.unsigned_abs() >= MAX_RANGE_OFFSET_SECONDS
             || self.items.len() > MAX_DAY_SNAPSHOT_ITEMS
-            || self.calendar_mirror_revision.is_some_and(|revision| {
-                revision == 0 || revision > MAX_DAY_REVISION
-            })
+            || self
+                .calendar_mirror_revision
+                .is_some_and(|revision| revision == 0 || revision > MAX_DAY_REVISION)
         {
             return Err("day.snapshot");
         }
@@ -763,10 +786,16 @@ fn validate_snapshot_bytes(value: &DaySnapshotDto) -> Result<(), &'static str> {
     struct Counter(usize);
     impl std::io::Write for Counter {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0 = self.0.checked_add(bytes.len()).filter(|size| *size <= MAX_DAY_SNAPSHOT_BYTES).ok_or_else(|| std::io::Error::other("Day snapshot byte budget"))?;
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .filter(|size| *size <= MAX_DAY_SNAPSHOT_BYTES)
+                .ok_or_else(|| std::io::Error::other("Day snapshot byte budget"))?;
             Ok(bytes.len())
         }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
     serde_json::to_writer(Counter(0), value).map_err(|_| "day.snapshot.byte_budget")
 }

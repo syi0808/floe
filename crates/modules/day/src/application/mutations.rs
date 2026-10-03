@@ -1,12 +1,22 @@
 //! Admission of idempotent Day commands. Storage owns one atomic transaction;
 //! the Day command owns the transition and exact safe result projection.
+use crate::{DayError, DayMutationCommand, DayMutationRequest, DayMutationResult, DayService};
 use floe_execution::ExecutionScope;
 use floe_kernel::OwnerActor;
-use crate::{DayError, DayMutationCommand, DayMutationRequest, DayMutationResult, DayService};
 impl DayService {
-    pub async fn mutate(&self, actor: &OwnerActor, request: DayMutationRequest, scope: &ExecutionScope) -> Result<DayMutationResult, DayError> {
+    pub async fn mutate(
+        &self,
+        actor: &OwnerActor,
+        request: DayMutationRequest,
+        scope: &ExecutionScope,
+    ) -> Result<DayMutationResult, DayError> {
         self.admit_actor(actor)?;
-        let command = DayMutationCommand { person_id: actor.person_id, device_id: actor.device_id.clone(), executor_generation: self.lifecycle.generation, request };
+        let command = DayMutationCommand {
+            person_id: actor.person_id,
+            device_id: actor.device_id.clone(),
+            executor_generation: self.lifecycle.generation,
+            request,
+        };
         command.validate()?;
         let _admission = tokio::select! {
             biased;
@@ -16,7 +26,12 @@ impl DayService {
         self.admit_actor(actor)?;
         // Shutdown waits this same admission guard before retiring the executor.
         // Repository replay precedes its active-executor/current-target reads.
-        let fence = crate::DayWriteFence::new(actor.clone(), self.lifecycle.generation, self.lifecycle.cancellation.clone(), scope);
+        let fence = crate::DayWriteFence::new(
+            actor.clone(),
+            self.lifecycle.generation,
+            self.lifecycle.cancellation.clone(),
+            scope,
+        );
         self.repository.mutate(command, &fence).await
     }
 }

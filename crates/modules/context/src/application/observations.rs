@@ -436,7 +436,6 @@ impl ObservationRegistry {
             .cloned()
             .ok_or(AgentFailure::StaleContext)
     }
-
 }
 
 /// Whether the view a device published is one Context accepts, and when it

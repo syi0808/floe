@@ -2,7 +2,9 @@ use super::{
     ConversationInteraction, InteractionResolution, MAX_ACTIVE_INTERACTIONS_PER_RUN, RunState,
     RunTerminal, TurnAdmissionRequest, TurnMode,
 };
-use floe_agent_contract::{AgentFailure, PreparedModelPlan, SourceProjectionReview, TaskExecutionReceiptRef};
+use floe_agent_contract::{
+    AgentFailure, PreparedModelPlan, SourceProjectionReview, TaskExecutionReceiptRef,
+};
 use floe_kernel::{PersonId, RunId};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -65,54 +67,128 @@ impl ReviewAuditRecord {
         match &self.evidence {
             BlockedReviewEvidence::ModelProjection { access_reviews, .. }
             | BlockedReviewEvidence::TaskModelProjection { access_reviews, .. }
-            | BlockedReviewEvidence::SourceRead { access_reviews, .. } => access_reviews.iter()
-                .map(|link| super::ReviewedTarget::SourceReview(link.reference.clone())).collect(),
-            BlockedReviewEvidence::ExpertBinding { review, .. } => vec![super::ReviewedTarget::ExpertBinding(review.clone())],
-            BlockedReviewEvidence::Navigation { target, .. } => vec![super::ReviewedTarget::NavigationOnly(target.clone())],
+            | BlockedReviewEvidence::SourceRead { access_reviews, .. } => access_reviews
+                .iter()
+                .map(|link| super::ReviewedTarget::SourceReview(link.reference.clone()))
+                .collect(),
+            BlockedReviewEvidence::ExpertBinding { review, .. } => {
+                vec![super::ReviewedTarget::ExpertBinding(review.clone())]
+            }
+            BlockedReviewEvidence::Navigation { target, .. } => {
+                vec![super::ReviewedTarget::NavigationOnly(target.clone())]
+            }
         }
     }
-    pub fn matches_requirement(&self, requirement: &super::InteractionRequirement, target: &super::ReviewedTarget) -> bool {
+    pub fn matches_requirement(
+        &self,
+        requirement: &super::InteractionRequirement,
+        target: &super::ReviewedTarget,
+    ) -> bool {
         match (&self.evidence, target) {
-            (BlockedReviewEvidence::ModelProjection { access_reviews, .. }
-            | BlockedReviewEvidence::TaskModelProjection { access_reviews, .. }
-            | BlockedReviewEvidence::SourceRead { access_reviews, .. }, super::ReviewedTarget::SourceReview(reference)) =>
-                access_reviews.iter().any(|link| &link.reference == reference && *requirement == super::InteractionRequirement::from_source(&link.requirement, true)),
-            (BlockedReviewEvidence::Navigation { requirement: source, .. }, super::ReviewedTarget::NavigationOnly(_)) =>
-                *requirement == super::InteractionRequirement::from_source(source, false),
-            (BlockedReviewEvidence::ExpertBinding { .. }, super::ReviewedTarget::ExpertBinding(_)) =>
-                requirement.kind == super::InteractionRequirementKind::ConfigureExpertBinding && !requirement.inline
-                    && requirement.source_id == "floe.expert.binding" && requirement.connection_id.is_none() && requirement.purpose == "configuration",
+            (
+                BlockedReviewEvidence::ModelProjection { access_reviews, .. }
+                | BlockedReviewEvidence::TaskModelProjection { access_reviews, .. }
+                | BlockedReviewEvidence::SourceRead { access_reviews, .. },
+                super::ReviewedTarget::SourceReview(reference),
+            ) => access_reviews.iter().any(|link| {
+                &link.reference == reference
+                    && *requirement
+                        == super::InteractionRequirement::from_source(&link.requirement, true)
+            }),
+            (
+                BlockedReviewEvidence::Navigation {
+                    requirement: source,
+                    ..
+                },
+                super::ReviewedTarget::NavigationOnly(_),
+            ) => *requirement == super::InteractionRequirement::from_source(source, false),
+            (
+                BlockedReviewEvidence::ExpertBinding { .. },
+                super::ReviewedTarget::ExpertBinding(_),
+            ) => {
+                requirement.kind == super::InteractionRequirementKind::ConfigureExpertBinding
+                    && !requirement.inline
+                    && requirement.source_id == "floe.expert.binding"
+                    && requirement.connection_id.is_none()
+                    && requirement.purpose == "configuration"
+            }
             _ => false,
         }
     }
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        if !self.person_id.is_valid() || self.session_id.is_nil() || !self.run_id.is_valid()
-            || self.executor_generation == 0 || self.operation_id.is_nil()
-            || self.device_id.is_empty() || self.device_id.len() > 256
-            || self.device_id.trim() != self.device_id || self.device_id.chars().any(char::is_control)
-        { return Err(AgentFailure::StorageUnavailable); }
+        if !self.person_id.is_valid()
+            || self.session_id.is_nil()
+            || !self.run_id.is_valid()
+            || self.executor_generation == 0
+            || self.operation_id.is_nil()
+            || self.device_id.is_empty()
+            || self.device_id.len() > 256
+            || self.device_id.trim() != self.device_id
+            || self.device_id.chars().any(char::is_control)
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
         match &self.evidence {
             BlockedReviewEvidence::ModelProjection { plan, review, .. }
             | BlockedReviewEvidence::TaskModelProjection { plan, review, .. } => {
-                if let BlockedReviewEvidence::TaskModelProjection { execution, .. } = &self.evidence { execution.validate()?; }
-                plan.validate()?; review.validate()?;
-                let actual: [u8; 32] = sha2::Sha256::digest(serde_json::to_vec(&(plan, review.projection_operation_id, &review.blockers))
-                    .map_err(|_| AgentFailure::StorageUnavailable)?).into();
-                if actual != review.target_digest || self.device_id != plan.device_id
-                    || self.person_id.to_string() != plan.principal || self.operation_id != review.projection_operation_id
-                { return Err(AgentFailure::StorageUnavailable); }
+                if let BlockedReviewEvidence::TaskModelProjection { execution, .. } = &self.evidence
+                {
+                    execution.validate()?;
+                }
+                plan.validate()?;
+                review.validate()?;
+                let actual: [u8; 32] = sha2::Sha256::digest(
+                    serde_json::to_vec(&(plan, review.projection_operation_id, &review.blockers))
+                        .map_err(|_| AgentFailure::StorageUnavailable)?,
+                )
+                .into();
+                if actual != review.target_digest
+                    || self.device_id != plan.device_id
+                    || self.person_id.to_string() != plan.principal
+                    || self.operation_id != review.projection_operation_id
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
             }
-            BlockedReviewEvidence::SourceRead { execution, tool_call_id, blockers, .. } => {
-                execution.validate()?; blockers.validate().map_err(|_| AgentFailure::StorageUnavailable)?;
-                if tool_call_id.is_nil() { return Err(AgentFailure::StorageUnavailable); }
+            BlockedReviewEvidence::SourceRead {
+                execution,
+                tool_call_id,
+                blockers,
+                ..
+            } => {
+                execution.validate()?;
+                blockers
+                    .validate()
+                    .map_err(|_| AgentFailure::StorageUnavailable)?;
+                if tool_call_id.is_nil() {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
             }
-            BlockedReviewEvidence::ExpertBinding { execution, requirement_key, review } => {
-                execution.validate()?; review.validate()?;
-                if requirement_key.is_empty() || requirement_key.len() > 256 || requirement_key.trim() != requirement_key
-                    || requirement_key.chars().any(char::is_control) { return Err(AgentFailure::StorageUnavailable); }
+            BlockedReviewEvidence::ExpertBinding {
+                execution,
+                requirement_key,
+                review,
+            } => {
+                execution.validate()?;
+                review.validate()?;
+                if requirement_key.is_empty()
+                    || requirement_key.len() > 256
+                    || requirement_key.trim() != requirement_key
+                    || requirement_key.chars().any(char::is_control)
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
             }
-            BlockedReviewEvidence::Navigation { execution, requirement, target } => {
-                execution.validate()?; requirement.validate().map_err(|_| AgentFailure::StorageUnavailable)?; target.validate()?;
+            BlockedReviewEvidence::Navigation {
+                execution,
+                requirement,
+                target,
+            } => {
+                execution.validate()?;
+                requirement
+                    .validate()
+                    .map_err(|_| AgentFailure::StorageUnavailable)?;
+                target.validate()?;
                 if requirement.source_id() != target.source_id
                     || requirement.connection_id().map(|id| id.as_str()) != target.connection_id.as_deref()
                     || requirement.consumer().identifier() != target.consumer
@@ -126,38 +202,70 @@ impl ReviewAuditRecord {
                 { return Err(AgentFailure::StorageUnavailable); }
             }
         }
-        if let BlockedReviewEvidence::ModelProjection { review, access_reviews, .. }
-            | BlockedReviewEvidence::TaskModelProjection { review, access_reviews, .. } = &self.evidence {
+        if let BlockedReviewEvidence::ModelProjection {
+            review,
+            access_reviews,
+            ..
+        }
+        | BlockedReviewEvidence::TaskModelProjection {
+            review,
+            access_reviews,
+            ..
+        } = &self.evidence
+        {
             validate_source_links(access_reviews, &review.blockers)?;
         }
-        if let BlockedReviewEvidence::SourceRead { blockers, access_reviews, .. } = &self.evidence {
+        if let BlockedReviewEvidence::SourceRead {
+            blockers,
+            access_reviews,
+            ..
+        } = &self.evidence
+        {
             validate_source_links(access_reviews, blockers)?;
         }
         let targets = self.targets();
-        if targets.is_empty() || targets.len() > MAX_ACTIVE_INTERACTIONS_PER_RUN { return Err(AgentFailure::StorageUnavailable); }
+        if targets.is_empty() || targets.len() > MAX_ACTIVE_INTERACTIONS_PER_RUN {
+            return Err(AgentFailure::StorageUnavailable);
+        }
         let mut seen = std::collections::HashSet::new();
         for target in targets {
             target.validate()?;
-            if !seen.insert(super::canonical_target_digest(&target)?) { return Err(AgentFailure::StorageUnavailable); }
+            if !seen.insert(super::canonical_target_digest(&target)?) {
+                return Err(AgentFailure::StorageUnavailable);
+            }
         }
         Ok(())
     }
 }
 
-fn validate_source_links(links: &[SourceReviewLink], blockers: &floe_context_contract::SourceAccessBlockers) -> Result<(), AgentFailure> {
+fn validate_source_links(
+    links: &[SourceReviewLink],
+    blockers: &floe_context_contract::SourceAccessBlockers,
+) -> Result<(), AgentFailure> {
     let mut ids = std::collections::HashSet::new();
     let mut connections = std::collections::HashSet::new();
     for link in links {
         link.reference.validate()?;
-        link.requirement.validate().map_err(|_| AgentFailure::StorageUnavailable)?;
-        if !blockers.blockers().contains(&link.requirement) || !ids.insert(link.reference.id)
-            || !link.requirement.inline_resolution() || link.requirement.connection_id().is_none()
-            || !connections.insert(link.requirement.connection_id().cloned()) {
+        link.requirement
+            .validate()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        if !blockers.blockers().contains(&link.requirement)
+            || !ids.insert(link.reference.id)
+            || !link.requirement.inline_resolution()
+            || link.requirement.connection_id().is_none()
+            || !connections.insert(link.requirement.connection_id().cloned())
+        {
             return Err(AgentFailure::StorageUnavailable);
         }
     }
-    let expected = blockers.blockers().iter().map(|b| b.connection_id().cloned()).collect::<std::collections::HashSet<_>>();
-    if expected != connections { return Err(AgentFailure::StorageUnavailable); }
+    let expected = blockers
+        .blockers()
+        .iter()
+        .map(|b| b.connection_id().cloned())
+        .collect::<std::collections::HashSet<_>>();
+    if expected != connections {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     Ok(())
 }
 
@@ -170,13 +278,24 @@ impl ReviewPublication {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         self.record.validate()?;
         let targets = self.record.targets();
-        if self.interactions.len() != targets.len() { return Err(AgentFailure::InvalidInput); }
+        if self.interactions.len() != targets.len() {
+            return Err(AgentFailure::InvalidInput);
+        }
         for (interaction, target) in self.interactions.iter().zip(targets) {
             interaction.validate()?;
-            if interaction.revision != 1 || !matches!(interaction.state, super::InteractionState::Pending) { return Err(AgentFailure::InvalidInput); }
-            if interaction.person_id != self.record.person_id || interaction.session_id != self.record.session_id
-                || interaction.origin_run_id != self.record.run_id || interaction.audit != self.record || interaction.target != target
-            { return Err(AgentFailure::InvalidInput); }
+            if interaction.revision != 1
+                || !matches!(interaction.state, super::InteractionState::Pending)
+            {
+                return Err(AgentFailure::InvalidInput);
+            }
+            if interaction.person_id != self.record.person_id
+                || interaction.session_id != self.record.session_id
+                || interaction.origin_run_id != self.record.run_id
+                || interaction.audit != self.record
+                || interaction.target != target
+            {
+                return Err(AgentFailure::InvalidInput);
+            }
         }
         Ok(())
     }
@@ -222,17 +341,34 @@ impl BlockedRunCommit {
             }
             for interaction in &publication.interactions {
                 let review_id = match &interaction.target {
-                    super::ReviewedTarget::SourceReview(reference) => Some(("source", reference.id)),
-                    super::ReviewedTarget::ExpertBinding(reference) => Some(("binding", reference.id)),
+                    super::ReviewedTarget::SourceReview(reference) => {
+                        Some(("source", reference.id))
+                    }
+                    super::ReviewedTarget::ExpertBinding(reference) => {
+                        Some(("binding", reference.id))
+                    }
                     super::ReviewedTarget::NavigationOnly(_) => None,
                 };
-                if review_id.is_some_and(|id| !review_ids.insert(id)) { return Err(AgentFailure::InvalidInput); }
-                let link = self.terminal.blocked.as_ref().ok_or(AgentFailure::InvalidInput)?
-                    .interactions.iter().find(|link| link.interaction_id == interaction.id).ok_or(AgentFailure::InvalidInput)?;
-                if link.target != interaction.target || link.origin.origin != interaction.origin
-                    || link.origin.person_id != self.person_id || link.origin.session_id != self.session_id
-                    || link.origin.run_id != self.run_id || link.origin.executor_generation != self.executor_generation
-                    || link.origin.device_id != publication.record.device_id {
+                if review_id.is_some_and(|id| !review_ids.insert(id)) {
+                    return Err(AgentFailure::InvalidInput);
+                }
+                let link = self
+                    .terminal
+                    .blocked
+                    .as_ref()
+                    .ok_or(AgentFailure::InvalidInput)?
+                    .interactions
+                    .iter()
+                    .find(|link| link.interaction_id == interaction.id)
+                    .ok_or(AgentFailure::InvalidInput)?;
+                if link.target != interaction.target
+                    || link.origin.origin != interaction.origin
+                    || link.origin.person_id != self.person_id
+                    || link.origin.session_id != self.session_id
+                    || link.origin.run_id != self.run_id
+                    || link.origin.executor_generation != self.executor_generation
+                    || link.origin.device_id != publication.record.device_id
+                {
                     return Err(AgentFailure::InvalidInput);
                 }
                 if !ids.insert(interaction.id) {
@@ -255,9 +391,15 @@ impl BlockedRunCommit {
             return Err(AgentFailure::InvalidInput);
         }
         for reference in &self.terminal.interactions {
-            let interaction = self.publications.iter().flat_map(|publication| &publication.interactions)
-                .find(|interaction| interaction.id == reference.interaction_id).ok_or(AgentFailure::InvalidInput)?;
-            if reference.kind != interaction.kind || reference.status != floe_agent_contract::UserInteractionStatus::Pending {
+            let interaction = self
+                .publications
+                .iter()
+                .flat_map(|publication| &publication.interactions)
+                .find(|interaction| interaction.id == reference.interaction_id)
+                .ok_or(AgentFailure::InvalidInput)?;
+            if reference.kind != interaction.kind
+                || reference.status != floe_agent_contract::UserInteractionStatus::Pending
+            {
                 return Err(AgentFailure::InvalidInput);
             }
         }
@@ -313,7 +455,12 @@ impl OwnerResolutionReceipt {
             }
             Self::ExpertBinding { receipt } => {
                 receipt.review_ref.validate()?;
-                if !receipt.command_id.is_valid() || receipt.assignment_ref.is_nil() || receipt.binding_revision == 0 || receipt.registry_revision == 0 || receipt.committed_at_unix_ms < 0 {
+                if !receipt.command_id.is_valid()
+                    || receipt.assignment_ref.is_nil()
+                    || receipt.binding_revision == 0
+                    || receipt.registry_revision == 0
+                    || receipt.committed_at_unix_ms < 0
+                {
                     return Err(AgentFailure::InvalidInput);
                 }
             }

@@ -43,14 +43,21 @@ pub struct ExpertToolObservation {
 
 #[derive(Clone, Debug)]
 pub enum ExpertSourceObservation {
-    Ready { payload: Value, coverage: floe_agent_contract::DependencyCoverage },
-    Unavailable { reason: floe_context_contract::SourceUnavailable },
+    Ready {
+        payload: Value,
+        coverage: floe_agent_contract::DependencyCoverage,
+    },
+    Unavailable {
+        reason: floe_context_contract::SourceUnavailable,
+    },
 }
 impl ExpertToolObservation {
     pub fn coverage(&self) -> floe_agent_contract::DependencyCoverage {
         match &self.outcome {
             ExpertSourceObservation::Ready { coverage, .. } => coverage.clone(),
-            ExpertSourceObservation::Unavailable { .. } => floe_agent_contract::DependencyCoverage::Independent,
+            ExpertSourceObservation::Unavailable { .. } => {
+                floe_agent_contract::DependencyCoverage::Independent
+            }
         }
     }
 }
@@ -61,7 +68,15 @@ pub struct ExpertFinalOutput {
 }
 
 pub trait ExpertProgram: Send + Sync {
-    fn specification(&self, request: &ExpertProgramRequest) -> Result<ExpertProgramSpec, AgentFailure>;
-    fn finalize(&self, request: &ExpertProgramRequest, observations: &[ExpertToolObservation],
-        text: &str, artifacts: &[Artifact]) -> Result<ExpertFinalOutput, AgentFailure>;
+    fn specification(
+        &self,
+        request: &ExpertProgramRequest,
+    ) -> Result<ExpertProgramSpec, AgentFailure>;
+    fn finalize(
+        &self,
+        request: &ExpertProgramRequest,
+        observations: &[ExpertToolObservation],
+        text: &str,
+        artifacts: &[Artifact],
+    ) -> Result<ExpertFinalOutput, AgentFailure>;
 }

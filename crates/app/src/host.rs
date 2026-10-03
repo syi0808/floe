@@ -125,7 +125,10 @@ pub struct AppHost<Services: HostServices> {
     admission: Arc<HostAdmission>,
 }
 impl<Services: HostServices> AppHost<Services> {
-    pub(crate) fn with_caller(services: Services, caller: CallerContext) -> Result<Self, HostError> {
+    pub(crate) fn with_caller(
+        services: Services,
+        caller: CallerContext,
+    ) -> Result<Self, HostError> {
         let services = Arc::new(services);
         let admission = Arc::new(HostAdmission::new());
         let worker_services = services.clone();
@@ -135,19 +138,30 @@ impl<Services: HostServices> AppHost<Services> {
         let worker = std::thread::Builder::new()
             .name("floe-host-retirement".into())
             .spawn(move || {
-                let completion = RetirementCompletion { admission: worker_admission.clone(), completed: false };
-                let result = isolate_shutdown(|| retire_services(&worker_admission, worker_services.as_ref()));
+                let completion = RetirementCompletion {
+                    admission: worker_admission.clone(),
+                    completed: false,
+                };
+                let result = isolate_shutdown(|| {
+                    retire_services(&worker_admission, worker_services.as_ref())
+                });
                 // Drop the final service root on this thread before publishing
                 // success. A blocked destructor remains covered by the caller's
                 // deadline and cannot strand memory borrowed by an active call.
-                let release = isolate_shutdown(|| { drop(worker_services); Ok(()) });
+                let release = isolate_shutdown(|| {
+                    drop(worker_services);
+                    Ok(())
+                });
                 completion.finish(result.and(release));
             });
         if worker.is_err() {
             // No request has been exposed. Retire the constructed resources,
             // including a partially activated owner, before reporting open failure.
             let _ = isolate_shutdown(|| services.shutdown());
-            let _ = isolate_shutdown(|| { drop(services); Ok(()) });
+            let _ = isolate_shutdown(|| {
+                drop(services);
+                Ok(())
+            });
             return Err(HostError::Shutdown);
         }
         // There is deliberately no join on this handle. The worker owns its
@@ -231,7 +245,10 @@ impl<Services: HostServices> HostRequest<'_, Services> {
     }
 }
 
-struct RetirementCompletion { admission: Arc<HostAdmission>, completed: bool }
+struct RetirementCompletion {
+    admission: Arc<HostAdmission>,
+    completed: bool,
+}
 impl RetirementCompletion {
     fn finish(mut self, result: Result<(), HostError>) {
         self.admission.finish(result);
@@ -240,11 +257,16 @@ impl RetirementCompletion {
 }
 impl Drop for RetirementCompletion {
     fn drop(&mut self) {
-        if !self.completed { self.admission.finish(Err(HostError::Shutdown)); }
+        if !self.completed {
+            self.admission.finish(Err(HostError::Shutdown));
+        }
     }
 }
 
-fn retire_services(admission: &HostAdmission, services: &impl HostServices) -> Result<(), HostError> {
+fn retire_services(
+    admission: &HostAdmission,
+    services: &impl HostServices,
+) -> Result<(), HostError> {
     let mut lifecycle = admission.retirement_lock();
     while lifecycle.state == HostState::Open {
         lifecycle = match admission.drained.wait(lifecycle) {
@@ -262,12 +284,17 @@ fn retire_services(admission: &HostAdmission, services: &impl HostServices) -> R
     // One panicking callback cannot prevent the remaining registrations retiring.
     // Closing them first releases product calls waiting on native completions.
     for hook in hooks.into_iter().filter_map(|hook| hook.upgrade()) {
-        let closed = isolate_shutdown(|| { hook.close_admission(); Ok(()) });
+        let closed = isolate_shutdown(|| {
+            hook.close_admission();
+            Ok(())
+        });
         result = result.and(closed);
     }
     let mut lifecycle = admission.retirement_lock();
     while lifecycle.active_requests != 0 {
-        let remaining = lifecycle.shutdown_deadline.unwrap_or_else(Instant::now)
+        let remaining = lifecycle
+            .shutdown_deadline
+            .unwrap_or_else(Instant::now)
             .saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             lifecycle.state = HostState::Closed;
@@ -301,7 +328,9 @@ fn isolate_shutdown(operation: impl FnOnce() -> Result<(), HostError>) -> Result
         // panic payload destructor or failing diagnostic sink cannot unwind out.
         if let Err(secondary) = catch_unwind(AssertUnwindSafe(|| {
             crate::diagnostics::panic_error(payload);
-        })) { std::mem::forget(secondary); }
+        })) {
+            std::mem::forget(secondary);
+        }
         Err(HostError::Shutdown)
     })
 }

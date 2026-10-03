@@ -84,7 +84,9 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
                     self.repository.as_ref(),
                     reference.run_id,
                     &request.principal,
-                    self.experts.as_ref(), actor, scope,
+                    self.experts.as_ref(),
+                    actor,
+                    scope,
                 )
                 .await?;
                 if snapshot.reference != *reference
@@ -434,7 +436,10 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
             },
         };
         continuation_replay.extend(request.replay);
-        let execution_id = resume.as_ref().map_or(run_id.as_uuid(), |resume: &floe_agent_contract::EngineResumeState| resume.validated_batch.execution_id);
+        let execution_id = resume.as_ref().map_or(
+            run_id.as_uuid(),
+            |resume: &floe_agent_contract::EngineResumeState| resume.validated_batch.execution_id,
+        );
         let engine_request = EngineRequest {
             execution_id,
             principal: request.principal.clone(),
@@ -737,14 +742,17 @@ pub async fn continuation<Repository: ConversationRepository>(
     for receipt in chain.iter() {
         let mut entries = repository.load_journal(receipt.run_id).await?;
         crate::validate_run_journal(receipt, &entries)?;
-        if receipt.principal != actor.person_id.to_string() || receipt.device_id != actor.device_id {
+        if receipt.principal != actor.person_id.to_string() || receipt.device_id != actor.device_id
+        {
             return Err(AgentFailure::PolicyDenied);
         }
         let mut pending = std::collections::BTreeMap::new();
         for entry in &entries {
             match &entry.event {
                 floe_agent_contract::JournalEvent::DelegationIntent { request } => {
-                    original_delegations.entry(request.task_id).or_insert_with(|| request.clone());
+                    original_delegations
+                        .entry(request.task_id)
+                        .or_insert_with(|| request.clone());
                     pending.insert(request.task_id, request.clone());
                 }
                 floe_agent_contract::JournalEvent::DelegationResult { receipt } => {
@@ -754,18 +762,33 @@ pub async fn continuation<Repository: ConversationRepository>(
             }
         }
         for request in pending.values() {
-            let original = original_delegations.get(&request.task_id).ok_or(AgentFailure::StorageUnavailable)?;
+            let original = original_delegations
+                .get(&request.task_id)
+                .ok_or(AgentFailure::StorageUnavailable)?;
             let mut normalized = request.clone();
             normalized.parent_run_id = original.parent_run_id;
-            if normalized != *original { return Err(AgentFailure::Conflict); }
+            if normalized != *original {
+                return Err(AgentFailure::Conflict);
+            }
             let mut recovered = experts.recover_delegation(actor, original, scope).await?;
             if request.parent_run_id != original.parent_run_id {
-                recovered.replay = Some(replay.iter().find(|entry: &&floe_agent_contract::ReplayReceipt|
-                    entry.task_id == Some(request.task_id)).cloned().ok_or(AgentFailure::Conflict)?);
+                recovered.replay = Some(
+                    replay
+                        .iter()
+                        .find(|entry: &&floe_agent_contract::ReplayReceipt| {
+                            entry.task_id == Some(request.task_id)
+                        })
+                        .cloned()
+                        .ok_or(AgentFailure::Conflict)?,
+                );
             }
-            scope.run(repository.reconcile_delegation(receipt.run_id, recovered)).await?;
+            scope
+                .run(repository.reconcile_delegation(receipt.run_id, recovered))
+                .await?;
         }
-        if !pending.is_empty() { entries = repository.load_journal(receipt.run_id).await?; }
+        if !pending.is_empty() {
+            entries = repository.load_journal(receipt.run_id).await?;
+        }
         total_entries = total_entries
             .checked_add(entries.len())
             .ok_or(AgentFailure::StorageUnavailable)?;
@@ -773,7 +796,8 @@ pub async fn continuation<Repository: ConversationRepository>(
             return Err(AgentFailure::BudgetExceeded);
         }
         let projected = floe_agent_runtime::project_execution_journal(
-            &super::recovery::journal_binding(receipt, &entries), &entries,
+            &super::recovery::journal_binding(receipt, &entries),
+            &entries,
             floe_agent_runtime::JournalProjectionMode::ContinueSettledDelegation,
         )?;
         // A resumed run re-journals the steps it replays, so the same logical
@@ -808,7 +832,9 @@ pub async fn continuation<Repository: ConversationRepository>(
             .zip(projected.cursor.clone());
         carried = reconcile_resume_lineage(carried, &projected.lineage, live)?;
     }
-    let usage = floe_agent_runtime::aggregate_model_accounting(&own_accounting, &delegated_accounting)?.usage;
+    let usage =
+        floe_agent_runtime::aggregate_model_accounting(&own_accounting, &delegated_accounting)?
+            .usage;
     let model_conversation = ModelConversation {
         history,
         current_turn,
@@ -1020,37 +1046,59 @@ pub fn validate_task_delegation_lineage(
     task: &floe_experts::TaskRecord,
 ) -> Result<(), AgentFailure> {
     use floe_agent_contract::{JournalEvent, delegation_request_digest};
-    if chain.is_empty() || chain.len() > 4 { return Err(AgentFailure::Conflict); }
+    if chain.is_empty() || chain.len() > 4 {
+        return Err(AgentFailure::Conflict);
+    }
     task.validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
     let first = &chain[0].0;
-    if first.continuation_of.is_some() { return Err(AgentFailure::Conflict); }
+    if first.continuation_of.is_some() {
+        return Err(AgentFailure::Conflict);
+    }
     let mut seen = std::collections::HashSet::new();
     let mut carried = None;
     let mut original = None;
     let mut current_intent = false;
     for (index, (run, entries)) in chain.iter().enumerate() {
         run.validate()?;
-        if !seen.insert(run.run_id) || run.principal != task.snapshot.principal
-            || run.device_id != task.device_id || run.session_id != first.session_id
-            || run.user_message_id != first.user_message_id { return Err(AgentFailure::Conflict); }
+        if !seen.insert(run.run_id)
+            || run.principal != task.snapshot.principal
+            || run.device_id != task.device_id
+            || run.session_id != first.session_id
+            || run.user_message_id != first.user_message_id
+        {
+            return Err(AgentFailure::Conflict);
+        }
         if index > 0 {
             let parent = &chain[index - 1].0;
             let reference = parent.continuation().ok_or(AgentFailure::Conflict)?;
             if run.continuation_of != Some(parent.run_id)
                 || run.continuation_executor_generation != Some(parent.executor_generation)
-                || run.continuation_level != reference.level { return Err(AgentFailure::Conflict); }
+                || run.continuation_level != reference.level
+            {
+                return Err(AgentFailure::Conflict);
+            }
         }
         let mode = if index + 1 < chain.len() {
             floe_agent_runtime::JournalProjectionMode::ContinueSettledDelegation
-        } else { floe_agent_runtime::JournalProjectionMode::DurablePrefix };
+        } else {
+            floe_agent_runtime::JournalProjectionMode::DurablePrefix
+        };
         let projected = floe_agent_runtime::project_execution_journal(
-            &super::recovery::journal_binding(run, entries), entries, mode)?;
-        let live = projected.pending_batch.clone().zip(projected.cursor.clone());
+            &super::recovery::journal_binding(run, entries),
+            entries,
+            mode,
+        )?;
+        let live = projected
+            .pending_batch
+            .clone()
+            .zip(projected.cursor.clone());
         carried = reconcile_resume_lineage(carried, &projected.lineage, live)?;
         current_intent = false;
         for entry in entries {
             if let JournalEvent::DelegationIntent { request } = &entry.event {
-                if request.task_id != task.snapshot.task_id { continue; }
+                if request.task_id != task.snapshot.task_id {
+                    continue;
+                }
                 let mut normalized = request.clone();
                 normalized.parent_run_id = task.snapshot.parent_run_id;
                 if request.principal != task.snapshot.principal
@@ -1059,16 +1107,23 @@ pub fn validate_task_delegation_lineage(
                     || request.execution_context.session_id != run.session_id
                     || request.execution_context.device_id != task.device_id
                     || request.invocation_key != task.invocation_key
-                    || delegation_request_digest(&normalized) != task.request_digest {
+                    || delegation_request_digest(&normalized) != task.request_digest
+                {
                     return Err(AgentFailure::Conflict);
                 }
                 if task.snapshot.parent_run_id == Some(run.run_id.as_uuid()) {
-                    if original.replace(normalized).is_some() { return Err(AgentFailure::Conflict); }
-                } else if original.as_ref() != Some(&normalized) { return Err(AgentFailure::Conflict); }
+                    if original.replace(normalized).is_some() {
+                        return Err(AgentFailure::Conflict);
+                    }
+                } else if original.as_ref() != Some(&normalized) {
+                    return Err(AgentFailure::Conflict);
+                }
                 current_intent = true;
             }
         }
     }
-    if original.is_none() || !current_intent { return Err(AgentFailure::Conflict); }
+    if original.is_none() || !current_intent {
+        return Err(AgentFailure::Conflict);
+    }
     Ok(())
 }

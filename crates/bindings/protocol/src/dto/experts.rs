@@ -34,7 +34,9 @@ pub struct BindingReviewRefDto {
 
 impl BindingReviewRefDto {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.digest.as_str() == "0000000000000000000000000000000000000000000000000000000000000000" {
+        if self.digest.as_str()
+            == "0000000000000000000000000000000000000000000000000000000000000000"
+        {
             return Err("experts.binding_review_ref.digest");
         }
         Ok(())
@@ -72,7 +74,10 @@ impl BindingReviewDto {
     pub fn validate(&self) -> Result<(), &'static str> {
         self.review_ref.validate()?;
         validate_requirement_ref(&self.requirement_ref)?;
-        positive_revision(self.binding_revision, "experts.binding_review.binding_revision")?;
+        positive_revision(
+            self.binding_revision,
+            "experts.binding_review.binding_revision",
+        )?;
         if self.expires_at_unix_ms <= 0
             || self.candidate_refs_and_labels.len() > MAX_BINDING_CANDIDATES
             || self.allowed_actions.is_empty()
@@ -81,9 +86,17 @@ impl BindingReviewDto {
             return Err("experts.binding_review");
         }
 
-        if self.candidate_refs_and_labels.iter().filter(|candidate| candidate.selected).count() > MAX_SELECTED_SOURCES as usize
-            || self.candidate_refs_and_labels.iter().any(|candidate|
-                candidate.availability == CandidateAvailabilityDto::Unavailable && !candidate.selected) {
+        if self
+            .candidate_refs_and_labels
+            .iter()
+            .filter(|candidate| candidate.selected)
+            .count()
+            > MAX_SELECTED_SOURCES as usize
+            || self.candidate_refs_and_labels.iter().any(|candidate| {
+                candidate.availability == CandidateAvailabilityDto::Unavailable
+                    && !candidate.selected
+            })
+        {
             return Err("experts.binding_review.selection");
         }
         let mut candidate_refs = HashSet::with_capacity(self.candidate_refs_and_labels.len());
@@ -128,7 +141,10 @@ pub struct BindingInspectionDto {
 impl BindingInspectionDto {
     pub fn validate(&self) -> Result<(), &'static str> {
         validate_requirement_ref(&self.requirement_ref)?;
-        positive_revision(self.binding_revision, "experts.binding_inspection.binding_revision")?;
+        positive_revision(
+            self.binding_revision,
+            "experts.binding_inspection.binding_revision",
+        )?;
         if self.candidates.len() > MAX_BINDING_CANDIDATES {
             return Err("experts.binding_inspection.candidates");
         }
@@ -219,8 +235,7 @@ pub struct ExpertDirectorySnapshotDto {
 
 impl ExpertDirectorySnapshotDto {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.installations.len() > MAX_INSTALLATIONS
-            || self.assignments.len() > MAX_ASSIGNMENTS
+        if self.installations.len() > MAX_INSTALLATIONS || self.assignments.len() > MAX_ASSIGNMENTS
         {
             return Err("experts.directory.collection_limit");
         }
@@ -311,9 +326,5 @@ fn bounded_owner_text(value: &str, max_bytes: usize) -> bool {
 }
 
 fn positive_revision(value: u64, field: &'static str) -> Result<(), &'static str> {
-    if value == 0 {
-        Err(field)
-    } else {
-        Ok(())
-    }
+    if value == 0 { Err(field) } else { Ok(()) }
 }

@@ -41,10 +41,11 @@ pub fn parse_learner_review_output(
 ) -> Result<Option<LearnerMemoryProposal>, AgentFailure> {
     let value = floe_agent_contract::strict_model_json(text.as_bytes(), 4096)
         .map_err(|_| AgentFailure::InvalidModelOutput)?;
-    crate::prompts::learner_output_schema()?.validate_value(&value)
+    crate::prompts::learner_output_schema()?
+        .validate_value(&value)
         .map_err(|_| AgentFailure::InvalidModelOutput)?;
-    let answer: StructuredLearnerAnswer = serde_json::from_value(value)
-        .map_err(|_| AgentFailure::InvalidModelOutput)?;
+    let answer: StructuredLearnerAnswer =
+        serde_json::from_value(value).map_err(|_| AgentFailure::InvalidModelOutput)?;
     if answer.schema_version != crate::KNOWLEDGE_VERSION || answer.proposals.len() > 1 {
         return Err(AgentFailure::InvalidModelOutput);
     }
@@ -93,7 +94,9 @@ pub enum LearnerJobState {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LearnerJobSettlement {
-    Blocked { blockage: LearnerProjectionBlock },
+    Blocked {
+        blockage: LearnerProjectionBlock,
+    },
     Completed {
         candidate_id: Option<Uuid>,
     },
@@ -116,11 +119,19 @@ impl LearnerProjectionBlock {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         self.plan.validate()?;
         self.review.validate()?;
-        let digest: [u8; 32] = Sha256::digest(serde_json::to_vec(&(
-            &self.plan, self.review.projection_operation_id, &self.review.blockers,
-        )).map_err(|_| AgentFailure::StorageUnavailable)?).into();
-        if self.review.target_digest != digest || self.plan.consumer != LEARNER_INFERENCE_CONSUMER
-            || self.plan.purpose != LEARNER_INFERENCE_PURPOSE {
+        let digest: [u8; 32] = Sha256::digest(
+            serde_json::to_vec(&(
+                &self.plan,
+                self.review.projection_operation_id,
+                &self.review.blockers,
+            ))
+            .map_err(|_| AgentFailure::StorageUnavailable)?,
+        )
+        .into();
+        if self.review.target_digest != digest
+            || self.plan.consumer != LEARNER_INFERENCE_CONSUMER
+            || self.plan.purpose != LEARNER_INFERENCE_PURPOSE
+        {
             return Err(AgentFailure::PolicyDenied);
         }
         Ok(())
@@ -152,7 +163,9 @@ pub fn claim_learner_job(
     device_id: &str,
 ) -> Result<LearnerJobClaim, AgentFailure> {
     validate_learner_job_lifecycle(lifecycle)?;
-    if device_id.trim().is_empty() || device_id.len() > 128 { return Err(AgentFailure::InvalidInput); }
+    if device_id.trim().is_empty() || device_id.len() > 128 {
+        return Err(AgentFailure::InvalidInput);
+    }
     if !matches!(
         lifecycle.state,
         LearnerJobState::Queued | LearnerJobState::Deferred
@@ -277,9 +290,15 @@ pub const fn retryable_learner_failure(failure: AgentFailure) -> bool {
 pub fn validate_learner_job_lifecycle(lifecycle: &LearnerJobLifecycle) -> Result<(), AgentFailure> {
     if lifecycle.attempts > MAX_LEARNER_JOB_ATTEMPTS
         || (lifecycle.state == LearnerJobState::Blocked) != lifecycle.blocked.is_some()
-        || lifecycle.blocked.as_ref().is_some_and(|blockage| blockage.validate().is_err())
+        || lifecycle
+            .blocked
+            .as_ref()
+            .is_some_and(|blockage| blockage.validate().is_err())
         || (lifecycle.attempts > 0) != lifecycle.claimed_device_id.is_some()
-        || lifecycle.claimed_device_id.as_ref().is_some_and(|device| device.trim().is_empty() || device.len() > 128)
+        || lifecycle
+            .claimed_device_id
+            .as_ref()
+            .is_some_and(|device| device.trim().is_empty() || device.len() > 128)
     {
         return Err(AgentFailure::VaultUnavailable);
     }
@@ -313,8 +332,10 @@ pub fn validate_learner_job_lifecycle(lifecycle: &LearnerJobLifecycle) -> Result
                 && lifecycle.last_failure.is_none()
         }
         LearnerJobState::Blocked => {
-            lifecycle.attempts > 0 && lifecycle.finished_at.is_some()
-                && lifecycle.last_failure.is_none() && lifecycle.candidate_id.is_none()
+            lifecycle.attempts > 0
+                && lifecycle.finished_at.is_some()
+                && lifecycle.last_failure.is_none()
+                && lifecycle.candidate_id.is_none()
         }
         LearnerJobState::Failed => {
             lifecycle.finished_at.is_some()
@@ -356,8 +377,10 @@ pub fn validate_learner_input(
         .map(|memory| memory.target_id)
         .collect::<HashSet<_>>();
     if input.schema_version != crate::KNOWLEDGE_VERSION
-        || input.person_id != person_id || !person_id.is_valid()
-        || input.session_id.is_nil() || input.turn_ids.iter().any(Uuid::is_nil)
+        || input.person_id != person_id
+        || !person_id.is_valid()
+        || input.session_id.is_nil()
+        || input.turn_ids.iter().any(Uuid::is_nil)
         || input.outcome != crate::LearningOutcome::Completed
         || input.session_revision == 0
         || input.turn_ids.is_empty()
@@ -466,30 +489,45 @@ pub fn explicit_learning_signal(text: &str) -> Option<crate::LearningObservation
 
 impl LearnerReviewJob {
     pub fn lifecycle(&self) -> LearnerJobLifecycle {
-        LearnerJobLifecycle { state: self.state, attempts: self.attempts, available_at: self.available_at,
-            claimed_at: self.claimed_at, finished_at: self.finished_at, candidate_id: self.candidate_id,
-            last_failure: self.last_failure, blocked: self.blocked.clone(), claimed_device_id: self.claimed_device_id.clone() }
+        LearnerJobLifecycle {
+            state: self.state,
+            attempts: self.attempts,
+            available_at: self.available_at,
+            claimed_at: self.claimed_at,
+            finished_at: self.finished_at,
+            candidate_id: self.candidate_id,
+            last_failure: self.last_failure,
+            blocked: self.blocked.clone(),
+            claimed_device_id: self.claimed_device_id.clone(),
+        }
     }
     pub fn apply_lifecycle(&self, lifecycle: LearnerJobLifecycle) -> Result<Self, AgentFailure> {
         validate_learner_job_lifecycle(&lifecycle)?;
         let mut next = self.clone();
-        next.state = lifecycle.state; next.attempts = lifecycle.attempts;
-        next.available_at = lifecycle.available_at; next.claimed_at = lifecycle.claimed_at;
-        next.finished_at = lifecycle.finished_at; next.candidate_id = lifecycle.candidate_id;
-        next.last_failure = lifecycle.last_failure; next.blocked = lifecycle.blocked;
+        next.state = lifecycle.state;
+        next.attempts = lifecycle.attempts;
+        next.available_at = lifecycle.available_at;
+        next.claimed_at = lifecycle.claimed_at;
+        next.finished_at = lifecycle.finished_at;
+        next.candidate_id = lifecycle.candidate_id;
+        next.last_failure = lifecycle.last_failure;
+        next.blocked = lifecycle.blocked;
         next.claimed_device_id = lifecycle.claimed_device_id;
         Ok(next)
     }
 }
 
 /// Stored current-memory snapshots remain immutable, but their validity is live.
-pub fn validate_learner_memory_time(input: &LearnerReviewInput, now: DateTime<Utc>)
-    -> Result<(), AgentFailure>
-{
+pub fn validate_learner_memory_time(
+    input: &LearnerReviewInput,
+    now: DateTime<Utc>,
+) -> Result<(), AgentFailure> {
     let now = now.timestamp_millis();
-    if input.current_memories.iter().any(|memory|
+    if input.current_memories.iter().any(|memory| {
         memory.valid_from_unix_ms.is_some_and(|from| from > now)
-            || memory.valid_until_unix_ms.is_some_and(|until| until <= now))
-    { return Err(AgentFailure::StaleContext); }
+            || memory.valid_until_unix_ms.is_some_and(|until| until <= now)
+    }) {
+        return Err(AgentFailure::StaleContext);
+    }
     Ok(())
 }

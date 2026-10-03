@@ -78,7 +78,10 @@ impl CanonicalModelRequest {
             return Err(AgentFailure::InvalidInput);
         }
         self.envelope.validate()?;
-        ModelCapabilities::for_request(&self.envelope.run_instructions.output_format, &self.catalog)?;
+        ModelCapabilities::for_request(
+            &self.envelope.run_instructions.output_format,
+            &self.catalog,
+        )?;
         self.catalog
             .tools
             .iter()

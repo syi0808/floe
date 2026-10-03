@@ -18,8 +18,8 @@ use floe_conversation::{
     ConversationInteraction, DecisionAdmission, ExpireInteraction, ExpireOutcome,
     InteractionDecision, InteractionOrigin, InteractionResolutionCommit,
     InteractionResolutionReceipt, InteractionState, MAX_ACTIVE_INTERACTIONS_PER_RUN,
-    MAX_STORED_INTERACTIONS_PER_RUN, ReviewAuditRecord, RunRecord, RunState,
-    SupersedeInteraction, next_state_after_decision, state_after_resolution,
+    MAX_STORED_INTERACTIONS_PER_RUN, ReviewAuditRecord, RunRecord, RunState, SupersedeInteraction,
+    next_state_after_decision, state_after_resolution,
 };
 use floe_kernel::{PersonId, RunId};
 use turso::transaction::{Transaction, TransactionBehavior};
@@ -312,21 +312,39 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 
     pub(super) async fn check_interaction_origin_on(
-        &self, transaction: &Transaction<'_>, record: &ConversationInteraction,
+        &self,
+        transaction: &Transaction<'_>,
+        record: &ConversationInteraction,
     ) -> Result<(), AgentFailure> {
         record.validate()?;
-        let run = self.conversation_run_on(transaction, record.origin_run_id).await?.ok_or(AgentFailure::NotFound)?;
-        if run.person_id != self.person_id || run.session_id != record.session_id || run.state != RunState::Working
-            || record.revision != 1 || !matches!(record.state, InteractionState::Pending) {
+        let run = self
+            .conversation_run_on(transaction, record.origin_run_id)
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        if run.person_id != self.person_id
+            || run.session_id != record.session_id
+            || run.state != RunState::Working
+            || record.revision != 1
+            || !matches!(record.state, InteractionState::Pending)
+        {
             return Err(AgentFailure::Conflict);
         }
         let journal = self.conversation_journal_on(transaction, &run).await?;
         match &record.origin {
-            InteractionOrigin::Projection { run_id, .. } if *run_id == run.run_id => {},
-            InteractionOrigin::Task { execution, capability_call_id } => {
-                let actual = self.read_execution_receipt_on(transaction, execution).await?;
-                let task = self.task_on(transaction, execution.execution.task_id).await?.ok_or(AgentFailure::Conflict)?;
-                self.validate_conversation_task_lineage_on(transaction, &run, &task).await?;
+            InteractionOrigin::Projection { run_id, .. } if *run_id == run.run_id => {}
+            InteractionOrigin::Task {
+                execution,
+                capability_call_id,
+            } => {
+                let actual = self
+                    .read_execution_receipt_on(transaction, execution)
+                    .await?;
+                let task = self
+                    .task_on(transaction, execution.execution.task_id)
+                    .await?
+                    .ok_or(AgentFailure::Conflict)?;
+                self.validate_conversation_task_lineage_on(transaction, &run, &task)
+                    .await?;
                 if task.device_id != run.device_id || actual.snapshot.principal != self.person_id.to_string()
                     || !journal.iter().any(|entry| matches!(&entry.event, JournalEvent::DelegationIntent { request }
                         if request.task_id == execution.execution.task_id && request.parent_run_id == Some(run.run_id.as_uuid())
@@ -337,64 +355,115 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     return Err(AgentFailure::Conflict);
                 }
                 if let Some(call_id) = capability_call_id {
-                    if !matches!(&actual.snapshot.blockage, Some(floe_agent_contract::TaskBlockage::SourceRead { tool_call_id, .. }) if tool_call_id == call_id) {
+                    if !matches!(&actual.snapshot.blockage, Some(floe_agent_contract::TaskBlockage::SourceRead { tool_call_id, .. }) if tool_call_id == call_id)
+                    {
                         return Err(AgentFailure::Conflict);
                     }
                 }
-                if matches!(&record.audit.evidence, floe_conversation::BlockedReviewEvidence::ExpertBinding { .. })
-                    && record.requirement.consumer != actual.snapshot.agent_id { return Err(AgentFailure::Conflict); }
+                if matches!(
+                    &record.audit.evidence,
+                    floe_conversation::BlockedReviewEvidence::ExpertBinding { .. }
+                ) && record.requirement.consumer != actual.snapshot.agent_id
+                {
+                    return Err(AgentFailure::Conflict);
+                }
             }
             _ => return Err(AgentFailure::Conflict),
         }
-        self.store_review_audit_on(transaction, &run, &record.audit, false).await
+        self.store_review_audit_on(transaction, &run, &record.audit, false)
+            .await
     }
 
     pub(super) async fn validate_blocked_task_audits_on(
-        &self, transaction: &Transaction<'_>, commit: &floe_conversation::BlockedRunCommit,
+        &self,
+        transaction: &Transaction<'_>,
+        commit: &floe_conversation::BlockedRunCommit,
     ) -> Result<(), AgentFailure> {
         use floe_conversation::BlockedReviewEvidence as E;
-        let mut groups: std::collections::HashMap<floe_agent_contract::TaskExecutionKey,
-            (floe_agent_contract::TaskExecutionReceiptRef, Vec<&E>)> = std::collections::HashMap::new();
+        let mut groups: std::collections::HashMap<
+            floe_agent_contract::TaskExecutionKey,
+            (floe_agent_contract::TaskExecutionReceiptRef, Vec<&E>),
+        > = std::collections::HashMap::new();
         for publication in &commit.publications {
             let execution = match &publication.record.evidence {
                 E::ModelProjection { .. } => continue,
-                E::TaskModelProjection { execution, .. } | E::SourceRead { execution, .. }
-                | E::ExpertBinding { execution, .. } | E::Navigation { execution, .. } => execution,
+                E::TaskModelProjection { execution, .. }
+                | E::SourceRead { execution, .. }
+                | E::ExpertBinding { execution, .. }
+                | E::Navigation { execution, .. } => execution,
             };
-            let group = groups.entry(execution.execution).or_insert_with(|| (execution.clone(), Vec::new()));
-            if group.0 != *execution { return Err(AgentFailure::Conflict); }
+            let group = groups
+                .entry(execution.execution)
+                .or_insert_with(|| (execution.clone(), Vec::new()));
+            if group.0 != *execution {
+                return Err(AgentFailure::Conflict);
+            }
             group.1.push(&publication.record.evidence);
         }
         for (_, (reference, audits)) in groups {
-            let actual = self.read_execution_receipt_on(transaction, &reference).await?;
-            match actual.snapshot.blockage.as_ref().ok_or(AgentFailure::Conflict)? {
+            let actual = self
+                .read_execution_receipt_on(transaction, &reference)
+                .await?;
+            match actual
+                .snapshot
+                .blockage
+                .as_ref()
+                .ok_or(AgentFailure::Conflict)?
+            {
                 floe_agent_contract::TaskBlockage::ModelProjection { plan, review } => {
-                    if audits.len() != 1 || !matches!(audits[0], E::TaskModelProjection { plan: p, review: r, .. } if p == plan && r == review) {
+                    if audits.len() != 1
+                        || !matches!(audits[0], E::TaskModelProjection { plan: p, review: r, .. } if p == plan && r == review)
+                    {
                         return Err(AgentFailure::Conflict);
                     }
                 }
-                floe_agent_contract::TaskBlockage::SourceRead { tool_call_id, blockers } => {
+                floe_agent_contract::TaskBlockage::SourceRead {
+                    tool_call_id,
+                    blockers,
+                } => {
                     let mut covered = std::collections::BTreeSet::new();
                     for audit in audits {
                         let requirements = match audit {
-                            E::SourceRead { tool_call_id: call, blockers, .. } if call == tool_call_id => blockers.blockers().to_vec(),
+                            E::SourceRead {
+                                tool_call_id: call,
+                                blockers,
+                                ..
+                            } if call == tool_call_id => blockers.blockers().to_vec(),
                             E::Navigation { requirement, .. } => vec![requirement.clone()],
                             _ => return Err(AgentFailure::Conflict),
                         };
                         for requirement in requirements {
-                            if !covered.insert(serde_json::to_vec(&requirement).map_err(storage)?) { return Err(AgentFailure::Conflict); }
+                            if !covered.insert(serde_json::to_vec(&requirement).map_err(storage)?) {
+                                return Err(AgentFailure::Conflict);
+                            }
                         }
                     }
-                    let expected = blockers.blockers().iter().map(serde_json::to_vec).collect::<Result<std::collections::BTreeSet<_>, _>>().map_err(storage)?;
-                    if covered != expected { return Err(AgentFailure::Conflict); }
+                    let expected = blockers
+                        .blockers()
+                        .iter()
+                        .map(serde_json::to_vec)
+                        .collect::<Result<std::collections::BTreeSet<_>, _>>()
+                        .map_err(storage)?;
+                    if covered != expected {
+                        return Err(AgentFailure::Conflict);
+                    }
                 }
                 floe_agent_contract::TaskBlockage::Binding { requirement_keys } => {
                     let mut covered = std::collections::BTreeSet::new();
                     for audit in audits {
-                        let E::ExpertBinding { requirement_key, .. } = audit else { return Err(AgentFailure::Conflict); };
-                        if !covered.insert(requirement_key.clone()) { return Err(AgentFailure::Conflict); }
+                        let E::ExpertBinding {
+                            requirement_key, ..
+                        } = audit
+                        else {
+                            return Err(AgentFailure::Conflict);
+                        };
+                        if !covered.insert(requirement_key.clone()) {
+                            return Err(AgentFailure::Conflict);
+                        }
                     }
-                    if covered != requirement_keys.iter().cloned().collect() { return Err(AgentFailure::Conflict); }
+                    if covered != requirement_keys.iter().cloned().collect() {
+                        return Err(AgentFailure::Conflict);
+                    }
                 }
             }
         }
@@ -402,42 +471,85 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 
     pub(super) async fn store_review_audit_on(
-        &self, transaction: &Transaction<'_>, run: &RunRecord,
-        audit: &ReviewAuditRecord, existing_only: bool,
+        &self,
+        transaction: &Transaction<'_>,
+        run: &RunRecord,
+        audit: &ReviewAuditRecord,
+        existing_only: bool,
     ) -> Result<(), AgentFailure> {
         use floe_conversation::BlockedReviewEvidence as E;
         audit.validate()?;
-        if audit.run_id != run.run_id || audit.person_id != run.person_id || audit.device_id != run.device_id
-            || audit.session_id != run.session_id || audit.executor_generation != run.executor_generation {
+        if audit.run_id != run.run_id
+            || audit.person_id != run.person_id
+            || audit.device_id != run.device_id
+            || audit.session_id != run.session_id
+            || audit.executor_generation != run.executor_generation
+        {
             return Err(AgentFailure::Conflict);
         }
         let id = audit.operation_id.to_string();
         let mut rows = transaction.query("SELECT run_id,person_id,payload FROM agent_conversation_review_audits WHERE operation_id=? AND run_id=?", (id.clone(), run.run_id.as_uuid().to_string())).await.map_err(storage)?;
         if let Some(row) = rows.next().await.map_err(storage)? {
             let payload = row.get::<String>(2).map_err(storage)?;
-            if payload.len() > 128 * 1024 { return Err(AgentFailure::StorageUnavailable); }
+            if payload.len() > 128 * 1024 {
+                return Err(AgentFailure::StorageUnavailable);
+            }
             let stored: ReviewAuditRecord = serde_json::from_str(&payload).map_err(unavailable)?;
             stored.validate()?;
-            if stored != *audit || row.get::<String>(0).map_err(storage)? != run.run_id.as_uuid().to_string()
-                || row.get::<String>(1).map_err(storage)? != run.person_id.to_string() || rows.next().await.map_err(storage)?.is_some() {
+            if stored != *audit
+                || row.get::<String>(0).map_err(storage)? != run.run_id.as_uuid().to_string()
+                || row.get::<String>(1).map_err(storage)? != run.person_id.to_string()
+                || rows.next().await.map_err(storage)?.is_some()
+            {
                 return Err(AgentFailure::Conflict);
             }
             return Ok(());
         }
         drop(rows);
-        if existing_only { return Err(AgentFailure::StorageUnavailable); }
+        if existing_only {
+            return Err(AgentFailure::StorageUnavailable);
+        }
         let source = match &audit.evidence {
-            E::ModelProjection { review, access_reviews, .. } | E::TaskModelProjection { review, access_reviews, .. } => Some((&review.blockers, access_reviews, review.target_digest)),
-            E::SourceRead { execution, tool_call_id, blockers, access_reviews } => {
+            E::ModelProjection {
+                review,
+                access_reviews,
+                ..
+            }
+            | E::TaskModelProjection {
+                review,
+                access_reviews,
+                ..
+            } => Some((&review.blockers, access_reviews, review.target_digest)),
+            E::SourceRead {
+                execution,
+                tool_call_id,
+                blockers,
+                access_reviews,
+            } => {
                 use sha2::Digest;
-                let origin = InteractionOrigin::Task { execution: execution.clone(), capability_call_id: Some(*tool_call_id) };
-                let digest: [u8;32] = sha2::Sha256::digest(serde_json::to_vec(&(run.run_id, &origin, blockers)).map_err(storage)?).into();
+                let origin = InteractionOrigin::Task {
+                    execution: execution.clone(),
+                    capability_call_id: Some(*tool_call_id),
+                };
+                let digest: [u8; 32] = sha2::Sha256::digest(
+                    serde_json::to_vec(&(run.run_id, &origin, blockers)).map_err(storage)?,
+                )
+                .into();
                 Some((blockers, access_reviews, digest))
             }
-            E::ExpertBinding { execution, requirement_key, review } => {
-                let descriptor = self.read_binding_review_on(transaction, &run.device_id, review).await?;
-                if descriptor.identity.person_id != run.person_id || descriptor.identity.device_id != run.device_id
-                    || descriptor.identity.task_origin.as_ref() != Some(execution) || &descriptor.identity.requirement_key != requirement_key {
+            E::ExpertBinding {
+                execution,
+                requirement_key,
+                review,
+            } => {
+                let descriptor = self
+                    .read_binding_review_on(transaction, &run.device_id, review)
+                    .await?;
+                if descriptor.identity.person_id != run.person_id
+                    || descriptor.identity.device_id != run.device_id
+                    || descriptor.identity.task_origin.as_ref() != Some(execution)
+                    || &descriptor.identity.requirement_key != requirement_key
+                {
                     return Err(AgentFailure::Conflict);
                 }
                 None
@@ -446,15 +558,32 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         };
         if let Some((blockers, links, target_digest)) = source {
             for link in links {
-                let connection_id = link.requirement.connection_id().ok_or(AgentFailure::Conflict)?.clone();
-                let requirements = blockers.blockers().iter().filter(|b| b.connection_id() == Some(&connection_id)).cloned().collect::<Vec<_>>();
-                let origin = floe_access::ProjectionReviewOrigin::for_requirements(run.run_id, audit.operation_id, target_digest, connection_id, &requirements)?;
+                let connection_id = link
+                    .requirement
+                    .connection_id()
+                    .ok_or(AgentFailure::Conflict)?
+                    .clone();
+                let requirements = blockers
+                    .blockers()
+                    .iter()
+                    .filter(|b| b.connection_id() == Some(&connection_id))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let origin = floe_access::ProjectionReviewOrigin::for_requirements(
+                    run.run_id,
+                    audit.operation_id,
+                    target_digest,
+                    connection_id,
+                    &requirements,
+                )?;
                 let review = access_review_on(transaction, self.person_id, &link.reference).await?;
                 origin.validate_review_binding(run.person_id, &run.device_id, &review)?;
             }
         }
         let payload = serde_json::to_string(audit).map_err(storage)?;
-        if payload.len() > 128 * 1024 { return Err(AgentFailure::BudgetExceeded); }
+        if payload.len() > 128 * 1024 {
+            return Err(AgentFailure::BudgetExceeded);
+        }
         transaction.execute("INSERT INTO agent_conversation_review_audits(operation_id,run_id,person_id,payload) VALUES(?,?,?,?)",
             (id,run.run_id.as_uuid().to_string(),self.person_id.to_string(),payload)).await.map_err(storage)?;
         Ok(())
@@ -507,13 +636,22 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 }
                 Ok(())
             }
-            (ReviewedTarget::ExpertBinding(reference), OwnerResolutionReceipt::ExpertBinding { receipt }) => {
-                let descriptor = self.read_binding_review_on(transaction, &run.device_id, reference).await?;
-                let stored = self.read_binding_review_receipt_on(transaction, &run.device_id, reference).await?
+            (
+                ReviewedTarget::ExpertBinding(reference),
+                OwnerResolutionReceipt::ExpertBinding { receipt },
+            ) => {
+                let descriptor = self
+                    .read_binding_review_on(transaction, &run.device_id, reference)
+                    .await?;
+                let stored = self
+                    .read_binding_review_receipt_on(transaction, &run.device_id, reference)
+                    .await?
                     .ok_or(AgentFailure::Conflict)?;
                 let actual = floe_experts::project_binding_mutation_receipt(&stored, &descriptor)?;
-                if &actual != receipt || receipt.review_ref != *reference
-                    || commit.resolution.resolved_at_unix_ms < receipt.committed_at_unix_ms {
+                if &actual != receipt
+                    || receipt.review_ref != *reference
+                    || commit.resolution.resolved_at_unix_ms < receipt.committed_at_unix_ms
+                {
                     return Err(AgentFailure::Conflict);
                 }
                 Ok(())
@@ -989,7 +1127,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         actor: &floe_kernel::OwnerActor,
         after: Option<floe_conversation::InteractionRecoveryCursor>,
         limit: usize,
-    ) -> Result<floe_conversation::RecoveryPage<ConversationInteraction, floe_conversation::InteractionRecoveryCursor>, AgentFailure> {
+    ) -> Result<
+        floe_conversation::RecoveryPage<
+            ConversationInteraction,
+            floe_conversation::InteractionRecoveryCursor,
+        >,
+        AgentFailure,
+    > {
         actor.validate()?;
         let person_id = actor.person_id;
         if person_id != self.person_id {
@@ -1001,7 +1145,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let connection = self.connection()?;
         if !table_exists(&connection, "agent_conversation_interactions").await? {
             self.check_access()?;
-            return Ok(floe_conversation::RecoveryPage { items: Vec::new(), next_cursor: None });
+            return Ok(floe_conversation::RecoveryPage {
+                items: Vec::new(),
+                next_cursor: None,
+            });
         }
         let created = after.map_or(i64::MIN, |cursor| cursor.created_at_unix_ms);
         let id = after.map_or_else(String::new, |cursor| cursor.interaction_id.to_string());
@@ -1013,7 +1160,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let record = read_interaction(&connection, person_id, id)
                 .await?
                 .ok_or(AgentFailure::StorageUnavailable)?;
-            if record.audit.device_id != actor.device_id { return Err(AgentFailure::StorageUnavailable); }
+            if record.audit.device_id != actor.device_id {
+                return Err(AgentFailure::StorageUnavailable);
+            }
             if !matches!(record.state, InteractionState::Resolving { .. }) {
                 return Err(AgentFailure::Conflict);
             }
@@ -1021,9 +1170,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         let more = result.len() > limit;
         result.truncate(limit);
-        let next_cursor = if more { result.last().map(|record| floe_conversation::InteractionRecoveryCursor {
-            created_at_unix_ms: record.created_at_unix_ms, interaction_id: record.id }) } else { None };
+        let next_cursor = if more {
+            result
+                .last()
+                .map(|record| floe_conversation::InteractionRecoveryCursor {
+                    created_at_unix_ms: record.created_at_unix_ms,
+                    interaction_id: record.id,
+                })
+        } else {
+            None
+        };
         self.check_access()?;
-        Ok(floe_conversation::RecoveryPage { items: result, next_cursor })
+        Ok(floe_conversation::RecoveryPage {
+            items: result,
+            next_cursor,
+        })
     }
 }

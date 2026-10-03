@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::prompts::{PromptAssembly, PromptComponentKind};
-use floe_agent_contract::{AGENT_VERSION, AgentFailure, AgentContext};
+use floe_agent_contract::{AGENT_VERSION, AgentContext, AgentFailure};
 use floe_context_contract::{
     CalendarContextView, ContextIssueReason, ContextMemory, ContextSource, FLOE_TASK_VIEW_ID,
     MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, NativeContextItem, NativeContextView,
@@ -164,7 +164,9 @@ impl ExpertProgram for CommitmentsProgram {
                 || finding.confidence_millis > 1000
                 || matches!(finding.epistemic_status, FindingEpistemicStatus::Observed)
                     != (finding.confidence_millis == 1000)
-                || finding.deadline_unix_ms.is_some_and(|deadline| deadline < 0)
+                || finding
+                    .deadline_unix_ms
+                    .is_some_and(|deadline| deadline < 0)
                 || !finding_keys.insert((finding.evidence_handle.clone(), finding.kind))
             {
                 return Err(AgentFailure::InvalidModelOutput);
@@ -273,10 +275,7 @@ fn commitment_evidence(
         None => {}
     }
 
-    match crate::program_support::read_one::<NativeContextView>(
-        observations,
-        TASK_REQUIREMENT,
-    )? {
+    match crate::program_support::read_one::<NativeContextView>(observations, TASK_REQUIREMENT)? {
         Some(view) => {
             if view.view_id != FLOE_TASK_VIEW_ID {
                 return Err(AgentFailure::InvalidInput);
@@ -304,7 +303,8 @@ fn commitment_evidence(
             if !view.items.is_empty() {
                 source_handles.push(view.source_handle.clone());
                 expires_at_unix_ms = expires_at_unix_ms.min(
-                    i64::try_from(view.expires_at_unix_ms).map_err(|_| AgentFailure::InvalidInput)?,
+                    i64::try_from(view.expires_at_unix_ms)
+                        .map_err(|_| AgentFailure::InvalidInput)?,
                 );
             }
         }
@@ -330,9 +330,8 @@ fn commitment_evidence(
                 snapshot.issue,
             );
         }
-        None
-            if crate::program_support::was_unavailable(observations, MEMORY_REQUIREMENT)
-                && context.memories.is_empty() =>
+        None if crate::program_support::was_unavailable(observations, MEMORY_REQUIREMENT)
+            && context.memories.is_empty() =>
         {
             record_source_issue(
                 &mut context.optional_context_issues,

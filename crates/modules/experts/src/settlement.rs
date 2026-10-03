@@ -12,25 +12,43 @@ use floe_agent_contract::{AgentFailure, EndpointSettlement};
 use crate::{ExpertAdmissionIdentity, ExpertPrivateState};
 
 /// Prepare the assignment-local transition after package judgment; storage performs its exact CAS.
-pub fn prepare_expert_completion(request: &crate::ExpertProgramRequest, result: &str)
-    -> Result<(ExpertPrivateState, EndpointSettlement), AgentFailure>
-{
+pub fn prepare_expert_completion(
+    request: &crate::ExpertProgramRequest,
+    result: &str,
+) -> Result<(ExpertPrivateState, EndpointSettlement), AgentFailure> {
     if request.private_state.schema_version != request.state_schema_version
-        || request.private_state.last_invocation_id == Some(request.request.invocation_key.as_uuid())
-        || result.trim().is_empty() || result.len() > request.request.execution_context.max_output_bytes
-    { return Err(AgentFailure::Conflict); }
+        || request.private_state.last_invocation_id
+            == Some(request.request.invocation_key.as_uuid())
+        || result.trim().is_empty()
+        || result.len() > request.request.execution_context.max_output_bytes
+    {
+        return Err(AgentFailure::Conflict);
+    }
     let dependencies = match &request.coverage {
         floe_agent_contract::DependencyCoverage::Independent => vec![],
         floe_agent_contract::DependencyCoverage::Dependent { dependencies } => dependencies.clone(),
         floe_agent_contract::DependencyCoverage::Unknown => return Err(AgentFailure::PolicyDenied),
     };
     let mut next = request.private_state.clone();
-    next.revision = next.revision.checked_add(1).ok_or(AgentFailure::BudgetExceeded)?;
-    next.completed_invocations = next.completed_invocations.checked_add(1).ok_or(AgentFailure::BudgetExceeded)?;
+    next.revision = next
+        .revision
+        .checked_add(1)
+        .ok_or(AgentFailure::BudgetExceeded)?;
+    next.completed_invocations = next
+        .completed_invocations
+        .checked_add(1)
+        .ok_or(AgentFailure::BudgetExceeded)?;
     next.last_invocation_id = Some(request.request.invocation_key.as_uuid());
-    let settlement = ExpertSettlement::new(request.admission.package.id.clone(), request.admission.clone(),
-        request.private_state.revision, next.clone(), request.request.invocation_key.as_uuid(),
-        dependencies, result.to_owned()).into_endpoint_settlement()?;
+    let settlement = ExpertSettlement::new(
+        request.admission.package.id.clone(),
+        request.admission.clone(),
+        request.private_state.revision,
+        next.clone(),
+        request.request.invocation_key.as_uuid(),
+        dependencies,
+        result.to_owned(),
+    )
+    .into_endpoint_settlement()?;
     Ok((next, settlement))
 }
 
@@ -104,4 +122,3 @@ impl ExpertSettlement {
         Ok(decoded)
     }
 }
-

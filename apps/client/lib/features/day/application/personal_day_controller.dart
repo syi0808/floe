@@ -16,7 +16,9 @@ final class PersonalDayController extends ChangeNotifier {
 
   PersonalDayController._(DayGateway gateway, this._query)
     : _gateway = gateway,
-      _refreshGateway = gateway is DayRefreshGateway ? gateway : null;
+      _refreshGateway = gateway is DayRefreshGateway
+          ? gateway as DayRefreshGateway
+          : null;
 
   final DayGateway _gateway;
   final DayRefreshGateway? _refreshGateway;

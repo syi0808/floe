@@ -15,17 +15,39 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     /// First registry installation and its command receipt share the caller's transaction.
     pub(crate) async fn initialize_expert_registry_on(
-        &self, connection: &turso::Connection, snapshot: &RegistrySnapshot,
+        &self,
+        connection: &turso::Connection,
+        snapshot: &RegistrySnapshot,
     ) -> Result<(), AgentFailure> {
         let payload = self.registry_payload(snapshot)?;
-        if snapshot.assignments.iter().any(|assignment| assignment.private_state.revision != 0) {
+        if snapshot
+            .assignments
+            .iter()
+            .any(|assignment| assignment.private_state.revision != 0)
+        {
             return Err(AgentFailure::InvalidInput);
         }
-        if self.registry_on(connection).await?.is_some() { return Err(AgentFailure::Conflict); }
+        if self.registry_on(connection).await?.is_some() {
+            return Err(AgentFailure::Conflict);
+        }
         connection.execute("CREATE TABLE agent_expert_registry (id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL, payload TEXT NOT NULL)", ()).await.map_err(storage)?;
-        connection.execute("INSERT INTO agent_expert_registry VALUES (1, ?, ?)", (integer(snapshot.revision)?, payload)).await.map_err(storage)?;
-        let changed = connection.execute("UPDATE vault_identity SET version = 2 WHERE id = 1 AND version = 1", ()).await.map_err(storage)?;
-        if changed != 1 { return Err(AgentFailure::Conflict); }
+        connection
+            .execute(
+                "INSERT INTO agent_expert_registry VALUES (1, ?, ?)",
+                (integer(snapshot.revision)?, payload),
+            )
+            .await
+            .map_err(storage)?;
+        let changed = connection
+            .execute(
+                "UPDATE vault_identity SET version = 2 WHERE id = 1 AND version = 1",
+                (),
+            )
+            .await
+            .map_err(storage)?;
+        if changed != 1 {
+            return Err(AgentFailure::Conflict);
+        }
         self.check_access()
     }
 
@@ -89,7 +111,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(())
     }
 
-    pub(crate) fn registry_payload(&self, snapshot: &RegistrySnapshot) -> Result<String, AgentFailure> {
+    pub(crate) fn registry_payload(
+        &self,
+        snapshot: &RegistrySnapshot,
+    ) -> Result<String, AgentFailure> {
         if snapshot
             .assignments
             .iter()

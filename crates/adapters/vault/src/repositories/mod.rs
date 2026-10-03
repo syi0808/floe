@@ -8,9 +8,9 @@ mod context_evidence;
 #[cfg(unix)]
 mod conversation;
 mod day;
-mod day_refresh;
 mod day_collection;
 mod day_mutation;
+mod day_refresh;
 #[cfg(unix)]
 mod knowledge;
 #[cfg(unix)]

@@ -1648,12 +1648,13 @@ impl ConnectionsService {
                     break;
                 }
                 let result = service.reconcile_pairing(&actor, id, &scope).await;
-                if result
-                    .as_ref()
-                    .is_ok_and(|snapshot| snapshot.state.terminal()
+                if result.as_ref().is_ok_and(|snapshot| {
+                    snapshot.state.terminal()
                         && !(snapshot.state == PairingState::RepairRequired
-                            && snapshot.allowed_actions.contains(&ConnectionAction::Reobserve)))
-                {
+                            && snapshot
+                                .allowed_actions
+                                .contains(&ConnectionAction::Reobserve))
+                }) {
                     break;
                 }
                 if matches!(

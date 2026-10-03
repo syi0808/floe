@@ -1,5 +1,7 @@
 //! Actual Calendar provider/OS transport, separated from product-read policy.
-use floe_access::{ProductCalendarDispatchFence, ProductCalendarResultBinding, ProductSourceObservation};
+use floe_access::{
+    ProductCalendarDispatchFence, ProductCalendarResultBinding, ProductSourceObservation,
+};
 use floe_connections::SourceConnection;
 use floe_day::CalendarResourceOutcome;
 use floe_execution::{BoxFuture, ExecutionScope};
@@ -29,9 +31,16 @@ pub struct CalendarProductPage {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CalendarProductPageOutcome {
-    Complete { records: Vec<floe_day::CalendarRecord> },
-    More { records: Vec<floe_day::CalendarRecord>, cursor: String },
-    Failed { reason: floe_day::CalendarFailure },
+    Complete {
+        records: Vec<floe_day::CalendarRecord>,
+    },
+    More {
+        records: Vec<floe_day::CalendarRecord>,
+        cursor: String,
+    },
+    Failed {
+        reason: floe_day::CalendarFailure,
+    },
 }
 
 pub struct CalendarProductReadResult {
@@ -45,10 +54,19 @@ pub struct CalendarProductReadResult {
 
 pub trait CalendarProductTransport: Send + Sync {
     /// Metadata-only permission/subject/provider probe over this exact source.
-    fn observe<'a>(&'a self, actor: &'a OwnerActor, source: &'a SourceConnection, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<ProductSourceObservation, AgentFailure>>;
+    fn observe<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        source: &'a SourceConnection,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<ProductSourceObservation, AgentFailure>>;
     /// Native reads one exact bounded host request; Gateway transport completes
     /// strict pages under the retained permit's per-page and total ceilings.
     /// Return exactly one terminal result per configured calendar; incomplete
     /// pages become a failure for that calendar, never an empty complete batch.
-    fn acquire<'a>(&'a self, fence: ProductCalendarDispatchFence<'a>, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<CalendarProductReadResult, AgentFailure>>;
+    fn acquire<'a>(
+        &'a self,
+        fence: ProductCalendarDispatchFence<'a>,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<CalendarProductReadResult, AgentFailure>>;
 }

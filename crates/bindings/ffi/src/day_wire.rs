@@ -3,7 +3,8 @@ use floe_protocol::wire::{WireResult, conversion_error, parse_date, parse_id, pa
 use floe_protocol::{DayMutationDto, DayQueryDto};
 
 pub(crate) fn read(day: DayQueryDto) -> WireResult<floe_day::DayQuery> {
-    day.validate().map_err(|field| floe_protocol::wire::invalid(field, "invalid Day query"))?;
+    day.validate()
+        .map_err(|field| floe_protocol::wire::invalid(field, "invalid Day query"))?;
     Ok(floe_day::DayQuery {
         date: parse_date(&day.date)?,
         timezone_offset_seconds: day.timezone_offset_seconds,
@@ -127,24 +128,57 @@ pub(crate) fn mutation(mutation: DayMutationDto) -> WireResult<floe_day::DayMuta
     })
 }
 
-
-pub(crate) fn refresh(value: floe_day::DayRefreshSnapshot) -> WireResult<floe_protocol::DayRefreshStateDto> {
+pub(crate) fn refresh(
+    value: floe_day::DayRefreshSnapshot,
+) -> WireResult<floe_protocol::DayRefreshStateDto> {
     use floe_day::DayRefreshState;
     use floe_protocol::DayRefreshStateDto;
-    let operation_ref = floe_protocol::OperationRefDto::new(value.operation_ref).ok_or_else(|| floe_protocol::wire::invalid("operation_ref", "nil refresh identity"))?;
+    let operation_ref = floe_protocol::OperationRefDto::new(value.operation_ref)
+        .ok_or_else(|| floe_protocol::wire::invalid("operation_ref", "nil refresh identity"))?;
     let revision = value.revision.0;
     let result = match value.state {
-        DayRefreshState::Pending => DayRefreshStateDto::Pending { operation_ref, revision },
-        DayRefreshState::Running => DayRefreshStateDto::Running { operation_ref, revision },
-        DayRefreshState::Completed { day } => DayRefreshStateDto::Completed { operation_ref, revision, day: conversion::day_snapshot_to_dto(day).map_err(conversion_error)? },
-        DayRefreshState::Failed { failure } => DayRefreshStateDto::Failed { operation_ref, revision, failure: refresh_failure(failure) },
-        DayRefreshState::Interrupted { failure } => DayRefreshStateDto::Interrupted { operation_ref, revision, failure: refresh_failure(failure) },
+        DayRefreshState::Pending => DayRefreshStateDto::Pending {
+            operation_ref,
+            revision,
+        },
+        DayRefreshState::Running => DayRefreshStateDto::Running {
+            operation_ref,
+            revision,
+        },
+        DayRefreshState::Completed { day } => DayRefreshStateDto::Completed {
+            operation_ref,
+            revision,
+            day: conversion::day_snapshot_to_dto(day).map_err(conversion_error)?,
+        },
+        DayRefreshState::Failed { failure } => DayRefreshStateDto::Failed {
+            operation_ref,
+            revision,
+            failure: refresh_failure(failure),
+        },
+        DayRefreshState::Interrupted { failure } => DayRefreshStateDto::Interrupted {
+            operation_ref,
+            revision,
+            failure: refresh_failure(failure),
+        },
     };
-    result.validate().map_err(|field| floe_protocol::wire::invalid(field, "invalid refresh projection"))?;
+    result
+        .validate()
+        .map_err(|field| floe_protocol::wire::invalid(field, "invalid refresh projection"))?;
     Ok(result)
 }
 fn refresh_failure(value: floe_day::DayRefreshFailure) -> floe_protocol::DayRefreshFailureDto {
     use floe_day::DayRefreshFailure as Owner;
     use floe_protocol::DayRefreshFailureDto as Wire;
-    match value { Owner::SourceChanged => Wire::SourceChanged, Owner::PermissionDenied => Wire::PermissionDenied, Owner::Unavailable => Wire::Unavailable, Owner::VaultLocked => Wire::VaultLocked, Owner::BudgetExceeded => Wire::BudgetExceeded, Owner::DeadlineExceeded => Wire::DeadlineExceeded, Owner::Cancelled => Wire::Cancelled, Owner::HostInterrupted => Wire::HostInterrupted, Owner::StorageUnavailable => Wire::StorageUnavailable, Owner::InvalidAcquisition => Wire::InvalidAcquisition }
+    match value {
+        Owner::SourceChanged => Wire::SourceChanged,
+        Owner::PermissionDenied => Wire::PermissionDenied,
+        Owner::Unavailable => Wire::Unavailable,
+        Owner::VaultLocked => Wire::VaultLocked,
+        Owner::BudgetExceeded => Wire::BudgetExceeded,
+        Owner::DeadlineExceeded => Wire::DeadlineExceeded,
+        Owner::Cancelled => Wire::Cancelled,
+        Owner::HostInterrupted => Wire::HostInterrupted,
+        Owner::StorageUnavailable => Wire::StorageUnavailable,
+        Owner::InvalidAcquisition => Wire::InvalidAcquisition,
+    }
 }

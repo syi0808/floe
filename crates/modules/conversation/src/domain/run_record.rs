@@ -43,7 +43,10 @@ pub struct RunBlockRecord {
 
 impl RunBlockRecord {
     pub fn interaction_refs(&self) -> Vec<Uuid> {
-        self.interactions.iter().map(|link| link.interaction_id).collect()
+        self.interactions
+            .iter()
+            .map(|link| link.interaction_id)
+            .collect()
     }
 
     pub fn validate(&self) -> Result<(), AgentFailure> {
@@ -106,7 +109,9 @@ pub struct PendingRunTerminal {
 
 impl PendingRunTerminal {
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.requested_from_revision != 1 { return Err(AgentFailure::StorageUnavailable); }
+        if self.requested_from_revision != 1 {
+            return Err(AgentFailure::StorageUnavailable);
+        }
         Ok(())
     }
 }
@@ -179,13 +184,23 @@ impl RunReceipt {
             })
             || self.task_refs.len() > 64
             || self.unresolved_delegations.len() > 64
-            || (!self.unresolved_delegations.is_empty() && matches!(self.state, RunState::Completed | RunState::Blocked))
-            || self.unresolved_delegations.iter().any(|id| !id.is_valid()
-                || !self.task_refs.contains(&id.as_uuid()))
-            || self.unresolved_delegations.iter().collect::<std::collections::HashSet<_>>().len()
+            || (!self.unresolved_delegations.is_empty()
+                && matches!(self.state, RunState::Completed | RunState::Blocked))
+            || self
+                .unresolved_delegations
+                .iter()
+                .any(|id| !id.is_valid() || !self.task_refs.contains(&id.as_uuid()))
+            || self
+                .unresolved_delegations
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
                 != self.unresolved_delegations.len()
-            || self.pending_terminal.is_some_and(|pending| pending.validate().is_err()
-                || self.state != RunState::Working || self.aggregate_revision < 2)
+            || self.pending_terminal.is_some_and(|pending| {
+                pending.validate().is_err()
+                    || self.state != RunState::Working
+                    || self.aggregate_revision < 2
+            })
             || self.attempt_refs.iter().any(Uuid::is_nil)
             || self.task_refs.iter().any(Uuid::is_nil)
             || self
@@ -468,8 +483,9 @@ impl RunRecord {
             || self.resume_of == Some(self.run_id)
             || self.resume_lineage > MAX_RESUME_LINEAGE
             || self.journal_revision > 512
-            || self.pending_terminal.is_some_and(|pending| pending.validate().is_err()
-                || self.state != RunState::Working)
+            || self.pending_terminal.is_some_and(|pending| {
+                pending.validate().is_err() || self.state != RunState::Working
+            })
             || self
                 .blocked
                 .as_ref()
@@ -497,8 +513,11 @@ impl RunRecord {
         let valid = match self.state {
             RunState::Working => {
                 self.session_revision == admitted_revision
-                    && (if self.pending_terminal.is_some() { self.aggregate_revision >= 2 }
-                        else { self.aggregate_revision == 1 })
+                    && (if self.pending_terminal.is_some() {
+                        self.aggregate_revision >= 2
+                    } else {
+                        self.aggregate_revision == 1
+                    })
                     && self.output.is_none()
                     && self.coverage == DependencyCoverage::Unknown
                     && self.issue.is_none()

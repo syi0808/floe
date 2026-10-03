@@ -88,9 +88,7 @@ async fn resolve_source_record<R: InteractionRepository + ?Sized>(
     let ReviewedTarget::SourceReview(reference) = &record.target else {
         return Err(AgentFailure::InvalidInput);
     };
-    if record.person_id != actor.person_id
-        || record.audit.device_id != actor.device_id
-    {
+    if record.person_id != actor.person_id || record.audit.device_id != actor.device_id {
         return Err(AgentFailure::PolicyDenied);
     }
     let operation = connections
@@ -117,7 +115,9 @@ async fn resolve_source_record<R: InteractionRepository + ?Sized>(
                 interaction_id: record.id,
                 person_id: actor.person_id,
                 expected_revision: record.revision,
-                cause: crate::InteractionResolutionCause::Decision { command_id: decision_id },
+                cause: crate::InteractionResolutionCause::Decision {
+                    command_id: decision_id,
+                },
                 owner_command_id,
                 owner_operation_id: operation.operation_id,
                 target_digest: record.target_digest,
@@ -142,33 +142,59 @@ pub(super) async fn recover_binding_interaction<R: InteractionRepository + ?Size
     now_unix_ms: i64,
     scope: &ExecutionScope,
 ) -> Result<ConversationInteraction, AgentFailure> {
-    let record = interactions.get_interaction(actor.person_id, request.interaction_id)
-        .await?.ok_or(AgentFailure::NotFound)?;
+    let record = interactions
+        .get_interaction(actor.person_id, request.interaction_id)
+        .await?
+        .ok_or(AgentFailure::NotFound)?;
     record.validate()?;
-    if record.person_id != actor.person_id || record.audit.device_id != actor.device_id
-        || record.session_id != request.session_id { return Err(AgentFailure::PolicyDenied); }
+    if record.person_id != actor.person_id
+        || record.audit.device_id != actor.device_id
+        || record.session_id != request.session_id
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
     let ReviewedTarget::ExpertBinding(reference) = &record.target else {
         return Err(AgentFailure::InvalidInput);
     };
-    if !matches!(record.state, InteractionState::Pending) { return Ok(record); }
-    let Some(receipt) = experts.binding_review_receipt(actor, reference.clone(), scope).await? else {
+    if !matches!(record.state, InteractionState::Pending) {
+        return Ok(record);
+    }
+    let Some(receipt) = experts
+        .binding_review_receipt(actor, reference.clone(), scope)
+        .await?
+    else {
         return Ok(record);
     };
-    OwnerResolutionReceipt::ExpertBinding { receipt: receipt.clone() }.validate()?;
-    if receipt.review_ref != *reference || receipt.committed_at_unix_ms < record.created_at_unix_ms
+    OwnerResolutionReceipt::ExpertBinding {
+        receipt: receipt.clone(),
+    }
+    .validate()?;
+    if receipt.review_ref != *reference
+        || receipt.committed_at_unix_ms < record.created_at_unix_ms
         || receipt.committed_at_unix_ms >= record.expires_at_unix_ms
-        || now_unix_ms < receipt.committed_at_unix_ms { return Err(AgentFailure::Conflict); }
-    interactions.resolve_and_request_resume(InteractionResolutionCommit {
-        resolution: InteractionResolution {
-            interaction_id: record.id, person_id: actor.person_id,
-            expected_revision: record.revision,
-            cause: crate::InteractionResolutionCause::Refresh { command_id: request.command_id },
-            owner_command_id: receipt.command_id.as_uuid(),
-            owner_operation_id: receipt.command_id.as_uuid(),
-            target_digest: record.target_digest, resolved_at_unix_ms: now_unix_ms,
-        },
-        owner_receipt: OwnerResolutionReceipt::ExpertBinding { receipt },
-    }).await?;
-    interactions.get_interaction(actor.person_id, record.id).await?
+        || now_unix_ms < receipt.committed_at_unix_ms
+    {
+        return Err(AgentFailure::Conflict);
+    }
+    interactions
+        .resolve_and_request_resume(InteractionResolutionCommit {
+            resolution: InteractionResolution {
+                interaction_id: record.id,
+                person_id: actor.person_id,
+                expected_revision: record.revision,
+                cause: crate::InteractionResolutionCause::Refresh {
+                    command_id: request.command_id,
+                },
+                owner_command_id: receipt.command_id.as_uuid(),
+                owner_operation_id: receipt.command_id.as_uuid(),
+                target_digest: record.target_digest,
+                resolved_at_unix_ms: now_unix_ms,
+            },
+            owner_receipt: OwnerResolutionReceipt::ExpertBinding { receipt },
+        })
+        .await?;
+    interactions
+        .get_interaction(actor.person_id, record.id)
+        .await?
         .ok_or(AgentFailure::StorageUnavailable)
 }

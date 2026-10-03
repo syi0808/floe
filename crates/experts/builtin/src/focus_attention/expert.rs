@@ -5,8 +5,7 @@ use floe_context_contract::{
     AttentionView, CalendarContextView, WorkContextView, validate_attention_view,
     validate_calendar_context_view, validate_work_context_view,
 };
-use floe_experts::{ExpertProgram, ExpertProgramRequest, ExpertProgramSpec,
-    ExpertToolObservation};
+use floe_experts::{ExpertProgram, ExpertProgramRequest, ExpertProgramSpec, ExpertToolObservation};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -89,23 +88,21 @@ impl ExpertProgram for FocusAttentionProgram {
         }
 
         let attention_key = crate::BuiltinContextSource::Attention.source_id();
-        let attention = match crate::program_support::read_one::<AttentionView>(
-            observations,
-            attention_key,
-        )? {
-            Some(view) => view,
-            None if crate::program_support::was_unavailable(observations, attention_key) => {
-                return crate::program_support::unavailable(
-                    request,
-                    observations,
-                    attention_key,
-                    crate::BuiltinExpertKind::FocusAttention.result_artifact_name(),
-                    super::RESULT_MEDIA_TYPE,
-                    UNAVAILABLE_SUMMARY,
-                );
-            }
-            None => return Err(AgentFailure::InvalidModelOutput),
-        };
+        let attention =
+            match crate::program_support::read_one::<AttentionView>(observations, attention_key)? {
+                Some(view) => view,
+                None if crate::program_support::was_unavailable(observations, attention_key) => {
+                    return crate::program_support::unavailable(
+                        request,
+                        observations,
+                        attention_key,
+                        crate::BuiltinExpertKind::FocusAttention.result_artifact_name(),
+                        super::RESULT_MEDIA_TYPE,
+                        UNAVAILABLE_SUMMARY,
+                    );
+                }
+                None => return Err(AgentFailure::InvalidModelOutput),
+            };
 
         validate_attention_view(&attention, request.now_unix_ms)?;
         let mut available = attention.evidence_handles.clone();
@@ -127,10 +124,9 @@ impl ExpertProgram for FocusAttentionProgram {
         }
 
         let work_key = crate::BuiltinContextSource::WorkContext.source_id();
-        if let Some(view) = crate::program_support::read_one::<WorkContextView>(
-            observations,
-            work_key,
-        )? {
+        if let Some(view) =
+            crate::program_support::read_one::<WorkContextView>(observations, work_key)?
+        {
             validate_work_context_view(&view, request.now_unix_ms)?;
             ensure_unique_source(&source_handles, &view.source_handle)?;
             extend_unique_handles(

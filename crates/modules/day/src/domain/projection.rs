@@ -124,8 +124,14 @@ pub fn project_day_with_end_offset(
             task.completed_at.is_none() && task.deadline.is_some_and(|deadline| deadline < now)
         })
         .count();
-    let total = events.len().checked_add(tasks.len()).and_then(|count| count.checked_add(notes.len())).ok_or_else(|| crate::DayError::budget("Day snapshot item budget"))?;
-    if total > MAX_DAY_SNAPSHOT_ITEMS { return Err(crate::DayError::budget("Day snapshot item budget")); }
+    let total = events
+        .len()
+        .checked_add(tasks.len())
+        .and_then(|count| count.checked_add(notes.len()))
+        .ok_or_else(|| crate::DayError::budget("Day snapshot item budget"))?;
+    if total > MAX_DAY_SNAPSHOT_ITEMS {
+        return Err(crate::DayError::budget("Day snapshot item budget"));
+    }
     let mut items = Vec::with_capacity(total);
     items.extend(events.into_iter().map(TimelineItem::Event));
     items.extend(tasks.into_iter().map(TimelineItem::Task));
@@ -167,7 +173,14 @@ pub fn project_day_with_end_offset(
         now_event_id,
         next_event_id,
         overdue_task_count,
-        items: items.into_iter().map(|item| match item { TimelineItem::Event(event) => DayTimelineItem::Event(super::project_event(&event)), TimelineItem::Task(task) => DayTimelineItem::Task(super::project_task(&task)), TimelineItem::Note(note) => DayTimelineItem::Note(super::project_note(&note)) }).collect(),
+        items: items
+            .into_iter()
+            .map(|item| match item {
+                TimelineItem::Event(event) => DayTimelineItem::Event(super::project_event(&event)),
+                TimelineItem::Task(task) => DayTimelineItem::Task(super::project_task(&task)),
+                TimelineItem::Note(note) => DayTimelineItem::Note(super::project_note(&note)),
+            })
+            .collect(),
     };
     snapshot.validate_bounds()?;
     Ok(snapshot)
@@ -175,16 +188,35 @@ pub fn project_day_with_end_offset(
 
 impl DaySnapshot {
     pub fn validate_bounds(&self) -> Result<(), crate::DayError> {
-        if self.items.len() > MAX_DAY_SNAPSHOT_ITEMS || self.calendar.as_ref().is_some_and(|calendar| calendar.sources.len() > crate::MAX_REFRESH_SOURCES || calendar.sources.iter().map(|source| source.resources.len()).sum::<usize>() > crate::MAX_REFRESH_CALENDARS) { return Err(crate::DayError::budget("Day snapshot item budget")); }
+        if self.items.len() > MAX_DAY_SNAPSHOT_ITEMS
+            || self.calendar.as_ref().is_some_and(|calendar| {
+                calendar.sources.len() > crate::MAX_REFRESH_SOURCES
+                    || calendar
+                        .sources
+                        .iter()
+                        .map(|source| source.resources.len())
+                        .sum::<usize>()
+                        > crate::MAX_REFRESH_CALENDARS
+            })
+        {
+            return Err(crate::DayError::budget("Day snapshot item budget"));
+        }
         struct Counter(usize);
         impl std::io::Write for Counter {
             fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                self.0 = self.0.checked_add(bytes.len()).filter(|count| *count <= MAX_DAY_SNAPSHOT_BYTES).ok_or_else(|| std::io::Error::other("Day snapshot byte budget"))?;
+                self.0 = self
+                    .0
+                    .checked_add(bytes.len())
+                    .filter(|count| *count <= MAX_DAY_SNAPSHOT_BYTES)
+                    .ok_or_else(|| std::io::Error::other("Day snapshot byte budget"))?;
                 Ok(bytes.len())
             }
-            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
         }
         // Reserve bounded product envelope metadata (including schema version).
-        serde_json::to_writer(Counter(64), self).map_err(|_| crate::DayError::budget("Day snapshot byte budget"))
+        serde_json::to_writer(Counter(64), self)
+            .map_err(|_| crate::DayError::budget("Day snapshot byte budget"))
     }
 }

@@ -5,18 +5,21 @@
 //! agent identity and a role-neutral invocation.
 
 mod api;
-#[path = "application/service.rs"]
-mod service;
 #[path = "application/engine_endpoint.rs"]
 mod engine_endpoint;
+#[path = "application/service.rs"]
+mod service;
 pub use engine_endpoint::EngineExpertEndpoint;
 #[path = "application/binding.rs"]
 mod binding;
-pub use binding::{binding_review_digest, project_binding_mutation_receipt, project_binding_review,
-    project_expert_directory, validate_binding_review_descriptor};
+pub use binding::{
+    binding_review_digest, project_binding_mutation_receipt, project_binding_review,
+    project_expert_directory, validate_binding_review_descriptor,
+};
 pub use service::{ExpertsDependencies, ExpertsService};
 mod directory;
 mod manifest;
+mod program;
 mod registry;
 mod selection;
 mod settlement;
@@ -25,27 +28,35 @@ mod task;
 mod task_record;
 #[path = "ports/task_repository.rs"]
 mod task_repository;
-mod program;
 pub mod ports {
     pub mod binding_review;
     pub mod candidate_catalog;
     pub mod registry_repository;
     pub mod source;
 }
-pub use api::{BindingCandidateSummary, BindingInspection, BindingInspectionCandidate,
-    BindingMutationReceipt, BindingReview, BindingReviewAction, ExpertAssignmentSummary,
-    ExpertClock, ExpertDirectorySnapshot, ExpertInstallationSummary, ExpertRequirementSummary,
-    ExpertsOwner, SystemExpertClock};
-pub use ports::binding_review::{BindingPrepareIdentity, BindingReplacementReceipt,
-    BindingReviewDescriptor, BindingReviewRef, BindingReviewRepository, ReviewedBindingReplacement,
-    ReviewedCandidate};
-pub use ports::candidate_catalog::{Candidate, CandidateAvailability, CandidateCatalog,
-    CandidateQuery, CandidateSnapshot, CandidateSourceExpectation};
+pub use api::{
+    BindingCandidateSummary, BindingInspection, BindingInspectionCandidate, BindingMutationReceipt,
+    BindingReview, BindingReviewAction, ExpertAssignmentSummary, ExpertClock,
+    ExpertDirectorySnapshot, ExpertInstallationSummary, ExpertRequirementSummary, ExpertsOwner,
+    SystemExpertClock,
+};
+pub use ports::binding_review::{
+    BindingPrepareIdentity, BindingReplacementReceipt, BindingReviewDescriptor, BindingReviewRef,
+    BindingReviewRepository, ReviewedBindingReplacement, ReviewedCandidate,
+};
+pub use ports::candidate_catalog::{
+    Candidate, CandidateAvailability, CandidateCatalog, CandidateQuery, CandidateSnapshot,
+    CandidateSourceExpectation,
+};
 pub use ports::registry_repository::{RegistryCommit, RegistryCommitReceipt, RegistryRepository};
-pub use program::{ExpertFinalOutput, ExpertProgram, ExpertProgramRequest, ExpertProgramSpec,
-    ExpertSourceObservation, ExpertToolObservation, ExpertToolSpec};
-pub use ports::source::{ExpertProjectionPort, ExpertProjectionRequest, ExpertSourcePort,
-    ExpertSourceRead, ExpertSourceRequest};
+pub use ports::source::{
+    ExpertProjectionPort, ExpertProjectionRequest, ExpertSourcePort, ExpertSourceRead,
+    ExpertSourceRequest,
+};
+pub use program::{
+    ExpertFinalOutput, ExpertProgram, ExpertProgramRequest, ExpertProgramSpec,
+    ExpertSourceObservation, ExpertToolObservation, ExpertToolSpec,
+};
 
 pub use directory::{
     Directory, DirectoryEntry, DirectoryQuery, ExpertAdmissionIdentity,
@@ -72,9 +83,11 @@ pub use selection::{
 };
 pub use settlement::{ExpertSettlement, prepare_expert_completion};
 pub use task::{RunExpertEnvironment, TaskCoordinator};
-pub use task_record::{TaskRecord, TaskArtifactEvidence, settle_task_execution,
-    interrupt_task_execution, validate_task_artifact, advance_task_journal, validate_task_journal,
-    MAX_TASK_RECORD_BYTES, MAX_TASK_TERMINAL_RESERVE_BYTES};
+pub use task_record::{
+    MAX_TASK_RECORD_BYTES, MAX_TASK_TERMINAL_RESERVE_BYTES, TaskArtifactEvidence, TaskRecord,
+    advance_task_journal, interrupt_task_execution, settle_task_execution, validate_task_artifact,
+    validate_task_journal,
+};
 pub use task_repository::{TaskActivation, TaskAdmission, TaskExecutionCommit, TaskRepository};
 
 /// Role-neutral inference consumer for admitted delegated Experts.

@@ -115,7 +115,8 @@ impl PairingRecord {
                 }
                 _ => vec![],
             },
-            next_observation_after_ms: (!self.state.terminal() || self.can_reconcile_repair()).then_some(2000),
+            next_observation_after_ms: (!self.state.terminal() || self.can_reconcile_repair())
+                .then_some(2000),
         }
     }
 }
@@ -419,7 +420,8 @@ impl GatewayPairingService {
         }
         if record.revision != expected_revision
             || (record.state.terminal() && !record.can_reconcile_repair())
-            || command_id.is_nil() {
+            || command_id.is_nil()
+        {
             return Err(PairingError::Conflict);
         }
         record.cancellation_command = Some(command_id);
@@ -443,9 +445,11 @@ impl GatewayPairingService {
             PairingProgress::Expired => record.state = PairingState::Expired,
             PairingProgress::Cancelled => record.state = PairingState::Cancelled,
             PairingProgress::RepairRequired => {
-                if record.state == PairingState::RepairRequired { return Ok(record); }
+                if record.state == PairingState::RepairRequired {
+                    return Ok(record);
+                }
                 record.state = PairingState::RepairRequired;
-            },
+            }
             PairingProgress::Approved => {
                 if record.confirmation_command.is_none() {
                     return Err(PairingError::Conflict);
@@ -564,6 +568,8 @@ fn pairing_failure_projection(record: &PairingRecord) -> Option<crate::Connectio
         recovery,
         safe_actions: if record.can_reconcile_repair() {
             vec![ConnectionAction::Cancel, ConnectionAction::Reobserve]
-        } else { vec![] },
+        } else {
+            vec![]
+        },
     })
 }

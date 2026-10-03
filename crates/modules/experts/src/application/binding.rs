@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use floe_agent_contract::{
-    AgentFailure, BoxFuture, CommandId, ExecutionScope, OwnerActor, TaskBlockage, TaskState,
-    TaskExecutionReceipt, TaskExecutionReceiptRef,
+    AgentFailure, BoxFuture, CommandId, ExecutionScope, OwnerActor, TaskBlockage,
+    TaskExecutionReceipt, TaskExecutionReceiptRef, TaskState,
 };
 use floe_context_contract::SourceSelectionReference;
 use floe_kernel::PersonId;
@@ -13,12 +13,12 @@ use uuid::Uuid;
 use crate::{
     AgentRegistry, BindingCandidateSummary, BindingInspection, BindingInspectionCandidate,
     BindingMutationReceipt, BindingPrepareIdentity, BindingReplacementReceipt, BindingReview,
-    BindingReviewAction, BindingReviewDescriptor, Candidate, CandidateAvailability,
-    CandidateQuery, CandidateSnapshot, CandidateSourceExpectation,
-    ExpertAssignmentSummary, ExpertDirectorySnapshot, ExpertInstallationSummary,
-    ExpertRequirementSummary, ExpertSourceRequirement, ExpertsOwner, ExpertsService,
-    RegistryCommit, RegistryCommitReceipt, RegistrySnapshot, ReviewedBindingReplacement,
-    ReviewedCandidate, TaskRecord, TaskRepository, MAX_REQUIREMENT_SOURCES,
+    BindingReviewAction, BindingReviewDescriptor, Candidate, CandidateAvailability, CandidateQuery,
+    CandidateSnapshot, CandidateSourceExpectation, ExpertAssignmentSummary,
+    ExpertDirectorySnapshot, ExpertInstallationSummary, ExpertRequirementSummary,
+    ExpertSourceRequirement, ExpertsOwner, ExpertsService, MAX_REQUIREMENT_SOURCES, RegistryCommit,
+    RegistryCommitReceipt, RegistrySnapshot, ReviewedBindingReplacement, ReviewedCandidate,
+    TaskRecord, TaskRepository,
 };
 
 const MAX_REVIEW_CANDIDATES: usize = 64;
@@ -39,12 +39,18 @@ struct CandidateEvidence {
 }
 
 impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
-    async fn project_stored_review(&self, actor: &OwnerActor, descriptor: &BindingReviewDescriptor,
-        scope: &ExecutionScope) -> Result<BindingReview, AgentFailure>
-    {
+    async fn project_stored_review(
+        &self,
+        actor: &OwnerActor,
+        descriptor: &BindingReviewDescriptor,
+        scope: &ExecutionScope,
+    ) -> Result<BindingReview, AgentFailure> {
         let mut review = project_binding_review(descriptor, self.dependencies.clock.now_unix_ms())?;
-        if let Some(receipt) = self.dependencies.binding_reviews
-            .find_review_replacement(actor, descriptor.review_ref.clone(), scope).await?
+        if let Some(receipt) = self
+            .dependencies
+            .binding_reviews
+            .find_review_replacement(actor, descriptor.review_ref.clone(), scope)
+            .await?
         {
             project_binding_mutation_receipt(&receipt, descriptor)?;
             review.allowed_actions = vec![BindingReviewAction::Refresh];
@@ -52,12 +58,21 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
         Ok(review)
     }
 
-    async fn project_stored_replacement(&self, actor: &OwnerActor,
-        receipt: &BindingReplacementReceipt, scope: &ExecutionScope)
-        -> Result<BindingMutationReceipt, AgentFailure>
-    {
-        let descriptor = self.dependencies.binding_reviews.get(actor, receipt.review_ref.clone(), scope).await.map_err(committed_followup_failure)?;
-        if descriptor.identity.person_id != actor.person_id || descriptor.identity.device_id != actor.device_id {
+    async fn project_stored_replacement(
+        &self,
+        actor: &OwnerActor,
+        receipt: &BindingReplacementReceipt,
+        scope: &ExecutionScope,
+    ) -> Result<BindingMutationReceipt, AgentFailure> {
+        let descriptor = self
+            .dependencies
+            .binding_reviews
+            .get(actor, receipt.review_ref.clone(), scope)
+            .await
+            .map_err(committed_followup_failure)?;
+        if descriptor.identity.person_id != actor.person_id
+            || descriptor.identity.device_id != actor.device_id
+        {
             return Err(AgentFailure::PolicyDenied);
         }
         project_binding_mutation_receipt(receipt, &descriptor)
@@ -123,8 +138,12 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
         acknowledged: &RegistrySnapshot,
         scope: &ExecutionScope,
     ) -> Result<(), AgentFailure> {
-        let latest = self.read_registry(actor, scope).await.map_err(committed_followup_failure)?;
-        if latest.instance_id != acknowledged.instance_id || latest.revision < acknowledged.revision {
+        let latest = self
+            .read_registry(actor, scope)
+            .await
+            .map_err(committed_followup_failure)?;
+        if latest.instance_id != acknowledged.instance_id || latest.revision < acknowledged.revision
+        {
             return Err(AgentFailure::StorageUnavailable);
         }
         self.republish(&latest).map_err(committed_followup_failure)
@@ -161,7 +180,9 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
             return Err(AgentFailure::StorageUnavailable);
         }
         validate_stored_descriptor(&stored)?;
-        self.project_stored_review(actor, &stored, scope).await.map_err(committed_followup_failure)
+        self.project_stored_review(actor, &stored, scope)
+            .await
+            .map_err(committed_followup_failure)
     }
 
     async fn replay_prepared_review(
@@ -184,7 +205,10 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
         if stored.identity != *identity {
             return Err(AgentFailure::Conflict);
         }
-        self.project_stored_review(actor, &stored, scope).await.map_err(committed_followup_failure).map(Some)
+        self.project_stored_review(actor, &stored, scope)
+            .await
+            .map_err(committed_followup_failure)
+            .map(Some)
     }
 
     async fn read_task_record(
@@ -201,19 +225,26 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
             )
             .await
     }
-
 }
 
 impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
-    fn recover_delegation<'a>(&'a self, actor: &'a OwnerActor,
-        request: &'a floe_agent_contract::DelegationRequest, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<floe_agent_contract::TaskReceipt, AgentFailure>>
-    {
-        Box::pin(async move { let _operation = self.begin_operation(actor, scope).await?;
-            self.dependencies.tasks.recover_delegation(actor, request, scope).await })
+    fn recover_delegation<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: &'a floe_agent_contract::DelegationRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<floe_agent_contract::TaskReceipt, AgentFailure>> {
+        Box::pin(async move {
+            let _operation = self.begin_operation(actor, scope).await?;
+            self.dependencies
+                .tasks
+                .recover_delegation(actor, request, scope)
+                .await
+        })
     }
     fn close_admission(&self) {
-        self.closing.store(true, std::sync::atomic::Ordering::Release);
+        self.closing
+            .store(true, std::sync::atomic::Ordering::Release);
         self.dependencies.tasks.close_admission();
     }
 
@@ -221,9 +252,11 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
         Box::pin(async move {
             self.close_admission();
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-            let _operations = tokio::time::timeout_at(deadline, self.operations.write()).await
+            let _operations = tokio::time::timeout_at(deadline, self.operations.write())
+                .await
                 .map_err(|_| AgentFailure::DeadlineExceeded)?;
-            tokio::time::timeout_at(deadline, self.dependencies.tasks.shutdown()).await
+            tokio::time::timeout_at(deadline, self.dependencies.tasks.shutdown())
+                .await
                 .map_err(|_| AgentFailure::DeadlineExceeded)?
         })
     }
@@ -295,13 +328,14 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
                     request_digest,
                     expected_revision,
                 )?;
-                self.republish_latest(actor, &receipt.snapshot, scope).await?;
-                return project_expert_directory(&receipt.snapshot, actor.person_id).map_err(committed_followup_failure);
+                self.republish_latest(actor, &receipt.snapshot, scope)
+                    .await?;
+                return project_expert_directory(&receipt.snapshot, actor.person_id)
+                    .map_err(committed_followup_failure);
             }
 
             let current = self.read_registry(actor, scope).await?;
-            let mut registry =
-                AgentRegistry::restore(current.clone(), current.instance_id)?;
+            let mut registry = AgentRegistry::restore(current.clone(), current.instance_id)?;
             registry.set_installation_enabled(expected_revision, installation_id, enabled)?;
             let next = registry.snapshot();
             let expected_next_revision = expected_revision
@@ -311,18 +345,16 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
                 return Err(AgentFailure::Conflict);
             }
             let receipt = scope
-                .run(
-                    self.dependencies.registry.commit(
-                        RegistryCommit {
-                            actor: actor.clone(),
-                            command_id,
-                            request_digest,
-                            expected_revision,
-                            next: next.clone(),
-                        },
-                        scope,
-                    ),
-                )
+                .run(self.dependencies.registry.commit(
+                    RegistryCommit {
+                        actor: actor.clone(),
+                        command_id,
+                        request_digest,
+                        expected_revision,
+                        next: next.clone(),
+                    },
+                    scope,
+                ))
                 .await?;
             validate_registry_commit_receipt(
                 &receipt,
@@ -330,10 +362,15 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
                 command_id,
                 request_digest,
                 expected_revision,
-            ).map_err(committed_followup_failure)?;
-            if receipt.snapshot != next { return Err(AgentFailure::StorageUnavailable); }
-            self.republish_latest(actor, &receipt.snapshot, scope).await?;
-            project_expert_directory(&receipt.snapshot, actor.person_id).map_err(committed_followup_failure)
+            )
+            .map_err(committed_followup_failure)?;
+            if receipt.snapshot != next {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            self.republish_latest(actor, &receipt.snapshot, scope)
+                .await?;
+            project_expert_directory(&receipt.snapshot, actor.person_id)
+                .map_err(committed_followup_failure)
         })
     }
 
@@ -351,14 +388,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
                 return Err(AgentFailure::InvalidInput);
             }
             let context = self
-                .binding_context(
-                    actor,
-                    assignment_id,
-                    &requirement_key,
-                    None,
-                    None,
-                    scope,
-                )
+                .binding_context(actor, assignment_id, &requirement_key, None, None, scope)
                 .await?;
             let evidence = self.candidate_evidence(actor, &context, scope).await?;
             let candidates = evidence
@@ -403,10 +433,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
                 expected_binding_revision,
                 task_origin: None,
             };
-            if let Some(review) = self
-                .replay_prepared_review(actor, &identity, scope)
-                .await?
-            {
+            if let Some(review) = self.replay_prepared_review(actor, &identity, scope).await? {
                 return Ok(review);
             }
             self.prepare_review(actor, identity, None, scope).await
@@ -443,17 +470,10 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
                 return Err(AgentFailure::Conflict);
             }
 
-            let record = self
-                .read_task_record(actor, &task_receipt, scope)
-                .await?;
+            let record = self.read_task_record(actor, &task_receipt, scope).await?;
             validate_task_binding_record(&record, actor, &task_receipt, &requirement_key)?;
-            let identity = task_prepare_identity(
-                actor,
-                command_id,
-                &task_receipt,
-                &record,
-                requirement_key,
-            );
+            let identity =
+                task_prepare_identity(actor, command_id, &task_receipt, &record, requirement_key);
             if let Some(saved) = saved {
                 validate_stored_descriptor(&saved)?;
                 if saved.identity != identity {
@@ -533,13 +553,12 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
                     &review_ref,
                     request_digest,
                 )?;
-                self.project_stored_replacement(actor, &receipt, scope).await?;
+                self.project_stored_replacement(actor, &receipt, scope)
+                    .await?;
                 self.republish_latest(actor, &receipt.registry.snapshot, scope)
                     .await?;
-                return project_expert_directory(
-                    &receipt.registry.snapshot,
-                    actor.person_id,
-                ).map_err(committed_followup_failure);
+                return project_expert_directory(&receipt.registry.snapshot, actor.person_id)
+                    .map_err(committed_followup_failure);
             }
 
             if expected_binding_revision == 0
@@ -616,11 +635,8 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
             if evidence.revision != descriptor.catalog_revision
                 || evidence.digest != descriptor.catalog_digest
                 || evidence.source_expectations != descriptor.source_expectations
-                || reviewed_candidates(
-                    descriptor.review_ref.id,
-                    &evidence,
-                    &context.selected,
-                )? != descriptor.candidates
+                || reviewed_candidates(descriptor.review_ref.id, &evidence, &context.selected)?
+                    != descriptor.candidates
             {
                 return Err(AgentFailure::StaleContext);
             }
@@ -665,39 +681,36 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
                 return Err(AgentFailure::StaleContext);
             }
             let receipt = scope
-                .run(
-                    self.dependencies.binding_reviews.commit_replacement(
-                        ReviewedBindingReplacement {
-                            review_ref: review_ref.clone(),
-                            expected_binding_revision,
-                            candidate_refs,
-                            committed_at_unix_ms,
-                            registry: RegistryCommit {
-                                actor: actor.clone(),
-                                command_id,
-                                request_digest,
-                                expected_revision: context.resolved.registry_revision,
-                                next: next.clone(),
-                            },
+                .run(self.dependencies.binding_reviews.commit_replacement(
+                    ReviewedBindingReplacement {
+                        review_ref: review_ref.clone(),
+                        expected_binding_revision,
+                        candidate_refs,
+                        committed_at_unix_ms,
+                        registry: RegistryCommit {
+                            actor: actor.clone(),
+                            command_id,
+                            request_digest,
+                            expected_revision: context.resolved.registry_revision,
+                            next: next.clone(),
                         },
-                        scope,
-                    ),
-                )
+                    },
+                    scope,
+                ))
                 .await?;
-            validate_replacement_receipt(
-                &receipt,
-                actor,
-                command_id,
-                &review_ref,
-                request_digest,
-            ).map_err(committed_followup_failure)?;
-            self.project_stored_replacement(actor, &receipt, scope).await?;
-            if receipt.registry.snapshot != next || receipt.committed_at_unix_ms != committed_at_unix_ms {
+            validate_replacement_receipt(&receipt, actor, command_id, &review_ref, request_digest)
+                .map_err(committed_followup_failure)?;
+            self.project_stored_replacement(actor, &receipt, scope)
+                .await?;
+            if receipt.registry.snapshot != next
+                || receipt.committed_at_unix_ms != committed_at_unix_ms
+            {
                 return Err(AgentFailure::StorageUnavailable);
             }
             self.republish_latest(actor, &receipt.registry.snapshot, scope)
                 .await?;
-            project_expert_directory(&receipt.registry.snapshot, actor.person_id).map_err(committed_followup_failure)
+            project_expert_directory(&receipt.registry.snapshot, actor.person_id)
+                .map_err(committed_followup_failure)
         })
     }
 
@@ -722,7 +735,9 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
             else {
                 return Ok(None);
             };
-            self.project_stored_replacement(actor, &receipt, scope).await.map(Some)
+            self.project_stored_replacement(actor, &receipt, scope)
+                .await
+                .map(Some)
         })
     }
 
@@ -736,17 +751,21 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
             let _operation = self.begin_operation(actor, scope).await?;
             review_ref.validate()?;
             let Some(receipt) = scope
-                .run(
-                    self.dependencies
-                        .binding_reviews
-                        .find_review_replacement(actor, review_ref.clone(), scope),
-                )
+                .run(self.dependencies.binding_reviews.find_review_replacement(
+                    actor,
+                    review_ref.clone(),
+                    scope,
+                ))
                 .await?
             else {
                 return Ok(None);
             };
-            if receipt.review_ref != review_ref { return Err(AgentFailure::StorageUnavailable); }
-            self.project_stored_replacement(actor, &receipt, scope).await.map(Some)
+            if receipt.review_ref != review_ref {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            self.project_stored_replacement(actor, &receipt, scope)
+                .await
+                .map(Some)
         })
     }
 }
@@ -783,7 +802,10 @@ pub fn validate_binding_review_descriptor(
         || descriptor.catalog_revision != descriptor.definition_revision
         || descriptor.created_at_unix_ms < 0
         || descriptor.source_expectations.len() > MAX_REVIEW_CANDIDATES
-        || serde_json::to_vec(descriptor).map_err(|_| AgentFailure::InvalidInput)?.len() > 256 * 1024
+        || serde_json::to_vec(descriptor)
+            .map_err(|_| AgentFailure::InvalidInput)?
+            .len()
+            > 256 * 1024
         || descriptor.expires_at_unix_ms
             != descriptor
                 .created_at_unix_ms
@@ -804,7 +826,9 @@ pub fn validate_binding_review_descriptor(
             .reference
             .validate()
             .map_err(|_| AgentFailure::InvalidInput)?;
-        if candidate.label.trim().is_empty() || candidate.label.len() > 256 || candidate.detail.len() > 512
+        if candidate.label.trim().is_empty()
+            || candidate.label.len() > 256
+            || candidate.detail.len() > 512
             || candidate.candidate_id != source_candidate_id(&candidate.reference)?
             || candidate.candidate_id.is_empty()
             || !candidate_ids.insert(candidate.candidate_id.as_str())
@@ -843,8 +867,7 @@ pub fn validate_binding_review_descriptor(
             || expectation.reference.contract_version != descriptor.requirement.contract_version
             || expectation_refs.contains(&expectation.reference)
             || (index > 0
-                && descriptor.source_expectations[index - 1].reference
-                    >= expectation.reference)
+                && descriptor.source_expectations[index - 1].reference >= expectation.reference)
             || !descriptor.candidates.iter().any(|reviewed| {
                 reviewed.candidate.reference == expectation.reference
                     && reviewed.candidate.availability == CandidateAvailability::Available
@@ -1019,9 +1042,9 @@ fn binding_context_from_snapshot(
             manifest.definition.definition_revision,
         )?
     };
-    if expected_binding_revision.is_some_and(|revision| {
-        revision != resolved.assignment.binding.revision
-    }) {
+    if expected_binding_revision
+        .is_some_and(|revision| revision != resolved.assignment.binding.revision)
+    {
         return Err(AgentFailure::Conflict);
     }
     let requirement = resolved
@@ -1041,14 +1064,11 @@ fn binding_context_from_snapshot(
     if binding.capability != requirement.capability
         || binding.contract_version != requirement.contract_version
         || binding.selected.len() > usize::from(requirement.maximum_sources)
-        || binding
-            .selected
-            .iter()
-            .any(|reference| {
-                reference.validate().is_err()
-                    || reference.capability_id != requirement.capability
-                    || reference.contract_version != requirement.contract_version
-            })
+        || binding.selected.iter().any(|reference| {
+            reference.validate().is_err()
+                || reference.capability_id != requirement.capability
+                || reference.contract_version != requirement.contract_version
+        })
         || binding.selected.windows(2).any(|pair| pair[0] >= pair[1])
     {
         return Err(AgentFailure::StorageUnavailable);
@@ -1089,7 +1109,9 @@ fn candidate_evidence(
             .reference
             .validate()
             .map_err(|_| AgentFailure::InvalidInput)?;
-        if candidate.label.trim().is_empty() || candidate.label.len() > 256 || candidate.detail.len() > 512
+        if candidate.label.trim().is_empty()
+            || candidate.label.len() > 256
+            || candidate.detail.len() > 512
             || candidate.candidate_id != source_candidate_id(&candidate.reference)?
             || !candidate_ids.insert(candidate.candidate_id.as_str())
             || candidate.reference.capability_id != requirement.capability
@@ -1257,11 +1279,8 @@ fn validate_task_binding_record(
     Ok(())
 }
 
-fn validate_stored_descriptor(
-    descriptor: &BindingReviewDescriptor,
-) -> Result<(), AgentFailure> {
-    validate_binding_review_descriptor(descriptor)
-        .map_err(|_| AgentFailure::StorageUnavailable)
+fn validate_stored_descriptor(descriptor: &BindingReviewDescriptor) -> Result<(), AgentFailure> {
+    validate_binding_review_descriptor(descriptor).map_err(|_| AgentFailure::StorageUnavailable)
 }
 
 fn validate_registry_commit_receipt(
@@ -1302,8 +1321,12 @@ fn validate_replacement_receipt(
     {
         return Err(AgentFailure::Conflict);
     }
-    AgentRegistry::restore(receipt.registry.snapshot.clone(), receipt.registry.snapshot.instance_id)
-        .map(|_| ()).map_err(|_| AgentFailure::StorageUnavailable)
+    AgentRegistry::restore(
+        receipt.registry.snapshot.clone(),
+        receipt.registry.snapshot.instance_id,
+    )
+    .map(|_| ())
+    .map_err(|_| AgentFailure::StorageUnavailable)
 }
 
 /// Historical owner evidence is bound to the exact immutable reviewed assignment.
@@ -1320,33 +1343,77 @@ pub fn project_binding_mutation_receipt(
         || receipt.registry.snapshot.instance_id != descriptor.registry_instance_id
         || receipt.committed_at_unix_ms < descriptor.created_at_unix_ms
         || receipt.committed_at_unix_ms >= descriptor.expires_at_unix_ms
-    { return Err(AgentFailure::StorageUnavailable); }
-    let registry = AgentRegistry::restore(receipt.registry.snapshot.clone(), descriptor.registry_instance_id)
-        .map_err(|_| AgentFailure::StorageUnavailable)?;
-    let resolved = registry.resolve_assignment(descriptor.registry_instance_id, identity.person_id,
-        identity.assignment_id, &descriptor.package, descriptor.definition_revision)
+    {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    let registry = AgentRegistry::restore(
+        receipt.registry.snapshot.clone(),
+        descriptor.registry_instance_id,
+    )
+    .map_err(|_| AgentFailure::StorageUnavailable)?;
+    let resolved = registry
+        .resolve_assignment(
+            descriptor.registry_instance_id,
+            identity.person_id,
+            identity.assignment_id,
+            &descriptor.package,
+            descriptor.definition_revision,
+        )
         .map_err(|_| AgentFailure::StorageUnavailable)?;
     let assignment = &resolved.assignment;
-    let operation = assignment.binding.last_operation.as_ref().ok_or(AgentFailure::StorageUnavailable)?;
+    let operation = assignment
+        .binding
+        .last_operation
+        .as_ref()
+        .ok_or(AgentFailure::StorageUnavailable)?;
     if assignment.installation_id != descriptor.installation_id
-        || assignment.binding.revision != identity.expected_binding_revision.checked_add(1).ok_or(AgentFailure::StorageUnavailable)?
+        || assignment.binding.revision
+            != identity
+                .expected_binding_revision
+                .checked_add(1)
+                .ok_or(AgentFailure::StorageUnavailable)?
         || operation.operation_id != receipt.registry.command_id.as_uuid()
         || operation.resulting_revision != assignment.binding.revision
-    { return Err(AgentFailure::StorageUnavailable); }
-    let selected = assignment.binding.entries.iter().find(|entry| entry.requirement_key == identity.requirement_key)
+    {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    let selected = assignment
+        .binding
+        .entries
+        .iter()
+        .find(|entry| entry.requirement_key == identity.requirement_key)
         .ok_or(AgentFailure::StorageUnavailable)?;
-    let mut candidate_refs = selected.selected.iter().map(|reference| {
-        descriptor.candidates.iter().find(|candidate| candidate.candidate.reference == *reference)
-            .map(|candidate| candidate.candidate_ref).ok_or(AgentFailure::StorageUnavailable)
-    }).collect::<Result<Vec<_>, AgentFailure>>()?;
+    let mut candidate_refs = selected
+        .selected
+        .iter()
+        .map(|reference| {
+            descriptor
+                .candidates
+                .iter()
+                .find(|candidate| candidate.candidate.reference == *reference)
+                .map(|candidate| candidate.candidate_ref)
+                .ok_or(AgentFailure::StorageUnavailable)
+        })
+        .collect::<Result<Vec<_>, AgentFailure>>()?;
     candidate_refs.sort_unstable();
-    let digest = digest_json(&("floe.expert-binding-replacement.sha256.v1", "replace_binding",
-        receipt.registry.command_id, identity.person_id, &identity.device_id,
-        &descriptor.review_ref, identity.expected_binding_revision, &candidate_refs))?;
-    if digest != receipt.registry.request_digest { return Err(AgentFailure::StorageUnavailable); }
+    let digest = digest_json(&(
+        "floe.expert-binding-replacement.sha256.v1",
+        "replace_binding",
+        receipt.registry.command_id,
+        identity.person_id,
+        &identity.device_id,
+        &descriptor.review_ref,
+        identity.expected_binding_revision,
+        &candidate_refs,
+    ))?;
+    if digest != receipt.registry.request_digest {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     Ok(BindingMutationReceipt {
-        command_id: receipt.registry.command_id, review_ref: receipt.review_ref.clone(),
-        assignment_ref: identity.assignment_id, binding_revision: assignment.binding.revision,
+        command_id: receipt.registry.command_id,
+        review_ref: receipt.review_ref.clone(),
+        assignment_ref: identity.assignment_id,
+        binding_revision: assignment.binding.revision,
         registry_revision: receipt.registry.snapshot.revision,
         committed_at_unix_ms: receipt.committed_at_unix_ms,
     })
@@ -1391,11 +1458,8 @@ fn replacement_request_digest(
 }
 
 fn deterministic_review_id(identity: &BindingPrepareIdentity) -> Result<Uuid, AgentFailure> {
-    let bytes = serde_json::to_vec(&(
-        "floe.expert-binding-review-id.v1",
-        identity,
-    ))
-    .map_err(|_| AgentFailure::InvalidInput)?;
+    let bytes = serde_json::to_vec(&("floe.expert-binding-review-id.v1", identity))
+        .map_err(|_| AgentFailure::InvalidInput)?;
     Ok(Uuid::new_v5(&Uuid::NAMESPACE_OID, &bytes))
 }
 
@@ -1410,17 +1474,12 @@ fn candidate_review_ref(
     Ok(Uuid::new_v5(&review_id, &bytes))
 }
 
-fn source_candidate_id(
-    reference: &SourceSelectionReference,
-) -> Result<String, AgentFailure> {
+fn source_candidate_id(reference: &SourceSelectionReference) -> Result<String, AgentFailure> {
     reference
         .validate()
         .map_err(|_| AgentFailure::InvalidInput)?;
-    let bytes = serde_json::to_vec(&(
-        "floe.source-selection-candidate.sha256.v1",
-        reference,
-    ))
-    .map_err(|_| AgentFailure::InvalidInput)?;
+    let bytes = serde_json::to_vec(&("floe.source-selection-candidate.sha256.v1", reference))
+        .map_err(|_| AgentFailure::InvalidInput)?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
@@ -1454,7 +1513,9 @@ fn valid_device_id(value: &str) -> bool {
 /// must not be mistaken by product callers for a definite precommit rejection.
 fn committed_followup_failure(failure: AgentFailure) -> AgentFailure {
     match failure {
-        AgentFailure::Conflict | AgentFailure::NotFound | AgentFailure::InvalidInput
+        AgentFailure::Conflict
+        | AgentFailure::NotFound
+        | AgentFailure::InvalidInput
         | AgentFailure::StaleContext => AgentFailure::StorageUnavailable,
         other => other,
     }

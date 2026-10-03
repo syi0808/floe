@@ -37,9 +37,13 @@ pub struct TaskSnapshot {
 impl TaskSnapshot {
     pub fn validate(&self, maximum_bytes: usize) -> Result<(), AgentFailure> {
         let result_valid = match self.state {
-            TaskState::Blocked => self.result.is_none() && self.issue.is_none()
-                && self.artifacts.is_empty() && self.blockage.is_some()
-                && self.coverage != DependencyCoverage::Unknown,
+            TaskState::Blocked => {
+                self.result.is_none()
+                    && self.issue.is_none()
+                    && self.artifacts.is_empty()
+                    && self.blockage.is_some()
+                    && self.coverage != DependencyCoverage::Unknown
+            }
             TaskState::Completed => {
                 self.result
                     .as_deref()
@@ -59,7 +63,10 @@ impl TaskSnapshot {
             || self.definition_revision == 0
             || !result_valid
             || (self.state == TaskState::Blocked) != self.blockage.is_some()
-            || self.blockage.as_ref().is_some_and(|blockage| blockage.validate().is_err())
+            || self
+                .blockage
+                .as_ref()
+                .is_some_and(|blockage| blockage.validate().is_err())
             || self
                 .result
                 .as_deref()
@@ -129,24 +136,37 @@ pub struct DelegationContextInput {
 
 impl DelegationContextInput {
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.session_id.is_nil() || self.device_id.trim().is_empty()
+        if self.session_id.is_nil()
+            || self.device_id.trim().is_empty()
             || self.device_id.len() > MAX_DELEGATION_DEVICE_ID_BYTES
-            || self.max_output_bytes == 0 || self.max_output_bytes > crate::MAX_OUTPUT_BYTES
-        { return Err(AgentFailure::InvalidInput); }
+            || self.max_output_bytes == 0
+            || self.max_output_bytes > crate::MAX_OUTPUT_BYTES
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
         self.agent_context.validate()?;
-        if serde_json::to_vec(self).map_err(|_| AgentFailure::InvalidInput)?.len()
+        if serde_json::to_vec(self)
+            .map_err(|_| AgentFailure::InvalidInput)?
+            .len()
             > MAX_DELEGATION_EXECUTION_CONTEXT_BYTES
-        { return Err(AgentFailure::BudgetExceeded); }
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
         Ok(())
     }
 
-    pub fn bind_projection(self, projection_coverage: DependencyCoverage)
-        -> Result<DelegationExecutionContext, AgentFailure>
-    {
+    pub fn bind_projection(
+        self,
+        projection_coverage: DependencyCoverage,
+    ) -> Result<DelegationExecutionContext, AgentFailure> {
         self.validate()?;
-        let context = DelegationExecutionContext { session_id: self.session_id,
-            device_id: self.device_id, agent_context: self.agent_context,
-            max_output_bytes: self.max_output_bytes, projection_coverage };
+        let context = DelegationExecutionContext {
+            session_id: self.session_id,
+            device_id: self.device_id,
+            agent_context: self.agent_context,
+            max_output_bytes: self.max_output_bytes,
+            projection_coverage,
+        };
         context.validate()?;
         Ok(context)
     }
@@ -173,8 +193,12 @@ impl DelegationExecutionContext {
             return Err(AgentFailure::InvalidInput);
         }
         self.agent_context.validate()?;
-        self.projection_coverage.validate().map_err(|_| AgentFailure::InvalidInput)?;
-        if self.projection_coverage == DependencyCoverage::Unknown { return Err(AgentFailure::PolicyDenied); }
+        self.projection_coverage
+            .validate()
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        if self.projection_coverage == DependencyCoverage::Unknown {
+            return Err(AgentFailure::PolicyDenied);
+        }
         if serde_json::to_vec(self)
             .map(|encoded| encoded.len() > MAX_DELEGATION_EXECUTION_CONTEXT_BYTES)
             .unwrap_or(true)
@@ -244,20 +268,31 @@ pub struct TaskReceipt {
 impl TaskReceipt {
     pub fn validate(&self, maximum_bytes: usize) -> Result<(), AgentFailure> {
         self.snapshot.validate(maximum_bytes)?;
-        if serde_json::to_vec(self).map_err(|_| AgentFailure::InvalidInput)?.len()
+        if serde_json::to_vec(self)
+            .map_err(|_| AgentFailure::InvalidInput)?
+            .len()
             > crate::MAX_TASK_RECEIPT_BYTES
-        { return Err(AgentFailure::BudgetExceeded); }
-        if self.task_id != self.snapshot.task_id { return Err(AgentFailure::InvalidInput); }
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        if self.task_id != self.snapshot.task_id {
+            return Err(AgentFailure::InvalidInput);
+        }
         match &self.execution {
             crate::TaskExecutionEvidence::Admitted(receipt) => {
                 receipt.validate(maximum_bytes)?;
-                if receipt.snapshot != self.snapshot { return Err(AgentFailure::Conflict); }
+                if receipt.snapshot != self.snapshot {
+                    return Err(AgentFailure::Conflict);
+                }
             }
             crate::TaskExecutionEvidence::Unadmitted => {
-                if self.snapshot.state != TaskState::Rejected || self.snapshot.issue.is_none()
+                if self.snapshot.state != TaskState::Rejected
+                    || self.snapshot.issue.is_none()
                     || !self.snapshot.artifacts.is_empty()
                     || self.snapshot.coverage != DependencyCoverage::Independent
-                { return Err(AgentFailure::InvalidInput); }
+                {
+                    return Err(AgentFailure::InvalidInput);
+                }
             }
         }
         Ok(())

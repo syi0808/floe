@@ -39,8 +39,10 @@ pub trait TaskRepository: Send + Sync {
     /// Called only by a retained Task owner after its active reservation is
     /// registered. An error may follow commit; exact readback distinguishes
     /// that case without creating another execution or endpoint handoff.
-    fn admit<'a>(&'a self, proposed: TaskRecord)
-        -> BoxFuture<'a, Result<TaskAdmission, AgentFailure>>;
+    fn admit<'a>(
+        &'a self,
+        proposed: TaskRecord,
+    ) -> BoxFuture<'a, Result<TaskAdmission, AgentFailure>>;
 
     /// Only Submitted -> Working. Terminal state requires journal-bound settlement.
     /// The owner retains this future past observer cancellation and may rejoin
@@ -55,23 +57,33 @@ pub trait TaskRepository: Send + Sync {
 
     /// Every append checks the exact Task/execution/generation and current active fence.
     /// A terminal Task rejects appends. Reserve a result slot for each admitted intent.
-    fn journal(&self, execution: TaskExecutionKey)
-        -> Result<Arc<dyn ExecutionJournal>, AgentFailure>;
+    fn journal(
+        &self,
+        execution: TaskExecutionKey,
+    ) -> Result<Arc<dyn ExecutionJournal>, AgentFailure>;
 
-    fn load_journal<'a>(&'a self, execution: TaskExecutionKey)
-        -> BoxFuture<'a, Result<Vec<JournalEntry>, AgentFailure>>;
+    fn load_journal<'a>(
+        &'a self,
+        execution: TaskExecutionKey,
+    ) -> BoxFuture<'a, Result<Vec<JournalEntry>, AgentFailure>>;
 
-    fn read_execution_receipt<'a>(&'a self, reference: TaskExecutionReceiptRef)
-        -> BoxFuture<'a, Result<TaskExecutionReceipt, AgentFailure>>;
+    fn read_execution_receipt<'a>(
+        &'a self,
+        reference: TaskExecutionReceiptRef,
+    ) -> BoxFuture<'a, Result<TaskExecutionReceipt, AgentFailure>>;
 
     fn validate_settlement(&self, settlement: &EndpointSettlement) -> Result<(), AgentFailure>;
 
     /// Recompute the journal projection under the short storage transaction and
     /// commit terminal Task, optional private state and immutable receipt together.
     /// An identical replay returns the stored receipt without reapplying private state.
-    fn settle_execution<'a>(&'a self, commit: TaskExecutionCommit)
-        -> BoxFuture<'a, Result<TaskExecutionReceipt, AgentFailure>>;
+    fn settle_execution<'a>(
+        &'a self,
+        commit: TaskExecutionCommit,
+    ) -> BoxFuture<'a, Result<TaskExecutionReceipt, AgentFailure>>;
 
-    fn get<'a>(&'a self, task_id: TaskId)
-        -> BoxFuture<'a, Result<Option<TaskRecord>, AgentFailure>>;
+    fn get<'a>(
+        &'a self,
+        task_id: TaskId,
+    ) -> BoxFuture<'a, Result<Option<TaskRecord>, AgentFailure>>;
 }

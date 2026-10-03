@@ -83,10 +83,10 @@ func readNativeResponse(reader io.Reader) (string, inference.UsageObservation, e
 			Type     string          `json:"type"`
 			Item     json.RawMessage `json:"item"`
 			Response struct {
-				ID string `json:"id"`
-				Status string `json:"status"`
+				ID     string          `json:"id"`
+				Status string          `json:"status"`
 				Output json.RawMessage `json:"output"`
-				Usage json.RawMessage `json:"usage"`
+				Usage  json.RawMessage `json:"usage"`
 			} `json:"response"`
 		}
 		if trust.StrictJSON([]byte(data), 1048576, 32) != nil || !inference.ValidJSONTextEncoding([]byte(data)) || json.Unmarshal([]byte(data), &event) != nil {
@@ -112,7 +112,9 @@ func readNativeResponse(reader io.Reader) (string, inference.UsageObservation, e
 			}
 			var err error
 			usage, err = completedNativeUsage(event.Response.Usage)
-			if err != nil { return "", inference.UsageObservation{}, err }
+			if err != nil {
+				return "", inference.UsageObservation{}, err
+			}
 			// Usage belongs to this completed response, independently of whether
 			// its content can be normalized into the requested Agent contract.
 			var output []json.RawMessage
@@ -132,20 +134,34 @@ func readNativeResponse(reader io.Reader) (string, inference.UsageObservation, e
 }
 
 func validNativeResponseID(value string) bool {
-	if value == "" || len(value) > 256 { return false }
-	for _, char := range value { if unicode.IsControl(char) { return false } }
+	if value == "" || len(value) > 256 {
+		return false
+	}
+	for _, char := range value {
+		if unicode.IsControl(char) {
+			return false
+		}
+	}
 	return true
 }
 
 func completedNativeUsage(raw json.RawMessage) (inference.UsageObservation, error) {
 	unknown := inference.UsageObservation{}
-	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" { return unknown, nil }
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return unknown, nil
+	}
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil || fields == nil { return unknown, invalidOutput }
+	if json.Unmarshal(raw, &fields) != nil || fields == nil {
+		return unknown, invalidOutput
+	}
 	value, present := fields["total_tokens"]
-	if !present || strings.TrimSpace(string(value)) == "null" { return unknown, nil }
+	if !present || strings.TrimSpace(string(value)) == "null" {
+		return unknown, nil
+	}
 	var tokens uint64
-	if json.Unmarshal(value, &tokens) != nil || tokens > trust.MaxJSONInteger { return unknown, invalidOutput }
+	if json.Unmarshal(value, &tokens) != nil || tokens > trust.MaxJSONInteger {
+		return unknown, invalidOutput
+	}
 	return inference.UsageObservation{Tokens: &tokens}, nil
 }
 

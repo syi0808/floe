@@ -28,3 +28,14 @@ G2 remains failed and full structural closure remains open. Automated test recon
 ## Go diagnostic follow-up
 
 A normal independent clone of the same source, retaining VCS stamping and the same formatting patch, reached the Go compiler. The linked-worktree environment had selected an empty parent .git directory; this was an executor problem, not a reason to disable provenance. The first actual compile failure was NewSecret calling Store.Get without context. The correction forwards the existing openIntegration caller context through NewSecret to the bounded credential observer, preserving cancellation and fail-closed credential handling. No local check or new build was run for this correction.
+
+
+## Retry on 40e64bd8 and coherent correction batch
+
+The cloud lane built all Go packages and the floe-server executable successfully, with VCS stamping retained in the independent clone. The dependency-policy and whitespace gates passed. The resulting Go executable SHA256 is 0c2483ada6e52e01cf2c749f2ec1d6a37fed4000f0ca66d8d7c6f85bd39dbffa. Those results cover the exact source plus captured formatting; unchanged Go inputs do not need another build solely because Rust/Swift corrections land.
+
+Rust formatting stopped on an invalid trailing comma after a struct-pattern rest in calendar_mirror.rs, after producing a partial formatting patch. Rust compilation then exposed duplicate/obsolete capability-journal exports and Day budget imports. The returned Rust/Go formatting and workspace-only Cargo.lock updates are integrated. The correction removes the unused execute_recorded helper and never-populated Session capability/delegation replay caches, including their obsolete cleanup scan/cursor phase; canonical Engine journals, ReplayReceipt and Task replay remain. The cleanup store has a deliberate private layout marker2 and rejects older layouts without migration or live data modification. Session.pending_output is outside this correction. Day and Context import budget types from their actual module; the pattern syntax and unused EventSchedule import are corrected.
+
+The Mac analyzer reported one Dart type error in the optional Day refresh capability; a guarded explicit interface cast fixes the initializer. macOS packaging stopped on that error. iOS platform tools became recognized after the user's installation, and simulator/standalone SwiftPM builds reached the new Swift sources. Their first error was ambiguous inference of a UTF-8 key Set; explicit Set and constructor-closure types preserve exact key semantics. The unsigned device invocation exited255 without a diagnostic and remains unverified; a later verbose attempt must establish its actual cause. No Mac formatting or lockfile change was returned.
+
+No tests or model/provider operations ran. This correction batch is not a pass; rerun affected Rust and Dart/Apple phases together after publication, preserving caches and reporting each target separately.

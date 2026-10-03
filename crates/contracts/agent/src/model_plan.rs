@@ -29,13 +29,22 @@ impl ModelCapabilities {
         Self(vec![ModelCapability::Chat])
     }
 
-    pub fn for_request(format: &crate::ModelOutputFormat, catalog: &crate::AllowedCatalog) -> Result<Self, AgentFailure> {
+    pub fn for_request(
+        format: &crate::ModelOutputFormat,
+        catalog: &crate::AllowedCatalog,
+    ) -> Result<Self, AgentFailure> {
         format.validate().map_err(|_| AgentFailure::InvalidInput)?;
         let has_tools = !catalog.tools.is_empty() || !catalog.cards.is_empty();
-        if format.is_json() && has_tools { return Err(AgentFailure::InvalidInput); }
+        if format.is_json() && has_tools {
+            return Err(AgentFailure::InvalidInput);
+        }
         let mut values = vec![ModelCapability::Chat];
-        if format.is_json() { values.push(ModelCapability::StructuredOutput); }
-        if has_tools { values.push(ModelCapability::ToolProposals); }
+        if format.is_json() {
+            values.push(ModelCapability::StructuredOutput);
+        }
+        if has_tools {
+            values.push(ModelCapability::ToolProposals);
+        }
         Ok(Self(values))
     }
 
@@ -51,8 +60,11 @@ impl ModelCapabilities {
     }
 
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.0.is_empty() || self.0.len() > 3 || !self.0.contains(&ModelCapability::Chat)
-            || self.0.windows(2).any(|pair| pair[0] >= pair[1]) {
+        if self.0.is_empty()
+            || self.0.len() > 3
+            || !self.0.contains(&ModelCapability::Chat)
+            || self.0.windows(2).any(|pair| pair[0] >= pair[1])
+        {
             return Err(AgentFailure::InvalidInput);
         }
         Ok(())

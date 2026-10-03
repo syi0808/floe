@@ -1,12 +1,12 @@
 use floe_agent_contract::{
-    AgentFailure, DependencyCoverage, JournalEntry, JournalEvent,
+    AgentFailure, DependencyCoverage, JournalEntry, JournalEvent, MAX_OUTPUT_BYTES,
     TaskExecutionKey, TaskExecutionReceipt, TaskExecutionReceiptRef, TaskId, TaskSnapshot,
-    TaskState, MAX_OUTPUT_BYTES,
+    TaskState,
 };
 use floe_experts::{
-    advance_task_journal, interrupt_task_execution, settle_task_execution as settle_task_record_execution,
-    validate_task_journal, MAX_TASK_RECORD_BYTES,
-    ExpertSettlement, TaskActivation, TaskAdmission, TaskExecutionCommit, TaskRecord,
+    ExpertSettlement, MAX_TASK_RECORD_BYTES, TaskActivation, TaskAdmission, TaskExecutionCommit,
+    TaskRecord, advance_task_journal, interrupt_task_execution,
+    settle_task_execution as settle_task_record_execution, validate_task_journal,
 };
 use turso::transaction::{Transaction, TransactionBehavior};
 
@@ -254,19 +254,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
 
             let journal = self.task_journal_on(&transaction, &current).await?;
-            let next = settle_task_record_execution(
-                &current,
-                &commit,
-                &journal,
-                MAX_OUTPUT_BYTES,
-            )?;
+            let next = settle_task_record_execution(&current, &commit, &journal, MAX_OUTPUT_BYTES)?;
             if replay {
                 if next != current {
                     return Err(AgentFailure::Conflict);
                 }
-                return current
-                    .receipt
-                    .ok_or(AgentFailure::StorageUnavailable);
+                return current.receipt.ok_or(AgentFailure::StorageUnavailable);
             }
 
             self.validate_context_dependency_coverage_in_transaction(
@@ -297,8 +290,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     || commit.terminal.principal != self.person_id.to_string()
                     || commit.terminal.state != TaskState::Completed
                     || commit.terminal.coverage != coverage
-                    || commit.terminal.result.as_deref()
-                        != Some(settlement.task_result.as_str())
+                    || commit.terminal.result.as_deref() != Some(settlement.task_result.as_str())
                     || settlement.next_private_state.schema_version != 1
                     || settlement.next_private_state.last_invocation_id
                         != Some(settlement.invocation_id)
@@ -330,8 +322,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         != settlement.expected_private_state_revision
                     || assignment.private_state.completed_invocations
                         != settlement.expected_private_state_revision
-                    || assignment.private_state.last_invocation_id
-                        == Some(settlement.invocation_id)
+                    || assignment.private_state.last_invocation_id == Some(settlement.invocation_id)
                     || !registry.installations.iter().any(|installation| {
                         installation.id == assignment.installation_id
                             && installation.package == settlement.admission.package
@@ -349,13 +340,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     .checked_add(1)
                     .ok_or(AgentFailure::BudgetExceeded)?;
                 let payload = self.registry_payload(&registry)?;
-                self.update_registry(
-                    &transaction,
-                    previous_revision,
-                    registry.revision,
-                    payload,
-                )
-                .await?;
+                self.update_registry(&transaction, previous_revision, registry.revision, payload)
+                    .await?;
             }
 
             if write_task(
@@ -382,10 +368,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::InvalidInput);
         }
         let mut connection = self.connection()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred).await
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = self.task_on(&transaction, task_id).await;
-        self.finish_registry_transaction_checked(transaction, result).await
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
     }
 
     pub async fn load_task_journal(
@@ -394,21 +383,25 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     ) -> Result<Vec<JournalEntry>, AgentFailure> {
         execution.validate()?;
         let mut connection = self.connection()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred).await
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
-        let record = self
-            .task_on(&transaction, execution.task_id)
-            .await?
-            .ok_or(AgentFailure::NotFound)?;
-        if record.execution() != execution {
-            return Err(AgentFailure::Conflict);
+            let record = self
+                .task_on(&transaction, execution.task_id)
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            if record.execution() != execution {
+                return Err(AgentFailure::Conflict);
+            }
+            let entries = self.task_journal_on(&transaction, &record).await?;
+            self.check_access()?;
+            Ok(entries)
         }
-        let entries = self.task_journal_on(&transaction, &record).await?;
-        self.check_access()?;
-        Ok(entries)
-        }.await;
-        self.finish_registry_transaction_checked(transaction, result).await
+        .await;
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
     }
 
     pub async fn read_task_execution_receipt(
@@ -416,10 +409,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         reference: TaskExecutionReceiptRef,
     ) -> Result<TaskExecutionReceipt, AgentFailure> {
         let mut connection = self.connection()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred).await
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
-        let result = self.read_execution_receipt_on(&transaction, &reference).await;
-        self.finish_registry_transaction_checked(transaction, result).await
+        let result = self
+            .read_execution_receipt_on(&transaction, &reference)
+            .await;
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
     }
 
     pub async fn append_task_journal(
@@ -433,7 +431,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if phase != kind {
             return Err(AgentFailure::InvalidInput);
         }
-        let payload = serde_json::to_string(&event).map_err(|_| AgentFailure::StorageUnavailable)?;
+        let payload =
+            serde_json::to_string(&event).map_err(|_| AgentFailure::StorageUnavailable)?;
         if payload.is_empty() || payload.len() > MAX_TASK_JOURNAL_ENTRY_BYTES {
             return Err(AgentFailure::BudgetExceeded);
         }
@@ -509,8 +508,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(storage)?;
         let Some(row) = rows.next().await.map_err(storage)? else {
             drop(rows);
-            let mut orphan = connection.query("SELECT 1 FROM agent_task_journal WHERE task_id = ? LIMIT 1",
-                [task_id.as_uuid().to_string()]).await.map_err(storage)?;
+            let mut orphan = connection
+                .query(
+                    "SELECT 1 FROM agent_task_journal WHERE task_id = ? LIMIT 1",
+                    [task_id.as_uuid().to_string()],
+                )
+                .await
+                .map_err(storage)?;
             if orphan.next().await.map_err(storage)?.is_some() {
                 return Err(AgentFailure::StorageUnavailable);
             }
@@ -524,8 +528,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         record.validate(MAX_OUTPUT_BYTES).map_err(unavailable)?;
         if record.snapshot.task_id != task_id
             || record.snapshot.principal != self.person_id.to_string()
-            || row.get::<String>(0).map_err(storage)?
-                != record.invocation_key.as_uuid().to_string()
+            || row.get::<String>(0).map_err(storage)? != record.invocation_key.as_uuid().to_string()
             || row.get::<String>(1).map_err(storage)? != self.person_id.to_string()
             || row.get::<String>(2).map_err(storage)? != state_name(record.snapshot.state)
             || row.get::<i64>(3).map_err(storage)? != integer(record.aggregate_revision)?
@@ -571,12 +574,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             terminal: record.snapshot.clone(),
             settlement: None,
         };
-        let verified = settle_task_record_execution(
-            &record,
-            &identical_replay,
-            &journal,
-            MAX_OUTPUT_BYTES,
-        )?;
+        let verified =
+            settle_task_record_execution(&record, &identical_replay, &journal, MAX_OUTPUT_BYTES)?;
         if verified != record {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -724,15 +723,19 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
         "agent_tasks".to_owned(),
     ];
     if found != expected {
-        return Err(if found == [
-            "agent_task_executor".to_owned(),
-            "agent_task_schema".to_owned(),
-            "agent_tasks".to_owned(),
-        ] {
-            AgentFailure::UnsupportedVersion
-        } else {
-            AgentFailure::VaultUnavailable
-        });
+        return Err(
+            if found
+                == [
+                    "agent_task_executor".to_owned(),
+                    "agent_task_schema".to_owned(),
+                    "agent_tasks".to_owned(),
+                ]
+            {
+                AgentFailure::UnsupportedVersion
+            } else {
+                AgentFailure::VaultUnavailable
+            },
+        );
     }
     let mut marker = transaction
         .query("SELECT id, version FROM agent_task_schema", ())
