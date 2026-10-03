@@ -31,3 +31,12 @@ Full cloud Rust build passed (50.18 seconds), dependency policy passed (23 nodes
 ## Apple build closure on 6dabf448
 
 macOS, arm64 iOS simulator and unsigned device application builds passed on the formatted source. Artifact architecture and four native exports were verified; macOS/simulator signature checks passed. Source and lockfiles remained clean. Full evidence is retained in Library file libfile_361aecfee5848191994efbbb914eaa83. Together with the preceding Rust/Go/DAG/Dart results, this closes build validation for this correction. Startup/development recovery and the reported dashboard authentication sequence still require coordinated behavior observation. No validator launched the apps or reset user state.
+
+
+## Fresh plain-store schema reproduction
+
+The user reported unsupported plain schema during startup. An isolated pinned-Turso reproduction on the validated source showed both fresh create_new and reopen failing: Turso renders stored CREATE SQL with punctuation spacing such as CHECK (id = 1), while the validator expected CHECK(id = 1). Seventeen of 26 objects differed by formatting. Authored schemas match; this is not evidence that user data is corrupt, and further user resets are unnecessary.
+
+A reviewed narrow correction compares bounded SQL token sequences. It ignores inter-token whitespace and unquoted ASCII keyword/identifier case, while preserving quoted content, numeric spelling, compound operators, constraints and order. IF NOT EXISTS is normalized only at the CREATE prefix. Stored invalid/different definitions remain rejected; malformed expected definitions are internal Storage failures. Safe mismatch metadata is available at StoreError but still flattened by the existing App startup string projection.
+
+The corrected patch is published as unverified because artifact transfer to the isolated worker failed. Next validation must fetch this exact commit and prove fresh create/close/reopen succeeds, all 26 schema objects match, and a scratch replacement CHECK(id >= 1) with unchanged row(1,1) is rejected. Additional lexical negatives preserve literal case, word boundaries, compound operators and key constraints. This is isolated behavior reproduction, not automated suite reconstruction. No user database, key or recovery archive was modified.

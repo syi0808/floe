@@ -5,6 +5,9 @@ use turso::{Builder, Connection};
 
 use crate::{StoreError, StoreErrorCode};
 
+#[path = "schema_sql.rs"]
+mod schema_sql;
+
 pub struct TursoStore {
     database: turso::Database,
     // Drop after the database. Every retained repository Arc keeps the same
@@ -257,22 +260,26 @@ pub(crate) async fn require_schema(
         .next()
         .await
         .map_err(admission_error)?
-        .ok_or_else(unsupported_profile)?;
+        .ok_or_else(|| schema_mismatch(name, "missing_object"))?;
     let sql: String = row.get(0).map_err(admission_error)?;
-    let canonical = |value: &str| {
-        value
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .to_ascii_lowercase()
-            .replace("if not exists ", "")
-    };
-    if canonical(&sql) != canonical(expected)
-        || rows.next().await.map_err(admission_error)?.is_some()
-    {
-        return Err(unsupported_profile());
+    if rows.next().await.map_err(admission_error)?.is_some() {
+        return Err(schema_mismatch(name, "duplicate_object"));
     }
-    Ok(())
+    match schema_sql::compare(&sql, expected) {
+        schema_sql::Comparison::Equivalent => Ok(()),
+        schema_sql::Comparison::Different => Err(schema_mismatch(name, "definition_mismatch")),
+        schema_sql::Comparison::InvalidStored => Err(schema_mismatch(name, "invalid_definition")),
+        schema_sql::Comparison::InvalidExpected => Err(StoreError::new(
+            StoreErrorCode::Storage,
+            "internal schema definition is invalid",
+        ).with_metadata("schema_object", name)),
+    }
+}
+
+fn schema_mismatch(name: &str, reason: &str) -> StoreError {
+    unsupported_profile()
+        .with_metadata("schema_object", name)
+        .with_metadata("schema_mismatch", reason)
 }
 /// Turso's high-level Builder defaults to Create. Retaining a preopened main
 /// file makes existing-profile admission independent of that default.

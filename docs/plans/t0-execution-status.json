@@ -139,7 +139,7 @@
     "client_day": "Delivered and integrated; current G2 correction/review is native-owned.",
     "client_experts_knowledge": "Delivered and integrated; current G2 correction/review is native-owned."
   },
-  "updated_at": "2026-10-03T17:04:00Z",
+  "updated_at": "2026-10-03T17:37:00Z",
   "publication_identity": {
     "author": "syi0808",
     "email": "66503450+syi0808@users.noreply.github.com",
@@ -191,9 +191,9 @@
     "next": "Compile coherent correction batch, coordinate rebuilt app before user retest; no automated test reconstruction yet."
   },
   "startup_correction": {
-    "status": "6dab_full_scoped_build_pass_behavior_pending",
+    "status": "fresh_schema_false_rejection_reproduced_token_fix_unverified",
     "evidence": "2026-10-03-startup-and-dashboard-correction.md",
     "policy": "No user profile wizard. Internal Rust identity; debug-only recoverable archive of typed invalid state, preserving logs/journals/oldkeys; stable builds never reset.",
-    "verification": "Full Rust/defaultVCSGo/DAG/Dart plus macOS/arm64simulator/unsigneddevice apps passed; expectedABI/signature/architecture inspected. No app launches/reset/key operations by validators."
+    "verification": "Prior build gatepassed; isolatedpinnedTurso freshcreate/reopen reproducesSQLformatfalse rejection. Tokenpreserving sourcefix reviewed, pending exactcommit scratchpositive/negativevalidation andformatting. No userreset."
   }
 }
