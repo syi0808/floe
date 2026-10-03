@@ -22,8 +22,8 @@ use floe_agent_contract::{AgentFailure, BoxFuture, PersonId};
 use floe_connections::{SourceOperationRepository, SourceRepository};
 use floe_context_contract::{
     AuthorizedSourceBinding, ContextDependency, GrantConsumer, GrantOperation, GrantPurpose,
-    MAX_SOURCE_ACCESS_BLOCKERS, ObservedGrant, ResourceHandle,
-    SourceAccessBlockers, SourceAccessRequirement, SourceAccessRequirementKind, SourceReadOutcome,
+    MAX_SOURCE_ACCESS_BLOCKERS, ObservedGrant, ResourceHandle, SourceAccessBlockers,
+    SourceAccessRequirement, SourceAccessRequirementKind, SourceReadOutcome,
     SourceSelectionReference, SourceUnavailable, connection_view_resource,
     source_access_id_for_capability, split_connection_view_resource,
 };

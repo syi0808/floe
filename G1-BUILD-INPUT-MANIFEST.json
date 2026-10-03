@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "G1 first pass completed: Go internal build and15Apple compiler phases PASS; Rust checks and Dart analysis FAIL. First coherent corrections integrated; affected rerun pending. No tests or full app builds.",
+  "verification": "G1:Go internal and15Apple compiler phases PASS on3a17;Dart analysis PASS on3a698 with107infos/0warnings/0errors;Rust keep-going FAIL14provider/Vault diagnostics. Second coherent Rust corrections integrated; rerun pending. No tests/full app builds.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "359a6d02bf0d9f82a8adb5ac0d918edc96c05013",
+  "current_correction_source_commit": "164114b3e73475f33028c9ae16312056187f22e1",
   "current_status_document": "docs/plans/2026-10-03-g1-first-pass.md"
 }

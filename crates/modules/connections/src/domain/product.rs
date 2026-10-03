@@ -1,7 +1,6 @@
 use crate::{
     ConnectionAction, ConnectionResource, GatewaySummary, IntegrationDescriptor,
-    IntegrationOperationRef, SourceConnection,
-    ValidatedManagementLaunch,
+    IntegrationOperationRef, SourceConnection, ValidatedManagementLaunch,
 };
 use chrono::{DateTime, Utc};
 use floe_access::{ReviewRef, SourceExpectation, VerifiedGatewayBinding};

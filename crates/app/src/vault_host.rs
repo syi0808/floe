@@ -991,9 +991,10 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
                 return Err(AgentFailure::CapabilityUnavailable);
             }
             let provider =
-                floe_provider_adapters::sources::native_calendar::NativeCalendar::new(vec![
-                    stored.calendar_id.clone(),
-                ]);
+                floe_provider_adapters::sources::native_calendar::NativeCalendar::new(
+                    vec![stored.calendar_id.clone()],
+                    core.store.clone(),
+                );
             if matches!(operation, CalendarActionOperation::Recover { .. }) {
                 core.recover_expert_calendar_action(vault, person_id, action_id, &provider)
                     .await?

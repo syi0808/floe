@@ -202,7 +202,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             })
             .chain(source.messages[split..].iter().cloned())
             .collect();
-            session.model_attempts.retain(|record| !archived_turns.contains(&record.turn_id));
             session.capability_executions.retain(|record| !archived_turns.contains(&record.turn_id));
             session.delegation_executions.retain(|record| !archived_turns.contains(&record.turn_id));
             let summary_coverage = archived_coverage.ok_or(AgentFailure::VaultUnavailable)?;

@@ -274,6 +274,7 @@ impl GatewayViewsClient {
         &self,
         keys: &Keys,
         expected: &RemoteViewAuthorizationExpectation,
+        consumer: &floe_access::GrantConsumer,
         challenge: &RemoteViewChallengeResponse,
         path: &str,
         deadline: tokio::time::Instant,
@@ -285,6 +286,7 @@ impl GatewayViewsClient {
         let signature = keys
             .sign_authorization(super::proof::authorization_command(
                 expected,
+                consumer,
                 &challenge.challenge_b64url,
                 &challenge.producer_signature,
                 access_producer_identity(&challenge.producer),
@@ -311,6 +313,7 @@ impl GatewayViewsClient {
         &self,
         keys: &Keys,
         expected: &RemoteViewAuthorizationExpectation,
+        consumer: &floe_access::GrantConsumer,
         challenge: &RemoteViewChallengeResponse,
         path: &str,
         deadline: tokio::time::Instant,
@@ -322,6 +325,7 @@ impl GatewayViewsClient {
         let signature = keys
             .sign_authorization(super::proof::authorization_command(
                 expected,
+                consumer,
                 &challenge.challenge_b64url,
                 &challenge.producer_signature,
                 access_producer_identity(&challenge.producer),

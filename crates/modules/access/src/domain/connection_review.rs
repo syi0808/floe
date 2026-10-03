@@ -1,8 +1,8 @@
 use crate::{DataAccessGrant, GrantState, VerifiedGatewayBinding};
 use chrono::{DateTime, Utc};
 use floe_context_contract::{
-    GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantPurpose,
-    GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+    GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantPurpose, GrantSourceBinding,
+    ProcessingRestriction, ResourceHandle, SourceAuthority,
 };
 use floe_kernel::{AgentFailure, PersonId};
 use serde::{Deserialize, Serialize};

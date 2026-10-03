@@ -18,6 +18,10 @@ pub const MAX_MEMORY_OVERVIEW_ITEMS: usize = 100;
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum LearningOutcome {
     Completed,
+    Blocked {
+        run_id: floe_kernel::RunId,
+        review_group_id: Uuid,
+    },
     Halted { reason: AgentFailure },
 }
 

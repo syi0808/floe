@@ -228,8 +228,7 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
             match self.vault.admit_conversation_turn(request).await? {
                 VaultConversationAdmission::Created { record, session } => {
                     let receipt = floe_conversation::project_run_receipt(record)?;
-                    let transcript =
-                        floe_conversation::project_transcript(&session.messages)?;
+                    let transcript = floe_conversation::project_transcript(&session.messages)?;
                     Ok(TurnAdmission::Created(AdmittedTurn {
                         receipt,
                         transcript,
@@ -533,8 +532,7 @@ impl<Keys: VaultKeyProvider + 'static> InteractionRepository for VaultConversati
                     let receipt = self
                         .attach_run_references(floe_conversation::project_run_receipt(record)?)
                         .await?;
-                    let transcript =
-                        floe_conversation::project_transcript(&session.messages)?;
+                    let transcript = floe_conversation::project_transcript(&session.messages)?;
                     Ok(TurnAdmission::Created(AdmittedTurn {
                         receipt,
                         transcript,

@@ -54,10 +54,7 @@ mod apple {
                     key(kSecUseDataProtectionKeychain),
                     CFBoolean::true_value().into_CFType(),
                 ),
-                (
-                    key(kSecUseAuthenticationUI),
-                    text(AUTHENTICATION_UI_FAIL),
-                ),
+                (key(kSecUseAuthenticationUI), text(AUTHENTICATION_UI_FAIL)),
             ]
         }
     }

@@ -3,13 +3,12 @@
 use crate::{
     SourceAbortReason, SourceConnection, SourceOperationAdmission, SourceOperationChange,
     SourceOperationExpectation, SourceOperationKind, SourceOperationPhase, SourceOperationProof,
-    SourceOperationRecord, SourceOperationReservation,
-    SourceRepairReason, SourceRepositoryError,
+    SourceOperationRecord, SourceOperationReservation, SourceRepairReason, SourceRepositoryError,
 };
 use floe_access::{
-    AccessService, ConnectionReview, GrantAbort, GrantAbortOutcome,
-    GrantCommitReceipt, GrantOperationReceipt, GrantReceiptQuery,
-    ReviewRef, SourceExpectation, SourceReservationEvidence,
+    AccessService, ConnectionReview, GrantAbort, GrantAbortOutcome, GrantCommitReceipt,
+    GrantOperationReceipt, GrantReceiptQuery, ReviewRef, SourceExpectation,
+    SourceReservationEvidence,
 };
 use floe_context_contract::{SourceAccessBlockers, SourceAccessRequirement};
 use floe_execution::{BoxFuture, ExecutionScope};

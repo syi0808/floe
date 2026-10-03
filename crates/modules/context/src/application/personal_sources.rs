@@ -12,8 +12,8 @@ use uuid::Uuid;
 
 use floe_access::{
     ContextDependency, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose,
-    GrantSourceBinding, PersonalReadRequirement, ResourceHandle,
-    active_read_grant, grant_unchanged, subject_unchanged,
+    GrantSourceBinding, PersonalReadRequirement, ResourceHandle, active_read_grant,
+    grant_unchanged, subject_unchanged,
 };
 use floe_agent_contract::{AgentFailure, PersonId};
 use floe_connections::SourceConnection;

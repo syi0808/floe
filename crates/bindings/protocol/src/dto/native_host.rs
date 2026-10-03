@@ -2,10 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     CalendarBatchDto, CalendarFailureDto, CalendarProviderDto, LocalContextAcquisitionModeDto,
-    LocalContextAttentionAcquisitionModeDto,
-    LocalContextPersonalAcquisitionModeDto,
-    LocalContextPersonalDomainDto,
-    NativeSourceResourceDto, UuidRefDto,
+    LocalContextAttentionAcquisitionModeDto, LocalContextPersonalAcquisitionModeDto,
+    LocalContextPersonalDomainDto, NativeSourceResourceDto, UuidRefDto,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

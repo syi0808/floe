@@ -602,7 +602,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     transaction
                         .execute(
                             "INSERT INTO agent_task_delegations (task_id, session_id, turn_id) VALUES (?, ?, ?)",
-                            (task.id.to_string(), candidate.id.to_string(), turn_id.to_string()),
+                            (task.task_id.to_string(), candidate.id.to_string(), turn_id.to_string()),
                         )
                         .await
                         .map_err(|_| AgentFailure::Conflict)?;

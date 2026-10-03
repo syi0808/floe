@@ -141,9 +141,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .iter()
                 .filter_map(|message| match message {
                     AgentMessage::Delegation { turn_id, task }
-                        if task.id == reference.invocation_id
+                        if task.task_id == task_id
                             && turn_id.to_string() == bound_turn
-                            && task.state == floe_experts::A2ATaskState::Completed =>
+                            && task.state == floe_agent_contract::TaskState::Completed =>
                     {
                         Some(task)
                     }
@@ -152,7 +152,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .flat_map(|task| &task.artifacts)
                 .flat_map(|artifact| {
                     artifact.parts.iter().filter_map(move |part| match part {
-                        floe_experts::A2APart::Data { media_type, data }
+                        floe_agent_contract::ArtifactPart::Data { media_type, data }
                             if media_type == EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE =>
                         {
                             Some((artifact.artifact_id, data.as_str()))

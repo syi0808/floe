@@ -287,6 +287,26 @@ impl floe_connections::EnrollmentProofVerifier for GatewayProofVerifier {
         Ok(())
     }
 }
+/// The wire identifies the consumer by name. Its authority variant comes from
+/// the exact admitted grant, never from a name heuristic or a default variant.
+fn authorization_consumer(
+    wire_identifier: &str,
+    admitted: &floe_access::GrantConsumer,
+) -> Result<floe_access::GrantConsumer, AgentFailure> {
+    if wire_identifier != admitted.identifier() {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    match admitted {
+        floe_access::GrantConsumer::Builtin(identifier) => {
+            floe_access::GrantConsumer::builtin(identifier.clone())
+        }
+        floe_access::GrantConsumer::Extension(identifier) => {
+            floe_access::GrantConsumer::extension(identifier.clone())
+        }
+    }
+    .map_err(|_| AgentFailure::PolicyDenied)
+}
+
 impl floe_access::AuthorizationProofVerifier for GatewayProofVerifier {
     fn verify(
         &self,
@@ -311,8 +331,7 @@ impl floe_access::AuthorizationProofVerifier for GatewayProofVerifier {
             "summarization" => floe_access::GrantPurpose::Summarization,
             _ => return Err(AgentFailure::PolicyDenied),
         };
-        let consumer = floe_access::GrantConsumer::new(wire._consumer)
-            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let consumer = authorization_consumer(&wire._consumer, &command.consumer)?;
         Ok(floe_access::VerifiedAuthorizationClaims {
             person_id: wire.person_id,
             key_id: wire.key_id,
@@ -346,6 +365,7 @@ impl floe_access::AuthorizationProofVerifier for GatewayProofVerifier {
 }
 pub(crate) fn authorization_command(
     expected: &floe_access::RemoteViewAuthorizationExpectation,
+    admitted_consumer: &floe_access::GrantConsumer,
     challenge: &str,
     signature: &str,
     producer: RemoteProducerIdentity,
@@ -361,8 +381,7 @@ pub(crate) fn authorization_command(
         "summarization" => floe_access::GrantPurpose::Summarization,
         _ => return Err(AgentFailure::PolicyDenied),
     };
-    let consumer =
-        floe_access::GrantConsumer::new(wire._consumer).map_err(|_| AgentFailure::PolicyDenied)?;
+    let consumer = authorization_consumer(&wire._consumer, admitted_consumer)?;
     let command = floe_access::AuthorizationSigningCommand {
         operation_id: Uuid::parse_str(&expected.challenge_id)
             .map_err(|_| AgentFailure::PolicyDenied)?,

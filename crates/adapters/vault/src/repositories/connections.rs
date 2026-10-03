@@ -337,7 +337,7 @@ impl SourceOperationRepository for TursoStore {
             let payload = serde_json::to_string(&requested).map_err(|_| SourceRepositoryError::Corrupt)?;
             if payload.len() > MAX_OPERATION_BYTES { return Err(SourceRepositoryError::Corrupt); }
             let changed = connection.execute("INSERT OR IGNORE INTO source_operations(operation_id,command_id,person_id,connection_id,revision,fence,payload) VALUES (?,?,?,?,1,1,?)",
-                (requested.operation_id.to_string(),requested.command_id.to_string(),requested.expected.source.person_id().to_string(),requested.expected.source.connection_id().to_string(),payload)).await.map_err(storage_error)?;
+                (requested.operation_id.to_string(),requested.command_id.to_string(),requested.expected.source.person_id().to_string(),requested.expected.source.connection_id().as_str().to_owned(),payload)).await.map_err(storage_error)?;
             if changed != 1 { return Err(SourceRepositoryError::Conflict); }
             Ok(SourceOperationAdmission { record: requested, replayed: false })
         }.await;

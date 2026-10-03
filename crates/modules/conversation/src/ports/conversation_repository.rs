@@ -1,6 +1,6 @@
 use crate::{
-    AdmittedTurn, CancelRunAdmission, CancelRunCommand, CommandQuery, JournalEntry, RecoveryReceipt,
-    RecoveryRequest, RunReceipt, RunTerminal, TurnAdmission, TurnAdmissionRequest,
+    AdmittedTurn, CancelRunAdmission, CancelRunCommand, CommandQuery, JournalEntry,
+    RecoveryReceipt, RecoveryRequest, RunReceipt, RunTerminal, TurnAdmission, TurnAdmissionRequest,
 };
 use floe_agent_contract::{BoxFuture, ExecutionJournal};
 use floe_kernel::{AgentFailure, RunId};

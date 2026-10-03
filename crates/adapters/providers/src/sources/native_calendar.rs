@@ -71,6 +71,7 @@ fn failure_from_native(value: CalendarFailureDto) -> CalendarFailure {
 
 pub struct NativeCalendar {
     pub calendar_ids: Vec<String>,
+    sources: Arc<dyn floe_connections::ConnectionsRepository>,
     local_events: std::sync::Mutex<Vec<Event>>,
     reviewed_source: std::sync::Mutex<Option<NativeActionSource>>,
 }
@@ -462,9 +463,13 @@ fn native_read_failure(failure: ReadCallFailure) -> AgentFailure {
 }
 
 impl NativeCalendar {
-    pub fn new(calendar_ids: Vec<String>) -> Self {
+    pub fn new(
+        calendar_ids: Vec<String>,
+        sources: Arc<dyn floe_connections::ConnectionsRepository>,
+    ) -> Self {
         Self {
             calendar_ids,
+            sources,
             local_events: Default::default(),
             reviewed_source: Default::default(),
         }
@@ -535,6 +540,7 @@ impl CalendarActionProvider for NativeCalendar {
             calendar_ids.clone(),
             dependency.source().connection_id().as_str().to_owned(),
             action.connection_revision,
+            self.sources.clone(),
         );
         let stamp = access
             .check(CalendarReadAccessRequest {

@@ -1545,6 +1545,13 @@ async fn finish_transaction<T>(
 fn learning_outcome(outcome: floe_conversation::AgentOutcome) -> floe_knowledge::LearningOutcome {
     match outcome {
         floe_conversation::AgentOutcome::Completed => floe_knowledge::LearningOutcome::Completed,
+        floe_conversation::AgentOutcome::Blocked {
+            run_id,
+            review_group_id,
+        } => floe_knowledge::LearningOutcome::Blocked {
+            run_id,
+            review_group_id,
+        },
         floe_conversation::AgentOutcome::Halted { reason } => {
             floe_knowledge::LearningOutcome::Halted { reason }
         }

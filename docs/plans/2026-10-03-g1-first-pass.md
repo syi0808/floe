@@ -22,3 +22,11 @@ Evidence archive SHA-256: `658adbacb504a21602d9aadef9d9dd87280aac1abbd1aceb14a02
 - Correct the attention parser's required Person UUID bound and the seven Dart warnings. Informational style lints are deferred; they are not compilation errors.
 
 These changes are source corrections pending the next coordinated G1 compiler pass, not evidence of a passing Rust or Dart gate.
+
+## Second compiler pass and correction batch
+
+Input `3a698d76b66cec22a4cc59572afa3c90c3a1bf51`. The affected Rust checks ran with keep-going; Dart analysis exited zero with no errors or warnings and the 107 unchanged informational lints. Rust reached the provider and Vault adapters and reported fourteen diagnostics, including cascaded type-inference errors. No lockfile changes occurred. Nine Rust formatter changes are integrated; Dart formatting changed no files, but its launcher exit reflected telemetry-home write permission rather than a source-format diagnostic.
+
+Corrections preserve typed Task IDs and canonical Task/Artifact evidence; source operation storage uses the ConnectionId accessor. Calendar action validation receives the actual Connections repository at construction. Removed obsolete per-session attempt-list pruning without changing immutable Run journals or aggregate usage. Knowledge records Blocked with exact Run/review IDs; its Completed-only evidence and learner admission remain unchanged. Provider signed-consumer verification must preserve the admitted consumer kind and exact signed identifier without guessing builtin authority.
+
+Rust compilation remains pending after this correction batch. Passed unchanged Dart/Go/Swift phases are retained, not rerun without new affected changes. Protocol unused validator warnings remain visible; no validation contract was removed solely to silence them.

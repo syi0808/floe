@@ -1,9 +1,8 @@
 use chrono::Utc;
-pub(super) use floe_access::AccessGrantMutation;
 use floe_access::{
     ConnectionId, ConnectorId, DataAccessGrant, ExecutionOwnerId, GrantAuthority, GrantId,
-    GrantPolicyError, GrantScope, GrantSourceBinding, GrantState, GrantTransitionError,
-    GrantValidationError, apply_grant_mutation, create_grant,
+    GrantPolicyError, GrantSourceBinding, GrantState, GrantTransitionError,
+    GrantValidationError,
 };
 use serde::{Deserialize, Serialize};
 use turso::{Row, transaction::TransactionBehavior};

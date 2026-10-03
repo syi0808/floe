@@ -1,14 +1,13 @@
-use std::{sync::OnceLock, time::Duration};
+use std::sync::OnceLock;
 
 use crate::control::PreparedServerSource;
 use crate::gateway::views::{
     GatewayViewsClient, RemoteViewAuthorizationRequest, parse_remote_view_challenge,
 };
-use floe_access::{AuthorizationSigner, RemoteViewAuthorizationExpectation};
+use floe_access::{AuthorizationSigner, GrantConsumer, RemoteViewAuthorizationExpectation};
 use floe_agent_contract::AgentFailure;
 use floe_connections::{CalendarConnectionRef, ConnectorCatalogObservation, ConnectorSnapshot};
 use floe_execution::limits::{CallLimiter, CallLimits};
-use reqwest::{Client, StatusCode};
 use serde::{Deserialize, de::DeserializeOwned};
 
 /// One authorized view read, as the grant it runs under states it.
@@ -128,6 +127,17 @@ impl ServerSourceClient {
         cancellation: &floe_execution::Cancellation,
     ) -> Result<serde_json::Value, AgentFailure> {
         self.source.revalidate().await?;
+        read.grant.validate().map_err(|_| AgentFailure::PolicyDenied)?;
+        let mut consumers = read
+            .grant
+            .scope()
+            .consumers()
+            .iter()
+            .filter(|consumer| consumer.identifier() == read.consumer);
+        let admitted_consumer = consumers.next().ok_or(AgentFailure::PolicyDenied)?.clone();
+        if consumers.next().is_some() {
+            return Err(AgentFailure::PolicyDenied);
+        }
         let source = read.grant.source();
         let connector = source.connector();
         let connection = source.connection_id();
@@ -171,8 +181,15 @@ impl ServerSourceClient {
             max_bytes,
             query: read.query,
         };
-        self.read_authorized_view(keys, request, expected, deadline, cancellation)
-            .await
+        self.read_authorized_view(
+            keys,
+            request,
+            expected,
+            admitted_consumer,
+            deadline,
+            cancellation,
+        )
+        .await
     }
 
     pub(crate) async fn read_authorized_view<Keys: AuthorizationSigner + ?Sized>(
@@ -180,10 +197,13 @@ impl ServerSourceClient {
         keys: &Keys,
         request: RemoteViewAuthorizationRequest<'_>,
         mut expected: RemoteViewAuthorizationExpectation,
+        admitted_consumer: GrantConsumer,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<serde_json::Value, AgentFailure> {
-        if !request.path.ends_with("/admit") {
+        if !request.path.ends_with("/admit")
+            || request.consumer != admitted_consumer.identifier()
+        {
             return Err(AgentFailure::InvalidInput);
         }
         let _permit = self
@@ -223,6 +243,7 @@ impl ServerSourceClient {
             .read_view_admission(
                 keys,
                 &expected,
+                &admitted_consumer,
                 &challenge,
                 &read_path,
                 deadline,
@@ -253,6 +274,7 @@ impl ServerSourceClient {
             .release_view(
                 keys,
                 &expected,
+                &admitted_consumer,
                 &release,
                 &release_path,
                 deadline,

@@ -1,7 +1,7 @@
 {
   "baseline": "3f4b407f8079d611224cd7adbef121f9e7e75e8e",
   "branch": "refactor/architecture-20261002",
-  "stage": "G1 first pass executed on published source3a17 (local69e6): Go internal build and15Apple compiler-only phases passed; Rust workspace/examples and Dart analysis failed. Coherent compiler-fix integration active; S2 production remains gated.",
+  "stage": "G1 second pass on3a698d76: Dart analysis passed with107infos/0warnings/0errors; Rust keep-going exposed14provider/Vault diagnostics. Second coherent Rust correction batch active; S2 remains gated.",
   "registration_counts": {
     "rust": 1298,
     "rust_retained_owners": 751,
@@ -36,7 +36,7 @@
   "count_caveat": "Source registrations and explicit expansion only, never execution or passing test counts. Table/assertion variants are recorded within each source-linked behavior ledger.",
   "checks": {
     "formatters": "PASS on Mac3a17; returned patch integrated",
-    "compilers": "Go internal build PASS;15Apple compiler-only phases PASS;Rust workspace/examples FAIL, corrections pending rerun",
+    "compilers": "Go internal and15Apple phases PASS on first input; Dart analysis PASS on3a698d76; Rust keep-going FAIL, second corrections pending",
     "builds": "Full builds NOT RUN; G1 Go internal packages only passed",
     "tests": "NOT RUN",
     "architecture_checker": "NOT RUN",
@@ -105,7 +105,7 @@
     "protocol": "Cloud two-file followup applied; current native caller corrections active. No cloud worker editing now.",
     "events": "Owner event buffer applied; actual blocked interaction references added; current native ownership."
   },
-  "last_update": "2026-10-03 04:04 UTC",
+  "last_update": "2026-10-03 04:24 UTC",
   "implementation_ownership": {
     "implement_shared_model_runtime": "shared contracts/runtime/inference, Experts/builtin model call seams, Knowledge Learner journal/model seams, App Expert/Learner adapters and examples; now Conversation owner code and pure projections",
     "implement_go_gateway_slice": "Go/Vault Conversation and native callback lane completed/checkpointed; current static race/transaction audit",
@@ -114,7 +114,7 @@
     "remove_core_rust_tests": "Apple Health/native and Flutter client S1 implementation (reused task after T0 completion)",
     "coordinator": "FFI Conversation/main dispatch, protocol integration, dependency policy/docs and stage closure"
   },
-  "verification_gate": "G1 still open. First-pass Rust errors:missing Apple bindings,Hash derive,Task ID field,integer counter type. Dart1error7warnings107infos. No tests or full app builds.",
+  "verification_gate": "G1 remains open for Rust workspace/examples. Go, Apple compiler-only, and Dart passed their specified scopes. No tests/full app builds.",
   "ancillary_handoff": "Parent completed partial97baselinefiles+manifest branch codex/handoff-s1-e2890706: commit d0eacbd08dc05dde224a1512d313d2a30845648e, tree5c7ac2f02ab0874f62d82562b9126cf5eecaca77. Not full e289 tree, no active S1 publication. Parent owns remote writes.",
   "day_stage": "Full refresh/multi-source mirror/acquisition owner closure remains S2. S1 cached reads/CRUD only; no refresh success/availability claims.",
   "review": "Current source audit and fixes closed across credential, pairing, Access review/Actions invalidation, source device, Go probe/Microsoft identity, safe projections and native callback lifetime. Full static evidence in s1-gateway-current-source-audit-20261002.md and s1-boundary-closure-notes.md. No current runtime validation claim.",
@@ -126,7 +126,7 @@
     "base_commit": "3f4b407f8079d611224cd7adbef121f9e7e75e8e",
     "publication": "Published main source3a17f45abe1c73d87a67933fd8d6df023a84e033; docs76ebaa271966e32c343b51ac85b981b6e0c91d21",
     "mac_thread": "01a0fdd1-926d-7722-a4ea-d88ebb39509c",
-    "result": "First Mac G1 executed on3a17; Go/Apple pass, Rust/Dart fail. Source corrections not yet rechecked."
+    "result": "Second Mac G1: Dart PASS0 with107informational lints; Rust FAIL14diagnostics in providers/Vault. No lockfile drift."
   },
   "s2_preparation": [
     "s2-day-product-read-contract-proposal.md",

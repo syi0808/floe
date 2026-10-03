@@ -2,11 +2,11 @@
 
 Production source: `69e6c427aab0b3dbcbe194281536d05abf1bd6cf`. Documentation source: `72364ad47f098270a4447c8de2f059d9517d46f3`.
 
-This publication contains the compiler-focused production snapshot, the G1 command sheet, and the bounded Markdown documents listed below. It is not the full local Git tree. Original snapshot validation and the current correction status are documented in [G1 first pass](2026-10-03-g1-first-pass.md). Go internal compilation and Apple compiler-only phases passed; Rust and Dart remain pending correction validation. No tests or full application builds have run.
+This publication contains the compiler-focused production snapshot, the G1 command sheet, and the bounded Markdown documents listed below. It is not the full local Git tree. Original snapshot validation and the current correction status are documented in [G1 first pass](2026-10-03-g1-first-pass.md). Go internal compilation and Apple compiler-only phases passed; Dart analysis subsequently passed; Rust remains pending correction validation. No tests or full application builds have run.
 
 Large behavior ledgers, generated source maps, machine-readable audit evidence, and other deferred files are retained in the local refactor checkout and existing delivery artifacts. Their relative links in published documents are **pending publication** where the referenced file is listed as deferred below. Omission does not mean the evidence was discarded or the audit was skipped.
 
-Current correction source: `359a6d02bf0d9f82a8adb5ac0d918edc96c05013`. The original production/document source identities above remain historical provenance.
+Current correction source: `164114b3e73475f33028c9ae16312056187f22e1`. The original production/document source identities above remain historical provenance.
 
 ## Published Markdown documents
 

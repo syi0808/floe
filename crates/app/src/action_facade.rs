@@ -257,6 +257,7 @@ impl FloeCore {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default(),
+            self.store.clone(),
         ))
     }
 
