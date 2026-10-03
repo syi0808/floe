@@ -4,6 +4,8 @@ This document defines the current Rust test-performance and validation policy.
 It is a runbook, not a benchmark archive. Detailed experiments and superseded
 measurements belong in Git history.
 
+During the authorized architecture refactor, the [execution plan](../plans/2026-10-02-architecture-refactor.md) overrides the normal iteration commands below. T0 records and removes the old suite; G1 compiles the complete first slice; G2 builds the complete structure; S3 reconstructs tests before G3 qualification. An empty old suite is not a successful verification result.
+
 ## Rust validation phases
 
 Select doctests by command, not by Cargo's dev/test/release build profile. Keep
@@ -77,23 +79,16 @@ solely to reduce a binary count when doing so weakens isolation or ownership.
 
 ## Shared cross-language fixtures
 
-Rust and Flutter tests share immutable compiled Go-server and Swift-calendar
-fixtures through one content-addressed builder:
+The old shared Go/Swift fixture builder and its test-only callers were removed
+in T0 after their behavior was recorded in the [root tooling ledger](../plans/t0-root-tools-behavior-ledger.md).
+S3 may restore a shared builder if the reconstructed boundary tests require it.
+Its tests must cover source/toolchain identity, output checksum validation,
+concurrent publication and failure cleanup before cache reuse is trusted.
 
-```sh
-python3 tools/validation/build_test_fixtures.py server
-python3 tools/validation/build_test_fixtures.py calendar
-python3 tools/validation/test_test_fixtures.py -v
-```
-
-Artifacts live under `target/test-fixtures/`. The cache key includes relevant
-source inputs, build flags, toolchain identity and SDK/environment inputs. Reuse
-verifies the output checksum, concurrent callers share a per-key file lock, and
-failed builds do not publish partial artifacts.
-
-Only compiled immutable artifacts are shared. Server credentials/data, test
+Only immutable compiled artifacts may be shared. Server credentials/data, test
 databases, profiles and copied native host bundles remain private to each test.
-Tests must not mutate cached artifacts.
+Do not mutate existing cached artifacts or remove user data as part of this
+source-only refactor.
 
 ## Deterministic timing tests
 

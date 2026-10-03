@@ -17,7 +17,8 @@ static int floe_keychain(const char *name, const char *value, int operation, cha
         CFDictionarySetValue(query, kSecReturnData, kCFBooleanTrue);
         CFTypeRef data = NULL;
         status = SecItemCopyMatching(query, &data);
-        if (status == errSecSuccess) {
+        if (status == errSecItemNotFound) status = errSecSuccess;
+        if (status == errSecSuccess && data != NULL) {
             CFIndex length = CFDataGetLength((CFDataRef)data);
             *output = malloc(length + 1);
             memcpy(*output, CFDataGetBytePtr((CFDataRef)data), length);

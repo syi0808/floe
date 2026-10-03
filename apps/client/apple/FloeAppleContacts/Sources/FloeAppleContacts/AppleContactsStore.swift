@@ -14,10 +14,21 @@ struct AppleContactBatch: Equatable, Sendable {
     let coverageComplete: Bool
 }
 
+struct AppleContactResourceRecord: Equatable, Sendable {
+    let identifier: String
+    let displayName: String
+}
+
+struct AppleContactResourceBatch: Equatable, Sendable {
+    let records: [AppleContactResourceRecord]
+    let coverageComplete: Bool
+}
+
 protocol AppleContactsStore: AnyObject {
     func authorizationState() -> AppleContactsAuthorizationState
     func requestAuthorization() async throws -> Bool
     func fetchContacts(limit: Int, identifiers: Set<String>?) throws -> AppleContactBatch
+    func fetchResourceMetadata(limit: Int, identifiers: Set<String>?) throws -> AppleContactResourceBatch
 }
 
 final class SystemAppleContactsStore: AppleContactsStore {
@@ -57,6 +68,29 @@ final class SystemAppleContactsStore: AppleContactsStore {
                 }
             }
         }
+    }
+
+    func fetchResourceMetadata(limit: Int, identifiers: Set<String>? = nil) throws -> AppleContactResourceBatch {
+        let keys: [CNKeyDescriptor] = [
+            CNContactIdentifierKey as CNKeyDescriptor,
+            CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
+            CNContactOrganizationNameKey as CNKeyDescriptor,
+        ]
+        let request = CNContactFetchRequest(keysToFetch: keys)
+        if let identifiers {
+            request.predicate = CNContact.predicateForContacts(withIdentifiers: Array(identifiers))
+        }
+        request.sortOrder = .userDefault
+        request.unifyResults = true
+        var records: [AppleContactResourceRecord] = []
+        var coverageComplete = true
+        try store.enumerateContacts(with: request) { contact, stop in
+            guard records.count < limit else { coverageComplete = false; stop.pointee = true; return }
+            let name = CNContactFormatter.string(from: contact, style: .fullName) ?? ""
+            let label = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? contact.organizationName : name
+            records.append(AppleContactResourceRecord(identifier: contact.identifier, displayName: label))
+        }
+        return AppleContactResourceBatch(records: records, coverageComplete: coverageComplete)
     }
 
     func fetchContacts(limit: Int, identifiers: Set<String>? = nil) throws -> AppleContactBatch {

@@ -1,5 +1,5 @@
 use crate::{ActionInspection, CalendarActionOperation};
-use crate::{CallerContext, ConversationSessionOperation, VaultLifecycleCommand, WorkerAction};
+use crate::{CallerContext, VaultLifecycleCommand, WorkerAction};
 use crate::{ExpertCommand, ExpertInspection};
 use crate::{KnowledgeInspection, MemoryReviewDecision};
 
@@ -7,13 +7,10 @@ use crate::{KnowledgeInspection, MemoryReviewDecision};
 pub(crate) enum LocalOperationIntent {
     VaultStatus,
     VaultCommand(VaultLifecycleCommand),
-    ConversationSession(ConversationSessionOperation),
     ExpertCommand(ExpertCommand),
     ExpertInspection(ExpertInspection),
-    ConnectionObserve(crate::ConnectionObserveOperation),
     KnowledgeInspection(KnowledgeInspection),
     MemoryDecision(MemoryReviewDecision),
-    Connections,
     ActionCommand(CalendarActionOperation),
     ActionInspection(ActionInspection),
 }
@@ -21,11 +18,8 @@ pub(crate) enum LocalOperationIntent {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LocalOperationOwner {
     Vault,
-    Conversation,
     Experts,
-    Access,
     Knowledge,
-    Connections,
     Actions,
 }
 
@@ -33,13 +27,10 @@ impl LocalOperationIntent {
     pub(crate) fn owner(&self) -> LocalOperationOwner {
         match self {
             Self::VaultStatus | Self::VaultCommand(_) => LocalOperationOwner::Vault,
-            Self::ConversationSession(_) => LocalOperationOwner::Conversation,
             Self::ExpertCommand(_) | Self::ExpertInspection(_) => LocalOperationOwner::Experts,
-            Self::ConnectionObserve(_) => LocalOperationOwner::Access,
             Self::KnowledgeInspection(_) | Self::MemoryDecision(_) => {
                 LocalOperationOwner::Knowledge
             }
-            Self::Connections => LocalOperationOwner::Connections,
             Self::ActionCommand(_) | Self::ActionInspection(_) => LocalOperationOwner::Actions,
         }
     }
@@ -50,9 +41,6 @@ impl LocalOperationIntent {
             Self::VaultCommand(VaultLifecycleCommand::Create) => WorkerAction::Create,
             Self::VaultCommand(VaultLifecycleCommand::Unlock) => WorkerAction::Unlock,
             Self::VaultCommand(VaultLifecycleCommand::Lock) => WorkerAction::Lock,
-            Self::ConversationSession(operation) => WorkerAction::ConversationSession {
-                operation: operation.clone(),
-            },
             Self::ExpertInspection(ExpertInspection::Registry) => {
                 WorkerAction::Registry { change: None }
             }
@@ -75,10 +63,6 @@ impl LocalOperationIntent {
                     device_id: caller.device_id().to_owned(),
                 }
             }
-            Self::ConnectionObserve(operation) => WorkerAction::ConnectionObserve {
-                operation: operation.clone(),
-                device_id: caller.device_id().to_owned(),
-            },
             Self::KnowledgeInspection(KnowledgeInspection::Memory) => WorkerAction::Memory,
             Self::KnowledgeInspection(KnowledgeInspection::Review) => {
                 WorkerAction::MemoryReview { decision: None }
@@ -86,7 +70,6 @@ impl LocalOperationIntent {
             Self::MemoryDecision(decision) => WorkerAction::MemoryReview {
                 decision: Some(*decision),
             },
-            Self::Connections => WorkerAction::Connections,
             Self::ActionCommand(operation) => WorkerAction::CalendarAction {
                 operation: operation.clone(),
             },

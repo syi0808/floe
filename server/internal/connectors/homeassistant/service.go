@@ -1,12 +1,14 @@
 package homeassistant
 
 import (
+ "floe/server/internal/integrations"
+ "floe/server/internal/views"
 	"context"
 	"errors"
 	"sync"
 	"time"
 
-	"floe/server/internal/connectors/common"
+	
 )
 
 type Service struct {
@@ -14,7 +16,7 @@ type Service struct {
 	entities  []string
 	clock     func() time.Time
 	operation sync.Mutex
-	last      *LogisticsView
+	last      *views.LogisticsView
 }
 
 func NewService(client *Client, entities []string) (*Service, error) {
@@ -32,7 +34,7 @@ func NewService(client *Client, entities []string) (*Service, error) {
 	return &Service{client: client, entities: selected, clock: time.Now}, nil
 }
 
-func (service *Service) ReadLogisticsView(ctx context.Context) (common.LogisticsView, error) {
+func (service *Service) ReadLogisticsView(ctx context.Context) (views.LogisticsView, error) {
 	service.operation.Lock()
 	defer service.operation.Unlock()
 	view, err := service.client.Logistics(ctx, service.entities, service.clock())
@@ -54,7 +56,7 @@ func (service *Service) ConnectionSnapshot(ctx context.Context) (any, error) {
 	return ConnectionSnapshot(view)
 }
 
-func failureSnapshot(now time.Time, last *LogisticsView, err error) common.Snapshot {
+func failureSnapshot(now time.Time, last *views.LogisticsView, err error) integrations.Snapshot {
 	state, kind := "unavailable", "unavailable"
 	switch {
 	case errors.Is(err, ErrCredentialExpired):
@@ -65,16 +67,16 @@ func failureSnapshot(now time.Time, last *LogisticsView, err error) common.Snaps
 		kind = "partial_fetch"
 	}
 	observed := now.UnixMilli()
-	snapshot := common.Snapshot{
+	snapshot := integrations.Snapshot{
 		Descriptor: ConnectorDescriptor(),
-		Connection: common.Connection{
+		Connection: integrations.Connection{
 			SchemaVersion:    1,
 			ConnectorID:      "home_assistant.states",
 			State:            state,
 			ObservedAtUnixMS: observed,
-			LastFailure:      &common.Failure{Kind: kind, ObservedAtUnixMS: observed},
+			LastFailure:      &integrations.Failure{Kind: kind, ObservedAtUnixMS: observed},
 		},
-		Views: []common.ViewSnapshot{},
+		Views: []views.ViewSnapshot{},
 	}
 	if last != nil {
 		snapshot.Connection.State = "degraded"

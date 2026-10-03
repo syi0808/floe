@@ -1,10 +1,4 @@
-//! The host-authorized model projection: the one immutable input one attempt runs on.
-//!
-//! A projection says the envelope below was assembled from source and history
-//! the current authority admits as model input. It says nothing about which
-//! external recipient may receive it; that admission happens later, at dispatch.
-//! The reference is a host-generated opaque identity: it carries no recipient,
-//! endpoint, route, or credential.
+//! Source-authorized model input bound to one immutable prepared plan.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -60,6 +54,8 @@ impl ModelCorrection {
 #[derive(Clone, Debug)]
 pub struct ModelProjectionRequest {
     pub principal: String,
+    pub projection_operation_id: Uuid,
+    pub plan: crate::PreparedModelPlan,
     pub role: RoleSpec,
     pub conversation: ModelConversation,
     pub catalog: AllowedCatalog,
@@ -69,7 +65,10 @@ pub struct ModelProjectionRequest {
 
 impl ModelProjectionRequest {
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.principal.trim().is_empty()
+        self.plan.validate()?;
+        if self.projection_operation_id.is_nil()
+            || self.principal != self.plan.principal
+            || self.principal.trim().is_empty()
             || self.principal.len() > 256
             || self.principal.chars().any(char::is_control)
             || self.max_output_bytes == 0
@@ -100,6 +99,9 @@ impl ModelProjectionRequest {
 #[serde(deny_unknown_fields)]
 pub struct AuthorizedModelProjection {
     pub projection_ref: ProjectionRef,
+    pub projection_operation_id: Uuid,
+    pub plan_id: Uuid,
+    pub binding_digest: crate::ModelBindingDigest,
     pub projection_revision: u64,
     pub envelope: ContextEnvelope,
     pub coverage: DependencyCoverage,
@@ -109,6 +111,8 @@ pub struct AuthorizedModelProjection {
 impl AuthorizedModelProjection {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         if self.projection_ref.as_uuid().is_nil()
+            || self.projection_operation_id.is_nil()
+            || self.plan_id.is_nil()
             || self.projection_revision == 0
             || self.input_data_classes.is_empty()
             || self.input_data_classes.len() > MAX_INPUT_DATA_CLASSES
@@ -119,5 +123,29 @@ impl AuthorizedModelProjection {
             .validate()
             .map_err(|_| AgentFailure::InvalidInput)?;
         self.envelope.validate()
+    }
+}
+
+
+#[derive(Clone, Debug)]
+pub enum ModelProjectionOutcome {
+    Ready(AuthorizedModelProjection),
+    NeedsSourceReview(SourceProjectionReview),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceProjectionReview {
+    pub projection_operation_id: Uuid,
+    pub target_digest: [u8; 32],
+    pub blockers: floe_context_contract::SourceAccessBlockers,
+}
+
+impl SourceProjectionReview {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.projection_operation_id.is_nil() || self.target_digest == [0; 32] {
+            return Err(AgentFailure::InvalidInput);
+        }
+        self.blockers.validate().map_err(|_| AgentFailure::InvalidInput)
     }
 }

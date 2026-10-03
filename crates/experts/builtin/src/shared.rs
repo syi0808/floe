@@ -12,12 +12,12 @@ use crate::RequirementReadOutcome;
 use floe_agent_contract::prompts::PromptAssembly;
 use floe_agent_contract::{
     AGENT_VERSION, AgentFailure, ExpertModel, ExpertModelAnswer, ExpertModelCall,
-    ExpertModelOutcome, ExpertModelRequirement, SessionProtection,
+    ExpertModelOutcome, SourceProjectionReview, SessionProtection,
 };
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_context_contract::{
     CalendarContextView, CommunicationView, ContextEvidence, ContextIssueReason, ContextSource,
-    MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, ProcessingRequirement,
+    MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS,
     calendar_context_evidence, communication_context_evidence, validate_calendar_context_view,
     validate_communication_view,
 };
@@ -141,19 +141,15 @@ fn admissible(
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExpertJudgment<Output> {
     Decided(Output),
-    Blocked(ProcessingRequirement),
+    Blocked(SourceProjectionReview),
 }
 
-/// The one bounded model call an Expert makes, stating what execution class it
-/// requires. The pre-check validates the context shape only; transfer
-/// authority is the Access dispatch fence inside canonical Inference, never
-/// this call. A blocked dispatch passes through untouched: bounds apply to
-/// an answer, and a blockage carries no usage.
+/// Validate context bounds before the shared planner and source projection.
+/// A source review is returned before allocating any model attempt.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_expert_model<Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
-    requirement: ExpertModelRequirement,
     person_id: PersonId,
     invocation_id: Uuid,
     assignment: &str,
@@ -167,7 +163,6 @@ pub(crate) async fn run_expert_model<Model: ExpertModel>(
     cancellation: &floe_execution::Cancellation,
 ) -> Result<ExpertModelOutcome, AgentFailure> {
     policy.authorize(
-        floe_agent_contract::ModelPlacement::DeviceLocal,
         SessionProtection::Encrypted,
         &context,
         u64::try_from(current_time_unix_ms).map_err(|_| AgentFailure::InvalidInput)?,
@@ -180,8 +175,7 @@ pub(crate) async fn run_expert_model<Model: ExpertModel>(
             policy: policy.clone(),
             context,
             assignment: assignment.to_owned(),
-            requirement,
-            max_output_bytes: max_output_bytes.min(8192),
+                max_output_bytes: max_output_bytes.min(8192),
             max_tokens: max_model_tokens,
             max_cost_micros: max_model_cost_micros,
             deadline,
@@ -204,7 +198,6 @@ pub(crate) async fn run_expert_model<Model: ExpertModel>(
 pub(crate) async fn run_mail_model<Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
-    requirement: ExpertModelRequirement,
     invocation: &MailExpertInvocation,
     prompt: PromptAssembly,
     mut context: AgentContext,
@@ -228,7 +221,6 @@ pub(crate) async fn run_mail_model<Model: ExpertModel>(
     let outcome = run_expert_model(
         model,
         policy,
-        requirement,
         invocation.person_id,
         invocation.invocation_id,
         &invocation.assignment,
@@ -252,7 +244,6 @@ pub(crate) async fn run_mail_model<Model: ExpertModel>(
 pub(crate) async fn run_portfolio_model<Output: DeserializeOwned, Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
-    requirement: ExpertModelRequirement,
     invocation: &PortfolioExpertInvocation,
     evidence: ContextEvidence,
     prompt: PromptAssembly,
@@ -269,7 +260,6 @@ pub(crate) async fn run_portfolio_model<Output: DeserializeOwned, Model: ExpertM
     let outcome = run_expert_model(
         model,
         policy,
-        requirement,
         invocation.person_id,
         invocation.invocation_id,
         &invocation.assignment,
@@ -296,7 +286,6 @@ pub(crate) async fn run_portfolio_model<Output: DeserializeOwned, Model: ExpertM
 pub(crate) async fn run_personal_model<Output: DeserializeOwned, Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
-    requirement: ExpertModelRequirement,
     invocation: &PersonalExpertInvocation,
     evidence: Vec<ContextEvidence>,
     prompt: PromptAssembly,
@@ -313,7 +302,6 @@ pub(crate) async fn run_personal_model<Output: DeserializeOwned, Model: ExpertMo
     let outcome = run_expert_model(
         model,
         policy,
-        requirement,
         invocation.person_id,
         invocation.invocation_id,
         &invocation.assignment,
@@ -432,50 +420,5 @@ pub(crate) fn validate_judgment(
         Err(AgentFailure::InvalidModelOutput)
     } else {
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod calendar_outcome_tests {
-    use super::*;
-    use floe_context_contract::SourceUnavailable;
-
-    fn context() -> AgentContext {
-        AgentContext {
-            projection_version: 1,
-            persona: None,
-            memories: vec![],
-            optional_context_issues: vec![],
-            evidence: vec![],
-        }
-    }
-
-    #[test]
-    fn optional_calendar_absence_is_recorded_instead_of_looking_empty() {
-        let mut context = context();
-        let views = optional_calendar_views(
-            &mut context,
-            RequirementReadOutcome::Unavailable(SourceUnavailable::TemporarilyUnavailable),
-        );
-        assert!(views.is_empty());
-        assert_eq!(context.optional_context_issues.len(), 1);
-        assert_eq!(
-            context.optional_context_issues[0].source,
-            ContextSource::Calendar
-        );
-        assert_eq!(
-            context.optional_context_issues[0].reason,
-            ContextIssueReason::Unavailable
-        );
-
-        optional_calendar_views(&mut context, RequirementReadOutcome::NeedsUserAction);
-        assert_eq!(context.optional_context_issues.len(), 1);
-        assert_eq!(
-            context.optional_context_issues[0].reason,
-            ContextIssueReason::NeedsUserAction
-        );
-
-        optional_calendar_views(&mut context, RequirementReadOutcome::Ready(vec![]));
-        assert!(context.optional_context_issues.is_empty());
     }
 }

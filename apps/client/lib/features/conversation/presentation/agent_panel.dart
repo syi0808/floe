@@ -12,7 +12,7 @@ import 'package:floe_client/app/floe_mascot.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
-import 'package:floe_client/features/conversation/application/agent_controller.dart';
+import 'package:floe_client/features/conversation/application/conversation_controller.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/conversation/presentation/agent_interaction_card.dart';
@@ -30,7 +30,7 @@ class AgentPanel extends StatefulWidget {
     this.onOpenExpertSettings,
   });
 
-  final AgentController controller;
+  final ConversationController controller;
   final VoidCallback onClose;
   final Future<void> Function(String actionId)? onOpenAction;
   final VoidCallback? onOpenSourceReview;
@@ -174,11 +174,14 @@ class _AgentPanelState extends State<AgentPanel> {
                             ? const NeverScrollableScrollPhysics()
                             : null,
                         padding: const EdgeInsets.all(FloeSpace.base),
-                        itemCount: messages.length,
+                        itemCount: messages.length + (controller.session?.hasEarlierMessages == true ? 1 : 0),
                         separatorBuilder: (_, _) =>
                             const SizedBox(height: FloeSpace.base),
-                        itemBuilder: (context, index) =>
-                            _message(strings, messages[index]),
+                        itemBuilder: (context, index) {
+                          final offset = controller.session?.hasEarlierMessages == true ? 1 : 0;
+                          if (offset == 1 && index == 0) return const Text('Earlier messages are retained by Conversation.');
+                          return _message(strings, messages[index - offset]);
+                        },
                       );
                 if (compact) {
                   return SingleChildScrollView(
@@ -278,7 +281,7 @@ class _AgentPanelState extends State<AgentPanel> {
     return output ?? strings.agentConversationSourceUnavailable;
   }
 
-  Widget _composer(AppLocalizations strings, AgentController controller) {
+  Widget _composer(AppLocalizations strings, ConversationController controller) {
     final status = _status(strings, controller);
     final storageLocked =
         controller.usesVault && controller.vaultState != AgentVaultState.ready;
@@ -429,7 +432,7 @@ class _AgentPanelState extends State<AgentPanel> {
     );
   }
 
-  Future<void> _sendText(AgentController controller) async {
+  Future<void> _sendText(ConversationController controller) async {
     final text = _composerText.text.trim();
     if (!controller.canSend) return;
     if (!controller.acceptsConversationText(text)) {
@@ -445,7 +448,7 @@ class _AgentPanelState extends State<AgentPanel> {
     }
   }
 
-  String? _status(AppLocalizations strings, AgentController controller) {
+  String? _status(AppLocalizations strings, ConversationController controller) {
     if (controller.busy) {
       return switch (controller.progress) {
         AgentProgress.loading => strings.agentLoading,

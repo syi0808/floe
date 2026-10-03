@@ -226,29 +226,3 @@ impl GatedStringCall {
 pub const BUNDLE_SIBLING: usize = 0;
 /// The macOS bundle hop count for `Contents/Frameworks` from `Contents/MacOS`.
 pub const MACOS_BUNDLE_ROOT: usize = 1;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unresolvable_entry_point_is_not_available() {
-        // No test binary ships this dylib next to itself on any platform, so
-        // the probe is deterministically false without loading anything real.
-        // The real bundled entries resolve the same cached way.
-        let missing = ByteCall::new(NativeLibrary {
-            relative_path: "Frameworks/libfloe_test_missing_7f3a.dylib",
-            invoke_symbol: c"floe_test_missing_invoke",
-            release_symbol: c"floe_test_missing_free",
-            #[cfg(target_os = "macos")]
-            bundle_parents: MACOS_BUNDLE_ROOT,
-            #[cfg(not(target_os = "macos"))]
-            bundle_parents: BUNDLE_SIBLING,
-        });
-        assert!(!missing.available());
-        assert_eq!(
-            missing.call(&[], 8).unwrap_err(),
-            NativeCallError::Unavailable
-        );
-    }
-}

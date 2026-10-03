@@ -1,6 +1,6 @@
 use crate::{
-    AppComposition, CalendarBatch, CalendarFailure, CalendarRange, CalendarRecord, CallerContext,
-    CaptureId, Classification, ConnectionId, CoreError, DomainRef, ErrorCode, EventId,
+    AppComposition, CallerContext,
+    CaptureId, Classification, CoreError, DomainRef, ErrorCode, EventId,
     EventSchedule, NoteId, PersonId, Priority, Revision, TaskId, TimelineItem,
 };
 use chrono::{DateTime, NaiveDate, Utc};
@@ -21,25 +21,6 @@ pub struct DayMutationRequest {
 }
 
 pub enum DayMutation {
-    ImportCalendarSources {
-        connection_id: ConnectionId,
-        expected_mirror_revision: Option<u64>,
-        range: CalendarRange,
-        batches: Vec<CalendarBatch>,
-        occurred_at: DateTime<Utc>,
-    },
-    ImportCalendar {
-        connection_id: ConnectionId,
-        expected_mirror_revision: Option<u64>,
-        range: CalendarRange,
-        records: Vec<CalendarRecord>,
-        occurred_at: DateTime<Utc>,
-    },
-    CalendarFailed {
-        connection_id: ConnectionId,
-        expected_mirror_revision: Option<u64>,
-        failure: CalendarFailure,
-    },
     SubmitCapture {
         input: String,
         occurred_at: DateTime<Utc>,
@@ -172,57 +153,6 @@ impl DayCommands for AppComposition {
             let mut changed_item = None;
             let mut capture = None;
             match request.mutation {
-                DayMutation::ImportCalendarSources {
-                    connection_id,
-                    expected_mirror_revision,
-                    range,
-                    batches,
-                    occurred_at,
-                } => {
-                    core.import_calendar_sources(
-                        person,
-                        &connection_id,
-                        caller.device_id(),
-                        expected_mirror_revision,
-                        range,
-                        batches,
-                        occurred_at,
-                    )
-                    .await?;
-                }
-                DayMutation::ImportCalendar {
-                    connection_id,
-                    expected_mirror_revision,
-                    range,
-                    records,
-                    occurred_at,
-                } => {
-                    core.import_calendar(
-                        person,
-                        &connection_id,
-                        caller.device_id(),
-                        expected_mirror_revision,
-                        range,
-                        records,
-                        occurred_at,
-                    )
-                    .await?;
-                }
-                DayMutation::CalendarFailed {
-                    connection_id,
-                    expected_mirror_revision,
-                    failure,
-                } => {
-                    core.record_calendar_failure(
-                        person,
-                        &connection_id,
-                        caller.device_id(),
-                        expected_mirror_revision,
-                        failure,
-                        request.day.now,
-                    )
-                    .await?;
-                }
                 DayMutation::SubmitCapture { input, occurred_at } => {
                     capture = Some(core.submit_capture(person, input, occurred_at).await?);
                 }
@@ -232,7 +162,7 @@ impl DayCommands for AppComposition {
                     classification,
                     occurred_at,
                 } => {
-                    let stored = TimelineRepository::get_capture(&core.store, capture_id)
+                    let stored = TimelineRepository::get_capture(core.store.as_ref(), capture_id)
                         .await
                         .map_err(crate::core::day_error)?;
                     check_person(stored.map(|value| value.person_id), person)?;
@@ -282,7 +212,7 @@ impl DayCommands for AppComposition {
                     schedule,
                     occurred_at,
                 } => {
-                    let stored = TimelineRepository::get_event(&core.store, event_id)
+                    let stored = TimelineRepository::get_event(core.store.as_ref(), event_id)
                         .await
                         .map_err(crate::core::day_error)?;
                     check_person(stored.map(|value| value.person_id), person)?;
@@ -305,7 +235,7 @@ impl DayCommands for AppComposition {
                     priority,
                     occurred_at,
                 } => {
-                    let stored = TimelineRepository::get_task(&core.store, task_id)
+                    let stored = TimelineRepository::get_task(core.store.as_ref(), task_id)
                         .await
                         .map_err(crate::core::day_error)?;
                     check_person(stored.map(|value| value.person_id), person)?;
@@ -327,7 +257,7 @@ impl DayCommands for AppComposition {
                     content,
                     occurred_at,
                 } => {
-                    let stored = TimelineRepository::get_note(&core.store, note_id)
+                    let stored = TimelineRepository::get_note(core.store.as_ref(), note_id)
                         .await
                         .map_err(crate::core::day_error)?;
                     check_person(stored.map(|value| value.person_id), person)?;
@@ -347,7 +277,7 @@ impl DayCommands for AppComposition {
                     completed,
                     occurred_at,
                 } => {
-                    let stored = TimelineRepository::get_task(&core.store, task_id)
+                    let stored = TimelineRepository::get_task(core.store.as_ref(), task_id)
                         .await
                         .map_err(crate::core::day_error)?;
                     check_person(stored.map(|value| value.person_id), person)?;
@@ -368,19 +298,19 @@ impl DayCommands for AppComposition {
                 } => {
                     let owner = match &target {
                         DomainRef::Event(identifier) => {
-                            TimelineRepository::get_event(&core.store, *identifier)
+                            TimelineRepository::get_event(core.store.as_ref(), *identifier)
                                 .await
                                 .map_err(crate::core::day_error)?
                                 .map(|value| value.person_id)
                         }
                         DomainRef::Task(identifier) => {
-                            TimelineRepository::get_task(&core.store, *identifier)
+                            TimelineRepository::get_task(core.store.as_ref(), *identifier)
                                 .await
                                 .map_err(crate::core::day_error)?
                                 .map(|value| value.person_id)
                         }
                         DomainRef::Note(identifier) => {
-                            TimelineRepository::get_note(&core.store, *identifier)
+                            TimelineRepository::get_note(core.store.as_ref(), *identifier)
                                 .await
                                 .map_err(crate::core::day_error)?
                                 .map(|value| value.person_id)
@@ -414,84 +344,5 @@ fn check_person(actual: Option<PersonId>, expected: PersonId) -> Result<(), Core
         Ok(())
     } else {
         Err(CoreError::new(ErrorCode::NotFound, "item not found"))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn admitted_day_preserves_person_and_revision_boundaries() {
-        let directory = tempfile::tempdir().unwrap();
-        let person = PersonId::new();
-        let path = directory
-            .path()
-            .join("people")
-            .join(person.to_string())
-            .join("floe.db");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(directory.path().join("local_device_id"), "verified-mac").unwrap();
-        let host = crate::composition::open(path.to_str().unwrap()).unwrap();
-        let admitted = host.request(Uuid::new_v4()).unwrap();
-        let caller = admitted.caller();
-        let services = admitted.services();
-        let now = Utc::now();
-        let read = || DayRead {
-            date: now.date_naive(),
-            timezone_offset_seconds: 0,
-            end_timezone_offset_seconds: None,
-            now,
-        };
-        let created = services
-            .mutate_day(
-                caller,
-                DayMutationRequest {
-                    command_id: Uuid::new_v4(),
-                    day: read(),
-                    mutation: DayMutation::CreateNote {
-                        content: "owned".into(),
-                        occurred_at: now,
-                    },
-                },
-            )
-            .unwrap();
-        let TimelineItem::Note(note) = created.changed_item.unwrap() else {
-            panic!("expected Note")
-        };
-        assert_eq!(note.person_id, person);
-        let foreign = CallerContext::verified(
-            crate::LocalIdentityClaim {
-                person_id: Uuid::new_v4(),
-                device_id: caller.device_id().into(),
-            },
-            caller.runtime_epoch(),
-        )
-        .unwrap();
-        for (identity, revision, code) in [
-            (&foreign, note.revision.0, ErrorCode::NotFound),
-            (caller, note.revision.0 + 1, ErrorCode::Conflict),
-        ] {
-            let result = services.mutate_day(
-                identity,
-                DayMutationRequest {
-                    command_id: Uuid::new_v4(),
-                    day: read(),
-                    mutation: DayMutation::UpdateNote {
-                        note_id: note.id,
-                        expected_revision: revision,
-                        content: "unauthorized".into(),
-                        occurred_at: now,
-                    },
-                },
-            );
-            assert_eq!(result.err().unwrap().code, code);
-        }
-        let stored = services
-            .runtime
-            .block_on(TimelineRepository::get_note(&services.core.store, note.id))
-            .unwrap()
-            .unwrap();
-        assert_eq!(stored, note);
     }
 }

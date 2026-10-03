@@ -1,25 +1,21 @@
-//! Canonical delegated Expert model/source host.
-//!
-//! Delegated built-in Experts reason through shared Inference: the Expert
-//! states what execution class it requires, Context projects the authorized
-//! input, Inference selects the profile and owns the attempt, and Access
-//! fences the dispatch. No provider, route, or usage ledger is selected here.
+//! Delegated Expert input translation onto the shared prepared model port.
 
 use std::{future::Future, pin::Pin, sync::Mutex};
 
 use floe_agent_contract::{
     AGENT_VERSION, AgentFailure, AllowedCatalog, DataClass, DependencyCoverage, ExpertModelAnswer,
-    ExpertModelCall, ExpertModelOutcome, ExpertModelRequirement, ExpertReasoningStep, ExpertStep,
+    ExpertModelCall, ExpertModelOutcome, ExpertReasoningStep, ExpertStep,
     ExpertStepOutcome, ExpertStepResult, ExpertTranscriptEntry, InferencePolicyDecision,
-    InvocationKey, ModelCallOutcome, ModelConversation, ModelConversationEntry, ModelPlacement,
-    ModelRequest, ModelStep, ToolCall, ToolDescriptor, ToolResult, TransferConsent,
+    InvocationKey, ModelConversation, ModelConversationEntry,
+    ModelRequest, ModelStep, ToolCall, ToolDescriptor, ToolResult,
+    ExecutionJournal, JournalAck, JournalEvent, ModelCapabilities, ModelPlanRequest, ModelPort,
+    ModelProjectionOutcome, ModelResponse, PreparedModelPlan, SourceProjectionReview,
 };
 use floe_context::{
     AttentionView, CalendarContextView, CalendarReviewClassification, NativeContextView,
-    PeopleView, PersonalGrantRecords, WellbeingView, classify_calendar_review,
+    PeopleView, WellbeingView, classify_calendar_review,
     current_calendar_connector as calendar_connector_id, observe_calendar_binding,
 };
-use floe_inference::{InferenceExecutionConstraint, InferenceExecutor};
 use floe_kernel::{PersonId, TaskId};
 use floe_provider_adapters::sources::ServerSourceClient;
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
@@ -41,87 +37,10 @@ pub(super) fn expert_policy(package_data_class: DataClass) -> InferencePolicyDec
     data_classes.sort();
     data_classes.dedup();
     InferencePolicyDecision {
-        purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE.into(),
+        purpose: "everyday_assistance".into(),
         data_classes,
-        allowed_placements: vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote],
         performance_class: "interactive".into(),
         projection_version: 1,
-        external_transfer_consent: TransferConsent::NotGranted,
-        bounded_sensitive_projection: false,
-    }
-}
-
-#[cfg(test)]
-#[test]
-fn admitted_manifest_class_is_an_allowance_not_evidence_authority() {
-    let registration = floe_experts_builtin::registrations()
-        .into_iter()
-        .find(|entry| entry.manifest.data_class == DataClass::HighlySensitive)
-        .unwrap();
-    let policy = expert_policy(registration.manifest.data_class);
-    assert_eq!(
-        policy.data_classes,
-        vec![DataClass::Personal, DataClass::HighlySensitive]
-    );
-    assert_eq!(
-        policy.external_transfer_consent,
-        TransferConsent::NotGranted
-    );
-    assert!(!policy.bounded_sensitive_projection);
-    let context = floe_agent_contract::AgentContext {
-        projection_version: 1,
-        persona: None,
-        memories: vec![],
-        optional_context_issues: vec![],
-        evidence: vec![floe_agent_contract::ContextEvidence {
-            source_handle: "health:test".into(),
-            data_class: DataClass::HighlySensitive,
-            untrusted_text: "bounded wellbeing".into(),
-            expires_at_unix_ms: 100,
-        }],
-    };
-    assert_eq!(
-        policy.authorize(
-            ModelPlacement::DeviceLocal,
-            floe_agent_contract::SessionProtection::Encrypted,
-            &context,
-            1
-        ),
-        Ok(())
-    );
-    assert_eq!(
-        expert_policy(DataClass::Personal).authorize(
-            ModelPlacement::DeviceLocal,
-            floe_agent_contract::SessionProtection::Encrypted,
-            &context,
-            1
-        ),
-        Err(AgentFailure::PolicyDenied)
-    );
-    for class in [DataClass::Credential, DataClass::DeviceOnlyRaw] {
-        let policy = expert_policy(class);
-        assert!(policy.data_classes.contains(&class));
-        assert_eq!(
-            policy.authorize(
-                ModelPlacement::DeviceLocal,
-                floe_agent_contract::SessionProtection::Encrypted,
-                &context,
-                1
-            ),
-            Err(AgentFailure::PolicyDenied)
-        );
-    }
-}
-
-/// Map an Expert-owned requirement to the Inference execution constraint.
-///
-/// The mapping is 1:1 by construction: the Expert states a class, Inference
-/// selects a profile satisfying it. No provider is named here.
-fn execution_constraint(requirement: ExpertModelRequirement) -> InferenceExecutionConstraint {
-    match requirement {
-        ExpertModelRequirement::Any => InferenceExecutionConstraint::Any,
-        ExpertModelRequirement::DeviceOnly => InferenceExecutionConstraint::DeviceOnly,
-        ExpertModelRequirement::RemoteOnly => InferenceExecutionConstraint::RemoteOnly,
     }
 }
 
@@ -318,153 +237,156 @@ fn expert_conversation(
     })
 }
 
-/// The model an Expert reasons on, as the Expert's own contract states it.
-///
-/// An Expert asks one question and is owed one answer. Projecting the
-/// authorized input is Context's work; selecting the profile, fencing the
-/// dispatch, and settling the attempt is Inference's. This host only binds
-/// the two: the Expert call becomes a Context projection plus a canonical
-/// model request under a bounded child of the Task scope.
+/// Selected model input and source review evidence for the admitted Task.
 pub(crate) struct ExpertModelHost<'a> {
-    pub(crate) executor: &'a dyn InferenceExecutor,
+    pub(crate) model: &'a dyn ModelPort,
+    pub(crate) journal: &'a dyn ExecutionJournal,
+    pub(crate) task_id: TaskId,
+    pub(crate) device_id: &'a str,
     pub(crate) scope: &'a floe_execution::ExecutionScope,
     pub(crate) captured: &'a Mutex<Vec<floe_context_contract::ContextDependency>>,
-    /// The intent lineage this delegation's dispatches run under, derived
-    /// from the admitted delegation (Session + manager origin Run). `None`
-    /// for non-Conversation delegation, whose external dispatches fail
-    /// closed without a reviewable requirement.
-    pub(crate) lineage: Option<floe_context_contract::RecipientLineage>,
-    /// The trusted model requirement this invocation blocked on, stashed
-    /// for the endpoint to publish. First blockage wins: the Expert stops
-    /// at the first one, so at most one is ever stashed.
-    pub(crate) model_blocked: &'a Mutex<Option<floe_context_contract::ProcessingRequirement>>,
+    pub(crate) model_blocked: &'a Mutex<Option<ExpertProjectionBlocker>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ExpertProjectionBlocker {
+    pub(crate) plan: PreparedModelPlan,
+    pub(crate) review: SourceProjectionReview,
+}
+
+struct ExpertModelInput {
+    person_id: PersonId,
+    invocation_id: Uuid,
+    prompt: floe_agent_contract::prompts::PromptAssembly,
+    context: floe_agent_contract::AgentContext,
+    conversation: ModelConversation,
+    catalog: AllowedCatalog,
+    data_classes: Vec<DataClass>,
+    max_tokens: u64,
+    max_cost_micros: u64,
+    max_output_bytes: usize,
+    deadline: tokio::time::Instant,
+}
+
+enum ExpertGeneration {
+    Answered(ModelResponse),
+    NeedsSourceReview(SourceProjectionReview),
 }
 
 impl ExpertModelHost<'_> {
-    fn captured_dependencies(
-        &self,
-    ) -> Result<Vec<floe_context_contract::ContextDependency>, AgentFailure> {
-        self.captured
-            .lock()
-            .map(|guard| guard.clone())
-            .map_err(|_| AgentFailure::StorageUnavailable)
-    }
-
-    fn child_scope(
-        &self,
-        deadline: tokio::time::Instant,
-        max_tokens: u64,
-        max_cost_micros: u64,
-        invocation_id: Uuid,
-    ) -> floe_execution::ExecutionScope {
-        self.scope.child_scope(
-            deadline,
-            max_tokens,
-            max_cost_micros,
-            TaskId::from_uuid(invocation_id),
-        )
-    }
-
-    /// Stash the trusted requirement one dispatch blocked on for the
-    /// endpoint to publish. First blockage wins.
-    fn stash_blocked(
-        &self,
-        requirement: floe_context_contract::ProcessingRequirement,
-    ) -> Result<(), AgentFailure> {
-        requirement
-            .validate()
-            .map_err(|_| AgentFailure::InvalidInput)?;
-        let mut blocked = self
-            .model_blocked
-            .lock()
-            .map_err(|_| AgentFailure::StorageUnavailable)?;
-        if blocked.is_none() {
-            *blocked = Some(requirement);
+    async fn generate(&self, input: ExpertModelInput) -> Result<ExpertGeneration, AgentFailure> {
+        let child = self.scope.child_scope(input.deadline, input.max_tokens, input.max_cost_micros,
+            TaskId::from_uuid(input.invocation_id));
+        let request = ModelPlanRequest {
+            principal: input.person_id.to_string(),
+            device_id: self.device_id.to_owned(),
+            purpose: "everyday_assistance".into(),
+            consumer: floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+            required_capabilities: ModelCapabilities::chat(),
+        };
+        let prepared = child.run(self.model.prepare(request.clone(), &child)).await?;
+        let plan = prepared.plan().clone();
+        plan.validate()?;
+        if plan.principal != request.principal || plan.device_id != request.device_id
+            || plan.purpose != request.purpose || plan.consumer != request.consumer {
+            return Err(AgentFailure::PolicyDenied);
         }
-        Ok(())
+        let dependencies = self.captured.lock().map_err(|_| AgentFailure::StorageUnavailable)?.clone();
+        let projection = floe_context::assemble_context_projection(floe_context::ContextProjectionInput {
+            role: floe_context::ContextProjectionRole::Expert,
+            plan: &plan,
+            projection_operation_id: Uuid::new_v4(),
+            purpose: &plan.purpose,
+            response_contract: "One bounded Expert reasoning result.",
+            correction: None,
+            prompt: input.prompt,
+            conversation: input.conversation,
+            agent_context: &input.context,
+            catalog: &input.catalog,
+            expert_environment: None,
+            authorized_history_dependencies: &dependencies,
+            input_data_classes: input.data_classes,
+            max_output_bytes: input.max_output_bytes,
+        })?;
+        let projection = match projection {
+            ModelProjectionOutcome::Ready(projection) => projection,
+            ModelProjectionOutcome::NeedsSourceReview(review) => {
+                review.validate()?;
+                let mut blocked = self.model_blocked.lock().map_err(|_| AgentFailure::StorageUnavailable)?;
+                if blocked.is_none() { *blocked = Some(ExpertProjectionBlocker { plan, review: review.clone() }); }
+                return Ok(ExpertGeneration::NeedsSourceReview(review));
+            }
+        };
+        let attempt_id = Uuid::new_v4();
+        let reservation_ceiling = floe_execution::budget::ModelReservationCeiling::for_lease(child.budget());
+        let intent = child.run(self.journal.record_intent(JournalEvent::ModelIntent {
+            reservation_ceiling,            parent_task_id: Some(self.task_id),
+            attempt_id,
+            projection_ref: projection.projection_ref,
+            plan: plan.clone(),
+        })).await?;
+        if !matches!(intent, JournalAck::Accepted { .. }) { return Err(AgentFailure::Conflict); }
+        let response = child.run(prepared.generate(ModelRequest {
+            attempt_id,
+            reservation_ceiling,
+            principal: request.principal,
+            device_id: request.device_id,
+            purpose: request.purpose,
+            consumer: request.consumer,
+            projection,
+            catalog: input.catalog,
+            replay: vec![],
+        }, &child)).await;
+        let receipt = child.budget().model_attempt_receipt(attempt_id);
+        if receipt.is_none() && (response.is_ok() || child.budget().model_attempt_admitted(attempt_id)) {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        let (usage, accounting) = receipt.map_or_else(
+            || (floe_agent_contract::ModelUsage::default(), floe_agent_contract::ModelAccounting::default()),
+            |receipt| (floe_agent_contract::ModelUsage {
+                tokens: receipt.charged_tokens, cost_micros: receipt.charged_cost_micros,
+            }, receipt.accounting),
+        );
+        let acknowledgment = self.journal.record_result(JournalEvent::ModelResult { attempt_id, usage, accounting }).await?;
+        if !matches!(acknowledgment, JournalAck::Accepted { .. }) { return Err(AgentFailure::Conflict); }
+        if receipt.is_some() { child.budget().acknowledge_model_attempt(attempt_id)?; }
+        let response = response?;
+        if response.attempt_id != attempt_id || response.usage != usage || response.accounting != accounting {
+            return Err(AgentFailure::InvalidModelOutput);
+        }
+        Ok(ExpertGeneration::Answered(response))
     }
 }
 
 impl floe_agent_contract::ExpertModel for ExpertModelHost<'_> {
-    fn answer<'a>(
-        &'a self,
-        call: ExpertModelCall,
-    ) -> floe_agent_contract::BoxFuture<'a, Result<ExpertModelOutcome, AgentFailure>> {
+    fn answer<'a>(&'a self, call: ExpertModelCall)
+        -> floe_agent_contract::BoxFuture<'a, Result<ExpertModelOutcome, AgentFailure>> {
         Box::pin(async move {
-            if call.cancellation.is_cancelled() {
-                return Err(AgentFailure::Cancelled);
-            }
-            if call.deadline <= tokio::time::Instant::now() {
-                return Err(AgentFailure::DeadlineExceeded);
-            }
+            if call.cancellation.is_cancelled() { return Err(AgentFailure::Cancelled); }
+            if call.deadline <= tokio::time::Instant::now() { return Err(AgentFailure::DeadlineExceeded); }
             call.prompt.validate()?;
-            if call.assignment.trim().is_empty() || call.assignment.len() > 2048 {
-                return Err(AgentFailure::InvalidInput);
-            }
-            let dependencies = self.captured_dependencies()?;
-            let catalog = AllowedCatalog {
-                cards: vec![],
-                tools: vec![],
-                revision: 1,
-            };
-            let conversation = ModelConversation {
-                history: vec![],
-                current_turn: vec![ModelConversationEntry::User {
-                    message_id: Uuid::new_v4(),
-                    text: call.assignment,
-                }],
-            };
-            let projection =
-                floe_context::assemble_context_projection(floe_context::ContextProjectionInput {
-                    role: floe_context::ContextProjectionRole::Expert,
-                    purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
-                    response_contract: "One answer to the Expert assignment.",
-                    correction: None,
-                    prompt: call.prompt,
-                    conversation,
-                    agent_context: &call.context,
-                    catalog: &catalog,
-                    expert_environment: None,
-                    authorized_history_dependencies: &dependencies,
-                    input_data_classes: call.policy.data_classes.clone(),
-                    max_output_bytes: call.max_output_bytes,
-                })?;
-            let child = self.child_scope(
-                call.deadline,
-                call.max_tokens,
-                call.max_cost_micros,
-                call.invocation_id,
-            );
-            let outcome = self
-                .executor
-                .execute(
-                    ModelRequest {
-                        attempt_id: Uuid::new_v4(),
-                        principal: call.person_id.to_string(),
-                        projection,
-                        catalog,
-                        purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE.into(),
-                        consumer: floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
-                        preferred_profile_id: None,
-                        replay: vec![],
-                        lineage: self.lineage,
-                    },
-                    &child,
-                    execution_constraint(call.requirement),
-                )
-                .await?;
+            if call.assignment.trim().is_empty() || call.assignment.len() > 2048 { return Err(AgentFailure::InvalidInput); }
+            let outcome = self.generate(ExpertModelInput {
+                person_id: call.person_id,
+                invocation_id: call.invocation_id,
+                prompt: call.prompt,
+                context: call.context,
+                conversation: ModelConversation {
+                    history: vec![],
+                    current_turn: vec![ModelConversationEntry::User { message_id: Uuid::new_v4(), text: call.assignment }],
+                },
+                catalog: AllowedCatalog { cards: vec![], tools: vec![], revision: 1 },
+                data_classes: call.policy.data_classes,
+                max_tokens: call.max_tokens,
+                max_cost_micros: call.max_cost_micros,
+                max_output_bytes: call.max_output_bytes,
+                deadline: call.deadline,
+            }).await?;
             let response = match outcome {
-                ModelCallOutcome::Ready(response) => response,
-                ModelCallOutcome::NeedsUserAction(requirement) => {
-                    self.stash_blocked(requirement.clone())?;
-                    return Ok(ExpertModelOutcome::Blocked(requirement));
-                }
+                ExpertGeneration::Answered(response) => response,
+                ExpertGeneration::NeedsSourceReview(review) => return Ok(ExpertModelOutcome::Blocked(review)),
             };
-            // One question, one reply: a preamble, a tool call or a
-            // delegation is not an answer to an Expert's assignment.
-            let [ModelStep::Answer { text, .. }] = response.steps.as_slice() else {
-                return Err(AgentFailure::InvalidModelOutput);
-            };
+            let [ModelStep::Answer { text, .. }] = response.steps.as_slice() else { return Err(AgentFailure::InvalidModelOutput); };
             Ok(ExpertModelOutcome::Answered(ExpertModelAnswer {
                 schema_version: AGENT_VERSION,
                 answer: text.clone(),
@@ -476,85 +398,39 @@ impl floe_agent_contract::ExpertModel for ExpertModelHost<'_> {
 }
 
 impl floe_agent_contract::ExpertReasoner for ExpertModelHost<'_> {
-    fn step<'a>(
-        &'a self,
-        step: ExpertReasoningStep,
-    ) -> floe_agent_contract::BoxFuture<'a, Result<ExpertStepResult, AgentFailure>> {
+    fn step<'a>(&'a self, step: ExpertReasoningStep)
+        -> floe_agent_contract::BoxFuture<'a, Result<ExpertStepResult, AgentFailure>> {
         Box::pin(async move {
-            if step.cancellation.is_cancelled() {
-                return Err(AgentFailure::Cancelled);
-            }
-            if step.deadline <= tokio::time::Instant::now() {
-                return Err(AgentFailure::DeadlineExceeded);
-            }
+            if step.cancellation.is_cancelled() { return Err(AgentFailure::Cancelled); }
+            if step.deadline <= tokio::time::Instant::now() { return Err(AgentFailure::DeadlineExceeded); }
             step.prompt.validate()?;
-            // The Expert's transcript is its own; it becomes a canonical
-            // conversation only for as long as the model call lasts.
             let catalog = expert_catalog(&step.capabilities)?;
             let conversation = expert_conversation(step.transcript, &catalog)?;
-            let dependencies = self.captured_dependencies()?;
-            let projection =
-                floe_context::assemble_context_projection(floe_context::ContextProjectionInput {
-                    role: floe_context::ContextProjectionRole::Expert,
-                    purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
-                    response_contract: "One Expert reasoning step.",
-                    correction: None,
-                    prompt: step.prompt,
-                    conversation,
-                    agent_context: &step.context,
-                    catalog: &catalog,
-                    expert_environment: None,
-                    authorized_history_dependencies: &dependencies,
-                    input_data_classes: step.policy.data_classes.clone(),
-                    max_output_bytes: step.max_output_bytes,
-                })?;
-            let child = self.child_scope(
-                step.deadline,
-                step.remaining_tokens,
-                step.remaining_cost_micros,
-                step.invocation_id,
-            );
-            let outcome = self
-                .executor
-                .execute(
-                    ModelRequest {
-                        attempt_id: Uuid::new_v4(),
-                        principal: step.person_id.to_string(),
-                        projection,
-                        catalog,
-                        purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE.into(),
-                        consumer: floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
-                        preferred_profile_id: None,
-                        replay: vec![],
-                        lineage: self.lineage,
-                    },
-                    &child,
-                    execution_constraint(step.requirement),
-                )
-                .await?;
+            let outcome = self.generate(ExpertModelInput {
+                person_id: step.person_id,
+                invocation_id: step.invocation_id,
+                prompt: step.prompt,
+                context: step.context,
+                conversation,
+                catalog,
+                data_classes: step.policy.data_classes,
+                max_tokens: step.remaining_tokens,
+                max_cost_micros: step.remaining_cost_micros,
+                max_output_bytes: step.max_output_bytes,
+                deadline: step.deadline,
+            }).await?;
             let response = match outcome {
-                ModelCallOutcome::Ready(response) => response,
-                ModelCallOutcome::NeedsUserAction(requirement) => {
-                    self.stash_blocked(requirement.clone())?;
-                    return Ok(ExpertStepResult::Blocked(requirement));
-                }
+                ExpertGeneration::Answered(response) => response,
+                ExpertGeneration::NeedsSourceReview(review) => return Ok(ExpertStepResult::Blocked(review)),
             };
             Ok(ExpertStepResult::Stepped(ExpertStepOutcome {
                 schema_version: AGENT_VERSION,
-                steps: response
-                    .steps
-                    .into_iter()
-                    .map(|step| match step {
-                        ModelStep::Preamble { text } => Ok(ExpertStep::Preamble { text }),
-                        ModelStep::Answer { text, .. } => Ok(ExpertStep::Answer { text }),
-                        ModelStep::CallTool { tool_id, input, .. } => Ok(ExpertStep::Call {
-                            capability_id: tool_id,
-                            input,
-                        }),
-                        // An Expert has no one to delegate to.
-                        ModelStep::Delegate { .. } => Err(AgentFailure::CapabilityDenied),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
+                steps: response.steps.into_iter().map(|step| match step {
+                    ModelStep::Preamble { text } => Ok(ExpertStep::Preamble { text }),
+                    ModelStep::Answer { text, .. } => Ok(ExpertStep::Answer { text }),
+                    ModelStep::CallTool { tool_id, input, .. } => Ok(ExpertStep::Call { capability_id: tool_id, input }),
+                    ModelStep::Delegate { .. } => Err(AgentFailure::CapabilityDenied),
+                }).collect::<Result<Vec<_>, _>>()?,
                 replay: None,
                 used_tokens: response.usage.tokens,
                 cost_micros: response.usage.cost_micros,
@@ -956,6 +832,8 @@ pub(super) struct SelectedCalendarContextReader<'a, Keys: VaultKeyProvider> {
     pub(super) core: &'a FloeCore,
     pub(super) vault: &'a EncryptedAgentVault<Keys>,
     pub(super) source_client: Option<&'a ServerSourceClient>,
+    pub(super) signer: &'a dyn floe_access::AuthorizationSigner,
+    pub(super) verifier: &'a dyn floe_access::SourcePreviewVerifier,
     pub(super) device_id: &'a str,
 }
 
@@ -1020,7 +898,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
             let expected_owner = if connector_id == "calendar.event_kit" {
                 self.device_id.to_owned()
             } else {
-                self.vault.remote_pinned_producer().await?.execution_owner
+                floe_access::GatewayTrustReader::pinned_producer(self.vault).await?.execution_owner
             };
             if connection.execution_owner_id().as_str() != expected_owner
                 || selected
@@ -1051,12 +929,15 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                 let authorized_client =
                     floe_provider_adapters::sources::AuthorizedSourceClient::new(
                         source_client,
-                        self.vault,
+                        self.signer,
                     );
                 let query_bytes =
                     serde_json::to_vec(query).map_err(|_| AgentFailure::InvalidInput)?;
                 let outcome = floe_context::read_selected_remote_view(
                     self.vault,
+                    self.verifier,
+                    self.core.store.as_ref(),
+                    self.core.store.as_ref(),
                     &authorized_client,
                     person_id,
                     pairing,
@@ -1112,6 +993,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                         calendar_ids.clone(),
                         connection.connection_id().as_str().to_owned(),
                         connection.revision(),
+                        self.core.store.clone(),
                     );
                     let window = floe_context::RemoteCallWindow {
                         deadline,
@@ -1147,9 +1029,10 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                 result,
                 Err(AgentFailure::AccessReviewRequired | AgentFailure::CredentialExpired)
             ) {
-                let grants = floe_vault::VaultGrantRecords::new(self.vault)
-                    .grants()
-                    .await?;
+                let source = floe_context_contract::GrantSourceBinding::try_new(person_id,
+                    connection.connection_id().clone(), connection.connector_id().clone(), connection.execution_owner_id().clone())
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+                let grants = floe_access::GrantRepository::snapshot(self.vault, source).await?.grants;
                 let review = classify_calendar_review(
                     &grants,
                     person_id,
@@ -1234,7 +1117,7 @@ impl<Keys: VaultKeyProvider> PersonalAttentionReaderApi for PersonalAttentionRea
             }
             floe_context::admit_selected_attention_outcome(
                 &personal_grants::CorePersonalConnections { core: self.core },
-                &floe_vault::VaultGrantRecords::new(self.vault),
+                self.vault,
                 &personal_grants::native_driver(self.local_context),
                 person_id,
                 self.device_id,
@@ -1289,7 +1172,7 @@ impl<Keys: VaultKeyProvider> PersonalWellbeingReaderApi for PersonalWellbeingRea
         Box::pin(async move {
             floe_context::read_selected_wellbeing_outcome(
                 &personal_grants::CorePersonalConnections { core: self.core },
-                &floe_vault::VaultGrantRecords::new(self.vault),
+                self.vault,
                 &personal_grants::native_driver(self.local_context),
                 person_id,
                 self.device_id,
@@ -1329,7 +1212,7 @@ impl<Keys: VaultKeyProvider> PersonalPeopleReaderApi for PersonalPeopleReader<'_
         Box::pin(async move {
             floe_context::read_selected_people_outcome(
                 &personal_grants::CorePersonalConnections { core: self.core },
-                &floe_vault::VaultGrantRecords::new(self.vault),
+                self.vault,
                 &personal_grants::native_driver(self.local_context),
                 person_id,
                 self.device_id,
@@ -1393,1059 +1276,5 @@ impl<Keys: VaultKeyProvider> ConversationContextReaderApi for ConversationContex
             16,
             8 * 1024,
         ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use floe_agent_contract::{ExpertModel, ExpertReasoner};
-    use std::collections::VecDeque;
-
-    fn calendar_connection() -> floe_connections::SourceConnection {
-        let mut source = floe_connections::SourceConnection::establish(
-            PersonId::new(),
-            floe_context_contract::ConnectorId::try_new("calendar.event_kit").unwrap(),
-            floe_context_contract::ConnectionId::try_new("connection").unwrap(),
-            floe_context_contract::ExecutionOwnerId::try_new("device").unwrap(),
-            floe_connections::ResourceMode::Selected,
-            vec![
-                floe_connections::ConnectionResource::new(
-                    floe_context_contract::ResourceHandle::try_new("primary").unwrap(),
-                    "Primary".into(),
-                )
-                .unwrap(),
-            ],
-        )
-        .unwrap();
-        source
-            .update_native_subject(source.revision(), "a".repeat(64))
-            .unwrap();
-        source
-    }
-
-    fn review_classification(
-        reason: floe_context_contract::SourceAccessRequirementKind,
-        observed: Option<floe_context_contract::ObservedGrant>,
-    ) -> CalendarReviewClassification {
-        CalendarReviewClassification { reason, observed }
-    }
-
-    fn selected_calendar() -> Vec<floe_context_contract::SourceSelectionReference> {
-        vec![floe_context_contract::SourceSelectionReference {
-            connector_id: floe_context_contract::ConnectorId::try_new("calendar.event_kit")
-                .unwrap(),
-            connection_id: floe_context_contract::ConnectionId::try_new("connection").unwrap(),
-            execution_owner_id: floe_context_contract::ExecutionOwnerId::try_new("device").unwrap(),
-            capability_id: "calendar.timeline".into(),
-            resource: floe_access::native_calendar_resource("connection").unwrap(),
-            contract_version: 1,
-        }]
-    }
-
-    fn blockers_requirement(
-        outcome: floe_context_contract::SourceReadOutcome<Vec<String>>,
-    ) -> floe_context_contract::SourceAccessRequirement {
-        let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = outcome else {
-            panic!("calendar review must remain actionable");
-        };
-        blockers.validate().unwrap();
-        assert_eq!(blockers.blockers().len(), 1);
-        blockers.blockers()[0].clone()
-    }
-
-    #[test]
-    fn calendar_review_requirement_binds_current_connection_and_expert() {
-        let connection = calendar_connection();
-        let observed = floe_context_contract::ObservedGrant::try_new(
-            floe_context_contract::GrantId::new(),
-            floe_context_contract::GrantAuthority::new(),
-        )
-        .unwrap();
-        let review = review_classification(
-            floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource,
-            Some(observed),
-        );
-        let outcome = calendar_read_outcome::<Vec<String>>(
-            Err(AgentFailure::AccessReviewRequired),
-            floe_context_contract::source_access_id_for_capability("calendar.timeline").unwrap(),
-            &connection,
-            &selected_calendar(),
-            "floe.builtin.schedule",
-            &review,
-            None,
-        )
-        .unwrap();
-        let requirement = blockers_requirement(outcome);
-        assert_eq!(requirement.source_id(), "floe.source.calendar");
-        assert_eq!(requirement.consumer().identifier(), "floe.builtin.schedule");
-        assert_eq!(
-            requirement.connector_id().unwrap().as_str(),
-            "calendar.event_kit"
-        );
-        assert_eq!(requirement.connection_id().unwrap().as_str(), "connection");
-        assert_eq!(
-            requirement.resources()[0].as_str(),
-            "calendar.timeline:connection"
-        );
-        assert_eq!(
-            requirement.source_authority(),
-            Some(connection.source_authority())
-        );
-        assert_eq!(requirement.observed_grant(), Some(observed));
-        assert!(requirement.inline_resolution());
-    }
-
-    #[test]
-    fn nonbuiltin_calendar_review_uses_context_identity_and_exact_consumer() {
-        let connection = calendar_connection();
-        let review = review_classification(
-            floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource,
-            None,
-        );
-        let outcome = calendar_read_outcome::<Vec<String>>(
-            Err(AgentFailure::AccessReviewRequired),
-            floe_context_contract::source_access_id_for_capability("calendar.timeline").unwrap(),
-            &connection,
-            &selected_calendar(),
-            "example.test.expert",
-            &review,
-            None,
-        )
-        .unwrap();
-        let requirement = blockers_requirement(outcome);
-        assert_eq!(requirement.source_id(), "floe.source.calendar");
-        assert_eq!(requirement.consumer().identifier(), "example.test.expert");
-        assert_eq!(
-            requirement.resources()[0].as_str(),
-            "calendar.timeline:connection"
-        );
-    }
-
-    #[test]
-    fn calendar_review_keeps_one_logical_resource_when_another_leaf_is_added() {
-        let mut connection = calendar_connection();
-        connection
-            .configure(
-                connection.revision(),
-                floe_connections::ResourceMode::Selected,
-                vec![
-                    floe_connections::ConnectionResource::new(
-                        floe_context_contract::ResourceHandle::try_new("primary").unwrap(),
-                        "Primary".into(),
-                    )
-                    .unwrap(),
-                    floe_connections::ConnectionResource::new(
-                        floe_context_contract::ResourceHandle::try_new("new-calendar").unwrap(),
-                        "New calendar".into(),
-                    )
-                    .unwrap(),
-                ],
-            )
-            .unwrap();
-        let review = review_classification(
-            floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource,
-            None,
-        );
-        let outcome = calendar_read_outcome::<Vec<String>>(
-            Err(AgentFailure::AccessReviewRequired),
-            floe_context_contract::source_access_id_for_capability("calendar.timeline").unwrap(),
-            &connection,
-            &selected_calendar(),
-            "floe.builtin.schedule",
-            &review,
-            None,
-        )
-        .unwrap();
-        let requirement = blockers_requirement(outcome);
-        assert_eq!(requirement.resources().len(), 1);
-        assert_eq!(
-            requirement.resources()[0].as_str(),
-            "calendar.timeline:connection"
-        );
-    }
-
-    #[test]
-    fn calendar_unavailability_and_integrity_failure_stay_distinct() {
-        let connection = calendar_connection();
-        let unused = review_classification(
-            floe_context_contract::SourceAccessRequirementKind::SelectResource,
-            None,
-        );
-        assert_eq!(
-            calendar_read_outcome::<Vec<String>>(
-                Ok(vec![]),
-                floe_context_contract::source_access_id_for_capability("calendar.timeline")
-                    .unwrap(),
-                &connection,
-                &selected_calendar(),
-                "floe.builtin.schedule",
-                &unused,
-                None,
-            )
-            .unwrap(),
-            floe_context_contract::SourceReadOutcome::Ready(vec![])
-        );
-        assert_eq!(
-            calendar_read_outcome::<Vec<String>>(
-                Err(AgentFailure::CapabilityUnavailable),
-                floe_context_contract::source_access_id_for_capability("calendar.timeline")
-                    .unwrap(),
-                &connection,
-                &selected_calendar(),
-                "floe.builtin.schedule",
-                &unused,
-                None,
-            )
-            .unwrap(),
-            floe_context_contract::SourceReadOutcome::Unavailable(
-                floe_context_contract::SourceUnavailable::TemporarilyUnavailable
-            )
-        );
-        for failure in [
-            AgentFailure::CapabilityDenied,
-            AgentFailure::PolicyDenied,
-            AgentFailure::StaleContext,
-            AgentFailure::StorageUnavailable,
-            AgentFailure::Cancelled,
-        ] {
-            assert_eq!(
-                calendar_read_outcome::<Vec<String>>(
-                    Err(failure),
-                    floe_context_contract::source_access_id_for_capability("calendar.timeline")
-                        .unwrap(),
-                    &connection,
-                    &selected_calendar(),
-                    "floe.builtin.schedule",
-                    &unused,
-                    None,
-                ),
-                Err(failure)
-            );
-        }
-    }
-
-    #[test]
-    fn unresolved_calendar_requirement_cannot_offer_inline_grant() {
-        let outcome = calendar_access_requirement::<Vec<String>>(
-            floe_context_contract::source_access_id_for_capability("calendar.timeline").unwrap(),
-            None,
-            &[],
-            "floe.builtin.schedule",
-            floe_context_contract::SourceAccessRequirementKind::SelectResource,
-            None,
-        )
-        .unwrap();
-        let requirement = blockers_requirement(outcome);
-        assert!(requirement.connection_id().is_none());
-        assert!(requirement.resources().is_empty());
-        assert!(!requirement.inline_resolution());
-
-        let connection = calendar_connection();
-        let outcome = calendar_access_requirement::<Vec<String>>(
-            floe_context_contract::source_access_id_for_capability("calendar.timeline").unwrap(),
-            Some(&connection),
-            &[],
-            "floe.builtin.schedule",
-            floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource,
-            None,
-        )
-        .unwrap();
-        let requirement = blockers_requirement(outcome);
-        assert!(requirement.resources().is_empty());
-        assert!(!requirement.inline_resolution());
-    }
-
-    fn calendar_grant_fixture(
-        person_id: PersonId,
-        state: floe_access::GrantState,
-    ) -> floe_access::DataAccessGrant {
-        let source = floe_context_contract::GrantSourceBinding::try_new(
-            person_id,
-            floe_context_contract::ConnectionId::try_new("connection").unwrap(),
-            floe_context_contract::ConnectorId::try_new("calendar.event_kit").unwrap(),
-            floe_context_contract::ExecutionOwnerId::try_new("device").unwrap(),
-        )
-        .unwrap();
-        let scope = floe_access::GrantScope::try_new(
-            vec![floe_context_contract::ResourceHandle::try_new("primary").unwrap()],
-            vec![floe_context_contract::GrantDataCategory::Derived],
-            vec![floe_context_contract::GrantOperation::Read],
-            vec![floe_context_contract::GrantPurpose::Assistant],
-            vec![floe_context_contract::GrantConsumer::builtin("floe.builtin.schedule").unwrap()],
-            floe_context_contract::ProcessingRestriction::LocalOnly,
-        )
-        .unwrap();
-        let mut grant = floe_access::DataAccessGrant::new(
-            floe_context_contract::GrantId::new(),
-            uuid::Uuid::new_v4(),
-            source.clone(),
-            scope.clone(),
-        )
-        .unwrap();
-        if state == floe_access::GrantState::Active {
-            grant.activate_review(grant.authority(), scope).unwrap();
-        }
-        grant
-    }
-
-    #[test]
-    fn calendar_review_classifies_missing_paused_and_drifted_grants() {
-        let person_id = PersonId::new();
-        let missing =
-            classify_calendar_review(&[], person_id, "calendar.event_kit", "connection").unwrap();
-        assert_eq!(
-            missing.reason,
-            floe_context_contract::SourceAccessRequirementKind::EnableObserve
-        );
-        assert_eq!(missing.observed, None);
-
-        let paused = calendar_grant_fixture(person_id, floe_access::GrantState::Paused);
-        let review = classify_calendar_review(
-            std::slice::from_ref(&paused),
-            person_id,
-            "calendar.event_kit",
-            "connection",
-        )
-        .unwrap();
-        assert_eq!(
-            review.reason,
-            floe_context_contract::SourceAccessRequirementKind::EnableObserve
-        );
-        let observed = review.observed.unwrap();
-        assert_eq!(observed.grant_id(), paused.id());
-        assert_eq!(observed.authority(), paused.authority());
-
-        let active = calendar_grant_fixture(person_id, floe_access::GrantState::Active);
-        let review = classify_calendar_review(
-            std::slice::from_ref(&active),
-            person_id,
-            "calendar.event_kit",
-            "connection",
-        )
-        .unwrap();
-        assert_eq!(
-            review.reason,
-            floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource
-        );
-        assert_eq!(review.observed.unwrap().grant_id(), active.id());
-    }
-
-    #[test]
-    fn calendar_review_ignores_foreign_grants_and_fails_duplicates_closed() {
-        let person_id = PersonId::new();
-        let foreign = calendar_grant_fixture(PersonId::new(), floe_access::GrantState::Active);
-        let review = classify_calendar_review(
-            std::slice::from_ref(&foreign),
-            person_id,
-            "calendar.event_kit",
-            "connection",
-        )
-        .unwrap();
-        assert_eq!(
-            review.reason,
-            floe_context_contract::SourceAccessRequirementKind::EnableObserve
-        );
-        assert_eq!(review.observed, None);
-
-        let first = calendar_grant_fixture(person_id, floe_access::GrantState::Paused);
-        let second = calendar_grant_fixture(person_id, floe_access::GrantState::Paused);
-        assert_eq!(
-            classify_calendar_review(
-                &[first, second],
-                person_id,
-                "calendar.event_kit",
-                "connection",
-            ),
-            Err(AgentFailure::PolicyDenied)
-        );
-    }
-
-    fn ready(steps: Vec<ModelStep>) -> Result<ModelCallOutcome, AgentFailure> {
-        Ok(ModelCallOutcome::Ready(
-            floe_agent_contract::ModelResponse {
-                attempt_id: Uuid::new_v4(),
-                steps,
-                usage: floe_agent_contract::ModelUsage {
-                    tokens: 11,
-                    cost_micros: 22,
-                },
-            },
-        ))
-    }
-
-    fn blocked(
-        requirement: floe_context_contract::ProcessingRequirement,
-    ) -> Result<ModelCallOutcome, AgentFailure> {
-        Ok(ModelCallOutcome::NeedsUserAction(requirement))
-    }
-
-    struct FakeExecutor {
-        calls: Mutex<
-            Vec<(
-                floe_agent_contract::ModelRequest,
-                floe_inference::InferenceExecutionConstraint,
-            )>,
-        >,
-        script: Mutex<VecDeque<Result<ModelCallOutcome, AgentFailure>>>,
-    }
-
-    impl FakeExecutor {
-        fn new(script: Vec<Result<ModelCallOutcome, AgentFailure>>) -> Self {
-            Self {
-                calls: Mutex::new(Vec::new()),
-                script: Mutex::new(script.into_iter().collect()),
-            }
-        }
-
-        fn calls(
-            &self,
-        ) -> Vec<(
-            floe_agent_contract::ModelRequest,
-            floe_inference::InferenceExecutionConstraint,
-        )> {
-            self.calls.lock().unwrap().clone()
-        }
-    }
-
-    impl floe_inference::InferenceExecutor for FakeExecutor {
-        fn execute<'a>(
-            &'a self,
-            request: floe_agent_contract::ModelRequest,
-            _scope: &'a floe_execution::ExecutionScope,
-            constraint: floe_inference::InferenceExecutionConstraint,
-        ) -> floe_agent_contract::BoxFuture<
-            'a,
-            Result<floe_agent_contract::ModelCallOutcome, AgentFailure>,
-        > {
-            self.calls
-                .lock()
-                .unwrap()
-                .push((request.clone(), constraint));
-            let next = self.script.lock().unwrap().pop_front().unwrap();
-            Box::pin(async move { next })
-        }
-    }
-
-    fn test_scope() -> floe_execution::ExecutionScope {
-        let ledger = floe_execution::budget::BudgetLedger::new(
-            floe_execution::budget::BudgetConfig::new(1_000_000, 1_000_000_000),
-            Default::default(),
-        );
-        floe_execution::ExecutionScope::root(
-            floe_execution::Cancellation::default(),
-            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
-            ledger.work_lease(),
-            floe_agent_contract::TraceContext::new(Uuid::new_v4()),
-        )
-    }
-
-    fn test_context() -> floe_agent_contract::AgentContext {
-        floe_agent_contract::AgentContext {
-            projection_version: 1,
-            persona: None,
-            optional_context_issues: vec![],
-            memories: vec![],
-            evidence: vec![],
-        }
-    }
-
-    fn test_call() -> ExpertModelCall {
-        ExpertModelCall {
-            person_id: PersonId::new(),
-            invocation_id: Uuid::new_v4(),
-            prompt: floe_experts_builtin::prompts::focus_expert_prompt(),
-            policy: expert_policy(floe_agent_contract::DataClass::Personal),
-            context: test_context(),
-            assignment: "Protect the current focus period.".into(),
-            requirement: ExpertModelRequirement::DeviceOnly,
-            max_output_bytes: 8192,
-            max_tokens: 4096,
-            max_cost_micros: 1_000,
-            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
-            cancellation: floe_execution::Cancellation::default(),
-        }
-    }
-
-    fn test_capability(id: &str) -> floe_agent_contract::CapabilityDescriptor {
-        floe_agent_contract::CapabilityDescriptor {
-            schema_version: AGENT_VERSION,
-            id: id.into(),
-            version: "1.0.0".into(),
-            read_only: true,
-            output_data_class: DataClass::Personal,
-            input_schema: Some(serde_json::json!({"type": "object"})),
-        }
-    }
-
-    fn test_step() -> ExpertReasoningStep {
-        ExpertReasoningStep {
-            person_id: PersonId::new(),
-            invocation_id: Uuid::new_v4(),
-            prompt: floe_experts_builtin::prompts::focus_expert_prompt(),
-            policy: expert_policy(floe_agent_contract::DataClass::Personal),
-            context: test_context(),
-            requirement: ExpertModelRequirement::Any,
-            transcript: vec![ExpertTranscriptEntry::Task {
-                text: "Review the selected context.".into(),
-            }],
-            capabilities: vec![test_capability("calendar.read")],
-            replay: vec![],
-            remaining_tokens: 4096,
-            remaining_cost_micros: 1_000,
-            max_output_bytes: 8192,
-            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
-            cancellation: floe_execution::Cancellation::default(),
-        }
-    }
-
-    #[tokio::test]
-    async fn expert_can_answer_after_user_action_capability_observation() {
-        let executor = FakeExecutor::new(vec![ready(vec![ModelStep::Answer {
-            text: "Calendar access is needed.".into(),
-            artifacts: vec![],
-        }])]);
-        let scope = test_scope();
-        let captured = Mutex::new(Vec::new());
-        let model_blocked = Mutex::new(None);
-        let host = ExpertModelHost {
-            executor: &executor,
-            scope: &scope,
-            captured: &captured,
-            lineage: None,
-            model_blocked: &model_blocked,
-        };
-        let mut step = test_step();
-        let interaction_id = Uuid::new_v4();
-        step.transcript.push(ExpertTranscriptEntry::Capability {
-            call_id: Uuid::new_v4(),
-            capability_id: "calendar.read".into(),
-            input: "{}".into(),
-            observation: floe_agent_contract::ExpertCapabilityObservation::NeedsUserAction {
-                interaction: floe_agent_contract::UserInteractionRef {
-                    interaction_id,
-                    kind: floe_agent_contract::UserInteractionKind::SourceAccess,
-                    status: floe_agent_contract::UserInteractionStatus::Pending,
-                },
-                summary: "Calendar access needs approval".into(),
-            },
-        });
-        let ExpertStepResult::Stepped(outcome) = ExpertReasoner::step(&host, step).await.unwrap()
-        else {
-            panic!("test executor must step");
-        };
-        assert_eq!(
-            outcome.steps,
-            vec![ExpertStep::Answer {
-                text: "Calendar access is needed.".into(),
-            }]
-        );
-        let calls = executor.calls();
-        let envelope = &calls[0].0.projection.envelope;
-        let exchange = envelope.conversation.current_turn.last().unwrap();
-        let ModelConversationEntry::ToolExchange { result, .. } = exchange else {
-            panic!("expected capability observation");
-        };
-        assert!(result.issue.is_some());
-        assert_eq!(result.coverage, DependencyCoverage::Independent);
-        assert_eq!(result.artifacts.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn single_answer_accepts_exactly_one_answer_with_inference_usage() {
-        let executor = FakeExecutor::new(vec![ready(vec![ModelStep::Answer {
-            text: "Protect focus.".into(),
-            artifacts: vec![],
-        }])]);
-        let scope = test_scope();
-        let captured = Mutex::new(Vec::new());
-        let model_blocked = Mutex::new(None);
-        let host = ExpertModelHost {
-            executor: &executor,
-            scope: &scope,
-            captured: &captured,
-            lineage: None,
-            model_blocked: &model_blocked,
-        };
-        let ExpertModelOutcome::Answered(answer) =
-            ExpertModel::answer(&host, test_call()).await.unwrap()
-        else {
-            panic!("test executor must answer");
-        };
-        assert_eq!(answer.schema_version, AGENT_VERSION);
-        assert_eq!(answer.answer, "Protect focus.");
-        assert_eq!(answer.used_tokens, 11);
-        assert_eq!(answer.cost_micros, 22);
-        let calls = executor.calls();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(
-            calls[0].0.purpose,
-            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE
-        );
-        assert_eq!(
-            calls[0].0.consumer,
-            floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER
-        );
-        assert_eq!(
-            calls[0].1,
-            floe_inference::InferenceExecutionConstraint::DeviceOnly
-        );
-        assert!(calls[0].0.catalog.tools.is_empty());
-        assert!(calls[0].0.catalog.cards.is_empty());
-    }
-
-    fn blocked_requirement() -> floe_context_contract::ProcessingRequirement {
-        floe_context_contract::ProcessingRequirement::try_new(
-            "model.example",
-            "server-model",
-            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
-            floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
-            vec![floe_agent_contract::DataClass::Personal],
-            vec![],
-            Uuid::new_v4(),
-            1,
-            floe_context_contract::RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4())
-                .unwrap(),
-        )
-        .unwrap()
-    }
-
-    #[tokio::test]
-    async fn blocked_answer_stashes_requirement_and_forwards_lineage() {
-        let requirement = blocked_requirement();
-        let lineage =
-            floe_context_contract::RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4())
-                .unwrap();
-        let executor = FakeExecutor::new(vec![blocked(requirement.clone())]);
-        let scope = test_scope();
-        let captured = Mutex::new(Vec::new());
-        let model_blocked = Mutex::new(None);
-        let host = ExpertModelHost {
-            executor: &executor,
-            scope: &scope,
-            captured: &captured,
-            lineage: Some(lineage),
-            model_blocked: &model_blocked,
-        };
-        let ExpertModelOutcome::Blocked(reported) =
-            ExpertModel::answer(&host, test_call()).await.unwrap()
-        else {
-            panic!("blocked dispatch must report Blocked");
-        };
-        assert_eq!(reported, requirement);
-        // The trusted stash carries the same requirement for the endpoint
-        // to publish; the dispatch ran under the delegation lineage.
-        assert_eq!(*model_blocked.lock().unwrap(), Some(requirement));
-        let calls = executor.calls();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0.lineage, Some(lineage));
-    }
-
-    #[tokio::test]
-    async fn blocked_reasoning_step_stashes_requirement_and_reports_blocked() {
-        let requirement = blocked_requirement();
-        let executor = FakeExecutor::new(vec![blocked(requirement.clone())]);
-        let scope = test_scope();
-        let captured = Mutex::new(Vec::new());
-        let model_blocked = Mutex::new(None);
-        let host = ExpertModelHost {
-            executor: &executor,
-            scope: &scope,
-            captured: &captured,
-            lineage: None,
-            model_blocked: &model_blocked,
-        };
-        let ExpertStepResult::Blocked(reported) =
-            ExpertReasoner::step(&host, test_step()).await.unwrap()
-        else {
-            panic!("blocked dispatch must report Blocked");
-        };
-        assert_eq!(reported, requirement);
-        assert_eq!(*model_blocked.lock().unwrap(), Some(requirement));
-    }
-
-    #[tokio::test]
-    async fn single_answer_rejects_non_answers() {
-        for steps in [
-            vec![],
-            vec![ModelStep::Preamble {
-                text: "Thinking.".into(),
-            }],
-            vec![ModelStep::CallTool {
-                tool_id: "calendar.read".into(),
-                definition_revision: 1,
-                input: "{}".into(),
-            }],
-            vec![ModelStep::Delegate {
-                agent_id: "floe.builtin.focus.v1".into(),
-                definition_revision: 1,
-                message: "hi".into(),
-                context_refs: vec![],
-            }],
-            vec![
-                ModelStep::Answer {
-                    text: "one".into(),
-                    artifacts: vec![],
-                },
-                ModelStep::Answer {
-                    text: "two".into(),
-                    artifacts: vec![],
-                },
-            ],
-        ] {
-            let executor = FakeExecutor::new(vec![ready(steps)]);
-            let scope = test_scope();
-            let captured = Mutex::new(Vec::new());
-            let model_blocked = Mutex::new(None);
-            let host = ExpertModelHost {
-                executor: &executor,
-                scope: &scope,
-                captured: &captured,
-                lineage: None,
-                model_blocked: &model_blocked,
-            };
-            assert_eq!(
-                ExpertModel::answer(&host, test_call()).await.err(),
-                Some(AgentFailure::InvalidModelOutput)
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn single_answer_maps_each_requirement_to_its_constraint() {
-        for (requirement, constraint) in [
-            (
-                ExpertModelRequirement::Any,
-                floe_inference::InferenceExecutionConstraint::Any,
-            ),
-            (
-                ExpertModelRequirement::DeviceOnly,
-                floe_inference::InferenceExecutionConstraint::DeviceOnly,
-            ),
-            (
-                ExpertModelRequirement::RemoteOnly,
-                floe_inference::InferenceExecutionConstraint::RemoteOnly,
-            ),
-        ] {
-            let executor = FakeExecutor::new(vec![ready(vec![ModelStep::Answer {
-                text: "ok".into(),
-                artifacts: vec![],
-            }])]);
-            let scope = test_scope();
-            let captured = Mutex::new(Vec::new());
-            let model_blocked = Mutex::new(None);
-            let host = ExpertModelHost {
-                executor: &executor,
-                scope: &scope,
-                captured: &captured,
-                lineage: None,
-                model_blocked: &model_blocked,
-            };
-            let mut call = test_call();
-            call.requirement = requirement;
-            ExpertModel::answer(&host, call).await.unwrap();
-            assert_eq!(executor.calls()[0].1, constraint);
-        }
-    }
-
-    #[tokio::test]
-    async fn source_backed_input_dispatches_with_exact_captured_coverage() {
-        let executor = FakeExecutor::new(vec![ready(vec![ModelStep::Answer {
-            text: "ok".into(),
-            artifacts: vec![],
-        }])]);
-        let scope = test_scope();
-        let person_id = PersonId::new();
-        let now = chrono::Utc::now();
-        let dependency = floe_context_contract::ContextDependency::try_new(
-            person_id,
-            floe_context_contract::GrantId::new(),
-            floe_context_contract::GrantAuthority::new(),
-            floe_context_contract::GrantSourceBinding::try_new(
-                person_id,
-                floe_context_contract::ConnectionId::try_new("connection").unwrap(),
-                floe_context_contract::ConnectorId::try_new("connector").unwrap(),
-                floe_context_contract::ExecutionOwnerId::try_new("owner").unwrap(),
-            )
-            .unwrap(),
-            vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
-            floe_context_contract::SourceAuthority::new(),
-            vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
-            vec![floe_context_contract::GrantDataCategory::Metadata],
-            floe_context_contract::GrantOperation::Read,
-            floe_context_contract::GrantPurpose::Assistant,
-            floe_context_contract::GrantConsumer::builtin("expert").unwrap(),
-            floe_context_contract::ProcessingRestriction::LocalOnly,
-            Uuid::new_v4(),
-            vec![7; 32],
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            now - chrono::Duration::minutes(1),
-            now + chrono::Duration::minutes(5),
-        )
-        .unwrap();
-        let captured = Mutex::new(vec![dependency.clone()]);
-        let model_blocked = Mutex::new(None);
-        let host = ExpertModelHost {
-            executor: &executor,
-            scope: &scope,
-            captured: &captured,
-            lineage: None,
-            model_blocked: &model_blocked,
-        };
-        ExpertModel::answer(&host, test_call()).await.unwrap();
-        let calls = executor.calls();
-        match &calls[0].0.projection.coverage {
-            floe_agent_contract::DependencyCoverage::Dependent { dependencies } => {
-                assert_eq!(dependencies.as_slice(), &[dependency]);
-            }
-            coverage => panic!("source-backed input must not be {coverage:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn malformed_expert_input_fails_closed_without_dispatch() {
-        let scope = test_scope();
-        // Empty assignment, empty prompt, empty data classes, oversized
-        // output, and cancelled/expired calls never reach Inference.
-        // Evidence shape stays the view readers' and the Expert pre-check's
-        // responsibility, exactly as on the canonical root path.
-        let mut empty_assignment = test_call();
-        empty_assignment.assignment = "   ".into();
-        let mut empty_prompt = test_call();
-        empty_prompt.prompt.components.clear();
-        let mut empty_classes = test_call();
-        empty_classes.policy.data_classes.clear();
-        let mut too_large = test_call();
-        too_large.max_output_bytes = usize::MAX;
-        let cancelled = {
-            let call = test_call();
-            call.cancellation.cancel();
-            call
-        };
-        let mut expired = test_call();
-        expired.deadline = tokio::time::Instant::now();
-        for (index, call) in [
-            empty_assignment,
-            empty_prompt,
-            empty_classes,
-            too_large,
-            cancelled,
-            expired,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let executor = FakeExecutor::new(vec![ready(vec![ModelStep::Answer {
-                text: "unreachable".into(),
-                artifacts: vec![],
-            }])]);
-            let captured = Mutex::new(Vec::new());
-            let model_blocked = Mutex::new(None);
-            let host = ExpertModelHost {
-                executor: &executor,
-                scope: &scope,
-                captured: &captured,
-                lineage: None,
-                model_blocked: &model_blocked,
-            };
-            let result = ExpertModel::answer(&host, call).await;
-            assert!(result.is_err(), "case {index} unexpectedly succeeded");
-            assert!(executor.calls().is_empty());
-        }
-    }
-
-    #[tokio::test]
-    async fn reasoning_step_maps_declared_capabilities_and_denies_delegation() {
-        let call_id = Uuid::new_v4();
-        let executor = FakeExecutor::new(vec![ready(vec![
-            ModelStep::Preamble {
-                text: "Checking.".into(),
-            },
-            ModelStep::CallTool {
-                tool_id: "calendar.read".into(),
-                definition_revision: 1,
-                input: "{}".into(),
-            },
-        ])]);
-        let scope = test_scope();
-        let captured = Mutex::new(Vec::new());
-        let model_blocked = Mutex::new(None);
-        let host = ExpertModelHost {
-            executor: &executor,
-            scope: &scope,
-            captured: &captured,
-            lineage: None,
-            model_blocked: &model_blocked,
-        };
-        let mut step = test_step();
-        step.transcript.push(ExpertTranscriptEntry::Capability {
-            call_id,
-            capability_id: "calendar.read".into(),
-            input: "{}".into(),
-            observation: floe_agent_contract::ExpertCapabilityObservation::Success {
-                result: "no conflicts".into(),
-            },
-        });
-        let ExpertStepResult::Stepped(outcome) = ExpertReasoner::step(&host, step).await.unwrap()
-        else {
-            panic!("test executor must step");
-        };
-        assert_eq!(outcome.schema_version, AGENT_VERSION);
-        assert_eq!(outcome.used_tokens, 11);
-        assert_eq!(outcome.cost_micros, 22);
-        assert_eq!(
-            outcome.steps.as_slice(),
-            [
-                ExpertStep::Preamble {
-                    text: "Checking.".into()
-                },
-                ExpertStep::Call {
-                    capability_id: "calendar.read".into(),
-                    input: "{}".into(),
-                },
-            ]
-        );
-        let calls = executor.calls();
-        assert_eq!(calls[0].0.catalog.tools.len(), 1);
-        assert_eq!(calls[0].0.catalog.tools[0].id, "calendar.read");
-
-        let executor = FakeExecutor::new(vec![ready(vec![ModelStep::Delegate {
-            agent_id: "floe.builtin.focus.v1".into(),
-            definition_revision: 1,
-            message: "you take it".into(),
-            context_refs: vec![],
-        }])]);
-        let host = ExpertModelHost {
-            executor: &executor,
-            scope: &scope,
-            captured: &captured,
-            lineage: None,
-            model_blocked: &model_blocked,
-        };
-        assert_eq!(
-            ExpertReasoner::step(&host, test_step()).await.err(),
-            Some(AgentFailure::CapabilityDenied)
-        );
-    }
-
-    #[tokio::test]
-    async fn reasoning_step_rejects_undeclared_or_unreadable_capabilities() {
-        let scope = test_scope();
-        // Transcript references a capability the step did not declare.
-        let mut undeclared = test_step();
-        undeclared
-            .transcript
-            .push(ExpertTranscriptEntry::Capability {
-                call_id: Uuid::new_v4(),
-                capability_id: "calendar.write".into(),
-                input: "{}".into(),
-                observation: floe_agent_contract::ExpertCapabilityObservation::Success {
-                    result: "done".into(),
-                },
-            });
-        // Non-read-only and wrong-schema capabilities are denied like the
-        // legacy transport denied them.
-        let mut writable = test_step();
-        writable.capabilities = vec![floe_agent_contract::CapabilityDescriptor {
-            read_only: false,
-            ..test_capability("calendar.read")
-        }];
-        let mut wrong_schema = test_step();
-        wrong_schema.capabilities = vec![floe_agent_contract::CapabilityDescriptor {
-            schema_version: AGENT_VERSION + 1,
-            ..test_capability("calendar.read")
-        }];
-        // A reasoning step without its task has no canonical conversation.
-        let mut taskless = test_step();
-        taskless.transcript = vec![ExpertTranscriptEntry::Preamble {
-            text: "no task".into(),
-        }];
-        for step in [undeclared, writable, wrong_schema, taskless] {
-            let executor = FakeExecutor::new(vec![ready(vec![ModelStep::Answer {
-                text: "unreachable".into(),
-                artifacts: vec![],
-            }])]);
-            let captured = Mutex::new(Vec::new());
-            let model_blocked = Mutex::new(None);
-            let host = ExpertModelHost {
-                executor: &executor,
-                scope: &scope,
-                captured: &captured,
-                lineage: None,
-                model_blocked: &model_blocked,
-            };
-            assert!(ExpertReasoner::step(&host, step).await.is_err());
-            assert!(executor.calls().is_empty());
-        }
-    }
-
-    #[test]
-    fn capturing_recorder_forwards_to_the_store_and_keeps_a_copy() {
-        struct Probe {
-            records: Mutex<Vec<floe_context_contract::ContextDependency>>,
-        }
-        impl ResultRecorder for Probe {
-            fn record_independent(&self, _: Uuid, _: Uuid) -> Result<(), AgentFailure> {
-                Ok(())
-            }
-            fn record(
-                &self,
-                _: Uuid,
-                _: Uuid,
-                dependency: floe_context_contract::ContextDependency,
-            ) -> Result<(), AgentFailure> {
-                self.records.lock().unwrap().push(dependency);
-                Ok(())
-            }
-        }
-        let probe = Probe {
-            records: Mutex::new(Vec::new()),
-        };
-        let captured = Mutex::new(Vec::new());
-        let recorder = CapturingRecorder {
-            inner: Some(&probe),
-            captured: &captured,
-        };
-        let person_id = PersonId::new();
-        let now = chrono::Utc::now();
-        let dependency = floe_context_contract::ContextDependency::try_new(
-            person_id,
-            floe_context_contract::GrantId::new(),
-            floe_context_contract::GrantAuthority::new(),
-            floe_context_contract::GrantSourceBinding::try_new(
-                person_id,
-                floe_context_contract::ConnectionId::try_new("connection").unwrap(),
-                floe_context_contract::ConnectorId::try_new("connector").unwrap(),
-                floe_context_contract::ExecutionOwnerId::try_new("owner").unwrap(),
-            )
-            .unwrap(),
-            vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
-            floe_context_contract::SourceAuthority::new(),
-            vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
-            vec![floe_context_contract::GrantDataCategory::Metadata],
-            floe_context_contract::GrantOperation::Read,
-            floe_context_contract::GrantPurpose::Assistant,
-            floe_context_contract::GrantConsumer::builtin("expert").unwrap(),
-            floe_context_contract::ProcessingRestriction::LocalOnly,
-            Uuid::new_v4(),
-            vec![7; 32],
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            now - chrono::Duration::minutes(1),
-            now + chrono::Duration::minutes(5),
-        )
-        .unwrap();
-        recorder
-            .record(Uuid::new_v4(), Uuid::new_v4(), dependency.clone())
-            .unwrap();
-        assert_eq!(captured.lock().unwrap().as_slice(), &[dependency.clone()]);
-        assert_eq!(probe.records.lock().unwrap().as_slice(), &[dependency]);
-        let bare = CapturingRecorder {
-            inner: None,
-            captured: &captured,
-        };
-        bare.record_independent(Uuid::new_v4(), Uuid::new_v4())
-            .unwrap();
     }
 }

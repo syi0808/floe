@@ -15,9 +15,7 @@ final class AppleContextChannel {
   private let channel: FlutterMethodChannel
   private let contacts: AppleContactsProvider
   private let nativeSubjectKey: SymmetricKey
-  private let health = HealthKitWellbeingProvider.currentHostProvider(
-    sourceHandle: "wellbeing:apple-health"
-  )
+  private let health: HealthKitWellbeingProvider
   private var contactsLastView: [String: Any]?
   private var contactsLastSuccess: Int64?
   private var healthLastView: [String: Any]?
@@ -29,6 +27,9 @@ final class AppleContextChannel {
     let handleSecret = try Self.contactsHandleSecret()
     nativeSubjectKey = SymmetricKey(data: handleSecret)
     contacts = try AppleContactsProvider(handleSecret: handleSecret)
+    health = HealthKitWellbeingProvider.currentHostProvider(
+      sourceHandle: "wellbeing:apple-health", transformer: try BundledHealthPrivacyTransformer()
+    )
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self else {
         result(FlutterError(code: "unavailable", message: "Apple context host is unavailable.", details: nil))
@@ -48,22 +49,33 @@ final class AppleContextChannel {
       case "connections":
         try requireExactKeys(arguments, ["device_id"])
         result(await connectionSnapshots(deviceID: deviceID))
-      case "requestPermission":
-        result(try await requestPermission(arguments))
+      case "requestPermissionAcquisition":
+        result(try await requestPermissionAcquisition(arguments, deviceID: deviceID))
       case "readContacts":
         result(try readContacts(arguments))
       case "inspectContactsSubject":
         result(try inspectContactsSubject(arguments))
+      case "inspectContactsCatalog":
+        try requireExactKeys(arguments, ["device_id"])
+        result(try encodedObject(contacts.inspectCatalog()))
       case "inspectWellbeingSubject":
         try requireExactKeys(arguments, ["device_id"])
         result(try await inspectWellbeingSubject(deviceID: deviceID))
-      case "requestWellbeingPermission":
+      case "inspectWellbeingCatalog":
         try requireExactKeys(arguments, ["device_id"])
-        let lifecycle = try await health.requestReadAuthorization()
-        result(lifecycle.state != .unsupported && lifecycle.state != .permissionRequired)
+        let subject = try await inspectWellbeingSubject(deviceID: deviceID)
+        result([
+          "resources": [["handle": "wellbeing.derived", "label": "Wellbeing summary"]],
+          "native_subject_fingerprint": subject["subject_fingerprint"]!,
+          "permission_class": subject["permission_class"]!,
+          "catalog_complete": true,
+        ])
       case "readWellbeing":
-        try requireExactKeys(arguments, ["device_id"])
-        result(try await readWellbeing())
+        try requireExactKeys(arguments, ["device_id", "transform_binding"])
+        guard let value = arguments["transform_binding"] as? [String: Any] else { throw ChannelFailure.invalidInput }
+        let binding = try HealthTransformBinding.decode(JSONSerialization.data(withJSONObject: value))
+        guard binding.deviceID == deviceID else { throw ChannelFailure.invalidInput }
+        result(try await readWellbeing(binding: binding))
       case "screenTimeCapability":
         try requireExactKeys(arguments, ["device_id"])
         result(try screenTimeCapability())
@@ -81,18 +93,36 @@ final class AppleContextChannel {
     }
   }
 
-  private func requestPermission(_ arguments: [String: Any]) async throws -> [String: Any] {
-    try requireExactKeys(arguments, ["device_id", "source"])
-    guard let source = arguments["source"] as? String else { throw ChannelFailure.invalidInput }
-    switch source {
-    case "contacts":
-      return ["granted": try await contacts.requestAuthorization().canRead]
-    case "health":
-      let lifecycle = try await health.requestReadAuthorization()
-      return ["granted": lifecycle.state != .permissionRequired && lifecycle.state != .unsupported]
-    default:
-      throw ChannelFailure.invalidInput
+  private func requestPermissionAcquisition(_ arguments: [String: Any], deviceID: String) async throws -> [String: Any] {
+    guard arguments["mode"] as? String == "request_permission",
+          let requestID = arguments["request_id"] as? String, UUID(uuidString: requestID) != nil,
+          let personID = arguments["person_id"] as? String, UUID(uuidString: personID) != nil,
+          let epoch = arguments["host_epoch"] as? String, !epoch.isEmpty, epoch.utf8.count <= 128,
+          let handles = arguments["selected_handles"] as? [String], handles.isEmpty,
+          let deadline = arguments["deadline_unix_ms"] as? NSNumber, deadline.int64Value > nowMilliseconds(),
+          let domain = arguments["domain"] as? String, ["people", "wellbeing"].contains(domain)
+    else { throw ChannelFailure.invalidInput }
+    func fingerprint(_ status: String) -> String {
+      let bytes = Data("floe.permission.subject.v1\0\(deviceID)\0\(domain)\0\(status)".utf8)
+      return HMAC<SHA256>.authenticationCode(for: bytes, using: nativeSubjectKey).map { String(format: "%02x", $0) }.joined()
     }
+    let beforeStatus = domain == "people" ? contacts.connectionSnapshot().authorization.rawValue : (await health.lifecycle()).state.rawValue
+    let outcome: String
+    if domain == "people" {
+      outcome = try await contacts.requestAuthorization().canRead ? "request_completed" : "denied"
+    } else {
+      do {
+        _ = try await health.requestReadAuthorization()
+        outcome = "request_completed"
+      } catch HealthKitWellbeingFailure.unsupported {
+        outcome = "unavailable"
+      } catch {
+        outcome = "unavailable"
+      }
+    }
+    let afterStatus = domain == "people" ? contacts.connectionSnapshot().authorization.rawValue : (await health.lifecycle()).state.rawValue
+    return ["native_subject_fingerprint_before": fingerprint(beforeStatus),
+            "native_subject_fingerprint_after": fingerprint(afterStatus), "permission_class": outcome]
   }
 
   private func readContacts(_ arguments: [String: Any]) throws -> [String: Any] {
@@ -136,12 +166,16 @@ final class AppleContextChannel {
     ]
   }
 
-  private func readWellbeing() async throws -> [String: Any] {
-    let view = try await health.readDerivedWellbeing()
-    let value = try encodedObject(view)
+  private func readWellbeing(binding: HealthTransformBinding) async throws -> [String: Any] {
+    let before = try await inspectWellbeingSubject(deviceID: binding.deviceID)
+    guard before["subject_fingerprint"] as? String == binding.nativeSubjectFingerprint else { throw ChannelFailure.invalidInput }
+    let observation = try await health.readDerivedWellbeing(binding: binding)
+    let after = try await inspectWellbeingSubject(deviceID: binding.deviceID)
+    guard before["subject_fingerprint"] as? String == after["subject_fingerprint"] as? String else { throw ChannelFailure.invalidInput }
+    let value = try encodedObject(observation.view)
     healthLastView = value
     healthLastSuccess = value["observed_at_unix_ms"] as? Int64
-    return value
+    return ["view": value, "privacy_transform": try encodedObject(observation.privacyTransform)]
   }
 
   private func inspectWellbeingSubject(deviceID: String) async throws -> [String: Any] {
@@ -207,7 +241,7 @@ final class AppleContextChannel {
         connectorID: "health.apple", provider: "apple_health",
         capabilityID: "health.derived.read", requiredScopes: [Self.healthScope],
         viewID: "wellbeing.derived", dataClass: "highly_sensitive", freshnessMs: 1_800_000, maxItems: 1, maxBytes: 8_192,
-        authorized: healthLifecycle.state != .permissionRequired,
+        authorized: healthLifecycle.state == .ready,
         unsupported: healthLifecycle.state == .unsupported,
         lastView: healthLastView, lastSuccess: healthLastSuccess,
         itemKey: nil, observed: observed, deviceID: deviceID
@@ -324,6 +358,7 @@ final class AppleContextChannel {
     case .permissionRequired: "permission_denied"
     case .noDataOrReadAccessLimited: "no_data"
     case .unavailable: "unavailable"
+    case .privacyTransform(let failure): failure.rawValue
     }
   }
 

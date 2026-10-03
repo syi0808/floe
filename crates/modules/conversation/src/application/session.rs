@@ -7,7 +7,7 @@ use crate::{SessionReadRequest, SessionReceipt, SessionRepository, SessionReques
 
 pub async fn start_session<Repository: SessionRepository>(
     repository: &Repository,
-    request: SessionRequest,
+    request: crate::StartSessionRequest,
 ) -> Result<SessionReceipt, AgentFailure> {
     request.validate()?;
     let principal = request.principal.clone();

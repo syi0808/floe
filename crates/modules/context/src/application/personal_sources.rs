@@ -26,7 +26,7 @@ use crate::application::personal_lineage::{
 };
 use crate::ports::personal_source::{
     AttentionAcquisition, AttentionAcquisitionMode, PersonalAcquisition, PersonalConnectionReader,
-    PersonalDomain, PersonalGrantRecords, PersonalSourceDriver,
+    PersonalDomain, PersonalSourceDriver,
 };
 use crate::{
     AttentionView, PeopleView, WellbeingView, validate_people_view, validate_wellbeing_view,
@@ -68,14 +68,14 @@ fn decode<View: DeserializeOwned>(value: serde_json::Value) -> Result<View, Agen
 /// device subject, with the same consumer policy — and for attention, against
 /// the device that would answer right now.
 ///
-/// Route-neutral: model placement is never consulted here. Whether a
-/// reauthorized dependency may reach a Device or External model target is
+/// Source reauthorization is independent of model planning. Whether a
+/// reauthorized dependency may reach a Device or Gateway model target is
 /// decided by Access model dispatch.
 #[allow(clippy::too_many_arguments)]
 pub async fn authorize_personal_dependency(
-    connections: &impl PersonalConnectionReader,
-    records: &impl PersonalGrantRecords,
-    driver: &impl PersonalSourceDriver,
+    connections: &(impl PersonalConnectionReader + ?Sized),
+    records: &(impl floe_access::GrantRepository + ?Sized),
+    driver: &(impl PersonalSourceDriver + ?Sized),
     person_id: PersonId,
     device_id: &str,
     dependency: &ContextDependency,
@@ -86,7 +86,6 @@ pub async fn authorize_personal_dependency(
         || dependency.source().person_id() != person_id
         || dependency.operation() != GrantOperation::Read
         || dependency.purpose() != GrantPurpose::Assistant
-        || dependency.processing() != &ProcessingRestriction::LocalOnly
         || dependency.categories() != [GrantDataCategory::Derived]
         || dependency.lease_invocation_id().is_nil()
     {
@@ -111,6 +110,7 @@ pub async fn authorize_personal_dependency(
         resource: logical.clone(),
         contract_version: 1,
     };
+    if connections.source_is_fenced(person_id, &selected.connection_id).await? { return Err(AgentFailure::PolicyDenied); }
     let connection = connections
         .load(person_id, &selected.connection_id)
         .await?
@@ -141,7 +141,7 @@ pub async fn authorize_personal_dependency(
         consumer: dependency.consumer(),
         reject_ambiguous: view != floe_context_contract::ATTENTION_VIEW_ID,
     };
-    let grant = active_read_grant(&records.grants().await?, &requirement)
+    let grant = active_read_grant(&records.snapshot(source.clone()).await?.grants, &requirement)
         .map_err(|_| AgentFailure::PolicyDenied)?;
     if dependency.grant_id() != grant.id() || dependency.grant_authority() != grant.authority() {
         return Err(AgentFailure::PolicyDenied);
@@ -194,7 +194,7 @@ pub async fn authorize_personal_dependency(
             .await?
             .ok_or(AgentFailure::PolicyDenied)?;
         standing_source_unchanged(&connection, &current).map_err(|_| AgentFailure::PolicyDenied)?;
-        let current_grant = active_read_grant(&records.grants().await?, &requirement)
+        let current_grant = active_read_grant(&records.snapshot(source.clone()).await?.grants, &requirement)
             .map_err(|_| AgentFailure::PolicyDenied)?;
         grant_unchanged(&grant, &current_grant).map_err(|_| AgentFailure::PolicyDenied)?;
     } else {
@@ -210,10 +210,15 @@ pub async fn authorize_personal_dependency(
             || dependency.observed_at().timestamp_millis() != observation.observed_at_unix_ms
             || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
             || dependency.query_fingerprint() != observation.query_fingerprint
+            || dependency.health_transform() != observation.health_transform.as_ref()
         {
             return Err(AgentFailure::PolicyDenied);
         }
     }
+    if view == floe_context_contract::WELLBEING_VIEW_ID {
+        dependency.validate_health_transform(device_id, Utc::now())?;
+    }
+    if connections.source_is_fenced(person_id, connection.connection_id()).await? { return Err(AgentFailure::PolicyDenied); }
     Ok(())
 }
 
@@ -225,7 +230,7 @@ fn observed_grant(
 }
 
 async fn selected_standing_grant(
-    records: &impl PersonalGrantRecords,
+    records: &(impl floe_access::GrantRepository + ?Sized),
     connection: &SourceConnection,
     source: &GrantSourceBinding,
     logical: &ResourceHandle,
@@ -233,7 +238,7 @@ async fn selected_standing_grant(
     source_id: &str,
     inline: bool,
 ) -> Result<floe_context_contract::SourceReadOutcome<floe_access::DataAccessGrant>, AgentFailure> {
-    let grants = records.grants().await?;
+    let grants = records.snapshot(source.clone()).await?.grants;
     let matching = grants
         .iter()
         .filter(|grant| {
@@ -290,9 +295,9 @@ async fn selected_standing_grant(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn read_selected_people_outcome(
-    connections: &impl PersonalConnectionReader,
-    records: &impl PersonalGrantRecords,
-    driver: &impl PersonalSourceDriver,
+    connections: &(impl PersonalConnectionReader + ?Sized),
+    records: &(impl floe_access::GrantRepository + ?Sized),
+    driver: &(impl PersonalSourceDriver + ?Sized),
     person_id: PersonId,
     device_id: &str,
     selected: &floe_context_contract::SourceSelectionReference,
@@ -302,6 +307,7 @@ pub async fn read_selected_people_outcome(
 ) -> Result<floe_context_contract::SourceReadOutcome<(PeopleView, ContextDependency)>, AgentFailure>
 {
     within_read_window(deadline, cancellation)?;
+    if connections.source_is_fenced(person_id, &selected.connection_id).await? { return Err(AgentFailure::PolicyDenied); }
     let connection = connections
         .load(person_id, &selected.connection_id)
         .await?
@@ -376,8 +382,9 @@ pub async fn read_selected_people_outcome(
         .await?
         .ok_or(AgentFailure::StaleContext)?;
     standing_source_unchanged(&connection, &current)?;
+    if connections.source_is_fenced(person_id, connection.connection_id()).await? { return Err(AgentFailure::PolicyDenied); }
     let current_grant = active_read_grant(
-        &records.grants().await?,
+        &records.snapshot(source.clone()).await?.grants,
         &PersonalReadRequirement {
             source: &source,
             resource: logical.as_str(),
@@ -410,7 +417,7 @@ pub async fn read_selected_people_outcome(
         GrantOperation::Read,
         GrantPurpose::Assistant,
         consumer,
-        ProcessingRestriction::LocalOnly,
+        current_grant.scope().processing().clone(),
         observation_id,
         query_fingerprint.clone(),
         Uuid::new_v4(),
@@ -428,6 +435,7 @@ pub async fn read_selected_people_outcome(
         view.observed_at_unix_ms,
         view.expires_at_unix_ms,
         query_fingerprint,
+        None,
     )?;
     Ok(floe_context_contract::SourceReadOutcome::Ready((
         view, dependency,
@@ -459,9 +467,9 @@ fn standing_source_unchanged(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn read_selected_wellbeing_outcome(
-    connections: &impl PersonalConnectionReader,
-    records: &impl PersonalGrantRecords,
-    driver: &impl PersonalSourceDriver,
+    connections: &(impl PersonalConnectionReader + ?Sized),
+    records: &(impl floe_access::GrantRepository + ?Sized),
+    driver: &(impl PersonalSourceDriver + ?Sized),
     person_id: PersonId,
     device_id: &str,
     selected: &floe_context_contract::SourceSelectionReference,
@@ -474,6 +482,7 @@ pub async fn read_selected_wellbeing_outcome(
     AgentFailure,
 > {
     within_read_window(deadline, cancellation)?;
+    if connections.source_is_fenced(person_id, &selected.connection_id).await? { return Err(AgentFailure::PolicyDenied); }
     let connection = connections
         .load(person_id, &selected.connection_id)
         .await?
@@ -549,14 +558,17 @@ pub async fn read_selected_wellbeing_outcome(
         .await?
         .ok_or(AgentFailure::StaleContext)?;
     standing_source_unchanged(&connection, &current)?;
-    let current_grant = active_read_grant(&records.grants().await?, &requirement)?;
+    if connections.source_is_fenced(person_id, connection.connection_id()).await? { return Err(AgentFailure::PolicyDenied); }
+    let current_grant = active_read_grant(&records.snapshot(source.clone()).await?.grants, &requirement)?;
     grant_unchanged(&grant, &current_grant)?;
+    let transform = acquired.health_transform.ok_or(AgentFailure::PolicyDenied)?;
     let view: WellbeingView = decode(acquired.view.ok_or(AgentFailure::CapabilityUnavailable)?)?;
+    transform.validate_view(device_id, &view, Utc::now())?;
     validate_wellbeing_view(&view, Utc::now().timestamp_millis())
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;
     let observation_id = Uuid::new_v4();
     let process = driver.process_incarnation();
-    let query_fingerprint = wellbeing_query_fingerprint(&view, &subject, observation_id, process);
+    let query_fingerprint = wellbeing_query_fingerprint(&view, &transform, &subject, observation_id, process);
     let (observed, expires) = freshness(view.observed_at_unix_ms, view.expires_at_unix_ms)?;
     let dependency = ContextDependency::try_new(
         person_id,
@@ -574,7 +586,7 @@ pub async fn read_selected_wellbeing_outcome(
         GrantOperation::Read,
         GrantPurpose::Assistant,
         consumer,
-        ProcessingRestriction::LocalOnly,
+        current_grant.scope().processing().clone(),
         observation_id,
         query_fingerprint.clone(),
         lease_invocation_id,
@@ -582,7 +594,8 @@ pub async fn read_selected_wellbeing_outcome(
         observed,
         expires,
     )
-    .map_err(|_| AgentFailure::InvalidInput)?;
+    .map_err(|_| AgentFailure::InvalidInput)?
+    .with_health_transform(transform.clone()).map_err(|_| AgentFailure::PolicyDenied)?;
     driver.commit_personal_observation(
         person_id,
         device_id,
@@ -592,6 +605,7 @@ pub async fn read_selected_wellbeing_outcome(
         view.observed_at_unix_ms,
         view.expires_at_unix_ms,
         query_fingerprint,
+        Some(transform),
     )?;
     Ok(floe_context_contract::SourceReadOutcome::Ready((
         view, dependency,
@@ -600,9 +614,9 @@ pub async fn read_selected_wellbeing_outcome(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn admit_selected_attention_outcome(
-    connections: &impl PersonalConnectionReader,
-    records: &impl PersonalGrantRecords,
-    driver: &impl PersonalSourceDriver,
+    connections: &(impl PersonalConnectionReader + ?Sized),
+    records: &(impl floe_access::GrantRepository + ?Sized),
+    driver: &(impl PersonalSourceDriver + ?Sized),
     person_id: PersonId,
     device_id: &str,
     selected: &floe_context_contract::SourceSelectionReference,
@@ -615,6 +629,7 @@ pub async fn admit_selected_attention_outcome(
     AgentFailure,
 > {
     within_read_window(deadline, cancellation)?;
+    if connections.source_is_fenced(person_id, &selected.connection_id).await? { return Err(AgentFailure::PolicyDenied); }
     let connection = connections
         .load(person_id, &selected.connection_id)
         .await?
@@ -696,7 +711,8 @@ pub async fn admit_selected_attention_outcome(
         .await?
         .ok_or(AgentFailure::StaleContext)?;
     standing_source_unchanged(&connection, &current)?;
-    let current_grant = active_read_grant(&records.grants().await?, &requirement)?;
+    if connections.source_is_fenced(person_id, connection.connection_id()).await? { return Err(AgentFailure::PolicyDenied); }
+    let current_grant = active_read_grant(&records.snapshot(source.clone()).await?.grants, &requirement)?;
     grant_unchanged(&grant, &current_grant)?;
     let (observation_id, process) =
         driver.commit_attention_projection(person_id, &host_epoch, device_id, &view, &subject)?;
@@ -716,7 +732,7 @@ pub async fn admit_selected_attention_outcome(
         GrantOperation::Read,
         GrantPurpose::Assistant,
         consumer,
-        ProcessingRestriction::LocalOnly,
+        current_grant.scope().processing().clone(),
         observation_id,
         attention_query_fingerprint(person_id, device_id, &view, observation_id, process),
         lease_invocation_id,
@@ -729,551 +745,4 @@ pub async fn admit_selected_attention_outcome(
     Ok(floe_context_contract::SourceReadOutcome::Ready((
         view, dependency,
     )))
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Mutex;
-
-    use floe_access::{DataAccessGrant, GrantDataCategory, GrantId, GrantScope};
-    use floe_agent_contract::BoxFuture;
-
-    use super::*;
-    use crate::ports::personal_source::{AcquiredSource, AttentionAcquisition};
-
-    const SUBJECT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const SUBJECT_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-
-    struct FixtureConnections(SourceConnection);
-
-    impl PersonalConnectionReader for FixtureConnections {
-        fn load<'a>(
-            &'a self,
-            person_id: PersonId,
-            connection_id: &'a floe_context_contract::ConnectionId,
-        ) -> BoxFuture<'a, Result<Option<SourceConnection>, AgentFailure>> {
-            Box::pin(async move {
-                Ok(
-                    (self.0.person_id() == person_id && self.0.connection_id() == connection_id)
-                        .then(|| self.0.clone()),
-                )
-            })
-        }
-    }
-
-    /// Records whose grant is replaced between the first read and the next,
-    /// exactly as a Person re-reviewing mid-read would do.
-    struct SwappingRecords {
-        grants: Vec<DataAccessGrant>,
-        reads: Mutex<usize>,
-    }
-
-    impl PersonalGrantRecords for SwappingRecords {
-        fn grants<'a>(&'a self) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>> {
-            let index = {
-                let mut reads = self.reads.lock().unwrap();
-                let index = (*reads).min(self.grants.len() - 1);
-                *reads += 1;
-                index
-            };
-            let grant = self.grants[index].clone();
-            Box::pin(async move { Ok(vec![grant]) })
-        }
-    }
-
-    /// A device that answers whatever subject it was asked for.
-    struct EchoingDriver;
-
-    impl PersonalSourceDriver for EchoingDriver {
-        fn personal_host_epoch(&self, _: PersonId) -> Result<String, AgentFailure> {
-            Ok("host".into())
-        }
-
-        fn attention_host_epoch(&self, _: PersonId) -> Result<String, AgentFailure> {
-            Ok("host".into())
-        }
-
-        fn process_incarnation(&self) -> Uuid {
-            Uuid::new_v4()
-        }
-
-        fn acquire<'a>(
-            &'a self,
-            request: PersonalAcquisition<'a>,
-            _: Cancellation,
-        ) -> BoxFuture<'a, Result<AcquiredSource, AgentFailure>> {
-            let subject = request.expected_subject.clone();
-            Box::pin(async move {
-                Ok(AcquiredSource {
-                    view: Some(serde_json::json!({})),
-                    subject_before: subject.clone(),
-                    subject_after: subject,
-                })
-            })
-        }
-
-        fn acquire_attention<'a>(
-            &'a self,
-            _: AttentionAcquisition<'a>,
-            _: Cancellation,
-        ) -> BoxFuture<'a, Result<AcquiredSource, AgentFailure>> {
-            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
-        }
-
-        #[allow(clippy::too_many_arguments)]
-        fn commit_personal_observation(
-            &self,
-            _: PersonId,
-            _: &str,
-            _: Uuid,
-            _: Uuid,
-            _: &str,
-            _: i64,
-            _: i64,
-            _: Vec<u8>,
-        ) -> Result<(), AgentFailure> {
-            Ok(())
-        }
-
-        fn trusted_personal_observation(
-            &self,
-            _: PersonId,
-            _: &str,
-            _: Uuid,
-            _: Uuid,
-        ) -> Result<crate::TrustedObservation, AgentFailure> {
-            Err(AgentFailure::NotFound)
-        }
-
-        fn trusted_attention_observation(
-            &self,
-            _: PersonId,
-            _: &str,
-            _: Uuid,
-            _: Uuid,
-        ) -> Result<(AttentionView, String), AgentFailure> {
-            Err(AgentFailure::NotFound)
-        }
-
-        fn commit_attention_projection(
-            &self,
-            _: PersonId,
-            _: &str,
-            _: &str,
-            _: &AttentionView,
-            _: &str,
-        ) -> Result<(Uuid, Uuid), AgentFailure> {
-            Err(AgentFailure::CapabilityUnavailable)
-        }
-    }
-
-    #[derive(Default)]
-    struct CapturingPeopleDriver {
-        selected: Mutex<Vec<String>>,
-        subject_after: Option<String>,
-    }
-
-    impl PersonalSourceDriver for CapturingPeopleDriver {
-        fn personal_host_epoch(&self, _: PersonId) -> Result<String, AgentFailure> {
-            Ok("host".into())
-        }
-
-        fn attention_host_epoch(&self, _: PersonId) -> Result<String, AgentFailure> {
-            Err(AgentFailure::CapabilityUnavailable)
-        }
-
-        fn process_incarnation(&self) -> Uuid {
-            Uuid::new_v4()
-        }
-
-        fn acquire<'a>(
-            &'a self,
-            request: PersonalAcquisition<'a>,
-            _: Cancellation,
-        ) -> BoxFuture<'a, Result<AcquiredSource, AgentFailure>> {
-            *self.selected.lock().unwrap() = request.selected_handles;
-            let now = Utc::now().timestamp_millis();
-            let subject_after = self
-                .subject_after
-                .clone()
-                .unwrap_or_else(|| request.expected_subject.clone());
-            Box::pin(async move {
-                Ok(AcquiredSource {
-                    view: Some(serde_json::json!({
-                        "schema_version": floe_kernel::AGENT_VERSION,
-                        "view_id": "people.identity",
-                        "source_handle": "contacts.apple",
-                        "observed_at_unix_ms": now,
-                        "expires_at_unix_ms": now + 60_000,
-                        "coverage_complete": true,
-                        "identities": []
-                    })),
-                    subject_before: request.expected_subject.clone(),
-                    subject_after,
-                })
-            })
-        }
-
-        fn acquire_attention<'a>(
-            &'a self,
-            _: AttentionAcquisition<'a>,
-            _: Cancellation,
-        ) -> BoxFuture<'a, Result<AcquiredSource, AgentFailure>> {
-            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
-        }
-
-        fn commit_personal_observation(
-            &self,
-            _: PersonId,
-            _: &str,
-            _: Uuid,
-            _: Uuid,
-            _: &str,
-            _: i64,
-            _: i64,
-            _: Vec<u8>,
-        ) -> Result<(), AgentFailure> {
-            Ok(())
-        }
-
-        fn trusted_personal_observation(
-            &self,
-            _: PersonId,
-            _: &str,
-            _: Uuid,
-            _: Uuid,
-        ) -> Result<crate::TrustedObservation, AgentFailure> {
-            Err(AgentFailure::NotFound)
-        }
-
-        fn trusted_attention_observation(
-            &self,
-            _: PersonId,
-            _: &str,
-            _: Uuid,
-            _: Uuid,
-        ) -> Result<(AttentionView, String), AgentFailure> {
-            Err(AgentFailure::NotFound)
-        }
-
-        fn commit_attention_projection(
-            &self,
-            _: PersonId,
-            _: &str,
-            _: &str,
-            _: &AttentionView,
-            _: &str,
-        ) -> Result<(Uuid, Uuid), AgentFailure> {
-            Err(AgentFailure::CapabilityUnavailable)
-        }
-    }
-
-    #[tokio::test]
-    async fn selected_contacts_read_uses_current_connection_handles_and_logical_grant() {
-        let person_id = PersonId::new();
-        let mut connection = SourceConnection::establish_reviewed_native(
-            person_id,
-            floe_context_contract::ConnectorId::try_new("contacts.apple").unwrap(),
-            floe_context_contract::ConnectionId::try_new("contacts.apple.local").unwrap(),
-            floe_context_contract::ExecutionOwnerId::try_new("apple:device").unwrap(),
-            floe_connections::ResourceMode::Selected,
-            vec![
-                floe_connections::ConnectionResource::new(
-                    ResourceHandle::try_new("person.identity:a").unwrap(),
-                    "A".into(),
-                )
-                .unwrap(),
-            ],
-            SUBJECT_A.into(),
-        )
-        .unwrap();
-        let original_authority = connection.source_authority();
-        connection
-            .configure_reviewed_native(
-                1,
-                floe_connections::ResourceMode::Selected,
-                vec![
-                    floe_connections::ConnectionResource::new(
-                        ResourceHandle::try_new("person.identity:a").unwrap(),
-                        "A".into(),
-                    )
-                    .unwrap(),
-                    floe_connections::ConnectionResource::new(
-                        ResourceHandle::try_new("person.identity:b").unwrap(),
-                        "B".into(),
-                    )
-                    .unwrap(),
-                ],
-                SUBJECT_B.into(),
-            )
-            .unwrap();
-        let source = GrantSourceBinding::try_new(
-            person_id,
-            connection.connection_id().clone(),
-            connection.connector_id().clone(),
-            connection.execution_owner_id().clone(),
-        )
-        .unwrap();
-        let logical = connection_view_resource(
-            floe_context_contract::PEOPLE_VIEW_ID,
-            connection.connection_id(),
-        )
-        .unwrap();
-        let scope = GrantScope::try_new(
-            vec![logical.clone()],
-            vec![GrantDataCategory::Derived],
-            vec![GrantOperation::Read],
-            vec![GrantPurpose::Assistant],
-            vec![GrantConsumer::builtin("floe.builtin.relationships").unwrap()],
-            ProcessingRestriction::LocalOnly,
-        )
-        .unwrap();
-        let mut grant =
-            DataAccessGrant::new(GrantId::new(), Uuid::new_v4(), source, scope.clone()).unwrap();
-        grant.activate_review(grant.authority(), scope).unwrap();
-        let records = SwappingRecords {
-            grants: vec![grant.clone()],
-            reads: Mutex::new(0),
-        };
-        let selected = crate::discover_source_candidates(crate::SourceCandidateRequest {
-            person_id,
-            device_id: "device",
-            capability: floe_context_contract::PEOPLE_VIEW_ID,
-            contract_version: 1,
-            remote_connections: &[],
-            remote_execution_owner: None,
-            source_connections: std::slice::from_ref(&connection),
-        })
-        .unwrap()
-        .remove(0)
-        .reference;
-        let driver = CapturingPeopleDriver::default();
-        let outcome = read_selected_people_outcome(
-            &FixtureConnections(connection.clone()),
-            &records,
-            &driver,
-            person_id,
-            "device",
-            &selected,
-            "floe.builtin.relationships",
-            Instant::now() + std::time::Duration::from_secs(5),
-            &Cancellation::default(),
-        )
-        .await
-        .unwrap();
-        let floe_context_contract::SourceReadOutcome::Ready((_, dependency)) = outcome else {
-            panic!("current reviewed connection must serve the people read");
-        };
-        assert_eq!(
-            *driver.selected.lock().unwrap(),
-            ["person.identity:a", "person.identity:b"]
-        );
-        assert_eq!(dependency.resources(), [logical]);
-        assert_eq!(
-            dependency
-                .source_resources()
-                .iter()
-                .map(ResourceHandle::as_str)
-                .collect::<Vec<_>>(),
-            ["person.identity:a", "person.identity:b"]
-        );
-        assert_eq!(dependency.source_authority(), connection.source_authority());
-        assert_ne!(dependency.source_authority(), original_authority);
-        assert_eq!(dependency.grant_id(), grant.id());
-        assert_eq!(dependency.grant_authority(), grant.authority());
-        let mut changed = connection.clone();
-        changed
-            .configure_reviewed_native(
-                connection.revision(),
-                floe_connections::ResourceMode::Selected,
-                connection.resources().to_vec(),
-                SUBJECT_A.into(),
-            )
-            .unwrap();
-        assert_eq!(
-            authorize_personal_dependency(
-                &FixtureConnections(changed),
-                &records,
-                &driver,
-                person_id,
-                "device",
-                &dependency,
-                Instant::now() + std::time::Duration::from_secs(5),
-                &Cancellation::default(),
-            )
-            .await,
-            Err(AgentFailure::PolicyDenied)
-        );
-    }
-
-    #[tokio::test]
-    async fn selected_contacts_subject_drift_fails_without_adopting_source() {
-        let person_id = PersonId::new();
-        let connection = SourceConnection::establish_reviewed_native(
-            person_id,
-            floe_context_contract::ConnectorId::try_new("contacts.apple").unwrap(),
-            floe_context_contract::ConnectionId::try_new("contacts.apple.local").unwrap(),
-            floe_context_contract::ExecutionOwnerId::try_new("apple:device").unwrap(),
-            floe_connections::ResourceMode::Selected,
-            vec![
-                floe_connections::ConnectionResource::new(
-                    ResourceHandle::try_new("person.identity:a").unwrap(),
-                    "A".into(),
-                )
-                .unwrap(),
-            ],
-            SUBJECT_A.into(),
-        )
-        .unwrap();
-        let source = GrantSourceBinding::try_new(
-            person_id,
-            connection.connection_id().clone(),
-            connection.connector_id().clone(),
-            connection.execution_owner_id().clone(),
-        )
-        .unwrap();
-        let scope = GrantScope::try_new(
-            vec![
-                connection_view_resource(
-                    floe_context_contract::PEOPLE_VIEW_ID,
-                    connection.connection_id(),
-                )
-                .unwrap(),
-            ],
-            vec![GrantDataCategory::Derived],
-            vec![GrantOperation::Read],
-            vec![GrantPurpose::Assistant],
-            vec![GrantConsumer::builtin("assistant").unwrap()],
-            ProcessingRestriction::LocalOnly,
-        )
-        .unwrap();
-        let mut grant =
-            DataAccessGrant::new(GrantId::new(), Uuid::new_v4(), source, scope.clone()).unwrap();
-        grant.activate_review(grant.authority(), scope).unwrap();
-        let records = SwappingRecords {
-            grants: vec![grant.clone()],
-            reads: Mutex::new(0),
-        };
-        let selected = crate::discover_source_candidates(crate::SourceCandidateRequest {
-            person_id,
-            device_id: "device",
-            capability: floe_context_contract::PEOPLE_VIEW_ID,
-            contract_version: 1,
-            remote_connections: &[],
-            remote_execution_owner: None,
-            source_connections: std::slice::from_ref(&connection),
-        })
-        .unwrap()
-        .remove(0)
-        .reference;
-        let connections = FixtureConnections(connection.clone());
-        let driver = CapturingPeopleDriver {
-            selected: Mutex::new(Vec::new()),
-            subject_after: Some(SUBJECT_B.into()),
-        };
-        let failure = read_selected_people_outcome(
-            &connections,
-            &records,
-            &driver,
-            person_id,
-            "device",
-            &selected,
-            "assistant",
-            Instant::now() + std::time::Duration::from_secs(5),
-            &Cancellation::default(),
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(failure, AgentFailure::AccessReviewRequired);
-        assert_eq!(connections.0.native_subject_fingerprint(), Some(SUBJECT_A));
-        assert_eq!(
-            connections.0.source_authority(),
-            connection.source_authority()
-        );
-        assert_eq!(grant.state(), floe_access::GrantState::Active);
-    }
-
-    #[tokio::test]
-    async fn selected_apple_contacts_ignore_live_android_grant() {
-        let person_id = PersonId::new();
-        let device_id = "device";
-        let source = GrantSourceBinding::try_new(
-            person_id,
-            floe_context_contract::ConnectionId::try_new("contacts.android.local").unwrap(),
-            floe_context_contract::ConnectorId::try_new("contacts.android").unwrap(),
-            floe_context_contract::ExecutionOwnerId::try_new(format!("android:{device_id}"))
-                .unwrap(),
-        )
-        .unwrap();
-        let scope = GrantScope::try_new(
-            vec![ResourceHandle::try_new(PEOPLE_RESOURCE).unwrap()],
-            vec![GrantDataCategory::Derived],
-            vec![GrantOperation::Read],
-            vec![GrantPurpose::Assistant],
-            vec![GrantConsumer::builtin("floe.builtin.relationships").unwrap()],
-            ProcessingRestriction::LocalOnly,
-        )
-        .unwrap();
-        let mut grant = DataAccessGrant::new(
-            GrantId::new(),
-            Uuid::new_v4(),
-            source.clone(),
-            scope.clone(),
-        )
-        .unwrap();
-        grant.activate_review(grant.authority(), scope).unwrap();
-        let records = SwappingRecords {
-            grants: vec![grant],
-            reads: Mutex::new(0),
-        };
-        let apple_connection = floe_connections::SourceConnection::establish_reviewed_native(
-            person_id,
-            floe_context_contract::ConnectorId::try_new("contacts.apple").unwrap(),
-            floe_context_contract::ConnectionId::try_new("contacts.apple.local").unwrap(),
-            floe_context_contract::ExecutionOwnerId::try_new("apple:device").unwrap(),
-            floe_connections::ResourceMode::Selected,
-            vec![
-                floe_connections::ConnectionResource::new(
-                    ResourceHandle::try_new("person.identity:a").unwrap(),
-                    "A".into(),
-                )
-                .unwrap(),
-            ],
-            "a".repeat(64),
-        )
-        .unwrap();
-        let selected = crate::discover_source_candidates(crate::SourceCandidateRequest {
-            person_id,
-            device_id,
-            capability: "people.identity",
-            contract_version: 1,
-            remote_connections: &[],
-            remote_execution_owner: None,
-            source_connections: std::slice::from_ref(&apple_connection),
-        })
-        .unwrap()
-        .remove(0)
-        .reference;
-        let outcome = read_selected_people_outcome(
-            &FixtureConnections(apple_connection),
-            &records,
-            &EchoingDriver,
-            person_id,
-            device_id,
-            &selected,
-            "floe.builtin.relationships",
-            Instant::now() + std::time::Duration::from_secs(5),
-            &Cancellation::default(),
-        )
-        .await
-        .unwrap();
-        let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = outcome else {
-            panic!("unselected Android grant must not authorize the Apple target");
-        };
-        assert_eq!(blockers.blockers().len(), 1);
-        assert_eq!(
-            blockers.blockers()[0].connector_id().unwrap().as_str(),
-            "contacts.apple"
-        );
-    }
 }

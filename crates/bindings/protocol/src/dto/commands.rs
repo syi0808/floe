@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{APP_WIRE_VERSION, AppWireErrorDto};
+use super::{
+    APP_WIRE_VERSION, AppWireErrorDto, CommandIdDto, InteractionRefDto, NativeHostCommandDto,
+    RequestIdDto, ReviewRefDto, RunRefDto, SessionRefDto,
+};
 
 const MAX_TURN_TEXT_BYTES: usize = 8 * 1024;
 const MAX_TURN_PAYLOAD_BYTES: usize = 64 * 1024;
@@ -10,8 +13,8 @@ const MAX_TURN_PAYLOAD_BYTES: usize = 64 * 1024;
 #[serde(deny_unknown_fields)]
 pub struct AppCommandRequestDto {
     pub schema_version: u32,
-    pub request_id: Uuid,
-    pub command_id: Uuid,
+    pub request_id: RequestIdDto,
+    pub command_id: CommandIdDto,
     pub command: AppCommandDto,
 }
 
@@ -20,45 +23,110 @@ impl AppCommandRequestDto {
         if self.schema_version != APP_WIRE_VERSION {
             return Err("schema_version");
         }
-        if self.request_id.is_nil() {
-            return Err("request_id");
-        }
-        if self.command_id.is_nil() {
-            return Err("command_id");
-        }
         self.command.validate()
     }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "kind", deny_unknown_fields)]
+#[serde(untagged)]
 pub enum AppCommandDto {
-    #[serde(rename = "context.apply")]
-    ContextApply { command: super::ContextCommandDto },
+    NativeHost(NativeHostCommandDto),
+    Product(AppProductCommandDto),
+}
+
+impl AppCommandDto {
+    fn validate(&self) -> Result<(), &'static str> {
+        match self {
+            Self::NativeHost(command) => command.validate(),
+            Self::Product(command) => command.validate(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(tag = "kind", deny_unknown_fields)]
+pub enum AppProductCommandDto {
+    #[serde(rename = "connections.gateway.prepare_setup")]
+    ConnectionsGatewayPrepareSetup { address_text: String },
+    #[serde(rename = "connections.pairing.start")]
+    ConnectionsPairingStart {
+        target_ref: super::GatewaySetupRefDto,
+    },
+    #[serde(rename = "connections.pairing.confirm")]
+    ConnectionsPairingConfirm {
+        operation_ref: super::OperationRefDto,
+        expected_revision: u64,
+    },
+    #[serde(rename = "connections.pairing.cancel")]
+    ConnectionsPairingCancel {
+        operation_ref: super::OperationRefDto,
+        expected_revision: u64,
+    },
+    #[serde(rename = "connections.gateway.forget")]
+    ConnectionsGatewayForget {
+        gateway_ref: super::GatewayRefDto,
+        expected_revision: u64,
+    },
+    #[serde(rename = "connections.integration.prepare_review")]
+    ConnectionsIntegrationPrepareReview {
+        integration_ref: super::IntegrationRefDto,
+        expected_revision: u64,
+    },
+    #[serde(rename = "connections.integration.start")]
+    ConnectionsIntegrationStart {
+        integration_ref: super::IntegrationRefDto,
+        review_ref: ReviewRefDto,
+        expected_revision: u64,
+    },
+    #[serde(rename = "connections.operation.cancel")]
+    ConnectionsOperationCancel {
+        operation_ref: super::OperationRefDto,
+        expected_revision: u64,
+    },
+    #[serde(rename = "connections.source.prepare_review")]
+    ConnectionsSourcePrepareReview {
+        source_ref: super::ConnectionsSourceRefDto,
+        expected_revision: u64,
+    },
+    #[serde(rename = "connections.source.configure")]
+    ConnectionsSourceConfigure {
+        source_ref: super::ConnectionsSourceRefDto,
+        review_ref: ReviewRefDto,
+        selected_resource_refs: Vec<super::ResourceRefDto>,
+        expected_revision: u64,
+    },
+    #[serde(rename = "connections.disconnect")]
+    ConnectionsDisconnect {
+        source_ref: super::ConnectionsSourceRefDto,
+        expected_revision: u64,
+    },
+    #[serde(rename = "connections.observe.prepare_review")]
+    ConnectionsObservePrepareReview {
+        source_ref: super::ConnectionsSourceRefDto,
+        expected_revision: u64,
+        requested_processing: super::RequestedProcessingDto,
+    },
+    #[serde(rename = "connections.observe.set")]
+    ConnectionsObserveSet {
+        mutation: super::ConnectionObserveSetMutationDto,
+    },
+    #[serde(rename = "connections.gateway.management_launch")]
+    ConnectionsGatewayManagementLaunch {
+        gateway_ref: super::GatewayRefDto,
+        expected_revision: u64,
+    },
     #[serde(rename = "actions.calendar")]
     ActionsCalendar {
         operation: super::CalendarActionOperationDto,
+    },
+    #[serde(rename = "day.refresh")]
+    DayRefresh {
+        day: super::DayQueryDto,
     },
     #[serde(rename = "day.mutate")]
     DayMutate {
         day: super::DayQueryDto,
         mutation: super::DayMutationDto,
-    },
-    #[serde(rename = "connections.native_calendar.mutate")]
-    NativeCalendarSourceMutate {
-        mutation: super::NativeCalendarSourceMutationDto,
-    },
-    #[serde(rename = "connections.native_personal.setup")]
-    NativePersonalSourceSetup {
-        setup: super::NativePersonalSourceSetupDto,
-    },
-    #[serde(rename = "connection_observe.set_enabled")]
-    ConnectionObserveSetEnabled {
-        mutation: super::ConnectionObserveMutationDto,
-    },
-    #[serde(rename = "connections.remote_calendar.mutate")]
-    RemoteCalendarSourceMutate {
-        mutation: super::RemoteCalendarSourceMutationDto,
     },
     #[serde(rename = "knowledge.memory.decide")]
     KnowledgeMemoryDecide {
@@ -75,11 +143,9 @@ pub enum AppCommandDto {
     },
     #[serde(rename = "conversation.session.start")]
     ConversationSessionStart {},
-    #[serde(rename = "conversation.session.resume")]
-    ConversationSessionResume {},
     #[serde(rename = "conversation.session.recover")]
     ConversationSessionRecover {
-        session_id: Uuid,
+        session_id: SessionRefDto,
         expected_revision: u64,
     },
     #[serde(rename = "vault.create")]
@@ -90,52 +156,100 @@ pub enum AppCommandDto {
     VaultLock {},
     #[serde(rename = "conversation.start_turn")]
     ConversationStartTurn {
-        session_id: Uuid,
+        session_id: SessionRefDto,
         expected_revision: u64,
         text: String,
-        mode: AppTurnModeDto,
-        #[serde(default, skip_serializing_if = "AppProfileSelectionDto::is_auto")]
-        profile: AppProfileSelectionDto,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        retry_of: Option<Uuid>,
+        continuation_ref: Option<ContinuationRefDto>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_of: Option<RunRefDto>,
     },
     #[serde(rename = "conversation.cancel_run")]
     ConversationCancelRun {
-        run_id: Uuid,
-        reason: AppCancelRunReasonDto,
+        run_id: RunRefDto,
     },
     #[serde(rename = "conversation.interaction.resolve")]
     ConversationInteractionResolve {
-        interaction_id: Uuid,
-        session_id: Uuid,
+        interaction_id: InteractionRefDto,
+        session_id: SessionRefDto,
         expected_revision: u64,
         decision: super::AppInteractionDecisionDto,
-        target_digest: [u8; 32],
+        reviewed_digest: super::DigestHex64Dto,
     },
     #[serde(rename = "conversation.interaction.refresh")]
     ConversationInteractionRefresh {
-        interaction_id: Uuid,
-        session_id: Uuid,
-        expected_revision: u64,
-    },
-    #[serde(rename = "conversation.interaction.resume")]
-    ConversationInteractionResume {
-        session_id: Uuid,
-        origin_run_id: Uuid,
+        interaction_id: InteractionRefDto,
+        session_id: SessionRefDto,
         expected_revision: u64,
     },
 }
 
-impl AppCommandDto {
+impl AppProductCommandDto {
     fn validate(&self) -> Result<(), &'static str> {
         match self {
-            Self::ContextApply { .. } => Ok(()),
+            Self::ConnectionsGatewayPrepareSetup { address_text } => {
+                if !valid_text(address_text, 2048) || !valid_gateway_setup_address(address_text) {
+                    Err("command.address_text")
+                } else {
+                    Ok(())
+                }
+            }
+            Self::ConnectionsPairingStart { .. } => Ok(()),
+            Self::ConnectionsPairingConfirm {
+                expected_revision, ..
+            }
+            | Self::ConnectionsPairingCancel {
+                expected_revision, ..
+            }
+            | Self::ConnectionsGatewayForget {
+                expected_revision, ..
+            }
+            | Self::ConnectionsIntegrationPrepareReview {
+                expected_revision, ..
+            }
+            | Self::ConnectionsOperationCancel {
+                expected_revision, ..
+            }
+            | Self::ConnectionsSourcePrepareReview {
+                expected_revision, ..
+            }
+            | Self::ConnectionsDisconnect {
+                expected_revision, ..
+            }
+            | Self::ConnectionsObservePrepareReview {
+                expected_revision, ..
+            }
+            | Self::ConnectionsGatewayManagementLaunch {
+                expected_revision, ..
+            } => validate_revision(*expected_revision),
+            Self::ConnectionsSourceConfigure {
+                selected_resource_refs,
+                review_ref,
+                expected_revision, ..
+            } => {
+                validate_revision(*expected_revision)?;
+                review_ref.validate()?;
+                if selected_resource_refs.len() > 4096
+                    || selected_resource_refs.iter().collect::<std::collections::HashSet<_>>().len()
+                        != selected_resource_refs.len()
+                {
+                    Err("command.selected_resource_refs")
+                } else {
+                    Ok(())
+                }
+            }
+            Self::ConnectionsIntegrationStart {
+                review_ref,
+                expected_revision,
+                ..
+            } => {
+                validate_revision(*expected_revision)?;
+                review_ref.validate()
+            }
+            Self::ConnectionsObserveSet { mutation } => mutation.validate(),
             Self::ActionsCalendar { operation } => super::actions::validate_command(operation),
+            Self::DayRefresh { .. } => Ok(()),
             Self::DayMutate { mutation, .. } => mutation.validate(),
-            Self::NativeCalendarSourceMutate { mutation } => mutation.validate(),
-            Self::NativePersonalSourceSetup { setup } => setup.validate(),
-            Self::ConnectionObserveSetEnabled { mutation } => mutation.validate(),
-            Self::RemoteCalendarSourceMutate { mutation } => mutation.validate(),
             Self::KnowledgeMemoryDecide { candidate_id, .. } => {
                 if candidate_id.is_nil() {
                     Err("command.candidate_id")
@@ -159,25 +273,21 @@ impl AppCommandDto {
                 }
             }
             Self::ExpertsBindingReplace { selection } => selection.validate(),
-            Self::ConversationSessionStart {} | Self::ConversationSessionResume {} => Ok(()),
-            Self::ConversationSessionRecover { session_id, .. } => {
-                if session_id.is_nil() {
-                    Err("command.session_id")
-                } else {
-                    Ok(())
-                }
-            }
+            Self::ConversationSessionStart {} => Ok(()),
+            Self::ConversationSessionRecover {
+                expected_revision, ..
+            } => validate_revision(*expected_revision),
             Self::VaultCreate {} | Self::VaultUnlock {} | Self::VaultLock {} => Ok(()),
             Self::ConversationStartTurn {
-                session_id,
+                expected_revision,
                 text,
-                mode,
-                profile,
+                continuation_ref,
                 retry_of,
                 ..
             } => {
-                if session_id.is_nil() {
-                    return Err("command.session_id");
+                validate_revision(*expected_revision)?;
+                if retry_of.is_some() && continuation_ref.is_some() {
+                    return Err("command.retry_of");
                 }
                 let normalized = text.trim();
                 if text.len() > MAX_TURN_PAYLOAD_BYTES
@@ -189,159 +299,46 @@ impl AppCommandDto {
                 {
                     return Err("command.text");
                 }
-                if retry_of.is_some_and(|id| id.is_nil()) {
-                    return Err("command.retry_of");
-                }
-                if retry_of.is_some() && !matches!(mode, AppTurnModeDto::NewTurn {}) {
-                    return Err("command.retry_of");
-                }
-                mode.validate()?;
-                profile.validate()
+                Ok(())
             }
-            Self::ConversationCancelRun { run_id, .. } => {
-                if run_id.is_nil() {
-                    Err("command.run_id")
-                } else {
-                    Ok(())
-                }
-            }
+            Self::ConversationCancelRun { .. } => Ok(()),
             Self::ConversationInteractionResolve {
-                interaction_id,
-                session_id,
                 expected_revision,
-                target_digest,
+                reviewed_digest: _,
                 ..
             } => {
-                if interaction_id.is_nil() {
-                    return Err("command.interaction_id");
-                }
-                if session_id.is_nil() {
-                    return Err("command.session_id");
-                }
-                if *expected_revision == 0 {
-                    return Err("command.expected_revision");
-                }
-                if *target_digest == [0; 32] {
-                    return Err("command.target_digest");
-                }
-                Ok(())
+                validate_revision(*expected_revision)
             }
             Self::ConversationInteractionRefresh {
-                interaction_id,
-                session_id,
                 expected_revision,
-            } => {
-                if interaction_id.is_nil() {
-                    return Err("command.interaction_id");
-                }
-                if session_id.is_nil() {
-                    return Err("command.session_id");
-                }
-                if *expected_revision == 0 {
-                    return Err("command.expected_revision");
-                }
-                Ok(())
-            }
-            Self::ConversationInteractionResume {
-                session_id,
-                origin_run_id,
                 ..
             } => {
-                if session_id.is_nil() {
-                    return Err("command.session_id");
-                }
-                if origin_run_id.is_nil() {
-                    return Err("command.origin_run_id");
-                }
-                Ok(())
+                validate_revision(*expected_revision)
             }
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum AppProfileSelectionDto {
-    #[default]
-    Auto,
-    Explicit {
-        profile_id: String,
-    },
-}
-
-impl AppProfileSelectionDto {
-    fn is_auto(&self) -> bool {
-        matches!(self, Self::Auto)
-    }
-
-    fn validate(&self) -> Result<(), &'static str> {
-        match self {
-            Self::Auto => Ok(()),
-            Self::Explicit { profile_id } => {
-                if profile_id.trim() != profile_id
-                    || profile_id.is_empty()
-                    || profile_id.len() > 128
-                    || profile_id.chars().any(char::is_control)
-                {
-                    Err("command.profile")
-                } else {
-                    Ok(())
-                }
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum AppTurnModeDto {
-    NewTurn {},
-    Continue {
-        continuation_ref: AppContinuationRefDto,
-    },
-}
-
-impl AppTurnModeDto {
-    fn validate(&self) -> Result<(), &'static str> {
-        match self {
-            Self::NewTurn {} => Ok(()),
-            Self::Continue { continuation_ref } => continuation_ref.validate(),
         }
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct AppContinuationRefDto {
-    pub run_id: Uuid,
-    pub executor_generation: u64,
-    pub level: u8,
+pub struct ContinuationRefDto {
+    pub id: super::UuidRefDto,
 }
 
-impl AppContinuationRefDto {
+impl ContinuationRefDto {
     fn validate(&self) -> Result<(), &'static str> {
-        if self.run_id.is_nil() || self.executor_generation == 0 || !(1..=3).contains(&self.level) {
-            Err("command.mode.continuation_ref")
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AppCancelRunReasonDto {
-    UserRequested,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppCommandReceiptDto {
-    pub command_id: Uuid,
+    pub command_id: CommandIdDto,
     pub runtime_epoch: u64,
     pub admission: AppCommandStatusDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<Uuid>,
+    pub run_id: Option<RunRefDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_revision: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -364,9 +361,55 @@ pub enum AppCancelRunOutcomeDto {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AppCommandResultDto {
-    ContextApplied {
-        command_id: Uuid,
-        context: super::LocalContextResultDto,
+    #[serde(rename = "registered")]
+    NativeHostRegistered {
+        registration: super::NativeHostRegistrationDto,
+    },
+    #[serde(rename = "acknowledged")]
+    NativeHostAcknowledged {},
+    #[serde(rename = "connections.gateway_setup")]
+    ConnectionsGatewaySetup {
+        setup: super::GatewaySetupDto,
+    },
+    #[serde(rename = "connections.gateway")]
+    ConnectionsGateway {
+        gateway: super::GatewaySummaryDto,
+    },
+    #[serde(rename = "connections.pairing")]
+    ConnectionsPairing {
+        pairing: super::PairingSnapshotDto,
+    },
+    #[serde(rename = "connections.overview")]
+    ConnectionsOverview {
+        overview: super::ConnectionsOverviewDto,
+    },
+    #[serde(rename = "connections.integration_review")]
+    ConnectionsIntegrationReview {
+        review: super::IntegrationReviewDto,
+    },
+    #[serde(rename = "connections.operation")]
+    ConnectionsOperation {
+        operation: super::ConnectionOperationSnapshotDto,
+    },
+    #[serde(rename = "connections.source")]
+    ConnectionsSource {
+        source: super::SourceSummaryDto,
+    },
+    #[serde(rename = "connections.source_review")]
+    ConnectionsSourceReview {
+        review: super::SourceReviewDto,
+    },
+    #[serde(rename = "connections.observe_review")]
+    ConnectionsObserveReview {
+        review: super::ObserveReviewDto,
+    },
+    #[serde(rename = "connections.launch")]
+    ConnectionsLaunch {
+        launch_action: super::LaunchActionDto,
+    },
+    #[serde(rename = "day.refresh")]
+    DayRefresh {
+        refresh: super::DayRefreshStateDto,
     },
     ActionOperation {
         #[serde(flatten)]
@@ -376,22 +419,6 @@ pub enum AppCommandResultDto {
         command_id: Uuid,
         mutation: super::MutationResultDto,
     },
-    NativeCalendarSource {
-        command_id: Uuid,
-        source: super::SourceConnectionDto,
-    },
-    NativePersonalSource {
-        command_id: Uuid,
-        source: super::SourceConnectionDto,
-    },
-    ConnectionObserve {
-        #[serde(flatten)]
-        result: super::ConnectionObserveResultDto,
-    },
-    RemoteCalendarSource {
-        command_id: Uuid,
-        source: super::SourceConnectionDto,
-    },
     KnowledgeOperation {
         #[serde(flatten)]
         result: super::KnowledgeOperationResultDto,
@@ -400,10 +427,7 @@ pub enum AppCommandResultDto {
         #[serde(flatten)]
         result: super::ExpertOperationResultDto,
     },
-    ConversationSessionOperation {
-        #[serde(flatten)]
-        result: super::ConversationSessionResultDto,
-    },
+    ConversationSession { session: super::ConversationSessionSnapshotDto },
     VaultOperation {
         #[serde(flatten)]
         result: super::VaultLifecycleResultDto,
@@ -413,8 +437,8 @@ pub enum AppCommandResultDto {
         receipt: AppCommandReceiptDto,
     },
     CancelRunReceipt {
-        command_id: Uuid,
-        run_id: Uuid,
+        command_id: CommandIdDto,
+        run_id: RunRefDto,
         runtime_epoch: u64,
         outcome: AppCancelRunOutcomeDto,
     },
@@ -426,4 +450,43 @@ pub enum AppCommandResultDto {
         #[serde(flatten)]
         result: super::AppInteractionRefreshResultDto,
     },
+}
+
+fn validate_revision(value: u64) -> Result<(), &'static str> {
+    if value == 0 || value > i64::MAX as u64 {
+        Err("expected_revision")
+    } else {
+        Ok(())
+    }
+}
+
+fn valid_text(value: &str, maximum: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
+fn valid_gateway_setup_address(value: &str) -> bool {
+    let Some((scheme, authority)) = value.split_once("://") else {
+        return false;
+    };
+    if scheme != "http" || authority.bytes().any(|byte| matches!(byte, b'/' | b'?' | b'#' | b'@')) {
+        return false;
+    }
+    let Some((host, port)) = authority.rsplit_once(':') else {
+        return false;
+    };
+    if authority.matches(':').count() != 1
+        || !(host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1")
+    {
+        return false;
+    }
+    valid_nonzero_port(port)
+}
+
+fn valid_nonzero_port(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && value.parse::<u16>().is_ok_and(|port| port != 0)
 }

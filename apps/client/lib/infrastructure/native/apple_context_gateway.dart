@@ -5,39 +5,13 @@ import 'package:flutter/services.dart';
 
 const _channel = MethodChannel('floe/apple_context');
 
-abstract interface class AppleContextApi {
-  Future<List<Map<String, dynamic>>> connections();
-  Future<bool> requestPermission(AppleContextSource source);
-  Future<Map<String, dynamic>> readContacts({
-    int limit = 64,
-    List<String>? selectedHandles,
-  });
-  Future<Map<String, dynamic>> readWellbeing();
-  Future<Map<String, dynamic>> screenTimeCapability();
-}
-
-abstract interface class AppleContextSubjectApi {
-  Future<Map<String, dynamic>> inspectContactsSubject(
-    List<String> selectedHandles,
-  );
-}
-
-abstract interface class AppleHealthSubjectApi {
-  Future<Map<String, dynamic>> inspectWellbeingSubject();
-  Future<bool> requestWellbeingPermission();
-}
-
-enum AppleContextSource { contacts, health }
-
-final class AppleContextGateway
-    implements AppleContextApi, AppleContextSubjectApi, AppleHealthSubjectApi {
+final class AppleContextGateway {
   AppleContextGateway({required String deviceId}) : _deviceId = deviceId {
     validateAppleDeviceId(deviceId);
   }
 
   final String _deviceId;
 
-  @override
   Future<List<Map<String, dynamic>>> connections() async {
     _requireAppleMobile();
     final values = await _channel.invokeListMethod<Object?>(
@@ -51,23 +25,21 @@ final class AppleContextGateway
     return connections;
   }
 
-  @override
-  Future<bool> requestPermission(AppleContextSource source) async {
+  Future<Map<String, dynamic>> requestPermissionAcquisition(Map<String, dynamic> request) async {
     _requireAppleMobile();
-    final value = _strictMap(
-      await _channel.invokeMapMethod<Object?, Object?>('requestPermission', {
-        'device_id': _deviceId,
-        'source': source.name,
-      }),
-    );
-    if (value.keys.toSet().difference({'granted'}).isNotEmpty ||
-        value['granted'] is! bool) {
-      throw const FormatException('Invalid Apple permission response.');
+    if (request['mode'] != 'request_permission' || request['device_id'] != _deviceId) {
+      throw const FormatException('Invalid permission acquisition.');
     }
-    return value['granted']! as bool;
+    final value = _strictMap(await _channel.invokeMapMethod<Object?, Object?>('requestPermissionAcquisition', request));
+    _requireExactKeys(value, {'native_subject_fingerprint_before','native_subject_fingerprint_after','permission_class'}, 'Permission completion');
+    if (!{'request_completed','denied','unavailable'}.contains(value['permission_class']) ||
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(value['native_subject_fingerprint_before'] as String) ||
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(value['native_subject_fingerprint_after'] as String)) {
+      throw const FormatException('Invalid permission completion.');
+    }
+    return value;
   }
 
-  @override
   Future<Map<String, dynamic>> readContacts({
     int limit = 64,
     List<String>? selectedHandles,
@@ -84,7 +56,31 @@ final class AppleContextGateway
     return view;
   }
 
-  @override
+  Future<Map<String, dynamic>> inspectContactsCatalog() async {
+    _requireAppleMobile();
+    final value = _strictMap(await _channel.invokeMapMethod<Object?, Object?>(
+      'inspectContactsCatalog', appleNativeArguments(_deviceId),
+    ));
+    _requireExactKeys(value, {'resources','native_subject_fingerprint','permission_class','catalog_complete'}, 'Contacts resource catalog');
+    final resources = value['resources'];
+    if (resources is! List || resources.length > 256 || value['catalog_complete'] is! bool ||
+        value['native_subject_fingerprint'] is! String ||
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(value['native_subject_fingerprint'] as String) ||
+        value['permission_class'] is! String) {
+      throw const FormatException('Invalid Contacts resource catalog.');
+    }
+    final handles = <String>{};
+    for (final item in resources) {
+      final resource = _strictMap(item);
+      _requireExactKeys(resource, {'handle','label'}, 'Contacts resource');
+      if (!_validHandle(resource['handle']) || resource['label'] is! String ||
+          (resource['label'] as String).isEmpty || !handles.add(resource['handle'] as String)) {
+        throw const FormatException('Invalid Contacts resource metadata.');
+      }
+    }
+    return value;
+  }
+
   Future<Map<String, dynamic>> inspectContactsSubject(
     List<String> selectedHandles,
   ) async {
@@ -118,7 +114,27 @@ final class AppleContextGateway
     return value;
   }
 
-  @override
+  Future<Map<String, dynamic>> inspectWellbeingCatalog() async {
+    _requireAppleMobile();
+    final value = _strictMap(await _channel.invokeMapMethod<Object?, Object?>(
+      'inspectWellbeingCatalog', appleNativeArguments(_deviceId),
+    ));
+    _requireExactKeys(value, {'resources','native_subject_fingerprint','permission_class','catalog_complete'}, 'Health resource catalog');
+    final resources = value['resources'];
+    if (resources is! List || resources.length != 1 || value['catalog_complete'] != true ||
+        value['native_subject_fingerprint'] is! String ||
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(value['native_subject_fingerprint'] as String) ||
+        value['permission_class'] is! String) {
+      throw const FormatException('Invalid native Health resource catalog.');
+    }
+    final resource = _strictMap(resources.single);
+    _requireExactKeys(resource, {'handle','label'}, 'Health resource');
+    if (resource['handle'] != 'wellbeing.derived' || resource['label'] is! String) {
+      throw const FormatException('Invalid Health resource metadata.');
+    }
+    return value;
+  }
+
   Future<Map<String, dynamic>> inspectWellbeingSubject() async {
     _requireAppleMobile();
     final value = _strictMap(
@@ -144,36 +160,29 @@ final class AppleContextGateway
     return value;
   }
 
-  @override
-  Future<bool> requestWellbeingPermission() async {
-    _requireAppleMobile();
-    final value = _strictMap(
-      await _channel.invokeMapMethod<Object?, Object?>('requestPermission', {
-        'device_id': _deviceId,
-        'source': AppleContextSource.health.name,
-      }),
-    );
-    if (value.keys.toSet().difference({'granted'}).isNotEmpty ||
-        value['granted'] is! bool) {
-      throw const FormatException('Invalid Apple Health permission response.');
-    }
-    return value['granted']! as bool;
-  }
-
-  @override
-  Future<Map<String, dynamic>> readWellbeing() async {
+  Future<Map<String, dynamic>> readWellbeingAcquisition(
+    Map<String, dynamic> transformBinding,
+  ) async {
     _requireAppleMobile();
     final view = _strictMap(
       await _channel.invokeMapMethod<Object?, Object?>(
         'readWellbeing',
-        appleNativeArguments(_deviceId),
+        appleNativeArguments(_deviceId, {'transform_binding': transformBinding}),
       ),
     );
-    validateAppleWellbeingView(view);
-    return view;
+    _requireExactKeys(view, {'view', 'privacy_transform'}, 'Health acquisition');
+    final transformed = _strictMap(view['view']);
+    final proof = _strictMap(view['privacy_transform']);
+    _requireExactKeys(proof, {'operation_id', 'output_sha256'}, 'Health transform proof');
+    if (proof['operation_id'] is! String ||
+        proof['output_sha256'] is! String ||
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(proof['output_sha256'] as String)) {
+      throw const FormatException('Invalid Health transform proof.');
+    }
+    validateAppleWellbeingView(transformed);
+    return {'view': transformed, 'privacy_transform': proof};
   }
 
-  @override
   Future<Map<String, dynamic>> screenTimeCapability() async {
     _requireAppleMobile();
     final value = _strictMap(
@@ -298,10 +307,15 @@ void validateAppleWellbeingView(Map<String, dynamic> view) {
       _integer(view['confidence_millis']) < 0 ||
       _integer(view['confidence_millis']) > 1000 ||
       evidence is! List ||
-      evidence.isEmpty ||
-      evidence.length > 3 ||
+      evidence.length > 1 ||
       evidence.any((value) => !_validHandle(value))) {
     throw const FormatException('Invalid Apple Wellbeing View.');
+  }
+  final unknown = view['capacity'] == 'unknown' && view['recovery'] == 'unknown';
+  if (unknown
+      ? evidence.isNotEmpty || view['confidence_millis'] != 0
+      : evidence.isEmpty || view['confidence_millis'] != 600) {
+    throw const FormatException('Invalid transformed Wellbeing evidence.');
   }
   _validateTimes(view, maximumTtlMs: 1800000);
 }

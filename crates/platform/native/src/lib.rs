@@ -14,7 +14,7 @@ pub use acquisition::{
     AttentionAcquisitionResult, AttentionBroker, CalendarAcquisitionMode,
     CalendarAcquisitionRequest, CalendarAcquisitionResult, CalendarBroker, CalendarSourceFailure,
     CompletionOutcome, HostRegistration, MAX_ACQUISITION_DEADLINE_MS, MAX_ACQUISITION_PENDING,
-    PersonalAcquisitionRequest, PersonalAcquisitionResult, PersonalBroker, PersonalDomain,
+    PersonalAcquisitionRequest, PersonalAcquisitionResult, PersonalBroker, PersonalDomain, PersonalAcquisitionMode, NativeSourceResource,
     attention_failure, calendar_failure, personal_failure,
 };
 pub use calendar_wire::{
@@ -25,4 +25,7 @@ pub use dylib::{
     BUNDLE_SIBLING, ByteCall, GatedStringCall, MACOS_BUNDLE_ROOT, NativeCallError, NativeLibrary,
 };
 pub use host::{NativeIdentityError, NativeLocalIdentity, local_identity_for_database};
-pub use keychain::{KeychainError, read_generic_password};
+pub use keychain::{KeychainError, read_generic_password, write_generic_password, delete_generic_password};
+
+mod health_privacy;
+pub use health_privacy::{HealthTransformReceiptRef,HealthTransformBinding,HealthPrivacyReceipt,consume_health_transform_receipt};

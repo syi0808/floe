@@ -13,7 +13,7 @@ use floe_context_contract::ConnectionId;
 use floe_context_contract::ContextDependency;
 use floe_kernel::PersonId;
 use floe_provider_adapters::sources::NativePersonalDriver;
-use floe_vault::{EncryptedAgentVault, VaultGrantRecords, VaultKeyProvider};
+use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 
 use crate::FloeCore;
 use crate::local_context::LocalContextHost;
@@ -23,6 +23,9 @@ pub(crate) struct CorePersonalConnections<'a> {
 }
 
 impl floe_context::PersonalConnectionReader for CorePersonalConnections<'_> {
+    fn source_is_fenced<'a>(&'a self, person_id: PersonId, connection_id: &'a ConnectionId) -> floe_execution::BoxFuture<'a, Result<bool, AgentFailure>> {
+        Box::pin(async move { floe_connections::SourceOperationRepository::source_is_fenced(self.core.store.as_ref(), person_id, connection_id).await.map_err(|_| AgentFailure::StorageUnavailable) })
+    }
     fn load<'a>(
         &'a self,
         person_id: PersonId,
@@ -50,11 +53,11 @@ pub(crate) struct PersonalDependencyResolver<'a, Keys: VaultKeyProvider> {
 }
 
 /// The device driver this host's local context owns.
-pub(crate) fn native_driver(local_context: &LocalContextHost) -> NativePersonalDriver<'_> {
+pub(crate) fn native_driver(local_context: &LocalContextHost) -> NativePersonalDriver {
     NativePersonalDriver {
-        attention: local_context.attention(),
-        personal: local_context.personal(),
-        observations: local_context.observations(),
+        attention: local_context.attention_handle(),
+        personal: local_context.personal_handle(),
+        observations: local_context.observations_handle(),
     }
 }
 
@@ -67,7 +70,7 @@ impl<Keys: VaultKeyProvider> DependencyResolver for PersonalDependencyResolver<'
         Box::pin(async move {
             floe_context::authorize_personal_dependency(
                 &CorePersonalConnections { core: self.core },
-                &VaultGrantRecords::new(self.vault),
+                self.vault,
                 &native_driver(self.local_context),
                 self.person_id,
                 self.device_id,

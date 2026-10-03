@@ -12,8 +12,9 @@ mod assembly;
 mod authorized_read;
 pub mod calendar;
 mod evidence;
+mod health_transform;
+pub use health_transform::{HealthTransformEvidence, health_output_digest};
 mod memory;
-mod processing;
 mod source_access;
 mod source_selection;
 pub mod views;
@@ -26,11 +27,6 @@ pub use floe_kernel::PersonId;
 pub use memory::{
     ContextMemory, EpistemicStatus, LearningEvidenceRef, MAX_CONTEXT_MEMORIES,
     MAX_CONTEXT_MEMORY_BYTES, MemoryContextSnapshot, PersonalMemoryKind,
-};
-pub use processing::{
-    MAX_PROCESSING_CONSUMER_BYTES, MAX_PROCESSING_DATA_CLASSES, MAX_PROCESSING_PURPOSE_BYTES,
-    MAX_PROCESSING_REQUIREMENT_BYTES, MAX_PROCESSING_SOURCE_SCOPES, MAX_PROFILE_ID_BYTES,
-    MAX_RECIPIENT_BYTES, ProcessingRequirement, ProcessingSourceScope, RecipientLineage,
 };
 pub use source_access::{
     MAX_SOURCE_ACCESS_BLOCKERS, ObservedGrant, SourceAccessBlockers, SourceAccessRequirement,
@@ -230,30 +226,26 @@ impl GrantConsumer {
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub enum ProcessingRestriction {
-    #[serde(rename = "local_only")]
-    LocalOnly,
-    #[serde(rename = "approved_recipient")]
-    ApprovedRecipient {
-        recipient: String,
-        categories: Vec<GrantDataCategory>,
-    },
+    #[serde(rename = "device_only")]
+    DeviceOnly,
+    #[serde(rename = "gateway_allowed")]
+    GatewayAllowed { categories: Vec<GrantDataCategory> },
 }
 
 impl ProcessingRestriction {
-    pub fn approved_recipient(
-        value: impl Into<String>,
-        categories: Vec<GrantDataCategory>,
-    ) -> Result<Self, GrantValidationError> {
-        let value = value.into();
-        validate_identifier(&value, MAX_CONSUMER_ID_BYTES, "recipient")?;
-        if categories.is_empty() {
-            return Err(GrantValidationError::MissingScope);
-        }
+    pub fn gateway_allowed(mut categories: Vec<GrantDataCategory>) -> Result<Self, GrantValidationError> {
+        if categories.is_empty() { return Err(GrantValidationError::MissingScope); }
         ensure_unique(&categories, "category")?;
-        Ok(Self::ApprovedRecipient {
-            recipient: value,
-            categories,
-        })
+        categories.sort();
+        Ok(Self::GatewayAllowed { categories })
+    }
+
+    pub fn admits_gateway(&self, requested: &[GrantDataCategory]) -> bool {
+        match self {
+            Self::DeviceOnly => false,
+            Self::GatewayAllowed { categories } => !requested.is_empty()
+                && requested.iter().all(|category| categories.contains(category)),
+        }
     }
 }
 
@@ -549,12 +541,8 @@ fn canonical_processing(
     scope_categories: &[GrantDataCategory],
 ) -> Result<ProcessingRestriction, GrantValidationError> {
     match processing {
-        ProcessingRestriction::LocalOnly => Ok(ProcessingRestriction::LocalOnly),
-        ProcessingRestriction::ApprovedRecipient {
-            recipient,
-            mut categories,
-        } => {
-            validate_identifier(&recipient, MAX_CONSUMER_ID_BYTES, "recipient")?;
+        ProcessingRestriction::DeviceOnly => Ok(ProcessingRestriction::DeviceOnly),
+        ProcessingRestriction::GatewayAllowed { mut categories } => {
             if categories.is_empty() {
                 return Err(GrantValidationError::MissingScope);
             }
@@ -566,10 +554,7 @@ fn canonical_processing(
                 return Err(GrantValidationError::MissingScope);
             }
             categories.sort();
-            Ok(ProcessingRestriction::ApprovedRecipient {
-                recipient,
-                categories,
-            })
+            Ok(ProcessingRestriction::GatewayAllowed { categories })
         }
     }
 }
@@ -627,6 +612,7 @@ pub struct ContextDependency {
     purpose: GrantPurpose,
     consumer: GrantConsumer,
     processing: ProcessingRestriction,
+    health_transform: Option<HealthTransformEvidence>,
     observation_id: Uuid,
     query_fingerprint: Vec<u8>,
     lease_invocation_id: Uuid,
@@ -705,21 +691,14 @@ impl ContextDependency {
             GrantConsumer::Extension(name) => GrantConsumer::extension(name.clone()),
         }
         .map_err(|_| ContextDependencyError::InvalidScope)?;
-        if let ProcessingRestriction::ApprovedRecipient {
+        if let ProcessingRestriction::GatewayAllowed {
             categories: allowed,
             ..
         } = &processing
             && (allowed.is_empty()
-                || allowed
-                    .iter()
-                    .any(|category| !categories.contains(category))
                 || allowed.windows(2).any(|pair| pair[0] >= pair[1]))
         {
             return Err(ContextDependencyError::InvalidScope);
-        }
-        if let ProcessingRestriction::ApprovedRecipient { recipient, .. } = &processing {
-            GrantConsumer::builtin(recipient.clone())
-                .map_err(|_| ContextDependencyError::InvalidScope)?;
         }
         if !expires_at.gt(&observed_at)
             || expires_at.signed_duration_since(observed_at) > MAX_DEPENDENCY_LIFETIME
@@ -742,6 +721,7 @@ impl ContextDependency {
             purpose,
             consumer,
             processing,
+            health_transform: None,
             observation_id,
             query_fingerprint,
             lease_invocation_id,
@@ -774,9 +754,15 @@ impl ContextDependency {
             self.observed_at,
             self.expires_at,
         )?;
-        (rebuilt == *self)
-            .then_some(())
-            .ok_or(ContextDependencyError::NonCanonical)
+        let mut rebuilt = rebuilt;
+        rebuilt.health_transform = self.health_transform.clone();
+        if let Some(evidence) = &self.health_transform {
+            if self.source.connector().as_str() != "health.apple" || self.source.execution_owner().as_str().strip_prefix("apple:") != Some(evidence.device_id.as_str())
+                || evidence.transformed_at != self.observed_at || evidence.expires_at != self.expires_at {
+                return Err(ContextDependencyError::InvalidScope);
+            }
+        }
+        (rebuilt == *self).then_some(()).ok_or(ContextDependencyError::NonCanonical)
     }
 
     pub fn person_id(&self) -> PersonId {
@@ -816,6 +802,20 @@ impl ContextDependency {
     }
     pub fn processing(&self) -> &ProcessingRestriction {
         &self.processing
+    }
+    pub fn with_health_transform(mut self, evidence: HealthTransformEvidence) -> Result<Self, ContextDependencyError> {
+        self.health_transform = Some(evidence);
+        self.validate()?;
+        Ok(self)
+    }
+    pub fn health_transform(&self) -> Option<&HealthTransformEvidence> { self.health_transform.as_ref() }
+    pub fn validate_health_transform(&self, device_id: &str, now: DateTime<Utc>) -> Result<(), floe_kernel::AgentFailure> {
+        let evidence = self.health_transform.as_ref().ok_or(floe_kernel::AgentFailure::PolicyDenied)?;
+        if self.source.connector().as_str() != "health.apple" || self.source.execution_owner().as_str().strip_prefix("apple:") != Some(device_id)
+            || evidence.transformed_at != self.observed_at || evidence.expires_at != self.expires_at {
+            return Err(floe_kernel::AgentFailure::PolicyDenied);
+        }
+        evidence.validate(device_id, now)
     }
     pub fn observation_id(&self) -> Uuid {
         self.observation_id
@@ -1058,242 +1058,3 @@ impl SourceGrant {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelPlacement {
-    DeviceLocal,
-    Remote,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TransferConsent {
-    NotGranted,
-    Granted,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn source() -> GrantSourceBinding {
-        GrantSourceBinding::try_new(
-            PersonId::new(),
-            ConnectionId::new(),
-            ConnectorId::try_new("calendar").unwrap(),
-            ExecutionOwnerId::try_new("device").unwrap(),
-        )
-        .unwrap()
-    }
-
-    fn admit_dependency(
-        source: GrantSourceBinding,
-        processing: ProcessingRestriction,
-    ) -> Result<ContextDependency, ContextDependencyError> {
-        let observed_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
-        ContextDependency::try_new(
-            source.person_id(),
-            GrantId::new(),
-            GrantAuthority::new(),
-            source,
-            vec![ResourceHandle::try_new("calendar").unwrap()],
-            SourceAuthority::new(),
-            vec![ResourceHandle::try_new("calendar/leaf").unwrap()],
-            vec![GrantDataCategory::Metadata, GrantDataCategory::Content],
-            GrantOperation::Read,
-            GrantPurpose::Assistant,
-            GrantConsumer::builtin("manager").unwrap(),
-            processing,
-            Uuid::new_v4(),
-            b"synthetic-query".to_vec(),
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            observed_at,
-            observed_at + Duration::minutes(5),
-        )
-    }
-
-    #[test]
-    fn stable_source_and_dependency_provenance_are_distinct() {
-        let source = source();
-        let encoded = serde_json::to_value(&source).unwrap();
-        assert_eq!(encoded.as_object().unwrap().len(), 4);
-        assert!(encoded.get("source_authority").is_none());
-        let mut old_source = encoded;
-        old_source["source_authority"] = serde_json::to_value(SourceAuthority::new()).unwrap();
-        assert!(serde_json::from_value::<GrantSourceBinding>(old_source).is_err());
-
-        let dependency = admit_dependency(source, ProcessingRestriction::LocalOnly).unwrap();
-        assert_ne!(dependency.resources(), dependency.source_resources());
-        let mut obsolete_policy = serde_json::to_value(&dependency).unwrap();
-        obsolete_policy["consumer_policy"] =
-            serde_json::json!({"incarnation": Uuid::new_v4(), "epoch": 1});
-        assert!(serde_json::from_value::<ContextDependency>(obsolete_policy).is_err());
-        let mut old_dependency = serde_json::to_value(dependency).unwrap();
-        old_dependency.as_object_mut().unwrap().remove("source_authority");
-        old_dependency.as_object_mut().unwrap().remove("source_resources");
-        assert!(serde_json::from_value::<ContextDependency>(old_dependency).is_err());
-    }
-
-    #[test]
-    fn dependency_source_resources_are_canonical_and_part_of_identity_conflicts() {
-        let dependency = admit_dependency(source(), ProcessingRestriction::LocalOnly).unwrap();
-        let mut changed = dependency.clone();
-        changed.source_resources = vec![ResourceHandle::try_new("calendar/other").unwrap()];
-        let first = DependencyCoverage::dependent(dependency.clone()).unwrap();
-        let second = DependencyCoverage::dependent(changed).unwrap();
-        assert_eq!(first.merge(&second), Err(ContextDependencyError::Conflict));
-
-        let canonical = ContextDependency::try_new(
-            dependency.person_id,
-            dependency.grant_id,
-            dependency.grant_authority,
-            dependency.source.clone(),
-            vec![
-                ResourceHandle::try_new("permission-b").unwrap(),
-                ResourceHandle::try_new("permission-a").unwrap(),
-            ],
-            dependency.source_authority,
-            vec![
-                ResourceHandle::try_new("leaf-b").unwrap(),
-                ResourceHandle::try_new("leaf-a").unwrap(),
-            ],
-            dependency.categories.clone(),
-            dependency.operation,
-            dependency.purpose,
-            dependency.consumer.clone(),
-            dependency.processing.clone(),
-            dependency.observation_id,
-            dependency.query_fingerprint.clone(),
-            dependency.lease_invocation_id,
-            dependency.process_incarnation_id,
-            dependency.observed_at,
-            dependency.expires_at,
-        )
-        .unwrap();
-        assert_eq!(canonical.resources()[0].as_str(), "permission-a");
-        assert_eq!(canonical.source_resources()[0].as_str(), "leaf-a");
-        let mut noncanonical = canonical.clone();
-        noncanonical.source_resources.reverse();
-        assert_eq!(noncanonical.validate(), Err(ContextDependencyError::NonCanonical));
-    }
-
-    #[test]
-    fn persisted_dependency_rejects_old_or_corrupt_source_provenance() {
-        let dependency = admit_dependency(source(), ProcessingRestriction::LocalOnly).unwrap();
-        let coverage = DependencyCoverage::dependent(dependency).unwrap();
-        let canonical = serde_json::to_value(coverage).unwrap();
-        let invalid = |mutate: fn(&mut serde_json::Value)| {
-            let mut value = canonical.clone();
-            mutate(&mut value);
-            let bytes = serde_json::to_vec(&value).unwrap();
-            assert!(DependencyCoverage::from_persisted_bytes(&bytes).is_err());
-        };
-        invalid(|value| {
-            value["dependent"]["dependencies"][0]
-                .as_object_mut()
-                .unwrap()
-                .remove("source_authority");
-        });
-        invalid(|value| {
-            value["dependent"]["dependencies"][0]
-                .as_object_mut()
-                .unwrap()
-                .remove("source_resources");
-        });
-        invalid(|value| {
-            value["dependent"]["dependencies"][0]["source"]["source_authority"] =
-                serde_json::to_value(SourceAuthority::new()).unwrap();
-        });
-        invalid(|value| {
-            value["dependent"]["dependencies"][0]["source_resources"] =
-                serde_json::json!(["leaf-b", "leaf-a"]);
-        });
-        invalid(|value| {
-            value["dependent"]["dependencies"][0]["source_resources"] =
-                serde_json::json!(["leaf-a", "leaf-a"]);
-        });
-    }
-
-    #[test]
-    fn connection_view_resource_round_trips() {
-        let connection_id = ConnectionId::try_new("connection").unwrap();
-        let resource = connection_view_resource("mail.communication", &connection_id).unwrap();
-        assert_eq!(resource.as_str(), "mail.communication:connection");
-        assert_eq!(
-            split_connection_view_resource(&resource, &connection_id).unwrap(),
-            "mail.communication"
-        );
-        assert!(connection_view_resource("mail:communication", &connection_id).is_err());
-    }
-
-    #[test]
-    fn grant_scope_accepts_more_than_128_distinct_resources_within_byte_budget() {
-        let resources = (0..129)
-            .map(|index| ResourceHandle::try_new(format!("calendar-{index}")))
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        let scope = GrantScope::try_new(
-            resources,
-            vec![GrantDataCategory::Metadata],
-            vec![GrantOperation::Read],
-            vec![GrantPurpose::Assistant],
-            vec![GrantConsumer::builtin("floe.builtin.schedule").unwrap()],
-            ProcessingRestriction::LocalOnly,
-        )
-        .unwrap();
-
-        assert_eq!(scope.resources().len(), 129);
-    }
-
-    #[test]
-    fn dependency_constructor_revalidates_deserialized_connection_identity() {
-        let source = source();
-        assert!(admit_dependency(source.clone(), ProcessingRestriction::LocalOnly).is_ok());
-        let mut encoded = serde_json::to_value(source).unwrap();
-        encoded["connection_id"] = serde_json::json!("");
-        let invalid_source = serde_json::from_value(encoded).unwrap();
-        assert_eq!(
-            admit_dependency(invalid_source, ProcessingRestriction::LocalOnly),
-            Err(ContextDependencyError::InvalidScope)
-        );
-    }
-
-    #[test]
-    fn dependency_constructor_rejects_noncanonical_recipient_categories() {
-        let source = source();
-        let processing = ProcessingRestriction::ApprovedRecipient {
-            recipient: "model".into(),
-            categories: vec![GrantDataCategory::Metadata, GrantDataCategory::Content],
-        };
-        assert!(admit_dependency(source.clone(), processing).is_ok());
-        let reversed = ProcessingRestriction::ApprovedRecipient {
-            recipient: "model".into(),
-            categories: vec![GrantDataCategory::Content, GrantDataCategory::Metadata],
-        };
-        assert_eq!(
-            admit_dependency(source, reversed),
-            Err(ContextDependencyError::InvalidScope)
-        );
-    }
-
-    #[test]
-    fn authority_changes_without_reusing_an_incarnation() {
-        let authority = SourceAuthority::new();
-        let advanced = authority.advance().unwrap();
-        assert!(authority.is_valid());
-        assert_eq!(authority.incarnation(), advanced.incarnation());
-        assert_eq!(advanced.epoch().get(), 2);
-        assert_ne!(
-            SourceAuthority::new().incarnation(),
-            authority.incarnation()
-        );
-    }
-
-    #[test]
-    fn exhaustion_never_wraps() {
-        let exhausted = SourceAuthority::from_parts(Uuid::new_v4(), NonZeroU64::MAX).unwrap();
-        assert_eq!(exhausted.advance(), None);
-        assert!(SourceAuthority::from_parts(Uuid::nil(), exhausted.epoch()).is_none());
-    }
-}

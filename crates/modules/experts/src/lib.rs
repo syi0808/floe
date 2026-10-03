@@ -42,7 +42,7 @@ pub use registry::{
     ExpertInstallOperation, ExpertInstallReceipt, ExpertInstallResult, ExpertPrivateState,
     InstalledExpert, PackageAssignment, PackageInstallation, RegistryConfiguration,
     RegistryConfigurationTarget, RegistryOverview, RegistrySnapshot, RequirementBinding,
-    ResolvedExpert, eligible_cards_for_availability,
+    ResolvedExpert,
 };
 pub use requirement::RequirementReadOutcome;
 pub use selection::{
@@ -54,3 +54,6 @@ pub use task::{
     RunExpertEnvironment, TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord,
     TaskRepository,
 };
+
+/// Role-neutral inference consumer for admitted delegated Experts.
+pub const DELEGATED_EXPERT_INFERENCE_CONSUMER: &str = "experts.delegated";

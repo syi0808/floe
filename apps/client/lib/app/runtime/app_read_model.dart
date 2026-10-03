@@ -2,7 +2,7 @@ import 'dart:collection';
 
 import 'package:flutter/foundation.dart';
 
-import 'package:floe_client/app/runtime/floe_client.dart';
+import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_client.dart';
 
 enum AppReadSyncState { uninitialized, resyncRequired, synchronized }
 
@@ -27,7 +27,7 @@ final class AppConversationProjection {
       syncState == AppReadSyncState.synchronized &&
       runs.values.every(
         (run) =>
-            run.sessionId != sessionId || run.state == AppRunState.finished,
+            run.sessionId != sessionId || run.state.terminal,
       );
 }
 

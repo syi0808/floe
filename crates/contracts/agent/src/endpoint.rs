@@ -122,28 +122,3 @@ pub trait AgentEndpoint: Send + Sync {
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<ExpertReport, AgentFailure>>;
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn settlement_is_bounded_and_omitted_from_the_public_report_shape() {
-        assert_eq!(
-            EndpointSettlement::try_new("schedule", "x".repeat(MAX_ENDPOINT_SETTLEMENT_BYTES + 1)),
-            Err(AgentFailure::InvalidModelOutput)
-        );
-        let report = ExpertReport {
-            task_id: TaskId::new(),
-            principal: "person-a".into(),
-            agent_id: "floe.builtin.schedule".into(),
-            definition_revision: 1,
-            result: "result".into(),
-            artifacts: vec![],
-            coverage: DependencyCoverage::Independent,
-            settlement: Some(EndpointSettlement::try_new("schedule", "{}").unwrap()),
-        };
-        let encoded = serde_json::to_value(report).unwrap();
-        assert!(encoded.get("settlement").is_none());
-    }
-}

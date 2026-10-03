@@ -1,0 +1,5898 @@
+{
+  "kind": "compiler-focused S1 snapshot; not full source commit tree",
+  "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
+  "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
+  "baseline_parent": "3f4b407f8079d611224cd7adbef121f9e7e75e8e",
+  "excluded": [
+    "docs/plans/** except s1-g1-command-sheet.md; historical behavior/planning maps are not compiler inputs"
+  ],
+  "files": [
+    {
+      "path": ".agents/skills/architecture-change/SKILL.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "db049f888e21bcc800e69e16ce71c4ac8f7e4c27"
+    },
+    {
+      "path": ".agents/skills/code-change-verification/SKILL.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9d58cb20c3afaed6c2a44cc2413ec362db3b3132"
+    },
+    {
+      "path": ".gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c2c2321e166df691236d851fddf8e0f990d05804"
+    },
+    {
+      "path": "AGENTS.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3c1b2d700814a1504f6bec184e5ae7ad91533bfc"
+    },
+    {
+      "path": "Cargo.lock",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ed4b39a5890e74bf288554be7fd66985a70e00ff"
+    },
+    {
+      "path": "Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "997ed42eb8d50a225b99fdef0758faefe4e28458"
+    },
+    {
+      "path": "DESIGN.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "89d5b69568fb240de50b4d0cdc63d89bce020cbb"
+    },
+    {
+      "path": "LICENSE",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c13f99117e366fd54b4c097b67ca34dfb1fb8ba1"
+    },
+    {
+      "path": "README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "42dc548ebe2a1b5e0cd183e753c12bf8101f245b"
+    },
+    {
+      "path": "apps/client/.gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "79f7ecabd5c79ed432e463c2304a605523961083"
+    },
+    {
+      "path": "apps/client/.metadata",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c7f8831d9755b1ad01d890d956a1683b63134e9a"
+    },
+    {
+      "path": "apps/client/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "01cdd15353e6be9b0a879b4aa272c61d33708452"
+    },
+    {
+      "path": "apps/client/analysis_options.yaml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "17d1855fbde728fd4c5762a37478fa913d3fff3a"
+    },
+    {
+      "path": "apps/client/android/.gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d8cecd60d9e14b42a6cdfb473a2867ca15d30429"
+    },
+    {
+      "path": "apps/client/android/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7d70bf11c1214499870eb17e9a7e6685caa5b483"
+    },
+    {
+      "path": "apps/client/android/app/build.gradle.kts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9235dd8c331f3c184b7b370e7d8c56e98811c3c6"
+    },
+    {
+      "path": "apps/client/android/app/src/debug/AndroidManifest.xml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "399f6981d5d35475eb18e6068ae67cdd7c731978"
+    },
+    {
+      "path": "apps/client/android/app/src/main/AndroidManifest.xml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "eb473a5e854fa14802208c2dc4d6ad9ceac6574b"
+    },
+    {
+      "path": "apps/client/android/app/src/main/kotlin/app/floe/floe_client/AndroidContextChannel.kt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f2f1008a15c1ecefa070fd0613682a771883d633"
+    },
+    {
+      "path": "apps/client/android/app/src/main/kotlin/app/floe/floe_client/AndroidVaultKeyStore.kt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f3172a8d8e15d10b7cdb8da5eaac6023aaf3f0db"
+    },
+    {
+      "path": "apps/client/android/app/src/main/kotlin/app/floe/floe_client/MainActivity.kt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c4347153fb163a43a34e2d711460693bd66bf58b"
+    },
+    {
+      "path": "apps/client/android/app/src/main/res/drawable-v21/launch_background.xml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f74085f3f6a2b995f8ad1f9ff7b2c46dc118a9e0"
+    },
+    {
+      "path": "apps/client/android/app/src/main/res/drawable/launch_background.xml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "304732f8842013497e14bd02f67a55f2614fb8f7"
+    },
+    {
+      "path": "apps/client/android/app/src/main/res/mipmap-hdpi/ic_launcher.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "db77bb4b7b0906d62b1847e87f15cdcacf6a4f29"
+    },
+    {
+      "path": "apps/client/android/app/src/main/res/mipmap-mdpi/ic_launcher.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "17987b79bb8a35cc66c3c1fd44f5a5526c1b78be"
+    },
+    {
+      "path": "apps/client/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "09d4391482be68e9e4a07fab769b5de337d16eb1"
+    },
+    {
+      "path": "apps/client/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d5f1c8d34e7a88e3f88bea192c3a370d44689c3c"
+    },
+    {
+      "path": "apps/client/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4d6372eebdb28e45604e46eeda8dd24651419bc0"
+    },
+    {
+      "path": "apps/client/android/app/src/main/res/values-night/styles.xml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "06952be745f9fa6fa75196e830d9578eb2ee631d"
+    },
+    {
+      "path": "apps/client/android/app/src/main/res/values/styles.xml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cb1ef88056edd1caf99a935e434e7ff6943a0ef6"
+    },
+    {
+      "path": "apps/client/android/app/src/profile/AndroidManifest.xml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "399f6981d5d35475eb18e6068ae67cdd7c731978"
+    },
+    {
+      "path": "apps/client/android/build.gradle.kts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dbee657bb5b9158516486b3a1b47ef8b6fc72a2a"
+    },
+    {
+      "path": "apps/client/android/build_rust.sh",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "68620f9e630b7fb1a9ca4b011201adc2469811fd"
+    },
+    {
+      "path": "apps/client/android/fixtures/calendar_snapshot.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "72f121ca5ce5e56b833864ee01cef6a8f69be876"
+    },
+    {
+      "path": "apps/client/android/fixtures/calendar_view.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6265fa603f05accd78a25ffe8ec35ec038cb36a7"
+    },
+    {
+      "path": "apps/client/android/fixtures/contacts_snapshot.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2f9b97ac5c08f3aa9c6b0eac8a011fa830f9c3ed"
+    },
+    {
+      "path": "apps/client/android/fixtures/health_connect_snapshot.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e1fc8c917b7725a3eb49b4128b38e06541ba0426"
+    },
+    {
+      "path": "apps/client/android/fixtures/people_view.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c1d922003437beeb56410ede5adaf31c038bebde"
+    },
+    {
+      "path": "apps/client/android/fixtures/wellbeing_view.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5539a55115deaf7c5502f6f93a133b00b9af190b"
+    },
+    {
+      "path": "apps/client/android/gradle.properties",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e96108cfe4c4d200adab58b532e95774c88e485b"
+    },
+    {
+      "path": "apps/client/android/gradle/wrapper/gradle-wrapper.properties",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a20f2c46d22ec5ccde3c08951676fda38a72949f"
+    },
+    {
+      "path": "apps/client/android/settings.gradle.kts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b28021a9101801eb907b881a293d4cf9bbf84456"
+    },
+    {
+      "path": "apps/client/apple/FloeAppleContacts/Package.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "65c144e72139eed003cffe39b132abb7e23b42e0"
+    },
+    {
+      "path": "apps/client/apple/FloeAppleContacts/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2a5ffe127d3c74470a6a93ad1beb053e5ee78b85"
+    },
+    {
+      "path": "apps/client/apple/FloeAppleContacts/Sources/FloeAppleContacts/AppleContactsModels.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c2e9b137ad3163a10fce6dc4927fd23f96035f64"
+    },
+    {
+      "path": "apps/client/apple/FloeAppleContacts/Sources/FloeAppleContacts/AppleContactsProvider.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9a4c0388d46dad4374ee16f21048df429688bb1d"
+    },
+    {
+      "path": "apps/client/apple/FloeAppleContacts/Sources/FloeAppleContacts/AppleContactsStore.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3b6270a9cc1b8d42dc3e349d25817385d617ec6d"
+    },
+    {
+      "path": "apps/client/apple/FloeAppleContacts/Tests/FloeAppleContactsTests/Fixtures/people_view_shape.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "02c0263d762b5ded73d749231fa64931314cafc4"
+    },
+    {
+      "path": "apps/client/apple/FloeAppleHealth/Package.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "176e67f9ee6df9ba779cfd1f50e7fb7566d4fe4c"
+    },
+    {
+      "path": "apps/client/apple/FloeAppleHealth/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "da2fc5a248de95ee9e6f05d4869ecf2fc659396d"
+    },
+    {
+      "path": "apps/client/apple/FloeAppleHealth/Sources/FloeAppleHealth/HealthKitWellbeingProvider.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "43500ed555763387f16b0c6ab9dc45461de52c3f"
+    },
+    {
+      "path": "apps/client/apple/FloeAppleHealth/Sources/FloeAppleHealth/HealthPrivacyTransform.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "69bbbc2b950244766d3c47ac3bb6c8f6568d6dab"
+    },
+    {
+      "path": "apps/client/apple/FloeAppleHealth/Sources/FloeAppleHealth/WellbeingProjection.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6b0f3ab18933608237676c5ef37e79b82491318e"
+    },
+    {
+      "path": "apps/client/apple/FloeAppleHealth/Tests/FloeAppleHealthTests/Fixtures/wellbeing_view.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "66ec87038bdaf290636e7e18dabc6c1eae8f8c5c"
+    },
+    {
+      "path": "apps/client/apple/native_build.sh",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2f28dd0e80d8e8eb86dd0004a83f6c2073a040c7"
+    },
+    {
+      "path": "apps/client/assets/floe-mascot.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e29e39286ce83bb974f69e8cfa6e9def48a4e3a7"
+    },
+    {
+      "path": "apps/client/assets/floe-mascot.svg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "60e9224d4e5259630d347887435f751a277abc1d"
+    },
+    {
+      "path": "apps/client/assets/fonts/OFL.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "497b88f9fa7623ba9f8fdac86b43dec5621984ed"
+    },
+    {
+      "path": "apps/client/assets/fonts/Pretendard-Bold.otf",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8e5e30a28b4435359945cf08b261c86d0de8da53"
+    },
+    {
+      "path": "apps/client/assets/fonts/Pretendard-Regular.otf",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "08bf4cfc2164a0bff74a4bf844128d3b843bbf87"
+    },
+    {
+      "path": "apps/client/assets/fonts/Pretendard-SemiBold.otf",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e7e36abc474796c8b6c383380ddd9f87655682ec"
+    },
+    {
+      "path": "apps/client/ios/.gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7a7f9873ad7dceb4dc17087fb06c800fa0191376"
+    },
+    {
+      "path": "apps/client/ios/APPLE_CONTEXT_SIGNING.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b27bcc82ac6a2e18c30e687211ef424eaaeb755a"
+    },
+    {
+      "path": "apps/client/ios/Flutter/AppFrameworkInfo.plist",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "391a902b2bebe1a3df1b090312fd85029dd99308"
+    },
+    {
+      "path": "apps/client/ios/Flutter/Debug.xcconfig",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "592ceee85b89bd111b779db6116b130509ab6d4b"
+    },
+    {
+      "path": "apps/client/ios/Flutter/Release.xcconfig",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "592ceee85b89bd111b779db6116b130509ab6d4b"
+    },
+    {
+      "path": "apps/client/ios/Runner.xcodeproj/project.pbxproj",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b8f66a8ed10f6c30bca0d61def2760433099e8f3"
+    },
+    {
+      "path": "apps/client/ios/Runner.xcodeproj/project.xcworkspace/contents.xcworkspacedata",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "919434a6254f0e9651f402737811be6634a03e9c"
+    },
+    {
+      "path": "apps/client/ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "18d981003d68d0546c4804ac2ff47dd97c6e7921"
+    },
+    {
+      "path": "apps/client/ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f9b0d7c5ea15f194be85eb6ee8e6721a87ff4644"
+    },
+    {
+      "path": "apps/client/ios/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5db441f58ab9c09ec50ab88870b17fa182188b46"
+    },
+    {
+      "path": "apps/client/ios/Runner.xcworkspace/contents.xcworkspacedata",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1d526a16ed0f1cd0c2409d848bf489b93fefa3b2"
+    },
+    {
+      "path": "apps/client/ios/Runner.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "18d981003d68d0546c4804ac2ff47dd97c6e7921"
+    },
+    {
+      "path": "apps/client/ios/Runner.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f9b0d7c5ea15f194be85eb6ee8e6721a87ff4644"
+    },
+    {
+      "path": "apps/client/ios/Runner/AppDelegate.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "34b2e4f16b8509a421850a845b7cf68e20b310ab"
+    },
+    {
+      "path": "apps/client/ios/Runner/AppleContextChannel.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "901d557b497152e439866bcaa81cdac969389d8c"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/AppIcon.appiconset/Contents.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d36b1fab2d9dea668a4f83df94d525897d9e68dd"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-1024x1024@1x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dc9ada4725e9b0ddb1deab583e5b5102493aa332"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-20x20@1x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7353c41ecf9ca08017312dc233d9830079b50717"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-20x20@2x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "797d452e458972bab9d994556c8305db4c827017"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-20x20@3x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6ed2d933e1120817fe9182483a228007b18ab6ae"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-29x29@1x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4cd7b0099ca80c806f8fe495613e8d6c69460d76"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-29x29@2x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fe730945a01f64a61e2235dbe3f45b08f7729182"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-29x29@3x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "321773cd857a8a0f0c9c7d3dc3f5ff4fb298dc10"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-40x40@1x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "797d452e458972bab9d994556c8305db4c827017"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-40x40@2x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "502f463a9bc882b461c96aadf492d1729e49e725"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-40x40@3x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0ec303439225b78712f49115768196d8d76f6790"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-60x60@2x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0ec303439225b78712f49115768196d8d76f6790"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-60x60@3x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e9f5fea27c705180eb716271f41b582e76dcbd90"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-76x76@1x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "84ac32ae7d989f82d5e46a60405adcc8279e8001"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-76x76@2x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8953cba09064923c5daf2d37e7c3c836ccdd794b"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-83.5x83.5@2x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0467bf12aa4d28f374bb26596605a46dcbb3e7c8"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/LaunchImage.imageset/Contents.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0bedcf2fd46788ae3a01a423467513ff59b5c120"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/LaunchImage.imageset/LaunchImage.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9da19eacad3b03bb08bbddbbf4ac48dd78b3d838"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/LaunchImage.imageset/LaunchImage@2x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9da19eacad3b03bb08bbddbbf4ac48dd78b3d838"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/LaunchImage.imageset/LaunchImage@3x.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9da19eacad3b03bb08bbddbbf4ac48dd78b3d838"
+    },
+    {
+      "path": "apps/client/ios/Runner/Assets.xcassets/LaunchImage.imageset/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "89c2725b70f1882be97f5214fafe22d27a0ec01e"
+    },
+    {
+      "path": "apps/client/ios/Runner/Base.lproj/LaunchScreen.storyboard",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f2e259c7c9390ff69a6bbe1e0907e6dc366848e7"
+    },
+    {
+      "path": "apps/client/ios/Runner/Base.lproj/Main.storyboard",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f3c28516fb38e64d88cfcf5fb1791175df078f2f"
+    },
+    {
+      "path": "apps/client/ios/Runner/CalendarChannel.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "23d8cb459fcd76e0725fb1fdf5a04db5011e6b47"
+    },
+    {
+      "path": "apps/client/ios/Runner/Info.plist",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cb709de16d503bec46cc90b3803363280795b4b8"
+    },
+    {
+      "path": "apps/client/ios/Runner/Runner-Bridging-Header.h",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "308a2a560b42f17aaf3c36e4e9c8cd07182fbb7e"
+    },
+    {
+      "path": "apps/client/ios/Runner/Runner.entitlements",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e10f4302d524a2c6313dc968df134285905acfc8"
+    },
+    {
+      "path": "apps/client/ios/Runner/SceneDelegate.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b9ce8ea2b2adb8d8061af09c75d2480999773ac3"
+    },
+    {
+      "path": "apps/client/ios/ScreenTimeGate/Package.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "da0606f66694afd35a6e8f200a185c54b742de69"
+    },
+    {
+      "path": "apps/client/ios/ScreenTimeGate/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "31f2c174df3f0979761d44f61245d231dedc2ba6"
+    },
+    {
+      "path": "apps/client/ios/ScreenTimeGate/Sources/FloeScreenTimeGate/AppleScreenTimeGate.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5ac05962142839086efa41752f3e8d9ce6db762c"
+    },
+    {
+      "path": "apps/client/ios/ScreenTimeGate/Sources/FloeScreenTimeGate/ScreenTimeGate.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ffd901e739aba58122e0032dcb5fa059d2c8b818"
+    },
+    {
+      "path": "apps/client/ios/ScreenTimeGate/Tests/FloeScreenTimeGateTests/Fixtures/supported_attention.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1beb0322b7099d84865d34f33165fc5b51fa7c93"
+    },
+    {
+      "path": "apps/client/ios/ScreenTimeGate/Tests/FloeScreenTimeGateTests/Fixtures/unknown_attention.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3482b458c333e92e19ef73a2e03479b3ca18555e"
+    },
+    {
+      "path": "apps/client/ios/ScreenTimeGate/Tests/FloeScreenTimeGateTests/Fixtures/unsupported_capability.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "20b6b2671c289ab6a35888bfddde3ad5d40acb63"
+    },
+    {
+      "path": "apps/client/ios/build_native.sh",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "af079ab6bb24493eed5c88fabf61b4c6fc8647a9"
+    },
+    {
+      "path": "apps/client/ios/build_rust.sh",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "f4bec54b0e1b42e45772b99f00f98f8ab305d228"
+    },
+    {
+      "path": "apps/client/l10n.yaml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a4d323c62a078f9496aa51f42415db29753ddaad"
+    },
+    {
+      "path": "apps/client/lib/app/design_tokens.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fa41d7813453c4dcebd45a9c8527143f3c7305c4"
+    },
+    {
+      "path": "apps/client/lib/app/floe_action_card.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "833850fa3db54735840e59386600e06a1129b4bc"
+    },
+    {
+      "path": "apps/client/lib/app/floe_app.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2809bc77a7dc6b143924bec406a74be877ea7d0b"
+    },
+    {
+      "path": "apps/client/lib/app/floe_badge.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5fed1a977a74597c6b9511c9e88b63acb684c010"
+    },
+    {
+      "path": "apps/client/lib/app/floe_button.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1beca5630cf167855a6126e8a7066dce9a1341f1"
+    },
+    {
+      "path": "apps/client/lib/app/floe_context_menu.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9b150bb6d963b4e902e00dc844b9369beff41906"
+    },
+    {
+      "path": "apps/client/lib/app/floe_date_picker.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f493f1caa3dd80b412bcdef3d7c6dda2a5865b55"
+    },
+    {
+      "path": "apps/client/lib/app/floe_feedback.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9c1d0df406968a9cf297261b7c72ca7c773cec25"
+    },
+    {
+      "path": "apps/client/lib/app/floe_field.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "25c6c8110526493f8ab1ddc20da221bb5c20eaad"
+    },
+    {
+      "path": "apps/client/lib/app/floe_input.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ad29a52dbd5e009cbd3ca6141fe80560a1b463a5"
+    },
+    {
+      "path": "apps/client/lib/app/floe_loading.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cf0fabdf99ac075c71dd8b5733120433f2600265"
+    },
+    {
+      "path": "apps/client/lib/app/floe_mascot.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9831d9e82f0708c69964bb91fd770134863372b2"
+    },
+    {
+      "path": "apps/client/lib/app/floe_motion.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "df00f5e8ba2bbe0f7c0cb56b933208b32d16e3e5"
+    },
+    {
+      "path": "apps/client/lib/app/floe_popover.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1084b2496c24b5e8203d66978df076b691781c3a"
+    },
+    {
+      "path": "apps/client/lib/app/floe_primitives.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "38b558eab4ddb4fdce4f460badadf48c1abf925b"
+    },
+    {
+      "path": "apps/client/lib/app/floe_selection.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6e536a57a5e5f01f316dfae2dd881f0e34184953"
+    },
+    {
+      "path": "apps/client/lib/app/floe_squircle.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bce6137e3af0cdf597e640c6901ea02c60ee0027"
+    },
+    {
+      "path": "apps/client/lib/app/floe_states.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "08e569c046c76b588584a00a7ce79a75d1d54f26"
+    },
+    {
+      "path": "apps/client/lib/app/floe_switch.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "40ff9290bde15d166eb91157bf6e180ad86d20fb"
+    },
+    {
+      "path": "apps/client/lib/app/floe_theme.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1296165375c0db3f692b211f8deaec05d9eba3a2"
+    },
+    {
+      "path": "apps/client/lib/app/floe_time_picker.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7003d16b47ec01aac762469c9b513f78de43ef84"
+    },
+    {
+      "path": "apps/client/lib/app/floe_toast.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e19a9beca2e75a64e9ecf00ccfe8da9d48099f4b"
+    },
+    {
+      "path": "apps/client/lib/app/profile_selection_app.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a6db2f08b3f671da0256d2581111cd9abc94a11b"
+    },
+    {
+      "path": "apps/client/lib/app/runtime/agent_vault_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0d6771404711d732f7745ff5d5f0a819ae0779aa"
+    },
+    {
+      "path": "apps/client/lib/app/runtime/app_read_model.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8929e89f15ce4ade93ab2161eb610f2dbdd1ff65"
+    },
+    {
+      "path": "apps/client/lib/app/runtime/app_runtime.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c95d4b78c8a62e0a4558c68684e0a4274dc5d62d"
+    },
+    {
+      "path": "apps/client/lib/app/runtime/app_wire_transport.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cf661356cbfb5534f564ba112f817f8f586303c5"
+    },
+    {
+      "path": "apps/client/lib/app/runtime/local_owner_gateways_scope.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5487445f2255cc2b244b974caf652401f207fa89"
+    },
+    {
+      "path": "apps/client/lib/app/runtime/local_profile_selection.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c0d06eb5d413bcddf8682ad0ea5337146c6d41f4"
+    },
+    {
+      "path": "apps/client/lib/app/runtime/native_transport.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2f235f2b6717fab46bcc31da8b16f61b40f9aeff"
+    },
+    {
+      "path": "apps/client/lib/app/runtime/owner_failure.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "01584067e74e2cfe1e7aec1d7c41deb4336cda1c"
+    },
+    {
+      "path": "apps/client/lib/app/runtime/owner_operation.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "405b5652769535063088d66d543fe1473028376f"
+    },
+    {
+      "path": "apps/client/lib/features/actions/application/calendar_action_controller.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "34fddbf57ef2237be146454879178669077ef657"
+    },
+    {
+      "path": "apps/client/lib/features/actions/application/calendar_action_facade.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "906f91c58e21537d9e9589b489f37e8028655ba7"
+    },
+    {
+      "path": "apps/client/lib/features/actions/application/calendar_action_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "39cabe07f8db5563bd2bb615519f15aad404aada"
+    },
+    {
+      "path": "apps/client/lib/features/actions/domain/agent_proposal.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "224c5f1fa0f3f084fb58311ca302d46542d59e05"
+    },
+    {
+      "path": "apps/client/lib/features/actions/domain/calendar_action.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5208676f4faebaa5edbcef3c3ff2f85a5d159a16"
+    },
+    {
+      "path": "apps/client/lib/features/actions/infrastructure/app_wire_proposal_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1efed068b3657ff346528e47a6f6bd1b35dfa3b5"
+    },
+    {
+      "path": "apps/client/lib/features/actions/infrastructure/native_calendar_action_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0ffb8c2141bd17a569662096b93dff81645e0e6e"
+    },
+    {
+      "path": "apps/client/lib/features/actions/presentation/agent_proposal_card.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "63d953ef2444e98547fddb74041a9b43370a539d"
+    },
+    {
+      "path": "apps/client/lib/features/actions/presentation/calendar_action_panel.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "aa52a49cacc1c7e16adf434ff8d7113e729c2a53"
+    },
+    {
+      "path": "apps/client/lib/features/actions/presentation/calendar_action_proposal.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4850717be6d1b0d6decabbb2dc70542a2bc0dfbc"
+    },
+    {
+      "path": "apps/client/lib/features/connections/application/calendar_connection_view.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "06920d89a2d6bb4c0021d756969e30986e867127"
+    },
+    {
+      "path": "apps/client/lib/features/connections/application/calendar_source_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9f9081fedad1d8804de98e8be58dd9783cb3da78"
+    },
+    {
+      "path": "apps/client/lib/features/connections/application/connections_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3f232a6bec71c76f73ea61ac4833b82ec68c7f37"
+    },
+    {
+      "path": "apps/client/lib/features/connections/domain/connection_models.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ce3b4c52108c03dd82ad7512b3d820433f698939"
+    },
+    {
+      "path": "apps/client/lib/features/connections/domain/source_connection.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e1ea8783864e29c4ddac53e2a0ec750e832b9655"
+    },
+    {
+      "path": "apps/client/lib/features/connections/infrastructure/app_wire_connections_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f4bd315bd9112f182c8c85725d002ea37025a59f"
+    },
+    {
+      "path": "apps/client/lib/features/connections/presentation/connections_controller.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b29bd4603a652321a9b6b95018baff16055a5587"
+    },
+    {
+      "path": "apps/client/lib/features/connections/presentation/connector_screen.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "407b2296d2c80f6f6bf79b194058c7f1725dda46"
+    },
+    {
+      "path": "apps/client/lib/features/connections/presentation/gateway_connection_panel.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "588814c72e3815503128974b792950b349829ee7"
+    },
+    {
+      "path": "apps/client/lib/features/connections/presentation/integration_detail_panel.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "84343da879d39f56c32cd8d59f02a699eeac0fdf"
+    },
+    {
+      "path": "apps/client/lib/features/conversation/application/agent_conversation_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fde07bd1b294729b9ff765ed2134408bf9b45c68"
+    },
+    {
+      "path": "apps/client/lib/features/conversation/application/agent_interaction_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6a7a46ddaca7795f4e6b1648134c57ca3cab27cb"
+    },
+    {
+      "path": "apps/client/lib/features/conversation/application/agent_request_id.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b79aa7276820d2117d71cb082d144ccb6c18bb71"
+    },
+    {
+      "path": "apps/client/lib/features/conversation/application/conversation_controller.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2e33132bd979ab95265b24b42ce745bdc93afc98"
+    },
+    {
+      "path": "apps/client/lib/features/conversation/application/conversation_runtime_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "42f91c56b35c41c955a28547f6cf13dc38e838c0"
+    },
+    {
+      "path": "apps/client/lib/features/conversation/domain/agent_interaction.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7e2080ff2bcb9c02d1014dea1619007812990d99"
+    },
+    {
+      "path": "apps/client/lib/features/conversation/domain/agent_session.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c82c167b83ccaf091a75a963cfbb2746e691f568"
+    },
+    {
+      "path": "apps/client/lib/features/conversation/infrastructure/app_wire_conversation_client.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c183e6f70b7a5561fffd6dd74910f98a4145062b"
+    },
+    {
+      "path": "apps/client/lib/features/conversation/infrastructure/app_wire_conversation_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f48dbb91a4cf8cd0f7e2173215052d274f2d4283"
+    },
+    {
+      "path": "apps/client/lib/features/conversation/presentation/agent_interaction_card.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "668a4fbe884f4bb140b1e2a95519395708c66f7b"
+    },
+    {
+      "path": "apps/client/lib/features/conversation/presentation/agent_panel.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a875dc2b099f938e05b38926aebd303123aea0ff"
+    },
+    {
+      "path": "apps/client/lib/features/day/application/day_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3123fd54d721ce6a125b485ebc4d5258717bb82c"
+    },
+    {
+      "path": "apps/client/lib/features/day/application/fake_day_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "650fdb61f9b4c6a2cae8fc01fd56c4a642487b59"
+    },
+    {
+      "path": "apps/client/lib/features/day/application/personal_day_controller.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "82b06cc1962d4c84774dfad555bc412acc6b9dd4"
+    },
+    {
+      "path": "apps/client/lib/features/day/domain/day_models.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f40e69817eeebcbce4c5d087d65fbdea98fe7f78"
+    },
+    {
+      "path": "apps/client/lib/features/day/infrastructure/app_wire_day_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a5e6c680b51eedcfcdcf31361f8041be5eb4dd67"
+    },
+    {
+      "path": "apps/client/lib/features/day/presentation/calendar_agenda.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1e39fb0f5041c12f7a311f24aa6859b151fb03f4"
+    },
+    {
+      "path": "apps/client/lib/features/day/presentation/calendar_context_rail.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7d33fac451157d0527ae16452ec8daae174f9f13"
+    },
+    {
+      "path": "apps/client/lib/features/day/presentation/calendar_date_time_field.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3e0de4a2d9ee782da380b9e9f60a60db2b0843e1"
+    },
+    {
+      "path": "apps/client/lib/features/day/presentation/calendar_event_actions.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7ffb32880f00a81196d30feefb69ecc137b6c6e0"
+    },
+    {
+      "path": "apps/client/lib/features/day/presentation/calendar_event_details.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "393d408213fd053e9b8b19b3ff7520a4831dc1da"
+    },
+    {
+      "path": "apps/client/lib/features/day/presentation/calendar_layout.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "936ad445792d6cf83cb74856488ad53993059fd1"
+    },
+    {
+      "path": "apps/client/lib/features/day/presentation/day_appearance.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "33919190006208b17baff6e9e8de88f3713253be"
+    },
+    {
+      "path": "apps/client/lib/features/day/presentation/personal_day/day_row.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a887d7ef8f359067bfadc711397be43da108c6a4"
+    },
+    {
+      "path": "apps/client/lib/features/day/presentation/personal_day/feedback.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "871cb6de5f38cd23fa08c9f940f5af5351fb87be"
+    },
+    {
+      "path": "apps/client/lib/features/day/presentation/personal_day/navigation.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "db9cde56b1fd260e66b7941ce24be70abed6abb5"
+    },
+    {
+      "path": "apps/client/lib/features/day/presentation/personal_day/notes.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "34089cb5f1bf5ad58b213f446eb544c3ad813453"
+    },
+    {
+      "path": "apps/client/lib/features/day/presentation/personal_day/tasks.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9c4633ac3787a2523b10e3f9cb084c745ea6d5cf"
+    },
+    {
+      "path": "apps/client/lib/features/day/presentation/personal_day_screen.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "734451fcb816ce8d2cce86c6bbf78f8461a147ab"
+    },
+    {
+      "path": "apps/client/lib/features/experts/application/agent_registry_controller.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "53f55714b051d078fff4ff3590fec83f75cd720c"
+    },
+    {
+      "path": "apps/client/lib/features/experts/domain/agent_registry.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "566c99a43b31bfe85fe4bbc6cc3ef206d8b2172d"
+    },
+    {
+      "path": "apps/client/lib/features/experts/infrastructure/app_wire_registry_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "274e0b16f76a9f6a5148f1e0c7e3678c05d8572a"
+    },
+    {
+      "path": "apps/client/lib/features/experts/presentation/agent_capability_label.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "de8e19da42909f72073d3988224ba79ed4903ac5"
+    },
+    {
+      "path": "apps/client/lib/features/experts/presentation/agent_registry_dialog.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "309813aa8fb5de221dd7130456fbaab82c38dbb1"
+    },
+    {
+      "path": "apps/client/lib/features/knowledge/application/agent_memory_controller.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "332d3a4092edf7e9a2df0f3acf2eef07ffbeaf14"
+    },
+    {
+      "path": "apps/client/lib/features/knowledge/application/memory_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5b227b72399ab34eccc961f766128aeeac0adcbd"
+    },
+    {
+      "path": "apps/client/lib/features/knowledge/domain/agent_memory.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d3c06acd5b511bfb29c6d9045ea24edc3740beee"
+    },
+    {
+      "path": "apps/client/lib/features/knowledge/domain/memory_review.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b3681bb53472e1a0c6c0a5c9930477a19fc019a5"
+    },
+    {
+      "path": "apps/client/lib/features/knowledge/infrastructure/app_wire_memory_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c60f73bdf3de76380f68542d25da45f93674d0e3"
+    },
+    {
+      "path": "apps/client/lib/features/settings/presentation/action_permissions.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "40c1ba52721c0c11b9cd00b290cd16ae4b82748b"
+    },
+    {
+      "path": "apps/client/lib/features/settings/presentation/agent_memory_review_settings.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f20080c1392ea9650d1e02e0775a485a94a879f4"
+    },
+    {
+      "path": "apps/client/lib/features/settings/presentation/agent_memory_settings.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "23716a3ea64f510014b0c6d3980b6cd686691eed"
+    },
+    {
+      "path": "apps/client/lib/features/settings/presentation/data_privacy.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7b90d93acdf109bb5738f926f9624d12a5ec0e24"
+    },
+    {
+      "path": "apps/client/lib/features/settings/presentation/navigation.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5b1b3ff8b35edfffcde76efe466ec82207a6a7ca"
+    },
+    {
+      "path": "apps/client/lib/features/settings/presentation/settings_screen.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b70e88ed9abd10c609684d04c15566d4245326db"
+    },
+    {
+      "path": "apps/client/lib/features/vault/application/vault_controller.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c792086ba0edfdcedea8c70170321ecbc7e51a4a"
+    },
+    {
+      "path": "apps/client/lib/features/vault/infrastructure/app_wire_vault_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d0cad12ff336370eecc0ce039ddefc332f3e26dd"
+    },
+    {
+      "path": "apps/client/lib/infrastructure/diagnostics/app_diagnostics.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "253dd592eafee2671151f196361957d4a7f4ee96"
+    },
+    {
+      "path": "apps/client/lib/infrastructure/native/android_context_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0297b35fcad4599d303d78706dbf494d84d7695f"
+    },
+    {
+      "path": "apps/client/lib/infrastructure/native/apple_context_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c692fc30a742b50f047eb1f2598b511d7bbbeb20"
+    },
+    {
+      "path": "apps/client/lib/infrastructure/native/attention_acquisition_broker.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3b54740bfa7086f535942bbfc4b2e52af7861cde"
+    },
+    {
+      "path": "apps/client/lib/infrastructure/native/calendar_acquisition_broker.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c00cef579cc4b370495743681fff9343fc63b718"
+    },
+    {
+      "path": "apps/client/lib/infrastructure/native/eventkit_calendar_host.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "425b9b8f8da41df4757f3479fbcfbca0be4e3255"
+    },
+    {
+      "path": "apps/client/lib/infrastructure/native/floe_native_bindings.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d64c249481ded75fdc8611e2d76009120e0890a6"
+    },
+    {
+      "path": "apps/client/lib/infrastructure/native/local_device_identity.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c0142333aca70c455c2c89d6d1dfc978579598a1"
+    },
+    {
+      "path": "apps/client/lib/infrastructure/native/macos_context_gateway.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e1996cdbe106bf04eef3575ff7f564525dd19cd9"
+    },
+    {
+      "path": "apps/client/lib/infrastructure/native/native_context_host_transport.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f431bcbe42eb4ffe22261ad3cbb6a0ed4ee75bc4"
+    },
+    {
+      "path": "apps/client/lib/infrastructure/native/personal_acquisition_broker.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "539ecd8c9e7c73ab3ebb029af41dea0bb5bdc559"
+    },
+    {
+      "path": "apps/client/lib/l10n/app_en.arb",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c301ab3e19ea8570977baede8ed77ee807a3582e"
+    },
+    {
+      "path": "apps/client/lib/l10n/app_localizations.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d8a2b6ae2e17f7ea717b26e6898e3d276ab1d053"
+    },
+    {
+      "path": "apps/client/lib/l10n/app_localizations_en.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "775711862eeac3580996608d9548e5cd945bf1dc"
+    },
+    {
+      "path": "apps/client/lib/main.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1d7702067b052f71d378552f674248a3b8f01057"
+    },
+    {
+      "path": "apps/client/lib/main_design_system.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b396573c1cec5f1b7a960bafab70a9d1b2e5b7fa"
+    },
+    {
+      "path": "apps/client/lib/main_preview.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c833f2d4a946086f2a3b7cb78e901d9b388016e3"
+    },
+    {
+      "path": "apps/client/lib/preview/calendar_fixture.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2c38b8178251eee8b4ee46b53bf7b2d70045ee64"
+    },
+    {
+      "path": "apps/client/lib/preview/design_feedback_overlay.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "620d65c436abefb5ecb3b72fff0d4bc3e5f4fb89"
+    },
+    {
+      "path": "apps/client/lib/preview/design_system_catalog.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e976ca04eb845e0b5ce5ad0548e70a70cdf3286e"
+    },
+    {
+      "path": "apps/client/lib/preview/product_fixture.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ab188da1634cb4962bf8a1e87b48f9dd3e20badb"
+    },
+    {
+      "path": "apps/client/macos/.gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "746adbb6b9e14b7e685c91e280a4d37a672afbd8"
+    },
+    {
+      "path": "apps/client/macos/CalendarActions/EventKitActions.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "78cda72ccdc77d0d1c1afefcf2292320513e6f58"
+    },
+    {
+      "path": "apps/client/macos/Flutter/Flutter-Debug.xcconfig",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c2efd0b608ba84712fb3e1d01122468a50c7fba1"
+    },
+    {
+      "path": "apps/client/macos/Flutter/Flutter-Release.xcconfig",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c2efd0b608ba84712fb3e1d01122468a50c7fba1"
+    },
+    {
+      "path": "apps/client/macos/Flutter/GeneratedPluginRegistrant.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8236f5728c63e5c23669d097ca1aa74d0058a88b"
+    },
+    {
+      "path": "apps/client/macos/LocalModel/LocalModel.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6b9988ec4118bdf9723d387cae65426ebd03cde7"
+    },
+    {
+      "path": "apps/client/macos/Runner.xcodeproj/project.pbxproj",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fa106c7f377832a8056b1f1fa5d62f4f2bc0a625"
+    },
+    {
+      "path": "apps/client/macos/Runner.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "18d981003d68d0546c4804ac2ff47dd97c6e7921"
+    },
+    {
+      "path": "apps/client/macos/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0e69c57a8a39dfb18e8a00516613d72cdb1e6428"
+    },
+    {
+      "path": "apps/client/macos/Runner.xcworkspace/contents.xcworkspacedata",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1d526a16ed0f1cd0c2409d848bf489b93fefa3b2"
+    },
+    {
+      "path": "apps/client/macos/Runner.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "18d981003d68d0546c4804ac2ff47dd97c6e7921"
+    },
+    {
+      "path": "apps/client/macos/Runner/AppDelegate.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b3c176141221dbe2b40d3e36942b15068ba48677"
+    },
+    {
+      "path": "apps/client/macos/Runner/Assets.xcassets/AppIcon.appiconset/Contents.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a2ec33f19f110ebff51a23342d7bc29ec9a1aaa6"
+    },
+    {
+      "path": "apps/client/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_1024.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "82b6f9d9a33e198f5747104729e1fcef999772a5"
+    },
+    {
+      "path": "apps/client/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_128.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "13b35eba55c6dabc3aac36f33d859266c18fa0d0"
+    },
+    {
+      "path": "apps/client/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_16.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0a3f5fa40fb3d1e0710331a48de5d256da3f275d"
+    },
+    {
+      "path": "apps/client/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_256.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bdb57226d5f2bd20f11934f4903f16459cf52379"
+    },
+    {
+      "path": "apps/client/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_32.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f083318e09ca1b6b8484b1694a149f0c5d5cac1d"
+    },
+    {
+      "path": "apps/client/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "326c0e72c9d820600887813b3b98d0dd69c5d4e8"
+    },
+    {
+      "path": "apps/client/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_64.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2f1632cfddf3d9dade342351e627a0a75609fb46"
+    },
+    {
+      "path": "apps/client/macos/Runner/Base.lproj/MainMenu.xib",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "80e867a4e06b4dc26d0a2b327cbd54041addc50a"
+    },
+    {
+      "path": "apps/client/macos/Runner/Configs/AppInfo.xcconfig",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "536966acae121747a8d2739c20eb9e9fa192e092"
+    },
+    {
+      "path": "apps/client/macos/Runner/Configs/Debug.xcconfig",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "36b0fd9464f45b33f482e64bea579787e142affa"
+    },
+    {
+      "path": "apps/client/macos/Runner/Configs/Release.xcconfig",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dff4f49561c816f70eaea557d889d31cf63447ac"
+    },
+    {
+      "path": "apps/client/macos/Runner/Configs/Warnings.xcconfig",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "42bcbf4780b187e80025b7917058bcb882012aa1"
+    },
+    {
+      "path": "apps/client/macos/Runner/DebugProfile.entitlements",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c05448fe33cdc5e3c78b5f03d8333954fbac078b"
+    },
+    {
+      "path": "apps/client/macos/Runner/Info.plist",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "688e9f631c31f4053494c7bc1c7f04be59c5259f"
+    },
+    {
+      "path": "apps/client/macos/Runner/MacOSAttentionBridge.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cb60dddd0e0311c18e79e587d13d3575d751639d"
+    },
+    {
+      "path": "apps/client/macos/Runner/MainFlutterWindow.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5fc1343ee8e092726979be5db84adfbee524e42b"
+    },
+    {
+      "path": "apps/client/macos/Runner/Release.entitlements",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f3a7ef45ada2924a1c2e7317680338064d02c68a"
+    },
+    {
+      "path": "apps/client/macos/build_native.sh",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "24c6c265c3b05704b201ffb57beb7058eb9673dd"
+    },
+    {
+      "path": "apps/client/macos/build_rust.sh",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "1877bd8f6ec51f0d6a0b689502262ac9ff750c68"
+    },
+    {
+      "path": "apps/client/pubspec.lock",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "98934c319388bf7e336a962c5e0022880d1d12c6"
+    },
+    {
+      "path": "apps/client/pubspec.yaml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7f3f7323410a2c6cd906821ddd60b7e87e3fa86b"
+    },
+    {
+      "path": "apps/client/tool/mobile_vault_smoke.dart",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d7e893f13497b9dd9e4137b850574689f7d520c4"
+    },
+    {
+      "path": "apps/client/windows/.gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d492d0d98c8fdc9f93ad2543bb4f531803e9df72"
+    },
+    {
+      "path": "apps/client/windows/CMakeLists.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0117dc704f343b3e0690ae4e989e08c57c5fa8de"
+    },
+    {
+      "path": "apps/client/windows/flutter/CMakeLists.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "903f4899d6fced0eb941e159f7322b21b320c40c"
+    },
+    {
+      "path": "apps/client/windows/flutter/generated_plugin_registrant.cc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4f7884874da74281c7ffe7fa4b936e7b2af92c24"
+    },
+    {
+      "path": "apps/client/windows/flutter/generated_plugin_registrant.h",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dc139d85a93101cc0f6e9db03a3e1a9f68e8dd7e"
+    },
+    {
+      "path": "apps/client/windows/flutter/generated_plugins.cmake",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a962892f6bc3cf97953725e5b67d59844472192e"
+    },
+    {
+      "path": "apps/client/windows/runner/CMakeLists.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "394917c053a04daa76d8b94f0a02db0bd99e1034"
+    },
+    {
+      "path": "apps/client/windows/runner/Runner.rc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "879bfcc960a829e95569333eff66360277b967e2"
+    },
+    {
+      "path": "apps/client/windows/runner/flutter_window.cpp",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "955ee3038f988929fac2dedb6a307ebd45dfcfd7"
+    },
+    {
+      "path": "apps/client/windows/runner/flutter_window.h",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6da0652f05f28fc6950cec20ebdfbae89b665479"
+    },
+    {
+      "path": "apps/client/windows/runner/main.cpp",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8c91912130cc7185b5415b3048646dd4d9ad0417"
+    },
+    {
+      "path": "apps/client/windows/runner/resource.h",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "66a65d1e4a79f230031ec0e0959a721039e7282f"
+    },
+    {
+      "path": "apps/client/windows/runner/resources/app_icon.ico",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c04e20caf6370ebb9253ad831cc31de4a9c965f6"
+    },
+    {
+      "path": "apps/client/windows/runner/runner.exe.manifest",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "153653e8d67f81b901d28257a65908f3278e058d"
+    },
+    {
+      "path": "apps/client/windows/runner/utils.cpp",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3cb71466549c0c087512f3465765191e4f7507be"
+    },
+    {
+      "path": "apps/client/windows/runner/utils.h",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3879d54755798567f0f318d63340508d5668eb96"
+    },
+    {
+      "path": "apps/client/windows/runner/win32_window.cpp",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "60608d0fe5bff3a7a7e05d5a232944a1a8effe5f"
+    },
+    {
+      "path": "apps/client/windows/runner/win32_window.h",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e901dde684ea8ba25c50ea5dc7d5900da31a30d4"
+    },
+    {
+      "path": "assets/floe-mascot.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e29e39286ce83bb974f69e8cfa6e9def48a4e3a7"
+    },
+    {
+      "path": "assets/floe-mascot.svg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "60e9224d4e5259630d347887435f751a277abc1d"
+    },
+    {
+      "path": "crates/adapters/providers/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d527549eb42a86fcd00bfbb2caa2d54fb272fb73"
+    },
+    {
+      "path": "crates/adapters/providers/src/control/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9894e7f6264df2ea879686683d81ea96c09b93af"
+    },
+    {
+      "path": "crates/adapters/providers/src/control/server_connection.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "eca62ed99e91f376eac6609f5bd2005e0931a518"
+    },
+    {
+      "path": "crates/adapters/providers/src/gateway/agent_codec.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "732b807e72eab2d8591b1862ce71d5d085cf13e6"
+    },
+    {
+      "path": "crates/adapters/providers/src/gateway/credentials.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "711718cc5af08b60b3ef23bcda64c8c0a21a3f75"
+    },
+    {
+      "path": "crates/adapters/providers/src/gateway/http.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "605e169320cf67c5dbb20ecd50e4211c2f82c818"
+    },
+    {
+      "path": "crates/adapters/providers/src/gateway/inference.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0c33a22e874ad33ac035207cb0554152cf6a74cc"
+    },
+    {
+      "path": "crates/adapters/providers/src/gateway/inference_wire.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "220a8e42b727bb8a782133afef094ac5fa86875b"
+    },
+    {
+      "path": "crates/adapters/providers/src/gateway/integrations.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "91dd4cdce8321170c2489fd536df1e867ffd9cb9"
+    },
+    {
+      "path": "crates/adapters/providers/src/gateway/json.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6a609f23dc71a8a9cc4e15b0437bb268438433da"
+    },
+    {
+      "path": "crates/adapters/providers/src/gateway/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7e72c0225cae7609911355073810d5e900828c11"
+    },
+    {
+      "path": "crates/adapters/providers/src/gateway/model_provider.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2cbe6f4dbc49e5d5909440e82a74fb1de86c3322"
+    },
+    {
+      "path": "crates/adapters/providers/src/gateway/pairing.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5d9be3cd479e2104b0d420a0d9af1223a0695837"
+    },
+    {
+      "path": "crates/adapters/providers/src/gateway/proof.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c66137890d91dc582f53ac87dfc10d396d6b35b4"
+    },
+    {
+      "path": "crates/adapters/providers/src/gateway/source_cleanup.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2f639946e7b1464185a7dc23e03c8dac37a8981a"
+    },
+    {
+      "path": "crates/adapters/providers/src/gateway/source_preview.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "938a3a021adc17e933bc4ece47d1b359c49c9fe2"
+    },
+    {
+      "path": "crates/adapters/providers/src/gateway/views.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "290ebacd77dbeb3b961d78068fea18a07198956f"
+    },
+    {
+      "path": "crates/adapters/providers/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7c01cd34cbd4542d2714603fc2f55b5bc39ebca7"
+    },
+    {
+      "path": "crates/adapters/providers/src/local_identity.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9c6a01da8d044e536d3a10da8a83390a24e3e739"
+    },
+    {
+      "path": "crates/adapters/providers/src/models/foundation.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c2b33995ff796e852c054d1b7060bfc0c9fad34d"
+    },
+    {
+      "path": "crates/adapters/providers/src/models/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9bb31d6a7bf42827091299686a230fde39685d02"
+    },
+    {
+      "path": "crates/adapters/providers/src/models/wire.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0599f1cd717dc4d34f73afb2cd36fadac05d832f"
+    },
+    {
+      "path": "crates/adapters/providers/src/sources/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bfe6c039a8dac2eb2db49c4fb8a02172e07feed0"
+    },
+    {
+      "path": "crates/adapters/providers/src/sources/native_acquisition.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f3a037a2372f4b7b32e77fde5af45470aab60657"
+    },
+    {
+      "path": "crates/adapters/providers/src/sources/native_calendar.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a59924a22a35ff9aeb58b0d4d2d61e82741a2358"
+    },
+    {
+      "path": "crates/adapters/providers/src/sources/personal_native.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "722368140e01b1488ce117c9721aa2f16fd6e6b2"
+    },
+    {
+      "path": "crates/adapters/providers/src/sources/server.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d2321e9f75a5366cf63c312189846dc393bbcfac"
+    },
+    {
+      "path": "crates/adapters/vault/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7799eb0ce1f70aae7e96ca9a2f81fea06e2c5794"
+    },
+    {
+      "path": "crates/adapters/vault/src/engine.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "142d65de8330fa15e1e924a43e8846e994cec46c"
+    },
+    {
+      "path": "crates/adapters/vault/src/error.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5f2f8639a510894a32702d24bd5ab3e07723d3fe"
+    },
+    {
+      "path": "crates/adapters/vault/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8bb4637468f58bd027140856ef577be6f3fb8e25"
+    },
+    {
+      "path": "crates/adapters/vault/src/repositories/actions.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4be9d229fe6a042aad8780e5fd97f8e111acbb58"
+    },
+    {
+      "path": "crates/adapters/vault/src/repositories/connections.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "27d911ca0f4b6c1585d0afff9c9183765988eb29"
+    },
+    {
+      "path": "crates/adapters/vault/src/repositories/context_evidence.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "52933b99f5052e2bbf6f0d5769a9b84f4585d8b2"
+    },
+    {
+      "path": "crates/adapters/vault/src/repositories/conversation.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "832affcb9fe0f1823c8fb6170139ea942350a0a8"
+    },
+    {
+      "path": "crates/adapters/vault/src/repositories/day.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1cc6c9a314b5b4952e0b21975f9c01628cb1cef2"
+    },
+    {
+      "path": "crates/adapters/vault/src/repositories/expert_actions.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "60f5ed86acf9f26a35f21d70357c4c13210f25bd"
+    },
+    {
+      "path": "crates/adapters/vault/src/repositories/learner_journal.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6e040b2d9b720b1ca311260b8047ea77e075e87f"
+    },
+    {
+      "path": "crates/adapters/vault/src/repositories/memory_review.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3597bab4bdf335cd74f645ba046b4fa5c349401a"
+    },
+    {
+      "path": "crates/adapters/vault/src/repositories/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "13d32db3b70cf78b09bb0e8e017068f2d3df6930"
+    },
+    {
+      "path": "crates/adapters/vault/src/repositories/task.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "77ff0f90160cd4c4c4913a55a88205a995b50d3a"
+    },
+    {
+      "path": "crates/adapters/vault/src/vault.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8d3a872e10c7ea0a2c325cd18aaaf46f064403a8"
+    },
+    {
+      "path": "crates/adapters/vault/src/vault/access_grants.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c4b21748b0c1941fab33856d27055ff85da83f11"
+    },
+    {
+      "path": "crates/adapters/vault/src/vault/agent_actions.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8074d727d51bd4f957f9e79fd71596eaf5d6bd5d"
+    },
+    {
+      "path": "crates/adapters/vault/src/vault/authority_keys.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "76e9e63529dfb6cb911d285a75f2cd1299851a8d"
+    },
+    {
+      "path": "crates/adapters/vault/src/vault/connection_reviews.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c197497037f5a9d5c74b8887aaae3b03b834bddd"
+    },
+    {
+      "path": "crates/adapters/vault/src/vault/context_cleanup.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "17f31f9bf684e6b337e31c8eab6c1a0f97b3657c"
+    },
+    {
+      "path": "crates/adapters/vault/src/vault/context_dependencies.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b64688a858c380fffa1d2a0f650739cfb2ba347e"
+    },
+    {
+      "path": "crates/adapters/vault/src/vault/conversation_interactions.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "47b8c05bfb90d1c261c72428d9186ed6855bf9f9"
+    },
+    {
+      "path": "crates/adapters/vault/src/vault/conversations.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f522a06d9b7cf427df81c931298f7091eb9d25c0"
+    },
+    {
+      "path": "crates/adapters/vault/src/vault/expert_actions.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "edb84c4f9530e1befdb524c5d59f5d7ba8004758"
+    },
+    {
+      "path": "crates/adapters/vault/src/vault/gateway_authority.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4e12c4be45d8b3d29e96be836f72c313c3daae05"
+    },
+    {
+      "path": "crates/adapters/vault/src/vault/keyring.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "29259b7850ca69754bfb0edffba1b179c47ebb51"
+    },
+    {
+      "path": "crates/adapters/vault/src/vault/learning.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c8422e76e89c5fe1538b971fe49b7acdd8eabfbe"
+    },
+    {
+      "path": "crates/adapters/vault/src/vault/registry.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a70f6b178aa92ef146fe24f750156707e0306b7c"
+    },
+    {
+      "path": "crates/adapters/vault/src/vault/session_archive.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "28c733ddd78e100156f51982d0f7e1564fca2ece"
+    },
+    {
+      "path": "crates/adapters/vault/src/vault/tasks.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "66ebb669c3c1316aa653167ec13647c8a29c19bf"
+    },
+    {
+      "path": "crates/app/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "78cc7f1db624eed2202111ece231155c7ca1e8ec"
+    },
+    {
+      "path": "crates/app/examples/floe_cli.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d1dadafe5c6ba0756257410dec20cd4cf8d333ca"
+    },
+    {
+      "path": "crates/app/examples/local_model_smoke.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8a4a29d5accdb4173be7be56884f20e70adce52c"
+    },
+    {
+      "path": "crates/app/examples/local_model_smoke/learner.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "35dcdf7b1769633fca1750641256f3beedc6147c"
+    },
+    {
+      "path": "crates/app/examples/local_model_smoke/manager_guidance.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6708d0868256c3d569b1945dd04aa36a6fc466b0"
+    },
+    {
+      "path": "crates/app/examples/local_model_smoke/support.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e6b27e0e96be57cd1157525aa4b4e30f96562d84"
+    },
+    {
+      "path": "crates/app/examples/vault_keyring_smoke.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "54207198e0901666e1c2d4f0ac1892ba44246982"
+    },
+    {
+      "path": "crates/app/src/action_facade.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e6b7dbd2792f96f194c142c439442979b3f19a64"
+    },
+    {
+      "path": "crates/app/src/action_services.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1dc5db40fb2a294df6b1573d30cadc43034cfcbf"
+    },
+    {
+      "path": "crates/app/src/api.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4fbfd16000d3c6e590bcc5f00340252d3efc68b0"
+    },
+    {
+      "path": "crates/app/src/bootstrap.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "14314181294ea9404443dfb2fc6a253256d0db81"
+    },
+    {
+      "path": "crates/app/src/calendar_facade.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4ba1a7b97ab64d0c9be83dfd207fb3dcff88a693"
+    },
+    {
+      "path": "crates/app/src/composition.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7f2a16fa496287fc86219050acc14daf3266e7d3"
+    },
+    {
+      "path": "crates/app/src/connection_observe.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "999969e9a2252943074d667877902c46f8c10840"
+    },
+    {
+      "path": "crates/app/src/context_services.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7b873fce98c2bc665c154696487a2ce3470bd68d"
+    },
+    {
+      "path": "crates/app/src/core.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "630d7456e7972170326a35a486c44d11e08eda25"
+    },
+    {
+      "path": "crates/app/src/day_services.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "620daa11644f17232e670846db3da5a9fa27ab53"
+    },
+    {
+      "path": "crates/app/src/diagnostics.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "af4ca6d5935c1f9284ae76da9cb0649efc5f6b52"
+    },
+    {
+      "path": "crates/app/src/error.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9a81e5b11add94b334b92abb04d5c9aca2f1fb89"
+    },
+    {
+      "path": "crates/app/src/expert_services.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cdba85ec172aaaf7971802c6f472915cc1e9f135"
+    },
+    {
+      "path": "crates/app/src/first_party_observe.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "056c81ebedcd11d1b2cd071a11eba5fb2d4707e4"
+    },
+    {
+      "path": "crates/app/src/host.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "18457941760e63ee159168e8c4b49d64423e889a"
+    },
+    {
+      "path": "crates/app/src/knowledge_services.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "18066b0edc4a622957ee3259ee35bcb60f1b7744"
+    },
+    {
+      "path": "crates/app/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4596187b97769cefe84a22ecc351b64ba32f66fa"
+    },
+    {
+      "path": "crates/app/src/local_context.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f5fde3dce5f74a0d340f486c42d2204a588a3edc"
+    },
+    {
+      "path": "crates/app/src/local_operations.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "599061fea1afa67cd1c37fd1e5f7175adc56b68e"
+    },
+    {
+      "path": "crates/app/src/native_lane.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c9a422ee3707427d11c4212327759af106c7e122"
+    },
+    {
+      "path": "crates/app/src/owner_handles.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "847fe62cd3350bbc26e778e4005b490bf3624e95"
+    },
+    {
+      "path": "crates/app/src/prompts.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fba9a5e8c5011001d063985cc6b236a6708aa39c"
+    },
+    {
+      "path": "crates/app/src/services.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d18c659667e26200812ea545200ad2b4512021e1"
+    },
+    {
+      "path": "crates/app/src/vault_host.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7f2605d7109ee1f31f037b4759bae59cd0a48a63"
+    },
+    {
+      "path": "crates/app/src/vault_host/calendar_access.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d955e460b0d5b31ea61e98bb6f321bd6c8c8b849"
+    },
+    {
+      "path": "crates/app/src/vault_host/conversation_turn.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e17daed9c6255d5fcbe4f08b45c14d0cfb6c4779"
+    },
+    {
+      "path": "crates/app/src/vault_host/conversation_turn/expert_dispatch.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4b4089a9b89c640dce21f88d1dd2e824de43eb82"
+    },
+    {
+      "path": "crates/app/src/vault_host/conversation_turn/expert_dispatch/stateful_settlement.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "951331b534e396bafac79433f6a7252f40df1940"
+    },
+    {
+      "path": "crates/app/src/vault_host/conversation_turn/expert_host.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7f159f98b89fff711aa50e0c83ff9294d7281659"
+    },
+    {
+      "path": "crates/app/src/vault_host/expert_binding_settings.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bfb5e9e346768df7f476155aab346720ff8a5bec"
+    },
+    {
+      "path": "crates/app/src/vault_host/expert_setup.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3b199bb524f02d20f63a76175ac977bd1e114e3c"
+    },
+    {
+      "path": "crates/app/src/vault_host/learner_worker.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5ea5ac48a7d3502a4ebc7131f487ccdc4b2c43e1"
+    },
+    {
+      "path": "crates/app/src/vault_host/personal_grants.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0395ed2d39ccd1d0ed5fc912b08a0d8c3156b783"
+    },
+    {
+      "path": "crates/app/src/vault_host/product_actions.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "defa91006c6cabf8ffd0b9d0ca07e09553458a2b"
+    },
+    {
+      "path": "crates/app/src/vault_host/remote_views.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "572338690d21be3405e351bcac1b7640f20de3b8"
+    },
+    {
+      "path": "crates/app/src/vault_host/review_snapshot.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9133a940936e7c37e79cbcf09f1654cef20c3432"
+    },
+    {
+      "path": "crates/app/src/vault_host/source_resolver.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6580f5343be5df32edf43a077c5ecf963cfe85ad"
+    },
+    {
+      "path": "crates/app/src/vault_services.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c448af349d674832e7585c892491ef923f4a02b1"
+    },
+    {
+      "path": "crates/app/src/worker.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7e751d9345c3cb0245b52de970073b8ab1824d4f"
+    },
+    {
+      "path": "crates/bindings/ffi/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1b8edaa11b0c8ea82dd6595e0ce538d99ad116e7"
+    },
+    {
+      "path": "crates/bindings/ffi/include/floe_ffi.h",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1bc916675c7b1b3b47b4980bd3c0032c0b02ad50"
+    },
+    {
+      "path": "crates/bindings/ffi/src/abi.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "885e828ad938b0b5ba506923cb72ae55acdc897d"
+    },
+    {
+      "path": "crates/bindings/ffi/src/app_wire.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f221ccbde4fd1e0801ad6bb3a28101607ee42662"
+    },
+    {
+      "path": "crates/bindings/ffi/src/bridge.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a77c3315264431cc3fc87995cd471ce92368d319"
+    },
+    {
+      "path": "crates/bindings/ffi/src/connections_wire.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dfecf0563f4463bb606f3159a8a3f7ada1e71877"
+    },
+    {
+      "path": "crates/bindings/ffi/src/context_wire.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0501cbbb1709b268b6e116780d489fd165a98497"
+    },
+    {
+      "path": "crates/bindings/ffi/src/conversation_wire.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "92cea868fdc2803691bed3ea7760de1d34738d61"
+    },
+    {
+      "path": "crates/bindings/ffi/src/conversion/day.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b8e5e530aab163321f92653c8d516bf61a36758f"
+    },
+    {
+      "path": "crates/bindings/ffi/src/conversion/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b4177d0405036154a590899c630a4e9378cf3062"
+    },
+    {
+      "path": "crates/bindings/ffi/src/conversion/native.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "28f97c0cc0d482fe949aca42cebde6c2cd302d7d"
+    },
+    {
+      "path": "crates/bindings/ffi/src/conversion/owners.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a7dddefa6cd79ccd8dbd622f16ddb5d491c7ba7c"
+    },
+    {
+      "path": "crates/bindings/ffi/src/day_wire.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0d193f14a275b5bcf60a62b7f29a42e1e15bdb9f"
+    },
+    {
+      "path": "crates/bindings/ffi/src/diagnostics.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7f1d92c43cf49f6e01e09bd412de4ae8d00966a4"
+    },
+    {
+      "path": "crates/bindings/ffi/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f09dec868a3e61278487eeb467b9094ac73b94fd"
+    },
+    {
+      "path": "crates/bindings/ffi/src/native_lane.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f1fa3784188f4e922597df4173ffee0786230e23"
+    },
+    {
+      "path": "crates/bindings/protocol/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a6c77ef77dc921a8cd04256945ee443342f05e3a"
+    },
+    {
+      "path": "crates/bindings/protocol/src/conversion.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bcf066f5107645e6cdb08d13456d78ba380ea924"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/actions.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e6d7d1e283e0a921755694b781f2359e5f998f43"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/agent.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3d334e1b95b32a41d63c161e98667246d2d4f22c"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/calendar.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cda551a01b2bb2eeb6174b1cec189d01280a40fb"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/commands.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "53a37d4b7a5d1cd91c2c42a073d6f4e5f2475092"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/connections.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b56ef3b05792c35fea53123cfdc03ad273890aba"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/conversation.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9d7140138a70712da90e8df875ef602eaed3ba5a"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/day.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "70ea91df1200beea897e5095e3b297894613c060"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/day_mutation.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2f441a9e1f67c3fb3f509b33fb5390314ff8b2b9"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/envelope.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0c29fc6e0bd0dc44b0f038bcf7900b5824826662"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/errors.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b80c29fd3db490120a20fa497bdf82e317034f69"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/events.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fe9dc5faf52b8d75f6113b9b469ded256fe829fb"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/experts.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7494a75b5cef739166a74362c20d8608d73e2de2"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/interactions.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a7b21c84b0b4a0270e0aa37e1bad6879846454c2"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/knowledge.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d565d36d55d0c44290298c5819a7384503f2a287"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/local_context.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8fa827967523d3f46e721600cb5f86c22e3d2fb2"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3e28f54ecd9ae6ca324be8874d41424dd90d79d4"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/native_host.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4cef0756021bb2760a09b727aacaabe25985e9b4"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/queries.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3f5180d02f704b152c8596867b30c4db1efa30f4"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/refs.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "19917fadfd2dff33c0504976b49a8991446184f0"
+    },
+    {
+      "path": "crates/bindings/protocol/src/dto/vault.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "afa5c1a84dd01853293fcb7b3c53d58c19ca12f4"
+    },
+    {
+      "path": "crates/bindings/protocol/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "eac514218927a66fc76c2876c176725f1e751e1c"
+    },
+    {
+      "path": "crates/bindings/protocol/src/wire.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "11f70260b55f1167266be92feb86d3761f0646d4"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/cancel_run.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2218653cd5d18156626b774ac0ace37773efde4f"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/cancel_run_receipt.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "057e0c85c09f0ae0c8667ffbce3534d460babfd6"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/command_receipt.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b52021883bbcf644f3153dc938a36acc871f1894"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/events.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bd6ab5802200edae7a1c5e6f265d7b8e92a78c31"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/get_message.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "aa39e886288cffbfce713ad848c1744d534775bd"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/get_run.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "37507f396be64e0b1ffda1f516cec69c9ece6855"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_get.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9abd0e6a76166623f7cfc3722688ca60de8098d1"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_list.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ace54af5bff302ac827ff014f7a4c0aaa999175c"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_refresh.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5d746696ed4daa493295cc45c903fc057a2366ad"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_resolve.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2c61142340918e6424b81aac80928a7846854033"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_resolved.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3fdfdbe3e0f0e62d5f71831e4b33058d72dbbcbe"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_resume.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "226d9d2f7beb31412f9cd6e1988d9bd6ccd0bbdd"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/interaction_snapshot.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8b8018afee9c9d27aee019515534264f0014c257"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/message.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1e10f261b5d863d124c64da1611edb8f3330e8f7"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/resync_required.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c24ed64ef5ff75f0b02ae96e2736e293245d9a3c"
+    },
+    {
+      "path": "crates/bindings/protocol/tests/fixtures/app_wire_v2/start_turn.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "898f3a53f3ffcb717ecf83440be5f9cc042af1f0"
+    },
+    {
+      "path": "crates/contracts/agent/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a91e8766c03ac654103acfb9279bffbc42b689ce"
+    },
+    {
+      "path": "crates/contracts/agent/prompts/behavior_kernel.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "61ea7dc26f07da7350403b60428a87b2b7399cd1"
+    },
+    {
+      "path": "crates/contracts/agent/prompts/capability_protocol.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ac248e4d57392bfb94ec3f6ab6e1be50e48c6ce5"
+    },
+    {
+      "path": "crates/contracts/agent/prompts/default_persona.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "13d65c256b948124d76b9ddca699788dc946fec4"
+    },
+    {
+      "path": "crates/contracts/agent/prompts/model_correction.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "05f498e937772d3309d3aa7eb2efe40112430703"
+    },
+    {
+      "path": "crates/contracts/agent/src/archive.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9e98a4526a54a7a42eaf8aadf974bf74e5ee42e7"
+    },
+    {
+      "path": "crates/contracts/agent/src/capability.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ea35b51cfdfbdbf6944bb1483dc0c5b8cd2e4ba4"
+    },
+    {
+      "path": "crates/contracts/agent/src/context.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7afd2cfdae50946cdc9993c5ab7d90b392d82350"
+    },
+    {
+      "path": "crates/contracts/agent/src/delegation.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d96b23c314b72965ff54f9cb13f577fb4be05ba2"
+    },
+    {
+      "path": "crates/contracts/agent/src/endpoint.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "53fdf490ea7b6d606bbca0d1573938694984f227"
+    },
+    {
+      "path": "crates/contracts/agent/src/envelope.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "358e5b232b81121e86d68ec8e8b02a91349d39b1"
+    },
+    {
+      "path": "crates/contracts/agent/src/expert.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cd0f87a327a4d46b1db53c409bb140eb7b1936c3"
+    },
+    {
+      "path": "crates/contracts/agent/src/expert_model.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "68240ee28a4195bf7eab43f778d34cf294c3c026"
+    },
+    {
+      "path": "crates/contracts/agent/src/history.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b73cc0aa25ef20023da2c9dc8b11db9e68d07e5a"
+    },
+    {
+      "path": "crates/contracts/agent/src/interaction.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cf146bb8af06856cda47e6648e8f9b10e5951a67"
+    },
+    {
+      "path": "crates/contracts/agent/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "83a84860f267e1a0dc0c4e03517b440220c22053"
+    },
+    {
+      "path": "crates/contracts/agent/src/message.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d9c59bb57ca0cf09c7eaa9466417296809b34ebe"
+    },
+    {
+      "path": "crates/contracts/agent/src/model.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3f8f3d234b500bbbc17175b7eaf95e07c4f94cc1"
+    },
+    {
+      "path": "crates/contracts/agent/src/model_conversation.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "26f530020feb7eedfe925e16275adb606257b7b9"
+    },
+    {
+      "path": "crates/contracts/agent/src/model_plan.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f54a7be20a04b22f3c8841a0147fb650b9eb2820"
+    },
+    {
+      "path": "crates/contracts/agent/src/ports.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7448698cec4d0678dedcb0e0d67413db12e4dd76"
+    },
+    {
+      "path": "crates/contracts/agent/src/projection.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9ca2d618b5c01ec3b135bc00baa01b16ba056874"
+    },
+    {
+      "path": "crates/contracts/agent/src/prompts.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2d4d1fced0cededa00bb2019fe9035ce27dcae99"
+    },
+    {
+      "path": "crates/contracts/agent/src/replay.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b0ca9db391473b06d006eb1e428dcfb030133887"
+    },
+    {
+      "path": "crates/contracts/agent/src/timeline_view.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "37bf0cfca7b2c21de93fa32a8253a2e99df8f844"
+    },
+    {
+      "path": "crates/contracts/context/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a35db936ff95b94018c6747a2bc1e128c6e056a7"
+    },
+    {
+      "path": "crates/contracts/context/src/assembly.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4f541b845f5106a0fd44b0a1fee7a37e6617e513"
+    },
+    {
+      "path": "crates/contracts/context/src/authorized_read.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dc946f5c34f8633aefd5f0365dbdd4eafd2bfe23"
+    },
+    {
+      "path": "crates/contracts/context/src/calendar.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "41e814373f11f37c82166569cf3666ec076eaa1d"
+    },
+    {
+      "path": "crates/contracts/context/src/evidence.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "444976f4328930d18cfd386ea5ba31c8f7a285d6"
+    },
+    {
+      "path": "crates/contracts/context/src/health_transform.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "22505f3ec9d00a7324800b346c52acb9957ded1e"
+    },
+    {
+      "path": "crates/contracts/context/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "de5a52f3a6abd3b859ff5a9773b1c27477e90744"
+    },
+    {
+      "path": "crates/contracts/context/src/memory.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b1b1d5682e5fb5c402cd9e5685bb537b8783e1dc"
+    },
+    {
+      "path": "crates/contracts/context/src/source_access.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "08dc45dc4d5d2e03168d5d4811c9f682ac7115ee"
+    },
+    {
+      "path": "crates/contracts/context/src/source_selection.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d78a58e3a194a130001ee8885b6621b52d6ef374"
+    },
+    {
+      "path": "crates/contracts/context/src/views/calendar.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a335e280953d9bd538bc7bb3e8c930e383df7342"
+    },
+    {
+      "path": "crates/contracts/context/src/views/communication.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "480e2d658483fdd27ba889a462d1669e3d189d4d"
+    },
+    {
+      "path": "crates/contracts/context/src/views/interactions.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b211058d854dd74a2377a3636a2d80dc950c935f"
+    },
+    {
+      "path": "crates/contracts/context/src/views/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "88fd28c76bd51f0317a5c8141917e91fe424d514"
+    },
+    {
+      "path": "crates/contracts/context/src/views/native.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2c86d7a8fade572b684a665408eeb089a8b64244"
+    },
+    {
+      "path": "crates/contracts/context/src/views/personal.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bea4bf5dfcc4ab73844d810e185e4dce0c019c01"
+    },
+    {
+      "path": "crates/contracts/context/src/views/portfolio.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c4f563b6e88f32008d3b22a1a785324c2e415732"
+    },
+    {
+      "path": "crates/contracts/kernel/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2eabb38600975533bdd4ce45d43f66f3dc044096"
+    },
+    {
+      "path": "crates/contracts/kernel/src/actor.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c47eae7ec90f22d37033b9967ab27d0a38ef845b"
+    },
+    {
+      "path": "crates/contracts/kernel/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2081eeece88ba115e51fe80be973412ae6da88db"
+    },
+    {
+      "path": "crates/experts/builtin/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f1a50416b02ef59ae21dea4d72f8b720a7524112"
+    },
+    {
+      "path": "crates/experts/builtin/prompts/commitments_expert_role.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e787756dcde34376f6fc62609f9278e4b18c23bf"
+    },
+    {
+      "path": "crates/experts/builtin/prompts/communication_expert_role.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b89f7c6d58ef0cb4b643f147edaa6b701703d9c0"
+    },
+    {
+      "path": "crates/experts/builtin/prompts/focus_expert_role.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d4a61d89be8df2d52e41916723d6ae6ae7c45d12"
+    },
+    {
+      "path": "crates/experts/builtin/prompts/life_logistics_expert_role.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d2e289f03fc0ec382713f68b3824df8e827eb412"
+    },
+    {
+      "path": "crates/experts/builtin/prompts/relationships_expert_role.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e6c6d9dff6c0c1ee74d47568fb41e9193b590914"
+    },
+    {
+      "path": "crates/experts/builtin/prompts/schedule_expert_role.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c9f6ee07155ec34c4f5238dfa920eb21d5f40c21"
+    },
+    {
+      "path": "crates/experts/builtin/prompts/wellbeing_expert_role.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9c05ad5d8273b68cec7e6852422a61a0bbe62068"
+    },
+    {
+      "path": "crates/experts/builtin/prompts/work_context_expert_role.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1e62efab18aaa3b63f8898c37e180b132e573c31"
+    },
+    {
+      "path": "crates/experts/builtin/src/catalog.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d2d82b2007e08b8dc73b2ff9bd400e32e4e55db3"
+    },
+    {
+      "path": "crates/experts/builtin/src/commitments/dispatch.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c952c070b303c775b0b6c1eb7d531e93f05250a4"
+    },
+    {
+      "path": "crates/experts/builtin/src/commitments/expert.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "568662a0865ed8c96ca654700ba76ddc91ac9f44"
+    },
+    {
+      "path": "crates/experts/builtin/src/commitments/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0d4500517f4b9f43be503aabb842a4404f98c7dd"
+    },
+    {
+      "path": "crates/experts/builtin/src/communication/dispatch.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0247d77839f74ea69dc98e2054ccdb3889cd6ebd"
+    },
+    {
+      "path": "crates/experts/builtin/src/communication/expert.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f7a13b23af292e26b0adfb435e8ada1e8bd262c6"
+    },
+    {
+      "path": "crates/experts/builtin/src/communication/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3bb10f1ebbeb00aaf2baf413f09a1fea8265005c"
+    },
+    {
+      "path": "crates/experts/builtin/src/focus_attention/dispatch.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "40083898531812ed7f8e63366574bf230c73fbd9"
+    },
+    {
+      "path": "crates/experts/builtin/src/focus_attention/expert.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ece58bc2586ee690262482d56a402e0c264eb963"
+    },
+    {
+      "path": "crates/experts/builtin/src/focus_attention/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fcf02b26696eb897e2867d1fadcaf49f70d24d1e"
+    },
+    {
+      "path": "crates/experts/builtin/src/host.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b2a487f9b991b235c4055f07b7c90f584d25a28b"
+    },
+    {
+      "path": "crates/experts/builtin/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7b71f632b3ae1d2923372a144093b3937f118b4e"
+    },
+    {
+      "path": "crates/experts/builtin/src/life_logistics/dispatch.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "18ba12471421cacaa9996b71c414b29eefbc8670"
+    },
+    {
+      "path": "crates/experts/builtin/src/life_logistics/expert.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "11b3be0ab2335f61b9e1f470781b5da55b695819"
+    },
+    {
+      "path": "crates/experts/builtin/src/life_logistics/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0e5dd8503cf6c056e62bfaae81e9d73475af076e"
+    },
+    {
+      "path": "crates/experts/builtin/src/prompts.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "36063d181226441f04d5e87ccb85f0e0fea02bc4"
+    },
+    {
+      "path": "crates/experts/builtin/src/registration.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e561ee01fa9b7fb3e07577951dd3f4f744737edc"
+    },
+    {
+      "path": "crates/experts/builtin/src/relationships/dispatch.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ec29627e0d68b89b153686b6768862416173ec62"
+    },
+    {
+      "path": "crates/experts/builtin/src/relationships/expert.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "11ae219d887246a50e6b3ae73cefc0a2b7bd4b2e"
+    },
+    {
+      "path": "crates/experts/builtin/src/relationships/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6b2e123420c6c298b3fdfeedb5a93d3fea893aaa"
+    },
+    {
+      "path": "crates/experts/builtin/src/schedule/dispatch.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "db0ac23fa3db91fa76d1d9137a127b689c322eb0"
+    },
+    {
+      "path": "crates/experts/builtin/src/schedule/expert.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "710b65472ecbc5699d19aca2910c1328c4ea319a"
+    },
+    {
+      "path": "crates/experts/builtin/src/schedule/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a8a76aa0378ec33988db3f64364ae32b34715840"
+    },
+    {
+      "path": "crates/experts/builtin/src/schedule/plan.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "aedb2ba5bb0944c3c19f4dd3bb7147e8da498dc9"
+    },
+    {
+      "path": "crates/experts/builtin/src/shared.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "11797be8982a85535278aecc70b4d7a3c608d763"
+    },
+    {
+      "path": "crates/experts/builtin/src/wellbeing/dispatch.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "805a362b25d57ff56b97c2b38b0e0ae13552d54f"
+    },
+    {
+      "path": "crates/experts/builtin/src/wellbeing/expert.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "492fca85f7a95255357d42229ff4e34a2677d6c5"
+    },
+    {
+      "path": "crates/experts/builtin/src/wellbeing/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a1d499a5e37a72e298908f08b76e3947baabb137"
+    },
+    {
+      "path": "crates/experts/builtin/src/work_context/dispatch.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "39727ef7ac669594121a693cfbadcebb06bd0253"
+    },
+    {
+      "path": "crates/experts/builtin/src/work_context/expert.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "93d8c95209e22948bb8dc9fca243f5efc5224964"
+    },
+    {
+      "path": "crates/experts/builtin/src/work_context/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "eb456778386e5beecf82c13c033f6ba21863308b"
+    },
+    {
+      "path": "crates/experts/builtin/tests/fixtures/mail_expert_corpus.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "131d3b991e5c697f42876448e5bdd480b6bb6d03"
+    },
+    {
+      "path": "crates/modules/access/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d1f7f67f0216d1139619e89a503a491416868da6"
+    },
+    {
+      "path": "crates/modules/access/src/application/authority.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b5cb63b86f62b0a1ae95511560af8c4b5158058e"
+    },
+    {
+      "path": "crates/modules/access/src/application/authorization_signing.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "85cff65a4ab53d0afd8bdaebcdd3e4d219ad681d"
+    },
+    {
+      "path": "crates/modules/access/src/application/calendar_read.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "244d642cadfa6cae279c44c40d8ecf85c6565c61"
+    },
+    {
+      "path": "crates/modules/access/src/application/connection_review.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dffc9392cb889dfc56442d8ae6a01804ba7dd0ff"
+    },
+    {
+      "path": "crates/modules/access/src/application/dependency.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a796e2279c6fa9cefec9361c3f93f5adcab9f3b0"
+    },
+    {
+      "path": "crates/modules/access/src/application/grants.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dd0d746e729090dff51cc0163a00376f42fe10d4"
+    },
+    {
+      "path": "crates/modules/access/src/application/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "deaa4d2b3660c688e1ab1f69e62b8ca680f4fa5f"
+    },
+    {
+      "path": "crates/modules/access/src/application/model_dispatch.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8cf7443b0ec51940f07b4f82662eb0c1c88b1f49"
+    },
+    {
+      "path": "crates/modules/access/src/application/native_calendar.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "24910b1f1b23789d4317b1639fb74bcce35fe97e"
+    },
+    {
+      "path": "crates/modules/access/src/application/personal_read.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a4945671de02f8199b8094eb23ae1530e15e8513"
+    },
+    {
+      "path": "crates/modules/access/src/application/personal_sources.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1d93c32be58a2c93d546de1792bc99a5e5ed3d53"
+    },
+    {
+      "path": "crates/modules/access/src/application/release.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a1bca036b72d6c112018bf229bef07da069832f6"
+    },
+    {
+      "path": "crates/modules/access/src/application/remote_authority.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1e5a4fd7287a198a3e1746fd8ade9d8a01aa0c7f"
+    },
+    {
+      "path": "crates/modules/access/src/application/remote_grants.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c5bd4e670035177a15caff1e35310a9f480b70a6"
+    },
+    {
+      "path": "crates/modules/access/src/application/remote_view.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b3ae22b8704823cadd0fbd84d49be0f24e0086df"
+    },
+    {
+      "path": "crates/modules/access/src/application/source_policy.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "492d7b2c844ac5dfbb9e76dbf746aec5e34a2b73"
+    },
+    {
+      "path": "crates/modules/access/src/data_access_grant.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "439a8f09bb72d4c1d059f49d822741195ac82dbb"
+    },
+    {
+      "path": "crates/modules/access/src/domain/connection_review.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3d5a95378befc751381ee5ce14022284f5c0265e"
+    },
+    {
+      "path": "crates/modules/access/src/domain/gateway_identity.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ada13a73203244ccca9ebdd2c9f6e8fe1adb7898"
+    },
+    {
+      "path": "crates/modules/access/src/domain/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7432fced111c2dee006be3657d718fb521d39950"
+    },
+    {
+      "path": "crates/modules/access/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c9ca4788fb674104cc9514e1e64535d36dac7c9a"
+    },
+    {
+      "path": "crates/modules/access/src/ports/authority.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e973e031d17fe04f6bd4b678e4217c983d4b7b06"
+    },
+    {
+      "path": "crates/modules/access/src/ports/authorization_signer.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9859e1e06dd5640e81e710049f0cbad40d6c663f"
+    },
+    {
+      "path": "crates/modules/access/src/ports/dependency_authorization.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3944b238672b129bd22cb7b06ae782e88991a540"
+    },
+    {
+      "path": "crates/modules/access/src/ports/gateway_admission.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9d074176060389354946dcbba0eef72d1b57cac8"
+    },
+    {
+      "path": "crates/modules/access/src/ports/gateway_trust.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f70cdc76d980fb0a425d8b2d089a725c877248dd"
+    },
+    {
+      "path": "crates/modules/access/src/ports/grant_repository.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "74c8acdd90c8dbe4a29c743e5e39e23e3aa33634"
+    },
+    {
+      "path": "crates/modules/access/src/ports/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ce88039801d38f382600e37cf13a64365071c3d3"
+    },
+    {
+      "path": "crates/modules/access/src/ports/model_dispatch.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bc838f686f4e759f03b98d90f93753bb384d97b9"
+    },
+    {
+      "path": "crates/modules/access/src/ports/personal_subject.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b5c7477086a0a4d1e4f350849ee05d3b84be08f9"
+    },
+    {
+      "path": "crates/modules/access/src/ports/remote_grants.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cb92463b47f0ffc8d632dc091940fd4d44ed66bc"
+    },
+    {
+      "path": "crates/modules/access/src/ports/source_preview.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b3e7f704452629e47ba763fa7cc5c48d59b52a6d"
+    },
+    {
+      "path": "crates/modules/access/src/ports/trusted_consumer_catalog.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d7489927d31a12175fa9ac3ab9fa80072948c815"
+    },
+    {
+      "path": "crates/modules/actions/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8d262df17376364a22c5e8cb3fcf49062ee19689"
+    },
+    {
+      "path": "crates/modules/actions/src/application/expert.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bebf36dacc3a38ca272ef461b9d33253377a08a3"
+    },
+    {
+      "path": "crates/modules/actions/src/application/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d8acfdd9d3340a309a4e748a9d0eabfe05fd7595"
+    },
+    {
+      "path": "crates/modules/actions/src/application/service.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e4e9387644cc898576c96201c85691ff56c6ae9a"
+    },
+    {
+      "path": "crates/modules/actions/src/domain/action.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c0f0a0f6821c898e58c9afacbcd0771f6ed8e938"
+    },
+    {
+      "path": "crates/modules/actions/src/domain/authority.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e6ff909ca9a78789a08604bf7ae1f3efdc3c0198"
+    },
+    {
+      "path": "crates/modules/actions/src/domain/envelope.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f8e60e6646236d6539fbd3d8fd7d4238426329d0"
+    },
+    {
+      "path": "crates/modules/actions/src/domain/expert_proposal.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c5b6d46d9c2842a077f5dbd505788b8e4bb2f0fa"
+    },
+    {
+      "path": "crates/modules/actions/src/domain/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "959692a8d4ebc0c1d9ee46d5d38303a4f703758c"
+    },
+    {
+      "path": "crates/modules/actions/src/domain/origin.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d7b860d755526dd351268a06f2c0e764c86c1ce0"
+    },
+    {
+      "path": "crates/modules/actions/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6bf6d5c4be15ad1f5704b402ca8319d8fa763bee"
+    },
+    {
+      "path": "crates/modules/actions/src/ports/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d8917248d46daf18332fb57a7ef9d5fe84b60203"
+    },
+    {
+      "path": "crates/modules/connections/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "35eec5600a0bc82d3d282708be1cb7b05172ac19"
+    },
+    {
+      "path": "crates/modules/connections/src/api.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3ec8d73f1c2d56a0a45a1fc8081ef44bf0890d3f"
+    },
+    {
+      "path": "crates/modules/connections/src/application/connected_context.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "eb6c0d0cd937c58900ff862b339940aa0530faab"
+    },
+    {
+      "path": "crates/modules/connections/src/application/gateway_pairing.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c08abece357949e72dce91794cb5787545b9cae1"
+    },
+    {
+      "path": "crates/modules/connections/src/application/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "49e3f313b646f1619c7b9546d630ce84193f563b"
+    },
+    {
+      "path": "crates/modules/connections/src/application/product.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "74a4c563d5d019e1e0c795a1477ccf67b9baf5f2"
+    },
+    {
+      "path": "crates/modules/connections/src/application/source_connections.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a835b7a422ad058c58a04fffb2d4095201a5223b"
+    },
+    {
+      "path": "crates/modules/connections/src/application/source_operation.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e13d37a486d7ae8863efff1ade4635bb2ee259af"
+    },
+    {
+      "path": "crates/modules/connections/src/domain/personal_source_spec.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "24163112a4a456cece2217424aab5f2fac416c49"
+    },
+    {
+      "path": "crates/modules/connections/src/domain/product.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cac85ee1f540e69d3ab12e8f91c3a1746afa453c"
+    },
+    {
+      "path": "crates/modules/connections/src/domain/source_operation.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d5f9f49fd4b64630d7b2992444f1a2968053772f"
+    },
+    {
+      "path": "crates/modules/connections/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "417af388a2c6dea88f00ed5bb8f0c9d34b166ef5"
+    },
+    {
+      "path": "crates/modules/connections/src/ports/gateway_pairing.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "377c81fb442646d80f5eb8e25833ab6cb5ffa1c3"
+    },
+    {
+      "path": "crates/modules/connections/src/ports/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "17bce3b36cdc4ccb41186a23d9c192fc9aba6264"
+    },
+    {
+      "path": "crates/modules/connections/src/ports/product_repository.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ee42055fbee0fb52433a70d17ceac938be17e852"
+    },
+    {
+      "path": "crates/modules/connections/src/ports/remote_integration.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "16a4e06bd90495decd4bc5305bf188766c247529"
+    },
+    {
+      "path": "crates/modules/connections/src/ports/source_operation_repository.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4df304cb99a0e559ad9b22f41ff8a060ce651efc"
+    },
+    {
+      "path": "crates/modules/connections/src/ports/source_repository.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "966d845ffbd39bd94c429ecda2720b00613f2c71"
+    },
+    {
+      "path": "crates/modules/connections/src/source.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f96b8ab7cb1b49cb96b870297b6c7b9c58e7dd2b"
+    },
+    {
+      "path": "crates/modules/context/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8f79d8f11bd32f8b5afb89518e7220845a477d89"
+    },
+    {
+      "path": "crates/modules/context/src/application/archive.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "88a1eb3de34c2672cadeefde9c69fd4d85e2c3dd"
+    },
+    {
+      "path": "crates/modules/context/src/application/assembler.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "70306578af8695eda21430879762269adc788acd"
+    },
+    {
+      "path": "crates/modules/context/src/application/calendar_connector.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "32c5e0d9fc158762b1f9eee5e5e6052bdac9320e"
+    },
+    {
+      "path": "crates/modules/context/src/application/calendar_lease.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b505df0b81f7baa135a4a622631838c4f7c1caee"
+    },
+    {
+      "path": "crates/modules/context/src/application/calendar_timeline.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "16aaa4319275dee7d53085a365dbd0f7d2d4b0c3"
+    },
+    {
+      "path": "crates/modules/context/src/application/consumed.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8d750b26cb02a3963e2fca5a5c5a176949f12138"
+    },
+    {
+      "path": "crates/modules/context/src/application/coverage.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a471b91fa7e5523dd22e582f30befa3ac7ce55ba"
+    },
+    {
+      "path": "crates/modules/context/src/application/day_context_views.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1bc7a8b913cc00066a4fe1f261f82ee8ac9f2a6c"
+    },
+    {
+      "path": "crates/modules/context/src/application/expert_context.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "09f1e77347991a6b57a59fbd73100d5d104ea571"
+    },
+    {
+      "path": "crates/modules/context/src/application/expert_sources.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "82fb3fa9adb73ca6ee5427e7cc5378d905944286"
+    },
+    {
+      "path": "crates/modules/context/src/application/history.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2532587e683aea2d6643ca48fd6007e7596c1c53"
+    },
+    {
+      "path": "crates/modules/context/src/application/leases.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9c892ebb98e80327cc762e2fc7cc32bc8dc4ee8c"
+    },
+    {
+      "path": "crates/modules/context/src/application/model_coverage.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "da373fb8ce4a37a0a0b05555667a8ada2ac90109"
+    },
+    {
+      "path": "crates/modules/context/src/application/model_projection.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3a962587d4d0cbaf0d60e2c628ac0fd0df6aee25"
+    },
+    {
+      "path": "crates/modules/context/src/application/native_calendar.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "56ca6efa78b52f980d6b7779f5eff9e1e5c09c90"
+    },
+    {
+      "path": "crates/modules/context/src/application/native_calendar_view.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f80b3631bf35d9b3570ac5391307201c261ee33a"
+    },
+    {
+      "path": "crates/modules/context/src/application/observations.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6e2bf59e9026862b04253779830387aed6caee35"
+    },
+    {
+      "path": "crates/modules/context/src/application/personal_lineage.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cb1e07f4a8a0d66c7f8851059844ba6739f76cbf"
+    },
+    {
+      "path": "crates/modules/context/src/application/personal_sources.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "51ddcbfe135af165ebedf88a941b6d46f108bfab"
+    },
+    {
+      "path": "crates/modules/context/src/application/projection.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bba682e21ae1badf15e04ebe9bfe5da1d2529eb6"
+    },
+    {
+      "path": "crates/modules/context/src/application/remote_sources.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "99093e8f4c38806c5ba980fcf8aeace0073a9e19"
+    },
+    {
+      "path": "crates/modules/context/src/application/remote_views.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "891cae755dad4b6e4b174cd42d3a71f004a1adc9"
+    },
+    {
+      "path": "crates/modules/context/src/application/routing.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8ab7906f9b2acd928e1b3c66ce15c82025f9c75c"
+    },
+    {
+      "path": "crates/modules/context/src/application/service.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fd0e01059d4f3fb5b7dc1fd3c7c183c08218734b"
+    },
+    {
+      "path": "crates/modules/context/src/application/source_candidates.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "83522b3df7dade0107090332e0db591afc36eb7d"
+    },
+    {
+      "path": "crates/modules/context/src/application/source_view.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "643f20959888670d6d471a568fe50f376d6b432d"
+    },
+    {
+      "path": "crates/modules/context/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "12c8d5c349fdada44e4b9d46a26da4c0199b41e2"
+    },
+    {
+      "path": "crates/modules/context/src/ports/archive_reader.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a8dd9e6ec4f57c8c6ef048de6d34e91e244dfe65"
+    },
+    {
+      "path": "crates/modules/context/src/ports/calendar_source.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "78725e1f209917afefe3ce3f1f0b875c45090c22"
+    },
+    {
+      "path": "crates/modules/context/src/ports/evidence_reader.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a945f80ede4098dcc55fd9f42c1bf2fce14ff852"
+    },
+    {
+      "path": "crates/modules/context/src/ports/personal_source.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6db5485c7739ecff42f9a97061d837ff71191f49"
+    },
+    {
+      "path": "crates/modules/context/src/ports/source_reader.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c320ef4811fea1a5f7f92665e753fbac1020c7fa"
+    },
+    {
+      "path": "crates/modules/conversation/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6d651b765871a43a56cd67c1cd84dac5afd94725"
+    },
+    {
+      "path": "crates/modules/conversation/prompts/manager_role.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "674ea6500e5e79ceedd9226baacd50562e7fa44e"
+    },
+    {
+      "path": "crates/modules/conversation/prompts/model_correction.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "05f498e937772d3309d3aa7eb2efe40112430703"
+    },
+    {
+      "path": "crates/modules/conversation/src/adapters/context_reader.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cec5eb364a594f97112d5231e707ddb33b163c4c"
+    },
+    {
+      "path": "crates/modules/conversation/src/adapters/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "34289097df5fdde481a8de519479c6dce8903e1c"
+    },
+    {
+      "path": "crates/modules/conversation/src/api.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fc4d929f9e5152f31a1385427af069b09b57aa92"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/admission.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6fe8da60f9c77860a46abc243c5fc68a84164b2b"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/archive.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2ec5677a888ae32db07f588f4b499a04de5cffc1"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/cancellation.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "df47d64ff5a953a145a953ab32b28c678c24acc4"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/coordinator.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "200fba1054d1764df87a0fe6a81b958f132546e2"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/events.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d8cdfe209f81fe4746ac6856b45040db5103e763"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/failure_projection.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cf94376154e16a2e55707f42fcace213087cd841"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/finalization.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2121e93377bb31edb7b863e908e91244a7b178b8"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/governed_session.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "08efdf98e80ad3cb4a4630b9bfe5d264815ba604"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/history_projection.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c872a3e68cdc94f8ab8f191dd8bbdd70515fa848"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/interaction_projection.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "705ad33e20e5fed2f79131b5bba187f27de23a9f"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/interaction_resolution.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "72789b5f3b63e40ebc1cfe63e9ad9fb994bdcb58"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/interactions.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "19309f1e3b9fc1b5c16ec48349c082d97ce5763b"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/manager_policy.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "62a2a88c4e9360623b5354396b85154deb69bf92"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "69e8c1782ef85ff7c6215fbe6313b8abd7c5db25"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/model_projection.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4e2b32f843ffd6f455ed86276a599dd091443ad3"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/query.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "22e92da4d625fcb9013d70dd9a6810f5127db953"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/recovery.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d6c64b2d1e1226481e5fcefacb54b42573c728c9"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/resume.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "177948e655e981d67c62870f907c2a5fe046847e"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/run_projection.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "954bc92db9ddd21d0792c389aec370c4356cc0e1"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/service.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9f377a5c32a1aa9631eefda007f20fbde6acb4b4"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/session.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6156abd2e60f7aa7353e46592fe4188e7eee373b"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/session_projection.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "70f0902c650c0d25d6bd4b604b207adfa7897e1f"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/source_review.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "055b5acf8e817e9fb2d763791816aa4ac1c8b18a"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/start.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6787583920453bcd7ef32bd0874eeec118bb69b2"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/storage_projection.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "27d769aac5888b8ccf84a591929ea70aa81ef126"
+    },
+    {
+      "path": "crates/modules/conversation/src/application/task_interactions.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e90eed108ac7eecb52dbaa186ca967943a7289e0"
+    },
+    {
+      "path": "crates/modules/conversation/src/domain/intent.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a70b2292b584cf25e91517fd2a538e5b565b42f9"
+    },
+    {
+      "path": "crates/modules/conversation/src/domain/interaction.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "438ffdf089ee1c9f2e909715c352f7cc228454e5"
+    },
+    {
+      "path": "crates/modules/conversation/src/domain/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5149b79442ecc624410df4b5d9421ce8b69b9dfe"
+    },
+    {
+      "path": "crates/modules/conversation/src/domain/purpose.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dedba75d702f59279d67c4e4c7bd7465c5032251"
+    },
+    {
+      "path": "crates/modules/conversation/src/domain/run_record.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "06ff3e3b665e0939c973b810639600fee3bdd652"
+    },
+    {
+      "path": "crates/modules/conversation/src/domain/source_review.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1831115cd6eafca1d18bbf0d6faf515567c95f85"
+    },
+    {
+      "path": "crates/modules/conversation/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "50aa221bee9b38efc6ca04c5a6c3fd5b45a75e2b"
+    },
+    {
+      "path": "crates/modules/conversation/src/ports/conversation_repository.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "24fff68ee361c94bcf8219ab234fe728ded59112"
+    },
+    {
+      "path": "crates/modules/conversation/src/ports/interaction_repository.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "20ca887add40bc7c623491f67aadd45a4d935ab4"
+    },
+    {
+      "path": "crates/modules/conversation/src/ports/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9017f5c3ff4da3fa6e802471ac0ba147f00186db"
+    },
+    {
+      "path": "crates/modules/conversation/src/ports/session_archive_repository.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "508281b7e3488457f66acaa8425b1545d2322185"
+    },
+    {
+      "path": "crates/modules/conversation/src/ports/session_repository.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e9ce405562dd41967e9e5571b59435ea54b4c450"
+    },
+    {
+      "path": "crates/modules/conversation/src/prompts.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e4c0a64457b2790d16f999ac393746743614a0a9"
+    },
+    {
+      "path": "crates/modules/conversation/src/turn/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f1b9801f198d54e02f4877c5619eaf0856d1d04b"
+    },
+    {
+      "path": "crates/modules/conversation/src/turn/session.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bcf40cec07631dd47c00b88224c1ed1f6aa87767"
+    },
+    {
+      "path": "crates/modules/day/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0283fc64a786da3822278eaaf3ed1316ac09ed98"
+    },
+    {
+      "path": "crates/modules/day/src/application/calendar_views.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "621ef9f812dff01fbffa8976d0f377afd05c2cfa"
+    },
+    {
+      "path": "crates/modules/day/src/application/commands.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "47dbf47b536c309c581a52057c02f4f679247637"
+    },
+    {
+      "path": "crates/modules/day/src/application/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0e963513084c23d39e21862b692138eab23a221a"
+    },
+    {
+      "path": "crates/modules/day/src/application/observations.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d5c023ee4c3972c925cc0649cfbd8fefea4c2bcd"
+    },
+    {
+      "path": "crates/modules/day/src/domain/calendar.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c11d036d58b4f75392cf3009fc1f85950c17f13e"
+    },
+    {
+      "path": "crates/modules/day/src/domain/capture.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1a3f204dfd9a2b2d79f40d48ceaf195b9d798915"
+    },
+    {
+      "path": "crates/modules/day/src/domain/entity.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3277eab139cec0545ed6c88b62d81b6784ca0435"
+    },
+    {
+      "path": "crates/modules/day/src/domain/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "115d84251ffde016e83ad65dd2ec0d2597a47430"
+    },
+    {
+      "path": "crates/modules/day/src/domain/projection.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2c71c74c96e1144121a17f16a5040c4c29aa48c9"
+    },
+    {
+      "path": "crates/modules/day/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3e036336de80c52361dd8af7dde67e29b8c64237"
+    },
+    {
+      "path": "crates/modules/day/src/ports/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "71cf5bc11e8a9bdcfbc9e4380ff764f9099a57c9"
+    },
+    {
+      "path": "crates/modules/day/src/ports/timeline_repository.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2ce63ec50d4c1139c6e2c88b5cb0f9890e161846"
+    },
+    {
+      "path": "crates/modules/experts/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "afe08ace92099b051b89ec970a19a3058be43391"
+    },
+    {
+      "path": "crates/modules/experts/src/a2a.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d9fba20f0b2e0158de00c90c88d913de027a3313"
+    },
+    {
+      "path": "crates/modules/experts/src/bundle_install.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0063f2f10b300735fd3ea3c258d52f4598411331"
+    },
+    {
+      "path": "crates/modules/experts/src/directory.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ef3ac9f082082a9768d70ebbbc0bded4332e7791"
+    },
+    {
+      "path": "crates/modules/experts/src/dispatch.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b8641c25d1fe35d35e03de17fad564ede9590e4b"
+    },
+    {
+      "path": "crates/modules/experts/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "24501c4b996d27103cc2076b0c7c3bb1ca584b91"
+    },
+    {
+      "path": "crates/modules/experts/src/manifest.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2e3a7c15ffdb24cd1fbeeb1e29ae1c065ad7a72e"
+    },
+    {
+      "path": "crates/modules/experts/src/registry.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7037547043b65237002a120511c3ceab55345b78"
+    },
+    {
+      "path": "crates/modules/experts/src/requirement.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a927cb61fb1da38cce000cc5b52f6bc1c9cad4ba"
+    },
+    {
+      "path": "crates/modules/experts/src/selection.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "40a4671b3a18e83368b6cff30a761ed333e17745"
+    },
+    {
+      "path": "crates/modules/experts/src/settlement.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b48a01796f1194a001d5e6c3d708a137b6249b5f"
+    },
+    {
+      "path": "crates/modules/experts/src/task.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cb5155a04b14d3678b199a9647c6c022bc23f10a"
+    },
+    {
+      "path": "crates/modules/inference/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "01c88a91558ee8e957281f9b780cc616f0c47f25"
+    },
+    {
+      "path": "crates/modules/inference/src/api.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2d040b5d05cd708455fa09d5582dc50e30bd4bcb"
+    },
+    {
+      "path": "crates/modules/inference/src/application/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e5d922bbb952619704f3a7b07fe81022808e8028"
+    },
+    {
+      "path": "crates/modules/inference/src/application/service.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7afe85aa52223d48b3e1182395dc11bd979386cc"
+    },
+    {
+      "path": "crates/modules/inference/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "95554d1d9d0a55c9749c6812611f1ab572f832c8"
+    },
+    {
+      "path": "crates/modules/inference/src/ports/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4b7fbb6003738b6638441dd2afdead379f5f7d1b"
+    },
+    {
+      "path": "crates/modules/inference/src/ports/model_provider.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "004a2e75738e247d5a835ac77c32165b1b30a673"
+    },
+    {
+      "path": "crates/modules/knowledge/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b16d7a8906805bcf6084442ba115de100913d80e"
+    },
+    {
+      "path": "crates/modules/knowledge/prompts/learner_protocol.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "457ad59bd6629eac63aff2e5e4948599cc1619ba"
+    },
+    {
+      "path": "crates/modules/knowledge/prompts/learner_role.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9b7f5af3a83e3d228900828a83e07e56cf16aaad"
+    },
+    {
+      "path": "crates/modules/knowledge/src/api.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6cf722466729003e92b0f5fe3f20b36d3cdcf2e4"
+    },
+    {
+      "path": "crates/modules/knowledge/src/application/learner.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "eaf67068d7f0bfd71c270ac6a08de55f5cf7f26b"
+    },
+    {
+      "path": "crates/modules/knowledge/src/application/learner_scheduling.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0821550aca534d81f41ecda3e05f7eae9b4a352e"
+    },
+    {
+      "path": "crates/modules/knowledge/src/application/learner_service.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d30dadc169aecd32d02fabe26dd533405e6d0c7c"
+    },
+    {
+      "path": "crates/modules/knowledge/src/application/memory.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "88fd277b19af2945a1a1a1f1b0722babb340260b"
+    },
+    {
+      "path": "crates/modules/knowledge/src/application/playbooks.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6a76d46eef7e7963fcbb61f201d2d1930c2d9908"
+    },
+    {
+      "path": "crates/modules/knowledge/src/application/review.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c2d5e30a421b9830447fa57638c8e87f94bc9cde"
+    },
+    {
+      "path": "crates/modules/knowledge/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cb042424e8e0fb518c40633b8e82de96006384cc"
+    },
+    {
+      "path": "crates/modules/knowledge/src/ports/evidence.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f81b2b6f5cb7edefb490e59cfcd6e6fd106c7483"
+    },
+    {
+      "path": "crates/modules/knowledge/src/ports/repository.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fdfa221cf82c9c7f3419ccf3afccf3bc19c18352"
+    },
+    {
+      "path": "crates/modules/knowledge/src/prompts.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0b76138e8160d3a1245c78716874c3bb0d0ad762"
+    },
+    {
+      "path": "crates/platform/diagnostics/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fea6f8e4e63d5990fa2513a05d43bd378e924067"
+    },
+    {
+      "path": "crates/platform/diagnostics/src/context.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c1bfc8b56c1e70d8f490de910ad91a1086d0a373"
+    },
+    {
+      "path": "crates/platform/diagnostics/src/events.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "53e7a7b64a04ef42c957df85d16d2727a3c84022"
+    },
+    {
+      "path": "crates/platform/diagnostics/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a1b626a1d324dfa89cb1a0c57047fdbe93042f55"
+    },
+    {
+      "path": "crates/platform/diagnostics/src/redaction.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5803d3979ae2cf9f8559a6d0f03684289bf058a1"
+    },
+    {
+      "path": "crates/platform/native/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a12928292aa0aae69bf38fe0dbfbb52968a4ea96"
+    },
+    {
+      "path": "crates/platform/native/src/acquisition/attention.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "39f02d3ab9426dfd3fbacf30a4f03e2b231d9886"
+    },
+    {
+      "path": "crates/platform/native/src/acquisition/calendar.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f25a6ed0d2e57b6fef970d70d4305647e20a81c8"
+    },
+    {
+      "path": "crates/platform/native/src/acquisition/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d5dac1297ba6450f2dd1eaf17982dedbeb500f6f"
+    },
+    {
+      "path": "crates/platform/native/src/acquisition/personal.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7e2fafdd5bc9c622f9704fdae5375830635fe053"
+    },
+    {
+      "path": "crates/platform/native/src/android_vault_keys.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4383847179bae34529ececd934b06ab1deaf6db2"
+    },
+    {
+      "path": "crates/platform/native/src/calendar_wire.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8731e3ee1bee34509d046da9b5da3352ddcfc71f"
+    },
+    {
+      "path": "crates/platform/native/src/dylib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7ba8cce9eed8ffdd7e957463f1fe1813d3ee47db"
+    },
+    {
+      "path": "crates/platform/native/src/health_privacy.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2062faccfc84723d513283076ccc364e58d2a5a1"
+    },
+    {
+      "path": "crates/platform/native/src/host.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "08971fb4b02c7bd09dd2718b366d89aa9033b83f"
+    },
+    {
+      "path": "crates/platform/native/src/keychain.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "60636ffe4eb467f9bee7007d73f79a9d9a9ea50e"
+    },
+    {
+      "path": "crates/platform/native/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "52eb58f4d3e85e56dd84214a2db960197109efb2"
+    },
+    {
+      "path": "crates/runtime/agent/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "61e13a4de09282e5be365e505664e3fb146a35ab"
+    },
+    {
+      "path": "crates/runtime/agent/src/capability.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7347f669cb149a77de4990dc598c7f39fd3ecbc3"
+    },
+    {
+      "path": "crates/runtime/agent/src/engine.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "88491044ba45a18abd3d59e8134232e9cbc31622"
+    },
+    {
+      "path": "crates/runtime/agent/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "56665818f3c20ac81cd4ca884b0afb66ceb5476e"
+    },
+    {
+      "path": "crates/runtime/execution/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "82254f7634cbef8385449ff129870953093cb761"
+    },
+    {
+      "path": "crates/runtime/execution/src/budget.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "611a614ce775625c991616012437e749ad4b3912"
+    },
+    {
+      "path": "crates/runtime/execution/src/cancellation.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a765bfb9587d4fddcb198d3484fc4766d0f7b0a1"
+    },
+    {
+      "path": "crates/runtime/execution/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2d4c75681b90d4fec11599be4e4f3fe6def7290b"
+    },
+    {
+      "path": "crates/runtime/execution/src/limits.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "26de9a865a35ebc9500a4841b84c36787aadf16b"
+    },
+    {
+      "path": "crates/runtime/execution/src/scope.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2db39fc86111235d4dfd446882c32f344d13d475"
+    },
+    {
+      "path": "crates/runtime/execution/src/tasks.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a1e9def48e863fe19178e26671e691b088a87443"
+    },
+    {
+      "path": "docs/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d196b858c9865405252a9e898221e57146efcb4e"
+    },
+    {
+      "path": "docs/architecture/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8e877c42ff4d6fabf6c70523358d31a64574fbdb"
+    },
+    {
+      "path": "docs/architecture/authority-recovery.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0cf09c0f900697e7b35d419caad9bbf85781f46e"
+    },
+    {
+      "path": "docs/architecture/invariants.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7739f6e786e7735c87632546b2c8118efcf5791d"
+    },
+    {
+      "path": "docs/architecture/modules.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a4582787495eaf9c9606c50a9c259a4e535bfa04"
+    },
+    {
+      "path": "docs/architecture/runtime.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "50f18a52262aafe39dc3ea854782a22546bcc59a"
+    },
+    {
+      "path": "docs/decisions/0001-greenfield-reset.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7bc9b8de1b7d7594ac0db90461258f156fe4ce4b"
+    },
+    {
+      "path": "docs/decisions/0002-implementation-baseline.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fa8fdb6b4b4155e52f6fd95b42f4536678e93b18"
+    },
+    {
+      "path": "docs/decisions/0003-native-connectors-and-experts.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "659f22c7d3f6fbe7f6785bcc53f350334d188287"
+    },
+    {
+      "path": "docs/decisions/0004-personal-day-first-slice.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "41dfda5817c09eaebc22cde4ad9d8d84aadcf7ba"
+    },
+    {
+      "path": "docs/decisions/0005-json-c-abi-flutter-bridge.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b88c5ee8754f669ae7841682b08048333f2312c7"
+    },
+    {
+      "path": "docs/decisions/0006-slice-driven-delivery.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "52126c374b63a11322e86d13a9a76497c32aee2c"
+    },
+    {
+      "path": "docs/decisions/0007-eventkit-calendar-read.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1e9225afd40ed0d1f6ba64f3c6a8d9bbeb177461"
+    },
+    {
+      "path": "docs/decisions/0008-unified-calendar-read.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "276437e62dd0fe92237a46e4096ac0ea9f7d926a"
+    },
+    {
+      "path": "docs/decisions/0010-local-connection-console.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fb6cf71a2bae730169a99e41a9b801676f7f2313"
+    },
+    {
+      "path": "docs/decisions/0011-inference-performance-classes.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "15776641d55ac04cfcdca689571da8e436972a0c"
+    },
+    {
+      "path": "docs/decisions/0012-memory-and-expert-first-slices.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a2861a839681b8e0a959ab95380ab3fd409c0afe"
+    },
+    {
+      "path": "docs/decisions/0013-conversational-agent-learning-and-voice-sequence.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "da0f50eec07166eccc5a9af354e840514b994d4f"
+    },
+    {
+      "path": "docs/decisions/0014-s4-connected-agent-sources.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "21f5178cc1de10fd6e148a65f6da010b7eeecb08"
+    },
+    {
+      "path": "docs/decisions/0015-s4-privacy-aware-inference.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fefc3023377b298cacb69625748c181fa666a4c2"
+    },
+    {
+      "path": "docs/decisions/0016-native-agent-model-protocol.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2eaa9fd429a6b3052b4d4bcf5b5af820e643910f"
+    },
+    {
+      "path": "docs/decisions/0017-agent-context-assembly.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5dc2c9213501e1a7217b6d7e32816515a7dfece3"
+    },
+    {
+      "path": "docs/decisions/0018-manager-expert-a2a-delegation.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "be1ae7cfa82332088358681817906d35c403e2a6"
+    },
+    {
+      "path": "docs/decisions/0019-governed-memory-and-playbook-learning.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e70c9f71e9a70abdac01a8b493047973b613d5f1"
+    },
+    {
+      "path": "docs/decisions/0020-ambient-assistant-expert-connector-model.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f2e27a0cfa030c28b42845c0759c176e61f5aece"
+    },
+    {
+      "path": "docs/decisions/0021-s5-5-connected-domain-expansion.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "028e2828b97473c6bb0e1937a5d4e33ca4912843"
+    },
+    {
+      "path": "docs/decisions/0022-generalizable-agent-guidance.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2ae8ab041662c038b5103eb57bcbb8e6e952fa93"
+    },
+    {
+      "path": "docs/decisions/0023-page-independent-assistant-conversation.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c07a1253fc65eb58d06a6041eec842e426f1b212"
+    },
+    {
+      "path": "docs/decisions/0024-device-context-collection-and-convergence.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9f9a08e81fe79b5630ab62e0f1bb5a9ecfded9aa"
+    },
+    {
+      "path": "docs/decisions/0025-person-owned-connections.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a2e29e3723b527de4844f5edd711783a4f54022c"
+    },
+    {
+      "path": "docs/decisions/0026-server-owned-provider-oauth.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "69a268fe413f0005ca8b352b22c8c010b6cd8a13"
+    },
+    {
+      "path": "docs/decisions/0027-connection-authority-and-observation.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6b21b65996e137db627e9832b347b6da0a11bf7c"
+    },
+    {
+      "path": "docs/decisions/0028-pairing-integrated-authority-and-connection-permissions.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9995cb6a07d713e05aa1a4bb5339b9fdfabd7ab0"
+    },
+    {
+      "path": "docs/decisions/0029-pre-stable-architecture-convergence.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8e9287f0acbfdd932aa37d730b768db92774ffc1"
+    },
+    {
+      "path": "docs/decisions/0030-durable-interaction-and-linked-resume.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "eed0b940f33eb7cb66da888a7b29ca388c1ad07e"
+    },
+    {
+      "path": "docs/decisions/0031-connection-owned-source-scope-and-logical-observe.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "268f2f5be2ac429d2d7e0e07a1e409c2864cff40"
+    },
+    {
+      "path": "docs/decisions/0032-retire-dedicated-feasibility-vertical.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ddc1a990fea8f9765a167f0f6f6b2a144f1f900f"
+    },
+    {
+      "path": "docs/decisions/0033-run-scoped-agent-environment-and-grounded-manager.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d4685c4e9d5280e872fb09003e9c0899d2b260b4"
+    },
+    {
+      "path": "docs/decisions/0034-gateway-reasoning-and-source-processing-authority.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "37842fbf071bcb236ceeb5f6d2a6f2abf626e5a1"
+    },
+    {
+      "path": "docs/decisions/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a2fe8ea1e63929a05aa1273ed98f5b9ac37cbbaa"
+    },
+    {
+      "path": "docs/deployment/oauth-configuration.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "927d7a0391af156e44356f54673f17818305be2d"
+    },
+    {
+      "path": "docs/design/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "88d4450e3d823938229a1a67ac3032eaaa9674b0"
+    },
+    {
+      "path": "docs/design/accessibility-and-motion.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "77d98ae23cdc417bd774dbc5ad9cb0365e09d1a5"
+    },
+    {
+      "path": "docs/design/assistant-and-interventions.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f60d8b072c7c5c8dbc2b19634ab9e0a060468ca6"
+    },
+    {
+      "path": "docs/design/calendar-event-layout.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b0ff4906ba7dd82d624a7b10edafcdf952d339b9"
+    },
+    {
+      "path": "docs/design/components.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e30125e2d348423fc9fbd6e02f3614801d3ff014"
+    },
+    {
+      "path": "docs/design/foundations.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "51427c274358c9e2c0e7297b1bf0bf0f98e111f3"
+    },
+    {
+      "path": "docs/design/reference-analysis.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bd58e9b376c72d81fec4c410764ae31b8987fd62"
+    },
+    {
+      "path": "docs/design/renders/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c86680aa5d5024fedbb219f9f55e2a5aa2404d9b"
+    },
+    {
+      "path": "docs/design/renders/assistant-confirmation.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3e70263dbf705d40c26e761f91e692693f43fe3e"
+    },
+    {
+      "path": "docs/design/renders/day-canvas.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ca81a9503c37b53d0cced038920608f774126caa"
+    },
+    {
+      "path": "docs/design/renders/notes.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "71fcf49204d6a154527c8ea681ba4c87210cd57d"
+    },
+    {
+      "path": "docs/design/renders/task-detail.png",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0421f773618b70f8c2427d9b6df7450c868adb19"
+    },
+    {
+      "path": "docs/design/s1-calendar-ui.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "864e20e44a29fc1d9b70a9c60e467b93aa67c78f"
+    },
+    {
+      "path": "docs/design/s3-calendar-action-ui.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a446df259f987f6db89e85d909094dbe955b81d0"
+    },
+    {
+      "path": "docs/design/screens/application-shell.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9c5dcb3c72ef0059a07f3f4c5e7c2734b52c4bba"
+    },
+    {
+      "path": "docs/design/screens/day-canvas.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3ffb730f930dc585a2318f79dc94b1e3e762f72d"
+    },
+    {
+      "path": "docs/design/screens/notes.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "767ca1cb7872b4a89f4cecbfb91f2449058439ff"
+    },
+    {
+      "path": "docs/design/screens/task-detail.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5965760a57126dd33a10a8d2de7029a0adfd95d4"
+    },
+    {
+      "path": "docs/design/selection-controls.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "016949f0b28a43f6e6ba4c417c56a881ed95c017"
+    },
+    {
+      "path": "docs/development/agent-debugging.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f072033ae1b4c6983630de952cb41daa51af3458"
+    },
+    {
+      "path": "docs/development/architecture-evolution.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "adf74be6b633307a2ba9a53a60f7808769159dd1"
+    },
+    {
+      "path": "docs/development/debug-cli.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b620604915605717801269b0cde259d4f365df8e"
+    },
+    {
+      "path": "docs/development/plans/agent-execution-environment-grounding.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b19bd9a2232d4793ad9adda8b27b1d144cbc0743"
+    },
+    {
+      "path": "docs/development/plans/reasoning-source-processing-convergence.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0e821db565a39b30c3b8adf16a8803f7cf0cdeb9"
+    },
+    {
+      "path": "docs/development/plans/reasoning-source-processing-convergence/02-health-privacy-transform-contract.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3d9b3f4f312251f4f979095e88143766957b95da"
+    },
+    {
+      "path": "docs/development/test-performance.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "51b7dae93fabbebdc654ace62194cf28a5b05aea"
+    },
+    {
+      "path": "docs/plans/s1-g1-command-sheet.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "db691d5b0dc2dd04a0c5dc5ec0088ce3187c8a61"
+    },
+    {
+      "path": "docs/product/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c7c64abe1426bbfac26519f05a52aa1aab407fc3"
+    },
+    {
+      "path": "docs/product/domains.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6d42a640cc7c2b3feba44a931dfbf42e6f458fd1"
+    },
+    {
+      "path": "docs/product/experience.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4ee0f0fb889a1dd489fdcfdd26125aa821a7745e"
+    },
+    {
+      "path": "docs/product/integrations-and-privacy.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "09e35c7fbcf0e831b04cc86e2c77d81b84052692"
+    },
+    {
+      "path": "docs/product/intelligence.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4f5fc30d316e989f26bf9e9ae8eda2465a0adbf9"
+    },
+    {
+      "path": "docs/product/principles.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a48f084392d0bab91806ff39421a961d7d68844d"
+    },
+    {
+      "path": "docs/product/roadmap.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7645bbbc03f2be4a6b7dae114b45cb554056c154"
+    },
+    {
+      "path": "fixtures/expert-report/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ad483a2e18a52c4196927b1705a1dfe3ce7258b1"
+    },
+    {
+      "path": "fixtures/expert-report/delegation-v1.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bdeb028e8e5f23886f6e88afcd8cb282bbfea4da"
+    },
+    {
+      "path": "fixtures/manager-guidance/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bdfda4456150703239f48dad1154db22f92e04a8"
+    },
+    {
+      "path": "fixtures/manager-guidance/corpus.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6eabda663771bca6a13c387449413036f872970b"
+    },
+    {
+      "path": "fixtures/remote-authorization/producer-v1.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5c13b8024b9b6bf7594ab8bc436556bb1ad4666f"
+    },
+    {
+      "path": "fixtures/remote-authorization/v1.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f81ff1958ab5c2374f7b260b26c6f1ea0cad4c98"
+    },
+    {
+      "path": "scripts/floe-cli.sh",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "29ee1eec3c58d1af21ba6f5205e125b67a4729dc"
+    },
+    {
+      "path": "scripts/reset-local-data.sh",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "dbc3ab73a67bc3460ebb875514912cbda1caf250"
+    },
+    {
+      "path": "scripts/run-agent-debug.sh",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "b37d5fd59fcff38a4b2b4886af982c5c88fc989f"
+    },
+    {
+      "path": "scripts/run-local.sh",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "1e0faf7be0a2bd9a62ea82560a1c68bae8d9d831"
+    },
+    {
+      "path": "server/.env.example",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "19893e628bb4b129064c8c64d8d1e63193947d3d"
+    },
+    {
+      "path": "server/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "21e73023a4ed542f2492d4e82046b8f9ddfe9c02"
+    },
+    {
+      "path": "server/cmd/floe-server/main.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d05aec9254c72d868a645eaf4df9ee2e537e8461"
+    },
+    {
+      "path": "server/config.example.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9adcbf5a664f4b0204110ce36f890fc5b4be1a08"
+    },
+    {
+      "path": "server/go.mod",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c8c13182f4454f6d43dcf49636763269d80c8ef2"
+    },
+    {
+      "path": "server/internal/authority/admissions.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "34f86e64c0800b8a91643093e2af2d8bea852124"
+    },
+    {
+      "path": "server/internal/authority/authorization.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7031d8302f4b5ef2f45bb265c0b96fcaac28b552"
+    },
+    {
+      "path": "server/internal/authority/ports.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4710f687ab50666231933f3a0e18dcae42265df7"
+    },
+    {
+      "path": "server/internal/authority/source_authority.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ff815975590d824c0ce12f816b83eeec03710c9b"
+    },
+    {
+      "path": "server/internal/authority/source_service.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "647a8fcaa1753a3a79d838c4d23c090175e5c3fe"
+    },
+    {
+      "path": "server/internal/connections/connectors.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "78dc5955cc2d0e703c6fd8d2fba209851bec00be"
+    },
+    {
+      "path": "server/internal/connections/listing.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e6e03a6aa05148719436f9c44ad1be18d2d69a85"
+    },
+    {
+      "path": "server/internal/connections/ports.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "68a3dfa192cbff218d81eb9fa494139ca9a74f10"
+    },
+    {
+      "path": "server/internal/connections/requests.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d0496d8dbfffab5c83070b820d0e28ec1c7ef26f"
+    },
+    {
+      "path": "server/internal/connectors/github/client.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "52607bb626f0103cce3e89e5a5c897fdb1ca81c7"
+    },
+    {
+      "path": "server/internal/connectors/github/contract.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "88d148ca5782796f9ebaf00fabad95120768d037"
+    },
+    {
+      "path": "server/internal/connectors/github/service.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6bf72787382c4959b95b3be2941ea6e487c9c8da"
+    },
+    {
+      "path": "server/internal/connectors/github/testdata/ready_snapshot.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "12c71cb9e19a3c7bef03d74a4e3d0a11b2b1e254"
+    },
+    {
+      "path": "server/internal/connectors/github/testdata/work_context.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d9554923c63069d93e4bc968093e8bfe8d95a93d"
+    },
+    {
+      "path": "server/internal/connectors/gmail/client.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "998293cc13d0afdb508a335a9bc1554419e829d3"
+    },
+    {
+      "path": "server/internal/connectors/gmail/contract.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "16ac5e7a695c6c14df02c9c848262734a7194c1e"
+    },
+    {
+      "path": "server/internal/connectors/gmail/index.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e4fc39f35f20bf2921c0a0444b7ed1b85f68e986"
+    },
+    {
+      "path": "server/internal/connectors/gmail/reader.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "223a5cda576e98857f17118b8378938b92880dda"
+    },
+    {
+      "path": "server/internal/connectors/gmail/service.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "953876f2d726bf322cb3c47c7a93abfb0676eb80"
+    },
+    {
+      "path": "server/internal/connectors/gmail/sync.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "84f3bd8040e753ce9fc1e6c74b917f07cbe7033f"
+    },
+    {
+      "path": "server/internal/connectors/gmail/testdata/communication_view.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "905abbf34ce9ab3831f6add823551b8b9a331c6f"
+    },
+    {
+      "path": "server/internal/connectors/gmail/testdata/logistics_view.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0eace0368563b217a46122581acae5bafb635553"
+    },
+    {
+      "path": "server/internal/connectors/gmail/testdata/ready_snapshot.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "236742d2c2fe12709f3ce0716ea33690fd4e1e15"
+    },
+    {
+      "path": "server/internal/connectors/googleauth/identity.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5a54d73d40558c49e8775f6ba642129c9d8edcfe"
+    },
+    {
+      "path": "server/internal/connectors/googleauth/runtime.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4cc72ddc5a2eb8da39c3ea6b1ac464384c62ff62"
+    },
+    {
+      "path": "server/internal/connectors/googlecalendar/client.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8823c00fd73f63f5109217548e9c2242472d622a"
+    },
+    {
+      "path": "server/internal/connectors/googlecalendar/contract.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "374d1c89e675bdd1cd6922f0bff506fb3853a2d9"
+    },
+    {
+      "path": "server/internal/connectors/googlecalendar/service.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a2f6967750a1016c839929549dcb14f2cf15d915"
+    },
+    {
+      "path": "server/internal/connectors/googlecalendar/testdata/calendar_view.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "001e620332da4bab4628d3f6b874018193a28e24"
+    },
+    {
+      "path": "server/internal/connectors/googlecalendar/testdata/ready_snapshot.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cf31c590c08530741c47c75cda45469b0099adbe"
+    },
+    {
+      "path": "server/internal/connectors/googledrive/client.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "88dad687ea56abd98e54783650faaca6a8e484bb"
+    },
+    {
+      "path": "server/internal/connectors/googledrive/contract.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ce6cdda69da3f4ccb3872b711a6c0a4a986ecbe8"
+    },
+    {
+      "path": "server/internal/connectors/googledrive/service.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "67ad1319988409102ba6589afface546e65a8f6f"
+    },
+    {
+      "path": "server/internal/connectors/googledrive/testdata/ready_snapshot.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a83f621f6a40d9042d9da35b339681ce21813915"
+    },
+    {
+      "path": "server/internal/connectors/googledrive/testdata/work_context.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f589f3f3e2b046cb49fc109ded4825dd308e8e7d"
+    },
+    {
+      "path": "server/internal/connectors/homeassistant/client.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "15428eccdd2386f907ab4c93928dd94d51b6a5b5"
+    },
+    {
+      "path": "server/internal/connectors/homeassistant/contract.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1ccaf0efd6aed3914795137290a523ae23ce905f"
+    },
+    {
+      "path": "server/internal/connectors/homeassistant/service.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5cf844360740da25190fea09e15b385c23d99b0c"
+    },
+    {
+      "path": "server/internal/connectors/homeassistant/testdata/logistics_view.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f3a228a382edb129869492ec074029c3357ae0de"
+    },
+    {
+      "path": "server/internal/connectors/homeassistant/testdata/ready_snapshot.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ffe9a1215d955042147378ae5137981b0f1be1cd"
+    },
+    {
+      "path": "server/internal/connectors/lifecycle/reader.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fb1d328040548aebee86d372643989ae12832e1f"
+    },
+    {
+      "path": "server/internal/connectors/lifecycle/setup.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "755db3b0bb8bcc7675d466f83b8b64939b472dbd"
+    },
+    {
+      "path": "server/internal/connectors/microsoftauth/identity.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "287684bf7758e2373301fa00dfb5ed36d60d762e"
+    },
+    {
+      "path": "server/internal/connectors/microsoftauth/runtime.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "91de3b090f7fd198e8c7f6fedce166ac337e6b31"
+    },
+    {
+      "path": "server/internal/connectors/microsoftcalendar/client.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c404be59993061c8e1caec819529401bc41fe250"
+    },
+    {
+      "path": "server/internal/connectors/microsoftcalendar/contract.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "715b857bbc5b46426c46960b9dfa631c11661214"
+    },
+    {
+      "path": "server/internal/connectors/microsoftcalendar/service.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4ee38ef3bc901b1c6e38bb7aa69c5f2f4655ce7b"
+    },
+    {
+      "path": "server/internal/connectors/microsoftcalendar/testdata/calendar_view.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0ab56d05aeecd91fafd1429ca5c81b8a3f19d003"
+    },
+    {
+      "path": "server/internal/connectors/microsoftcalendar/testdata/ready_snapshot.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fcdfca228155bad83f75c3d6d70c57cf65ef6e91"
+    },
+    {
+      "path": "server/internal/connectors/microsoftmail/client.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7060720f3156595bf3ba35ee917fbfcf01d3e1be"
+    },
+    {
+      "path": "server/internal/connectors/microsoftmail/contract.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4216a54e395b547b8b994392e6213762a7cafd43"
+    },
+    {
+      "path": "server/internal/connectors/microsoftmail/service.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0ae1286b0ac27222898d253a58c4e74a5cc8febb"
+    },
+    {
+      "path": "server/internal/connectors/microsoftmail/testdata/communication_view.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "44db84daa816e4ef03cc8ef5fde711f8c2ae3d48"
+    },
+    {
+      "path": "server/internal/connectors/microsoftmail/testdata/ready_snapshot.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f39f59ee2ae7907f57ab04fe86dfcfe5a3d2f235"
+    },
+    {
+      "path": "server/internal/connectors/microsoftteams/client.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "274b37b0d018c2d365420168c30be0501f4dec3c"
+    },
+    {
+      "path": "server/internal/connectors/microsoftteams/contract.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c616b757eac33313b505001d8c6a673bc816e38f"
+    },
+    {
+      "path": "server/internal/connectors/microsoftteams/service.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "abfd4d33d89cfb149792d87700627dddc521a505"
+    },
+    {
+      "path": "server/internal/connectors/microsoftteams/testdata/ready_snapshot.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "eb497eaee774627d092acdbe0ff0fbd3884bc7fc"
+    },
+    {
+      "path": "server/internal/connectors/microsoftteams/testdata/work_context.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "08fbf4a5b91eb55c9a890cab305a695547dfab92"
+    },
+    {
+      "path": "server/internal/connectors/slack/client.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cac4c30bcd15b6b05e1738085f5becdb0a655693"
+    },
+    {
+      "path": "server/internal/connectors/slack/contract.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "eb6c71d3145f43e698213f0ac660596d6a01aaec"
+    },
+    {
+      "path": "server/internal/connectors/slack/service.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "97befaebab204341a899dd0c3eab1d2e44b69bda"
+    },
+    {
+      "path": "server/internal/connectors/slack/testdata/ready_snapshot.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c6786aab0571619db9c4bc8cb366debcaa77e564"
+    },
+    {
+      "path": "server/internal/connectors/slack/testdata/work_context.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "80d329768c2ae875eaac8f0a22c1f6305bdf119a"
+    },
+    {
+      "path": "server/internal/connectors/workoauth/runtime.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5fc91288bb20188c1edbce09cb0cf6d803991dea"
+    },
+    {
+      "path": "server/internal/credentials/keychain_darwin.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bddf01fada32733122de3710e254a03f68916311"
+    },
+    {
+      "path": "server/internal/credentials/keychain_other.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7571b7fd13a45f9001bf03ef141eb8c97be71e85"
+    },
+    {
+      "path": "server/internal/credentials/scope.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "966181a0f8fcdaa810183ff8d36e954fbcea6f22"
+    },
+    {
+      "path": "server/internal/credentials/store.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2b175c81752e92528c8283b71de527935fe6fd89"
+    },
+    {
+      "path": "server/internal/envfile/envfile.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "960ee9119c36746bff95d51943b355bec226590f"
+    },
+    {
+      "path": "server/internal/inference/audit.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c2c6507f8c96c8758855b8ffe8364c1eb9738d77"
+    },
+    {
+      "path": "server/internal/inference/codex/agent.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0335643ef16148908a579bec26a38379bbd0b75b"
+    },
+    {
+      "path": "server/internal/inference/codex/runtime.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fe7314735401284120194e0d36f288636535c695"
+    },
+    {
+      "path": "server/internal/inference/config.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2ac839e6b57684128454f34cafe63bd65b96463c"
+    },
+    {
+      "path": "server/internal/inference/contracts.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3cb47750e6d71f19b75732ee8cece431c16e93e2"
+    },
+    {
+      "path": "server/internal/inference/ports.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0bf4a45e629aaa191241c5571a2d9a2eebd33783"
+    },
+    {
+      "path": "server/internal/inference/probe.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f4528a32fcec546e093980d64f0a0230e15cf36b"
+    },
+    {
+      "path": "server/internal/inference/providers/agent.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e5fbd76da841e7a84e6e382d93de1b262c34e513"
+    },
+    {
+      "path": "server/internal/inference/providers/config.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cf481766fc312b1ce6844d0810a681c4ca20a44e"
+    },
+    {
+      "path": "server/internal/inference/providers/provider.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0da0f42539bb5bd9e87cfaed9b447c06616853fd"
+    },
+    {
+      "path": "server/internal/inference/purpose_model.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "969c8ac695194526250cb0bdebb791555926ea43"
+    },
+    {
+      "path": "server/internal/inference/service.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "814c9642b3486614e2e80f202273cf8f6465421c"
+    },
+    {
+      "path": "server/internal/inference/validation.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1a0d1e503a17b75b8090d347127090d10c9c6b22"
+    },
+    {
+      "path": "server/internal/integrations/hosted.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "803def8b3f120d5ea974c2b022adf3bc25386e81"
+    },
+    {
+      "path": "server/internal/integrations/ports.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "78c576d61421abb1f907223a82860980e8d88d2e"
+    },
+    {
+      "path": "server/internal/integrations/resolver.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cc93123e5451d101d73dad5395f1764569f38aa8"
+    },
+    {
+      "path": "server/internal/integrations/service.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "faa14a1db0b06456aac57b66f14919794be99c24"
+    },
+    {
+      "path": "server/internal/integrations/snapshot.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "26aaf668d2028674354c1b3e30a0ca4cd8543bef"
+    },
+    {
+      "path": "server/internal/integrations/sources.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "db1bb9e8d06c6a196b38e4ac70b4274b67ef8e9b"
+    },
+    {
+      "path": "server/internal/integrations/state.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "25078c1749f50b192afd65a79cad1a0b9d212d36"
+    },
+    {
+      "path": "server/internal/node/bootstrap.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7fbf5159e20709e9e3f157eeb04bd1bcdae35b8b"
+    },
+    {
+      "path": "server/internal/node/console.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "78ed589a3603e148c732b2d1daabf798018ab0f5"
+    },
+    {
+      "path": "server/internal/node/http.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "088922f70eec8389dd08857fa2dd4cedb2f0d825"
+    },
+    {
+      "path": "server/internal/node/integration_factories.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d72619c8be77dad8f213e8caf757badc7698a984"
+    },
+    {
+      "path": "server/internal/node/management.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a963985f910c5d71ed4b3a734b3c6f4cd6e79218"
+    },
+    {
+      "path": "server/internal/node/provider_profile.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "858b7ce154364bda45d363e4bf6851bdc17702ec"
+    },
+    {
+      "path": "server/internal/node/state.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "457408c614677ed318ed72aabe94e45301f82818"
+    },
+    {
+      "path": "server/internal/node/test_target.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "624f2e471653e99c48a7e7f58fcd28799a0ed911"
+    },
+    {
+      "path": "server/internal/operation/result.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "81fef8be0e8cfb216a3868d71f3b11fb32a9b293"
+    },
+    {
+      "path": "server/internal/pairing/pairing.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1718a776b22c3e47235d08b45aa9eb5164682478"
+    },
+    {
+      "path": "server/internal/pairing/receipts.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8a751799bc890761813bd1c1243553c4e21fd8a8"
+    },
+    {
+      "path": "server/internal/pairing/state.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "72e86e6ef98f3e575d55509eb59118a09f31ee77"
+    },
+    {
+      "path": "server/internal/storage/private.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "753473d1f8dc09a94ec9dbff5c4554a972be3cba"
+    },
+    {
+      "path": "server/internal/transport/http/assets.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b7dfcdb0d4cc4900f739d7606133963e5a0df730"
+    },
+    {
+      "path": "server/internal/transport/http/authority.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d483cc98da7bae720662fcc8034db716ed0b3812"
+    },
+    {
+      "path": "server/internal/transport/http/connectors.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fcdff5c628de2d30dacfce0045f564366a206953"
+    },
+    {
+      "path": "server/internal/transport/http/console.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "45e81ff47903ed8a998555d3ac8f4f8cf7c65881"
+    },
+    {
+      "path": "server/internal/transport/http/hosted_setup.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "07e48f0a8fda2e5bcf1a204281b4170fe6948bd3"
+    },
+    {
+      "path": "server/internal/transport/http/inference.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e7bd986fd1059b7502a243f91b46330feb5ff9ec"
+    },
+    {
+      "path": "server/internal/transport/http/inference_dto.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c0e359e20db81d23d8a6cd45e8ce5c0d687795fe"
+    },
+    {
+      "path": "server/internal/transport/http/source.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0898d0fc1d8c500161805bda5aad7faf407a3a31"
+    },
+    {
+      "path": "server/internal/transport/http/source_decode.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dad4eba3ba43b9bfdb1ff208b86b28e70c17abc4"
+    },
+    {
+      "path": "server/internal/transport/http/web/app.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "266311cd6a263fbf27b681207dd096c53e90e2af"
+    },
+    {
+      "path": "server/internal/transport/http/web/index.html",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b66b2d601aeaed9e49b98e63b39908939f2719ed"
+    },
+    {
+      "path": "server/internal/transport/http/web/style.css",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5490b2482958aaec4ac692975ed155ad08521fa4"
+    },
+    {
+      "path": "server/internal/trust/operator.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ff1f44b1f4dd0d368e48525bdb8b0a40f73bf6e9"
+    },
+    {
+      "path": "server/internal/trust/producer_identity.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4598ac1e417b9ff0afdf6acc88b37f56595c8120"
+    },
+    {
+      "path": "server/internal/trust/proof.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b5fe0d1367a576fc4c6e055d5aa43eb06f0ed44f"
+    },
+    {
+      "path": "server/internal/trust/service.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "afee826e91d72a61728ca192c33930bf99ccb0b0"
+    },
+    {
+      "path": "server/internal/views/calendar.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "49ffb8d2a6cd469e57c8e34789a091d09d0f0818"
+    },
+    {
+      "path": "server/internal/views/calendar_pager.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9446962673b48ce07a1c975eb64824d82bc8e7a7"
+    },
+    {
+      "path": "server/internal/views/communication.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "eb350674c3f55bce33e4abb751813435700265fd"
+    },
+    {
+      "path": "server/internal/views/contracts.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "19cd42f49ed01d00585ec229a11094f2a6faf65c"
+    },
+    {
+      "path": "server/internal/views/descriptor.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fbf9be62480388bcbcc14df8d214c278f495fc00"
+    },
+    {
+      "path": "server/internal/views/logistics.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7891075212cb50ffb2fc84eb515dd23eba837001"
+    },
+    {
+      "path": "server/internal/views/work.go",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0f157b50fead708c7ecc2440c5c109550801b9b9"
+    },
+    {
+      "path": "tools/architecture/.gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c18dd8d83ceed1806b50b0aaa46beb7e335fff13"
+    },
+    {
+      "path": "tools/architecture/check_boundaries.py",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "874326e75a763a84d5e497b7749f5c7a6c7608b2"
+    },
+    {
+      "path": "tools/architecture/module-dependencies.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5b19bf2ef90c9221bf0d2291330518c8b2030d22"
+    },
+    {
+      "path": "tools/cli/Info.plist",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "19caab412c6c9cd000eaf0627db481a58f1e9a77"
+    },
+    {
+      "path": "tools/validation/.gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c18dd8d83ceed1806b50b0aaa46beb7e335fff13"
+    },
+    {
+      "path": "tools/validation/calendar/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4d4ff9e081947d7dd012d3780e5b0c27713c6147"
+    },
+    {
+      "path": "tools/validation/calendar/core-check.c",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bdf2a60c86241bea9fe71e11eedb479225c56ded"
+    },
+    {
+      "path": "tools/validation/calendar/inspect.swift",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3618b7eef1e14eb149af340f4c9b2cc645aede55"
+    },
+    {
+      "path": "tools/validation/local-model-smoke-Info.plist",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "818474a49b0716e5549c463b8377697e60e0402b"
+    },
+    {
+      "path": "tools/validation/run-local-model-smoke.sh",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "0e2077546da5cdce54c9640c77511cc430e29ff0"
+    },
+    {
+      "path": "tools/validation/run-vault-keyring-smoke.sh",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "1fd1a02a7c6be4a92e94315eae905dcff4a0d74f"
+    },
+    {
+      "path": "tools/validation/vault-smoke-Info.plist",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
+    }
+  ],
+  "verification": "G1 not run; format/production compile/typecheck only; no tests/application packaging/live probes"
+}

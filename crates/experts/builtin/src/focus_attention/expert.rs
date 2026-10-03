@@ -6,7 +6,7 @@ use uuid::Uuid;
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
 use floe_agent_contract::InferencePolicyDecision;
-use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
+use floe_agent_contract::{ExpertModel};
 use floe_context_contract::{
     AttentionView, CalendarContextView, WorkContextView, personal_context_evidence,
     validate_attention_view, validate_work_context_view, work_context_evidence,
@@ -90,7 +90,6 @@ pub async fn run_focus_expert_with_views<Model: ExpertModel>(
     let output: FocusOutput = match run_personal_model(
         model,
         policy,
-        ExpertModelRequirement::DeviceOnly,
         &invocation,
         evidence,
         focus_expert_prompt(),

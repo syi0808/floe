@@ -12,7 +12,7 @@ Future<Map<String, dynamic>> ownerCommand(
   Map<String, Object?> command,
 ) => transport.commandV2({
   'schema_version': appWireProtocolVersion,
-  'request_id': operationId,
+  'request_id': newAgentRequestId(),
   'command_id': operationId,
   'command': command,
 });
@@ -78,11 +78,12 @@ final class OwnerOperationObserver {
       _pending = pending;
       return await _finish(pending) as T;
     } on NativeTransportException catch (error) {
-      throw AgentVaultException(
+      throw AgentVaultException.fromAppWire(
         error.metadata['agent_failure'] ?? error.code,
         requestId: _pending?.correlation.id,
         stage: stage,
         metadata: error.metadata,
+        ownerFailure: error.ownerFailure,
       );
     } finally {
       _observing = false;
@@ -92,10 +93,11 @@ final class OwnerOperationObserver {
   Future<Object?> _finish(_PendingOwnerOperation pending) async {
     if (!pending.decoded) {
       final elapsed = Stopwatch()..start();
-      var result = pending.started
+      final wasStarted = pending.started;
+      pending.started = true;
+      var result = wasStarted
           ? await pending.read(pending.correlation.id, false)
           : await pending.start(pending.correlation.id);
-      pending.started = true;
       while (true) {
         if (result['kind'] != pending.resultKind) {
           throw const FormatException('Invalid owner result kind');
@@ -339,11 +341,6 @@ _OwnerFailureEnvelope _failureEnvelope(Object? raw, _OwnerCorrelation job) {
     throw const FormatException('Invalid vault failure retry policy');
   }
   final retryable = value['retryable']! as bool;
-  if (retryable != (action == 'retry_read') ||
-      retryable != (retryPolicy != 'never') ||
-      retryable != safeActions.contains('retry')) {
-    throw const FormatException('Invalid vault recovery retry contract');
-  }
   return _OwnerFailureEnvelope(
     domain: value['domain']! as String,
     category: value['category']! as String,

@@ -13,10 +13,10 @@
 //! Decision command identity is a second primary key with the same
 //! replay-or-conflict contract.
 
-use floe_agent_contract::AgentFailure;
+use floe_agent_contract::{AgentFailure, JournalEvent};
 use floe_conversation::{
     ConversationInteraction, DecisionAdmission, ExpireInteraction, ExpireOutcome,
-    InteractionDecision, InteractionResolution, InteractionState, MAX_ACTIVE_INTERACTIONS_PER_RUN,
+    InteractionDecision, InteractionResolutionCommit, InteractionResolutionReceipt, InteractionState, InteractionOrigin, ProjectionReviewRecord, RunRecord, RunState, MAX_ACTIVE_INTERACTIONS_PER_RUN,
     MAX_STORED_INTERACTIONS_PER_RUN, PublishAdmission, SupersedeInteraction,
     next_state_after_decision, state_after_resolution,
 };
@@ -50,16 +50,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if let Some(existing) =
                 read_interaction(&transaction, self.person_id, record.id).await?
             {
-                if existing.requirement_digest != record.requirement_digest
-                    || existing.target_digest != record.target_digest
-                    || existing.origin_run_id != record.origin_run_id
-                    || existing.origin != record.origin
-                {
+                if !super::conversations::same_publication(&existing, &record) {
                     return Err(AgentFailure::VaultUnavailable);
                 }
                 return Ok(PublishAdmission::Existing(existing));
             }
-            self.check_interaction_origin(&transaction, &record).await?;
+            self.check_interaction_origin_on(&transaction, &record, false).await?;
             let stored = count_interactions(&transaction, record.origin_run_id, false).await?;
             if stored >= u64::try_from(MAX_STORED_INTERACTIONS_PER_RUN).unwrap_or(u64::MAX) {
                 return Err(AgentFailure::BudgetExceeded);
@@ -69,6 +65,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 return Err(AgentFailure::BudgetExceeded);
             }
             insert_interaction(&transaction, &record).await?;
+            let run = self.conversation_run_on(&transaction, record.origin_run_id).await?.ok_or(AgentFailure::StorageUnavailable)?;
+            self.enqueue_resume_on(&transaction, &run).await?;
             self.check_access()?;
             Ok(PublishAdmission::Created(record))
         }
@@ -96,25 +94,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if !origin_run_id.is_valid() {
             return Err(AgentFailure::InvalidInput);
         }
-        let connection = self.connection()?;
-        if !table_exists(&connection, "agent_conversation_interactions").await? {
-            self.check_access()?;
-            return Ok(vec![]);
-        }
-        let mut rows = connection
-            .query(
-                "SELECT interaction_id, session_id, person_id, origin_run_id, requirement_digest, target_digest, state, revision, created_at, expires_at, payload FROM agent_conversation_interactions WHERE origin_run_id = ? ORDER BY created_at ASC, interaction_id ASC",
-                [origin_run_id.as_uuid().to_string()],
-            )
-            .await
-            .map_err(storage)?;
-        let mut records = Vec::new();
-        while let Some(row) = rows.next().await.map_err(storage)? {
-            records.push(parse_row(self.person_id, &row).await?);
-        }
-        if records.len() > MAX_STORED_INTERACTIONS_PER_RUN {
-            return Err(AgentFailure::VaultUnavailable);
-        }
+        let records = read_group_on(&self.connection()?, self.person_id, origin_run_id).await?;
         self.check_access()?;
         Ok(records)
     }
@@ -146,6 +126,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         .ok_or(AgentFailure::VaultUnavailable)?;
                 return Ok(DecisionAdmission::Rejoined(current));
             }
+            if super::conversations::command_identity_used(&transaction, decision.command_id).await? { return Err(AgentFailure::Conflict); }
             let current = read_interaction(&transaction, self.person_id, decision.interaction_id)
                 .await?
                 .ok_or(AgentFailure::NotFound)?;
@@ -168,6 +149,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .map_err(|_| AgentFailure::VaultUnavailable)?;
             insert_decision(&transaction, &decision).await?;
             update_interaction(&transaction, &updated, updated.revision - 1).await?;
+            let run = self.conversation_run_on(&transaction, updated.origin_run_id).await?.ok_or(AgentFailure::StorageUnavailable)?;
+            self.enqueue_resume_on(&transaction, &run).await?;
             self.check_access()?;
             Ok(DecisionAdmission::Applied(updated))
         }
@@ -176,59 +159,49 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    pub async fn resolve_conversation_interaction(
-        &self,
-        resolution: InteractionResolution,
-    ) -> Result<ConversationInteraction, AgentFailure> {
-        resolution
-            .validate()
-            .map_err(|_| AgentFailure::InvalidInput)?;
-        if resolution.person_id != self.person_id {
-            return Err(AgentFailure::CapabilityDenied);
-        }
+    pub async fn resolve_conversation_interaction_and_request_resume(
+        &self, commit: InteractionResolutionCommit,
+    ) -> Result<InteractionResolutionReceipt, AgentFailure> {
+        let resolution = &commit.resolution;
+        resolution.validate()?; commit.owner_receipt.validate()?;
+        if resolution.person_id != self.person_id { return Err(AgentFailure::CapabilityDenied); }
         let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(|error| self.registry_transaction_start_error(error))?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).await.map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
             initialize(&transaction).await?;
-            let recorded = read_decision(&transaction, resolution.decision_id)
-                .await?
-                .ok_or(AgentFailure::Conflict)?;
-            if recorded.interaction_id != resolution.interaction_id
-                || resolution.resolved_at_unix_ms < recorded.decided_at_unix_ms
-            {
+            let recorded = read_decision(&transaction, resolution.decision_id).await?.ok_or(AgentFailure::Conflict)?;
+            if recorded.interaction_id != resolution.interaction_id || recorded.target_digest != resolution.target_digest
+                || recorded.principal != self.person_id.to_string() || resolution.resolved_at_unix_ms < recorded.decided_at_unix_ms {
                 return Err(AgentFailure::Conflict);
             }
-            let current = read_interaction(&transaction, self.person_id, resolution.interaction_id)
-                .await?
-                .ok_or(AgentFailure::NotFound)?;
-            if current.revision != resolution.expected_revision {
+            let current = read_interaction(&transaction, self.person_id, resolution.interaction_id).await?.ok_or(AgentFailure::NotFound)?;
+            if current.target_digest != resolution.target_digest { return Err(AgentFailure::Conflict); }
+            let run = self.conversation_run_on(&transaction, current.origin_run_id).await?.ok_or(AgentFailure::StorageUnavailable)?;
+            self.validate_owner_resolution_on(&transaction, &run, &current, &commit).await?;
+            if let InteractionState::Resolved { receipt } = &current.state {
+                if current.revision == resolution.expected_revision.checked_add(1).ok_or(AgentFailure::Conflict)?
+                    && receipt.decision_id == resolution.decision_id && receipt.owner_command_id == resolution.owner_command_id
+                    && receipt.owner_operation_id == resolution.owner_operation_id && receipt.owner_receipt == commit.owner_receipt
+                    && receipt.resolved_at_unix_ms == resolution.resolved_at_unix_ms {
+                    self.enqueue_resume_on(&transaction, &run).await?;
+                    return Ok(receipt.clone());
+                }
                 return Err(AgentFailure::Conflict);
             }
-            let next = state_after_resolution(
-                &current.state,
-                resolution.decision_id,
-                resolution.owner_operation_id,
-                resolution.resolved_at_unix_ms,
-            )?;
+            if current.revision != resolution.expected_revision { return Err(AgentFailure::Conflict); }
+            let next = state_after_resolution(&current.state, resolution, &commit.owner_receipt)?;
+            let InteractionState::Resolved { receipt } = &next else { return Err(AgentFailure::StorageUnavailable); };
+            let receipt = receipt.clone();
             let mut updated = current;
             updated.state = next;
-            updated.revision = updated
-                .revision
-                .checked_add(1)
-                .ok_or(AgentFailure::Conflict)?;
-            updated
-                .validate()
-                .map_err(|_| AgentFailure::VaultUnavailable)?;
-            update_interaction(&transaction, &updated, updated.revision - 1).await?;
+            updated.revision = updated.revision.checked_add(1).ok_or(AgentFailure::Conflict)?;
+            updated.validate()?;
+            update_interaction(&transaction, &updated, resolution.expected_revision).await?;
+            self.enqueue_resume_on(&transaction, &run).await?;
             self.check_access()?;
-            Ok(updated)
-        }
-        .await;
-        self.finish_registry_transaction_checked(transaction, result)
-            .await
+            Ok(receipt)
+        }.await;
+        self.finish_registry_transaction_checked(transaction, result).await
     }
 
     pub async fn supersede_conversation_interaction(
@@ -266,6 +239,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .validate()
                 .map_err(|_| AgentFailure::VaultUnavailable)?;
             update_interaction(&transaction, &updated, updated.revision - 1).await?;
+            let run = self.conversation_run_on(&transaction, updated.origin_run_id).await?.ok_or(AgentFailure::StorageUnavailable)?;
+            self.enqueue_resume_on(&transaction, &run).await?;
             self.check_access()?;
             Ok(updated)
         }
@@ -308,6 +283,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .validate()
                 .map_err(|_| AgentFailure::VaultUnavailable)?;
             update_interaction(&transaction, &updated, updated.revision - 1).await?;
+            let run = self.conversation_run_on(&transaction, updated.origin_run_id).await?.ok_or(AgentFailure::StorageUnavailable)?;
+            self.enqueue_resume_on(&transaction, &run).await?;
             self.check_access()?;
             Ok(ExpireOutcome::Expired(updated))
         }
@@ -316,32 +293,97 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    /// Crash case 5: a Run cancelled before publication leaves no actionable
-    /// orphan card. Unknown runs fail closed; terminal-but-not-cancelled runs
-    /// still publish, since replay may arrive after the origin Run completed.
-    async fn check_interaction_origin(
-        &self,
-        transaction: &Transaction<'_>,
-        record: &ConversationInteraction,
-    ) -> Result<(), AgentFailure> {
-        if !table_exists(transaction, "agent_conversation_runs").await? {
-            return Err(AgentFailure::NotFound);
+    pub(super) async fn check_interaction_origin_on(&self, transaction: &Transaction<'_>, record: &ConversationInteraction, atomic_projection: bool) -> Result<(), AgentFailure> {
+        let run = self.conversation_run_on(transaction, record.origin_run_id).await?.ok_or(AgentFailure::NotFound)?;
+        if run.person_id != self.person_id || run.session_id != record.session_id
+            || run.state != RunState::Working
+            || record.revision != 1 || !matches!(record.state, InteractionState::Pending) { return Err(AgentFailure::Conflict); }
+        let journal = self.conversation_journal_on(transaction, &run).await?;
+        match &record.origin {
+            InteractionOrigin::Projection { run_id, projection_operation_id, target_digest } => {
+                let projection = record.projection.as_ref().ok_or(AgentFailure::Conflict)?;
+                if !atomic_projection || run.state != RunState::Working || *run_id != run.run_id
+                    || *projection_operation_id != projection.review.projection_operation_id || *target_digest != projection.review.target_digest {
+                    return Err(AgentFailure::Conflict);
+                }
+            }
+            InteractionOrigin::Tool { call_id } => {
+                if !journal.iter().any(|entry| matches!(&entry.event, JournalEvent::ToolIntent { call } if call.call_id == *call_id)) { return Err(AgentFailure::Conflict); }
+            }
+            InteractionOrigin::Task { task_id, capability_call_id } => {
+                if !journal.iter().any(|entry| matches!(&entry.event, JournalEvent::DelegationIntent { request } if request.task_id.as_uuid() == *task_id
+                    && request.parent_run_id == Some(run.run_id.as_uuid()) && request.principal == self.person_id.to_string()
+                    && request.execution_context.session_id == run.session_id && request.execution_context.device_id == run.device_id)) {
+                    return Err(AgentFailure::Conflict);
+                }
+                if let Some(call_id) = capability_call_id {
+                    if !journal.iter().any(|entry| matches!(&entry.event, JournalEvent::ToolIntent { call } if call.call_id == *call_id)) { return Err(AgentFailure::Conflict); }
+                }
+            }
         }
-        let run = self
-            .conversation_run_on(transaction, record.origin_run_id)
-            .await?
-            .ok_or(AgentFailure::NotFound)?;
-        if run.person_id != self.person_id
-            || run.session_id != record.session_id
-            || run.command_id.as_uuid().is_nil()
-        {
-            return Err(AgentFailure::Conflict);
-        }
-        if run.state == crate::VaultConversationRunState::Cancelled {
-            return Err(AgentFailure::Conflict);
-        }
+        if let Some(projection) = &record.projection { self.store_projection_review_on(transaction, &run, projection, false).await?; }
         Ok(())
     }
+
+    pub(super) async fn store_projection_review_on(&self, transaction: &Transaction<'_>, run: &RunRecord, projection: &ProjectionReviewRecord, existing_only: bool) -> Result<(), AgentFailure> {
+        projection.validate()?;
+        if projection.run_id != run.run_id || projection.person_id != run.person_id || projection.device_id != run.device_id
+            || projection.session_id != run.session_id || projection.executor_generation != run.executor_generation { return Err(AgentFailure::Conflict); }
+        let id = projection.review.projection_operation_id.to_string();
+        let mut rows = transaction.query("SELECT run_id, person_id, payload FROM agent_conversation_projection_reviews WHERE projection_operation_id = ?", [id.clone()]).await.map_err(storage)?;
+        if let Some(row) = rows.next().await.map_err(storage)? {
+            let payload = row.get::<String>(2).map_err(storage)?;
+            if payload.len() > 128 * 1024 { return Err(AgentFailure::StorageUnavailable); }
+            let stored: ProjectionReviewRecord = serde_json::from_str(&payload).map_err(unavailable)?;
+            stored.validate()?;
+            if stored != *projection || row.get::<String>(0).map_err(storage)? != run.run_id.as_uuid().to_string()
+                || row.get::<String>(1).map_err(storage)? != run.person_id.to_string() || rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::Conflict); }
+            return Ok(());
+        }
+        drop(rows);
+        if existing_only { return Err(AgentFailure::StorageUnavailable); }
+        if projection.access_reviews.len() != projection.review.blockers.blockers().len() { return Err(AgentFailure::Conflict); }
+        for (reference, blocker) in projection.access_reviews.iter().zip(projection.review.blockers.blockers()) {
+            let review = access_review_on(transaction, self.person_id, reference).await?;
+            if review.device_id != run.device_id
+                || blocker.connection_id().is_some_and(|id| id != &review.source.source.connection_id())
+                || blocker.connector_id().is_some_and(|connector| connector != review.source.source.connector()) {
+                return Err(AgentFailure::Conflict);
+            }
+        }
+        let payload = serde_json::to_string(projection).map_err(storage)?;
+        if payload.len() > 128 * 1024 { return Err(AgentFailure::BudgetExceeded); }
+        transaction.execute("INSERT INTO agent_conversation_projection_reviews (projection_operation_id, run_id, person_id, payload) VALUES (?, ?, ?, ?)",
+            (id, run.run_id.as_uuid().to_string(), self.person_id.to_string(), payload)).await.map_err(storage)?;
+        Ok(())
+    }
+
+    async fn validate_owner_resolution_on(&self, transaction: &Transaction<'_>, run: &RunRecord, interaction: &ConversationInteraction, commit: &InteractionResolutionCommit) -> Result<(), AgentFailure> {
+        use floe_conversation::{OwnerResolutionReceipt, ReviewedTarget};
+        if commit.owner_receipt.command_id() != commit.resolution.owner_command_id || commit.owner_receipt.operation_id() != commit.resolution.owner_operation_id { return Err(AgentFailure::Conflict); }
+        match (&interaction.target, &commit.owner_receipt) {
+            (ReviewedTarget::SourceReview(reference), OwnerResolutionReceipt::SourceProcessing { receipt }) => {
+                receipt.validate()?;
+                let review = access_review_on(transaction, self.person_id, reference).await?;
+                if review.device_id != run.device_id || receipt.reservation.source != review.source
+                    || !matches!(&receipt.kind, floe_access::GrantCommitKind::Reviewed { review } if review == reference) {
+                    return Err(AgentFailure::Conflict);
+                }
+                let mut rows = transaction.query("SELECT payload FROM access_grant_operations WHERE operation_id = ? AND person_id = ?",
+                    (receipt.reservation.operation_id.to_string(), self.person_id.to_string())).await.map_err(storage)?;
+                let row = rows.next().await.map_err(storage)?.ok_or(AgentFailure::Conflict)?;
+                let payload = row.get::<String>(0).map_err(storage)?;
+                if payload.len() > 256 * 1024 { return Err(AgentFailure::StorageUnavailable); }
+                let stored: floe_access::GrantOperationReceipt = serde_json::from_str(&payload).map_err(unavailable)?;
+                stored.validate()?;
+                if stored != floe_access::GrantOperationReceipt::Committed(receipt.clone()) || rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::Conflict); }
+                Ok(())
+            }
+            // Binding replacement is wired by its owning S2 slice; a shaped receipt alone is not a commit.
+            _ => Err(AgentFailure::Conflict),
+        }
+    }
+
 }
 
 async fn table_exists(connection: &turso::Connection, table: &str) -> Result<bool, AgentFailure> {
@@ -355,10 +397,10 @@ async fn table_exists(connection: &turso::Connection, table: &str) -> Result<boo
     Ok(rows.next().await.map_err(storage)?.is_some())
 }
 
-async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
+pub(super) async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     let mut tables = transaction
         .query(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('agent_conversation_interaction_schema', 'agent_conversation_interactions', 'agent_conversation_interaction_decisions')",
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('agent_conversation_interaction_schema', 'agent_conversation_interactions', 'agent_conversation_interaction_decisions', 'agent_conversation_interaction_refreshes')",
             (),
         )
         .await
@@ -390,6 +432,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             )
             .await
             .map_err(storage)?;
+        transaction.execute("CREATE TABLE agent_conversation_interaction_refreshes (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, session_id TEXT NOT NULL, interaction_id TEXT NOT NULL REFERENCES agent_conversation_interactions(interaction_id), expected_revision INTEGER NOT NULL CHECK(expected_revision > 0))", ()).await.map_err(storage)?;
         transaction
             .execute(
                 "CREATE INDEX agent_conversation_interactions_run ON agent_conversation_interactions (origin_run_id, state, interaction_id)",
@@ -409,6 +452,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     if found
         != [
             "agent_conversation_interaction_decisions".to_owned(),
+            "agent_conversation_interaction_refreshes".to_owned(),
             "agent_conversation_interaction_schema".to_owned(),
             "agent_conversation_interactions".to_owned(),
         ]
@@ -447,6 +491,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
         )
         .await
         .map_err(storage)?;
+    transaction.query("SELECT command_id, person_id, session_id, interaction_id, expected_revision FROM agent_conversation_interaction_refreshes LIMIT 0", ()).await.map_err(storage)?;
     let mut index = transaction
         .query(
             "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'agent_conversation_interactions_run' AND tbl_name = 'agent_conversation_interactions'",
@@ -462,7 +507,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     Ok(())
 }
 
-async fn read_interaction(
+pub(super) async fn read_interaction(
     connection: &turso::Connection,
     person_id: PersonId,
     interaction_id: Uuid,
@@ -491,8 +536,9 @@ async fn parse_row(
     person_id: PersonId,
     row: &turso::Row,
 ) -> Result<ConversationInteraction, AgentFailure> {
-    let record: ConversationInteraction =
-        serde_json::from_str(&row.get::<String>(10).map_err(storage)?).map_err(unavailable)?;
+    let payload = row.get::<String>(10).map_err(storage)?;
+    if payload.len() > MAX_INTERACTION_PAYLOAD_BYTES { return Err(AgentFailure::StorageUnavailable); }
+    let record: ConversationInteraction = serde_json::from_str(&payload).map_err(unavailable)?;
     record
         .validate()
         .map_err(|_| AgentFailure::VaultUnavailable)?;
@@ -513,7 +559,7 @@ async fn parse_row(
     Ok(record)
 }
 
-async fn count_interactions(
+pub(super) async fn count_interactions(
     transaction: &Transaction<'_>,
     origin_run_id: RunId,
     active_only: bool,
@@ -537,7 +583,7 @@ async fn count_interactions(
     u64::try_from(count).map_err(|_| AgentFailure::VaultUnavailable)
 }
 
-async fn insert_interaction(
+pub(super) async fn insert_interaction(
     transaction: &Transaction<'_>,
     record: &ConversationInteraction,
 ) -> Result<(), AgentFailure> {
@@ -703,5 +749,76 @@ fn parse_digest(value: &str) -> Result<[u8; 32], AgentFailure> {
     Ok(digest)
 }
 
-#[cfg(test)]
-mod tests;
+pub(super) async fn read_group_on(connection: &turso::Connection, person_id: PersonId, origin_run_id: RunId) -> Result<Vec<ConversationInteraction>, AgentFailure> {
+    if !table_exists(connection, "agent_conversation_interactions").await? { return Ok(Vec::new()); }
+    let mut rows = connection.query("SELECT interaction_id, session_id, person_id, origin_run_id, requirement_digest, target_digest, state, revision, created_at, expires_at, payload FROM agent_conversation_interactions WHERE origin_run_id = ? ORDER BY created_at ASC, interaction_id ASC LIMIT 65", [origin_run_id.as_uuid().to_string()]).await.map_err(storage)?;
+    let mut records = Vec::new();
+    while let Some(row) = rows.next().await.map_err(storage)? { records.push(parse_row(person_id, &row).await?); }
+    if records.len() > MAX_STORED_INTERACTIONS_PER_RUN { return Err(AgentFailure::StorageUnavailable); }
+    Ok(records)
+}
+async fn access_review_on(connection: &turso::Connection, person_id: PersonId, reference: &floe_access::ReviewRef) -> Result<floe_access::ConnectionReview, AgentFailure> {
+    let mut rows = connection.query("SELECT payload FROM access_connection_reviews WHERE review_id = ? AND person_id = ?", (reference.id.to_string(), person_id.to_string())).await.map_err(storage)?;
+    let row = rows.next().await.map_err(storage)?.ok_or(AgentFailure::Conflict)?;
+    let payload = row.get::<String>(0).map_err(storage)?;
+    if payload.len() > 256 * 1024 { return Err(AgentFailure::StorageUnavailable); }
+    let review: floe_access::ConnectionReview = serde_json::from_str(&payload).map_err(unavailable)?;
+    review.validate()?;
+    if &review.reference != reference || review.person_id != person_id || rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::Conflict); }
+    Ok(review)
+}
+
+impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub async fn admit_conversation_interaction_refresh(&self, request: floe_conversation::InteractionRefresh) -> Result<ConversationInteraction, AgentFailure> {
+        request.validate()?;
+        if request.person_id != self.person_id { return Err(AgentFailure::CapabilityDenied); }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).await.map_err(|error| self.registry_transaction_start_error(error))?;
+        let result = async {
+            initialize(&transaction).await?;
+            let mut rows = transaction.query("SELECT person_id, session_id, interaction_id, expected_revision FROM agent_conversation_interaction_refreshes WHERE command_id = ?", [request.command_id.to_string()]).await.map_err(storage)?;
+            let replay = if let Some(row) = rows.next().await.map_err(storage)? {
+                if row.get::<String>(0).map_err(storage)? != self.person_id.to_string() || row.get::<String>(1).map_err(storage)? != request.session_id.to_string()
+                    || row.get::<String>(2).map_err(storage)? != request.interaction_id.to_string() || row.get::<i64>(3).map_err(storage)? != integer(request.expected_revision)?
+                    || rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::Conflict); }
+                true
+            } else { false };
+            drop(rows);
+            if !replay && super::conversations::command_identity_used(&transaction, request.command_id).await? { return Err(AgentFailure::Conflict); }
+            let current = read_interaction(&transaction, self.person_id, request.interaction_id).await?.ok_or(AgentFailure::NotFound)?;
+            let session = self.session_on(&transaction, request.session_id).await?;
+            if current.session_id != request.session_id || session.person_id != self.person_id || session.scope.is_some()
+                || session.data_classes != [DataClass::Personal] || (!replay && current.revision != request.expected_revision) { return Err(AgentFailure::Conflict); }
+            if !replay {
+                let mut count = transaction.query("SELECT count(*) FROM agent_conversation_interaction_refreshes WHERE person_id = ?", [self.person_id.to_string()]).await.map_err(storage)?;
+                if count.next().await.map_err(storage)?.ok_or(AgentFailure::StorageUnavailable)?.get::<i64>(0).map_err(storage)? >= 4096 { return Err(AgentFailure::BudgetExceeded); }
+                drop(count);
+                transaction.execute("INSERT INTO agent_conversation_interaction_refreshes (command_id, person_id, session_id, interaction_id, expected_revision) VALUES (?, ?, ?, ?, ?)",
+                    (request.command_id.to_string(), self.person_id.to_string(), request.session_id.to_string(), request.interaction_id.to_string(), integer(request.expected_revision)?)).await.map_err(storage)?;
+            }
+            self.check_access()?;
+            Ok(current)
+        }.await;
+        self.finish_registry_transaction_checked(transaction, result).await
+    }
+}
+
+impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub async fn resolving_conversation_interactions(&self, person_id: PersonId, limit: usize) -> Result<Vec<ConversationInteraction>, AgentFailure> {
+        if person_id != self.person_id { return Err(AgentFailure::CapabilityDenied); }
+        if limit == 0 || limit > 64 { return Err(AgentFailure::InvalidInput); }
+        let connection = self.connection()?;
+        if !table_exists(&connection, "agent_conversation_interactions").await? { self.check_access()?; return Ok(Vec::new()); }
+        let mut rows = connection.query("SELECT interaction_id FROM agent_conversation_interactions WHERE person_id = ? AND state = 'resolving' ORDER BY created_at, interaction_id LIMIT ?", (person_id.to_string(), integer(limit as u64 + 1)?)).await.map_err(storage)?;
+        let mut result = Vec::new();
+        while let Some(row) = rows.next().await.map_err(storage)? {
+            let id = Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
+            let record = read_interaction(&connection, person_id, id).await?.ok_or(AgentFailure::StorageUnavailable)?;
+            if !matches!(record.state, InteractionState::Resolving { .. }) { return Err(AgentFailure::Conflict); }
+            result.push(record);
+            if result.len() > limit { return Err(AgentFailure::BudgetExceeded); }
+        }
+        self.check_access()?;
+        Ok(result)
+    }
+}

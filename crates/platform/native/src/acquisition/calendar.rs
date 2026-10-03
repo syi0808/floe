@@ -10,6 +10,8 @@ use crate::calendar_wire::NativeCalendarBatch;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CalendarAcquisitionMode {
     InspectSubject,
+    InspectCatalog,
+    RequestPermission,
     ReadEvents,
 }
 
@@ -64,6 +66,7 @@ pub struct CalendarAcquisitionResult {
     pub native_subject_fingerprint_before: String,
     pub native_subject_fingerprint_after: String,
     pub available_calendar_ids: Vec<String>,
+    pub available_calendars: Vec<crate::NativeSourceResource>,
     pub permission_class: String,
     pub batches: Vec<NativeCalendarBatch>,
 }
@@ -108,6 +111,18 @@ impl AcquisitionExchange for CalendarExchange {
         if !identity_matches(request, response) {
             // The answer is not to this request; the request keeps waiting.
             return CompletionOutcome::Refuse(AgentFailure::StaleContext);
+        }
+        if request.mode==CalendarAcquisitionMode::RequestPermission {
+            if !request.calendar_ids.is_empty()||!response.batches.is_empty()||!response.available_calendar_ids.is_empty()||!response.available_calendars.is_empty(){return CompletionOutcome::RejectKeepingDeadline(AgentFailure::PolicyDenied)}
+            return CompletionOutcome::Accept;
+        }
+        if response.available_calendars.len()>256
+            || response.available_calendars.iter().any(|resource|resource.handle.is_empty()||resource.handle.len()>512||resource.label.is_empty()||resource.label.len()>256||resource.label.chars().any(char::is_control))
+            || response.available_calendars.iter().map(|resource|&resource.handle).collect::<std::collections::BTreeSet<_>>() != response.available_calendar_ids.iter().collect::<std::collections::BTreeSet<_>>() {
+            return CompletionOutcome::RejectKeepingDeadline(AgentFailure::PolicyDenied);
+        }
+        if response.mode==CalendarAcquisitionMode::InspectCatalog && (!request.calendar_ids.is_empty()||!response.batches.is_empty()) {
+            return CompletionOutcome::RejectKeepingDeadline(AgentFailure::PolicyDenied);
         }
         if response.mode == CalendarAcquisitionMode::ReadEvents
             && request.expected_native_subject_fingerprint.as_deref()

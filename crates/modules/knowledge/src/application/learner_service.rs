@@ -47,7 +47,7 @@ where
             extractor_version: crate::prompts::LEARNER_EXTRACTOR_VERSION,
             prompt_version: crate::prompts::LEARNER_PROMPT_VERSION,
         }
-        .review(job.input.clone(), cancellation)
+        .review(job.input.clone(), job.attempts, cancellation)
         .await;
         let settled_at = Utc::now();
         let settlement = settlement_for_learner_result(

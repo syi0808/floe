@@ -19,7 +19,7 @@ pub fn apple_execution_owner(device_id: &str) -> String {
 /// served by the Person's paired server and re-admitted against it.
 pub fn is_device_local_source(connector: &str) -> bool {
     connector == ATTENTION_CONNECTOR
-        || connector.starts_with("calendar.")
+        || matches!(connector, "calendar.event_kit" | "calendar.android")
         || matches!(
             connector,
             "contacts.apple" | "contacts.android" | "health.apple"

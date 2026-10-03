@@ -1,6 +1,8 @@
 package gmail
 
 import (
+ "floe/server/internal/integrations"
+ "floe/server/internal/views"
 	"encoding/json"
 	"errors"
 	"os"
@@ -10,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"floe/server/internal/connectors/common"
+	
 )
 
 const (
@@ -33,30 +35,10 @@ type indexState struct {
 	HistoryID           string              `json:"history_id,omitempty"`
 	Messages            map[string]Metadata `json:"messages"`
 	LastSuccessAtUnixMS *int64              `json:"last_success_at_unix_ms,omitempty"`
-	LastFailure         *Failure            `json:"last_failure,omitempty"`
+	LastFailure         *integrations.Failure            `json:"last_failure,omitempty"`
 }
 
-type CommunicationItem struct {
-	EvidenceHandle string   `json:"evidence_handle"`
-	ThreadHandle   string   `json:"thread_handle"`
-	ReceivedUnixMS int64    `json:"received_unix_ms"`
-	From           string   `json:"from,omitempty"`
-	To             string   `json:"to,omitempty"`
-	Subject        string   `json:"subject,omitempty"`
-	Snippet        string   `json:"snippet,omitempty"`
-	Labels         []string `json:"labels"`
-}
 
-type CommunicationView struct {
-	SchemaVersion    int                 `json:"schema_version"`
-	ViewID           string              `json:"view_id"`
-	SourceHandle     string              `json:"source_handle"`
-	ObservedAtUnixMS int64               `json:"observed_at_unix_ms"`
-	ExpiresAtUnixMS  int64               `json:"expires_at_unix_ms"`
-	CoverageComplete bool                `json:"coverage_complete"`
-	NextCursor       *int                `json:"next_cursor,omitempty"`
-	Items            []CommunicationItem `json:"items"`
-}
 
 func OpenIndex(directory, connectionID string) (*Index, error) {
 	if !validID(connectionID) {
@@ -143,12 +125,12 @@ func (index *Index) RecordSync(now time.Time, failureKind string) error {
 		if !validFailure(failureKind) {
 			return ErrInvalidInput
 		}
-		next.LastFailure = &Failure{Kind: failureKind, ObservedAtUnixMS: observed}
+		next.LastFailure = &integrations.Failure{Kind: failureKind, ObservedAtUnixMS: observed}
 	}
 	return index.commit(next)
 }
 
-func (index *Index) SyncStatus() (*int64, *Failure, int) {
+func (index *Index) SyncStatus() (*int64, *integrations.Failure, int) {
 	index.mu.Lock()
 	defer index.mu.Unlock()
 	var success *int64
@@ -169,11 +151,11 @@ func (index *Index) Reset() error {
 	return nil
 }
 
-func (index *Index) Communication(query string, cursor, limit int, now time.Time) (CommunicationView, error) {
+func (index *Index) Communication(query string, cursor, limit int, now time.Time) (views.CommunicationView, error) {
 	index.mu.Lock()
 	defer index.mu.Unlock()
 	if len(query) > 512 || cursor < 0 || limit < 1 || limit > MaxPageItems {
-		return CommunicationView{}, ErrInvalidInput
+		return views.CommunicationView{}, ErrInvalidInput
 	}
 	needle := strings.ToLower(strings.TrimSpace(query))
 	matches := make([]Metadata, 0, len(index.state.Messages))
@@ -190,10 +172,10 @@ func (index *Index) Communication(query string, cursor, limit int, now time.Time
 		return matches[left].ReceivedMS > matches[right].ReceivedMS
 	})
 	if cursor > len(matches) {
-		return CommunicationView{}, ErrInvalidInput
+		return views.CommunicationView{}, ErrInvalidInput
 	}
 	end := min(cursor+limit, len(matches))
-	view := CommunicationView{SchemaVersion: 1, ViewID: "mail.communication", ObservedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: now.Add(5 * time.Minute).UnixMilli(), CoverageComplete: end == len(matches), Items: []CommunicationItem{}}
+	view := views.CommunicationView{SchemaVersion: 1, ViewID: "mail.communication", ObservedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: now.Add(5 * time.Minute).UnixMilli(), CoverageComplete: end == len(matches), Items: []views.CommunicationItem{}}
 	view.SourceHandle, _ = SourceHandle(index.connectionID, "communication:"+index.state.HistoryID)
 	if !view.CoverageComplete {
 		next := end
@@ -202,16 +184,16 @@ func (index *Index) Communication(query string, cursor, limit int, now time.Time
 	for _, message := range matches[cursor:end] {
 		evidence, _ := SourceHandle(index.connectionID, "message:"+message.ID)
 		thread, _ := SourceHandle(index.connectionID, "thread:"+message.ThreadID)
-		view.Items = append(view.Items, CommunicationItem{EvidenceHandle: evidence, ThreadHandle: thread, ReceivedUnixMS: message.ReceivedMS, From: message.From, To: message.To, Subject: message.Subject, Snippet: message.Snippet, Labels: append([]string(nil), message.Labels...)})
+		view.Items = append(view.Items, views.CommunicationItem{EvidenceHandle: evidence, ThreadHandle: thread, ReceivedUnixMS: message.ReceivedMS, From: message.From, To: message.To, Subject: message.Subject, Snippet: message.Snippet, Labels: append([]string(nil), message.Labels...)})
 	}
 	encoded, err := json.Marshal(view)
 	if err != nil || len(encoded) > 65_536 {
-		return CommunicationView{}, ErrInvalidResponse
+		return views.CommunicationView{}, ErrInvalidResponse
 	}
 	return view, nil
 }
 
-func (index *Index) Logistics(now time.Time) (common.LogisticsView, error) {
+func (index *Index) Logistics(now time.Time) (views.LogisticsView, error) {
 	index.mu.Lock()
 	defer index.mu.Unlock()
 	matches := make([]Metadata, 0, maxLogisticsItems)
@@ -226,8 +208,8 @@ func (index *Index) Logistics(now time.Time) (common.LogisticsView, error) {
 		}
 		return matches[left].ReceivedMS > matches[right].ReceivedMS
 	})
-	view := common.LogisticsView{
-		SchemaVersion: 1, ViewID: "life.logistics", ObservedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: now.Add(5 * time.Minute).UnixMilli(), CoverageComplete: len(matches) <= maxLogisticsItems, Items: []common.LogisticsItem{},
+	view := views.LogisticsView{
+		SchemaVersion: 1, ViewID: "life.logistics", ObservedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: now.Add(5 * time.Minute).UnixMilli(), CoverageComplete: len(matches) <= maxLogisticsItems, Items: []views.LogisticsItem{},
 	}
 	view.SourceHandle, _ = SourceHandle(index.connectionID, "logistics:"+index.state.HistoryID)
 	for _, message := range matches[:min(len(matches), maxLogisticsItems)] {
@@ -239,11 +221,11 @@ func (index *Index) Logistics(now time.Time) (common.LogisticsView, error) {
 			summary = boundedText(summary, 512)
 		}
 		evidence, _ := SourceHandle(index.connectionID, "message:"+message.ID)
-		view.Items = append(view.Items, common.LogisticsItem{EvidenceHandle: evidence, Kind: logisticsKind(message.Subject + "\n" + message.Snippet), Summary: summary, Status: "mail_candidate", NeedsAttention: false})
+		view.Items = append(view.Items, views.LogisticsItem{EvidenceHandle: evidence, Kind: logisticsKind(message.Subject + "\n" + message.Snippet), Summary: summary, Status: "mail_candidate", NeedsAttention: false})
 	}
 	encoded, err := json.Marshal(view)
 	if err != nil || len(encoded) > 65_536 {
-		return common.LogisticsView{}, ErrInvalidResponse
+		return views.LogisticsView{}, ErrInvalidResponse
 	}
 	return view, nil
 }
@@ -321,7 +303,7 @@ func cloneIndexState(state indexState) indexState {
 	return next
 }
 
-func cloneFailure(failure *Failure) *Failure {
+func cloneFailure(failure *integrations.Failure) *integrations.Failure {
 	if failure == nil {
 		return nil
 	}

@@ -8,21 +8,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:floe_client/app/floe_app.dart';
-import 'package:floe_client/app/local_identity.dart';
+import 'package:floe_client/app/profile_selection_app.dart';
+import 'package:floe_client/app/runtime/local_profile_selection.dart';
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_primitives.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/app/runtime/app_runtime.dart';
-import 'package:floe_client/features/actions/application/calendar_action_facade.dart';
-import 'package:floe_client/features/day/application/native_day_gateway.dart';
-import 'package:floe_client/features/day/application/calendar_gateway.dart';
-import 'package:floe_client/features/connections/application/local_server_client.dart';
+import 'package:floe_client/features/day/infrastructure/app_wire_day_gateway.dart';
+import 'package:floe_client/infrastructure/native/eventkit_calendar_host.dart';
 import 'package:floe_client/infrastructure/native/android_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/macos_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/attention_acquisition_broker.dart';
 import 'package:floe_client/infrastructure/native/calendar_acquisition_broker.dart';
-import 'package:floe_client/infrastructure/native/local_context_publication.dart';
+import 'package:floe_client/infrastructure/native/local_device_identity.dart';
 import 'package:floe_client/infrastructure/native/personal_acquisition_broker.dart';
 import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
 import 'package:floe_client/preview/design_feedback_overlay.dart';
@@ -65,28 +64,29 @@ void main() {
 
 Future<void> _start() async {
   try {
+    final selection = await LocalProfileSelection.open();
+    final profile = await selection.selected();
+    if (profile == null) {
+      runApp(ProfileSelectionApp(profiles: await selection.candidates(), onSelect: (profile) async {
+        await selection.select(profile);
+        await _start();
+      }, onReload: _start));
+      return;
+    }
     final androidNative = Platform.isAndroid ? AndroidContextGateway() : null;
-    final device = await LocalDeviceIdentity.openDefault();
-    final serverClient = LocalServerClient(
-      personId: defaultLocalPersonId,
-      deviceId: device.id,
-    );
-    final calendarAdapter = androidNative == null
-        ? EventKitCalendarAdapter(deviceId: device.id)
-        : AndroidCalendarAdapter(androidNative);
+    final device = await LocalDeviceIdentity.openExisting();
+    final calendarHost = EventKitCalendarHost(deviceId: device.id);
     // App-lifetime objects are created once here; no feature owns them.
-    final runtime = await AppRuntime.openDefault(deviceId: device.id);
-    final gateway = NativeDayGateway(runtime, calendarAdapter);
-    final calendarActions = CalendarActionFacade(runtime);
+    final runtime = await AppRuntime.openSelected(deviceId: device.id, profile: profile);
+    final gateway = AppWireDayGateway(runtime);
     CalendarAcquisitionService? calendarAcquisition;
-    if (Platform.isIOS || androidNative != null) {
-      final reader = Platform.isIOS
-          ? (calendarAdapter as EventKitCalendarAdapter).readAcquisition
+    if (Platform.isMacOS || Platform.isIOS || androidNative != null) {
+      final reader = Platform.isMacOS || Platform.isIOS
+          ? calendarHost.readAcquisition
           : androidNative!.readAcquisition;
       calendarAcquisition = CalendarAcquisitionService(
         broker: CalendarAcquisitionBroker(
-          transport: runtime.localContextTransport,
-          personId: localPersonId,
+          transport: runtime.nativeHostTransport,
         ),
         reader: reader,
       );
@@ -103,8 +103,7 @@ Future<void> _start() async {
     if (Platform.isMacOS) {
       final attentionGateway = macOSContextGateway!;
       final broker = AttentionAcquisitionBroker(
-        transport: runtime.localContextTransport,
-        personId: localPersonId,
+        transport: runtime.nativeHostTransport,
       );
       attentionAcquisition = AttentionAcquisitionService(
         broker: broker,
@@ -157,26 +156,9 @@ Future<void> _start() async {
         attentionAcquisition = null;
       }
     }
-    Timer? macOSContextRefresh;
     final appleNativeGateway = Platform.isIOS
         ? AppleContextGateway(deviceId: device.id)
         : null;
-    final appleContext = appleNativeGateway == null
-        ? null
-        : PublishingAppleContextGateway(
-            gateway: appleNativeGateway,
-            transport: runtime.localContextTransport,
-            personId: localPersonId,
-            deviceId: device.id,
-          );
-    final androidContext = androidNative == null
-        ? null
-        : PublishingAndroidContextGateway(
-            gateway: androidNative,
-            transport: runtime.localContextTransport,
-            personId: localPersonId,
-            deviceId: device.id,
-          );
     PersonalAcquisitionService? personalAcquisition;
     final personalReader = appleNativeGateway != null
         ? _applePersonalReader(appleNativeGateway, device.id)
@@ -185,8 +167,7 @@ Future<void> _start() async {
         : null;
     if (personalReader != null) {
       final broker = PersonalAcquisitionBroker(
-        transport: runtime.localContextTransport,
-        personId: localPersonId,
+        transport: runtime.nativeHostTransport,
       );
       personalAcquisition = PersonalAcquisitionService(
         broker: broker,
@@ -200,51 +181,21 @@ Future<void> _start() async {
         personalAcquisition = null;
       }
     }
-    if (Platform.isMacOS) {
-      final macOSContext = PublishingMacOSContextGateway(
-        gateway: macOSContextGateway!,
-        transport: runtime.localContextTransport,
-        personId: localPersonId,
-        deviceId: device.id,
-      );
-      try {
-        await macOSContext.readAttention();
-      } on Object catch (error, stackTrace) {
-        _recordOptionalContextFailure(error, stackTrace);
-      }
-      macOSContextRefresh = Timer.periodic(const Duration(seconds: 45), (_) {
-        unawaited(
-          macOSContext.readAttention().catchError((
-            Object error,
-            StackTrace stackTrace,
-          ) {
-            _recordOptionalContextFailure(error, stackTrace);
-            return <String, dynamic>{};
-          }),
-        );
-      });
-    }
     runApp(
       FloeApp(
+        personId: runtime.personId,
         gateway: gateway,
-        calendarSourceGateway: runtime.calendarSource,
-        calendarActions: calendarActions,
         agentGateway: runtime.conversation,
         ownerGateways: runtime.owners,
-        pairingGateway: runtime.pairing,
-        connectionObserveGateway: runtime.connectionObserve,
-        nativePersonalSourceGateway: runtime.nativePersonalSource,
-        serverClient: serverClient,
-        androidContext: androidContext,
-        appleContext: appleContext,
-        macOSContext: macOSContextGateway,
+        connectionsGateway: runtime.connections,
         onDisposeGateway: () async {
-          macOSContextRefresh?.cancel();
-          await calendarAcquisition?.dispose();
-          await attentionAcquisition?.dispose();
-          await personalAcquisition?.dispose();
-          await gateway.drain();
-          await runtime.close();
+          try {
+            await Future.wait([
+              if (calendarAcquisition != null) calendarAcquisition.dispose(),
+              if (attentionAcquisition != null) attentionAcquisition.dispose(),
+              if (personalAcquisition != null) personalAcquisition.dispose(),
+            ]).timeout(const Duration(seconds: 5));
+          } finally { await runtime.close(); }
         },
         builder: kDebugMode
             ? (context, child) => DesignFeedbackOverlay(child: child!)
@@ -278,41 +229,64 @@ PersonalAcquisitionReader _applePersonalReader(
   AppleContextGateway native,
   String deviceId,
 ) => (request) async {
-  if (request['domain'] == 'wellbeing' && request['device_id'] == deviceId) {
+  if (request['device_id'] != deviceId) throw PlatformException(code: 'permission_denied');
+  final mode = request['mode'];
+  final domain = request['domain'];
+  if (!{'people','wellbeing'}.contains(domain)) throw PlatformException(code: 'provider_unavailable');
+  if (mode == 'request_permission') {
+    final completion = await native.requestPermissionAcquisition(request);
+    return _personalPeopleResult(request,
+      {'subject_fingerprint': completion['native_subject_fingerprint_before'], 'permission_class': completion['permission_class']},
+      {'subject_fingerprint': completion['native_subject_fingerprint_after'], 'permission_class': completion['permission_class']},
+      null, domain == 'people' ? 'apple_contacts' : 'apple_health');
+  }
+  if (mode == 'inspect_catalog') {
+    final before = domain == 'people' ? await native.inspectContactsCatalog() : await native.inspectWellbeingCatalog();
+    final after = domain == 'people' ? await native.inspectContactsCatalog() : await native.inspectWellbeingCatalog();
+    if (before['native_subject_fingerprint'] != after['native_subject_fingerprint']) {
+      throw PlatformException(code: 'permission_denied');
+    }
+    final subject = {'subject_fingerprint': after['native_subject_fingerprint'], 'permission_class': after['permission_class']};
+    return _personalPeopleResult(request, subject, subject, null,
+      domain == 'people' ? 'apple_contacts' : 'apple_health',
+      resources: (after['resources'] as List).cast<Map>(),
+      catalogComplete: after['catalog_complete'] as bool);
+  }
+  if (domain == 'wellbeing') {
     final before = await native.inspectWellbeingSubject();
     final expected = request['expected_native_subject_fingerprint'];
-    if (expected != null && before['subject_fingerprint'] != expected) {
-      throw PlatformException(code: 'permission_denied');
+    if (expected != null && before['subject_fingerprint'] != expected) throw PlatformException(code: 'permission_denied');
+    if (mode == 'inspect_subject') {
+      final after = await native.inspectWellbeingSubject();
+      return _personalPeopleResult(request, before, after, null, 'apple_health');
     }
-    final view = await native.readWellbeing();
+    if (mode != 'read_projection') throw PlatformException(code: 'provider_unavailable');
+    final result = await native.readWellbeingAcquisition({
+      'request_id': request['request_id'], 'host_epoch': request['host_epoch'],
+      'person_id': request['person_id'], 'device_id': request['device_id'],
+      'native_subject_fingerprint': before['subject_fingerprint'],
+    });
     final after = await native.inspectWellbeingSubject();
-    if (after['subject_fingerprint'] != before['subject_fingerprint']) {
-      throw PlatformException(code: 'permission_denied');
-    }
-    return _personalPeopleResult(request, before, after, view, 'apple_health');
+    return {
+      ..._personalPeopleResult(request, before, after, Map<String,dynamic>.from(result['view'] as Map), 'apple_health'),
+      'transform_operation_id': (result['privacy_transform'] as Map)['operation_id'],
+    };
   }
   final selected = request['selected_handles'];
-  if (request['domain'] != 'people' ||
-      request['device_id'] != deviceId ||
-      selected is! List ||
-      selected.isEmpty ||
-      selected.any((value) => value is! String)) {
+  if (domain != 'people' || selected is! List || selected.isEmpty || selected.any((value) => value is! String)) {
     throw PlatformException(code: 'provider_unavailable');
   }
   final handles = selected.cast<String>();
   final before = await native.inspectContactsSubject(handles);
   final expected = request['expected_native_subject_fingerprint'];
-  if (expected != null && before['subject_fingerprint'] != expected) {
-    throw PlatformException(code: 'permission_denied');
+  if (expected != null && before['subject_fingerprint'] != expected) throw PlatformException(code: 'permission_denied');
+  Map<String,dynamic>? view;
+  if (mode == 'read_projection') {
+    view = await native.readContacts(limit: handles.length, selectedHandles: handles);
+  } else if (mode != 'inspect_subject') {
+    throw PlatformException(code: 'provider_unavailable');
   }
-  final view = await native.readContacts(
-    limit: handles.length,
-    selectedHandles: handles,
-  );
   final after = await native.inspectContactsSubject(handles);
-  if (after['subject_fingerprint'] != before['subject_fingerprint']) {
-    throw PlatformException(code: 'permission_denied');
-  }
   return _personalPeopleResult(request, before, after, view, 'apple_contacts');
 };
 
@@ -321,7 +295,7 @@ PersonalAcquisitionReader _androidContactsReader(
   String deviceId,
 ) => (request) async {
   final selected = request['selected_handles'];
-  if (request['domain'] != 'people' ||
+  if (request['mode'] != 'read_projection' || request['domain'] != 'people' ||
       request['device_id'] != deviceId ||
       selected is! List ||
       selected.isEmpty ||
@@ -355,19 +329,25 @@ Map<String, dynamic> _personalPeopleResult(
   Map<String, dynamic> request,
   Map<String, dynamic> before,
   Map<String, dynamic> after,
-  Map<String, dynamic> view,
-  String provider,
-) => {
+  Map<String, dynamic>? view,
+  String provider, {
+  List<Map> resources = const [],
+  bool catalogComplete = false,
+}) => {
   'request_id': request['request_id'],
   'host_epoch': request['host_epoch'],
   'person_id': request['person_id'],
   'device_id': request['device_id'],
   'domain': request['domain'],
+  'mode': request['mode'],
   'native_subject_fingerprint_before': before['subject_fingerprint'],
   'native_subject_fingerprint_after': after['subject_fingerprint'],
   'permission_class': before['permission_class'],
   'provider': provider,
   'view': view,
+  'transform_operation_id': null,
+  'resources': resources,
+  'catalog_complete': catalogComplete,
 };
 
 class _StartupErrorApp extends StatelessWidget {

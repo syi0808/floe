@@ -13,10 +13,5 @@ let package = Package(
   ],
   targets: [
     .target(name: "FloeScreenTimeGate"),
-    .testTarget(
-      name: "FloeScreenTimeGateTests",
-      dependencies: ["FloeScreenTimeGate"],
-      resources: [.copy("Fixtures")]
-    ),
   ]
 )

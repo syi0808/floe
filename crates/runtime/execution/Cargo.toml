@@ -9,3 +9,4 @@ rust-version.workspace = true
 floe-kernel = { path = "../../contracts/kernel" }
 serde.workspace = true
 tokio.workspace = true
+uuid.workspace = true

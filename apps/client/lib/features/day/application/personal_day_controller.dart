@@ -4,7 +4,7 @@ import 'package:floe_client/app/floe_loading.dart';
 
 import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
-import 'package:floe_client/features/day/application/calendar_gateway.dart';
+import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 
 enum DayLoadState { loading, ready, failure }
 
@@ -12,11 +12,14 @@ final class PersonalDayController extends ChangeNotifier {
   factory PersonalDayController({
     required DayGateway gateway,
     required DayQuery query,
-  }) => PersonalDayController._(gateway, query);
+    DayRefreshGateway? refreshGateway,
+  }) => PersonalDayController._(gateway, query, refreshGateway);
 
-  PersonalDayController._(this._gateway, this._query);
+  PersonalDayController._(this._gateway, this._query, this._refreshGateway);
 
   final DayGateway _gateway;
+  final DayRefreshGateway? _refreshGateway;
+  bool get canRefresh => _refreshGateway != null;
   DayQuery _query;
   DayLoadState loadState = DayLoadState.loading;
   DaySnapshot? snapshot;
@@ -25,6 +28,10 @@ final class PersonalDayController extends ChangeNotifier {
   bool commandPending = false;
   int _loadGeneration = 0;
   bool _disposed = false;
+  String? _refreshCommandId;
+  DayQuery? _refreshQuery;
+  DayRefreshSnapshot? _refreshOperation;
+  Future<DaySnapshot>? _refreshing;
 
   DayQuery get query => _query;
 
@@ -40,9 +47,7 @@ final class PersonalDayController extends ChangeNotifier {
     notifyListeners();
     try {
       final result = await FloeLoading.run(
-        () => sync && _gateway is CalendarGateway
-            ? (_gateway as CalendarGateway).syncCalendar(query)
-            : _gateway.loadDay(query),
+        () => sync ? _refresh(query) : _gateway.loadDay(query),
       );
       if (_disposed || generation != _loadGeneration) return;
       snapshot = result;
@@ -53,6 +58,35 @@ final class PersonalDayController extends ChangeNotifier {
       errorMessage = error.toString();
     }
     notifyListeners();
+  }
+
+  Future<DaySnapshot> _refresh(DayQuery query) => _refreshing ??=
+      _refreshOwner(query).whenComplete(() => _refreshing = null);
+
+  Future<DaySnapshot> _refreshOwner(DayQuery query) async {
+    final refresher = _refreshGateway;
+    if (refresher == null) throw StateError('Day source refresh is not available.');
+    _refreshCommandId ??= newAgentRequestId();
+    _refreshQuery ??= query;
+    final first = _refreshOperation ?? await refresher.refreshDay(commandId: _refreshCommandId!, query: _refreshQuery!);
+    _refreshOperation = first;
+    try {
+      final result = await awaitDayRefresh(refresher, first, onSnapshot: (value) => _refreshOperation = value, detached: () => _disposed);
+      final matches = result.personId == query.personId && result.date.year == query.date.year &&
+          result.date.month == query.date.month && result.date.day == query.date.day &&
+          result.timezoneOffsetSeconds == query.timezoneOffsetSeconds;
+      _refreshCommandId = null;
+      _refreshQuery = null;
+      _refreshOperation = null;
+      return matches ? result : _refreshOwner(query);
+    } on Object {
+      if (_refreshOperation?.terminal == true) {
+        _refreshCommandId = null;
+        _refreshQuery = null;
+        _refreshOperation = null;
+      }
+      rethrow;
+    }
   }
 
   @override
@@ -99,7 +133,7 @@ final class PersonalDayController extends ChangeNotifier {
       ),
       now: DateTime.now(),
     );
-    return refresh();
+    return load();
   }
 
   Future<void> goToday() {
@@ -109,7 +143,7 @@ final class PersonalDayController extends ChangeNotifier {
       date: DateTime(now.year, now.month, now.day),
       now: now,
     );
-    return refresh();
+    return load();
   }
 
   void clearError() {

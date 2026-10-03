@@ -29,3 +29,8 @@ func Accept(value any) Result {
 func Reject(category Category, code string) Result {
 	return Result{Category: category, Code: code}
 }
+
+// Error exposes only a stable category and code; provider and storage details stay private.
+type Error struct { Category Category; Code string }
+func (e Error) Error() string { return e.Code }
+func Fail(category Category, code string) error { return Error{Category: category, Code: code} }

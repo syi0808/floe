@@ -7,7 +7,7 @@ import 'package:floe_client/app/floe_badge.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
-import 'package:floe_client/features/conversation/application/agent_controller.dart';
+import 'package:floe_client/features/conversation/application/conversation_controller.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 
 class AgentProposalCard extends StatelessWidget {
@@ -18,7 +18,7 @@ class AgentProposalCard extends StatelessWidget {
     this.onOpenAction,
   });
 
-  final AgentController controller;
+  final ConversationController controller;
   final AgentCapabilityMessage message;
   final Future<void> Function(String actionId)? onOpenAction;
 

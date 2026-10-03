@@ -228,7 +228,7 @@ class _DayToolbar extends StatelessWidget {
             onPressed: onCreateEvent,
             icon: const Icon(LucideIcons.plus, size: 18),
           ),
-          FloeButton.icon(
+          if (controller.canRefresh) FloeButton.icon(
             tooltip: AppLocalizations.of(context).refreshCalendar,
             loading: controller.loadState == DayLoadState.loading,
             onPressed: () async {

@@ -1,6 +1,7 @@
 package microsoftteams
 
 import (
+ "floe/server/internal/views"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"floe/server/internal/connectors/common"
+	
 )
 
 const (
@@ -94,19 +95,19 @@ func NewWithBaseURL(tokens TokenSource, baseURL string) (*Client, error) {
 	}, nil
 }
 
-func (client *Client) WorkContext(ctx context.Context, team, channel string, now time.Time) (common.WorkContextView, error) {
+func (client *Client) WorkContext(ctx context.Context, team, channel string, now time.Time) (views.WorkContextView, error) {
 	if !selectionPattern.MatchString(team) || !selectionPattern.MatchString(channel) {
-		return common.WorkContextView{}, ErrInvalidInput
+		return views.WorkContextView{}, ErrInvalidInput
 	}
 	path := "/teams/" + url.PathEscape(team) + "/channels/" + url.PathEscape(channel) + "/messages?%24top=50"
 	var response messageResponse
 	if err := client.get(ctx, path, &response); err != nil {
-		return common.WorkContextView{}, err
+		return views.WorkContextView{}, err
 	}
 	if len(response.Value) > maxMessages {
-		return common.WorkContextView{}, ErrInvalidResponse
+		return views.WorkContextView{}, ErrInvalidResponse
 	}
-	view := common.WorkContextView{
+	view := views.WorkContextView{
 		SchemaVersion:    1,
 		ViewID:           "work.context",
 		SourceHandle:     handle("teams", team+":"+channel+":"+now.UTC().Format("2006-01-02T15:04")),
@@ -114,7 +115,7 @@ func (client *Client) WorkContext(ctx context.Context, team, channel string, now
 		ExpiresAtUnixMS:  now.Add(5 * time.Minute).UnixMilli(),
 		CoverageComplete: strings.TrimSpace(response.Next) == "",
 		ScopeHandle:      handle("teams-channel", team+":"+channel),
-		Items:            []common.WorkItem{},
+		Items:            []views.WorkItem{},
 	}
 	seen := map[string]bool{}
 	for _, item := range response.Value {
@@ -122,7 +123,7 @@ func (client *Client) WorkContext(ctx context.Context, team, channel string, now
 			continue
 		}
 		if !validOpaque(item.ID, 512) || seen[item.ID] || len(item.Body.Content) > 65_536 {
-			return common.WorkContextView{}, ErrInvalidResponse
+			return views.WorkContextView{}, ErrInvalidResponse
 		}
 		seen[item.ID] = true
 		observed, err := parseTime(item.LastModified)
@@ -131,7 +132,7 @@ func (client *Client) WorkContext(ctx context.Context, team, channel string, now
 		}
 		text, textErr := messageText(item.Body.ContentType, item.Body.Content)
 		if err != nil || textErr != nil || observed > now.Add(time.Minute).UnixMilli() {
-			return common.WorkContextView{}, ErrInvalidResponse
+			return views.WorkContextView{}, ErrInvalidResponse
 		}
 		if text == "" {
 			continue
@@ -139,7 +140,7 @@ func (client *Client) WorkContext(ctx context.Context, team, channel string, now
 		excerpt := truncate(text, 2048)
 		title := truncate(strings.TrimSpace(strings.SplitN(excerpt, "\n", 2)[0]), 512)
 		status := "message"
-		view.Items = append(view.Items, common.WorkItem{
+		view.Items = append(view.Items, views.WorkItem{
 			EvidenceHandle:   handle("teams-message", team+":"+channel+":"+item.ID),
 			Kind:             "communication",
 			Title:            title,
@@ -150,7 +151,7 @@ func (client *Client) WorkContext(ctx context.Context, team, channel string, now
 	}
 	encoded, err := json.Marshal(view)
 	if err != nil || len(encoded) > 65_536 {
-		return common.WorkContextView{}, ErrInvalidResponse
+		return views.WorkContextView{}, ErrInvalidResponse
 	}
 	return view, nil
 }

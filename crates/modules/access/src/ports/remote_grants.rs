@@ -61,39 +61,3 @@ pub trait RemoteGrantTransport: Sync {
     ) -> BoxFuture<'a, Result<SignedSourcePreview, AgentFailure>>;
 }
 
-/// The Person's own record of who they trust and what they have granted.
-pub trait RemoteGrantStore: Sync {
-    fn pinned_producer<'a>(&'a self)
-    -> BoxFuture<'a, Result<RemoteProducerIdentity, AgentFailure>>;
-
-    /// Check the producer's signature over the descriptor, and read out what it
-    /// names. A descriptor that does not name this pairing and this source is
-    /// rejected here, not by the caller.
-    fn verify_view_source_preview<'a>(
-        &'a self,
-        preview: &'a SignedSourcePreview,
-        pairing: RemotePairingIdentity<'a>,
-        query: RemoteSourceQuery<'a>,
-    ) -> BoxFuture<'a, Result<RemoteViewSourceReference, AgentFailure>>;
-
-    fn grants<'a>(
-        &'a self,
-        limit: usize,
-    ) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>>;
-
-    fn find_view_grant<'a>(
-        &'a self,
-        view_id: &'a str,
-        source: &'a GrantSourceBinding,
-    ) -> BoxFuture<'a, Result<Option<DataAccessGrant>, AgentFailure>>;
-
-    /// Commit the activation atomically against the authority it expects.
-    fn activate_view_grant<'a>(
-        &'a self,
-        view_id: &'a str,
-        grant_id: GrantId,
-        expected: Option<GrantAuthority>,
-        source: GrantSourceBinding,
-        scope: GrantScope,
-    ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>>;
-}

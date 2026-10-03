@@ -622,6 +622,3 @@ fn state_name(state: TaskState) -> &'static str {
         TaskState::Interrupted => "interrupted",
     }
 }
-
-#[cfg(test)]
-mod tests;

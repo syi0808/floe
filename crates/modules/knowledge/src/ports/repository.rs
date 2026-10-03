@@ -53,3 +53,14 @@ pub trait MemoryReviewRepository: Send + Sync {
         decided_at: DateTime<Utc>,
     ) -> impl Future<Output = Result<KnowledgeDecisionResult, AgentFailure>> + Send;
 }
+
+
+/// Opens the canonical durable journal for one admitted Learner job claim.
+pub trait LearnerJournalFactory: Send + Sync {
+    fn journal(
+        &self,
+        person_id: floe_kernel::PersonId,
+        job_id: uuid::Uuid,
+        claim_attempt: u8,
+    ) -> Result<std::sync::Arc<dyn floe_agent_contract::ExecutionJournal>, AgentFailure>;
+}

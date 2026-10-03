@@ -16,15 +16,19 @@ pub use floe_native::{
 /// One host per kind, for one process.
 #[derive(Default)]
 pub struct LocalAcquisitionBrokers {
-    calendar: CalendarBroker,
-    attention: AttentionBroker,
-    personal: PersonalBroker,
+    calendar: std::sync::Arc<CalendarBroker>,
+    attention: std::sync::Arc<AttentionBroker>,
+    personal: std::sync::Arc<PersonalBroker>,
 }
 
 impl LocalAcquisitionBrokers {
     pub fn new() -> Self {
         Self::default()
     }
+
+    pub fn calendar_handle(&self)->std::sync::Arc<CalendarBroker>{self.calendar.clone()}
+    pub fn attention_handle(&self)->std::sync::Arc<AttentionBroker>{self.attention.clone()}
+    pub fn personal_handle(&self)->std::sync::Arc<PersonalBroker>{self.personal.clone()}
 
     pub fn calendar(&self) -> &CalendarBroker {
         &self.calendar
@@ -38,3 +42,5 @@ impl LocalAcquisitionBrokers {
         &self.personal
     }
 }
+
+pub use floe_native::{PersonalAcquisitionMode,NativeSourceResource};

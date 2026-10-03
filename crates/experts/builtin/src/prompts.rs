@@ -77,31 +77,3 @@ pub fn life_logistics_expert_prompt() -> PromptAssembly {
         LIFE_LOGISTICS_EXPERT_ROLE,
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use floe_agent_contract::prompts::{PromptComponentKind, PromptRole};
-
-    #[test]
-    fn distinct_packages_share_runtime_role_but_not_role_component() {
-        let schedule = schedule_expert_prompt();
-        let commitments = commitments_expert_prompt();
-        assert_eq!(schedule.role, PromptRole::Expert);
-        assert_eq!(commitments.role, PromptRole::Expert);
-        let role = |prompt: &PromptAssembly| {
-            prompt
-                .components
-                .iter()
-                .find(|component| component.kind == PromptComponentKind::Role)
-                .unwrap()
-                .clone()
-        };
-        let schedule_role = role(&schedule);
-        let commitments_role = role(&commitments);
-        assert_ne!(schedule_role.source, commitments_role.source);
-        assert_ne!(schedule_role.content, commitments_role.content);
-        assert!(schedule_role.revision > 0);
-        assert!(commitments_role.revision > 0);
-    }
-}

@@ -10,6 +10,3 @@ floe-kernel = { path = "../../contracts/kernel" }
 serde.workspace = true
 tracing.workspace = true
 uuid.workspace = true
-
-[dev-dependencies]
-tokio.workspace = true

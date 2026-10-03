@@ -21,6 +21,7 @@ cp tools/validation/local-model-smoke-Info.plist "$bundle/Contents/Info.plist"
 library="$bundle/Contents/Frameworks/libfloe_local_model.dylib"
 xcrun swiftc -emit-library -swift-version 6 -warnings-as-errors \
   -target "$(uname -m)-apple-macosx12.0" \
+  apps/client/apple/FloeAppleHealth/Sources/FloeAppleHealth/HealthPrivacyTransform.swift \
   apps/client/macos/LocalModel/LocalModel.swift -o "$library"
 install_name_tool -id '@rpath/libfloe_local_model.dylib' "$library"
 codesign --force --sign - "$library"

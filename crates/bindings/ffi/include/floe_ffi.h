@@ -8,13 +8,21 @@ extern "C" {
 #endif
 
 typedef struct FloeHandle FloeHandle;
+typedef struct FloeNativeHostLane FloeNativeHostLane;
 
 FloeHandle *floe_core_open(const char *database_path, char **error_json_out);
 char *floe_core_command_v2(FloeHandle *handle, const char *request_json);
 char *floe_core_query_v2(FloeHandle *handle, const char *request_json);
 char *floe_core_events_v2(FloeHandle *handle, const char *request_json);
-char *floe_core_remote_pairing_v2(FloeHandle *handle, const char *request_json);
-char *floe_core_remote_access_v2(FloeHandle *handle, const char *request_json);
+/* Acquire on the core owner thread before its serial product work. Move only
+ * this independent lane to the native callback worker. Command/query accept
+ * schema 2 native_host.* envelopes; product commands are rejected. A retained
+ * lane rejects calls after core closure. Free once after its final call; free
+ * interrupts its outstanding acquisitions and never frees/aliases the core. */
+FloeNativeHostLane *floe_native_host_acquire(FloeHandle *handle, char **error_json_out);
+char *floe_native_host_command_v2(FloeNativeHostLane *lane, const char *request_json);
+char *floe_native_host_query_v2(FloeNativeHostLane *lane, const char *request_json);
+void floe_native_host_free(FloeNativeHostLane *lane);
 uint32_t floe_protocol_version(void);
 void floe_string_free(char *value);
 void floe_core_free(FloeHandle *handle);

@@ -11,33 +11,14 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use floe_context_contract::{DataClass, ProcessingRequirement};
+use floe_context_contract::DataClass;
 use floe_execution::Cancellation;
 use floe_kernel::{AgentFailure, PersonId};
 
 use crate::{
-    AgentContext, InferencePolicyDecision, ModelReplay, ProviderReplay, ports::BoxFuture,
+    AgentContext, InferencePolicyDecision, ModelReplay, ProviderReplay, SourceProjectionReview, ports::BoxFuture,
     prompts::PromptAssembly,
 };
-
-/// The consumer delegated Experts share on canonical Inference.
-///
-/// Experts run under the everyday-assistance purpose with their own consumer,
-/// never as `conversation.root`: the root profile stays root-only while the
-/// product purpose still describes delegated Expert work.
-pub const DELEGATED_EXPERT_INFERENCE_CONSUMER: &str = "experts.delegated";
-
-/// What execution class an Expert requires.
-///
-/// Experts state the class; Inference selects the provider. An Expert whose
-/// judgment needs one class states it and lets dispatch fail closed when no
-/// profile satisfies it, rather than silently accepting another class.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum ExpertModelRequirement {
-    Any,
-    DeviceOnly,
-    RemoteOnly,
-}
 
 /// One assignment, with the context and the bounds it must be answered under.
 pub struct ExpertModelCall {
@@ -48,9 +29,6 @@ pub struct ExpertModelCall {
     pub policy: InferencePolicyDecision,
     pub context: AgentContext,
     pub assignment: String,
-    /// What execution class this call requires. Carried as intent; the model
-    /// owner maps it to an execution constraint, never to a provider.
-    pub requirement: ExpertModelRequirement,
     pub max_output_bytes: usize,
     pub max_tokens: u64,
     pub max_cost_micros: u64,
@@ -78,7 +56,7 @@ pub struct ExpertModelAnswer {
 #[derive(Clone, Debug)]
 pub enum ExpertModelOutcome {
     Answered(ExpertModelAnswer),
-    Blocked(ProcessingRequirement),
+    Blocked(SourceProjectionReview),
 }
 
 /// The model an Expert reasons on.
@@ -86,10 +64,8 @@ pub trait ExpertModel: Sync {
     /// Answer one assignment.
     ///
     /// Anything but a single answer is `InvalidModelOutput`: the caller asked
-    /// one question and is owed one reply. The call's requirement states what
-    /// execution class the Expert needs; which provider satisfies it is the
-    /// model owner's answer, never the Expert's. A recoverable consent
-    /// blockage is `Ok(Blocked)`, never an error and never a forged answer.
+    /// one question and is owed one reply. The shared planner selects the model
+    /// before source projection; `Blocked` carries a pre-attempt source review.
     fn answer<'a>(
         &'a self,
         call: ExpertModelCall,
@@ -208,9 +184,6 @@ pub struct ExpertReasoningStep {
     pub prompt: PromptAssembly,
     pub policy: InferencePolicyDecision,
     pub context: AgentContext,
-    /// What execution class this step requires. Carried as intent; the model
-    /// owner maps it to an execution constraint, never to a provider.
-    pub requirement: ExpertModelRequirement,
     pub transcript: Vec<ExpertTranscriptEntry>,
     /// The capabilities the Expert is willing to be asked for on this step. An
     /// empty list is how it says it has none left to give.
@@ -266,7 +239,7 @@ impl ExpertStepOutcome {
 #[derive(Clone, Debug)]
 pub enum ExpertStepResult {
     Stepped(ExpertStepOutcome),
-    Blocked(ProcessingRequirement),
+    Blocked(SourceProjectionReview),
 }
 
 /// A model an Expert reasons with over several steps, calling its own bounded
@@ -280,63 +253,4 @@ pub trait ExpertReasoner: ExpertModel {
         &'a self,
         step: ExpertReasoningStep,
     ) -> BoxFuture<'a, Result<ExpertStepResult, AgentFailure>>;
-}
-
-#[cfg(test)]
-mod observation_tests {
-    use super::*;
-
-    #[test]
-    fn failed_capability_observations_are_bounded_and_typed() {
-        assert_eq!(
-            ExpertCapabilityObservation::Unavailable {
-                reason_code: "".into(),
-            }
-            .validate(4096),
-            Err(AgentFailure::InvalidModelOutput)
-        );
-        assert_eq!(
-            ExpertCapabilityObservation::NeedsUserAction {
-                interaction: crate::UserInteractionRef {
-                    interaction_id: Uuid::nil(),
-                    kind: crate::UserInteractionKind::SourceAccess,
-                    status: crate::UserInteractionStatus::Pending,
-                },
-                summary: "Calendar access needs approval".into(),
-            }
-            .validate(4096),
-            Err(AgentFailure::InvalidModelOutput)
-        );
-        assert!(
-            ExpertCapabilityObservation::Unavailable {
-                reason_code: "temporarily_unavailable".into(),
-            }
-            .validate(4096)
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn user_action_observation_serializes_as_opaque_reference_only() {
-        let observation = ExpertCapabilityObservation::NeedsUserAction {
-            interaction: crate::UserInteractionRef {
-                interaction_id: Uuid::new_v4(),
-                kind: crate::UserInteractionKind::SourceAccess,
-                status: crate::UserInteractionStatus::Pending,
-            },
-            summary: "Calendar access needs approval".into(),
-        };
-        assert!(observation.validate(4096).is_ok());
-        let encoded = serde_json::to_string(&observation).unwrap();
-        for forbidden in [
-            "requirement",
-            "resource",
-            "consumer",
-            "grant",
-            "fingerprint",
-            "authority",
-        ] {
-            assert!(!encoded.contains(forbidden), "leaked {forbidden}");
-        }
-    }
 }

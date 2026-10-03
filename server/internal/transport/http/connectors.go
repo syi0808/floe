@@ -29,14 +29,14 @@ func ServeConnectors(writer http.ResponseWriter, request *http.Request, operatio
 		})
 	case len(parts) == 2 && parts[1] == "scope" && request.Method == http.MethodPatch:
 		dispatch(writer, request, func(input connections.ScopeRequest) operation.Result { return operations.Update(parts[0], input) })
-	case len(parts) == 1 && request.Method == http.MethodDelete:
+	case len(parts) == 2 && parts[1] == "disconnect" && request.Method == http.MethodPost:
 		dispatch(writer, request, func(input connections.DisconnectRequest) operation.Result {
 			return operations.Disconnect(request.Context(), parts[0], input)
 		})
 	case len(parts) == 3 && parts[1] == "connection-attempts" && request.Method == http.MethodGet:
 		writeResult(writer, operations.Attempt(request.Context(), parts[0], parts[2]))
 	case len(parts) == 4 && parts[1] == "connection-attempts" && parts[3] == "cancel" && request.Method == http.MethodPost:
-		writeResult(writer, operations.Cancel(request.Context(), parts[0], parts[2]))
+		dispatch(writer,request,func(in connections.CancelSetupRequest)operation.Result{return operations.Cancel(request.Context(),parts[0],parts[2],in)})
 	default:
 		failure(writer, http.StatusNotFound, "not_found")
 	}

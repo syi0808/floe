@@ -1,10 +1,11 @@
 package connections
 
 import (
+ "floe/server/internal/views"
 	"context"
 	"time"
 
-	"floe/server/internal/connectors/common"
+	
 )
 
 // Owner-defined ports for the concrete connector runtimes.
@@ -16,7 +17,7 @@ type ConnectorAuthRuntime interface {
 	ConnectorOAuthRuntime
 	ConnectionSnapshot() (any, error)
 	ReadCommunicationView(string, int, int) (any, error)
-	ReadLogisticsView(context.Context) (common.LogisticsView, error)
+	ReadLogisticsView(context.Context) (views.LogisticsView, error)
 }
 
 type ConnectorOAuthRuntime interface {
@@ -49,11 +50,11 @@ type CalendarRuntime interface {
 
 type WorkContextRuntime interface {
 	ConnectionSnapshot(context.Context) (any, error)
-	ReadWorkContextView(context.Context) (common.WorkContextView, error)
+	ReadWorkContextView(context.Context) (views.WorkContextView, error)
 }
 
 type LogisticsViewReader interface {
-	ReadLogisticsView(context.Context) (common.LogisticsView, error)
+	ReadLogisticsView(context.Context) (views.LogisticsView, error)
 }
 
 type LogisticsRuntime interface {

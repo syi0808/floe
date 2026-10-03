@@ -1,3 +1,5 @@
+mod domain;
+pub use domain::connection_review::*;
 mod application;
 mod data_access_grant;
 mod ports;
@@ -7,11 +9,6 @@ pub use application::model_dispatch::{
     ModelDispatchFence, ModelDispatchPermit, admit_model_dispatch, consume_model_dispatch,
     revalidate_model_dispatch,
 };
-pub use application::recipient_consent::{
-    ContextualRecipientAuthority, RECIPIENT_CONSENT_NAMESPACE, RECIPIENT_CONSENT_TTL,
-    RecipientConsent, RecipientConsentState, grant_recipient_consent, recipient_consent_id,
-    revoke_recipient_consent,
-};
 pub use application::{
     ATTENTION_CONNECTOR, ATTENTION_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTOR,
     WELLBEING_RESOURCE, apple_execution_owner, is_device_local_source,
@@ -19,14 +16,14 @@ pub use application::{
 pub use application::{
     AccessGrantMutation, GrantPolicyError, PersonalReadRequirement, ReadAuthorityEvidence,
     ReadAuthorityIdentity, ReleasePermit, ReleaseRecipient, RemoteProducerIdentity,
-    RemoteViewApproval, RemoteViewGrantActivation, RemoteViewGrantExpectation,
-    RemoteViewGrantPreparation, RemoteViewGrantPreview, RemoteViewGrantRequest,
+    
+    RemoteViewGrantPreview, RemoteViewGrantRequest,
     RemoteViewSourceReference, active_read_grant, admit_release, admit_remote_view_binding,
     admit_remote_view_source, apply_grant_mutation, authorize_grant, consume_release, create_grant,
-    grant_unchanged, matches_review, prepare_remote_view_grant_activation,
+    grant_unchanged, 
     preview_remote_view_grant, producer_is_pinned, remote_dependency_live,
-    remote_dependency_resource, remote_dependency_source_admits, remote_view_scope,
-    remote_view_source, review_and_activate_remote_view_grant, source_matches_producer,
+    remote_dependency_resource, remote_dependency_source_admits, 
+    remote_view_source,  source_matches_producer,
     subject_unchanged, valid_subject_fingerprint, validate_grant_dependency,
     validate_grant_expectation, validate_read_authority, validate_read_continuity,
 };
@@ -37,9 +34,7 @@ pub use application::{
     reviewed_native_subject,
 };
 pub use application::{
-    RemoteAuthorityEnrollment, RemoteAuthorityInspection, admit_device_pairing,
-    admit_enrollment_pairing, inspect_remote_authority, remote_enrollment_status,
-    review_and_enroll_remote_authority,
+    admit_device_pairing, admit_enrollment_pairing,
 };
 pub use data_access_grant::{DataAccessGrant, GrantState, GrantTransitionError};
 pub use floe_context_contract::{
@@ -55,31 +50,30 @@ pub use ports::CurrentAuthority;
 pub use ports::dependency_authorization::{
     DependencyAuthorization, DependencyLiveness, DependencyResolver,
 };
-pub use ports::model_dispatch::{
-    ModelDispatchDenial, ModelDispatchRecipientAuthority, ModelDispatchRequest,
-    ModelDispatchTarget, RecipientCheckOutcome,
-};
+pub use ports::model_dispatch::{ModelDispatchRequest, ModelDispatchTarget};
+pub use ports::gateway_admission::{GatewayAdmission, VerifiedGatewayBinding};
 pub use ports::personal_subject::{
     PersonalSubjectEvidence, PersonalSubjectInspector, PersonalSubjectProbe,
 };
-pub use ports::recipient_consent::{
-    AdmittedModelConnection, ModelConnectionAdmission, RecipientConsentClock,
-    RecipientConsentStore, SystemConsentClock,
-};
-pub use ports::remote_authorization::{
-    RemoteAuthorityStore, RemoteAuthorityTransport, RemoteAuthorizationKeys,
-    RemoteEnrollmentSignature, RemoteEnrollmentStatus, RemoteOwnerPublicKey,
-    RemotePairingChallenge, RemoteViewAuthorizationExpectation,
-};
 pub use ports::remote_grants::{
-    BoxFuture, RemoteCallWindow, RemoteGrantStore, RemoteGrantTransport, RemotePairingIdentity,
+    BoxFuture, RemoteCallWindow, RemoteGrantTransport, RemotePairingIdentity,
     RemoteSourceQuery, SignedSourcePreview,
 };
 
 pub use application::calendar_read::{
     CalendarReadAccessAdmission, CalendarReadAccessRequest, CalendarReadAdmission,
     admission_matches, admission_matches_dependency, admits_calendar_read,
-    admits_calendar_read_request, admits_native_calendar_read, admits_processing,
-    native_calendar_resource,
+    admits_calendar_read_request, admits_native_calendar_read,
+    native_calendar_resource, current_native_calendar_grant,
 };
 pub use floe_context_contract::{CalendarProvider, CalendarReadAccessStamp, CalendarScope};
+
+pub use ports::gateway_trust::{GatewayTrustReader, GatewayCredentialExpectation};
+pub use ports::grant_repository::GrantRepository;
+pub use ports::trusted_consumer_catalog::{TrustedConsumerCatalog, TrustedConsumerRegistration, TrustedViewCapability};
+pub use application::connection_review::{AccessService, AccessClock, SystemAccessClock, PrepareConnectionReview, ViewReviewRequest};
+pub use ports::source_preview::SourcePreviewVerifier;
+pub use domain::gateway_identity::{RemoteOwnerPublicKey, RemoteViewAuthorizationExpectation};
+pub use ports::authorization_signer::{AuthorizationSigner, AuthorizationSigningCommand, AuthorizationSignature, AuthorizationProofVerifier, VerifiedAuthorizationClaims};
+pub use application::authorization_signing::validate_authorization_grant;
+pub use application::source_policy::{source_view_ids, trusted_view_capability, remote_connector_ids_for_view};

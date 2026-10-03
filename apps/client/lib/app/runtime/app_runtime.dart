@@ -1,18 +1,19 @@
+import 'package:floe_client/features/connections/infrastructure/app_wire_connections_gateway.dart';
 import 'dart:async';
 
-import 'package:floe_client/features/connections/application/app_wire_calendar_source_gateway.dart';
-import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
-import 'package:floe_client/features/connections/application/connection_observe_gateway.dart';
-import 'package:floe_client/features/connections/application/native_personal_source_gateway.dart';
-import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
 
-import 'package:floe_client/app/local_identity.dart';
-import 'package:floe_client/app/runtime/local_owner_gateways.dart';
-import 'package:floe_client/app/runtime/local_context_gateway.dart';
+import 'package:floe_client/app/runtime/local_profile_selection.dart';
+import 'package:floe_client/features/knowledge/infrastructure/app_wire_memory_gateway.dart';
+import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_gateway.dart';
+import 'package:floe_client/features/actions/infrastructure/app_wire_proposal_gateway.dart';
+import 'package:floe_client/features/experts/infrastructure/app_wire_registry_gateway.dart';
+import 'package:floe_client/features/vault/infrastructure/app_wire_vault_gateway.dart';
+import 'package:floe_client/infrastructure/native/native_context_host_transport.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
+import 'package:floe_client/app/runtime/owner_failure.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/app/runtime/app_read_model.dart';
-import 'package:floe_client/app/runtime/floe_client.dart';
+import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_client.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
 
 /// Thrown when a request through the app transport fails.
@@ -22,12 +23,14 @@ final class AppRuntimeException implements Exception {
     this.message, {
     this.field,
     this.metadata = const {},
+    this.ownerFailure,
   });
 
   final String code;
   final String message;
   final String? field;
   final Map<String, String> metadata;
+  final OwnerFailure? ownerFailure;
 
   @override
   String toString() => message;
@@ -39,69 +42,45 @@ final class AppRuntimeException implements Exception {
 /// These outlive any single screen, so no feature owns them. Features receive
 /// owner gateways built on the admitted AppWire.
 final class AppRuntime {
-  AppRuntime._(this._transport, this.deviceId);
+  AppRuntime._(this._transport, this.deviceId, this.personId);
 
   final NativeTransport _transport;
   final String deviceId;
+  final String personId;
 
-  late final FloeClient client = FloeClient(_transport);
+  late final AppWireConversationClient client = AppWireConversationClient(_transport);
   late final AppReadModel readModel = AppReadModel();
-  late final RemoteAccessGateway remoteAccess = NativeRemoteAccessGateway(
-    remoteAccessV2,
-  );
-  late final ConnectionObserveGateway connectionObserve =
-      AppWireConnectionObserveGateway(_transport);
-  late final NativePersonalSourceGateway nativePersonalSource =
-      AppWireNativePersonalSourceGateway(_transport, deviceId: deviceId);
-  late final RemotePairingGateway pairing = NativeRemotePairingGateway(
-    remotePairingV2,
-    expectedPersonId: defaultLocalPersonId,
-    expectedDeviceId: deviceId,
-  );
-  late final vault = NativeVaultLifecycleGateway(_transport);
-  late final conversation = NativeConversationSessionGateway(
+  late final vault = AppWireVaultGateway(_transport);
+  late final conversation = AppWireConversationGateway(
     _transport,
     runtimeClient: client,
     readModel: readModel,
   );
-  late final registry = NativeRegistryGateway(_transport);
-  late final memory = NativeMemoryGateway(_transport);
-  late final connections = NativeConnectionsGateway(_transport);
-  late final calendarSource = AppWireCalendarSourceGateway(
-    _transport,
-    deviceId: deviceId,
-  );
-  late final proposals = NativeProposalGateway(_transport);
+  late final registry = AppWireRegistryGateway(_transport);
+  late final memory = AppWireMemoryGateway(_transport);
+  late final connections = AppWireConnectionsGateway(_transport);
+  late final proposals = AppWireProposalGateway(_transport);
   late final owners = LocalOwnerGateways(
     vault: vault,
     registry: registry,
     memory: memory,
     memoryReview: memory,
-    connections: connections,
     proposals: proposals,
   );
-  late final LocalContextTransport localContextTransport =
-      NativeLocalContextGateway(_transport, deviceId: deviceId);
+  late final NativeContextHostTransport nativeHostTransport =
+      AppWireNativeContextHostTransport(_transport.nativeCallbacks);
   AppWireTransport get wireTransport => _transport;
 
-  Future<Map<String, dynamic>> remotePairingV2(Map<String, dynamic> request) =>
-      _transport.remotePairingV2(request);
-
-  Future<Map<String, dynamic>> remoteAccessV2(Map<String, dynamic> request) =>
-      _transport.remoteAccessV2(request);
-
-  static Future<AppRuntime> openDefault({required String deviceId}) async =>
-      AppRuntime._(
-        await _open(
-          NativeTransport.openDefault(personId: defaultLocalPersonId),
-        ),
-        deviceId,
-      );
+  static Future<AppRuntime> openSelected({required String deviceId, required ExistingLocalProfile profile}) async =>
+      AppRuntime._(await _open(NativeTransport.open(
+        libraryPath: resolveLibraryPath(), databasePath: profile.databasePath,
+      )), deviceId, profile.personId);
 
   static Future<AppRuntime> open({
     required String libraryPath,
     required String databasePath,
     required String deviceId,
+    required String personId,
   }) async => AppRuntime._(
     await _open(
       NativeTransport.open(
@@ -110,6 +89,7 @@ final class AppRuntime {
       ),
     ),
     deviceId,
+    personId,
   );
 
   static String resolveLibraryPath() => NativeTransport.resolveLibraryPath();
@@ -123,6 +103,7 @@ final class AppRuntime {
         error.message,
         field: error.field,
         metadata: error.metadata,
+        ownerFailure: error.ownerFailure,
       );
     }
   }

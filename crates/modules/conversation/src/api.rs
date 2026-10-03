@@ -9,21 +9,12 @@ use std::time::Duration;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::{CanonicalTurnIntent, ProfileSelection, TurnMode};
+use crate::{CanonicalTurnIntent, TurnMode};
 
 pub const FINALIZATION_ROLE_ID: &str = "manager.finalization";
 pub const FINALIZATION_ROLE_PROMPT: &str = "Produce one final answer using only the supplied settled observations. Do not call tools or delegate.";
 pub const FINALIZATION_OUTPUT_CONTRACT: &str = "Return one concise user-facing answer. State that the requested execution did not complete; do not claim that a failed action succeeded.";
 pub const MANAGER_OUTPUT_CONTRACT: &str = "Return exactly one supported user-facing answer or one registered delegation. A factual answer about private, current, or changing external state requires admissible support from the user's relevant supplied information, admitted current context, or a settled Expert result. When that support is required but unavailable, return a limitation answer rather than inventing the missing state.";
-pub const CONVERSATION_MODEL_CONSUMER: &str = "conversation.root";
-/// Deterministic source-independent limitation for a blocked model dispatch.
-///
-/// A Manager cannot explain a denial by calling the very unapproved model,
-/// so Conversation completes the original Run with this controlled copy plus
-/// the durable interaction. Fixed text: no source names, no recipient
-/// interpolation, no model output. The card discloses the exact review.
-pub const MODEL_CONSENT_LIMITATION: &str = "The selected model needs your approval before it can process this request. No data has been sent. Review the pending request to continue.";
-
 #[derive(Clone, Debug)]
 pub struct ManagerConfig {
     pub role_spec: RoleSpec,
@@ -66,7 +57,6 @@ pub struct TurnRequest {
     pub prompt: String,
     pub mode: TurnMode,
     pub retry_of: Option<RunId>,
-    pub profile: ProfileSelection,
     pub allowed_catalog: AllowedCatalog,
     pub expert_environment: floe_experts::RunExpertEnvironmentIdentity,
     pub replay: Vec<ReplayReceipt>,
@@ -109,7 +99,6 @@ impl TurnRequest {
             return Err(AgentFailure::InvalidInput);
         }
         crate::normalize_turn_text(&self.prompt)?;
-        self.profile.validate()?;
         if let Some(context) = &self.delegation_context {
             context.validate()?;
         }
@@ -129,16 +118,14 @@ impl TurnRequest {
     }
 
     pub(crate) fn canonical_intent(&self) -> Result<CanonicalTurnIntent, AgentFailure> {
-        let mut turn = crate::StartTurn {
-            command_id: self.command_id,
+        self.validate()?;
+        Ok(CanonicalTurnIntent {
             session_id: self.session_id,
             expected_revision: self.expected_session_revision,
-            text: self.prompt.clone(),
+            text: crate::normalize_turn_text(&self.prompt)?,
             mode: self.mode.clone(),
             retry_of: self.retry_of,
-            profile: self.profile.clone(),
-        };
-        CanonicalTurnIntent::from_start_turn(&mut turn)
+        })
     }
 }
 

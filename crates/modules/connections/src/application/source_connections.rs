@@ -1,9 +1,9 @@
-use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId};
+use floe_context_contract::{ConnectionId, ConnectorId};
 use floe_kernel::PersonId;
 use thiserror::Error;
 
 use crate::{
-    ConnectionResource, ResourceMode, SourceConnection, SourceConnectionError, SourceRepository,
+    SourceConnection, SourceConnectionError, SourceRepository,
     SourceRepositoryError,
 };
 
@@ -45,135 +45,4 @@ impl<'a, Repository: SourceRepository + ?Sized> SourceConnectionService<'a, Repo
             .await?)
     }
 
-    pub async fn establish(
-        &self,
-        person_id: PersonId,
-        connector_id: ConnectorId,
-        connection_id: ConnectionId,
-        execution_owner_id: ExecutionOwnerId,
-        resource_mode: ResourceMode,
-        resources: Vec<ConnectionResource>,
-    ) -> Result<SourceConnection, SourceServiceError> {
-        let source = SourceConnection::establish(
-            person_id,
-            connector_id,
-            connection_id,
-            execution_owner_id,
-            resource_mode,
-            resources,
-        )?;
-        self.repository.create(&source).await?;
-        Ok(source)
-    }
-
-    pub async fn establish_reviewed_native(
-        &self,
-        person_id: PersonId,
-        connector_id: ConnectorId,
-        connection_id: ConnectionId,
-        execution_owner_id: ExecutionOwnerId,
-        resource_mode: ResourceMode,
-        resources: Vec<ConnectionResource>,
-        fingerprint: String,
-    ) -> Result<SourceConnection, SourceServiceError> {
-        let source = SourceConnection::establish_reviewed_native(
-            person_id,
-            connector_id,
-            connection_id,
-            execution_owner_id,
-            resource_mode,
-            resources,
-            fingerprint,
-        )?;
-        self.repository.create(&source).await?;
-        Ok(source)
-    }
-
-    pub async fn configure(
-        &self,
-        person_id: PersonId,
-        connection_id: &ConnectionId,
-        expected_revision: u64,
-        resource_mode: ResourceMode,
-        resources: Vec<ConnectionResource>,
-    ) -> Result<SourceConnection, SourceServiceError> {
-        let mut source = self.current(person_id, connection_id).await?;
-        if source.configure(expected_revision, resource_mode, resources)? {
-            self.repository.update(&source, expected_revision).await?;
-        }
-        Ok(source)
-    }
-
-    pub async fn update_native_subject(
-        &self,
-        person_id: PersonId,
-        connection_id: &ConnectionId,
-        expected_revision: u64,
-        fingerprint: String,
-    ) -> Result<SourceConnection, SourceServiceError> {
-        let mut source = self.current(person_id, connection_id).await?;
-        if source.update_native_subject(expected_revision, fingerprint)? {
-            self.repository.update(&source, expected_revision).await?;
-        }
-        Ok(source)
-    }
-
-    pub async fn configure_reviewed_native(
-        &self,
-        person_id: PersonId,
-        connection_id: &ConnectionId,
-        expected_revision: u64,
-        resource_mode: ResourceMode,
-        resources: Vec<ConnectionResource>,
-        fingerprint: String,
-    ) -> Result<SourceConnection, SourceServiceError> {
-        let mut source = self.current(person_id, connection_id).await?;
-        if source.configure_reviewed_native(
-            expected_revision,
-            resource_mode,
-            resources,
-            fingerprint,
-        )? {
-            self.repository.update(&source, expected_revision).await?;
-        }
-        Ok(source)
-    }
-
-    pub async fn reconcile_inventory(
-        &self,
-        person_id: PersonId,
-        connection_id: &ConnectionId,
-        expected_revision: u64,
-        resources: Vec<ConnectionResource>,
-    ) -> Result<SourceConnection, SourceServiceError> {
-        let mut source = self.current(person_id, connection_id).await?;
-        if source.reconcile_inventory(expected_revision, resources)? {
-            self.repository.update(&source, expected_revision).await?;
-        }
-        Ok(source)
-    }
-
-    pub async fn disconnect(
-        &self,
-        person_id: PersonId,
-        connection_id: &ConnectionId,
-        expected_revision: u64,
-    ) -> Result<SourceConnection, SourceServiceError> {
-        let mut source = self.current(person_id, connection_id).await?;
-        if source.disconnect(expected_revision)? {
-            self.repository.update(&source, expected_revision).await?;
-        }
-        Ok(source)
-    }
-
-    async fn current(
-        &self,
-        person_id: PersonId,
-        connection_id: &ConnectionId,
-    ) -> Result<SourceConnection, SourceServiceError> {
-        self.repository
-            .load(person_id, connection_id)
-            .await?
-            .ok_or(SourceServiceError::NotFound)
-    }
 }

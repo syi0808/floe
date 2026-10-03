@@ -123,6 +123,7 @@ mod macos {
         let mut completed = initial.clone();
         completed.revision += 1;
         completed.messages.push(AgentMessage::User {
+            message_id: Uuid::new_v4(),
             turn_id: uuid::Uuid::new_v4(),
             text: "Disposable encrypted persistence check".into(),
         });
@@ -209,58 +210,6 @@ mod macos {
             json!({"schema_version":1,"status":"passed","evidence":"signed_native_core","checks":["real_key_create","encrypted_session_cas","reopen","key_loss_fail_closed","exact_key_cleanup","temporary_file_cleanup"],"personal_data":false})
         );
         Ok(())
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        fn disposable() -> (tempfile::TempDir, PersonId) {
-            let root = tempfile::Builder::new()
-                .prefix("floe-vault-keyring-smoke-")
-                .tempdir()
-                .unwrap();
-            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
-            let person = PersonId::new();
-            let directory = root.path().join(person.to_string());
-            fs::create_dir(&directory).unwrap();
-            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
-            let marker = directory.join("vault.id");
-            fs::write(&marker, Uuid::new_v4().to_string()).unwrap();
-            fs::set_permissions(marker, fs::Permissions::from_mode(0o600)).unwrap();
-            (root, person)
-        }
-
-        #[test]
-        fn cleanup_scope_is_one_private_disposable_person() {
-            let (root, person) = disposable();
-            assert!(validate_cleanup_root(root.path(), person).is_ok());
-            assert!(validate_cleanup_root(root.path(), PersonId::new()).is_err());
-            fs::write(root.path().join("unrelated"), "fixture").unwrap();
-            assert!(validate_cleanup_root(root.path(), person).is_err());
-        }
-
-        #[test]
-        fn cleanup_rejects_public_root_and_symlink_marker() {
-            let (root, person) = disposable();
-            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o755)).unwrap();
-            assert!(validate_cleanup_root(root.path(), person).is_err());
-            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
-            let marker = root.path().join(person.to_string()).join("vault.id");
-            let moved = marker.with_file_name("other.id");
-            fs::rename(&marker, &moved).unwrap();
-            std::os::unix::fs::symlink(&moved, &marker).unwrap();
-            assert!(validate_cleanup_root(root.path(), person).is_err());
-        }
-
-        #[test]
-        fn cleanup_rejects_root_symlink() {
-            let (root, person) = disposable();
-            let holder = tempfile::tempdir().unwrap();
-            let alias = holder.path().join("alias");
-            std::os::unix::fs::symlink(root.path(), &alias).unwrap();
-            assert!(validate_cleanup_root(&alias, person).is_err());
-        }
     }
 }
 

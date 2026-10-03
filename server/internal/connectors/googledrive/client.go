@@ -1,6 +1,7 @@
 package googledrive
 
 import (
+ "floe/server/internal/views"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,7 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"floe/server/internal/connectors/common"
+	
 )
 
 const (
@@ -84,9 +85,9 @@ func NewWithBaseURL(tokens TokenSource, baseURL string) (*Client, error) {
 	}, nil
 }
 
-func (client *Client) WorkContext(ctx context.Context, folderID string, now time.Time) (common.WorkContextView, error) {
+func (client *Client) WorkContext(ctx context.Context, folderID string, now time.Time) (views.WorkContextView, error) {
 	if !idPattern.MatchString(folderID) {
-		return common.WorkContextView{}, ErrInvalidInput
+		return views.WorkContextView{}, ErrInvalidInput
 	}
 	query := url.Values{
 		"fields":   {"nextPageToken,files(id,name,mimeType,modifiedTime)"},
@@ -97,12 +98,12 @@ func (client *Client) WorkContext(ctx context.Context, folderID string, now time
 	}
 	var files fileList
 	if err := client.getJSON(ctx, "/drive/v3/files?"+query.Encode(), &files); err != nil {
-		return common.WorkContextView{}, err
+		return views.WorkContextView{}, err
 	}
 	if len(files.Files) > maxFiles {
-		return common.WorkContextView{}, ErrInvalidResponse
+		return views.WorkContextView{}, ErrInvalidResponse
 	}
-	view := common.WorkContextView{
+	view := views.WorkContextView{
 		SchemaVersion:    1,
 		ViewID:           "work.context",
 		SourceHandle:     handle("drive", folderID+":"+now.UTC().Format("2006-01-02T15:04")),
@@ -110,7 +111,7 @@ func (client *Client) WorkContext(ctx context.Context, folderID string, now time
 		ExpiresAtUnixMS:  now.Add(5 * time.Minute).UnixMilli(),
 		CoverageComplete: strings.TrimSpace(files.NextPageToken) == "",
 		ScopeHandle:      handle("folder", folderID),
-		Items:            []common.WorkItem{},
+		Items:            []views.WorkItem{},
 	}
 	seen := map[string]bool{}
 	for _, file := range files.Files {
@@ -119,7 +120,7 @@ func (client *Client) WorkContext(ctx context.Context, folderID string, now time
 		}
 		modified, err := time.Parse(time.RFC3339Nano, file.ModifiedTime)
 		if err != nil || !idPattern.MatchString(file.ID) || seen[file.ID] || strings.TrimSpace(file.Name) == "" || len(file.Name) > 512 || modified.After(now.Add(time.Minute)) {
-			return common.WorkContextView{}, ErrInvalidResponse
+			return views.WorkContextView{}, ErrInvalidResponse
 		}
 		seen[file.ID] = true
 		path := "/drive/v3/files/" + url.PathEscape(file.ID) + "?alt=media"
@@ -128,7 +129,7 @@ func (client *Client) WorkContext(ctx context.Context, folderID string, now time
 		}
 		content, err := client.getBytes(ctx, path, maxFileBytes)
 		if err != nil || !utf8.Valid(content) {
-			return common.WorkContextView{}, ErrInvalidResponse
+			return views.WorkContextView{}, ErrInvalidResponse
 		}
 		excerpt := truncate(strings.TrimSpace(string(content)), 2048)
 		var excerptPointer *string
@@ -136,7 +137,7 @@ func (client *Client) WorkContext(ctx context.Context, folderID string, now time
 			excerptPointer = &excerpt
 		}
 		status := "selected_file"
-		view.Items = append(view.Items, common.WorkItem{
+		view.Items = append(view.Items, views.WorkItem{
 			EvidenceHandle:   handle("drive", folderID+":"+file.ID+":"+file.ModifiedTime),
 			Kind:             "selected_file",
 			Title:            strings.TrimSpace(file.Name),
@@ -147,7 +148,7 @@ func (client *Client) WorkContext(ctx context.Context, folderID string, now time
 	}
 	encoded, err := json.Marshal(view)
 	if err != nil || len(encoded) > 65_536 {
-		return common.WorkContextView{}, ErrInvalidResponse
+		return views.WorkContextView{}, ErrInvalidResponse
 	}
 	return view, nil
 }

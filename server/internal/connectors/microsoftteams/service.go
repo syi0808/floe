@@ -1,12 +1,14 @@
 package microsoftteams
 
 import (
+ "floe/server/internal/integrations"
+ "floe/server/internal/views"
 	"context"
 	"errors"
 	"sync"
 	"time"
 
-	"floe/server/internal/connectors/common"
+	
 )
 
 type Service struct {
@@ -15,7 +17,7 @@ type Service struct {
 	channel   string
 	clock     func() time.Time
 	operation sync.Mutex
-	last      *common.WorkContextView
+	last      *views.WorkContextView
 }
 
 func NewService(client *Client, team, channel string) (*Service, error) {
@@ -25,7 +27,7 @@ func NewService(client *Client, team, channel string) (*Service, error) {
 	return &Service{client: client, team: team, channel: channel, clock: time.Now}, nil
 }
 
-func (service *Service) ReadWorkContextView(ctx context.Context) (common.WorkContextView, error) {
+func (service *Service) ReadWorkContextView(ctx context.Context) (views.WorkContextView, error) {
 	service.operation.Lock()
 	defer service.operation.Unlock()
 	view, err := service.client.WorkContext(ctx, service.team, service.channel, service.clock())
@@ -56,7 +58,7 @@ func (service *Service) ConnectionSnapshot(ctx context.Context) (any, error) {
 		kind = "partial_fetch"
 	}
 	observed := now.UnixMilli()
-	snapshot := common.Snapshot{Descriptor: ConnectorDescriptor(), Connection: common.Connection{SchemaVersion: 1, ConnectorID: "microsoft.teams", State: state, ObservedAtUnixMS: observed, LastFailure: &common.Failure{Kind: kind, ObservedAtUnixMS: observed}}, Views: []common.ViewSnapshot{}}
+	snapshot := integrations.Snapshot{Descriptor: ConnectorDescriptor(), Connection: integrations.Connection{SchemaVersion: 1, ConnectorID: "microsoft.teams", State: state, ObservedAtUnixMS: observed, LastFailure: &integrations.Failure{Kind: kind, ObservedAtUnixMS: observed}}, Views: []views.ViewSnapshot{}}
 	if service.last != nil {
 		snapshot.Connection.State = "degraded"
 		snapshot.Connection.GrantedScopes = []string{observeScope}

@@ -1,4 +1,5 @@
-import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
+import 'package:floe_client/features/connections/presentation/connections_controller.dart';
+import 'package:floe_client/features/connections/presentation/connector_screen.dart';
 
 import 'dart:async';
 
@@ -11,17 +12,13 @@ import 'package:floe_client/app/floe_primitives.dart';
 import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_squircle.dart';
-import 'package:floe_client/features/conversation/application/agent_controller.dart';
+import 'package:floe_client/features/conversation/application/conversation_controller.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/experts/presentation/agent_registry_dialog.dart';
 import 'package:floe_client/features/settings/presentation/agent_memory_settings.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/actions/application/calendar_action_controller.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
-import 'package:floe_client/features/connections/application/local_server_client.dart';
-import 'package:floe_client/features/connections/presentation/local_server_panel.dart';
-import 'package:floe_client/infrastructure/native/android_context_gateway.dart';
-import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
 
 part 'data_privacy.dart';
 part 'action_permissions.dart';
@@ -32,23 +29,17 @@ enum _SettingsPage { actions, dataPrivacy, experts, memory, remoteServer }
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     super.key,
-    required this.client,
-    this.pairingGateway,
+    required this.connectionsController,
     this.actionController,
     this.agentController,
     this.expertBindingTarget,
-    this.androidContext,
-    this.appleContext,
     this.platform,
   });
 
-  final LocalServerClient? client;
-  final RemotePairingGateway? pairingGateway;
+  final ConnectionsController? connectionsController;
   final CalendarActionController? actionController;
-  final AgentController? agentController;
+  final ConversationController? agentController;
   final AgentExpertBindingTarget? expertBindingTarget;
-  final AndroidContextApi? androidContext;
-  final AppleContextApi? appleContext;
   final TargetPlatform? platform;
 
   @override
@@ -96,9 +87,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ),
     _SettingsPage.dataPrivacy => _DataPrivacy(
       controller: widget.agentController!,
-      serverClient: widget.client,
-      androidContext: widget.androidContext,
-      appleContext: widget.appleContext,
       platform: widget.platform,
       onManageMemory: () => setState(() => selectedPage = _SettingsPage.memory),
     ),
@@ -110,10 +98,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       controller: widget.agentController!,
       onBack: () => setState(() => selectedPage = _SettingsPage.dataPrivacy),
     ),
-    _SettingsPage.remoteServer => _RemoteServerSettings(
-      client: widget.client,
-      pairingGateway: widget.pairingGateway,
-    ),
+    _SettingsPage.remoteServer => ConnectorScreen(controller: widget.connectionsController),
   };
 
   @override
@@ -216,45 +201,4 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ],
     );
   }
-}
-
-class _RemoteServerSettings extends StatelessWidget {
-  const _RemoteServerSettings({
-    required this.client,
-    required this.pairingGateway,
-  });
-
-  final LocalServerClient? client;
-  final RemotePairingGateway? pairingGateway;
-
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      if (client case final serverClient?)
-        LocalServerPanel(client: serverClient, pairingGateway: pairingGateway)
-      else
-        const FloeSquircle(
-          padding: EdgeInsets.all(FloeSpace.lg),
-          child: Text(
-            'Remote server connection is available in the native Floe app.',
-          ),
-        ),
-      const SizedBox(height: FloeSpace.lg),
-      Padding(
-        padding: EdgeInsets.symmetric(horizontal: 4),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Connection boundary', style: FloeType.controlLabel),
-            SizedBox(height: 6),
-            Text(
-              'Pairing authorizes this app to use assisted features on your server. Sensitive context is still approved per request, and service credentials remain on the server.',
-              style: FloeType.body.copyWith(color: FloePalette.neutral600),
-            ),
-          ],
-        ),
-      ),
-    ],
-  );
 }

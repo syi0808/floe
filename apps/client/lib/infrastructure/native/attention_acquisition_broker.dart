@@ -1,34 +1,32 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:flutter/services.dart';
 
-import 'package:floe_client/app/runtime/native_transport.dart';
+import 'package:floe_client/infrastructure/native/native_context_host_transport.dart';
 
 typedef AttentionAcquisitionReader = Future<Map<String, dynamic>> Function(
   Map<String, dynamic> request,
 );
 
 final class AttentionAcquisitionBroker {
-  AttentionAcquisitionBroker({
-    required this._transport,
-    required this._personId,
-    String? hostEpoch,
-  }) : _hostEpoch = hostEpoch ?? _newEpoch();
+  AttentionAcquisitionBroker({required NativeContextHostTransport transport})
+      : _transport = transport;
 
-  final LocalContextTransport _transport;
-  final String _personId;
-  final String _hostEpoch;
+  final NativeContextHostTransport _transport;
+  NativeHostRegistration? _registration;
+  String get _hostEpoch => _registration!.hostEpoch;
   bool _started = false;
   bool _disposed = false;
 
   Future<void> start() async {
     _ensureOpen();
     if (_started) return;
-    await _transport.registerAttentionHost(
-      personId: _personId,
-      hostEpoch: _hostEpoch,
+    _registration = await _transport.registerAttentionHost(
     );
+    if (_disposed) {
+      await _transport.disposeAttentionHost(registration: _registration!);
+      throw StateError('Native host was detached during registration.');
+    }
     _started = true;
   }
 
@@ -36,8 +34,7 @@ final class AttentionAcquisitionBroker {
     _ensureOpen();
     await start();
     final requests = await _transport.pollAttentionAcquisitions(
-      personId: _personId,
-      hostEpoch: _hostEpoch,
+      registration: _registration!,
     );
     if (requests.isEmpty) return false;
     if (requests.length != 1) {
@@ -54,8 +51,7 @@ final class AttentionAcquisitionBroker {
     } on Object catch (error) {
       if (_disposed) return false;
       await _transport.failAttentionAcquisition(
-        personId: _personId,
-        hostEpoch: _hostEpoch,
+        registration: _registration!,
         requestId: requestId,
         failure: _failureCode(error),
       );
@@ -65,15 +61,13 @@ final class AttentionAcquisitionBroker {
     try {
       _validateResult(request, result);
       await _transport.completeAttentionAcquisition(
-        personId: _personId,
-        hostEpoch: _hostEpoch,
+        registration: _registration!,
         result: Map.unmodifiable(result),
       );
     } on Object catch (error) {
       if (!_disposed) {
         await _transport.failAttentionAcquisition(
-          personId: _personId,
-          hostEpoch: _hostEpoch,
+          registration: _registration!,
           requestId: requestId,
           failure: _failureCode(error),
         );
@@ -88,8 +82,7 @@ final class AttentionAcquisitionBroker {
     _disposed = true;
     if (_started) {
       await _transport.disposeAttentionHost(
-        personId: _personId,
-        hostEpoch: _hostEpoch,
+        registration: _registration!,
       );
     }
   }
@@ -158,7 +151,7 @@ final class AttentionAcquisitionBroker {
           ...optional,
         }).isNotEmpty ||
         !request.keys.toSet().containsAll(required) ||
-        request['person_id'] != _personId ||
+        !_validOpaque(request['person_id']) ||
         request['host_epoch'] != _hostEpoch ||
         !_validOpaque(request['request_id'], maximum: 128) ||
         !_validOpaque(request['host_epoch'], maximum: 128) ||
@@ -203,21 +196,15 @@ final class AttentionAcquisitionBroker {
       value.length <= maximum &&
       !value.contains(RegExp(r'\s'));
 
-  static String _newEpoch() {
-    final random = Random.secure();
-    return List<String>.generate(
-      32,
-      (_) => random.nextInt(16).toRadixString(16),
-    ).join();
-  }
+
 }
 
 final class AttentionAcquisitionService {
   AttentionAcquisitionService({
-    required this._broker,
-    required this._reader,
-    this._pollInterval = const Duration(milliseconds: 100),
-  });
+    required AttentionAcquisitionBroker broker,
+    required AttentionAcquisitionReader reader,
+    Duration pollInterval = const Duration(milliseconds: 100),
+  }) : _broker = broker, _reader = reader, _pollInterval = pollInterval;
 
   final AttentionAcquisitionBroker _broker;
   final AttentionAcquisitionReader _reader;

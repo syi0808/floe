@@ -2,8 +2,8 @@
 //!
 //! Re-admitting a recorded dependency needs only the window it must finish in —
 //! not the Session, the transcript, the ledger the run happens to carry, or the
-//! model route/placement it may later be shown to. Source/grant/dependency
-//! authority is route-neutral; Device vs External processing restrictions are
+//! model plan it may later be shown to. Source/grant/dependency
+//! authority is independent of planning; Device and Gateway processing restrictions are
 //! enforced by Access model dispatch, not by reauthorization.
 
 use std::future::Future;
@@ -31,4 +31,12 @@ pub trait DependencyResolver: Send + Sync {
 /// Whether a dependency's observation is still live, without any I/O.
 pub trait DependencyLiveness: Send + Sync {
     fn validate(&self, dependency: &ContextDependency) -> Result<(), AgentFailure>;
+}
+
+impl<T: DependencyResolver + ?Sized> DependencyResolver for std::sync::Arc<T> {
+    fn authorize<'a>(&'a self, dependency: &'a ContextDependency, request: &'a DependencyAuthorization)
+        -> floe_execution::BoxFuture<'a, Result<(), AgentFailure>> { (**self).authorize(dependency, request) }
+}
+impl<T: DependencyLiveness + ?Sized> DependencyLiveness for std::sync::Arc<T> {
+    fn validate(&self, dependency: &ContextDependency) -> Result<(), AgentFailure> { (**self).validate(dependency) }
 }

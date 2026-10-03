@@ -34,3 +34,17 @@ trailing identities. Any budget reduction sets `coverage_complete` to `false`.
 
 The host must not persist a returned View beyond its expiry or interpret it as an
 address-book mirror. Relationship memories remain separate, confirmed Floe data.
+
+## Native source review metadata
+
+`inspectCatalog()` fetches only identifier and display-name keys for a bounded
+resource catalog. It returns opaque HMAC handles, display labels, the exact
+catalog subject fingerprint and `catalog_complete`. A truncated scan or byte
+budget remains explicitly incomplete; missing rows are not proof of revocation.
+The source owner decides whether that catalog is usable for a reviewed selection.
+
+`inspectSelectedSubject()` also uses metadata-only reads. It rebuilds its private
+handle-to-native-identifier mapping after a process restart without fetching phone
+numbers, email addresses or a People View. Only an admitted `read_projection`
+request calls `readPeopleView()` for those selected handles. Native callbacks echo
+the owner request mode and preserve the before/after subject and permission fences.

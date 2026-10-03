@@ -1,3 +1,5 @@
+import 'package:floe_client/features/conversation/application/conversation_runtime_gateway.dart';
+import 'package:floe_client/features/conversation/application/agent_interaction_gateway.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 
 final class AgentConversationTurnRequest {
@@ -6,17 +8,17 @@ final class AgentConversationTurnRequest {
     required this.text,
     this.continuation = false,
     this.retryOf,
-    this.profileId,
   }) : assert(!continuation || retryOf == null);
 
   final AgentSession session;
   final String text;
   final bool continuation;
   final String? retryOf;
-  final String? profileId;
 }
 
 abstract interface class AgentConversationGateway {
+  ConversationRuntimeGateway get conversationRuntime;
+  AgentInteractionGateway get interactionGateway;
   Future<AgentSession> startConversation(String personId);
   Future<AgentSession> resumeConversation(String personId);
   Future<AgentSession> loadConversation(String personId, String sessionId);

@@ -3,13 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_squircle.dart';
-import 'package:floe_client/features/conversation/application/agent_controller.dart';
-import 'package:floe_client/features/knowledge/presentation/agent_memory_review.dart';
+import 'package:floe_client/features/conversation/application/conversation_controller.dart';
+import 'package:floe_client/features/knowledge/domain/memory_review.dart';
+import 'package:floe_client/features/knowledge/application/memory_gateway.dart';
 
 final class AgentMemoryReviewSettings extends StatelessWidget {
   const AgentMemoryReviewSettings({super.key, required this.controller});
 
-  final AgentController controller;
+  final ConversationController controller;
 
   @override
   Widget build(BuildContext context) {
@@ -56,7 +57,7 @@ final class AgentMemoryReviewSettings extends StatelessWidget {
 final class _Candidate extends StatelessWidget {
   const _Candidate({required this.controller, required this.candidate});
 
-  final AgentController controller;
+  final ConversationController controller;
   final AgentMemoryCandidate candidate;
 
   @override

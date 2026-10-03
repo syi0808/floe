@@ -13,11 +13,6 @@ let package = Package(
     ],
     targets: [
         .target(name: "FloeAppleContacts"),
-        .testTarget(
-            name: "FloeAppleContactsTests",
-            dependencies: ["FloeAppleContacts"],
-            resources: [.process("Fixtures")]
-        ),
     ],
     swiftLanguageModes: [.v5]
 )

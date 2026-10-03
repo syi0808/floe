@@ -71,6 +71,21 @@ impl AgentActionEnvelope {
         Ok(())
     }
 
+    /// Invalidate only effects that have not crossed their durable dispatch
+    /// boundary. Executing/Unknown records retain their identity and recovery.
+    pub fn invalidate_grant(&mut self, person_id: PersonId, grant_id: floe_context_contract::GrantId,
+        authority: floe_context_contract::GrantAuthority,
+    ) -> Result<bool, AgentFailure> {
+        self.validate(person_id)?;
+        if !grant_id.is_valid() || !authority.is_valid() || self.dependency.grant_id() != grant_id
+            || self.dependency.grant_authority() != authority { return Err(AgentFailure::PolicyDenied); }
+        if !matches!(self.action.state, CalendarActionState::Pending | CalendarActionState::Approved) { return Ok(false); }
+        self.write_approval = false;
+        self.action.state = CalendarActionState::Blocked { reason: crate::domain::ActionBlockReason::PolicyDenied };
+        self.validate(person_id)?;
+        Ok(true)
+    }
+
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, AgentFailure> {
         let mut action = self.action.clone();
         action.state = CalendarActionState::Pending;

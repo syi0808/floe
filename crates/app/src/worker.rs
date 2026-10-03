@@ -9,7 +9,6 @@ use floe_agent_contract::AgentFailure;
 use floe_kernel::PersonId;
 use uuid::Uuid;
 
-use crate::ConversationTurnRequest;
 
 /// The Person's vault, as this process currently holds it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -19,20 +18,6 @@ pub enum VaultState {
     Locked,
     Ready,
     Unavailable,
-}
-
-/// What a Session command is asked to do.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ConversationSessionOperation {
-    Start,
-    Resume,
-    Get {
-        session_id: Uuid,
-    },
-    Recover {
-        session_id: Uuid,
-        expected_revision: u64,
-    },
 }
 
 /// What a calendar action command is asked to do.
@@ -80,12 +65,6 @@ pub struct CalendarActionProposal {
 /// Both are Knowledge's own values; the worker only carries them.
 pub use floe_knowledge::{MemoryReviewDecision, MemoryReviewResult};
 
-/// One producer pairing challenge, as the producer issued it.
-///
-/// The challenge is Access's: what a producer claims and what the owner key is
-/// asked to sign over. The worker only carries it to the key holder.
-pub use floe_access::RemotePairingChallenge;
-
 /// One proposal the Person asked to inspect.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CalendarProposalInspection {
@@ -115,10 +94,6 @@ pub enum WorkerAction {
         change: crate::ExpertBindingSelectionIntent,
         device_id: String,
     },
-    ConnectionObserve {
-        operation: crate::ConnectionObserveOperation,
-        device_id: String,
-    },
     CalendarAction {
         operation: CalendarActionOperation,
     },
@@ -126,40 +101,10 @@ pub enum WorkerAction {
         session_id: Uuid,
         invocation_id: Uuid,
     },
-    ConversationSession {
-        operation: ConversationSessionOperation,
-    },
-    ConversationTurn {
-        request: Box<ConversationTurnRequest>,
-    },
-    ConversationResume {
-        request: Box<crate::ConversationResumeRequest>,
-    },
     MemoryReview {
         decision: Option<MemoryReviewDecision>,
     },
     Memory,
-    Connections,
-    RemoteAccess {
-        caller: crate::CallerContext,
-        command: crate::RemoteAccessCommand,
-    },
-    RemotePairing {
-        caller: crate::CallerContext,
-        command: crate::RemotePairingCommand,
-    },
-}
-
-/// What the worker queue is asked to do with one request.
-///
-/// This is scheduling only: submit a command, read how far it got, stop it, or
-/// let the vault go.
-#[cfg(test)]
-pub enum WorkerOperation {
-    Submit { action: Box<WorkerAction> },
-    Poll { after_sequence: usize },
-    Stop,
-    Release,
 }
 
 impl WorkerAction {
@@ -174,16 +119,9 @@ impl WorkerAction {
             Self::ExpertCandidates { .. } => "expert_candidates",
             Self::ExpertReplaceBinding { .. } => "expert_binding",
             Self::CalendarAction { .. } => "calendar_action",
-            Self::ConnectionObserve { operation, .. } => operation.name(),
             Self::InspectProposal { .. } => "inspect_proposal",
-            Self::ConversationSession { .. } => "conversation_session",
-            Self::ConversationTurn { .. } => "conversation_turn",
-            Self::ConversationResume { .. } => "conversation_resume",
             Self::MemoryReview { .. } => "memory_review",
             Self::Memory => "memory",
-            Self::Connections => "connections",
-            Self::RemoteAccess { command, .. } => command.name(),
-            Self::RemotePairing { command, .. } => command.name(),
         }
     }
 
@@ -200,18 +138,9 @@ impl WorkerAction {
                 | Self::Registry { .. }
                 | Self::ExpertCandidates { .. }
                 | Self::ExpertReplaceBinding { .. }
-                | Self::ConnectionObserve { .. }
-                | Self::ConversationTurn { .. }
-                | Self::ConversationResume { .. }
-                | Self::ConversationSession {
-                    operation: ConversationSessionOperation::Get { .. },
-                }
                 | Self::InspectProposal { .. }
                 | Self::MemoryReview { .. }
                 | Self::Memory
-                | Self::Connections
-                | Self::RemoteAccess { .. }
-                | Self::RemotePairing { .. }
         )
     }
 }
@@ -224,52 +153,14 @@ pub struct WorkerResult {
     pub request_id: Uuid,
     pub person_id: PersonId,
     pub stage: String,
-    #[cfg(test)]
-    pub events: Vec<floe_conversation::AgentEvent>,
     pub done: bool,
     pub state: Option<VaultState>,
-    pub session: Option<floe_conversation::AgentSession>,
     pub registry: Option<floe_experts::RegistryOverview>,
     pub expert_candidates: Option<crate::ExpertCandidateCatalog>,
     pub proposal: Option<CalendarProposalInspection>,
     pub memory_review: Option<MemoryReviewResult>,
     pub memory: Option<floe_knowledge::MemoryOverviewSnapshot>,
-    pub connections: Option<Vec<floe_connections::ConnectorSnapshot>>,
-    pub remote_producer: Option<floe_access::RemoteProducerIdentity>,
-    pub remote_enrollment: Option<floe_access::RemoteEnrollmentStatus>,
-    pub remote_pairing: Option<floe_connections::PairingStatus>,
-    pub remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
-    pub connection_observe: Option<crate::ConnectionObserveOverview>,
-    pub reviewed_connection_observe: Option<crate::ConnectionObserveExpectation>,
     pub calendar_actions: Option<crate::CalendarActionsResult>,
     pub failure: Option<AgentFailure>,
 }
 
-impl WorkerAction {
-    pub(crate) fn remote_caller(&self) -> Option<&crate::CallerContext> {
-        match self {
-            Self::RemotePairing { caller, .. } | Self::RemoteAccess { caller, .. } => Some(caller),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn same_remote_command(&self, other: &Self) -> bool {
-        match (self, other) {
-            (
-                Self::RemotePairing { caller, command },
-                Self::RemotePairing {
-                    caller: other_caller,
-                    command: other_command,
-                },
-            ) => caller == other_caller && command == other_command,
-            (
-                Self::RemoteAccess { caller, command },
-                Self::RemoteAccess {
-                    caller: other_caller,
-                    command: other_command,
-                },
-            ) => caller == other_caller && command == other_command,
-            _ => false,
-        }
-    }
-}

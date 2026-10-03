@@ -1,32 +1,16 @@
-mod access;
 mod actions;
-pub use access::{
-    RemoteAccessOperationDto, RemoteAccessRequestDto, RemoteAccessResultDto,
-    RemoteAuthorityEnrollmentStatusDto, RemoteOwnerPublicKeyDto, RemoteProducerIdentityDto,
-};
 pub use actions::ActionOperationResultDto;
-mod connection_observe;
 mod connections;
-pub use connection_observe::{
-    ConnectionObserveExpectationDto, ConnectionObserveGrantStateDto, ConnectionObserveMemberDto,
-    ConnectionObserveMutationDto, ConnectionObserveOverviewDto, ConnectionObserveResultDto,
-    ConnectionObserveReviewedMemberDto, ConnectionObserveStatusDto,
-};
-pub use connections::RemotePairingChallengeDto;
-pub use connections::{
-    ConnectionResourceDto, ConnectionsResultDto, NativeCalendarSourceMutationDto,
-    NativePersonalSourceSetupDto, PairingOutcomeDto, PairingReportDto, PairingTargetDto,
-    RemoteCalendarSourceMutationDto, RemotePairingOperationDto, RemotePairingRequestDto,
-    RemotePairingResultDto, SourceConnectionDto, SourceLifecycleDto, SourceResourceModeDto,
-};
+pub use connections::*;
 mod agent;
 mod calendar;
 mod commands;
 mod conversation;
-pub use conversation::ConversationSessionResultDto;
+pub use conversation::*;
 mod day;
 mod day_mutation;
 pub use day_mutation::DayMutationDto;
+pub use day::DayRefreshStateDto;
 mod envelope;
 mod errors;
 mod events;
@@ -36,11 +20,18 @@ pub use experts::{
     ExpertBindingSelectionDto, ExpertCandidateCatalogDto, ExpertOperationResultDto,
     ExpertSourceCandidateDto,
 };
-mod context;
 mod local_context;
-pub use context::{
-    AttentionCompletionDto, CalendarCompletionDto, ContextCommandDto, ContextQueryDto,
-    PersonalCompletionDto,
+mod native_host;
+mod refs;
+pub use native_host::{
+    AttentionCompletionDto, CalendarCompletionDto, NativeHostCommandDto, NativeHostQueryDto,
+    NativeHostRegistrationDto, PersonalCompletionDto,
+};
+pub use refs::{
+    ActionRefDto, AssignmentRefDto, AttemptRefDto, CommandIdDto, DigestHex64Dto, GatewayRefDto,
+    ConnectionsSourceRefDto, GatewaySetupRefDto, InteractionRefDto, IntegrationRefDto,
+    LaunchActionRefDto, MessageRefDto, OperationRefDto, RequestIdDto, ResourceRefDto,
+    ReviewRefDto, RunRefDto, SessionRefDto, TaskRefDto, UuidRefDto,
 };
 mod knowledge;
 pub use knowledge::KnowledgeOperationResultDto;
@@ -56,7 +47,7 @@ pub use agent::{
     AgentFailureDto, AgentFailureSafeAction, AgentMemoryOriginDto, AgentMemoryOverviewDto,
     AgentMemoryReviewDecisionKindDto, AgentMemoryReviewOverviewDto, AgentMemorySummaryDto,
     AgentProposalActionDto, AgentProposalInspectionDto, AgentProposalStatusDto, AgentRetryPolicy,
-    AgentSessionDto, AgentVaultFailureDto, AgentVaultRecoveryActionDto, AgentVaultStateDto,
+    AgentVaultFailureDto, AgentVaultRecoveryActionDto, AgentVaultStateDto,
     CalendarActionDecisionDto, CalendarActionOperationDto, ConnectorSnapshotDto,
     EpistemicStatusDto, KnowledgeCandidateDto, KnowledgeDecisionResultDto, PersonalMemoryKindDto,
     RegistryConfigurationDto, RegistryConfigurationTargetDto, RegistryOverviewDto,
@@ -66,9 +57,9 @@ pub use calendar::{
     CalendarScopeDto, CalendarSelectionDto, CalendarSourceDto, CalendarSyncStatusDto,
 };
 pub use commands::{
-    AppCancelRunOutcomeDto, AppCancelRunReasonDto, AppCommandDto, AppCommandReceiptDto,
-    AppCommandRequestDto, AppCommandResultDto, AppCommandStatusDto, AppContinuationRefDto,
-    AppProfileSelectionDto, AppTurnModeDto,
+    AppCancelRunOutcomeDto, AppCommandDto, AppCommandReceiptDto, AppCommandRequestDto,
+    AppCommandResultDto, AppCommandStatusDto, AppProductCommandDto,
+    ContinuationRefDto,
 };
 pub use day::{
     CalendarBatchDto, CalendarRecordDto, CaptureDto, CaptureProcessingDto, CaptureSourceDto,
@@ -76,22 +67,22 @@ pub use day::{
     MutationResultDto, NoteDto, PriorityDto, SourceRefDto, TaskDto, TimelineItemDto,
 };
 pub use envelope::{ErrorCodeDto, ErrorDto, ResponseEnvelopeDto, ResponseOutcomeDto};
-pub use errors::{AppResponseDto, AppResponseOutcomeDto, AppWireErrorCodeDto, AppWireErrorDto};
+pub use errors::{AppResponseDto, AppResponseOutcomeDto, AppWireErrorCodeDto, AppWireErrorDto, OwnerFailureDto, OwnerRecoveryDto};
 pub use events::{AppEventDto, AppEventKindDto, AppEventsRequestDto, AppEventsResultDto};
 pub use interactions::{
-    AppConsentScopeDto, AppInteractionActionDto, AppInteractionDecisionDto, AppInteractionKindDto,
+    AppInteractionActionDto, AppInteractionDecisionDto, AppInteractionKindDto,
     AppInteractionListDto, AppInteractionRefreshOutcomeDto, AppInteractionRefreshResultDto,
     AppInteractionResolveOutcomeDto, AppInteractionResolveResultDto, AppInteractionSnapshotDto,
-    AppInteractionStateDto, AppInteractionTargetDto, AppNavigationDestinationDto,
-    AppObservedMemberDto, MAX_INTERACTIONS_PER_LIST,
+    AppInteractionStateDto, AppInteractionTargetDto, AppNavigationDestinationDto, MAX_INTERACTIONS_PER_LIST,
 };
 pub use local_context::{
     LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,
     LocalContextAttentionAcquisitionModeDto, LocalContextAttentionAcquisitionRequestDto,
     LocalContextPersonalAcquisitionRequestDto, LocalContextPersonalDomainDto,
-    LocalContextResultDto,
+    LocalContextPersonalAcquisitionModeDto, NativeSourceResourceDto,
 };
 pub use queries::{
-    AppMessageDto, AppMessageRoleDto, AppQueryDto, AppQueryRequestDto, AppQueryResultDto,
-    AppReplyStatusDto, AppRunSnapshotDto, AppRunStateDto, AppTurnExecutionDto, AppTurnReportDto,
+    AppMessageDto, AppMessageRoleDto, AppProductQueryDto, AppQueryDto, AppQueryRequestDto,
+    AppQueryResultDto, AppReplyStatusDto, AppRunSnapshotDto, AppRunStateDto,
+    AppTurnExecutionDto, AppTurnReportDto,
 };

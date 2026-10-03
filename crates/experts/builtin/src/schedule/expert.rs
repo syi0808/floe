@@ -1,4 +1,4 @@
-use floe_agent_contract::{AgentFailure, ExpertModelOutcome, ExpertModelRequirement};
+use floe_agent_contract::{AgentFailure, ExpertModelOutcome};
 use floe_context_contract::{CalendarContextView, calendar_context_evidence};
 use uuid::Uuid;
 
@@ -26,7 +26,6 @@ pub async fn judge<Host: BuiltinExpertHost + ?Sized>(
     let answer = match run_expert_model(
         host.model(),
         host.policy(),
-        ExpertModelRequirement::Any,
         request.person_id,
         request.invocation_id,
         &request.assignment,

@@ -6,7 +6,7 @@ use uuid::Uuid;
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_agent_contract::{AgentFailure, DataClass};
-use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
+use floe_agent_contract::{ExpertModel};
 use floe_context_contract::{
     ConfirmedInteractionView, ContextEvidence, PeopleView, personal_context_evidence,
     validate_confirmed_interaction_view, validate_people_view,
@@ -103,7 +103,6 @@ pub async fn run_relationships_expert_with_views<Model: ExpertModel>(
     let output: RelationshipsOutput = match run_personal_model(
         model,
         policy,
-        ExpertModelRequirement::Any,
         &invocation,
         evidence,
         relationships_expert_prompt(),

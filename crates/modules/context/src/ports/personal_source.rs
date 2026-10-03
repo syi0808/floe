@@ -5,7 +5,6 @@
 //! device, are the host's; both reach this module as ports so the read itself
 //! names neither a vault nor a native bridge.
 
-use floe_access::DataAccessGrant;
 use floe_agent_contract::{AgentFailure, BoxFuture, PersonId};
 use floe_connections::SourceConnection;
 use floe_context_contract::ConnectionId;
@@ -14,12 +13,9 @@ use serde_json::Value;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-/// Vault-owned grant records.
-pub trait PersonalGrantRecords: Sync {
-    fn grants<'a>(&'a self) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>>;
-}
-
 pub trait PersonalConnectionReader: Sync {
+    fn source_is_fenced<'a>(&'a self, person_id: PersonId, connection_id: &'a ConnectionId)
+        -> BoxFuture<'a, Result<bool, AgentFailure>>;
     fn load<'a>(
         &'a self,
         person_id: PersonId,
@@ -73,6 +69,7 @@ pub struct TrustedObservation {
     pub observed_at_unix_ms: i64,
     pub expires_at_unix_ms: i64,
     pub query_fingerprint: Vec<u8>,
+    pub health_transform: Option<floe_context_contract::HealthTransformEvidence>,
 }
 
 /// What the device answered, and which subject answered it — before the read
@@ -81,6 +78,7 @@ pub struct AcquiredSource {
     pub view: Option<Value>,
     pub subject_before: String,
     pub subject_after: String,
+    pub health_transform: Option<floe_context_contract::HealthTransformEvidence>,
 }
 
 /// The device driver one personal read asks, and the observations it keeps.
@@ -118,6 +116,7 @@ pub trait PersonalSourceDriver: Sync {
         observed_at_unix_ms: i64,
         expires_at_unix_ms: i64,
         query_fingerprint: Vec<u8>,
+        health_transform: Option<floe_context_contract::HealthTransformEvidence>,
     ) -> Result<(), AgentFailure>;
 
     /// The observation a stored personal dependency was recorded against, if

@@ -50,6 +50,74 @@ public final class AppleContactsProvider {
         return connectionSnapshot()
     }
 
+    /// Resource selection metadata only. Phone numbers, email addresses and
+    /// aliases are never fetched before a source read is admitted.
+    public func inspectCatalog(limit: Int = 256) throws -> AppleContactsCatalog {
+        guard (1...Self.maximumScanCount).contains(limit) else { throw AppleContactsProviderError.invalidLimit }
+        let authorization = store.authorizationState()
+        guard authorization == .authorized || authorization == .limited else {
+            throw AppleContactsProviderError.permissionRequired(authorization)
+        }
+        let batch: AppleContactResourceBatch
+        do { batch = try store.fetchResourceMetadata(limit: limit, identifiers: nil) }
+        catch { throw AppleContactsProviderError.storeReadFailed }
+        guard store.authorizationState() == authorization else {
+            throw AppleContactsProviderError.permissionRequired(store.authorizationState())
+        }
+        var resources: [AppleContactResource] = []
+        var coverageComplete = batch.coverageComplete
+        for record in batch.records {
+            guard !record.identifier.isEmpty else { throw AppleContactsProviderError.invalidSelection }
+            let label = Self.boundedText(record.displayName, maximumBytes: 256)
+            guard !label.isEmpty, !label.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+                throw AppleContactsProviderError.invalidSelection
+            }
+            let handle = opaqueHandle(prefix: "person.identity", value: record.identifier)
+            nativeIdentifiersByHandle[handle] = record.identifier
+            let resource = AppleContactResource(handle: handle, label: label)
+            let candidate = resources + [resource]
+            if (try JSONEncoder().encode(candidate)).count > 24_576 {
+                coverageComplete = false
+                break
+            }
+            resources.append(resource)
+        }
+        resources.sort { $0.handle < $1.handle }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let encoded = try encoder.encode(resources)
+        var fingerprintInput = Data("contacts.catalog\0\(authorization.rawValue)\0\(coverageComplete)\0".utf8)
+        fingerprintInput.append(encoded)
+        let digest = HMAC<SHA256>.authenticationCode(for: fingerprintInput, using: handleKey)
+        return AppleContactsCatalog(resources: resources,
+            nativeSubjectFingerprint: digest.map { String(format: "%02x", $0) }.joined(),
+            permissionClass: authorization.rawValue, coverageComplete: coverageComplete)
+    }
+
+    private func resolveNativeIdentifiers(_ handles: Set<String>) throws -> Set<String> {
+        // Re-establish the native mapping from real metadata after process restart.
+        // This never infers that a missing bounded row was revoked.
+        if handles.contains(where: { nativeIdentifiersByHandle[$0] == nil }) {
+            let authorization = store.authorizationState()
+            guard authorization == .authorized || authorization == .limited else {
+                throw AppleContactsProviderError.permissionRequired(authorization)
+            }
+            let batch: AppleContactResourceBatch
+            do { batch = try store.fetchResourceMetadata(limit: Self.maximumScanCount, identifiers: nil) }
+            catch { throw AppleContactsProviderError.storeReadFailed }
+            guard store.authorizationState() == authorization else {
+                throw AppleContactsProviderError.permissionRequired(store.authorizationState())
+            }
+            for record in batch.records {
+                let handle = opaqueHandle(prefix: "person.identity", value: record.identifier)
+                nativeIdentifiersByHandle[handle] = record.identifier
+            }
+        }
+        let identifiers = Set(handles.compactMap { nativeIdentifiersByHandle[$0] })
+        guard identifiers.count == handles.count else { throw AppleContactsProviderError.selectionUnresolved }
+        return identifiers
+    }
+
     public func readPeopleView(
         selection: AppleContactsSelection = .allAuthorized,
         limit: Int = AppleContactsProvider.maximumIdentityCount
@@ -76,11 +144,8 @@ public final class AppleContactsProvider {
             else {
                 throw AppleContactsProviderError.invalidSelection
             }
-            guard handles.allSatisfy({ nativeIdentifiersByHandle[$0] != nil }) else {
-                throw AppleContactsProviderError.selectionUnresolved
-            }
             selectedHandles = handles
-            selectedIdentifiers = Set(handles.compactMap { nativeIdentifiersByHandle[$0] })
+            selectedIdentifiers = try resolveNativeIdentifiers(handles)
             scanLimit = Self.maximumScanCount
         }
         let batch: AppleContactBatch
@@ -125,17 +190,16 @@ public final class AppleContactsProvider {
         guard !handles.isEmpty,
               handles.count <= Self.maximumIdentityCount,
               Set(handles).count == handles.count,
-              handles.allSatisfy(Self.validHandle),
-              let identifiers = Optional(handles.compactMap { nativeIdentifiersByHandle[$0] }),
-              identifiers.count == handles.count
+              handles.allSatisfy(Self.validHandle)
         else { throw AppleContactsProviderError.selectionUnresolved }
+        let identifiers = try resolveNativeIdentifiers(Set(handles))
         let authorization = store.authorizationState()
         guard authorization == .authorized || authorization == .limited else {
             throw AppleContactsProviderError.permissionRequired(authorization)
         }
-        let batch: AppleContactBatch
+        let batch: AppleContactResourceBatch
         do {
-            batch = try store.fetchContacts(limit: handles.count, identifiers: Set(identifiers))
+            batch = try store.fetchResourceMetadata(limit: handles.count, identifiers: identifiers)
         } catch {
             throw AppleContactsProviderError.storeReadFailed
         }
@@ -143,7 +207,7 @@ public final class AppleContactsProvider {
             throw AppleContactsProviderError.permissionRequired(store.authorizationState())
         }
         let resolved = Set(batch.records.map(\.identifier))
-        guard resolved == Set(identifiers) else {
+        guard resolved == identifiers else {
             throw AppleContactsProviderError.selectionUnresolved
         }
         let canonicalIdentifiers = identifiers.sorted().joined(separator: "\u{0}")

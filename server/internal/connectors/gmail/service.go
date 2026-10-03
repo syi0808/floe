@@ -1,13 +1,15 @@
 package gmail
 
 import (
+ "floe/server/internal/integrations"
+ "floe/server/internal/views"
 	"context"
 	"encoding/json"
 	"errors"
 	"sync"
 	"time"
 
-	"floe/server/internal/connectors/common"
+	
 )
 
 type AuthRuntime interface {
@@ -129,7 +131,7 @@ func (service *Service) Run(ctx context.Context, interval time.Duration) error {
 	}
 }
 
-func (service *Service) Snapshot() (Snapshot, error) {
+func (service *Service) Snapshot() (integrations.Snapshot, error) {
 	now := service.clock()
 	success, failure, count := service.index.SyncStatus()
 	state, failureKind := "pending", ""
@@ -153,22 +155,22 @@ func (service *Service) Snapshot() (Snapshot, error) {
 	}
 	snapshot, err := ConnectionSnapshot(service.index.connectionID, state, now, successTime, failureKind)
 	if err != nil {
-		return Snapshot{}, err
+		return integrations.Snapshot{}, err
 	}
 	if (state == "ready" || state == "degraded") && count > 0 {
 		view, err := service.index.Communication("", 0, min(count, MaxPageItems), now)
 		if err != nil {
-			return Snapshot{}, err
+			return integrations.Snapshot{}, err
 		}
 		encoded, _ := json.Marshal(view)
-		snapshot.Views = []ViewSnapshot{{SchemaVersion: 1, ViewID: "mail.communication", SourceHandle: view.SourceHandle, ObservedAtUnixMS: view.ObservedAtUnixMS, ExpiresAtUnixMS: view.ExpiresAtUnixMS, ItemCount: len(view.Items), ByteCount: len(encoded), ProvenanceCount: len(view.Items)}}
+		snapshot.Views = []views.ViewSnapshot{{SchemaVersion: 1, ViewID: "mail.communication", SourceHandle: view.SourceHandle, ObservedAtUnixMS: view.ObservedAtUnixMS, ExpiresAtUnixMS: view.ExpiresAtUnixMS, ItemCount: len(view.Items), ByteCount: len(encoded), ProvenanceCount: len(view.Items)}}
 		logistics, err := service.index.Logistics(now)
 		if err != nil {
-			return Snapshot{}, err
+			return integrations.Snapshot{}, err
 		}
 		if len(logistics.Items) > 0 {
 			encoded, _ := json.Marshal(logistics)
-			snapshot.Views = append(snapshot.Views, ViewSnapshot{SchemaVersion: 1, ViewID: "life.logistics", SourceHandle: logistics.SourceHandle, ObservedAtUnixMS: logistics.ObservedAtUnixMS, ExpiresAtUnixMS: logistics.ExpiresAtUnixMS, ItemCount: len(logistics.Items), ByteCount: len(encoded), ProvenanceCount: len(logistics.Items)})
+			snapshot.Views = append(snapshot.Views, views.ViewSnapshot{SchemaVersion: 1, ViewID: "life.logistics", SourceHandle: logistics.SourceHandle, ObservedAtUnixMS: logistics.ObservedAtUnixMS, ExpiresAtUnixMS: logistics.ExpiresAtUnixMS, ItemCount: len(logistics.Items), ByteCount: len(encoded), ProvenanceCount: len(logistics.Items)})
 		}
 	}
 	return snapshot, nil
@@ -189,13 +191,13 @@ func (service *Service) ReadCommunicationView(query string, cursor, limit int) (
 	return service.index.Communication(query, cursor, limit, service.clock())
 }
 
-func (service *Service) ReadLogisticsView(context.Context) (common.LogisticsView, error) {
+func (service *Service) ReadLogisticsView(context.Context) (views.LogisticsView, error) {
 	snapshot, err := service.Snapshot()
 	if err != nil {
-		return common.LogisticsView{}, err
+		return views.LogisticsView{}, err
 	}
 	if snapshot.Connection.State != "ready" && snapshot.Connection.State != "degraded" {
-		return common.LogisticsView{}, ErrUnavailable
+		return views.LogisticsView{}, ErrUnavailable
 	}
 	return service.index.Logistics(service.clock())
 }

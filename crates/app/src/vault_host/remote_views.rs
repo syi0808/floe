@@ -19,6 +19,9 @@ use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 
 pub(crate) struct RemoteViewReader<'a, Keys: VaultKeyProvider> {
     pub(crate) vault: &'a EncryptedAgentVault<Keys>,
+    pub(crate) core: &'a crate::FloeCore,
+    pub(crate) signer: &'a dyn floe_access::AuthorizationSigner,
+    pub(crate) verifier: &'a dyn floe_access::SourcePreviewVerifier,
     pub(crate) source_client: &'a floe_provider_adapters::sources::ServerSourceClient,
     pub(crate) person_id: floe_kernel::PersonId,
     /// The pairing identity is compared as text on both sides of the wire.
@@ -30,13 +33,16 @@ pub(crate) struct RemoteViewReader<'a, Keys: VaultKeyProvider> {
 impl<'a, Keys: VaultKeyProvider> RemoteViewReader<'a, Keys> {
     pub(crate) fn new(
         vault: &'a EncryptedAgentVault<Keys>,
+        core: &'a crate::FloeCore,
+        signer: &'a dyn floe_access::AuthorizationSigner,
+        verifier: &'a dyn floe_access::SourcePreviewVerifier,
         source_client: &'a floe_provider_adapters::sources::ServerSourceClient,
         person_id: floe_kernel::PersonId,
         client_id: &'a str,
         device_id: &'a str,
     ) -> Self {
         Self {
-            vault,
+            vault, core, signer, verifier,
             source_client,
             person_id,
             person_text: person_id.to_string(),
@@ -53,8 +59,8 @@ impl<'a, Keys: VaultKeyProvider> RemoteViewReader<'a, Keys> {
         }
     }
 
-    fn transport(&self) -> AuthorizedSourceClient<'_, EncryptedAgentVault<Keys>> {
-        AuthorizedSourceClient::new(self.source_client, self.vault)
+    fn transport(&self) -> AuthorizedSourceClient<'_, dyn floe_access::AuthorizationSigner + '_> {
+        AuthorizedSourceClient::new(self.source_client, self.signer)
     }
 }
 
@@ -89,6 +95,9 @@ impl<Keys: VaultKeyProvider> floe_context::SelectedSourceReader for RemoteViewRe
             }
             let outcome = floe_context::read_selected_remote_view(
                 self.vault,
+                self.verifier,
+                self.core.store.as_ref(),
+                self.core.store.as_ref(),
                 &self.transport(),
                 self.person_id,
                 self.pairing(),
@@ -126,54 +135,17 @@ impl<Keys: VaultKeyProvider> floe_context::SelectedSourceReader for RemoteViewRe
 }
 
 impl<Keys: VaultKeyProvider> floe_context::SourceReader for RemoteViewReader<'_, Keys> {
-    fn read<'a>(
-        &'a self,
-        request: &'a floe_context::SourceReadRequest,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        floe_context_contract::SourceReadOutcome<floe_context::SourceRead>,
-                        AgentFailure,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
+    fn read<'a>(&'a self, request: &'a floe_context::SourceReadRequest) -> floe_execution::BoxFuture<'a, Result<floe_context_contract::SourceReadOutcome<floe_context::SourceRead>, AgentFailure>> {
         Box::pin(async move {
-            match floe_context::read_remote_view(
-                self.vault,
-                &self.transport(),
-                self.person_id,
-                self.pairing(),
-                request.source().as_str(),
-                request.consumer().identifier(),
-                request.query().clone(),
-                &RemoteCallWindow {
-                    deadline: request.deadline(),
-                    cancellation: request.cancellation().clone(),
-                },
-                request.process_incarnation_id(),
-                request.query_fingerprint(),
-            )
-            .await?
-            {
-                floe_context_contract::SourceReadOutcome::Ready((payload, bindings)) => {
-                    Ok(floe_context_contract::SourceReadOutcome::Ready(
-                        floe_context::SourceRead::with_bindings(
-                            request.source().clone(),
-                            payload,
-                            bindings,
-                        ),
-                    ))
-                }
-                floe_context_contract::SourceReadOutcome::Unavailable(reason) => Ok(
-                    floe_context_contract::SourceReadOutcome::Unavailable(reason),
-                ),
-                floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => Ok(
-                    floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers),
-                ),
-            }
+            let outcome = floe_context::read_configured_remote_view(self.vault, self.verifier, self.core.store.as_ref(), self.core.store.as_ref(),
+                &self.transport(), self.person_id, self.pairing(), request.source().as_str(), request.consumer().identifier(),
+                request.query().clone(), &RemoteCallWindow { deadline: request.deadline(), cancellation: request.cancellation().clone() },
+                request.process_incarnation_id(), request.query_fingerprint()).await?;
+            Ok(match outcome {
+                floe_context_contract::SourceReadOutcome::Ready((payload, bindings)) => floe_context_contract::SourceReadOutcome::Ready(floe_context::SourceRead::with_bindings(request.source().clone(), payload, bindings)),
+                floe_context_contract::SourceReadOutcome::Unavailable(reason) => floe_context_contract::SourceReadOutcome::Unavailable(reason),
+                floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers),
+            })
         })
     }
 }
@@ -212,6 +184,9 @@ impl<Keys: VaultKeyProvider> DependencyResolver for RemoteDependencyResolver<'_,
         Box::pin(async move {
             floe_context::authorize_remote_dependency(
                 self.reader.vault,
+                self.reader.verifier,
+                self.reader.core.store.as_ref(),
+                self.reader.core.store.as_ref(),
                 &self.reader.transport(),
                 self.reader.person_id,
                 self.reader.pairing(),

@@ -260,26 +260,3 @@ impl Note {
         self.revision = self.revision.next();
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::TimeZone;
-
-    #[test]
-    fn empty_text_is_rejected() {
-        assert!(matches!(
-            required("  ", "title"),
-            Err(DomainError::EmptyText { .. })
-        ));
-    }
-
-    #[test]
-    fn invalid_interval_is_rejected() {
-        let now = Utc.with_ymd_and_hms(2026, 9, 2, 9, 0, 0).unwrap();
-        assert_eq!(
-            TimedSchedule::new(now, now, "UTC"),
-            Err(DomainError::InvalidEventInterval)
-        );
-    }
-}

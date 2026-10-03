@@ -118,13 +118,13 @@ impl EngineResumeState {
 #[derive(Clone, Debug)]
 pub struct EngineRequest {
     pub principal: String,
+    pub device_id: String,
     pub role_spec: RoleSpec,
     pub scope: ExecutionScope,
     pub conversation: ModelConversation,
     pub allowed_catalog: AllowedCatalog,
     pub purpose: String,
     pub consumer: String,
-    pub preferred_profile_id: Option<String>,
     pub max_iterations: u32,
     pub max_output_bytes: usize,
     pub replay: Vec<crate::ReplayReceipt>,
@@ -133,25 +133,24 @@ pub struct EngineRequest {
     /// the Conversation owner. Required when a validated batch contains a
     /// Delegate step; absent otherwise.
     pub delegation_context: Option<DelegationExecutionContext>,
-    /// The opaque intent lineage model dispatches run under, supplied by
-    /// the Conversation owner and forwarded verbatim to every model call.
-    /// Absent only for callers with no Conversation lineage, whose
-    /// external dispatches fail closed without a reviewable requirement.
-    pub lineage: Option<floe_context_contract::RecipientLineage>,
+
 }
 
 impl EngineRequest {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         self.role_spec.validate()?;
+        crate::ModelPlanRequest {
+            principal: self.principal.clone(),
+            device_id: self.device_id.clone(),
+            purpose: self.purpose.clone(),
+            consumer: self.consumer.clone(),
+            required_capabilities: crate::ModelCapabilities::chat(),
+        }.validate()?;
         if self.principal.trim().is_empty()
             || self.purpose.trim().is_empty()
             || self.purpose.len() > 512
             || self.consumer.trim().is_empty()
             || self.consumer.len() > 256
-            || self
-                .preferred_profile_id
-                .as_ref()
-                .is_some_and(|profile| profile.trim().is_empty() || profile.len() > 128)
             || self.max_iterations == 0
             || self.max_iterations > 64
             || self.max_output_bytes == 0
@@ -177,12 +176,6 @@ impl EngineRequest {
         if let Some(context) = &self.delegation_context {
             context.validate()?;
         }
-        if self
-            .lineage
-            .is_some_and(|lineage| lineage.validate().is_err())
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
         Ok(())
     }
 }
@@ -191,22 +184,27 @@ impl EngineRequest {
 #[serde(deny_unknown_fields)]
 pub struct ModelRequest {
     pub attempt_id: Uuid,
+    pub reservation_ceiling: floe_execution::budget::ModelReservationCeiling,
     pub principal: String,
+    pub device_id: String,
     pub projection: AuthorizedModelProjection,
     pub catalog: AllowedCatalog,
     pub purpose: String,
     pub consumer: String,
-    pub preferred_profile_id: Option<String>,
     pub replay: Vec<crate::ReplayReceipt>,
-    /// The opaque intent lineage this dispatch runs under. A missing
-    /// consent is reviewable only when lineage is present; callers
-    /// without Conversation lineage (learner, provider smoke) fail
-    /// closed without a card.
-    pub lineage: Option<floe_context_contract::RecipientLineage>,
+
 }
 
 impl ModelRequest {
     pub fn validate(&self) -> Result<(), AgentFailure> {
+        self.reservation_ceiling.validate()?;
+        crate::ModelPlanRequest {
+            principal: self.principal.clone(),
+            device_id: self.device_id.clone(),
+            purpose: self.purpose.clone(),
+            consumer: self.consumer.clone(),
+            required_capabilities: crate::ModelCapabilities::chat(),
+        }.validate()?;
         if self.attempt_id.is_nil()
             || self.principal.trim().is_empty()
             || self.principal.len() > 256
@@ -215,14 +213,7 @@ impl ModelRequest {
             || self.purpose.len() > 512
             || self.consumer.trim().is_empty()
             || self.consumer.len() > 256
-            || self
-                .preferred_profile_id
-                .as_ref()
-                .is_some_and(|profile| profile.trim().is_empty() || profile.len() > 128)
             || self.replay.len() > 128
-            || self
-                .lineage
-                .is_some_and(|lineage| lineage.validate().is_err())
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -277,37 +268,7 @@ pub struct ModelResponse {
     pub attempt_id: Uuid,
     pub steps: Vec<ModelStep>,
     pub usage: ModelUsage,
-}
-
-/// One typed model-admission outcome: either the model answered, or the exact
-/// selected route needs contextual recipient consent before any transmission.
-///
-/// Returned inside the outer Result: hard failures (policy prohibition,
-/// transport errors, invalid input) stay Err(AgentFailure); only the
-/// recoverable consent case is Ok(NeedsUserAction). Inference derives the
-/// requirement from the actual selected candidate and the Access decision;
-/// LLM output never names the authorized recipient.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
-pub enum ModelCallOutcome {
-    Ready(ModelResponse),
-    NeedsUserAction(floe_context_contract::ProcessingRequirement),
-}
-
-impl ModelCallOutcome {
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        match self {
-            Self::Ready(response) => {
-                if response.attempt_id.is_nil() {
-                    return Err(AgentFailure::InvalidInput);
-                }
-                Ok(())
-            }
-            Self::NeedsUserAction(requirement) => requirement
-                .validate()
-                .map_err(|_| AgentFailure::InvalidInput),
-        }
-    }
+    pub accounting: floe_execution::budget::ModelAccounting,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -325,49 +286,4 @@ pub enum EngineStep {
     },
     Tool(ToolResult),
     Delegation(Box<crate::TaskReceipt>),
-}
-
-#[cfg(test)]
-mod outcome_tests {
-    use super::*;
-
-    fn requirement() -> floe_context_contract::ProcessingRequirement {
-        floe_context_contract::ProcessingRequirement::try_new(
-            "model.example",
-            "server-model",
-            "everyday_assistance",
-            "conversation.root",
-            vec![floe_context_contract::DataClass::Personal],
-            vec![],
-            Uuid::new_v4(),
-            1,
-            floe_context_contract::RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4())
-                .unwrap(),
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn outcome_variants_round_trip_and_validate() {
-        let ready = ModelCallOutcome::Ready(ModelResponse {
-            attempt_id: Uuid::new_v4(),
-            steps: vec![],
-            usage: ModelUsage::default(),
-        });
-        assert!(ready.validate().is_ok());
-        let decoded: ModelCallOutcome =
-            serde_json::from_str(&serde_json::to_string(&ready).unwrap()).unwrap();
-        assert_eq!(decoded, ready);
-        let blocked = ModelCallOutcome::NeedsUserAction(requirement());
-        assert!(blocked.validate().is_ok());
-        let decoded: ModelCallOutcome =
-            serde_json::from_str(&serde_json::to_string(&blocked).unwrap()).unwrap();
-        assert_eq!(decoded, blocked);
-        let nil_ready = ModelCallOutcome::Ready(ModelResponse {
-            attempt_id: Uuid::nil(),
-            steps: vec![],
-            usage: ModelUsage::default(),
-        });
-        assert_eq!(nil_ready.validate(), Err(AgentFailure::InvalidInput));
-    }
 }

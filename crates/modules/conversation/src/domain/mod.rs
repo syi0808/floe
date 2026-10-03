@@ -6,28 +6,46 @@ use floe_kernel::{AgentFailure, CommandId, RunId};
 use uuid::Uuid;
 
 mod intent;
+mod purpose;
+pub use purpose::{CONVERSATION_PURPOSE, CONVERSATION_CONSUMER};
 mod interaction;
+mod run_record;
+mod source_review;
+pub use source_review::{ProjectionReviewRecord, ProjectionReviewPublication, BlockedRunCommit, OwnerResolutionReceipt, InteractionResolutionCommit, ResumeRequired, ResumeChildAdmission, PublishTaskProjectionReview};
+pub use run_record::{UnresolvedModelAttempt, RunRecord, RunState, RunReceipt, RunTerminal, RunBlockRecord, RunBlockOrigin, PriorExhaustion};
 
 pub use intent::{
-    AdmittedExecution, CanonicalTurnIntent, MAX_TURN_TEXT_BYTES, ProfileSelection, StartTurn,
+    AdmittedExecution, CanonicalTurnIntent, MAX_TURN_TEXT_BYTES, StartTurn, ContinuationToken,
     normalize_turn_text,
 };
 pub use interaction::{
-    AuthorityRevision, ConversationInteraction, DecisionAdmission, ExpectedGrantState,
+    ConversationInteraction, InteractionRefresh, DecisionAdmission, 
     ExpertBindingTarget, ExpireInteraction, ExpireOutcome, INTERACTION_PENDING_LIFETIME_MS,
-    InlineObserveTarget, InteractionDecision, InteractionDecisionKind, InteractionOrigin,
+    InteractionDecision, InteractionDecisionKind, InteractionOrigin,
     InteractionRequirement, InteractionRequirementKind, InteractionResolution,
     InteractionResolutionReceipt, InteractionResumeRef, InteractionState,
-    MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_RECIPIENT_CONSENT_TARGET_BYTES, MAX_RESUME_LINEAGE,
+    MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_RESUME_LINEAGE,
     MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES,
     MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_BUNDLE_MEMBERS,
-    NavigationDestination, NavigationOnlyTarget, PublishAdmission, RecipientConsentTarget,
-    ReviewedBundleMember, ReviewedTarget, SupersedeInteraction, canonical_requirement_digest,
-    canonical_target_digest, decision_operation_id, interaction_publication_id,
+    NavigationDestination, NavigationOnlyTarget, PublishAdmission,     ReviewedTarget, SupersedeInteraction, canonical_requirement_digest,
+    canonical_target_digest, decision_owner_command_id, interaction_publication_id,
     next_state_after_decision, resume_command_id, state_after_resolution,
 };
 
 pub const MAX_COMPACTION_SUMMARY_BYTES: usize = 16 * 1024;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StartSessionRequest {
+    pub principal: String,
+    pub command_id: CommandId,
+}
+impl StartSessionRequest {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        validate_principal(&self.principal)?;
+        if !self.command_id.is_valid() { return Err(AgentFailure::InvalidInput); }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionRequest {
@@ -116,16 +134,6 @@ impl RunQuery {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RunState {
-    Working,
-    Completed,
-    Failed,
-    Cancelled,
-    TimedOut,
-    Interrupted,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContinuationRef {
     pub run_id: RunId,
@@ -154,158 +162,8 @@ pub enum TurnMode {
     Resume(InteractionResumeRef),
 }
 
-impl RunState {
-    pub fn is_terminal(self) -> bool {
-        self != Self::Working
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RunReceipt {
-    pub expert_environment: floe_experts::RunExpertEnvironmentIdentity,
-    pub run_id: RunId,
-    pub command_id: CommandId,
-    pub session_id: Uuid,
-    pub principal: String,
-    pub request_digest: [u8; 32],
-    pub state: RunState,
-    pub output: Option<String>,
-    pub coverage: DependencyCoverage,
-    pub issue: Option<AgentFailure>,
-    pub session_revision: u64,
-    pub aggregate_revision: u64,
-    pub executor_generation: u64,
-    pub continuation_of: Option<RunId>,
-    pub continuation_executor_generation: Option<u64>,
-    pub continuation_level: u8,
-    pub retry_of: Option<RunId>,
-    pub resume_of: Option<RunId>,
-    pub resume_lineage: u8,
-    pub profile: ProfileSelection,
-    pub attempt_refs: Vec<Uuid>,
-    pub task_refs: Vec<Uuid>,
-}
-
-impl RunReceipt {
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        self.expert_environment
-            .validate()
-            .map_err(|_| AgentFailure::StorageUnavailable)?;
-        if !self.run_id.is_valid()
-            || !self.command_id.is_valid()
-            || self.session_id.is_nil()
-            || self.principal.trim() != self.principal
-            || self.principal.is_empty()
-            || self.principal.len() > 256
-            || self.principal.chars().any(char::is_control)
-            || self.request_digest == [0; 32]
-            || self.session_revision == 0
-            || self.aggregate_revision == 0
-            || self.executor_generation == 0
-            || self.continuation_level > 3
-            || self.retry_of == Some(self.run_id)
-            || self.resume_of == Some(self.run_id)
-            || self.resume_lineage > MAX_RESUME_LINEAGE
-            || self.profile.validate().is_err()
-            || self.attempt_refs.len() > 64
-            || self.task_refs.len() > 64
-            || self.attempt_refs.iter().any(Uuid::is_nil)
-            || self.task_refs.iter().any(Uuid::is_nil)
-            || self
-                .attempt_refs
-                .iter()
-                .collect::<std::collections::HashSet<_>>()
-                .len()
-                != self.attempt_refs.len()
-            || self
-                .task_refs
-                .iter()
-                .collect::<std::collections::HashSet<_>>()
-                .len()
-                != self.task_refs.len()
-            || self.coverage.validate().is_err()
-            || self
-                .output
-                .as_ref()
-                .is_some_and(|output| output.len() > floe_agent_contract::MAX_OUTPUT_BYTES)
-        {
-            return Err(AgentFailure::StorageUnavailable);
-        }
-        if self.continuation_of.is_some() != (self.continuation_level > 0)
-            || self.continuation_executor_generation.is_some() != (self.continuation_level > 0)
-            || self.continuation_executor_generation == Some(0)
-            || self.resume_of.is_some() != (self.resume_lineage > 0)
-            || self.resume_of.is_some()
-                && (self.continuation_of.is_some()
-                    || self.continuation_level > 0
-                    || self.retry_of.is_some())
-        {
-            return Err(AgentFailure::StorageUnavailable);
-        }
-        let valid = match self.state {
-            RunState::Working => {
-                self.output.is_none()
-                    && self.issue.is_none()
-                    && self.coverage == DependencyCoverage::Unknown
-            }
-            RunState::Completed => {
-                self.output
-                    .as_deref()
-                    .is_some_and(|output| !output.trim().is_empty())
-                    && self.issue.is_none()
-            }
-            RunState::Failed => match self.output.as_deref() {
-                Some(output) => {
-                    !output.trim().is_empty()
-                        && self.coverage != DependencyCoverage::Unknown
-                        && matches!(
-                            self.issue,
-                            Some(AgentFailure::BudgetExceeded | AgentFailure::Stalled)
-                        )
-                }
-                None => self.issue.is_some() && self.coverage == DependencyCoverage::Unknown,
-            },
-            RunState::Cancelled | RunState::TimedOut | RunState::Interrupted => {
-                self.output.is_none()
-                    && self.issue.is_some()
-                    && self.coverage == DependencyCoverage::Unknown
-            }
-        };
-        valid.then_some(()).ok_or(AgentFailure::StorageUnavailable)
-    }
-
-    pub fn continuation(&self) -> Option<ContinuationRef> {
-        (self.output.is_none()
-            && matches!(
-                (self.state, self.issue),
-                (RunState::TimedOut, Some(AgentFailure::DeadlineExceeded))
-                    | (RunState::Failed, Some(AgentFailure::BudgetExceeded))
-            ))
-        .then(|| self.continuation_level.checked_add(1))
-        .flatten()
-        .filter(|level| *level <= 3)
-        .map(|level| ContinuationRef {
-            run_id: self.run_id,
-            executor_generation: self.executor_generation,
-            level,
-        })
-    }
-
-    /// The linked-resume reference this Run's child would carry, if this Run
-    /// may be an origin: Completed, with chain depth left. Whether the
-    /// interaction group actually admits that child is decided atomically at
-    /// admission, never from this receipt alone.
-    pub fn resume(&self) -> Option<InteractionResumeRef> {
-        (self.state == RunState::Completed)
-            .then(|| self.resume_lineage.checked_add(1))
-            .flatten()
-            .filter(|lineage| *lineage <= MAX_RESUME_LINEAGE)
-            .map(|lineage| InteractionResumeRef {
-                origin_run_id: self.run_id,
-                lineage,
-            })
-    }
-}
+#[derive(Clone, Debug)]
+pub enum TurnInput { NewMessage(AgentMessage), ExistingMessage { message_id: Uuid } }
 
 #[derive(Clone, Debug)]
 pub struct TurnAdmissionRequest {
@@ -315,18 +173,25 @@ pub struct TurnAdmissionRequest {
     pub session_id: Uuid,
     pub expected_session_revision: u64,
     pub principal: String,
+    pub device_id: String,
     pub request_digest: [u8; 32],
     pub mode: TurnMode,
     pub retry_of: Option<RunId>,
-    pub profile: ProfileSelection,
-    pub user_message: AgentMessage,
+    pub input: TurnInput,
 }
 
 impl TurnAdmissionRequest {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         self.expert_environment.validate()?;
-        self.user_message.validate()?;
-        self.profile.validate()?;
+        match (&self.mode, &self.input) {
+            (TurnMode::New, TurnInput::NewMessage(message)) => {
+                message.validate()?;
+                if message.message_id != self.command_id.as_uuid() || message.role != floe_agent_contract::MessageRole::User
+                    || message.call_id.is_some() || message.coverage != DependencyCoverage::Independent { return Err(AgentFailure::InvalidInput); }
+            }
+            (TurnMode::Continue(_) | TurnMode::Resume(_), TurnInput::ExistingMessage { message_id }) if !message_id.is_nil() => {},
+            _ => return Err(AgentFailure::InvalidInput),
+        }
         if !self.run_id.is_valid()
             || !self.command_id.is_valid()
             || self.session_id.is_nil()
@@ -334,11 +199,9 @@ impl TurnAdmissionRequest {
             || self.principal.is_empty()
             || self.principal.len() > 256
             || self.principal.chars().any(char::is_control)
+            || self.device_id.is_empty() || self.device_id.len() > 256
+            || self.device_id.trim() != self.device_id || self.device_id.chars().any(char::is_control)
             || self.request_digest == [0; 32]
-            || self.user_message.message_id != self.command_id.as_uuid()
-            || self.user_message.role != floe_agent_contract::MessageRole::User
-            || self.user_message.call_id.is_some()
-            || self.user_message.coverage != DependencyCoverage::Independent
             || self.retry_of.is_some_and(|run_id| !run_id.is_valid())
             || self.retry_of.is_some() && !matches!(&self.mode, TurnMode::New)
         {
@@ -401,6 +264,7 @@ pub enum TurnAdmission {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecoveryRequest {
+    pub command_id: CommandId,
     pub session_id: Uuid,
     pub expected_session_revision: u64,
     pub principal: String,
@@ -408,7 +272,7 @@ pub struct RecoveryRequest {
 
 impl RecoveryRequest {
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.session_id.is_nil()
+        if !self.command_id.is_valid() || self.session_id.is_nil()
             || self.principal.trim() != self.principal
             || self.principal.is_empty()
             || self.principal.len() > 256
@@ -434,11 +298,11 @@ pub struct JournalEntry {
 
 #[derive(Clone, Debug)]
 pub struct ContinuationSnapshot {
+    pub user_message_id: Uuid,
     pub expert_environment: floe_experts::RunExpertEnvironmentIdentity,
     pub reference: ContinuationRef,
     pub session_id: Uuid,
     pub session_revision: u64,
-    pub profile: ProfileSelection,
     /// History from the durable transcript plus the settled exchanges of the
     /// continued execution. The continuing turn prepends its own user message;
     /// until then the current turn carries exchanges only.
@@ -519,105 +383,5 @@ impl RecoveryReceipt {
             return Err(AgentFailure::StorageUnavailable);
         }
         Ok(())
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct RunTerminal {
-    pub state: RunState,
-    pub output: Option<String>,
-    pub steps: Vec<EngineStep>,
-    pub coverage: DependencyCoverage,
-    pub issue: Option<AgentFailure>,
-    /// Interactions this completion references beyond settled step artifacts.
-    ///
-    /// Set explicitly by Conversation for completions the model did not
-    /// author (deterministic no-model limitation): the repository projects
-    /// one immutable Interaction message per ref. Model-authored Answers
-    /// never project refs, so model output cannot inject interaction
-    /// messages; only this owner-set linkage and trusted-port step
-    /// artifacts do.
-    pub interactions: Vec<floe_agent_contract::UserInteractionRef>,
-}
-
-impl RunTerminal {
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        if !self.state.is_terminal()
-            || self.coverage.validate().is_err()
-            || self
-                .output
-                .as_ref()
-                .is_some_and(|output| output.len() > floe_agent_contract::MAX_OUTPUT_BYTES)
-            || self.steps.len() > floe_agent_contract::MAX_AGENT_MESSAGES
-            || self.interactions.len() > MAX_ACTIVE_INTERACTIONS_PER_RUN
-            || self
-                .interactions
-                .iter()
-                .any(|reference| reference.validate().is_err())
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let mut seen = std::collections::HashSet::new();
-        if self
-            .interactions
-            .iter()
-            .any(|reference| !seen.insert(reference.interaction_id))
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let valid = match self.state {
-            RunState::Completed => {
-                self.output
-                    .as_deref()
-                    .is_some_and(|output| !output.trim().is_empty())
-                    && self.issue.is_none()
-                    && self.steps.last().is_some_and(|step| {
-                        matches!(step, EngineStep::Answer { text, .. } if Some(text) == self.output.as_ref())
-                    })
-            }
-            RunState::Failed => match self.output.as_deref() {
-                Some(output) => {
-                    !output.trim().is_empty()
-                        && self.coverage != DependencyCoverage::Unknown
-                        && matches!(
-                            self.issue,
-                            Some(AgentFailure::BudgetExceeded | AgentFailure::Stalled)
-                        )
-                        && self.steps.last().is_some_and(|step| {
-                            matches!(step, EngineStep::Answer { text, .. } if text == output)
-                        })
-                }
-                None => {
-                    self.steps.is_empty()
-                        && self.issue.is_some()
-                        && self.coverage == DependencyCoverage::Unknown
-                }
-            },
-            RunState::Cancelled | RunState::TimedOut | RunState::Interrupted => {
-                self.output.is_none()
-                    && self.steps.is_empty()
-                    && self.issue.is_some()
-                    && self.coverage == DependencyCoverage::Unknown
-            }
-            RunState::Working => false,
-        };
-        valid.then_some(()).ok_or(AgentFailure::InvalidInput)
-    }
-
-    pub(crate) fn from_failure(failure: AgentFailure) -> Self {
-        let state = match failure {
-            AgentFailure::Cancelled => RunState::Cancelled,
-            AgentFailure::DeadlineExceeded => RunState::TimedOut,
-            AgentFailure::Interrupted => RunState::Interrupted,
-            _ => RunState::Failed,
-        };
-        Self {
-            state,
-            output: None,
-            steps: vec![],
-            coverage: DependencyCoverage::Unknown,
-            issue: Some(failure),
-            interactions: vec![],
-        }
     }
 }

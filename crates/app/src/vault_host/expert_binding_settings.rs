@@ -165,12 +165,12 @@ async fn discover_live_candidates<Keys: floe_vault::VaultKeyProvider>(
     ) {
         if let Some(client) =
             floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
-                &open.connections,
+                open.sources.gateway_credentials.as_ref(),
                 &person_id.to_string(),
                 device_id,
-            )?
+            ).await?
         {
-            let producer = open.vault.remote_pinned_producer().await?;
+            let producer = floe_access::GatewayTrustReader::pinned_producer(open.vault.as_ref()).await?;
             (
                 client
                     .observe_source_connections(
@@ -192,12 +192,12 @@ async fn discover_live_candidates<Keys: floe_vault::VaultKeyProvider>(
             .any(|connection| connection.connector_id().as_str() != "calendar.event_kit")
     {
         floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
-            &open.connections,
+            open.sources.gateway_credentials.as_ref(),
             &person_id.to_string(),
             device_id,
-        )?
+        ).await?
         .ok_or(AgentFailure::CapabilityUnavailable)?;
-        Some(open.vault.remote_pinned_producer().await?.execution_owner)
+        Some(floe_access::GatewayTrustReader::pinned_producer(open.vault.as_ref()).await?.execution_owner)
     } else {
         remote.1
     };

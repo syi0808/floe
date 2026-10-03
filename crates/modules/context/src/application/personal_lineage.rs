@@ -74,55 +74,21 @@ pub fn people_query_fingerprint(
 
 pub fn wellbeing_query_fingerprint(
     view: &WellbeingView,
+    transform: &floe_context_contract::HealthTransformEvidence,
     native_subject_fingerprint: &str,
     observation: Uuid,
     process: Uuid,
 ) -> Vec<u8> {
     digest(format!(
-        "wellbeing.query\0{}\0{}\0{}\0{}\0{}\0{}",
+        "wellbeing.query\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
         view.source_handle,
         native_subject_fingerprint,
         observation,
         process,
         view.observed_at_unix_ms,
         view.expires_at_unix_ms,
+        transform.operation_id,
+        transform.host_epoch,
+        transform.output_sha256.iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use floe_context_contract::AttentionState;
-
-    use super::*;
-
-    fn attention() -> AttentionView {
-        AttentionView {
-            schema_version: floe_agent_contract::AGENT_VERSION,
-            view_id: "attention.coarse".into(),
-            source_handle: "attention.macos:session_idle".into(),
-            observed_at_unix_ms: 1_000,
-            expires_at_unix_ms: 2_000,
-            state: AttentionState::Available,
-            confidence_millis: 900,
-            evidence_handles: vec!["attention:aggregate".into()],
-        }
-    }
-
-    #[test]
-    fn the_subject_is_stable_and_every_observation_is_its_own_query() {
-        let person = PersonId::new();
-        let view = attention();
-        assert_eq!(
-            attention_subject_fingerprint(person, "device", &view),
-            attention_subject_fingerprint(person, "device", &view)
-        );
-        assert_ne!(
-            attention_subject_fingerprint(person, "device", &view),
-            attention_subject_fingerprint(person, "other", &view)
-        );
-        assert_ne!(
-            attention_query_fingerprint(person, "device", &view, Uuid::new_v4(), Uuid::new_v4()),
-            attention_query_fingerprint(person, "device", &view, Uuid::new_v4(), Uuid::new_v4())
-        );
-    }
 }

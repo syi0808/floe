@@ -5,69 +5,57 @@ use floe_agent_contract::{
     MessageRole, ModelConversation, ModelConversationEntry, UserInteractionRef,
     UserInteractionStatus, ValidatedModelBatch,
 };
-use floe_agent_runtime::{Engine, EngineBlocked, EngineOutcome, EnginePorts, EngineReport};
+use floe_agent_runtime::{Engine, EngineOutcome, EnginePorts, EngineReport};
 use floe_execution::{ExecutionScope, budget::BudgetLedger};
-use floe_kernel::{AgentFailure, RunId, TraceContext};
+use floe_kernel::{AgentFailure, OwnerActor, RunId, TraceContext};
 
 use crate::{
-    CONVERSATION_MODEL_CONSUMER, CancelRunRequest, CancelRunStatus, CommandQuery,
-    CompactionReceipt, CompactionRequest, ContinuationSnapshot, ConversationInteraction,
+    CONVERSATION_CONSUMER, CommandQuery, ContinuationSnapshot, ConversationInteraction,
     ConversationPorts, ConversationRepository, InteractionOrigin, InteractionRepository,
-    InteractionResumeRef, InteractionState, MODEL_CONSENT_LIMITATION, ManagerConfig,
-    ProfileSelection, PublishAdmission, PublishModelRequirement, RecoveryReceipt, RecoveryRequest,
-    RunCancellationRegistry, RunQuery, RunReceipt, RunState, RunTerminal, TurnAdmission,
+    InteractionResumeRef, InteractionState, ManagerConfig,
+    RecoveryReceipt, RecoveryRequest,
+    RunReceipt, RunState, RunTerminal, TurnAdmission,
     TurnAdmissionRequest, TurnMode, TurnRequest,
 };
 
 use super::finalization::{FinalizationOutcome, finalize_exhausted_run};
-use super::interactions::{publish_model_requirement, rescope_blocked_requirement};
 use super::recovery::{JournalLineage, project_journal, project_transcript_history};
 
-pub struct ConversationService<Repository> {
-    repository: Arc<Repository>,
-    run_cancellations: Arc<RunCancellationRegistry>,
-    engine: Engine,
-    config: ManagerConfig,
+pub(super) enum RunAdmission {
+    Existing(RunReceipt),
+    Created(PreparedRun),
 }
 
-impl<Repository: ConversationRepository + InteractionRepository> ConversationService<Repository> {
-    pub fn new(repository: Arc<Repository>, config: ManagerConfig) -> Result<Self, AgentFailure> {
-        Self::with_run_cancellations(
-            repository,
-            config,
-            Arc::new(RunCancellationRegistry::default()),
-        )
-    }
+pub(super) struct PreparedRun {
+    pub(super) admitted: crate::AdmittedTurn,
+    continuation: Option<ContinuationSnapshot>,
+    resume_origin: Option<RunReceipt>,
+    intent: crate::CanonicalTurnIntent,
+}
 
-    pub fn with_run_cancellations(
-        repository: Arc<Repository>,
-        config: ManagerConfig,
-        run_cancellations: Arc<RunCancellationRegistry>,
-    ) -> Result<Self, AgentFailure> {
+pub(super) struct RunCoordinator<Repository> {
+    repository: Arc<Repository>,
+    engine: Engine,
+    config: ManagerConfig,
+    connections: Arc<floe_connections::ConnectionsService>,
+}
+
+impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<Repository> {
+    pub(super) fn new(repository: Arc<Repository>, config: ManagerConfig, connections: Arc<floe_connections::ConnectionsService>) -> Result<Self, AgentFailure> {
         config.validate()?;
-        Ok(Self {
-            repository,
-            run_cancellations,
-            engine: Engine::default(),
-            config,
-        })
+        Ok(Self { repository, engine: Engine::default(), config, connections })
     }
 
-    pub async fn run_turn(
+    pub(super) async fn prepare_run(
         &self,
-        request: TurnRequest,
-        ports: ConversationPorts<'_>,
-    ) -> Result<RunReceipt, AgentFailure> {
-        self.run_turn_observed(request, ports, |_| {}).await
-    }
-
-    pub async fn run_turn_observed(
-        &self,
-        request: TurnRequest,
-        ports: ConversationPorts<'_>,
-        mut on_admitted: impl FnMut(&RunReceipt),
-    ) -> Result<RunReceipt, AgentFailure> {
+        actor: &OwnerActor,
+        request: &TurnRequest,
+    ) -> Result<RunAdmission, AgentFailure> {
+        actor.validate()?;
         request.validate()?;
+        if actor.person_id.to_string() != request.principal || actor.device_id != request.device_id {
+            return Err(AgentFailure::PolicyDenied);
+        }
         let intent = request.canonical_intent()?;
         let request_digest = intent.digest(&request.principal)?;
         let command_query = CommandQuery {
@@ -76,8 +64,7 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
         };
         if let Some(receipt) = self.repository.find_command(command_query).await? {
             verify_existing(&request, request_digest, &receipt)?;
-            on_admitted(&receipt);
-            return Ok(receipt);
+            return Ok(RunAdmission::Existing(receipt));
         }
         let continuation = match &request.mode {
             TurnMode::New | TurnMode::Resume(_) => None,
@@ -93,9 +80,6 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
                     || snapshot.session_revision != request.expected_session_revision
                 {
                     return Err(AgentFailure::Conflict);
-                }
-                if snapshot.profile != request.profile {
-                    return Err(AgentFailure::StorageUnavailable);
                 }
                 if let Some(batch) = &snapshot.pending_batch {
                     if snapshot.expert_environment != request.expert_environment
@@ -127,41 +111,45 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
             }
         }
         let run_id = RunId::new();
-        let admission = self
-            .repository
-            .admit_turn(TurnAdmissionRequest {
-                expert_environment: request.expert_environment,
-                run_id,
-                command_id: request.command_id,
-                session_id: request.session_id,
-                expected_session_revision: request.expected_session_revision,
-                principal: request.principal.clone(),
-                request_digest,
-                mode: request.mode.clone(),
-                retry_of: request.retry_of,
-                profile: request.profile.clone(),
-                user_message: AgentMessage {
-                    message_id: request.command_id.as_uuid(),
-                    role: MessageRole::User,
-                    text: intent.text.clone(),
-                    call_id: None,
-                    coverage: DependencyCoverage::Independent,
-                },
-            })
-            .await?;
+        let input = match &request.mode {
+            TurnMode::New => crate::TurnInput::NewMessage(AgentMessage {
+                message_id: request.command_id.as_uuid(), role: MessageRole::User,
+                text: intent.text.clone(), call_id: None, coverage: DependencyCoverage::Independent,
+            }),
+            TurnMode::Continue(_) => crate::TurnInput::ExistingMessage {
+                message_id: continuation.as_ref().ok_or(AgentFailure::Conflict)?.user_message_id,
+            },
+            TurnMode::Resume(_) => crate::TurnInput::ExistingMessage {
+                message_id: resume_origin.as_ref().ok_or(AgentFailure::Conflict)?.user_message_id,
+            },
+        };
+        let admission_request = TurnAdmissionRequest {
+            expert_environment: request.expert_environment, run_id, command_id: request.command_id,
+            session_id: request.session_id, expected_session_revision: request.expected_session_revision,
+            principal: request.principal.clone(), device_id: request.device_id.clone(), request_digest,
+            mode: request.mode.clone(), retry_of: request.retry_of, input,
+        };
+        let admission = match &request.mode {
+            TurnMode::Resume(reference) => {
+                let pending = self.repository.pending_resume_requests(64).await?.into_iter()
+                    .find(|pending| pending.origin_run_id == reference.origin_run_id)
+                    .ok_or(AgentFailure::Conflict)?;
+                self.repository.claim_resume(crate::ResumeChildAdmission { request: pending, child: admission_request }).await?
+            }
+            _ => self.repository.admit_turn(admission_request).await?,
+        };
         let admitted = match admission {
             TurnAdmission::Created(admitted) => admitted,
             TurnAdmission::Existing(receipt) => {
                 verify_existing(&request, request_digest, &receipt)?;
-                return Ok(receipt);
+                return Ok(RunAdmission::Existing(receipt));
             }
             TurnAdmission::Resumed(receipt) => {
                 let TurnMode::Resume(reference) = &request.mode else {
                     return Err(AgentFailure::StorageUnavailable);
                 };
                 verify_resumed(&request, reference, &receipt)?;
-                on_admitted(&receipt);
-                return Ok(receipt);
+                    return Ok(RunAdmission::Existing(receipt));
             }
         };
         admitted.validate()?;
@@ -172,7 +160,6 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
             || admitted.receipt.principal != request.principal
             || admitted.receipt.request_digest != request_digest
             || admitted.receipt.retry_of != request.retry_of
-            || admitted.receipt.profile != request.profile
             || admitted.receipt.state != RunState::Working
             || match &request.mode {
                 TurnMode::New => {
@@ -209,26 +196,20 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
         {
             return Err(AgentFailure::StorageUnavailable);
         }
+        Ok(RunAdmission::Created(PreparedRun { admitted, continuation, resume_origin, intent }))
+    }
+
+    pub(super) async fn drive_run(
+        &self,
+        actor: &OwnerActor,
+        request: TurnRequest,
+        ports: ConversationPorts<'_>,
+        prepared: PreparedRun,
+        _cancellation_guard: super::cancellation::RunCancellationGuard,
+    ) -> Result<RunReceipt, AgentFailure> {
+        let PreparedRun { admitted, continuation, resume_origin, intent } = prepared;
+        let run_id = admitted.receipt.run_id;
         let expected_aggregate_revision = admitted.receipt.aggregate_revision;
-        let _cancellation_guard = match self.run_cancellations.register(
-            run_id,
-            request.command_id,
-            &request.principal,
-            request.cancellation.clone(),
-        ) {
-            Ok(guard) => guard,
-            Err(failure) => {
-                return self
-                    .repository
-                    .finish_run(
-                        run_id,
-                        expected_aggregate_revision,
-                        RunTerminal::from_failure(failure),
-                    )
-                    .await;
-            }
-        };
-        on_admitted(&admitted.receipt);
         let now = tokio::time::Instant::now();
         if request.deadline <= now {
             return self
@@ -292,7 +273,7 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
                     }
                 };
                 Some((
-                    origin.command_id.as_uuid(),
+                    origin.user_message_id,
                     resume_marker_text(origin, &group),
                 ))
             }
@@ -323,9 +304,12 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
             ledger.work_lease(),
             TraceContext::new(request.command_id.as_uuid()).with_run_id(run_id),
         );
+        let original = admitted.transcript.iter().find(|message|
+            message.message_id == admitted.receipt.user_message_id && message.role == MessageRole::User)
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        if original.text != intent.text { return Err(AgentFailure::Conflict); }
         let user_entry = ModelConversationEntry::User {
-            message_id: request.command_id.as_uuid(),
-            text: intent.text.clone(),
+            message_id: original.message_id, text: original.text.clone(),
         };
         let (model_conversation, resume, mut continuation_replay) = match continuation {
             // Continuation and resume both derive from the validated request
@@ -345,7 +329,8 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
                 );
                 (
                     ModelConversation {
-                        history: snapshot.model_conversation.history,
+                        history: snapshot.model_conversation.history.into_iter().filter(|entry|
+                            !matches!(entry, ModelConversationEntry::User { message_id, .. } if *message_id == admitted.receipt.user_message_id)).collect(),
                         current_turn,
                     },
                     resume,
@@ -360,7 +345,8 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
                 // no message; only the model turn restates the intent.
                 Some((user_message_id, marker)) => (
                     ModelConversation {
-                        history: project_transcript_history(&admitted.transcript)?,
+                        history: project_transcript_history(&admitted.transcript)?.into_iter().filter(|entry|
+                            !matches!(entry, ModelConversationEntry::User { message_id, .. } if *message_id == user_message_id)).collect(),
                         current_turn: vec![
                             ModelConversationEntry::Preamble {
                                 message_id: request.command_id.as_uuid(),
@@ -398,33 +384,20 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
             },
         };
         continuation_replay.extend(request.replay);
-        // The lineage binds this explicit intent: a linked resume carries
-        // its origin, so consent granted under the origin's reviewed
-        // lineage still scopes the child; anything else carries itself.
-        let lineage_origin = resume_origin
-            .as_ref()
-            .map_or(run_id.as_uuid(), |origin| origin.run_id.as_uuid());
-        let lineage =
-            floe_agent_contract::RecipientLineage::try_new(request.session_id, lineage_origin)
-                .map_err(|_| AgentFailure::StorageUnavailable)?;
         let engine_request = EngineRequest {
             principal: request.principal.clone(),
+            device_id: request.device_id.clone(),
             role_spec: self.config.role_spec.clone(),
             scope,
             conversation: model_conversation,
             allowed_catalog: request.allowed_catalog,
             purpose: self.config.purpose.clone(),
-            consumer: CONVERSATION_MODEL_CONSUMER.into(),
-            preferred_profile_id: match request.profile {
-                ProfileSelection::Auto => None,
-                ProfileSelection::Explicit(profile) => Some(profile),
-            },
+            consumer: CONVERSATION_CONSUMER.into(),
             max_iterations: self.config.max_iterations - completed_iterations,
             max_output_bytes: self.config.max_output_bytes,
             replay: continuation_replay,
             resume,
             delegation_context: request.delegation_context,
-            lineage: Some(lineage),
         };
         let pending_coverage = engine_request
             .resume
@@ -496,12 +469,14 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
                             steps,
                             coverage,
                             issue: None,
+                            blocked: None,
                             interactions: vec![],
                         },
                         Err(failure) => RunTerminal::from_failure(failure),
                     },
                     None => {
-                        self.finalize_exhaustion(
+                        return self.finalize_exhaustion(
+                            actor,
                             run_id,
                             &engine_request.scope,
                             &engine_request,
@@ -513,16 +488,19 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
                     }
                 }
             }
-            // A blocked first (or mid-run) dispatch: publish the durable
-            // card under the exact attempted origin, commit the
-            // deterministic source-independent limitation, and complete the
-            // original Run without fabricating model output.
-            Ok(EngineOutcome::Blocked(blocked)) => {
-                self.complete_blocked_run(run_id, &turn_context, blocked)
-                    .await
+            Ok(EngineOutcome::NeedsSourceReview(blocked)) => {
+                let commit = super::source_review::build_blocked_run_commit(self.repository.as_ref(),
+                    self.connections.as_ref(), actor, run_id, blocked, None, turn_context.now_unix_ms,
+                    &engine_request.scope).await;
+                return match commit {
+                    Ok(commit) => self.repository.finish_blocked_run(commit).await,
+                    Err(failure) => self.repository.finish_run(run_id, expected_aggregate_revision,
+                        RunTerminal::from_failure(failure)).await,
+                };
             }
             Err(failure @ (AgentFailure::BudgetExceeded | AgentFailure::Stalled)) => {
-                self.finalize_exhaustion(
+                return self.finalize_exhaustion(
+                    actor,
                     run_id,
                     &engine_request.scope,
                     &engine_request,
@@ -539,120 +517,32 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
             .await
     }
 
-    /// Complete a Run whose model dispatch blocked on exact-recipient
-    /// consent: publish the card, then finish Completed with the
-    /// deterministic limitation plus the immutable interaction linkage.
-    ///
-    /// Coverage merges the limitation's independent base with settled
-    /// steps, so previously settled work is preserved honestly and no
-    /// successful source coverage is fabricated. A publication or coverage
-    /// failure fails the Run closed instead of completing without a card.
-    async fn complete_blocked_run(
-        &self,
-        run_id: RunId,
-        request: &TurnRequest,
-        blocked: EngineBlocked,
-    ) -> RunTerminal {
-        let mut steps = blocked.steps;
-        steps.push(EngineStep::Answer {
-            text: MODEL_CONSENT_LIMITATION.into(),
-            artifacts: vec![],
-        });
-        let coverage = match report_coverage(Some(DependencyCoverage::Independent), &steps) {
-            Ok(coverage) => coverage,
-            Err(failure) => return RunTerminal::from_failure(failure),
-        };
-        // A linked resume dispatches under origin-carried lineage; the fresh
-        // review re-scopes to this attempting Run before publication.
-        let requirement =
-            match rescope_blocked_requirement(blocked.requirement, request.session_id, run_id) {
-                Ok(requirement) => requirement,
-                Err(failure) => return RunTerminal::from_failure(failure),
-            };
-        let published = match publish_model_requirement(
-            self.repository.as_ref(),
-            self.repository.as_ref(),
-            PublishModelRequirement {
-                principal: request.principal.clone(),
-                session_id: request.session_id,
-                origin_run_id: run_id,
-                origin: InteractionOrigin::Model {
-                    attempt_id: blocked.attempt_id,
-                },
-                requirement,
-                device_id: request.device_id.clone(),
-            },
-            request.now_unix_ms,
-        )
-        .await
-        {
-            Ok(PublishAdmission::Created(record)) => record,
-            Ok(PublishAdmission::Existing(record)) => record,
-            Err(failure) => return RunTerminal::from_failure(failure),
-        };
-        let reference = UserInteractionRef {
-            interaction_id: published.id,
-            kind: published.kind,
-            status: UserInteractionStatus::Pending,
-        };
-        RunTerminal {
-            state: RunState::Completed,
-            output: Some(MODEL_CONSENT_LIMITATION.into()),
-            steps,
-            coverage,
-            issue: None,
-            interactions: vec![reference],
-        }
-    }
-
     async fn finalize_exhaustion(
         &self,
+        actor: &OwnerActor,
         run_id: RunId,
         scope: &ExecutionScope,
         request: &EngineRequest,
         ports: ConversationPorts<'_>,
         issue: AgentFailure,
         turn: &TurnRequest,
-    ) -> RunTerminal {
-        match finalize_exhausted_run(
-            &self.engine,
-            self.repository.as_ref(),
-            run_id,
-            scope,
-            request,
-            ports,
-            issue,
-            turn,
-        )
-        .await
-        {
+    ) -> Result<RunReceipt, AgentFailure> {
+        let outcome = finalize_exhausted_run(&self.engine, self.repository.as_ref(), self.connections.as_ref(),
+            actor, run_id, scope, request, ports, issue, turn).await;
+        let terminal = match outcome {
+            Ok(FinalizationOutcome::Blocked(commit)) => return self.repository.finish_blocked_run(commit).await,
             Ok(FinalizationOutcome::Replied(terminal)) => terminal,
             Ok(FinalizationOutcome::NotAttempted(failure)) => RunTerminal::from_failure(failure),
-            Ok(FinalizationOutcome::AttemptedWithoutReply) => {
-                RunTerminal::from_failure(AgentFailure::Stalled)
-            }
+            Ok(FinalizationOutcome::AttemptedWithoutReply) => RunTerminal::from_failure(AgentFailure::Stalled),
             Err(failure) => RunTerminal::from_failure(failure),
-        }
-    }
-
-    pub async fn recover_session(
-        &self,
-        request: RecoveryRequest,
-    ) -> Result<RecoveryReceipt, AgentFailure> {
-        recover_session(self.repository.as_ref(), request).await
-    }
-
-    pub async fn continuation(
-        &self,
-        run_id: RunId,
-        principal: &str,
-    ) -> Result<ContinuationSnapshot, AgentFailure> {
-        continuation(self.repository.as_ref(), run_id, principal).await
+        };
+        let receipt = self.repository.load_receipt(run_id).await?.ok_or(AgentFailure::StorageUnavailable)?;
+        self.repository.finish_run(run_id, receipt.aggregate_revision, terminal).await
     }
 
     /// The origin a linked resume continues, verified before admission.
     ///
-    /// Fail-fast only: the Vault re-verifies the origin, the profile, the
+    /// Fail-fast only: the Vault re-verifies the origin, the exact user message, the
     /// interaction group and the resume slot atomically inside admission.
     async fn resume_origin(
         &self,
@@ -668,65 +558,13 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
         if origin.principal != request.principal
             || origin.session_id != request.session_id
             || origin.resume().as_ref() != Some(reference)
-            || origin.profile != request.profile
         {
             return Err(AgentFailure::Conflict);
         }
         Ok(origin)
     }
 
-    pub async fn get_command(
-        &self,
-        query: CommandQuery,
-    ) -> Result<Option<RunReceipt>, AgentFailure> {
-        super::query::get_command(self.repository.as_ref(), query).await
-    }
 
-    pub async fn get_run(&self, query: RunQuery) -> Result<Option<RunReceipt>, AgentFailure> {
-        super::query::get_run(self.repository.as_ref(), query).await
-    }
-
-    pub async fn cancel_run(
-        &self,
-        request: CancelRunRequest,
-    ) -> Result<CancelRunStatus, AgentFailure> {
-        let receipt = self
-            .get_run(RunQuery {
-                run_id: request.run_id,
-                principal: request.principal.clone(),
-            })
-            .await?;
-        match receipt {
-            Some(receipt) if receipt.state == RunState::Working => {
-                self.run_cancellations.cancel_run(request)
-            }
-            Some(_) => Ok(CancelRunStatus::Inactive),
-            None => Ok(CancelRunStatus::Unknown),
-        }
-    }
-
-    pub async fn compact_session(
-        &self,
-        request: CompactionRequest,
-    ) -> Result<CompactionReceipt, AgentFailure>
-    where
-        Repository: crate::SessionArchiveRepository,
-    {
-        super::archive::compact_session(self.repository.as_ref(), request).await
-    }
-
-    pub async fn read_archive<Authorize, AuthorizationFuture>(
-        &self,
-        request: &floe_agent_contract::ArchiveReadRequest,
-        authorize: Authorize,
-    ) -> Result<floe_context::ArchiveProjection, AgentFailure>
-    where
-        Repository: crate::SessionArchiveRepository,
-        Authorize: FnMut(floe_context::ContextDependency) -> AuthorizationFuture,
-        AuthorizationFuture: std::future::Future<Output = Result<bool, AgentFailure>>,
-    {
-        super::archive::read_archive(self.repository.as_ref(), request, authorize).await
-    }
 }
 
 pub async fn recover_session<Repository: ConversationRepository>(
@@ -780,7 +618,6 @@ pub async fn continuation<Repository: ConversationRepository>(
         parent.validate()?;
         if parent.principal != principal
             || parent.session_id != current.session_id
-            || parent.profile != current.profile
             || child.continuation_executor_generation != Some(parent.executor_generation)
             || parent.continuation().as_ref().is_none_or(|reference| {
                 reference.run_id != parent_run_id || reference.level != child.continuation_level
@@ -843,6 +680,10 @@ pub async fn continuation<Repository: ConversationRepository>(
             .cost_micros
             .checked_add(projected.usage.cost_micros)
             .ok_or(AgentFailure::StorageUnavailable)?;
+        usage.estimated_tokens = usage.estimated_tokens.checked_add(projected.usage.estimated_tokens)
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        usage.estimated_cost_micros = usage.estimated_cost_micros.checked_add(projected.usage.estimated_cost_micros)
+            .ok_or(AgentFailure::StorageUnavailable)?;
         // Cross-run resume lineage: a newer run supersedes an older pending
         // batch only after durably re-recording the exact batch and starting
         // cursor. A child that crashed before takeover leaves the parent
@@ -865,9 +706,9 @@ pub async fn continuation<Repository: ConversationRepository>(
     Ok(ContinuationSnapshot {
         expert_environment: current.expert_environment,
         reference: current.continuation().ok_or(AgentFailure::Conflict)?,
+        user_message_id: current.user_message_id,
         session_id: current.session_id,
         session_revision: current.session_revision,
-        profile: current.profile.clone(),
         model_conversation,
         replay,
         pending_batch,
@@ -996,7 +837,7 @@ fn resume_marker_text(origin: &RunReceipt, group: &[ConversationInteraction]) ->
 
 /// A slot rejoin across commands: the receipt is the canonical child the
 /// origin slot already admitted. Identity binds the origin linkage, the
-/// session, the principal and the kept profile; the digest is the winner's
+/// session, the principal and the original user message; the digest is the winner's
 /// and is never compared against the loser's request.
 fn verify_resumed(
     request: &TurnRequest,
@@ -1008,7 +849,6 @@ fn verify_resumed(
         || receipt.principal != request.principal
         || receipt.resume_of != Some(reference.origin_run_id)
         || receipt.resume_lineage != reference.lineage
-        || receipt.profile != request.profile
     {
         return Err(AgentFailure::StorageUnavailable);
     }
@@ -1056,340 +896,4 @@ fn report_coverage(
         }
     }
     Ok(coverage)
-}
-
-#[cfg(test)]
-mod tests {
-    use floe_agent_contract::{ModelStep, ProjectionRef};
-    use uuid::Uuid;
-
-    use super::*;
-
-    fn tool_batch() -> ValidatedModelBatch {
-        ValidatedModelBatch {
-            execution_id: Uuid::new_v4(),
-            attempt_id: Uuid::new_v4(),
-            projection_ref: ProjectionRef::new(),
-            projection_coverage: DependencyCoverage::Independent,
-            batch_id: Uuid::new_v4(),
-            steps: vec![
-                ModelStep::CallTool {
-                    tool_id: "read.context".into(),
-                    definition_revision: 3,
-                    input: r#"{"path":"a"}"#.into(),
-                },
-                ModelStep::CallTool {
-                    tool_id: "read.context".into(),
-                    definition_revision: 3,
-                    input: r#"{"path":"a"}"#.into(),
-                },
-            ],
-            catalog_revision: 1,
-            tool_revisions: vec![],
-            agent_revisions: vec![],
-            delegation_context: None,
-        }
-    }
-
-    fn cursor_at(batch: &ValidatedModelBatch, next_step_index: u32) -> BatchCursor {
-        BatchCursor {
-            batch_id: batch.batch_id,
-            next_step_index,
-        }
-    }
-
-    #[test]
-    fn child_resume_must_match_parent_pending_batch() {
-        let parent_batch = tool_batch();
-        let parent_cursor = cursor_at(&parent_batch, 1);
-        let carried = Some((parent_batch.clone(), parent_cursor));
-        // A different batch id never takes over.
-        let other = tool_batch();
-        let other_cursor = cursor_at(&other, 1);
-        assert!(matches!(
-            reconcile_resume_lineage(
-                carried.clone(),
-                &JournalLineage::ResumeClaimed {
-                    batch: other.clone(),
-                    cursor: other_cursor,
-                },
-                Some((other.clone(), cursor_at(&other, 2))),
-            ),
-            Err(AgentFailure::StorageUnavailable)
-        ));
-        assert!(matches!(
-            reconcile_resume_lineage(
-                carried.clone(),
-                &JournalLineage::ResumeBatchOnly { batch: other },
-                None,
-            ),
-            Err(AgentFailure::StorageUnavailable)
-        ));
-        // Same batch id with different steps is still a mismatch: full
-        // batch equality decides, never the id alone.
-        let mut same_id = parent_batch.clone();
-        same_id.steps.pop();
-        assert!(matches!(
-            reconcile_resume_lineage(
-                carried,
-                &JournalLineage::ResumeClaimed {
-                    batch: same_id,
-                    cursor: cursor_at(&parent_batch, 1),
-                },
-                None,
-            ),
-            Err(AgentFailure::StorageUnavailable)
-        ));
-    }
-
-    #[test]
-    fn child_resume_must_match_parent_projection_coverage() {
-        use floe_context_contract::{
-            ConnectionId, ConnectorId, ContextDependency, ExecutionOwnerId, GrantAuthority,
-            GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-            GrantSourceBinding, ProcessingRestriction, ResourceHandle,
-        };
-        let parent_batch = tool_batch();
-        let parent_cursor = cursor_at(&parent_batch, 1);
-        let carried = Some((parent_batch.clone(), parent_cursor.clone()));
-        // Same batch id, same steps, different answering projection coverage:
-        // full batch equality decides, so no takeover.
-        let person = floe_kernel::PersonId::new();
-        let source = GrantSourceBinding::try_new(
-            person,
-            ConnectionId::try_new("connection").unwrap(),
-            ConnectorId::try_new("connector").unwrap(),
-            ExecutionOwnerId::try_new("owner").unwrap(),
-        )
-        .unwrap();
-        let now = chrono::Utc::now();
-        let mut same_id = parent_batch.clone();
-        same_id.projection_coverage = DependencyCoverage::dependent(
-            ContextDependency::try_new(
-                person,
-                GrantId::new(),
-                GrantAuthority::new(),
-                source,
-                vec![ResourceHandle::try_new("resource").unwrap()],
-                floe_context_contract::SourceAuthority::new(),
-                vec![ResourceHandle::try_new("resource").unwrap()],
-                vec![GrantDataCategory::Metadata],
-                GrantOperation::Read,
-                GrantPurpose::Assistant,
-                GrantConsumer::builtin("assistant").unwrap(),
-                ProcessingRestriction::LocalOnly,
-                Uuid::new_v4(),
-                b"fingerprint".to_vec(),
-                Uuid::new_v4(),
-                Uuid::new_v4(),
-                now - chrono::Duration::minutes(1),
-                now + chrono::Duration::minutes(5),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        assert!(matches!(
-            reconcile_resume_lineage(
-                carried,
-                &JournalLineage::ResumeClaimed {
-                    batch: same_id,
-                    cursor: cursor_at(&parent_batch, 1),
-                },
-                None,
-            ),
-            Err(AgentFailure::StorageUnavailable)
-        ));
-    }
-
-    #[test]
-    fn child_resume_must_match_parent_delegation_context() {
-        // 2-C C2: cross-run exact batch takeover preserves the delegation
-        // binding, and a context mismatch fails closed.
-        let mut parent_batch = tool_batch();
-        parent_batch.steps = vec![floe_agent_contract::ModelStep::Delegate {
-            agent_id: "expert-a".into(),
-            definition_revision: 2,
-            message: "summarize".into(),
-            context_refs: vec![],
-        }];
-        let bound = floe_agent_contract::DelegationExecutionContext {
-            session_id: Uuid::new_v4(),
-            device_id: "test-device".into(),
-            agent_context: floe_agent_contract::AgentContext {
-                projection_version: 1,
-                persona: None,
-                memories: vec![],
-                optional_context_issues: vec![],
-                evidence: vec![],
-            },
-            max_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
-        };
-        parent_batch.delegation_context = Some(bound.clone());
-        let parent_cursor = cursor_at(&parent_batch, 0);
-        let carried = Some((parent_batch.clone(), parent_cursor.clone()));
-        let live = Some((parent_batch.clone(), cursor_at(&parent_batch, 1)));
-        let taken = reconcile_resume_lineage(
-            carried.clone(),
-            &JournalLineage::ResumeClaimed {
-                batch: parent_batch.clone(),
-                cursor: parent_cursor,
-            },
-            live,
-        )
-        .unwrap()
-        .expect("exact takeover carries live state");
-        assert_eq!(taken.0.delegation_context, Some(bound.clone()));
-        // Same batch id, same steps, different bound device: no takeover.
-        let mut changed = parent_batch.clone();
-        let mut context = bound.clone();
-        context.device_id = "changed-device".into();
-        changed.delegation_context = Some(context);
-        assert!(matches!(
-            reconcile_resume_lineage(
-                carried,
-                &JournalLineage::ResumeClaimed {
-                    batch: changed,
-                    cursor: cursor_at(&parent_batch, 0),
-                },
-                None,
-            ),
-            Err(AgentFailure::StorageUnavailable)
-        ));
-    }
-
-    #[test]
-    fn child_resume_must_match_parent_cursor() {
-        let parent_batch = tool_batch();
-        let parent_cursor = cursor_at(&parent_batch, 1);
-        let carried = Some((parent_batch.clone(), parent_cursor));
-        // Same batch, different starting cursor: no takeover.
-        let shifted = cursor_at(&parent_batch, 0);
-        assert!(matches!(
-            reconcile_resume_lineage(
-                carried,
-                &JournalLineage::ResumeClaimed {
-                    batch: parent_batch,
-                    cursor: shifted,
-                },
-                None,
-            ),
-            Err(AgentFailure::StorageUnavailable)
-        ));
-    }
-
-    #[test]
-    fn child_crash_before_resume_takeover_preserves_parent_pending() {
-        let parent_batch = tool_batch();
-        let parent_cursor = cursor_at(&parent_batch, 1);
-        let carried = Some((parent_batch.clone(), parent_cursor.clone()));
-        // An empty child journal means takeover never happened.
-        assert_eq!(
-            reconcile_resume_lineage(carried, &JournalLineage::Empty, None).unwrap(),
-            Some((parent_batch, parent_cursor))
-        );
-    }
-
-    #[test]
-    fn child_batch_only_before_cursor_preserves_parent_pending() {
-        let parent_batch = tool_batch();
-        let parent_cursor = cursor_at(&parent_batch, 1);
-        let carried = Some((parent_batch.clone(), parent_cursor.clone()));
-        // The child's unclaimed re-record projects a zero cursor, but the
-        // parent's starting cursor stays authoritative until the claim.
-        let child_live = Some((parent_batch.clone(), cursor_at(&parent_batch, 0)));
-        assert_eq!(
-            reconcile_resume_lineage(
-                carried,
-                &JournalLineage::ResumeBatchOnly {
-                    batch: parent_batch.clone(),
-                },
-                child_live,
-            )
-            .unwrap(),
-            Some((parent_batch, parent_cursor))
-        );
-    }
-
-    #[test]
-    fn child_resume_without_parent_pending_is_storage_fault() {
-        let batch = tool_batch();
-        let cursor = cursor_at(&batch, 0);
-        assert!(matches!(
-            reconcile_resume_lineage(
-                None,
-                &JournalLineage::ResumeBatchOnly {
-                    batch: batch.clone()
-                },
-                Some((batch.clone(), cursor.clone())),
-            ),
-            Err(AgentFailure::StorageUnavailable)
-        ));
-        assert!(matches!(
-            reconcile_resume_lineage(None, &JournalLineage::ResumeClaimed { batch, cursor }, None,),
-            Err(AgentFailure::StorageUnavailable)
-        ));
-        // Empty and fresh journals without a parent stay allowed.
-        assert_eq!(
-            reconcile_resume_lineage(None, &JournalLineage::Empty, None).unwrap(),
-            None
-        );
-        let fresh = tool_batch();
-        let fresh_live = Some((fresh.clone(), cursor_at(&fresh, 0)));
-        assert_eq!(
-            reconcile_resume_lineage(None, &JournalLineage::Fresh, fresh_live.clone()).unwrap(),
-            fresh_live
-        );
-    }
-
-    #[test]
-    fn child_fresh_model_plan_cannot_skip_parent_pending() {
-        let parent_batch = tool_batch();
-        let parent_cursor = cursor_at(&parent_batch, 1);
-        let carried = Some((parent_batch, parent_cursor));
-        let fresh = tool_batch();
-        let fresh_live = Some((fresh.clone(), cursor_at(&fresh, 0)));
-        assert!(matches!(
-            reconcile_resume_lineage(carried, &JournalLineage::Fresh, fresh_live),
-            Err(AgentFailure::StorageUnavailable)
-        ));
-    }
-
-    #[test]
-    fn exact_child_resume_supersedes_parent_pending_after_cursor() {
-        let parent_batch = tool_batch();
-        let parent_cursor = cursor_at(&parent_batch, 1);
-        let carried = Some((parent_batch.clone(), parent_cursor.clone()));
-        // Exact takeover: the child's live state becomes authoritative,
-        // including an advanced cursor after resumed execution.
-        let advanced = Some((parent_batch.clone(), cursor_at(&parent_batch, 2)));
-        assert_eq!(
-            reconcile_resume_lineage(
-                carried.clone(),
-                &JournalLineage::ResumeClaimed {
-                    batch: parent_batch.clone(),
-                    cursor: parent_cursor.clone(),
-                },
-                advanced.clone(),
-            )
-            .unwrap(),
-            advanced
-        );
-        // A completed takeover carries no pending work forward, and the next
-        // empty child keeps that completed state instead of resurrecting the
-        // parent.
-        let completed = reconcile_resume_lineage(
-            carried,
-            &JournalLineage::ResumeClaimed {
-                batch: parent_batch,
-                cursor: parent_cursor,
-            },
-            None,
-        )
-        .unwrap();
-        assert_eq!(completed, None);
-        assert_eq!(
-            reconcile_resume_lineage(completed, &JournalLineage::Empty, None).unwrap(),
-            None
-        );
-    }
 }

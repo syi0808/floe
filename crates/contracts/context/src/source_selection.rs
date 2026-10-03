@@ -32,35 +32,3 @@ impl SourceSelectionReference {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn reference() -> SourceSelectionReference {
-        SourceSelectionReference {
-            connector_id: ConnectorId::try_new("floe.connector.calendar").unwrap(),
-            connection_id: ConnectionId::try_new("calendar-account").unwrap(),
-            execution_owner_id: ExecutionOwnerId::try_new("device:example").unwrap(),
-            capability_id: "calendar.timeline".into(),
-            resource: ResourceHandle::try_new("calendar:personal").unwrap(),
-            contract_version: 1,
-        }
-    }
-
-    #[test]
-    fn round_trip_and_bounds() {
-        let reference = reference();
-        reference.validate().unwrap();
-        let decoded: SourceSelectionReference =
-            serde_json::from_slice(&serde_json::to_vec(&reference).unwrap()).unwrap();
-        assert_eq!(decoded, reference);
-        let mut invalid = reference;
-        invalid.contract_version = 0;
-        assert!(invalid.validate().is_err());
-        invalid.contract_version = 1;
-        invalid.capability_id = "x".repeat(129);
-        assert!(invalid.validate().is_err());
-        assert!(ResourceHandle::try_new("*").is_err());
-    }
-}

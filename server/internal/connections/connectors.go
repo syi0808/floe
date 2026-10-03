@@ -5,7 +5,6 @@ import (
 	"errors"
 	"sort"
 	"strings"
-	"time"
 	"unicode"
 )
 
@@ -72,25 +71,6 @@ func OauthActionStatus(value any) (string, string, string, bool) {
 	return status, authorizationURL, userCode, true
 }
 
-func ConnectorAttemptResponse(attempt *Attempt) map[string]any {
-	value := map[string]any{
-		"schema_version": 1, "attempt_id": attempt.ID, "connector_id": attempt.ConnectorID,
-		"connection_id": attempt.ConnectionID, "person_id": attempt.PersonID,
-		"device_id": attempt.DeviceID, "status": attempt.Status,
-		"created_at": attempt.CreatedAt.UTC().Format(time.RFC3339),
-	}
-	if attempt.AuthorizationURL != "" {
-		value["authorization_url"] = attempt.AuthorizationURL
-	}
-	if attempt.UserCode != "" {
-		value["user_code"] = attempt.UserCode
-	}
-	if attempt.ErrorCode != "" {
-		value["error"] = map[string]string{"code": attempt.ErrorCode}
-	}
-	return value
-}
-
 func IsOAuthAuthKind(value string) bool {
 	return value == "oauth_pkce" || value == "oauth_device"
 }
@@ -153,11 +133,11 @@ func ValidatedConnectorScope(definition Definition, scope map[string]any) (map[s
 		return map[string]any{"channel": channel, "thread": thread}, nil
 	case "home_assistant.states":
 		baseURL, baseURLOK := ScopeString(scope, "base_url")
-		items, itemsOK := scope["entities"].([]any)
+		items, itemsOK := ConnectorScopeStrings(scope["entities"])
 		entities := make([]string, 0, len(items))
 		for _, item := range items {
-			value, ok := item.(string)
-			if !ok || value == "" || value != strings.TrimSpace(value) {
+			value := item
+			if value == "" || value != strings.TrimSpace(value) {
 				return nil, errors.New("invalid entity")
 			}
 			entities = append(entities, value)
@@ -165,7 +145,9 @@ func ValidatedConnectorScope(definition Definition, scope map[string]any) (map[s
 		if !baseURLOK || !itemsOK || baseURL == "" || len(entities) == 0 || len(entities) > 128 {
 			return nil, errors.New("invalid home assistant scope")
 		}
-		return map[string]any{"base_url": baseURL, "entities": entities}, nil
+		sort.Strings(entities)
+ for i:=1;i<len(entities);i++{if entities[i]==entities[i-1]{return nil,errors.New("duplicate entity")}}
+ return map[string]any{"base_url": baseURL, "entities": entities}, nil
 	case "google_drive.files":
 		folderID, ok := ScopeString(scope, "folder_id")
 		if !ok || folderID == "" || len(folderID) > 256 {

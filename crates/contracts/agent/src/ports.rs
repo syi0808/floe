@@ -1,15 +1,14 @@
-use std::future::Future;
 
 use uuid::Uuid;
 
 use crate::{
-    AgentFailure, AllowedCatalog, AuthorizedModelProjection, DelegationExecutionContext,
+    AgentFailure, AllowedCatalog, DelegationExecutionContext,
     DelegationRequest, DependencyCoverage, ModelProjectionRequest, ModelRequest, ModelStep,
     ProjectionRef, ReplayReceipt, TaskReceipt, ToolCall, ToolResult,
 };
 use serde::{Deserialize, Serialize};
 
-pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub use floe_execution::BoxFuture;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum JournalAck {
@@ -147,11 +146,15 @@ fn has_duplicate_agent_pins(pins: &[PinnedAgentRevision]) -> bool {
 pub enum JournalEvent {
     ModelIntent {
         attempt_id: uuid::Uuid,
+        parent_task_id: Option<crate::TaskId>,
+        reservation_ceiling: floe_execution::budget::ModelReservationCeiling,
         projection_ref: ProjectionRef,
+        plan: crate::PreparedModelPlan,
     },
     ModelResult {
         attempt_id: uuid::Uuid,
         usage: crate::ModelUsage,
+        accounting: floe_execution::budget::ModelAccounting,
     },
     ToolIntent {
         call: ToolCall,
@@ -172,6 +175,11 @@ pub enum JournalEvent {
     Checkpoint {
         iteration: u32,
     },
+    FinalizationStarted {
+        prior_execution_id: Uuid,
+        abandoned_cursor: Option<BatchCursor>,
+        prior_exhaustion: AgentFailure,
+    },
     ValidatedBatch {
         batch: ValidatedModelBatch,
     },
@@ -185,20 +193,26 @@ pub trait ModelProjectionPort: Sync {
         &'a self,
         request: ModelProjectionRequest,
         scope: &'a floe_execution::ExecutionScope,
-    ) -> BoxFuture<'a, Result<AuthorizedModelProjection, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<crate::ModelProjectionOutcome, AgentFailure>>;
 }
 
-pub trait ModelPort: Sync {
-    /// One typed model call: either the model answered, or the exact
-    /// selected route needs contextual recipient consent before any
-    /// transmission. Hard failures (policy prohibition, transport errors,
-    /// invalid input) stay Err; only the recoverable consent case is
-    /// Ok(NeedsUserAction). No parallel generate path exists.
+pub trait ModelPort: Send + Sync {
+    fn prepare<'a>(
+        &'a self,
+        request: crate::ModelPlanRequest,
+        scope: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<Box<dyn PreparedModelCall>, AgentFailure>>;
+}
+
+/// An owned selected transport. Its plan is immutable and is never authority.
+pub trait PreparedModelCall: Send + Sync {
+    fn plan(&self) -> &crate::PreparedModelPlan;
+
     fn generate<'a>(
         &'a self,
         request: ModelRequest,
         scope: &'a floe_execution::ExecutionScope,
-    ) -> BoxFuture<'a, Result<crate::ModelCallOutcome, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<crate::ModelResponse, AgentFailure>>;
 }
 
 pub trait ToolPort: Sync {

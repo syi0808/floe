@@ -1,5 +1,5 @@
 const element = (id) => document.getElementById(id);
-const classes = ['fast', 'balanced', 'high_effort'];
+const purposes = ['quick_response', 'everyday_assistance', 'deep_work'];
 let csrf = '';
 let pairing = null;
 let unlocked = false;
@@ -51,7 +51,7 @@ function renderProvider() {
   }
   if (isClaude) return;
   const form = element('provider-form');
-  const profile = state.providers?.[selectedProvider] || {classes: {}};
+  const profile = state.providers?.[selectedProvider] || {purposes: {}};
   form.elements.provider.value = selectedProvider;
   element('provider-heading').replaceChildren(
     text('h2', isCodex ? 'Codex OAuth' : 'OpenAI-compatible API'),
@@ -61,13 +61,13 @@ function renderProvider() {
   element('api-connection').hidden = isCodex;
   form.elements.base_url.value = profile.base_url || 'https://api.openai.com/v1';
   form.elements.api_key.value = '';
-  for (const inferenceClass of classes) {
-    const configured = profile.classes?.[inferenceClass] || {};
-    const model = form.elements[`${inferenceClass}_model`];
+  for (const purpose of purposes) {
+    const configured = profile.purposes?.[purpose] || {};
+    const model = form.elements[`${purpose}_model`];
     model.value = configured.model || '';
     if (isCodex) model.setAttribute('list', 'codex-models'); else model.removeAttribute('list');
-    form.elements[`${inferenceClass}_effort`].value = configured.reasoning_effort || '';
-    const row = form.querySelector(`[data-class="${inferenceClass}"]`);
+    form.elements[`${purpose}_effort`].value = configured.reasoning_effort || '';
+    const row = form.querySelector(`[data-class="${purpose}"]`);
     row.classList.toggle('active-route', configured.active === true);
     row.querySelector('.test-class').disabled = !configured.model || configured.available === false;
   }
@@ -109,27 +109,27 @@ element('provider-form').addEventListener('input', () => { editing = true; });
 element('provider-form').addEventListener('submit', (event) => {
   event.preventDefault(); action(event.submitter, async () => {
     const form = event.target; const configured = {};
-    for (const inferenceClass of classes) {
-      const model = form.elements[`${inferenceClass}_model`].value.trim();
-      if (model) configured[inferenceClass] = {model, reasoning_effort: form.elements[`${inferenceClass}_effort`].value};
+    for (const purpose of purposes) {
+      const model = form.elements[`${purpose}_model`].value.trim();
+      if (model) configured[purpose] = {model, reasoning_effort: form.elements[`${purpose}_effort`].value};
     }
-    const input = {provider: selectedProvider, base_url: form.elements.base_url.value, api_key: form.elements.api_key.value, classes: configured};
+    const input = {provider: selectedProvider, base_url: form.elements.base_url.value, api_key: form.elements.api_key.value, purposes: configured};
     form.elements.api_key.value = '';
-    await api('provider', input); editing = false; await refresh(); notice('Provider configuration saved and active classes updated.');
+    await api('provider', input); editing = false; await refresh(); notice('Provider configuration saved and active purposes updated.');
   });
 });
 element('remove-provider').addEventListener('click', () => action(element('remove-provider'), async () => {
   if (!confirm('Remove this provider configuration and its active class routes?')) return;
-  await api('provider', {provider: selectedProvider, base_url: '', api_key: '', classes: {}});
+  await api('provider', {provider: selectedProvider, base_url: '', api_key: '', purposes: {}});
   editing = false; await refresh(); notice('Provider configuration removed.');
 }));
 for (const testButton of document.querySelectorAll('.test-class')) {
   testButton.addEventListener('click', () => action(testButton, async () => {
-    const inferenceClass = testButton.closest('.class-grid').dataset.class;
-    const configured = state.providers?.[selectedProvider]?.classes?.[inferenceClass];
+    const purpose = testButton.closest('.class-grid').dataset.class;
+    const configured = state.providers?.[selectedProvider]?.purposes?.[purpose];
     if (!configured || !confirm('Send a synthetic test with no personal or calendar data? Provider usage may apply.')) return;
-    const result = await api('test', {id: `managed_${selectedProvider}_${inferenceClass}`, allow_external: true});
-    notice(`${inferenceClass.replace('_', ' ')}: valid response in ${result.elapsed_ms} ms.`);
+    const result = await api('test', {id: `managed_${selectedProvider}_${purpose}`});
+    notice(`${purpose.replace('_', ' ')}: valid response in ${result.elapsed_ms} ms.`);
   }));
 }
 element('refresh').onclick = () => action(element('refresh'), refresh);

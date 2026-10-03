@@ -8,7 +8,7 @@ pub use application::learner::validate_learner_input;
 pub use application::learner_scheduling::{LearnerLease, LearnerScheduling};
 pub use application::learner_service::LearnerService;
 pub use ports::evidence::EvidenceReader;
-pub use ports::repository::{LearnerJobRepository, MemoryContextReader, MemoryReviewRepository};
+pub use ports::repository::{LearnerJournalFactory, LearnerJobRepository, MemoryContextReader, MemoryReviewRepository};
 pub mod application {
     pub mod learner;
     pub mod learner_scheduling;

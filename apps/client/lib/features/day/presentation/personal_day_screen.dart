@@ -1,6 +1,5 @@
-import 'package:floe_client/features/connections/application/connection_observe_gateway.dart';
-import 'package:floe_client/features/connections/application/native_personal_source_gateway.dart';
-import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
+import 'package:floe_client/features/conversation/application/agent_request_id.dart';
+import 'package:floe_client/features/connections/presentation/connections_controller.dart';
 import 'package:floe_client/features/connections/application/calendar_source_gateway.dart';
 import 'package:floe_client/features/connections/application/calendar_connection_view.dart';
 import 'package:floe_client/features/connections/domain/source_connection.dart';
@@ -26,8 +25,6 @@ import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/app/floe_toast.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
-import 'package:floe_client/features/day/application/calendar_gateway.dart';
-import 'package:floe_client/features/day/application/calendar_observation_refresh.dart';
 import 'package:floe_client/features/actions/application/calendar_action_gateway.dart';
 import 'package:floe_client/features/actions/application/calendar_action_controller.dart';
 import 'package:floe_client/features/actions/presentation/calendar_action_panel.dart';
@@ -41,16 +38,12 @@ import 'package:floe_client/features/day/presentation/calendar_context_rail.dart
 import 'package:floe_client/features/connections/presentation/connector_screen.dart';
 import 'package:floe_client/app/floe_feedback.dart';
 import 'package:floe_client/features/settings/presentation/settings_screen.dart';
-import 'package:floe_client/features/connections/application/local_server_client.dart';
 import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
-import 'package:floe_client/features/conversation/application/agent_controller.dart';
+import 'package:floe_client/features/conversation/application/conversation_controller.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/conversation/presentation/agent_panel.dart';
-import 'package:floe_client/infrastructure/native/android_context_gateway.dart';
-import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
-import 'package:floe_client/infrastructure/native/macos_context_gateway.dart';
 
 part 'personal_day/navigation.dart';
 part 'personal_day/tasks.dart';
@@ -74,28 +67,20 @@ class PersonalDayScreen extends StatefulWidget {
     required this.gateway,
     required this.query,
     this.calendarSourceGateway,
+    this.calendarActions,
+    this.dayRefreshGateway,
     this.agentGateway,
+    this.connectionsController,
     this.ownerGateways = const LocalOwnerGateways(),
-    this.pairingGateway,
-    this.connectionObserveGateway,
-    this.nativePersonalSourceGateway,
-    this.serverClient,
-    this.androidContext,
-    this.appleContext,
-    this.macOSContext,
   });
   final DayGateway gateway;
   final CalendarSourceGateway? calendarSourceGateway;
+  final CalendarActionExecutionGateway? calendarActions;
+  final DayRefreshGateway? dayRefreshGateway;
   final DayQuery query;
   final AgentConversationGateway? agentGateway;
+  final ConnectionsController? connectionsController;
   final LocalOwnerGateways ownerGateways;
-  final RemotePairingGateway? pairingGateway;
-  final ConnectionObserveGateway? connectionObserveGateway;
-  final NativePersonalSourceGateway? nativePersonalSourceGateway;
-  final LocalServerClient? serverClient;
-  final AndroidContextApi? androidContext;
-  final AppleContextApi? appleContext;
-  final MacOSContextApi? macOSContext;
   @override
   State<PersonalDayScreen> createState() => _PersonalDayScreenState();
 }
@@ -103,7 +88,6 @@ class PersonalDayScreen extends StatefulWidget {
 class _PersonalDayScreenState extends State<PersonalDayScreen>
     with WidgetsBindingObserver {
   late final PersonalDayController controller;
-  CalendarObservationRefreshCoordinator? calendarObservationRefresh;
   SourceConnection? nativeCalendarSource;
   List<SourceConnection> remoteCalendarSources = const [];
   SourceConnection? get calendarSource {
@@ -125,7 +109,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           controller.snapshot?.calendar,
         );
   CalendarActionController? actionController;
-  AgentController? agentController;
+  ConversationController? agentController;
   bool assistantOpen = false;
   bool openDeviceCalendarDetail = false;
   AgentExpertBindingTarget? expertBindingTarget;
@@ -141,25 +125,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     controller = PersonalDayController(
       gateway: widget.gateway,
       query: widget.query,
+      refreshGateway: widget.dayRefreshGateway,
     );
-    if (widget.gateway case final CalendarGateway gateway) {
-      calendarObservationRefresh = CalendarObservationRefreshCoordinator(
-        refresh: () async {
-          final snapshot = await gateway.syncCalendar(controller.query);
-          await controller.load();
-          await _inspectCalendarSource();
-          return calendarSource == null
-              ? null
-              : CalendarConnectionView.compose(
-                  calendarSource!,
-                  snapshot.calendar,
-                );
-        },
-      );
-      WidgetsBinding.instance.addObserver(this);
-    }
     _loadCalendar();
-    if (widget.gateway case final CalendarActionGateway gateway) {
+    if (widget.calendarActions case final gateway? when widget.dayRefreshGateway != null) {
       actionController = CalendarActionController(
         gateway: gateway,
         personId: widget.query.personId,
@@ -169,7 +138,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     screenState = Listenable.merge([controller, ?actionController]);
     final agentGateway = widget.agentGateway;
     if (agentGateway != null) {
-      agentController = AgentController(
+      agentController = ConversationController(
         gateway: agentGateway,
         owners: widget.ownerGateways,
         personId: widget.query.personId,
@@ -180,7 +149,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    calendarObservationRefresh?.dispose();
     controller.dispose();
     agentController?.removeListener(_reloadActionAuthorityAfterVaultUnlock);
     actionController?.dispose();
@@ -192,25 +160,11 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   Future<void> _loadCalendar() async {
     await controller.load();
     await _inspectCalendarSource();
-    if (!mounted) return;
-    calendarObservationRefresh?.reconcile(calendarConnection);
-    if (calendarObservationRefresh?.active ?? false) {
-      try {
-        await calendarObservationRefresh!.ensureFresh();
-      } on Object {
-        calendarObservationRefresh?.reconcile(calendarConnection);
-      }
-    }
   }
 
   Future<void> _reloadCalendarConnection() async {
     await controller.load();
     await _inspectCalendarSource();
-    if (!mounted) return;
-    calendarObservationRefresh?.reconcile(calendarConnection);
-    if (calendarObservationRefresh?.active ?? false) {
-      await calendarObservationRefresh!.ensureFresh();
-    }
   }
 
   Future<void> _inspectCalendarSource() async {
@@ -229,17 +183,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     }
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) return;
-    unawaited(calendarObservationRefresh?.ensureFresh());
-  }
-
   Future<void> _collectAction(CalendarAction action) async {
-    if (widget.gateway is! CalendarGateway) {
-      throw StateError('Calendar read unavailable');
-    }
-    final gateway = widget.gateway as CalendarGateway;
+    final gateway = widget.dayRefreshGateway;
+    if (gateway == null) throw StateError('Day acquisition is not available.');
     final start = action.startsAt.toLocal();
     final end = action.endsAt
         .subtract(const Duration(microseconds: 1))
@@ -248,13 +194,15 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     final last = DateTime(end.year, end.month, end.day);
     var matched = false;
     while (!day.isAfter(last)) {
-      final snapshot = await gateway.syncCalendar(
-        DayQuery.local(
+      final refresh = await gateway.refreshDay(
+        commandId: newAgentRequestId(),
+        query: DayQuery.local(
           personId: action.personId,
           date: day,
           now: DateTime.now(),
         ),
       );
+      final snapshot = await awaitDayRefresh(gateway, refresh);
       await _inspectCalendarSource();
       final source = calendarSource;
       if (source == null ||
@@ -338,35 +286,14 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
 
   Widget _workspace(bool narrow) {
     if (destination == _DestinationView.connections) {
-      return ConnectorScreen(
-        connectionObserveGateway: widget.connectionObserveGateway,
-        nativePersonalSourceGateway: widget.nativePersonalSourceGateway,
-        gateway: widget.gateway is CalendarGateway
-            ? widget.gateway as CalendarGateway
-            : null,
-        query: controller.query,
-        connection: calendarConnection,
-        calendarSourceGateway: widget.calendarSourceGateway,
-        calendarSource: nativeCalendarSource,
-        remoteCalendarSources: remoteCalendarSources,
-        onChanged: _reloadCalendarConnection,
-        serverClient: widget.serverClient,
-        deviceId: widget.serverClient?.deviceId,
-        appleContext: widget.appleContext,
-        macOSContext: widget.macOSContext,
-        agentController: agentController,
-        initialDeviceCalendarDetail: openDeviceCalendarDetail,
-      );
+      return ConnectorScreen(controller: widget.connectionsController);
     }
     if (destination == _DestinationView.settings) {
       return SettingsScreen(
-        pairingGateway: widget.pairingGateway,
-        client: widget.serverClient,
+        connectionsController: widget.connectionsController,
         actionController: actionController,
         agentController: agentController,
         expertBindingTarget: expertBindingTarget,
-        androidContext: widget.androidContext,
-        appleContext: widget.appleContext,
         platform: defaultTargetPlatform,
       );
     }
@@ -541,6 +468,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
             return AgentPanel(
               controller: agentController!,
               onOpenAction: actionController == null ? null : _openAgentAction,
+              onOpenConnections: () => _selectDestination(_DestinationView.connections),
               onOpenSourceReview: _openAgentSourceReview,
               onOpenExpertSettings: _openExpertSettings,
               onClose: _closeAssistant,
@@ -571,7 +499,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                       onOpenAction: actionController == null
                           ? null
                           : _openAgentAction,
-                      onOpenSourceReview: _openAgentSourceReview,
+                      onOpenConnections: () => _selectDestination(_DestinationView.connections),
+              onOpenSourceReview: _openAgentSourceReview,
                       onOpenExpertSettings: _openExpertSettings,
                       onClose: _closeAssistant,
                     )
@@ -618,6 +547,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   Future<void> _openAssistant() async {
     final agent = agentController;
     if (agent == null) return;
+    agent.attachView();
     if (agent.session == null && !agent.busy) unawaited(agent.load());
     if (MediaQuery.sizeOf(context).width > 960) {
       setState(() => assistantOpen = true);
@@ -630,9 +560,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         child: AgentPanel(
           controller: agent,
           onOpenAction: actionController == null ? null : _openAgentAction,
-          onOpenSourceReview: _openAgentSourceReview,
+          onOpenConnections: () => _selectDestination(_DestinationView.connections),
+              onOpenSourceReview: _openAgentSourceReview,
           onOpenExpertSettings: _openExpertSettings,
-          onClose: () => Navigator.pop(context),
+          onClose: () { agent.detachView(); Navigator.pop(context); },
         ),
       ),
     );
@@ -675,6 +606,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   }
 
   void _closeAssistant() {
+    agentController?.detachView();
     setState(() => assistantOpen = false);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && destination == _DestinationView.today) {

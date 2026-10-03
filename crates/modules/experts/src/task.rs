@@ -202,13 +202,13 @@ pub struct TaskCoordinator<Repository> {
     active: Mutex<HashMap<TaskId, floe_agent_contract::Cancellation>>,
 }
 
-pub struct RunExpertEnvironment<'a, Repository> {
-    coordinator: &'a TaskCoordinator<Repository>,
+pub struct RunExpertEnvironment<Repository> {
+    coordinator: Arc<TaskCoordinator<Repository>>,
     principal: String,
     snapshot: crate::directory::DirectorySnapshot,
 }
 
-impl<Repository> RunExpertEnvironment<'_, Repository> {
+impl<Repository> RunExpertEnvironment<Repository> {
     pub fn identity(&self) -> crate::RunExpertEnvironmentIdentity {
         self.snapshot.identity()
     }
@@ -271,15 +271,15 @@ impl<Repository> TaskCoordinator<Repository> {
 
 impl<Repository: TaskRepository> TaskCoordinator<Repository> {
     pub fn environment(
-        &self,
+        self: &Arc<Self>,
         principal: &str,
-    ) -> Result<RunExpertEnvironment<'_, Repository>, AgentFailure> {
+    ) -> Result<RunExpertEnvironment<Repository>, AgentFailure> {
         let snapshot = self.directory.snapshot(DirectoryQuery {
             principal,
             purpose: &self.purpose,
         })?;
         Ok(RunExpertEnvironment {
-            coordinator: self,
+            coordinator: Arc::clone(self),
             principal: principal.to_owned(),
             snapshot,
         })
@@ -629,7 +629,7 @@ async fn before_deadline<Value>(
         .unwrap_or(Err(AgentFailure::DeadlineExceeded))
 }
 
-impl<Repository: TaskRepository> DelegationPort for RunExpertEnvironment<'_, Repository> {
+impl<Repository: TaskRepository> DelegationPort for RunExpertEnvironment<Repository> {
     fn delegate<'a>(
         &'a self,
         request: DelegationRequest,

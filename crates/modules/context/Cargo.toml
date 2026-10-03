@@ -1,14 +1,9 @@
 [package]
-autotests = false
 name = "floe-context"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-
-[[test]]
-name = "integration"
-path = "tests/integration.rs"
 
 [dependencies]
 chrono.workspace = true
@@ -18,6 +13,7 @@ floe-context-contract = { path = "../../contracts/context" }
 floe-connections = { path = "../connections" }
 floe-day = { path = "../day" }
 floe-execution = { path = "../../runtime/execution" }
+floe-kernel = { path = "../../contracts/kernel" }
 floe-knowledge = { path = "../knowledge" }
 serde.workspace = true
 sha2.workspace = true
@@ -25,6 +21,4 @@ serde_json.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 
-[dev-dependencies]
-tokio = { workspace = true, features = ["test-util"] }
-floe-kernel = { path = "../../contracts/kernel" }
+

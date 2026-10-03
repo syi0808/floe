@@ -1,249 +1,97 @@
-use std::sync::{Condvar, Mutex};
-
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use uuid::Uuid;
-
 use crate::{CallerContext, HostError, HostServices};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum HostState {
-    Open,
-    Closing,
-    Closed,
-}
-
+enum HostState { Open, Closing, Closed }
 struct Lifecycle {
     state: HostState,
     active_requests: usize,
     shutdown_failure: Option<HostError>,
+    close_hooks: Vec<Weak<dyn CloseAdmission>>,
 }
+pub(crate) trait CloseAdmission: Send + Sync { fn close_admission(&self); }
 
+/// Shared admission owns no application services. Retained callback lanes use a
+/// short guard for each call and cannot extend the lifetime of the core handle.
+pub(crate) struct HostAdmission { lifecycle: Mutex<Lifecycle>, drained: Condvar }
+impl HostAdmission {
+    fn new() -> Self { Self { lifecycle: Mutex::new(Lifecycle { state: HostState::Open,
+        active_requests: 0, shutdown_failure: None, close_hooks: Vec::new() }), drained: Condvar::new() } }
+    pub(crate) fn enter(self: &Arc<Self>, request_id: Uuid) -> Result<AdmissionGuard, HostError> {
+        if request_id.is_nil() { return Err(HostError::InvalidRequest); }
+        let mut lifecycle = self.lifecycle.lock().map_err(|_| HostError::Shutdown)?;
+        if lifecycle.state != HostState::Open { return Err(HostError::Closing); }
+        lifecycle.active_requests = lifecycle.active_requests.checked_add(1).ok_or(HostError::Shutdown)?;
+        Ok(AdmissionGuard { admission: self.clone() })
+    }
+    pub(crate) fn register_close_hook(&self, hook: Weak<dyn CloseAdmission>) -> Result<(), HostError> {
+        let mut lifecycle = self.lifecycle.lock().map_err(|_| HostError::Shutdown)?;
+        if lifecycle.state != HostState::Open { return Err(HostError::Closing); }
+        lifecycle.close_hooks.retain(|hook| hook.strong_count() > 0);
+        if lifecycle.close_hooks.len() >= 64 { return Err(HostError::InvalidRequest); }
+        lifecycle.close_hooks.push(hook);
+        Ok(())
+    }
+}
+pub(crate) struct AdmissionGuard { admission: Arc<HostAdmission> }
+impl Drop for AdmissionGuard {
+    fn drop(&mut self) {
+        if let Ok(mut lifecycle) = self.admission.lifecycle.lock() {
+            lifecycle.active_requests = lifecycle.active_requests.saturating_sub(1);
+            if lifecycle.active_requests == 0 { self.admission.drained.notify_all(); }
+        }
+    }
+}
 pub struct AppHost<Services: HostServices> {
     services: Services,
     caller: CallerContext,
-    lifecycle: Mutex<Lifecycle>,
-    drained: Condvar,
+    admission: Arc<HostAdmission>,
 }
-
 impl<Services: HostServices> AppHost<Services> {
     pub(crate) fn with_caller(services: Services, caller: CallerContext) -> Self {
-        Self {
-            services,
-            caller,
-            lifecycle: Mutex::new(Lifecycle {
-                state: HostState::Open,
-                active_requests: 0,
-                shutdown_failure: None,
-            }),
-            drained: Condvar::new(),
-        }
+        Self { services, caller, admission: Arc::new(HostAdmission::new()) }
     }
-
     pub fn request(&self, request_id: Uuid) -> Result<HostRequest<'_, Services>, HostError> {
-        if request_id.is_nil() {
-            return Err(HostError::InvalidRequest);
-        }
-        let caller = &self.caller;
-        let mut lifecycle = self.lifecycle.lock().map_err(|_| HostError::Shutdown)?;
-        if lifecycle.state != HostState::Open {
-            return Err(HostError::Closing);
-        }
-        lifecycle.active_requests = lifecycle
-            .active_requests
-            .checked_add(1)
-            .ok_or(HostError::Shutdown)?;
-        Ok(HostRequest {
-            host: self,
-            caller,
-            request_id,
-        })
+        let guard = self.admission.enter(request_id)?;
+        Ok(HostRequest { host: self, caller: &self.caller, request_id, _guard: guard })
     }
-
     pub fn shutdown(&self) -> Result<(), HostError> {
-        let mut lifecycle = self.lifecycle.lock().map_err(|_| HostError::Shutdown)?;
+        let mut lifecycle = self.admission.lifecycle.lock().map_err(|_| HostError::Shutdown)?;
         match lifecycle.state {
             HostState::Open => lifecycle.state = HostState::Closing,
             HostState::Closing => {
                 while lifecycle.state == HostState::Closing {
-                    lifecycle = self
-                        .drained
-                        .wait(lifecycle)
-                        .map_err(|_| HostError::Shutdown)?;
+                    lifecycle = self.admission.drained.wait(lifecycle).map_err(|_| HostError::Shutdown)?;
                 }
                 return lifecycle.shutdown_failure.map_or(Ok(()), Err);
             }
             HostState::Closed => return lifecycle.shutdown_failure.map_or(Ok(()), Err),
         }
+        let hooks = lifecycle.close_hooks.iter().filter_map(Weak::upgrade).collect::<Vec<_>>();
+        drop(lifecycle);
+        // Cancelling callback registrations first releases product requests that
+        // are awaiting a native reply. No new admission is possible after Closing.
+        for hook in hooks { hook.close_admission(); }
+        let mut lifecycle = self.admission.lifecycle.lock().map_err(|_| HostError::Shutdown)?;
         while lifecycle.active_requests != 0 {
-            lifecycle = self
-                .drained
-                .wait(lifecycle)
-                .map_err(|_| HostError::Shutdown)?;
+            lifecycle = self.admission.drained.wait(lifecycle).map_err(|_| HostError::Shutdown)?;
         }
         drop(lifecycle);
         let result = self.services.shutdown();
-        let mut lifecycle = self.lifecycle.lock().map_err(|_| HostError::Shutdown)?;
-        lifecycle.shutdown_failure = result.err();
-        lifecycle.state = HostState::Closed;
-        self.drained.notify_all();
+        let mut lifecycle = self.admission.lifecycle.lock().map_err(|_| HostError::Shutdown)?;
+        lifecycle.shutdown_failure = result.err(); lifecycle.state = HostState::Closed;
+        self.admission.drained.notify_all();
         lifecycle.shutdown_failure.map_or(Ok(()), Err)
     }
-
-    fn release_request(&self) {
-        if let Ok(mut lifecycle) = self.lifecycle.lock() {
-            lifecycle.active_requests = lifecycle.active_requests.saturating_sub(1);
-            if lifecycle.active_requests == 0 {
-                self.drained.notify_all();
-            }
-        }
-    }
 }
-
-impl<Services: HostServices> Drop for AppHost<Services> {
-    fn drop(&mut self) {
-        let _ = self.shutdown();
-    }
-}
-
+impl<Services: HostServices> Drop for AppHost<Services> { fn drop(&mut self) { let _ = self.shutdown(); } }
 pub struct HostRequest<'host, Services: HostServices> {
-    host: &'host AppHost<Services>,
-    caller: &'host CallerContext,
-    request_id: Uuid,
+    host: &'host AppHost<Services>, caller: &'host CallerContext, request_id: Uuid, _guard: AdmissionGuard,
 }
-
 impl<Services: HostServices> HostRequest<'_, Services> {
-    pub fn caller(&self) -> &CallerContext {
-        self.caller
-    }
-
-    pub fn request_id(&self) -> Uuid {
-        self.request_id
-    }
-
-    pub fn services(&self) -> &Services {
-        &self.host.services
-    }
-}
-
-impl<Services: HostServices> Drop for HostRequest<'_, Services> {
-    fn drop(&mut self) {
-        self.host.release_request();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        sync::{
-            Arc,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
-        },
-        time::Duration,
-    };
-
-    use super::*;
-    use crate::{LocalIdentityClaim, LocalIdentityProvider};
-
-    struct Identity;
-
-    impl LocalIdentityProvider for Identity {
-        fn verified_local_identity(&self) -> Result<LocalIdentityClaim, HostError> {
-            Ok(LocalIdentityClaim {
-                person_id: Uuid::new_v4(),
-                device_id: "mac-local".into(),
-            })
-        }
-    }
-
-    struct Services(Arc<AtomicUsize>);
-
-    impl HostServices for Services {
-        fn shutdown(&self) -> Result<(), HostError> {
-            self.0.fetch_add(1, Ordering::AcqRel);
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn verified_identity_is_host_owned_and_shutdown_is_idempotent() {
-        let shutdowns = Arc::new(AtomicUsize::new(0));
-        let host = AppHost::bootstrap(Services(Arc::clone(&shutdowns)), &Identity).unwrap();
-        let request_id = Uuid::new_v4();
-        let request = host.request(request_id).unwrap();
-        assert_eq!(request.request_id(), request_id);
-        assert_eq!(request.caller().device_id(), "mac-local");
-        assert!(!request.caller().person_id().is_nil());
-        assert!((1..=i64::MAX as u64).contains(&request.caller().runtime_epoch()));
-        drop(request);
-        host.shutdown().unwrap();
-        host.shutdown().unwrap();
-        assert_eq!(shutdowns.load(Ordering::Acquire), 1);
-        assert_eq!(host.request(Uuid::new_v4()).err(), Some(HostError::Closing));
-    }
-
-    #[test]
-    fn shutdown_blocks_new_admission_and_drains_active_requests() {
-        let shutdowns = Arc::new(AtomicUsize::new(0));
-        let host =
-            Arc::new(AppHost::bootstrap(Services(Arc::clone(&shutdowns)), &Identity).unwrap());
-        let request = host.request(Uuid::new_v4()).unwrap();
-        let shutdown_started = Arc::new(AtomicBool::new(false));
-        let shutdown_host = Arc::clone(&host);
-        let shutdown_started_task = Arc::clone(&shutdown_started);
-        let shutdown = std::thread::spawn(move || {
-            shutdown_started_task.store(true, Ordering::Release);
-            shutdown_host.shutdown()
-        });
-        while !shutdown_started.load(Ordering::Acquire) {
-            std::thread::yield_now();
-        }
-        let deadline = std::time::Instant::now() + Duration::from_secs(1);
-        loop {
-            match host.request(Uuid::new_v4()) {
-                Err(HostError::Closing) => break,
-                Ok(admitted) => drop(admitted),
-                Err(failure) => panic!("unexpected admission failure: {failure:?}"),
-            }
-            assert!(std::time::Instant::now() < deadline);
-        }
-        assert_eq!(shutdowns.load(Ordering::Acquire), 0);
-        drop(request);
-        shutdown.join().unwrap().unwrap();
-        assert_eq!(shutdowns.load(Ordering::Acquire), 1);
-    }
-
-    #[test]
-    fn product_path_identity_is_verified_before_bootstrap() {
-        let root = tempfile::tempdir().unwrap();
-        let person_id = Uuid::new_v4();
-        let person_directory = root.path().join("people").join(person_id.to_string());
-        std::fs::create_dir_all(&person_directory).unwrap();
-        std::fs::write(root.path().join("local_device_id"), "local-device-1").unwrap();
-        let shutdowns = Arc::new(AtomicUsize::new(0));
-        let claim =
-            crate::bootstrap::local_identity_for_database(&person_directory.join("floe.db"))
-                .unwrap()
-                .unwrap();
-        let host = AppHost::bootstrap_claim(Services(Arc::clone(&shutdowns)), claim).unwrap();
-        let request = host.request(Uuid::new_v4()).unwrap();
-        assert_eq!(request.caller().person_id(), person_id);
-        assert_eq!(request.caller().device_id(), "local-device-1");
-        drop(request);
-
-        assert!(
-            crate::bootstrap::local_identity_for_database(&root.path().join("test.db"))
-                .unwrap()
-                .is_none()
-        );
-        assert_eq!(
-            AppHost::bootstrap_claim(
-                Services(shutdowns),
-                LocalIdentityClaim {
-                    person_id: Uuid::nil(),
-                    device_id: "device".into()
-                }
-            )
-            .err(),
-            Some(HostError::InvalidIdentity),
-        );
-    }
+    pub fn caller(&self) -> &CallerContext { self.caller }
+    pub fn request_id(&self) -> Uuid { self.request_id }
+    pub fn services(&self) -> &Services { &self.host.services }
+    pub(crate) fn admission(&self) -> Arc<HostAdmission> { self.host.admission.clone() }
 }

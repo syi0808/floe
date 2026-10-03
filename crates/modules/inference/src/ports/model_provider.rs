@@ -1,45 +1,42 @@
-//! Canonical provider port: non-secret profile facts plus an opaque prepared
-//! transport whose credential/endpoint internals stay in the adapter.
-//!
-//! Inference observes profiles, plans a route and dispatches through Access.
-//! It never sees a bearer, a base URL or an arbitrary endpoint.
+//! Typed observations and one selected, private provider capability.
 
-use floe_agent_contract::{AgentFailure, AllowedCatalog, ContextEnvelope, ModelStep};
+use floe_agent_contract::{
+    AgentFailure, AllowedCatalog, BoxFuture, ContextEnvelope, ModelBindingDigest,
+    ModelCapabilities, ModelPlanRequest, ModelStep, ProcessingBoundary,
+};
 use floe_context_contract::DataClass;
-use floe_execution::Cancellation;
+use floe_execution::{Cancellation, ExecutionScope};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::api::ModelProfile;
+use crate::{ModelConsumer, ModelPurpose};
 
+/// Proof of consumed Access admission. Product-supplied digests cannot create it.
 #[derive(Clone, Debug)]
 pub struct AdmittedDispatchTarget {
-    profile_id: String,
+    binding_digest: ModelBindingDigest,
     target: floe_access::ModelDispatchTarget,
 }
 
 impl AdmittedDispatchTarget {
     pub fn from_consumed<Resolver, Authority>(
-        fence: &floe_access::ModelDispatchFence<'_, '_, Resolver, Authority>,
+        fence: &floe_access::ModelDispatchFence<'_, '_, '_, Resolver, Authority>,
     ) -> Self {
-        let (profile_id, target) = fence.target();
+        let (binding_digest, target) = fence.target();
         Self {
-            profile_id: profile_id.to_owned(),
+            binding_digest: ModelBindingDigest(*binding_digest),
             target: target.clone(),
         }
     }
 
-    pub fn matches(&self, profile_id: &str, recipient: Option<&str>) -> bool {
-        self.profile_id == profile_id && self.target.recipient() == recipient
-    }
-
-    pub fn recipient(&self) -> Option<&str> {
-        self.target.recipient()
+    pub fn matches(&self, binding_digest: &ModelBindingDigest, boundary: ProcessingBoundary) -> bool {
+        self.binding_digest == *binding_digest
+            && matches!((&self.target, boundary),
+                (floe_access::ModelDispatchTarget::Device, ProcessingBoundary::Device)
+                | (floe_access::ModelDispatchTarget::Gateway { .. }, ProcessingBoundary::Gateway))
     }
 }
 
-/// What one approved model attempt needs. No Session, Task, ledger,
-/// bearer or endpoint travels here.
 #[derive(Clone, Debug)]
 pub struct CanonicalModelRequest {
     pub attempt_id: Uuid,
@@ -59,89 +56,120 @@ impl CanonicalModelRequest {
             || self.remaining_tokens == 0
             || self.max_output_bytes == 0
             || self.max_output_bytes > floe_agent_contract::MAX_OUTPUT_BYTES
+            || self.input_data_classes.is_empty()
+            || self.input_data_classes.iter().any(|class| !matches!(class,
+                DataClass::Synthetic | DataClass::Personal | DataClass::HighlySensitive))
         {
             return Err(AgentFailure::InvalidInput);
         }
-        self.envelope
-            .validate()
-            .map_err(|_| AgentFailure::InvalidInput)?;
-        Ok(())
+        self.envelope.validate()?;
+        self.catalog.tools.iter().try_for_each(floe_agent_contract::ToolDescriptor::validate)?;
+        self.catalog.cards.iter().try_for_each(floe_agent_contract::AgentDefinition::validate)
     }
 }
 
-/// What prepared transport returns, without loss.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProviderUsageObservation {
+    pub tokens: Option<u64>,
+    pub cost_micros: Option<u64>,
+}
+
+/// A trustworthy envelope retains usage even when its output is invalid.
 #[derive(Clone, Debug)]
 pub struct CanonicalModelResponse {
-    pub output: Vec<ModelStep>,
-    pub used_tokens: u64,
-    pub cost_micros: u64,
+    pub output: Result<Vec<ModelStep>, AgentFailure>,
+    pub usage: ProviderUsageObservation,
 }
 
-impl CanonicalModelResponse {
-    pub fn validate(&self, max_output_bytes: usize) -> Result<(), AgentFailure> {
-        if self.output.is_empty()
-            || self.output.len() > 16
-            || self
-                .output
-                .iter()
-                .any(|step| !valid_step(step, max_output_bytes))
-        {
-            return Err(AgentFailure::ServerModelInvalidOutput);
-        }
-        Ok(())
-    }
-}
+pub trait PreparedModelTransport: Send + Sync {
+    /// The adapter-retained non-secret expected binding; Access verifies it live.
+    fn dispatch_target(&self) -> floe_access::ModelDispatchTarget;
 
-fn valid_step(step: &ModelStep, max_output_bytes: usize) -> bool {
-    match step {
-        ModelStep::Preamble { text } | ModelStep::Answer { text, .. } => {
-            !text.trim().is_empty() && text.len() <= max_output_bytes
-        }
-        ModelStep::CallTool {
-            tool_id,
-            definition_revision,
-            input,
-        } => {
-            !tool_id.is_empty()
-                && *definition_revision > 0
-                && serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(input).is_ok()
-        }
-        ModelStep::Delegate {
-            agent_id,
-            definition_revision,
-            message,
-            context_refs,
-        } => {
-            !agent_id.is_empty()
-                && *definition_revision > 0
-                && !message.trim().is_empty()
-                && message.len() <= max_output_bytes
-                && floe_agent_contract::valid_context_refs(context_refs)
-        }
-    }
-}
-
-/// One prepared attempt dispatch. The secret fields stay in the adapter.
-pub trait PreparedModelTransport: Sync {
-    fn generate(
-        &self,
+    fn generate<'a>(
+        &'a self,
         request: CanonicalModelRequest,
         target: AdmittedDispatchTarget,
-    ) -> impl std::future::Future<Output = Result<CanonicalModelResponse, AgentFailure>> + Send;
+    ) -> BoxFuture<'a, Result<CanonicalModelResponse, AgentFailure>>;
 }
 
-/// Non-secret profile facts paired with the opaque capability that can run them.
-pub struct PreparedModelProfile<Prepared> {
-    pub profile: ModelProfile,
-    pub transport: Prepared,
+pub struct PreparedModelProfile<P> {
+    pub capability: ObservedModelCapability,
+    pub transport: P,
 }
 
-/// Canonical profile observation. Async because a server purpose inventory
-/// is one HTTP round trip; a device profile is immediately available.
-pub trait ModelProvider: Sync {
-    type Prepared: PreparedModelTransport + Send;
+#[derive(Clone, Debug)]
+pub struct ObservedModelCapability {
+    pub purpose: ModelPurpose,
+    pub consumer: ModelConsumer,
+    pub capabilities: ModelCapabilities,
+    pub boundary: ProcessingBoundary,
+    pub binding_digest: ModelBindingDigest,
+}
 
-    fn observe_profiles(
-        &self,
-    ) -> impl std::future::Future<Output = Vec<PreparedModelProfile<Self::Prepared>>> + Send;
+pub enum PrimaryObservation<P> {
+    Available(PreparedModelProfile<P>),
+    Absent(PrimaryAbsence),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PrimaryAbsence {
+    NoGatewayConfigured,
+    PurposeNotConfigured,
+    PurposeDisabled,
+}
+
+pub enum LocalObservation<P> {
+    Available(PreparedModelProfile<P>),
+    Unavailable(LocalAvailabilityReason),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalAvailabilityReason {
+    Unsupported,
+    Disabled,
+    NotReady,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModelObservationError {
+    InvalidIdentity,
+    InvalidInventory,
+    CredentialRejected,
+    PermissionDenied,
+    Timeout,
+    TransportUnavailable,
+    Cancelled,
+    StorageUnavailable,
+    QuotaExceeded,
+}
+
+impl From<ModelObservationError> for AgentFailure {
+    fn from(error: ModelObservationError) -> Self {
+        match error {
+            ModelObservationError::InvalidIdentity | ModelObservationError::PermissionDenied => Self::PolicyDenied,
+            ModelObservationError::InvalidInventory => Self::ServerModelInvalidOutput,
+            ModelObservationError::CredentialRejected => Self::CredentialExpired,
+            ModelObservationError::Timeout => Self::DeadlineExceeded,
+            ModelObservationError::TransportUnavailable => Self::ServerModelUnavailable,
+            ModelObservationError::Cancelled => Self::Cancelled,
+            ModelObservationError::StorageUnavailable => Self::StorageUnavailable,
+            ModelObservationError::QuotaExceeded => Self::QuotaExceeded,
+        }
+    }
+}
+
+pub trait ModelProvider: Send + Sync {
+    type Prepared: PreparedModelTransport + Send + Sync + 'static;
+
+    fn observe_primary<'a>(
+        &'a self,
+        request: &'a ModelPlanRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<PrimaryObservation<Self::Prepared>, ModelObservationError>>;
+
+    fn observe_local_fallback<'a>(
+        &'a self,
+        request: &'a ModelPlanRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<LocalObservation<Self::Prepared>, ModelObservationError>>;
 }

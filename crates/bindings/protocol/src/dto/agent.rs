@@ -16,7 +16,6 @@ macro_rules! response_payload {
 
 response_payload!(AgentEventDto);
 response_payload!(AgentFailureDto);
-response_payload!(AgentSessionDto);
 response_payload!(ConnectorSnapshotDto);
 response_payload!(EpistemicStatusDto);
 response_payload!(KnowledgeCandidateDto);

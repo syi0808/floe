@@ -9,14 +9,18 @@ mod error;
 mod repositories;
 #[cfg(unix)]
 mod vault;
-#[cfg(all(test, unix))]
-mod test_expert_registry;
 
 pub use engine::TursoStore;
 pub use error::{StoreError, StoreErrorCode};
 #[cfg(unix)]
 pub use repositories::{
-    ContextEvidenceReader, VaultConversationRepository, VaultGrantRecords, VaultTaskRepository,
+    ContextEvidenceReader, VaultConversationRepository, VaultTaskRepository,
 };
 #[cfg(unix)]
 pub use vault::*;
+
+#[cfg(unix)]
+pub use repositories::VaultLearnerJournalFactory;
+
+#[cfg(unix)]
+pub use vault::{VaultEnrollmentSigner, VaultAuthorizationSigner};

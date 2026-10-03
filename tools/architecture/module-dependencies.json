@@ -2,7 +2,7 @@
   "schema_version": 1,
   "status": "canonical allowed dependency policy; current repository graph is read from Cargo manifests",
   "edge_semantics": "A -> B means A may directly depend on B public API at compile time; adapters implement owner-defined ports.",
-  "contract_reference_note": "v0.3: naming a pure contract crate (kernel, agent_contract, context_contract) directly is not a violation for a crate whose own API or stored records carry those values. The composition root, the vault adapter and Actions are the cases: the app composes owners that trade in them, the vault stores agent sessions, tasks, settlements and dependencies, and an action records the Expert result and package that proposed it. Routing any of them through a module re-export would hide the dependency rather than remove it. This does not extend to protocol, which carries a wire, nor to any execution or storage implementation.",
+  "contract_reference_note": "Direct pure kernel, agent_contract, context_contract, and execution values are declared where public owner ports name them. FFI invokes typed owner APIs with verified App host admission and bounded execution scopes; it does not import concrete Vault/provider/native credential adapters. Stage-specific allowed deltas follow docs/plans/2026-10-02-canonical-contracts.md.",
   "target": [
     {
       "id": "kernel",
@@ -16,7 +16,7 @@
       "id": "context_contract",
       "package": "floe-context-contract",
       "path": "crates/contracts/context",
-      "responsibility": "Source views, provenance, recipient types",
+      "responsibility": "Source view/coverage values and Health transformation proofs",
       "group": "contracts",
       "allowed_internal_dependencies": [
         "kernel"
@@ -95,7 +95,7 @@
       "id": "inference",
       "package": "floe-inference",
       "path": "crates/modules/inference",
-      "responsibility": "Model profiles, invocation routing, approved dispatch",
+      "responsibility": "Shared purpose/capability planning and fenced dispatch, with Gateway-primary and valid-absence local fallback",
       "group": "modules",
       "allowed_internal_dependencies": [
         "agent_contract",
@@ -114,9 +114,7 @@
         "kernel",
         "agent_contract",
         "context_contract",
-        "execution",
-        "access",
-        "inference"
+        "execution"
       ]
     },
     {
@@ -144,7 +142,8 @@
         "access",
         "connections",
         "knowledge",
-        "day"
+        "day",
+        "kernel"
       ]
     },
     {
@@ -172,8 +171,7 @@
       "allowed_internal_dependencies": [
         "agent_contract",
         "context_contract",
-        "execution",
-        "inference"
+        "execution"
       ]
     },
     {
@@ -191,7 +189,10 @@
         "inference",
         "experts",
         "knowledge",
-        "actions"
+        "actions",
+        "access",
+        "connections",
+        "context_contract"
       ]
     },
     {
@@ -226,7 +227,7 @@
       "id": "providers",
       "package": "floe-provider-adapters",
       "path": "crates/adapters/providers",
-      "responsibility": "models/, sources/, control/; HTTP and OS adapters",
+      "responsibility": "Private Gateway transport/credentials plus local model and physical source adapters",
       "group": "adapters",
       "adapter_note": "day is allowed for calendar value conversion and for implementing a public source port only; DayService, query or policy orchestration and direct Day storage access are not.",
       "allowed_internal_dependencies": [
@@ -240,7 +241,8 @@
         "connections",
         "actions",
         "access",
-        "day"
+        "day",
+        "kernel"
       ]
     },
     {
@@ -259,7 +261,6 @@
         "conversation",
         "experts",
         "connections",
-        "inference",
         "access",
         "knowledge",
         "actions",
@@ -313,7 +314,19 @@
       "group": "bindings",
       "allowed_internal_dependencies": [
         "app",
-        "protocol"
+        "protocol",
+        "conversation",
+        "connections",
+        "access",
+        "context",
+        "day",
+        "actions",
+        "experts",
+        "knowledge",
+        "kernel",
+        "agent_contract",
+        "context_contract",
+        "execution"
       ]
     }
   ],

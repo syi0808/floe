@@ -6,7 +6,7 @@ use uuid::Uuid;
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
 use floe_agent_contract::InferencePolicyDecision;
-use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
+use floe_agent_contract::{ExpertModel};
 use floe_context_contract::{LogisticsView, logistics_context_evidence, validate_logistics_view};
 
 use crate::prompts::life_logistics_expert_prompt;
@@ -59,7 +59,6 @@ pub async fn run_life_logistics_expert<Model: ExpertModel>(
     let output: LogisticsOutput = match run_portfolio_model(
         model,
         policy,
-        ExpertModelRequirement::RemoteOnly,
         &invocation,
         logistics_context_evidence(&view)?,
         life_logistics_expert_prompt(),

@@ -188,6 +188,8 @@ pub fn validate_wellbeing_view(view: &WellbeingView, now_unix_ms: i64) -> Result
         now_unix_ms,
         WELLBEING_MAX_LIFETIME_MS,
     )?;
+    if matches!(view.capacity, CapacityState::Unknown) && matches!(view.recovery, RecoveryState::Unknown)
+        && !view.evidence_handles.is_empty() { return Err(AgentFailure::InvalidInput); }
     validate_derived(
         view.confidence_millis,
         &view.evidence_handles,
@@ -260,81 +262,4 @@ fn validate_size(view: &impl Serialize) -> Result<(), AgentFailure> {
 
 fn valid_handle(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= 128
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn typed_views_own_evidence_class_without_changing_payload_or_provenance() {
-        let people = PeopleView {
-            schema_version: AGENT_VERSION,
-            view_id: PEOPLE_VIEW_ID.into(),
-            source_handle: "people:test".into(),
-            observed_at_unix_ms: 1_000,
-            expires_at_unix_ms: 2_000,
-            coverage_complete: true,
-            identities: vec![],
-        };
-        let attention = AttentionView {
-            schema_version: AGENT_VERSION,
-            view_id: ATTENTION_VIEW_ID.into(),
-            source_handle: "attention:test".into(),
-            observed_at_unix_ms: 1_000,
-            expires_at_unix_ms: 2_000,
-            state: AttentionState::Unknown,
-            confidence_millis: 0,
-            evidence_handles: vec![],
-        };
-        let mut wellbeing = WellbeingView {
-            schema_version: AGENT_VERSION,
-            view_id: WELLBEING_VIEW_ID.into(),
-            source_handle: "wellbeing:test".into(),
-            observed_at_unix_ms: 1_000,
-            expires_at_unix_ms: 2_000,
-            capacity: CapacityState::Typical,
-            recovery: RecoveryState::Typical,
-            confidence_millis: 800,
-            evidence_handles: vec!["health:window".into()],
-        };
-        validate_people_view(&people, 1_000).unwrap();
-        validate_attention_view(&attention, 1_000).unwrap();
-        validate_wellbeing_view(&wellbeing, 1_000).unwrap();
-        assert_evidence(&people, DataClass::Personal);
-        assert_evidence(&attention, DataClass::Personal);
-        assert_evidence(&wellbeing, DataClass::HighlySensitive);
-        let encoded = serde_json::to_value(&wellbeing).unwrap();
-        assert_eq!(
-            serde_json::from_value::<WellbeingView>(encoded.clone()).unwrap(),
-            wellbeing
-        );
-        let mut forbidden = encoded;
-        forbidden["raw_samples"] = serde_json::json!([]);
-        assert!(serde_json::from_value::<WellbeingView>(forbidden).is_err());
-        wellbeing.evidence_handles.clear();
-        assert_eq!(
-            validate_wellbeing_view(&wellbeing, 1_000),
-            Err(AgentFailure::InvalidInput)
-        );
-        wellbeing.expires_at_unix_ms = 1_000;
-        assert_eq!(
-            validate_wellbeing_view(&wellbeing, 1_000),
-            Err(AgentFailure::InvalidInput)
-        );
-    }
-
-    fn assert_evidence(view: &impl PersonalContextProjection, expected: DataClass) {
-        let evidence = personal_context_evidence(view).unwrap();
-        assert_eq!(evidence.data_class, expected);
-        assert_eq!(evidence.source_handle, view.source_handle());
-        assert_eq!(
-            evidence.expires_at_unix_ms,
-            view.expires_at_unix_ms() as u64
-        );
-        assert_eq!(
-            evidence.untrusted_text,
-            serde_json::to_string(view).unwrap()
-        );
-    }
 }

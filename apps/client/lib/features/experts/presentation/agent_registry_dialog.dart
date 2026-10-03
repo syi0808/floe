@@ -6,7 +6,7 @@ import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/app/floe_switch.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
-import 'package:floe_client/features/conversation/application/agent_controller.dart';
+import 'package:floe_client/features/conversation/application/conversation_controller.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/experts/domain/agent_registry.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
@@ -18,7 +18,7 @@ class AgentRegistrySettings extends StatelessWidget {
     this.focus,
   });
 
-  final AgentController controller;
+  final ConversationController controller;
   final AgentExpertBindingTarget? focus;
 
   @override
@@ -93,7 +93,7 @@ class _CapabilityPermission extends StatelessWidget {
     required this.focus,
   });
 
-  final AgentController controller;
+  final ConversationController controller;
   final AgentRegistryView registry;
   final AgentInstallation installation;
   final AgentExpertBindingTarget? focus;
@@ -174,7 +174,7 @@ class _RequirementPicker extends StatefulWidget {
     required this.focused,
   });
 
-  final AgentController controller;
+  final ConversationController controller;
   final AgentInstallation installation;
   final AgentExpertDefinition definition;
   final AgentAssignment assignment;

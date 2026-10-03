@@ -1,5 +1,10 @@
 # Floe Client
 
+During the active architecture refactor, the [staged verification policy](../../docs/plans/2026-10-02-architecture-refactor.md#8-verification-policy-and-final-evidence)
+governs execution. T0 removes the documented legacy suites using static inspection only;
+the run and opt-in diagnostic instructions below are not T0 verification commands.
+Replacement behavioral tests are deferred until S3, after structural closure.
+
 ## Apple-first development
 
 macOS, iPhone and iPad are the first product targets. Android implementation, parity work
@@ -10,13 +15,21 @@ and build/test validation are deferred; existing Android code is not a delivery 
 iOS Xcode builds package the Rust and shared Apple local-model dylibs for the selected
 device/simulator architecture; the corresponding Rust target, Xcode 26 SDK and an eligible
 Xcode runtime are required. FoundationModels is weak-linked so older supported iOS versions
-remain usable without local inference. Generation requires the supported iOS 26 model profile
-and an available on-device model; unavailability never triggers a remote-model fallback.
+remain usable without local inference. Local generation requires iOS 26 and an available on-device model. The common Rust
+planner owns Gateway-primary/local-fallback selection; a denied or failed call cannot
+trigger a client-selected fallback. Health additionally requires its independent
+source-local privacy transform before any reasoning.
 
-Run `flutter run -d <apple-device> -t tool/mobile_vault_smoke.dart` to directly check
-the platform secure-key store, exclusive Vault ownership, and reopening an encrypted Vault.
-This uses a separate `mobile-vault-smoke` application-support directory and does not request
-Contacts, location, or external provider access. Success prints `MOBILE_VAULT_SMOKE_PASSED`.
+The opt-in `tool/mobile_vault_smoke.dart` diagnostic requires explicit Dart defines:
+`FLOE_VAULT_SMOKE_EXERCISE=true`, `FLOE_VAULT_SMOKE_DATABASE`,
+`FLOE_VAULT_SMOKE_PERSON_ID` and `FLOE_VAULT_SMOKE_DEVICE_ID`. The database must
+already exist at `<application support>/mobile-vault-smoke/people/<Person UUID>/floe.db`,
+and that diagnostic root must contain the matching existing `local_device_id`.
+No profile, directory or identity is created or reset. By default the Vault must also
+exist; `FLOE_VAULT_SMOKE_CREATE_VAULT=true` explicitly permits its first creation only.
+The exercise retains exclusive-owner rejection, lock and reopen validation, and never
+requests Contacts, Health or external-provider access. Run it only at an authorized
+Apple validation gate; it has not been executed during S1 caller migration.
 
 iOS uses device-only Keychain items available while unlocked and does not regenerate
 a missing key while opening an existing Vault.
@@ -43,28 +56,43 @@ The lightweight phases deliberately retain `alwaysOutOfDate` rather than an inco
 Rust source list that could silently skip required builds. All bundled dylibs are declared
 as Xcode phase outputs. Deleting Xcode derived data simply forces a native rebuild.
 
-Run `python3 tools/validation/test_native_build.py` from the repository root for isolated
-native cache invalidation/failure tests. These use fake tools and do not replace an Apple
-product build or native host tests.
-
 ```sh
 flutter pub get
 flutter run -d macos
 ```
 
-Build native FFI and Flutter from the same source snapshot (`cargo build -p floe-ffi`
-before native Flutter tests). Local Vault, Conversation sessions, Experts, Access,
+Build native FFI and Flutter from the same source snapshot when the staged production-build
+gate permits it. Local Vault, Conversation sessions, Experts, Access,
 Knowledge, Connections, Day, Actions and Context use owner-prefixed typed intents
 on the existing `command_v2/query_v2` AppWire. Rust derives Person/device authority
 from the verified product profile; there is no generic AgentVault/fixture ABI or
-unverified host fallback. Pairing uses the schema-2 Connections owner ABI;
-protected grant operations use the separate Access owner ABI and load the saved
-connection in Rust, not from a Flutter request route. Approved credentials are
-persisted and verified before releasing their bounded Rust result.
+unverified host fallback. Pairing, source review and management launch use ordinary Connections intents on
+the same AppWire. Flutter receives opaque references and safe owner snapshots;
+Gateway credentials, enrollment challenges and HTTP calls stay inside Rust owners
+and adapters. A connected pairing is shown only after owner commit and readback.
+The former Flutter HTTP client, credential channel and special remote ABIs are gone.
 
-From the repository root, `tools/validation/check-local-model.sh` runs the Swift
-host suite plus current provider-adapter and Inference tests.
-`tools/validation/run-local-model-smoke.sh --availability` checks the bundled
+Startup opens only an explicitly selected existing `people/<Person UUID>/floe.db`
+profile and existing `local_device_id`. A missing selection presents available profiles,
+even when there is only one; no profile/device identity is silently created or replaced.
+Malformed or unreadable selection/identity fails startup. A device with no existing
+profile remains in the setup-required state until the explicit profile-creation flow lands.
+
+Native Calendar, Attention and Personal pumps keep host-issued registration refs
+inside native infrastructure. A separate callback isolate owns one independently acquired
+native lane sharing the verified Rust host; the product handle never crosses isolates.
+Shutdown disposes registrations before freeing the callback lane and closing the product
+core. Repeated close, late callback, startup abandonment and shutdown-during-permission
+races are required S3 behavioral coverage; current review is static only. Catalog inspection reads bounded resource metadata only;
+Calendar and Contacts catalog calls never request OS permission. Only an explicit
+Connections integration start can admit a `request_permission` acquisition. Health
+reports that the OS request completed without claiming hidden read permission.
+Closing a screen detaches its observer; it does not
+cancel a Run or an owner operation. Conversation source-review blocks are explicit
+`blocked` / `not_produced` states, and eligible review completion is resumed by the
+durable Rust owner without a resolved-card Continue command.
+
+From the repository root, `tools/validation/run-local-model-smoke.sh --availability` checks the bundled
 FoundationModels transport; supported hosts can also run `--exercise` and
 `--exercise-learner`. The smoke example belongs to `floe-app`.
 
@@ -72,48 +100,17 @@ FoundationModels transport; supported hosts can also run `--exercise` and
 login Keychain without creating a key; `--exercise` uses only a fresh disposable
 Vault root and exact validation-owned key cleanup.
 
-`tools/validation/calendar/check-native.sh` compiles the production EventKit action
-adapter with deterministic payload, conflict and authority assertions and does not
-read a personal Calendar. The opt-in real Calendar response-loss and exact cleanup
-procedure is documented in `tools/validation/calendar/README.md`; it requires
-explicit approval for the dedicated disposable calendar and never authorizes TCC
-reset or unrelated Calendar edits.
+The retained [Calendar diagnostics and exact recovery tools](../../tools/validation/calendar/README.md)
+cover the production C ABI host and inspection of an explicitly identified disposable
+Calendar operation. Any live Calendar access or cleanup requires approval for the exact
+target and operation; it never authorizes TCC reset or unrelated Calendar edits.
 
-`flutter test integration/product_conversation_test.dart` runs the real product
-gateways and debug FFI in a private, signed copy of Flutter's test host containing
-the same-source Foundation dylib. It requires macOS with Foundation Available
-and no saved-server credential conflicting with its random validation identity.
-It never changes the shared saved-server slot; that conflict is a fail-closed
-environment blocker, not permission to clear credentials. The integration checks
-Auto/explicit `foundation-device` turns and durable reopen, then deletes only the
-exact validation-owned Vault key before removing its private profile.
-
-`flutter test integration/local_server_pairing_test.dart` (from `apps/client`)
-requires a buildable Go server and the debug FFI dylib. It uses a fresh temporary
-profile, final Rust pairing envelopes and memory-only credential persistence,
-then checks direct server authorization/revocation. It does not write the shared
-server Keychain slot or claim a live protected Access success through that slot.
-
-Go server and calendar fixture compilation is shared with the Rust tests through
-the [test fixture builder](../../docs/development/test-performance.md); mutable
-profiles and copied native host bundles remain private to each test.
-
-The separate `cargo test -p floe-provider-adapters --test live_server_access`
-test (repository root, macOS with Go) starts another disposable real server,
-strictly pairs it using test-owned vault keys, and loads the exact approved
-credential through `CurrentSavedConnectionStore::fixed`. It proves protected
-Rust Access inspection succeeds, then rejects both fresh and previously prepared
-transports after server revocation. This test also runs in the macOS Rust
-workspace suite; it never reads or writes the shared saved-connection Keychain slot.
-Its separately ignored `live_codex_model_uses_canonical_inference_and_exact_recipient`
-test requires explicit operator approval and an already-configured, unexpired
-Codex OAuth credential. With `FLOE_VALIDATION_CODEX_MODEL` set to the approved
-existing model, run that exact test with `-- --exact --ignored --nocapture`.
-It configures only a disposable loopback server, uses fictional input through
-canonical Inference/Access, verifies exact `OpenAI (Codex OAuth)` recipient consent and usage, and
-revokes only its disposable paired client. It is not a Flutter Conversation test
-and does not set up, refresh deliberately, or rotate an external account.
-Current validation commands and supported Apple build expectations are maintained in this guide and the repository validation tools; historical migration reports live in Git history.
+The legacy client, native-package and Runner test suites have been removed in T0.
+Their [behavior ledger](../../docs/plans/t0-client-behavior-ledger.md) preserves the
+observed safety, failure and recovery cases for review. Shared JSON fixtures and
+the [fixture builder](../../docs/development/test-performance.md) remain available;
+private profiles and copied native host bundles must remain isolated. The ledger
+does not claim the old behavior passed or that a replacement suite exists.
 
 To start the local server and macOS client together from the repository root:
 
@@ -123,6 +120,12 @@ To start the local server and macOS client together from the repository root:
 
 Pass Flutter run arguments to target another Apple device, for example
 `./scripts/run-local.sh -d <apple-device>`. Stopping either process stops the other.
+
+During S1, the app composes Conversation and Connections. Day exposes cached reads
+and local CRUD. The prepared `DayRefreshGateway` is deliberately not supplied to
+the UI until S2 assembles its durable acquisition owner; refresh and dependent
+Action controls are absent at this intermediate boundary. The old Dart evidence
+publication, mirror import and periodic acquisition policy remain removed.
 
 ## Localization
 
@@ -148,12 +151,14 @@ The Tasks destination retains the working task collection. Open a task to review
 - Icon navigation provides hover, keyboard-focus, tooltips and press feedback. Selecting the current destination also returns from task detail.
 - The 24-hour calendar has a 1–12× slider, matching scrollbars, exact duration geometry and overlap lanes. Hour/half-hour guides stay sparse; five-minute events remain accurate, with tooltip and detail access. Zoom and scroll survive navigation.
 - Event details use a shared 240 ms entrance / 120 ms exit dialog with backdrop blur, rounded time/source panels and read-only provenance. Reduced motion skips dialog animation. Empty days center their message over the blurred calendar; refreshing keeps the calendar underneath an eight-dot spinner.
-- Connect and Settings open a service list; the plain icon/name/description card opens detail, with Back to connections. Counts, status and read-only badges are not shown on list cards.
+- Connections and Gateway settings render owner-issued setup, pairing, source and integration snapshots. Resource and processing changes use immutable reviewed references; provider sign-in opens a bounded Gateway management action.
 - Notes supports search, Personal filtering, and Clear filters. New note opens an autofocus editor and saves through the capture/classification gateway, with empty-input prevention, pending protection, and retry feedback. Saving clears filters so the new note is visible; cancelling does not create an item.
 - Capture retains the real classification flow, then shows dismissible, screen-reader-announced success feedback only after saving.
 - Week/Month and the previous timeline suggestion bubble are not exposed. Unsupported domain actions are not simulated as successful native operations.
 
-Flutter automated tests cover controller loading, data processing and native gateway integration only. Design, layout and interaction are reviewed manually in the preview; widget, geometry and visual-capture regression suites are not maintained.
+The product preview remains available for manual design, layout and interaction review.
+Legacy controller, native gateway and widget suites were removed in T0; their behavior
+is recorded in the client ledger. New behavioral proof follows S2 structural closure.
 
 ### Shared button press motion
 
@@ -167,7 +172,8 @@ Run `flutter run -d macos -t lib/main_design_system.dart` to inspect shared colo
 button sizes and states, field alignment, and selection controls. Reusable controls use
 semantic state colors from `FloeColor`/`FloeStates`, spacing from `FloeSpace`, and
 36px compact, 44px standard, or 48px field metrics from `FloeControlSize`. Add new
-reusable states to the catalog and its widget tests before using them in a feature screen.
+reusable states to the catalog before using them in a feature screen. New behavioral
+tests follow the staged verification policy after structural closure.
 
 For custom controls, use `PressableScale(builder: (states) => InkWell(statesController: states, ...))`. The navigation and Floe anchor use this path with a 0.98 scale. Always connect the supplied state controller to the interactive child so disabled states, keyboard activation, and gesture cancellation follow Flutter's native behavior rather than raw pointer events. Reduced motion suppresses scaling. Checkbox, switch, popup-menu, and platform picker interactions retain their native behavior.
 
@@ -208,48 +214,32 @@ the app's Application Support directory.
 
 ## Connected Calendar
 
-Connect → macOS Calendar offers **Connect Calendar**, calendar selection, and manual refresh of
-the selected date. Permission is requested only after the connection disclosure.
-EventKit requires full OS access even for reads; the approved exception does not
-enable external writes in Floe. Use **권한 설정** after denial or revocation.
+Connections owns reviewed source selection and Observe authority. Catalogs carry
+actual bounded EventKit labels and handles; the owner validates selection, source
+revision and the current native subject before granting access. Permission requests,
+resource configuration and Observe remain separate explicit steps.
 
-Connections owns one EventKit `SourceConnection` with a bounded current resource set;
-multiple selected/current calendars are supported. **Use with Floe** manages one Access-owned
-standing Observe grant for the logical `calendar.timeline:<connection>` View. Context reloads
-the connection and reads its current resource set, retaining exact source provenance.
-Resource edits advance `SourceAuthority` and stale old review/evidence without inherently
-changing `GrantId`, `GrantAuthority` or the Expert connection/View binding. Expert selection
-is configuration, not permission; Observe never authorizes Calendar Actions.
-
-Day persists the imported mirror, provenance, last successful range/time and typed failures
-separately from Connections source authority. Relaunch displays cached data; refresh explicitly
-to recollect it. Source edits do not touch local tasks/notes or external calendars.
-This path is macOS-only. Fixture and deterministic native validation do not read a personal
-Calendar; live procedures require an explicitly approved disposable source.
-
-Historical acceptance snapshots are not part of the active documentation tree. Use the commands below plus the repository validation tools for current Apple product-boundary checks.
+Day mirror refresh and Calendar Action composition are S2 work. S1 displays cached
+Day content and does not expose refresh or dependent Action controls. Retained native
+Action code and diagnostics are unconnected to the S1 product flow. Legacy raw
+SourceConnection mutation/query adapters are removed from the running client.
 
 ## Validation commands
 
-In a connected, unlocked conversation, `/focus` requests a 60-minute focus proposal for today.
-It requires current authorized Calendar evidence and an exact reviewed destination calendar;
-the connection may expose multiple calendars. Open the resulting proposal to review it;
-the command never dispatches a calendar write. Approval and execution use the unlocked encrypted
-vault, and an expired source observation requires a fresh proposal rather than replaying an old one.
-Calendar Actions remain fenced to the exact destination and current source evidence.
-Unavailable sources or ambiguous action destinations return an explicit source/capability error.
+The `/focus` Calendar proposal and Action validation flow resumes after S2 reconnects
+its owner-backed Day acquisition and action presentation. It is not an S1 verification path.
 
-```sh
-flutter analyze
-flutter test
-flutter build macos
-```
+Follow the [architecture refactor verification gates](../../docs/plans/2026-10-02-architecture-refactor.md#8-verification-policy-and-final-evidence):
 
-The native gateway integration test needs a debug library before `flutter test`:
+- T0 permits static residual inspection, complete diff review and `git diff --check` only.
+  Do not run a formatter, compiler, analyzer, build, test, package resolver or architecture checker.
+- At the completed S1 boundary, G1 permits the recorded production compiler/type-check
+  phase using the required SDK. It does not permit a Flutter application build or tests.
+- After S2 structural closure, G2 requires the full production compilation/build gate,
+  including same-snapshot FFI, Flutter and affected Apple targets.
+- Only after S2, S3 restores test dependencies and targets for new behavioral tests.
+  G3 then includes `flutter analyze`, `flutter test` and final Apple/FFI builds.
 
-```sh
-cd ../..
-cargo build -p floe-ffi
-cd apps/client
-flutter test
-```
+The direct `flutter_test` dependency and old native test targets are absent at T0.
+The lockfile remains unchanged until an authorized package-resolution phase; its retained
+entries are not evidence of a runnable old or new suite. `flutter_lints` remains in use.

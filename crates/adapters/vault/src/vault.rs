@@ -20,8 +20,8 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 mod access_grants;
+mod connection_reviews;
 mod agent_actions;
-mod calendar_grants;
 mod context_cleanup;
 mod context_dependencies;
 mod conversation_interactions;
@@ -29,27 +29,18 @@ mod conversations;
 mod expert_actions;
 mod keyring;
 mod learning;
-mod recipient_consents;
 mod registry;
-mod remote_authority;
+mod authority_keys;
+mod gateway_authority;
+pub use gateway_authority::{VaultEnrollmentSigner, VaultAuthorizationSigner};
 mod session_archive;
 mod tasks;
-pub use access_grants::AccessGrantActivation;
 pub use access_grants::AccessGrantCleanup;
-pub use calendar_grants::CalendarGrantAdmission;
-pub use conversations::{
-    VaultConversationActivation, VaultConversationAdmission, VaultConversationAdmissionRequest,
-    VaultConversationCancelAdmission, VaultConversationCancelReceipt,
-    VaultConversationCancelRequest, VaultConversationContinuationRef,
-    VaultConversationJournalEntry, VaultConversationResumeRef, VaultConversationRunRecord,
-    VaultConversationRunState, VaultConversationTerminal,
-};
+pub use conversations::{VaultConversationActivation, VaultConversationAdmission,
+    VaultConversationCancelAdmission, VaultConversationCancelReceipt, VaultConversationCancelRequest,
+    VaultConversationJournalEntry};
 pub use floe_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use keyring::KeyringVaultKeys;
-pub use remote_authority::{
-    RemoteEnrollmentSignature, RemoteOwnerPublicKey, RemotePairingChallenge,
-    RemoteProducerIdentity, RemoteViewAuthorizationExpectation, RemoteViewSourceReference,
-};
 pub use session_archive::*;
 pub use tasks::{VaultTaskActivation, VaultTaskAdmission, VaultTaskRecord};
 
@@ -152,6 +143,10 @@ impl<Keys: VaultKeyProvider> floe_access::CurrentAuthority
 pub use floe_context::{DependencyLiveness, DependencyResolver};
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    /// Seal this exact opened generation. Retained owner handles fail all
+    /// existing access fences; no file, key or uncertain effect is removed.
+    pub fn seal(&self) { self.unavailable.store(true, Ordering::Release); }
+
     pub fn person_id(&self) -> PersonId {
         self.person_id
     }
@@ -224,6 +219,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_session_archive().await?;
         vault.initialize_learning_store().await?;
         vault.initialize_access_grant_store().await?;
+        vault.initialize_connection_reviews(true).await?;
         vault.initialize_agent_action_store().await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_conversation_store().await?;
@@ -314,6 +310,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_session_archive().await?;
         vault.initialize_learning_store().await?;
         vault.initialize_access_grant_store().await?;
+        vault.initialize_connection_reviews(false).await?;
         vault.initialize_agent_action_store().await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_conversation_store().await?;
@@ -401,12 +398,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.create_session().await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn create_sample_session(&self) -> Result<AgentSession, AgentFailure> {
-        let mut session = AgentSession::new(self.person_id);
-        session.data_classes = vec![DataClass::Synthetic];
-        self.insert_session(session).await
-    }
 
     pub fn check_access(&self) -> Result<(), AgentFailure> {
         self.connection().map(|_| ())
@@ -795,6 +786,3 @@ impl<Keys: VaultKeyProvider> floe_conversation::GovernedSessionRepository
         })
     }
 }
-
-#[cfg(test)]
-mod synthetic_tests;

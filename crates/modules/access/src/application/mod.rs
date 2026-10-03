@@ -6,7 +6,6 @@ pub mod model_dispatch;
 pub mod native_calendar;
 pub mod personal_read;
 pub mod personal_sources;
-pub mod recipient_consent;
 pub mod release;
 pub mod remote_authority;
 pub mod remote_grants;
@@ -36,18 +35,18 @@ pub use personal_sources::{
 };
 pub use release::{ReleasePermit, ReleaseRecipient, admit_release, consume_release};
 pub use remote_authority::{
-    RemoteAuthorityEnrollment, RemoteAuthorityInspection, admit_device_pairing,
-    admit_enrollment_pairing, inspect_remote_authority, remote_enrollment_status,
-    review_and_enroll_remote_authority,
+    admit_device_pairing, admit_enrollment_pairing,
 };
 pub use remote_grants::{
-    RemoteViewGrantActivation, RemoteViewGrantExpectation, RemoteViewGrantPreparation,
-    RemoteViewGrantPreview, RemoteViewGrantRequest, prepare_remote_view_grant_activation,
-    preview_remote_view_grant, review_and_activate_remote_view_grant,
+    RemoteViewGrantPreview, RemoteViewGrantRequest, 
+    preview_remote_view_grant, 
 };
 pub use remote_view::{
-    RemoteProducerIdentity, RemoteViewApproval, RemoteViewSourceReference,
-    admit_remote_view_binding, admit_remote_view_source, matches_review, producer_is_pinned,
+    RemoteProducerIdentity, RemoteViewSourceReference,
+    admit_remote_view_binding, admit_remote_view_source, producer_is_pinned,
     remote_dependency_live, remote_dependency_resource, remote_dependency_source_admits,
-    remote_view_scope, remote_view_source, source_matches_producer,
+     remote_view_source, source_matches_producer,
 };
+pub mod connection_review;
+pub mod authorization_signing;
+pub mod source_policy;

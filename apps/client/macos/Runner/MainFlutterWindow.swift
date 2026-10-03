@@ -2,12 +2,9 @@ import Cocoa
 import FlutterMacOS
 import EventKit
 import CryptoKit
-import Security
-import LocalAuthentication
 
 class MainFlutterWindow: NSWindow {
   private let calendarBridge = CalendarBridge()
-  private let serverBridge = LocalServerBridge()
   private let attentionBridge = MacOSAttentionBridge()
   private var designFeedbackChannel: FlutterMethodChannel?
 
@@ -28,8 +25,6 @@ class MainFlutterWindow: NSWindow {
     RegisterGeneratedPlugins(registry: flutterViewController)
     let channel = FlutterMethodChannel(name: "floe/calendar", binaryMessenger: flutterViewController.engine.binaryMessenger)
     channel.setMethodCallHandler(calendarBridge.handle)
-    let serverChannel = FlutterMethodChannel(name: "floe/local-server", binaryMessenger: flutterViewController.engine.binaryMessenger)
-    serverChannel.setMethodCallHandler(serverBridge.handle)
     let contextChannel = FlutterMethodChannel(name: "floe/macos_context", binaryMessenger: flutterViewController.engine.binaryMessenger)
     contextChannel.setMethodCallHandler(attentionBridge.handle)
     designFeedbackChannel = FlutterMethodChannel(name: "floe/design-feedback", binaryMessenger: flutterViewController.engine.binaryMessenger)
@@ -54,74 +49,10 @@ class MainFlutterWindow: NSWindow {
   }
 }
 
-final class LocalServerBridge {
-  private let credentialQueue = DispatchQueue(label: "floe.local-server.credentials")
-  private var query: [String: Any] {
-    [kSecClass as String: kSecClassGenericPassword,
-     kSecAttrService as String: "app.floe.local-server",
-     kSecAttrAccount as String: "connection-v1"]
-  }
-
-  func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-    switch call.method {
-    case "open":
-      guard let source = call.arguments as? String,
-            let url = URL(string: source), url.scheme == "http", url.host == "127.0.0.1",
-            url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
-            url.path == "/manage/" || url.path == "/manage" else {
-        result(failure()); return
-      }
-      if NSWorkspace.shared.open(url) { result(nil) } else { result(failure()) }
-    default:
-      credentialQueue.async {
-        self.handleCredential(call) { value in
-          DispatchQueue.main.async { result(value) }
-        }
-      }
-    }
-  }
-
-  private func handleCredential(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-    switch call.method {
-    case "read":
-      var request = query
-      request[kSecReturnData as String] = true
-      request[kSecMatchLimit as String] = kSecMatchLimitOne
-      let authentication = LAContext()
-      authentication.interactionNotAllowed = true
-      request[kSecUseAuthenticationContext as String] = authentication
-      var found: CFTypeRef?
-      let status = SecItemCopyMatching(request as CFDictionary, &found)
-      if status == errSecItemNotFound { result(nil); return }
-      guard status == errSecSuccess, let data = found as? Data,
-            let value = String(data: data, encoding: .utf8) else { result(failure()); return }
-      result(value)
-    case "write":
-      guard let value = call.arguments as? String, value.utf8.count <= 4096,
-            let data = value.data(using: .utf8) else { result(failure()); return }
-      let update = [kSecValueData as String: data]
-      var status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
-      if status == errSecItemNotFound {
-        var item = query
-        item[kSecValueData as String] = data
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        status = SecItemAdd(item as CFDictionary, nil)
-      }
-      result(status == errSecSuccess ? nil : failure())
-    case "delete":
-      let status = SecItemDelete(query as CFDictionary)
-      result(status == errSecSuccess || status == errSecItemNotFound ? nil : failure())
-    default:
-      result(FlutterMethodNotImplemented)
-    }
-  }
-
-  private func failure() -> FlutterError {
-    FlutterError(code: "credential_store_unavailable", message: "Could not access the local server connection.", details: nil)
-  }
-}
-
 final class CalendarBridge {
+  private struct AcquisitionFailure: Error { let code: String }
+  private static let provider = "event_kit"
+  private var boundDeviceID: String?
   private let store = EKEventStore()
   private let queue = DispatchQueue(label: "floe.calendar.read")
 
@@ -133,73 +64,268 @@ final class CalendarBridge {
 
   func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
-    case "settings":
-      NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")!)
-      result(nil)
-    case "calendars":
-      if canRead { list(result); return }
-      if let arguments = call.arguments as? [String: Any], arguments["request_access"] as? Bool == false {
-        result(failure("permission_denied")); return
+    case "readAcquisition":
+      guard let arguments = call.arguments as? [String: Any] else {
+        result(failure("invalid_input")); return
       }
-      let completion: (Bool, Error?) -> Void = { granted, _ in
-        DispatchQueue.main.async {
-          if granted { self.list(result) }
-          else { result(self.failure("permission_denied")) }
+      if arguments["mode"] as? String == "request_permission" {
+        Task {
+          do { result(try await self.requestPermissionAcquisition(arguments)) }
+          catch let error as AcquisitionFailure { result(self.failure(error.code)) }
+          catch { result(self.failure("provider_unavailable")) }
         }
-      }
-      if #available(macOS 14.0, *) {
-        store.requestFullAccessToEvents(completion: completion)
-      } else {
-        store.requestAccess(to: .event, completion: completion)
-      }
-    case "read":
-      guard let arguments = call.arguments as? [String: Any],
-            let identifier = arguments["calendar_id"] as? String,
-            let startText = arguments["starts_at"] as? String,
-            let endText = arguments["ends_at"] as? String else {
-        result(failure("provider_unavailable")); return
-      }
-      let formatter = ISO8601DateFormatter()
-      formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-      guard let start = formatter.date(from: startText),
-            let end = formatter.date(from: endText), end > start,
-            end.timeIntervalSince(start) <= 32 * 86400 else {
-        result(failure("provider_unavailable")); return
+        return
       }
       queue.async {
-        guard self.canRead else {
-          DispatchQueue.main.async { result(self.failure("permission_denied")) }; return
+        do {
+          let response = try self.readAcquisition(arguments)
+          DispatchQueue.main.async { result(response) }
+        } catch let error as AcquisitionFailure {
+          DispatchQueue.main.async { result(self.failure(error.code)) }
+        } catch {
+          DispatchQueue.main.async { result(self.failure("provider_unavailable")) }
         }
-        self.store.reset()
-        guard let calendar = self.store.calendar(withIdentifier: identifier) else {
-          DispatchQueue.main.async { result(self.failure("calendar_unavailable")) }; return
-        }
-        let predicate = self.store.predicateForEvents(withStart: start, end: end, calendars: [calendar])
-        let events = self.store.events(matching: predicate)
-        guard self.canRead else {
-          DispatchQueue.main.async { result(self.failure("permission_denied")) }; return
-        }
-        let records = events.map { self.record($0) }
-        DispatchQueue.main.async { result(records) }
       }
     default:
       result(FlutterMethodNotImplemented)
     }
   }
 
-  private func list(_ result: @escaping FlutterResult) {
-    queue.async {
-      guard self.canRead else {
-        DispatchQueue.main.async { result(self.failure("permission_denied")) }; return
+  private func requestPermissionAcquisition(_ arguments: [String: Any]) async throws -> [String: Any] {
+    guard arguments["mode"] as? String == "request_permission",
+          let requestID = arguments["request_id"] as? String, UUID(uuidString: requestID) != nil,
+          let personID = arguments["person_id"] as? String, UUID(uuidString: personID) != nil,
+          let epoch = arguments["host_epoch"] as? String, !epoch.isEmpty, epoch.utf8.count <= 128,
+          let connectionID = arguments["connection_id"] as? String, !connectionID.isEmpty,
+          let revision = Self.integer(arguments["connection_revision"]), revision > 0,
+          arguments["provider"] as? String == Self.provider,
+          let calendarIDs = arguments["calendar_ids"] as? [String], calendarIDs.isEmpty,
+          let start = Self.integer(arguments["range_start_unix_ms"]),
+          let end = Self.integer(arguments["range_end_unix_ms"]), end > start,
+          let deadline = Self.integer(arguments["deadline_unix_ms"]), deadline > Self.unixMilliseconds(),
+          let deviceID = bindDeviceID(arguments)
+    else { throw AcquisitionFailure(code: "invalid_input") }
+    func fingerprint() throws -> String {
+      let bytes = try JSONSerialization.data(withJSONObject: ["permission_class": Self.sourcePermissionClass(), "subjects": []] as [String: Any], options: [.sortedKeys])
+      return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    }
+    let before = try fingerprint()
+    let granted: Bool
+    if canRead {
+      granted = true
+    } else if EKEventStore.authorizationStatus(for: .event) == .notDetermined {
+      if #available(macOS 14.0, *) {
+        granted = try await store.requestFullAccessToEvents()
+      } else {
+        granted = try await withCheckedThrowingContinuation { continuation in
+          store.requestAccess(to: .event) { allowed, error in
+            if let error { continuation.resume(throwing: error) }
+            else { continuation.resume(returning: allowed) }
+          }
+        }
       }
-      self.store.reset()
-      let calendars = self.store.calendars(for: .event).map {
-        ["id": $0.calendarIdentifier, "name": "\($0.source.title) · \($0.title)"]
+    } else {
+      granted = false
+    }
+    return ["request_id": requestID, "host_epoch": epoch, "person_id": personID,
+            "device_id": deviceID, "connection_id": connectionID, "connection_revision": revision,
+            "provider": Self.provider, "mode": "request_permission", "calendar_ids": calendarIDs,
+            "range_start_unix_ms": start, "range_end_unix_ms": end,
+            "native_subject_fingerprint_before": before, "native_subject_fingerprint_after": try fingerprint(),
+            "available_calendar_ids": [], "available_calendars": [],
+            "permission_class": granted ? "request_completed" : "denied", "batches": []]
+  }
+
+  private func readAcquisition(_ arguments: [String: Any]) throws -> [String: Any] {
+    guard let requestID = arguments["request_id"] as? String,
+          let hostEpoch = arguments["host_epoch"] as? String,
+          let personID = arguments["person_id"] as? String,
+          let connectionID = arguments["connection_id"] as? String,
+          let deviceID = arguments["device_id"] as? String,
+          let connectionRevision = Self.integer(arguments["connection_revision"]),
+          let calendarIDs = arguments["calendar_ids"] as? [String],
+          let start = Self.integer(arguments["range_start_unix_ms"]),
+          let end = Self.integer(arguments["range_end_unix_ms"]),
+          let deadline = Self.integer(arguments["deadline_unix_ms"]),
+          let mode = arguments["mode"] as? String,
+          let provider = arguments["provider"] as? String,
+          provider == Self.provider,
+          ["inspect_subject", "inspect_catalog", "read_events"].contains(mode),
+          !requestID.isEmpty, !hostEpoch.isEmpty, !personID.isEmpty, !connectionID.isEmpty,
+          connectionRevision > 0,
+          (mode == "inspect_catalog" ? calendarIDs.isEmpty : !calendarIDs.isEmpty),
+          calendarIDs == calendarIDs.sorted(), Set(calendarIDs).count == calendarIDs.count,
+          calendarIDs.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 512 }),
+          start >= 0, end > start, end - start <= 32 * 86_400_000,
+          deadline > Self.unixMilliseconds(), deadline - Self.unixMilliseconds() <= 30_000
+    else { throw AcquisitionFailure(code: "invalid_input") }
+    guard bindDeviceID(arguments) == deviceID else { throw AcquisitionFailure(code: "stale_context") }
+
+    guard canRead else { throw AcquisitionFailure(code: "permission_denied") }
+    store.reset()
+    let evidenceBefore = try subjectEvidence(calendarIDs: calendarIDs)
+    guard calendarIDs.allSatisfy(evidenceBefore.availableCalendarIDs.contains) else {
+      throw AcquisitionFailure(code: "calendar_unavailable")
+    }
+    if mode == "read_events" {
+      guard canRead,
+            let expected = arguments["expected_native_subject_fingerprint"] as? String,
+            expected == evidenceBefore.fingerprint
+      else { throw AcquisitionFailure(code: "permission_denied") }
+    } else if arguments["expected_native_subject_fingerprint"] != nil {
+      throw AcquisitionFailure(code: "invalid_input")
+    }
+    guard deadline > Self.unixMilliseconds() else { throw AcquisitionFailure(code: "deadline_exceeded") }
+
+    var batches: [[String: Any]] = []
+    if mode == "read_events" {
+      let startDate = Date(timeIntervalSince1970: TimeInterval(start) / 1000)
+      let endDate = Date(timeIntervalSince1970: TimeInterval(end) / 1000)
+      var total = 0
+      for calendarID in calendarIDs {
+        guard deadline > Self.unixMilliseconds() else { throw AcquisitionFailure(code: "deadline_exceeded") }
+        guard let calendar = store.calendar(withIdentifier: calendarID) else {
+          throw AcquisitionFailure(code: "calendar_unavailable")
+        }
+        let predicate = store.predicateForEvents(withStart: startDate, end: endDate, calendars: [calendar])
+        let events = store.events(matching: predicate)
+        guard events.count <= 128 - total else { throw AcquisitionFailure(code: "provider_unavailable") }
+        var records: [[String: Any]] = []
+        for event in events {
+          total += 1
+          records.append(try acquisitionRecord(event))
+          let encoded = try JSONSerialization.data(withJSONObject: batches + [[
+            "calendar_id": calendarID,
+            "records": records,
+            "failure": NSNull(),
+          ]], options: [.sortedKeys])
+          guard encoded.count <= 65_536 else { throw AcquisitionFailure(code: "provider_unavailable") }
+        }
+        batches.append([
+          "calendar_id": calendarID,
+          "records": records,
+          "failure": NSNull(),
+        ])
       }
-      DispatchQueue.main.async { result(calendars) }
+    }
+    let evidenceAfter = try subjectEvidence(calendarIDs: calendarIDs)
+    guard canRead, evidenceAfter.fingerprint == evidenceBefore.fingerprint,
+          evidenceAfter.availableCalendars == evidenceBefore.availableCalendars,
+          deadline > Self.unixMilliseconds()
+    else { throw AcquisitionFailure(code: "stale_context") }
+    let response: [String: Any] = [
+      "request_id": requestID,
+      "host_epoch": hostEpoch,
+      "person_id": personID,
+      "device_id": deviceID,
+      "connection_id": connectionID,
+      "connection_revision": Int(connectionRevision),
+      "provider": provider,
+      "mode": mode,
+      "calendar_ids": calendarIDs,
+      "range_start_unix_ms": start,
+      "range_end_unix_ms": end,
+      "native_subject_fingerprint_before": evidenceBefore.fingerprint,
+      "native_subject_fingerprint_after": evidenceAfter.fingerprint,
+      "available_calendar_ids": evidenceBefore.availableCalendarIDs,
+      "available_calendars": evidenceBefore.availableCalendars,
+      "permission_class": evidenceBefore.permissionClass,
+      "batches": batches,
+    ]
+    guard JSONSerialization.isValidJSONObject(response),
+          (try JSONSerialization.data(withJSONObject: response)).count <= 65_536
+    else { throw AcquisitionFailure(code: "provider_unavailable") }
+    return response
+  }
+
+  private func subjectEvidence(calendarIDs: [String]) throws -> (fingerprint: String, availableCalendarIDs: [String], availableCalendars: [[String: String]], permissionClass: String) {
+    let permissionClass = Self.sourcePermissionClass()
+    let calendars = store.calendars(for: .event).sorted { $0.calendarIdentifier < $1.calendarIdentifier }
+    guard calendars.count <= 256, Set(calendars.map(\.calendarIdentifier)).count == calendars.count else {
+      throw AcquisitionFailure(code: "provider_unavailable")
+    }
+    let resources = try calendars.map { calendar -> [String: String] in
+      let label = "\(calendar.source.title) · \(calendar.title)"
+      guard !calendar.calendarIdentifier.isEmpty, calendar.calendarIdentifier.utf8.count <= 512,
+            !label.isEmpty, label.utf8.count <= 256,
+            !label.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+      else { throw AcquisitionFailure(code: "provider_unavailable") }
+      return ["handle": calendar.calendarIdentifier, "label": label]
+    }
+    let subjects = try calendarIDs.map { identifier -> [String] in
+      guard let calendar = calendars.first(where: { $0.calendarIdentifier == identifier }) else {
+        throw AcquisitionFailure(code: "calendar_unavailable")
+      }
+      return [calendar.calendarIdentifier, calendar.source.sourceIdentifier, String(calendar.source.sourceType.rawValue)]
+    }
+    let payload: [String: Any] = ["permission_class": permissionClass, "subjects": subjects]
+    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+    let fingerprint = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    return (fingerprint, calendars.map(\.calendarIdentifier), resources, permissionClass)
+  }
+
+  private static func sourcePermissionClass() -> String {
+    let status = EKEventStore.authorizationStatus(for: .event)
+    if #available(macOS 14.0, *) {
+      switch status {
+      case .fullAccess: return "full"
+      case .writeOnly: return "write_only"
+      case .authorized: return "authorized"
+      case .denied: return "denied"
+      case .restricted: return "restricted"
+      case .notDetermined: return "not_determined"
+      @unknown default: return "unknown"
+      }
+    }
+    switch status {
+    case .authorized: return "authorized"
+    case .denied: return "denied"
+    case .restricted: return "restricted"
+    case .notDetermined: return "not_determined"
+    default: return "unknown"
     }
   }
 
+  private func acquisitionRecord(_ event: EKEvent) throws -> [String: Any] {
+    let value = record(event)
+    guard let externalID = value["external_id"] as? String,
+          let externalRevision = value["external_revision"] as? String,
+          let title = value["title"] as? String,
+          externalID.utf8.count <= 512,
+          externalRevision.utf8.count <= 512,
+          title.utf8.count <= 4_096
+    else { throw AcquisitionFailure(code: "provider_unavailable") }
+    return [
+      "calendar_id": event.calendar.calendarIdentifier,
+      "external_id": externalID,
+      "external_revision": externalRevision,
+      "title": title,
+      "schedule": value["schedule"]!,
+      "can_modify": value["can_modify"]!,
+    ]
+  }
+
+  private func bindDeviceID(_ arguments: [String: Any]) -> String? {
+    guard let value = arguments["device_id"] as? String,
+          !value.isEmpty,
+          value.utf8.count <= 128,
+          !value.contains(where: { $0.isWhitespace })
+    else { return nil }
+    if let boundDeviceID, boundDeviceID != value { return nil }
+    boundDeviceID = value
+    return value
+  }
+
+  private static func integer(_ value: Any?) -> Int64? {
+    if let value = value as? Int { return Int64(value) }
+    if let value = value as? Int64 { return value }
+    if let value = value as? NSNumber { return value.int64Value }
+    return nil
+  }
+
+  private static func unixMilliseconds() -> Int64 {
+    Int64(Date().timeIntervalSince1970 * 1000)
+  }
   private func record(_ event: EKEvent) -> [String: Any] {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

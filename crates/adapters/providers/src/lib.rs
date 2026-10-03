@@ -5,6 +5,7 @@
 //! policy lives in the owning module, OS handles live in `floe-native`.
 
 pub mod control;
+pub mod gateway;
 mod local_identity;
 pub mod models;
 pub mod sources;

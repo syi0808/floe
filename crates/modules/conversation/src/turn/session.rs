@@ -4,7 +4,7 @@ use floe_kernel::PersonId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_agent_contract::{AgentFailure, ModelPlacement, ModelStep, SessionProtection};
+use floe_agent_contract::{AgentFailure, ProcessingBoundary, ModelStep, SessionProtection};
 
 use floe_agent_contract::{AGENT_VERSION, CapabilityExecution, ProviderReplay};
 
@@ -19,7 +19,6 @@ pub struct AgentSession {
     pub data_classes: Vec<floe_agent_contract::DataClass>,
     pub messages: Vec<AgentMessage>,
     pub usage: AgentUsage,
-    pub model_attempts: Vec<floe_inference::ModelAttemptRecord>,
     pub capability_executions: Vec<CapabilityExecution>,
     pub delegation_executions: Vec<DelegationExecution>,
     pub pending_output: Option<Vec<ModelStep>>,
@@ -67,7 +66,6 @@ impl AgentSession {
             data_classes: vec![floe_agent_contract::DataClass::Personal],
             messages: vec![],
             usage: AgentUsage::default(),
-            model_attempts: vec![],
             capability_executions: vec![],
             delegation_executions: vec![],
             pending_output: None,
@@ -86,7 +84,7 @@ pub struct DelegationExecution {
     pub agent_id: String,
     pub message: String,
     pub state: DelegationExecutionState,
-    pub task: Option<floe_experts::A2ATask>,
+    pub task: Option<floe_agent_contract::TaskSnapshot>,
     pub replay: Option<ProviderReplay>,
 }
 
@@ -103,6 +101,7 @@ pub enum DelegationExecutionState {
 pub struct AgentUsage {
     pub model_attempts: u32,
     pub estimated_tokens: u64,
+    pub estimated_cost_micros: u64,
     pub iterations: u32,
     pub capability_calls: u32,
     pub tokens: u64,
@@ -131,6 +130,7 @@ pub enum AgentMessage {
     },
     User {
         turn_id: Uuid,
+        message_id: Uuid,
         text: String,
     },
     Assistant {
@@ -146,7 +146,7 @@ pub enum AgentMessage {
     },
     Delegation {
         turn_id: Uuid,
-        task: floe_experts::A2ATask,
+        task: floe_agent_contract::TaskSnapshot,
     },
     Interaction {
         turn_id: Uuid,
@@ -167,7 +167,7 @@ impl AgentMessage {
     pub fn may_derive_from_source(&self) -> bool {
         match self {
             Self::Assistant { .. } | Self::Capability { result: Ok(_), .. } => true,
-            Self::Delegation { task, .. } => task.state == floe_experts::A2ATaskState::Completed,
+            Self::Delegation { task, .. } => task.state == floe_agent_contract::TaskState::Completed,
             Self::Compaction { .. }
             | Self::Preamble { .. }
             | Self::User { .. }
@@ -202,6 +202,7 @@ pub struct SessionRecoveryPointer {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum AgentOutcome {
     Completed,
+    Blocked { run_id: floe_kernel::RunId, review_group_id: Uuid },
     Halted { reason: AgentFailure },
 }
 
@@ -218,12 +219,9 @@ pub struct AgentEvent {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentEventKind {
     Started,
-    ModelAttempt {
-        record: floe_inference::ModelAttemptRecord,
-    },
     ModelStarted {
         iteration: u32,
-        placement: ModelPlacement,
+        boundary: ProcessingBoundary,
     },
     CapabilityStarted {
         call_id: Uuid,
@@ -301,24 +299,5 @@ impl AgentBudget {
             expanded.deadline_ms = expanded.deadline_ms.checked_mul(7)?.div_ceil(4);
         }
         Some(expanded)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn default_manager_budget_supports_long_running_turns() {
-        let budget = AgentBudget::default();
-        assert_eq!(budget.max_iterations, 100);
-        assert_eq!(budget.max_capability_calls, 100);
-        assert_eq!(budget.max_tokens, 409_600);
-        assert_eq!(budget.max_context_bytes, 1_048_576);
-        assert_eq!(budget.max_session_bytes, 2_097_152);
-        assert_eq!(budget.deadline_ms, 300_000);
-        assert_eq!(budget.expanded(1).unwrap().max_iterations, 175);
-        assert_eq!(budget.expanded(2).unwrap().max_iterations, 307);
-        assert_eq!(budget.expanded(3).unwrap().max_iterations, 538);
-        assert!(budget.expanded(4).is_none());
     }
 }

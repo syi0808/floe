@@ -119,17 +119,6 @@ func ownedSnapshots(snapshots []any, scope Scope, ownership OwnershipReader) ([]
 	return owned, nil
 }
 
-// LegacySnapshotSource adapts a runtime whose snapshot takes no context.
-type LegacySnapshotSource struct {
-	Runtime interface {
-		ConnectionSnapshot() (any, error)
-	}
-}
-
-func (source LegacySnapshotSource) ConnectionSnapshot(context.Context) (any, error) {
-	return source.Runtime.ConnectionSnapshot()
-}
-
 // SnapshotMetadata reads the connector and device a reported snapshot claims.
 func SnapshotMetadata(snapshot any) (map[string]any, string, string, bool) {
 	encoded, err := json.Marshal(snapshot)

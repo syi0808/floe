@@ -16,6 +16,7 @@ mod interaction;
 mod message;
 mod model;
 mod model_conversation;
+mod model_plan;
 mod ports;
 mod projection;
 pub mod prompts;
@@ -47,8 +48,8 @@ pub use envelope::{
 };
 pub use expert::{PackageKind, PackageRef};
 pub use expert_model::{
-    CapabilityDescriptor, DELEGATED_EXPERT_INFERENCE_CONSUMER, ExpertCapabilityObservation,
-    ExpertModel, ExpertModelAnswer, ExpertModelCall, ExpertModelOutcome, ExpertModelRequirement,
+    CapabilityDescriptor, ExpertCapabilityObservation,
+    ExpertModel, ExpertModelAnswer, ExpertModelCall, ExpertModelOutcome,
     ExpertReasoner, ExpertReasoningStep, ExpertStep, ExpertStepOutcome, ExpertStepResult,
     ExpertTranscriptEntry,
 };
@@ -58,14 +59,13 @@ pub use floe_context_contract::{
     EpistemicStatus, ExpertTimelineView, LearningEvidenceRef, MAX_CONTEXT_EVIDENCE,
     MAX_CONTEXT_EVIDENCE_BYTES, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES,
     MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS, MAX_TIMELINE_VIEW_ITEMS,
-    MemoryContextSnapshot, ModelPlacement, PersonalMemoryKind, ProcessingRequirement,
-    ProcessingSourceScope, RecipientLineage, SourceAuthority, SourceGrant, TimelineViewItem,
-    TransferConsent,
+    MemoryContextSnapshot, PersonalMemoryKind, SourceAuthority, SourceGrant, TimelineViewItem,
 };
-pub use floe_execution::{CancelReason, Cancellation, ExecutionScope};
+pub use floe_execution::{BoxFuture, CancelReason, Cancellation, ExecutionScope};
+pub use floe_execution::budget::ModelAccounting;
 pub use floe_kernel::{
     AGENT_VERSION, AgentFailure, AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction,
-    AgentRetryPolicy, CommandId, PersonId, RunId, ScopeId, TaskId, TraceContext,
+    AgentRetryPolicy, CommandId, OwnerActor, PersonId, RunId, ScopeId, TaskId, TraceContext,
 };
 pub use history::{HistoryMessageSize, bounded_history_start};
 pub use interaction::{
@@ -76,19 +76,19 @@ pub use message::{
 };
 pub use model::{
     AgentDefinition, AllowedCatalog, EngineRequest, EngineResumeState, EngineStep,
-    ModelCallOutcome, ModelRequest, ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall,
+    ModelRequest, ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall,
     ToolDescriptor, validate_tool_input,
 };
 pub use model_conversation::{
     MAX_CONTEXT_REFS, MAX_MODEL_CONVERSATION_BYTES, ModelConversation, ModelConversationEntry,
 };
 pub use ports::{
-    BatchCursor, BoxFuture, DelegationPort, ExecutionJournal, JournalAck, JournalEvent, ModelPort,
-    ModelProjectionPort, PinnedAgentRevision, PinnedToolRevision, ToolPort, ValidatedModelBatch,
+    BatchCursor, DelegationPort, ExecutionJournal, JournalAck, JournalEvent, ModelPort,
+    ModelProjectionPort, PreparedModelCall, PinnedAgentRevision, PinnedToolRevision, ToolPort, ValidatedModelBatch,
 };
 pub use projection::{
     AuthorizedModelProjection, MAX_CORRECTION_BYTES, MAX_INPUT_DATA_CLASSES, MODEL_CORRECTION_TEXT,
-    ModelCorrection, ModelProjectionRequest, ProjectionRef,
+    ModelCorrection, ModelProjectionOutcome, ModelProjectionRequest, ProjectionRef, SourceProjectionReview,
 };
 pub use replay::{AttemptId, InvocationKey, ReplayReceipt, input_digest};
 pub use timeline_view::TimelineViewRead;
@@ -104,3 +104,5 @@ pub const AGENT_SCHEMA_VERSION: u32 = 1;
 pub const A2A_PROTOCOL_VERSION: &str = "1.0";
 pub const MAX_AGENT_MESSAGES: usize = 128;
 pub const MAX_OUTPUT_BYTES: usize = 64 * 1024;
+
+pub use model_plan::{ModelBindingDigest, ModelCapabilities, ModelCapability, ModelPlanRequest, PreparedModelPlan, ProcessingBoundary};

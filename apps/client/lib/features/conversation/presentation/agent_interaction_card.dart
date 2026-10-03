@@ -1,10 +1,11 @@
+import 'package:floe_client/features/connections/domain/connection_models.dart';
 import 'package:flutter/material.dart';
 
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_badge.dart';
 import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_squircle.dart';
-import 'package:floe_client/features/conversation/application/agent_controller.dart';
+import 'package:floe_client/features/conversation/application/conversation_controller.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
@@ -25,7 +26,7 @@ final class AgentInteractionCard extends StatefulWidget {
     this.onOpenExpertSettings,
   });
 
-  final AgentController controller;
+  final ConversationController controller;
   final AgentInteractionMessage message;
   final VoidCallback? onOpenSourceReview;
   final VoidCallback? onOpenConnections;
@@ -96,11 +97,13 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
           strings.agentInteractionStateResolving,
         AgentInteractionState.resolved => strings.agentInteractionStateResolved,
         AgentInteractionState.denied => strings.agentInteractionStateDenied,
-        AgentInteractionState.cancelled =>
+        AgentInteractionState.dismissed =>
           strings.agentInteractionStateCancelled,
         AgentInteractionState.superseded =>
           strings.agentInteractionStateSuperseded,
         AgentInteractionState.expired => strings.agentInteractionStateExpired,
+        AgentInteractionState.stale => strings.agentInteractionStale,
+        AgentInteractionState.wrongDevice => strings.agentInteractionWrongDevice,
       };
       return FloeSquircle(
         size: FloeSquircleSize.md,
@@ -116,8 +119,6 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
                   child: Text(switch (snapshot.kind) {
                     AgentInteractionKind.sourceAccess =>
                       strings.agentInteractionSourceTitle,
-                    AgentInteractionKind.processingRecipient =>
-                      strings.agentInteractionConsentTitle,
                     AgentInteractionKind.expertBinding =>
                       strings.agentInteractionExpertBindingTitle,
                   }, style: FloeType.label),
@@ -170,62 +171,15 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
     AppLocalizations strings,
     AgentInteractionTarget target,
   ) => switch (target) {
-    AgentInlineObserveTarget(
-      :final connectionId,
-      :final sourceId,
-      :final purpose,
-      :final consumer,
-      :final members,
-    ) =>
-      [
-        _row(strings.agentInteractionConnection, connectionId),
-        _row(strings.agentInteractionSource, sourceId),
-        _row(strings.agentInteractionPurpose, purpose),
-        _row(strings.agentInteractionConsumer, consumer),
-        if (members.isNotEmpty)
-          _row(
-            strings.agentInteractionMembers,
-            members.map((member) => member.resource).join(', '),
-          ),
-      ],
-    AgentNavigationOnlyTarget(
-      :final destination,
-      :final sourceId,
-      :final purpose,
-    ) =>
-      [
-        _row(strings.agentInteractionNextStep, switch (destination) {
-          AgentNavigationDestination.connectionSettings =>
-            strings.agentInteractionOpenConnection,
-          AgentNavigationDestination.systemPermission =>
-            strings.agentInteractionRequestPermission,
-          AgentNavigationDestination.resourcePicker =>
-            strings.agentInteractionReviewSource,
-        }),
-        _row(strings.agentInteractionSource, sourceId),
-        _row(strings.agentInteractionPurpose, purpose),
-      ],
-    AgentRecipientConsentTarget(
-      :final recipient,
-      :final profileId,
-      :final purpose,
-      :final consumer,
-      :final inputDataClasses,
-      :final sourceScopes,
-    ) =>
-      [
-        _row(strings.agentInteractionRecipient, recipient),
-        _row(strings.agentInteractionProfile, profileId),
-        _row(strings.agentInteractionPurpose, purpose),
-        _row(strings.agentInteractionConsumer, consumer),
-        if (inputDataClasses.isNotEmpty)
-          _row(strings.agentInteractionData, inputDataClasses.join(', ')),
-        for (final scope in sourceScopes)
-          _row(
-            strings.agentInteractionScopes,
-            '${scope.connectionId} · ${scope.resources.join(', ')} · ${scope.operation}',
-          ),
-      ],
+    AgentSourceReviewTarget(:final review) => [
+      _row(strings.agentInteractionMembers, review.displayMembers.join(', ')),
+      _row('Processing', review.processingDisclosure.requested == SourceProcessing.deviceOnly
+        ? 'On this device only'
+        : 'On this device or your verified Gateway'),
+      _row(strings.agentInteractionScopes, review.processingDisclosure.scopeLabels.join(', ')),
+      _row(strings.agentInteractionData, review.processingDisclosure.categories.join(', ')),
+    ],
+    AgentNavigationTarget(:final sourceLabel) => [_row(strings.agentInteractionSource, sourceLabel)],
     AgentExpertBindingTarget(
       :final packageId,
       :final requirementKey,
@@ -256,7 +210,7 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
 
   Widget _actionButton(
     AppLocalizations strings,
-    AgentController controller,
+    ConversationController controller,
     AgentInteractionSnapshot snapshot,
     AgentInteractionAction action,
     bool busy,
@@ -266,8 +220,6 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
       AgentInteractionAction.deny => strings.agentInteractionDeny,
       AgentInteractionAction.dismiss => strings.agentInteractionDismiss,
       AgentInteractionAction.refresh => strings.agentInteractionRefresh,
-      AgentInteractionAction.continueRequest =>
-        strings.agentInteractionContinue,
       AgentInteractionAction.openConnection =>
         strings.agentInteractionOpenConnection,
       AgentInteractionAction.reviewSource =>
@@ -295,8 +247,6 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
               ),
             AgentInteractionAction.refresh =>
               () => controller.refreshInteraction(snapshot),
-            AgentInteractionAction.continueRequest =>
-              () => controller.continueInteraction(snapshot),
             AgentInteractionAction.openConnection => () {
               widget.onOpenConnections?.call();
               controller.refreshInteraction(snapshot);
@@ -305,8 +255,9 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
               widget.onOpenSourceReview?.call();
               controller.refreshInteraction(snapshot);
             },
-            AgentInteractionAction.requestPermission =>
-              () => controller.refreshInteraction(snapshot),
+            AgentInteractionAction.requestPermission => () {
+              widget.onOpenSourceReview?.call();
+            },
             AgentInteractionAction.openExpertSettings => () {
               final target = snapshot.target;
               if (target is AgentExpertBindingTarget) {
@@ -314,8 +265,7 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
               }
             },
           };
-    if (action == AgentInteractionAction.allow ||
-        action == AgentInteractionAction.continueRequest) {
+    if (action == AgentInteractionAction.allow) {
       return FloeButton.filled(
         onPressed: onPressed,
         size: FloeButtonSize.compact,

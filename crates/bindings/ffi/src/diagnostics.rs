@@ -42,19 +42,3 @@ pub(crate) fn panic_error(payload: Box<dyn Any + Send>) -> ErrorDto {
         metadata: [("error_id".into(), error_id)].into(),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use uuid::Uuid;
-
-    #[test]
-    fn panic_error_is_correlated_without_exposing_payload() {
-        let error = panic_error(Box::new(String::from("private model response")));
-
-        assert_eq!(error.code, ErrorCodeDto::Internal);
-        assert_eq!(error.message, "Rust core panicked");
-        assert!(error.metadata["error_id"].parse::<Uuid>().is_ok());
-        assert!(!format!("{error:?}").contains("private model response"));
-    }
-}

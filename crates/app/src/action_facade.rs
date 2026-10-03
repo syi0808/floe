@@ -261,11 +261,11 @@ impl FloeCore {
     }
 
     pub fn actions(&self) -> ActionService<'_, TursoStore, TursoStore> {
-        ActionService::new(&self.store, &self.store)
+        ActionService::new(self.store.as_ref(), self.store.as_ref())
     }
 
     pub fn expert_actions(&self) -> ExpertActionService<'_, TursoStore, TursoStore, Self> {
-        ExpertActionService::new(&self.store, &self.store, self)
+        ExpertActionService::new(self.store.as_ref(), self.store.as_ref(), self)
     }
 
     pub async fn inspect_expert_calendar_action(
@@ -376,7 +376,7 @@ impl FloeCore {
         if sources.len() > 1 {
             return Err(AgentFailure::Conflict);
         }
-        let mirror = floe_day::TimelineRepository::calendar_mirror(&self.store, person_id)
+        let mirror = floe_day::TimelineRepository::calendar_mirror(self.store.as_ref(), person_id)
             .await
             .map_err(|_| AgentFailure::StorageUnavailable)?;
         let source = match sources.pop() {

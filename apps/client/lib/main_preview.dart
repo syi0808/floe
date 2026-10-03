@@ -8,6 +8,7 @@ import 'package:floe_client/preview/calendar_fixture.dart';
 void main() => runApp(
   previewAppearance(
     FloeApp(
+      personId: calendarPreviewQuery.personId,
       gateway: calendarPreviewGateway(),
       query: calendarPreviewQuery,
       builder: (context, child) => DesignFeedbackOverlay(child: child!),

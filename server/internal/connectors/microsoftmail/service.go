@@ -1,19 +1,21 @@
 package microsoftmail
 
 import (
+ "floe/server/internal/integrations"
+ "floe/server/internal/views"
 	"context"
 	"errors"
 	"sync"
 	"time"
 
-	"floe/server/internal/connectors/common"
+	
 )
 
 type Service struct {
 	client    *Client
 	clock     func() time.Time
 	operation sync.Mutex
-	last      *CommunicationView
+	last      *views.CommunicationView
 }
 
 func NewService(client *Client) (*Service, error) {
@@ -54,7 +56,7 @@ func (service *Service) ConnectionSnapshot(ctx context.Context) (any, error) {
 		kind = "partial_fetch"
 	}
 	observed := now.UnixMilli()
-	snapshot := common.Snapshot{Descriptor: ConnectorDescriptor(), Connection: common.Connection{SchemaVersion: 1, ConnectorID: "microsoft.mail", State: state, ObservedAtUnixMS: observed, LastFailure: &common.Failure{Kind: kind, ObservedAtUnixMS: observed}}, Views: []common.ViewSnapshot{}}
+	snapshot := integrations.Snapshot{Descriptor: ConnectorDescriptor(), Connection: integrations.Connection{SchemaVersion: 1, ConnectorID: "microsoft.mail", State: state, ObservedAtUnixMS: observed, LastFailure: &integrations.Failure{Kind: kind, ObservedAtUnixMS: observed}}, Views: []views.ViewSnapshot{}}
 	if service.last != nil {
 		snapshot.Connection.State = "degraded"
 		snapshot.Connection.GrantedScopes = []string{observeScope}

@@ -3,8 +3,6 @@
 //! Day owns the timeline; the wire owns the DTO. Neither of them owns the
 //! translation, so it lives here, at the binding that needs both.
 
-#[cfg(test)]
-use floe_app::Revision;
 use floe_app::{
     AllDaySchedule, CalendarBatch, CalendarFailure, CalendarMirrorState, CalendarRange,
     CalendarRecord, CalendarSelection, CalendarSource, CalendarSyncStatus, Capture,
@@ -45,17 +43,6 @@ macro_rules! parse_id {
     };
 }
 
-macro_rules! parse_test_id {
-    ($function:ident, $type:path) => {
-        #[cfg(test)]
-        fn $function(value: &str, field: &'static str) -> Result<$type, ProtocolConversionError> {
-            parse_uuid(value, field).map($type)
-        }
-    };
-}
-
-parse_test_id!(parse_person_id, floe_app::PersonId);
-parse_test_id!(parse_capture_id, floe_app::CaptureId);
 parse_id!(parse_event_id, EventId);
 parse_id!(parse_task_id, TaskId);
 parse_id!(parse_note_id, NoteId);
@@ -119,33 +106,11 @@ pub fn calendar_source_to_dto(value: CalendarSource) -> CalendarSourceDto {
     }
 }
 
-#[cfg(test)]
-pub fn calendar_source_from_dto(value: CalendarSourceDto) -> CalendarSource {
-    CalendarSource {
-        can_modify: value.can_modify,
-        provider: calendar_provider_from_dto(value.provider),
-        calendar_id: value.calendar_id,
-        calendar_name: value.calendar_name,
-        external_id: value.external_id,
-        external_revision: value.external_revision,
-    }
-}
-
 pub fn calendar_sync_status_to_dto(value: CalendarSyncStatus) -> CalendarSyncStatusDto {
     CalendarSyncStatusDto {
         last_success_at: value.last_success_at,
         last_range: value.last_range.map(calendar_range_to_dto),
         error: value.error.map(calendar_failure_to_dto),
-        error_at: value.error_at,
-    }
-}
-
-#[cfg(test)]
-pub fn calendar_sync_status_from_dto(value: CalendarSyncStatusDto) -> CalendarSyncStatus {
-    CalendarSyncStatus {
-        last_success_at: value.last_success_at,
-        last_range: value.last_range.map(calendar_range_from_dto),
-        error: value.error.map(calendar_failure_from_dto),
         error_at: value.error_at,
     }
 }
@@ -162,23 +127,6 @@ pub fn calendar_mirror_state_to_dto(value: CalendarMirrorState) -> CalendarMirro
             .source_statuses
             .into_iter()
             .map(|(key, value)| (key, calendar_sync_status_to_dto(value)))
-            .collect(),
-    }
-}
-
-#[cfg(test)]
-pub fn calendar_mirror_state_from_dto(value: CalendarMirrorStateDto) -> CalendarMirrorState {
-    CalendarMirrorState {
-        source_connection_id: value.source_connection_id,
-        provider: calendar_provider_from_dto(value.provider),
-        last_success_at: value.last_success_at,
-        last_range: value.last_range.map(calendar_range_from_dto),
-        error: value.error.map(calendar_failure_from_dto),
-        error_at: value.error_at,
-        source_statuses: value
-            .source_statuses
-            .into_iter()
-            .map(|(key, value)| (key, calendar_sync_status_from_dto(value)))
             .collect(),
     }
 }
@@ -208,20 +156,6 @@ pub fn source_ref_to_dto(value: SourceRef) -> SourceRefDto {
         SourceRef::Capture(id) => SourceRefDto::Capture {
             capture_id: id.to_string(),
         },
-    }
-}
-
-#[cfg(test)]
-pub fn source_ref_from_dto(value: SourceRefDto) -> Result<SourceRef, ProtocolConversionError> {
-    match value {
-        SourceRefDto::Manual => Ok(SourceRef::Manual),
-        SourceRefDto::Calendar { source } => {
-            Ok(SourceRef::Calendar(calendar_source_from_dto(source)))
-        }
-        SourceRefDto::Capture { capture_id } => Ok(SourceRef::Capture(parse_capture_id(
-            &capture_id,
-            "capture_id",
-        )?)),
     }
 }
 
@@ -298,25 +232,6 @@ pub fn event_to_dto(value: Event) -> EventDto {
     }
 }
 
-#[cfg(test)]
-pub fn event_from_dto(value: EventDto) -> Result<Event, ProtocolConversionError> {
-    let person_id = parse_person_id(&value.person_id, "person_id")?;
-    let schedule = event_schedule_from_dto(value.schedule)?;
-    let source = source_ref_from_dto(value.source)?;
-    let created_at = parse_timestamp(&value.created_at, "created_at")?;
-    let mut event =
-        Event::new(person_id, value.title, schedule, source, created_at).map_err(domain_error)?;
-    event.id = parse_event_id(&value.id, "id")?;
-    event.updated_at = parse_timestamp(&value.updated_at, "updated_at")?;
-    event.revision = Revision(value.revision);
-    event.deleted_at = value
-        .deleted_at
-        .as_deref()
-        .map(|value| parse_timestamp(value, "deleted_at"))
-        .transpose()?;
-    Ok(event)
-}
-
 pub fn task_to_dto(value: Task) -> TaskDto {
     TaskDto {
         id: value.id.to_string(),
@@ -333,41 +248,6 @@ pub fn task_to_dto(value: Task) -> TaskDto {
     }
 }
 
-#[cfg(test)]
-pub fn task_from_dto(value: TaskDto) -> Result<Task, ProtocolConversionError> {
-    let person_id = parse_person_id(&value.person_id, "person_id")?;
-    let deadline = value
-        .deadline
-        .as_deref()
-        .map(|value| parse_timestamp(value, "deadline"))
-        .transpose()?;
-    let source = source_ref_from_dto(value.source)?;
-    let created_at = parse_timestamp(&value.created_at, "created_at")?;
-    let mut task = Task::new(
-        person_id,
-        value.title,
-        deadline,
-        priority_from_dto(value.priority),
-        source,
-        created_at,
-    )
-    .map_err(domain_error)?;
-    task.id = parse_task_id(&value.id, "id")?;
-    task.completed_at = value
-        .completed_at
-        .as_deref()
-        .map(|value| parse_timestamp(value, "completed_at"))
-        .transpose()?;
-    task.updated_at = parse_timestamp(&value.updated_at, "updated_at")?;
-    task.revision = Revision(value.revision);
-    task.deleted_at = value
-        .deleted_at
-        .as_deref()
-        .map(|value| parse_timestamp(value, "deleted_at"))
-        .transpose()?;
-    Ok(task)
-}
-
 pub fn note_to_dto(value: Note) -> NoteDto {
     NoteDto {
         id: value.id.to_string(),
@@ -379,23 +259,6 @@ pub fn note_to_dto(value: Note) -> NoteDto {
         revision: value.revision.0,
         deleted_at: value.deleted_at.map(timestamp),
     }
-}
-
-#[cfg(test)]
-pub fn note_from_dto(value: NoteDto) -> Result<Note, ProtocolConversionError> {
-    let person_id = parse_person_id(&value.person_id, "person_id")?;
-    let source = source_ref_from_dto(value.source)?;
-    let created_at = parse_timestamp(&value.created_at, "created_at")?;
-    let mut note = Note::new(person_id, value.content, source, created_at).map_err(domain_error)?;
-    note.id = parse_note_id(&value.id, "id")?;
-    note.updated_at = parse_timestamp(&value.updated_at, "updated_at")?;
-    note.revision = Revision(value.revision);
-    note.deleted_at = value
-        .deleted_at
-        .as_deref()
-        .map(|value| parse_timestamp(value, "deleted_at"))
-        .transpose()?;
-    Ok(note)
 }
 
 /// The classification a caller chose for one capture.
@@ -469,29 +332,10 @@ pub fn timeline_item_to_dto(value: TimelineItem) -> TimelineItemDto {
     }
 }
 
-#[cfg(test)]
-pub fn timeline_item_from_dto(
-    value: TimelineItemDto,
-) -> Result<TimelineItem, ProtocolConversionError> {
-    match value {
-        TimelineItemDto::Event(value) => Ok(TimelineItem::Event(event_from_dto(value)?)),
-        TimelineItemDto::Task(value) => Ok(TimelineItem::Task(task_from_dto(value)?)),
-        TimelineItemDto::Note(value) => Ok(TimelineItem::Note(note_from_dto(value)?)),
-    }
-}
-
 pub fn capture_source_to_dto(value: CaptureSource) -> CaptureSourceDto {
     match value {
         CaptureSource::Typed => CaptureSourceDto::Typed,
         CaptureSource::Voice => CaptureSourceDto::Voice,
-    }
-}
-
-#[cfg(test)]
-pub fn capture_source_from_dto(value: CaptureSourceDto) -> CaptureSource {
-    match value {
-        CaptureSourceDto::Typed => CaptureSource::Typed,
-        CaptureSourceDto::Voice => CaptureSource::Voice,
     }
 }
 
@@ -511,25 +355,6 @@ pub fn capture_processing_to_dto(value: CaptureProcessing) -> CaptureProcessingD
     }
 }
 
-#[cfg(test)]
-pub fn capture_processing_from_dto(
-    value: CaptureProcessingDto,
-) -> Result<CaptureProcessing, ProtocolConversionError> {
-    match value {
-        CaptureProcessingDto::Pending => Ok(CaptureProcessing::Pending),
-        CaptureProcessingDto::Classified {
-            target,
-            classified_at,
-        } => Ok(CaptureProcessing::Classified {
-            target: domain_ref_from_dto(target)?,
-            classified_at: parse_timestamp(&classified_at, "classified_at")?,
-        }),
-        CaptureProcessingDto::Dismissed { dismissed_at } => Ok(CaptureProcessing::Dismissed {
-            dismissed_at: parse_timestamp(&dismissed_at, "dismissed_at")?,
-        }),
-    }
-}
-
 pub fn capture_to_dto(value: Capture) -> CaptureDto {
     CaptureDto {
         id: value.id.to_string(),
@@ -540,23 +365,6 @@ pub fn capture_to_dto(value: Capture) -> CaptureDto {
         processing: capture_processing_to_dto(value.processing),
         revision: value.revision.0,
     }
-}
-
-#[cfg(test)]
-pub fn capture_from_dto(value: CaptureDto) -> Result<Capture, ProtocolConversionError> {
-    let person_id = parse_person_id(&value.person_id, "person_id")?;
-    let captured_at = parse_timestamp(&value.captured_at, "captured_at")?;
-    let mut capture = Capture::new(
-        person_id,
-        value.original_input,
-        captured_at,
-        capture_source_from_dto(value.source),
-    )
-    .map_err(domain_error)?;
-    capture.id = parse_capture_id(&value.id, "id")?;
-    capture.processing = capture_processing_from_dto(value.processing)?;
-    capture.revision = Revision(value.revision);
-    Ok(capture)
 }
 
 pub fn day_snapshot_to_dto(value: DaySnapshot) -> Result<DaySnapshotDto, ProtocolConversionError> {
@@ -577,198 +385,4 @@ pub fn day_snapshot_to_dto(value: DaySnapshot) -> Result<DaySnapshotDto, Protoco
         calendar: value.calendar.map(calendar_mirror_state_to_dto),
         calendar_mirror_revision: value.calendar_mirror_revision,
     })
-}
-
-#[cfg(test)]
-pub fn day_snapshot_from_dto(
-    value: DaySnapshotDto,
-) -> Result<DaySnapshot, ProtocolConversionError> {
-    if value.schema_version != PROTOCOL_VERSION {
-        return Err(ProtocolConversionError::UnsupportedVersion {
-            actual: value.schema_version,
-            expected: PROTOCOL_VERSION,
-        });
-    }
-    Ok(DaySnapshot {
-        person_id: parse_person_id(&value.person_id, "person_id")?,
-        date: parse_date(&value.date, "date")?,
-        calendar: value.calendar.map(calendar_mirror_state_from_dto),
-        calendar_mirror_revision: value.calendar_mirror_revision,
-        generated_at: parse_timestamp(&value.generated_at, "generated_at")?,
-        timezone_offset_seconds: value.timezone_offset_seconds,
-        now_event_id: value
-            .now_event_id
-            .as_deref()
-            .map(|value| parse_event_id(value, "now_event_id"))
-            .transpose()?,
-        next_event_id: value
-            .next_event_id
-            .as_deref()
-            .map(|value| parse_event_id(value, "next_event_id"))
-            .transpose()?,
-        overdue_task_count: value.overdue_task_count as usize,
-        items: value
-            .items
-            .into_iter()
-            .map(timeline_item_from_dto)
-            .collect::<Result<_, _>>()?,
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::BTreeMap;
-
-    use chrono::{TimeZone, Utc};
-    use floe_app::{
-        CalendarFailure, CalendarMirrorState, CalendarProvider, CalendarRange, CalendarSyncStatus,
-        Capture, CaptureId, CaptureSource, DaySnapshot, DomainRef, Event, EventId, EventSchedule,
-        Note, PersonId, Priority, SourceRef, Task, TimedSchedule, TimelineItem,
-    };
-    use floe_protocol::{CalendarProviderDto, DaySnapshotDto, EventScheduleDto, SourceRefDto};
-    use uuid::Uuid;
-
-    fn id(value: &str) -> Uuid {
-        Uuid::parse_str(value).unwrap()
-    }
-
-    #[test]
-    fn domain_snapshot_round_trip_preserves_all_item_kinds() {
-        let person_id = PersonId(id("00000000-0000-0000-0000-000000000001"));
-        let capture_id = CaptureId(id("00000000-0000-0000-0000-000000000004"));
-        let now = Utc.with_ymd_and_hms(2026, 9, 2, 10, 30, 0).unwrap();
-        let event = Event::new(
-            person_id,
-            "Review",
-            EventSchedule::Timed(
-                TimedSchedule::new(now, now + chrono::Duration::hours(1), "Asia/Seoul").unwrap(),
-            ),
-            SourceRef::Capture(capture_id),
-            now,
-        )
-        .unwrap();
-        let task = Task::new(
-            person_id,
-            "Ship",
-            Some(now),
-            Priority::High,
-            SourceRef::Manual,
-            now,
-        )
-        .unwrap();
-        let note = Note::new(person_id, "Remember", SourceRef::Manual, now).unwrap();
-        let snapshot = DaySnapshot {
-            calendar: None,
-            calendar_mirror_revision: None,
-            person_id,
-            date: now.date_naive(),
-            generated_at: now,
-            timezone_offset_seconds: 32_400,
-            now_event_id: Some(event.id),
-            next_event_id: None,
-            overdue_task_count: 1,
-            items: vec![
-                TimelineItem::Event(event),
-                TimelineItem::Task(task),
-                TimelineItem::Note(note),
-            ],
-        };
-
-        let dto = day_snapshot_to_dto(snapshot.clone()).unwrap();
-        assert_eq!(day_snapshot_from_dto(dto).unwrap(), snapshot);
-    }
-
-    #[test]
-    fn capture_round_trip_preserves_processing_and_revision() {
-        let person_id = PersonId(id("00000000-0000-0000-0000-000000000001"));
-        let now = Utc.with_ymd_and_hms(2026, 9, 2, 10, 30, 0).unwrap();
-        let mut capture = Capture::new(person_id, "Ship", now, CaptureSource::Typed).unwrap();
-        capture.classify(
-            DomainRef::Event(EventId(id("00000000-0000-0000-0000-000000000002"))),
-            now,
-        );
-
-        let dto = capture_to_dto(capture.clone());
-        assert_eq!(dto.revision, 1);
-        assert_eq!(capture_from_dto(dto).unwrap(), capture);
-    }
-
-    #[test]
-    fn conversion_rejects_invalid_versions_and_domain_values() {
-        let snapshot = DaySnapshotDto {
-            calendar: None,
-            calendar_mirror_revision: None,
-            schema_version: 99,
-            person_id: "00000000-0000-0000-0000-000000000001".into(),
-            date: "2026-09-02".into(),
-            generated_at: "2026-09-02T10:30:00Z".into(),
-            timezone_offset_seconds: 0,
-            now_event_id: None,
-            next_event_id: None,
-            overdue_task_count: 0,
-            items: vec![],
-        };
-        assert!(matches!(
-            day_snapshot_from_dto(snapshot),
-            Err(ProtocolConversionError::UnsupportedVersion { actual: 99, .. })
-        ));
-
-        let schedule = EventScheduleDto::Timed {
-            starts_at: "2026-09-02T10:30:00Z".into(),
-            ends_at: "2026-09-02T10:30:00Z".into(),
-            timezone: "UTC".into(),
-        };
-        assert!(event_schedule_from_dto(schedule).is_err());
-
-        let invalid_id = SourceRefDto::Capture {
-            capture_id: "not-a-uuid".into(),
-        };
-        assert!(source_ref_from_dto(invalid_id).is_err());
-    }
-
-    #[test]
-    fn calendar_mirror_state_conversion_preserves_wire_json_shape() {
-        let now = Utc.with_ymd_and_hms(2026, 9, 2, 10, 30, 0).unwrap();
-        let range = CalendarRange {
-            start_date: now.date_naive(),
-            end_date_exclusive: now.date_naive() + chrono::Duration::days(1),
-            timezone_offset_seconds: 32_400,
-            end_timezone_offset_seconds: Some(28_800),
-        };
-        let state = CalendarMirrorState {
-            source_connection_id: "connection-1".into(),
-            provider: CalendarProvider::Google,
-            last_success_at: Some(now),
-            last_range: Some(range.clone()),
-            error: Some(CalendarFailure::ProviderUnavailable),
-            error_at: Some(now),
-            source_statuses: [(
-                "primary".into(),
-                CalendarSyncStatus {
-                    last_success_at: Some(now),
-                    last_range: Some(range),
-                    error: None,
-                    error_at: None,
-                },
-            )]
-            .into_iter()
-            .collect::<BTreeMap<_, _>>(),
-        };
-        let dto = calendar_mirror_state_to_dto(state.clone());
-        assert_eq!(
-            serde_json::to_value(&dto).unwrap(),
-            serde_json::to_value(&state).unwrap()
-        );
-        assert_eq!(dto.provider, CalendarProviderDto::Google);
-        assert_eq!(
-            serde_json::to_value(CalendarProviderDto::Google).unwrap(),
-            serde_json::json!("google_calendar")
-        );
-        assert_eq!(
-            serde_json::to_value(CalendarProviderDto::Microsoft).unwrap(),
-            serde_json::json!("microsoft_calendar")
-        );
-        assert_eq!(calendar_mirror_state_from_dto(dto), state);
-    }
 }

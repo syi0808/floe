@@ -28,6 +28,8 @@ pub struct AppWireErrorDto {
     pub field: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_failure: Option<OwnerFailureDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -61,4 +63,21 @@ impl<T> AppResponseDto<T> {
             outcome: AppResponseOutcomeDto::Error { error },
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnerRecoveryDto { None, Reobserve, Reconcile, Unlock, Reopen, NewReview }
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerFailureDto {
+    pub domain: floe_kernel::AgentFailureDomain,
+    pub category: floe_kernel::AgentFailureCategory,
+    pub reason: floe_kernel::AgentFailure,
+    pub incident_id: super::UuidRefDto,
+    pub correlation_id: super::UuidRefDto,
+    pub reload_required: bool,
+    pub seal_session: bool,
+    pub recovery: OwnerRecoveryDto,
+    pub safe_actions: Vec<floe_kernel::AgentFailureSafeAction>,
 }

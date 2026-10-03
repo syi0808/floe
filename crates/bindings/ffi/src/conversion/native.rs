@@ -8,9 +8,9 @@
 
 use floe_app::{
     AttentionAcquisitionMode, AttentionAcquisitionRequest, CalendarAcquisitionMode,
-    CalendarAcquisitionRequest, CalendarProvider, CalendarSourceFailure, LocalContextOutcome,
+    CalendarAcquisitionRequest, CalendarProvider, CalendarSourceFailure, NativeHostOutcome,
     NativeCalendarBatch, NativeCalendarFailure, NativeCalendarRecord, NativeEventSchedule,
-    PersonId, PersonalAcquisitionRequest, PersonalDomain, valid_native_subject_fingerprint,
+    PersonalAcquisitionRequest, PersonalDomain, PersonalAcquisitionMode,
 };
 use floe_protocol::wire::{WireResult, invalid};
 use floe_protocol::{
@@ -18,65 +18,8 @@ use floe_protocol::{
     LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,
     LocalContextAttentionAcquisitionModeDto, LocalContextAttentionAcquisitionRequestDto,
     LocalContextPersonalAcquisitionRequestDto, LocalContextPersonalDomainDto,
-    LocalContextResultDto,
+    LocalContextPersonalAcquisitionModeDto, AppCommandResultDto, AppQueryResultDto, NativeHostRegistrationDto, UuidRefDto,
 };
-use uuid::Uuid;
-
-const ALLOWED_VIEW_IDS: [&str; 4] = [
-    "people.identity",
-    "attention.coarse",
-    "wellbeing.derived",
-    "calendar.timeline",
-];
-
-pub(crate) fn now_unix_ms() -> WireResult<i64> {
-    i64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| invalid("now", "system clock is before the epoch"))?
-            .as_millis(),
-    )
-    .map_err(|_| invalid("now", "system clock is out of range"))
-}
-
-pub(crate) fn validate_handle(value: &str, field: &'static str) -> WireResult<()> {
-    if !value.trim().is_empty() && value.len() <= 128 {
-        Ok(())
-    } else {
-        Err(invalid(field, "must contain 1 to 128 characters"))
-    }
-}
-
-pub(crate) fn validate_host_epoch(value: &str) -> WireResult<()> {
-    if value.trim().is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
-        return Err(invalid("operation.host_epoch", "invalid host epoch"));
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_view_id(view_id: &str) -> WireResult<()> {
-    if ALLOWED_VIEW_IDS.contains(&view_id) {
-        Ok(())
-    } else {
-        Err(invalid(
-            "operation.view_id",
-            "unsupported local context View",
-        ))
-    }
-}
-
-pub(crate) fn validate_fingerprint(value: &str, field: &'static str) -> WireResult<()> {
-    if valid_native_subject_fingerprint(value) {
-        Ok(())
-    } else {
-        Err(invalid(field, "invalid fingerprint"))
-    }
-}
-
-pub(crate) fn parse_request_id(value: &str, field: &'static str) -> WireResult<Uuid> {
-    validate_handle(value, field)?;
-    Uuid::parse_str(value).map_err(|_| invalid(field, "must be a UUID"))
-}
 
 pub fn calendar_provider(value: CalendarProviderDto) -> CalendarProvider {
     super::day::calendar_provider_from_dto(value)
@@ -145,6 +88,8 @@ pub(crate) fn native_batch(value: CalendarBatchDto) -> NativeCalendarBatch {
 pub(crate) fn acquisition_mode(value: LocalContextAcquisitionModeDto) -> CalendarAcquisitionMode {
     match value {
         LocalContextAcquisitionModeDto::InspectSubject => CalendarAcquisitionMode::InspectSubject,
+        LocalContextAcquisitionModeDto::InspectCatalog => CalendarAcquisitionMode::InspectCatalog,
+        LocalContextAcquisitionModeDto::RequestPermission => CalendarAcquisitionMode::RequestPermission,
         LocalContextAcquisitionModeDto::ReadEvents => CalendarAcquisitionMode::ReadEvents,
     }
 }
@@ -152,6 +97,8 @@ pub(crate) fn acquisition_mode(value: LocalContextAcquisitionModeDto) -> Calenda
 fn acquisition_mode_dto(value: CalendarAcquisitionMode) -> LocalContextAcquisitionModeDto {
     match value {
         CalendarAcquisitionMode::InspectSubject => LocalContextAcquisitionModeDto::InspectSubject,
+        CalendarAcquisitionMode::InspectCatalog => LocalContextAcquisitionModeDto::InspectCatalog,
+        CalendarAcquisitionMode::RequestPermission => LocalContextAcquisitionModeDto::RequestPermission,
         CalendarAcquisitionMode::ReadEvents => LocalContextAcquisitionModeDto::ReadEvents,
     }
 }
@@ -237,37 +184,44 @@ pub fn personal_request_dto(
         person_id: request.person_id.to_string(),
         device_id: request.device_id,
         domain: personal_domain_dto(request.domain),
+        mode: personal_mode_dto(request.mode),
         selected_handles: request.selected_handles,
         deadline_unix_ms: request.deadline_unix_ms,
         expected_native_subject_fingerprint: request.expected_native_subject_fingerprint,
     }
 }
 
-/// Report one command's outcome back on the wire.
-pub fn local_context_result(
-    person_id: PersonId,
-    outcome: LocalContextOutcome,
-) -> LocalContextResultDto {
-    LocalContextResultDto {
-        person_id: person_id.to_string(),
-        device_id: outcome.device_id,
-        view_id: outcome.view_id,
-        removed_count: outcome.removed_count,
-        view: outcome.view,
-        acquisitions: outcome
-            .acquisitions
-            .into_iter()
-            .map(acquisition_request_dto)
-            .collect(),
-        attention_acquisitions: outcome
-            .attention_acquisitions
-            .into_iter()
-            .map(attention_request_dto)
-            .collect(),
-        personal_acquisitions: outcome
-            .personal_acquisitions
-            .into_iter()
-            .map(personal_request_dto)
-            .collect(),
+pub(crate) fn personal_mode(value: LocalContextPersonalAcquisitionModeDto) -> PersonalAcquisitionMode {
+    match value {
+        LocalContextPersonalAcquisitionModeDto::ReadProjection => PersonalAcquisitionMode::ReadProjection,
+        LocalContextPersonalAcquisitionModeDto::InspectSubject => PersonalAcquisitionMode::InspectSubject,
+        LocalContextPersonalAcquisitionModeDto::InspectCatalog => PersonalAcquisitionMode::InspectCatalog,
+        LocalContextPersonalAcquisitionModeDto::RequestPermission => PersonalAcquisitionMode::RequestPermission,
+    }
+}
+fn personal_mode_dto(value: PersonalAcquisitionMode) -> LocalContextPersonalAcquisitionModeDto {
+    match value {
+        PersonalAcquisitionMode::ReadProjection => LocalContextPersonalAcquisitionModeDto::ReadProjection,
+        PersonalAcquisitionMode::InspectSubject => LocalContextPersonalAcquisitionModeDto::InspectSubject,
+        PersonalAcquisitionMode::InspectCatalog => LocalContextPersonalAcquisitionModeDto::InspectCatalog,
+        PersonalAcquisitionMode::RequestPermission => LocalContextPersonalAcquisitionModeDto::RequestPermission,
+    }
+}
+pub fn native_host_command_result(outcome: NativeHostOutcome) -> WireResult<AppCommandResultDto> {
+    match outcome {
+        NativeHostOutcome::Registered(value) => Ok(AppCommandResultDto::NativeHostRegistered { registration: NativeHostRegistrationDto {
+            registration_id: UuidRefDto::new(value.registration_id).ok_or_else(|| invalid("registration_id", "nil host registration"))?,
+            host_epoch: value.host_epoch, runtime_epoch: value.runtime_epoch,
+        }}),
+        NativeHostOutcome::Acknowledged => Ok(AppCommandResultDto::NativeHostAcknowledged {}),
+        _ => Err(invalid("outcome", "unexpected native command outcome")),
+    }
+}
+pub fn native_host_query_result(outcome: NativeHostOutcome) -> WireResult<AppQueryResultDto> {
+    match outcome {
+        NativeHostOutcome::CalendarAcquisitions(values) => Ok(AppQueryResultDto::NativeHostCalendarAcquisitions { acquisitions: values.into_iter().map(acquisition_request_dto).collect() }),
+        NativeHostOutcome::AttentionAcquisitions(values) => Ok(AppQueryResultDto::NativeHostAttentionAcquisitions { acquisitions: values.into_iter().map(attention_request_dto).collect() }),
+        NativeHostOutcome::PersonalAcquisitions(values) => Ok(AppQueryResultDto::NativeHostPersonalAcquisitions { acquisitions: values.into_iter().map(personal_request_dto).collect() }),
+        _ => Err(invalid("outcome", "unexpected native query outcome")),
     }
 }

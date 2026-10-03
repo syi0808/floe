@@ -6,7 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"floe/server/internal/authorization"
+	"floe/server/internal/authority"
+ "floe/server/internal/trust"
 )
 
 type sourceProofWire struct {
@@ -15,8 +16,8 @@ type sourceProofWire struct {
 }
 
 func decodeSourceEnvelope(writer http.ResponseWriter, request *http.Request, allowed map[string]struct{}, output any) bool {
-	data, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, authorization.MaxChallengeBytes))
-	if err != nil || len(data) == 0 || !authorization.StrictJSON(data) || !authorization.ValidateCalendarCaseExact(data) || !authorization.ValidateCalendarObjectKeys(data, allowed) {
+	data, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, authority.MaxChallengeBytes))
+	if err != nil || len(data) == 0 || !authority.StrictJSON(data) || !authority.ValidateCalendarCaseExact(data) || !authority.ValidateCalendarObjectKeys(data, allowed) {
 		return false
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(data)))
@@ -27,11 +28,11 @@ func decodeSourceEnvelope(writer http.ResponseWriter, request *http.Request, all
 	var extra any
 	return decoder.Decode(&extra) == io.EOF
 }
-func decodeSourceProof(writer http.ResponseWriter, request *http.Request) (authorization.Proof, bool) {
+func decodeSourceProof(writer http.ResponseWriter, request *http.Request) (trust.Proof, bool) {
 	var envelope sourceProofWire
-	if !decodeSourceEnvelope(writer, request, map[string]struct{}{"schema_version": {}, "proof": {}}, &envelope) || envelope.SchemaVersion != authorization.SchemaVersion || len(envelope.Proof) == 0 {
-		return authorization.Proof{}, false
+	if !decodeSourceEnvelope(writer, request, map[string]struct{}{"schema_version": {}, "proof": {}}, &envelope) || envelope.SchemaVersion != authority.SchemaVersion || len(envelope.Proof) == 0 {
+		return trust.Proof{}, false
 	}
-	proof, err := authorization.ParseProofJSON(envelope.Proof)
+	proof, err := trust.ParseProofJSON(envelope.Proof)
 	return proof, err == nil
 }

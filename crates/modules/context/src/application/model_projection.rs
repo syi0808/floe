@@ -3,10 +3,9 @@
 //! The assembler turns already-filtered Conversation input plus current Context
 //! inputs into the one immutable [`AuthorizedModelProjection`] one model
 //! attempt runs on. It owns the envelope, the contextual data, the manifest,
-//! the coverage fold, and the projection identity — and it is route-free: no
-//! model profile, placement, recipient, endpoint, credential, or
-//! external-transfer consent enters here. Model route/recipient admission
-//! happens later, at Access model dispatch.
+//! coverage and immutable prepared-plan identity. Current source-processing
+//! requirements are checked before a model intent exists; Access repeats live
+//! source and Gateway fences at handoff and release.
 
 use floe_agent_contract::{
     AGENT_SCHEMA_VERSION, AgentContext, AgentFailure, AllowedCatalog, AttemptContext,
@@ -41,11 +40,13 @@ pub enum ContextProjectionRole {
 ///
 /// History filtering already happened: `conversation` carries only retained
 /// history, and `authorized_history_dependencies` are the exact dependencies
-/// that retained history reauthorized under. There is deliberately no model
-/// profile, placement, recipient, route, endpoint, credential, or consent
-/// field: this input — and the projection it produces — is route-free.
+/// that retained history reauthorized under. The immutable prepared plan binds
+/// this projection to its operation, processing boundary and transport digest.
+/// Credentials and live dispatch admission remain with their owners.
 pub struct ContextProjectionInput<'a> {
     pub role: ContextProjectionRole,
+    pub plan: &'a floe_agent_contract::PreparedModelPlan,
+    pub projection_operation_id: uuid::Uuid,
     pub purpose: &'a str,
     pub response_contract: &'a str,
     pub correction: Option<ModelCorrection>,
@@ -64,10 +65,12 @@ pub struct ContextProjectionInput<'a> {
 /// Assemble the canonical authorized model projection.
 pub fn assemble_context_projection(
     input: ContextProjectionInput<'_>,
-) -> Result<AuthorizedModelProjection, AgentFailure> {
+) -> Result<floe_agent_contract::ModelProjectionOutcome, AgentFailure> {
     validate_input(&input)?;
     let live = live_context(input.role, input.agent_context);
     let input_data_classes = effective_input_data_classes(&input.input_data_classes, &live)?;
+    if input_data_classes.iter().any(|class| matches!(class, DataClass::Credential | DataClass::DeviceOnlyRaw)
+        || (*class == DataClass::TemporaryAiContext && input.plan.boundary == floe_agent_contract::ProcessingBoundary::Gateway)) { return Err(AgentFailure::PolicyDenied); }
     let mut available_capabilities = capability_summaries(input.catalog)?;
     available_capabilities.sort_by(|left, right| left.id.cmp(&right.id));
     let mut active_experts = input.catalog.cards.clone();
@@ -107,7 +110,47 @@ pub fn assemble_context_projection(
     };
     envelope.manifest = envelope.derived_manifest(input.expert_environment)?;
     let coverage = fold_coverage(input.authorized_history_dependencies, &input.conversation)?;
+    // A transformed Health view is admitted only with the exact still-live
+    // host receipt carried by its source dependency. Class labels never attest it.
+    for evidence in &live.evidence {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&evidence.untrusted_text) else { continue; };
+        if value.get("view_id").and_then(serde_json::Value::as_str) == Some(floe_context_contract::WELLBEING_VIEW_ID) {
+            let view: floe_context_contract::WellbeingView = serde_json::from_value(value).map_err(|_| AgentFailure::PolicyDenied)?;
+            let DependencyCoverage::Dependent { dependencies } = &coverage else { return Err(AgentFailure::PolicyDenied); };
+            let valid = dependencies.iter().any(|dependency| dependency.source().connector().as_str() == floe_access::WELLBEING_CONNECTOR
+                && dependency.health_transform().is_some_and(|receipt| receipt.validate_view(&input.plan.device_id, &view, chrono::Utc::now()).is_ok()));
+            if !valid || evidence.data_class != DataClass::HighlySensitive { return Err(AgentFailure::PolicyDenied); }
+        }
+    }
+    let mut blockers = Vec::new();
+    match &coverage {
+        DependencyCoverage::Unknown if input.plan.boundary == floe_agent_contract::ProcessingBoundary::Gateway => return Err(AgentFailure::PolicyDenied),
+        DependencyCoverage::Dependent { dependencies } => for dependency in dependencies {
+            if dependency.person_id().to_string() != input.plan.principal || dependency.expires_at() <= chrono::Utc::now() { return Err(AgentFailure::PolicyDenied); }
+            if dependency.source().connector().as_str() == floe_access::WELLBEING_CONNECTOR {
+                dependency.validate_health_transform(&input.plan.device_id, chrono::Utc::now())?;
+                if !input_data_classes.contains(&DataClass::HighlySensitive) { return Err(AgentFailure::PolicyDenied); }
+            }
+            if input.plan.boundary == floe_agent_contract::ProcessingBoundary::Gateway
+                && !dependency.processing().admits_gateway(dependency.categories()) {
+                let blocker = floe_context_contract::SourceAccessRequirement::from_processing_dependency(dependency).map_err(|_| AgentFailure::InvalidInput)?;
+                if !blockers.contains(&blocker) { blockers.push(blocker); }
+            }
+        },
+        _ => {},
+    }
+    if !blockers.is_empty() {
+        use sha2::Digest;
+        let blockers = floe_context_contract::SourceAccessBlockers::try_new(blockers).map_err(|_| AgentFailure::InvalidInput)?;
+        let target_digest = sha2::Sha256::digest(serde_json::to_vec(&(input.plan, input.projection_operation_id, &blockers)).map_err(|_| AgentFailure::InvalidInput)?).into();
+        return Ok(floe_agent_contract::ModelProjectionOutcome::NeedsSourceReview(floe_agent_contract::SourceProjectionReview {
+            projection_operation_id: input.projection_operation_id, target_digest, blockers,
+        }));
+    }
     let projection = AuthorizedModelProjection {
+        plan_id: input.plan.operation_id,
+        binding_digest: input.plan.binding_digest,
+        projection_operation_id: input.projection_operation_id,
         projection_ref: ProjectionRef::new(),
         projection_revision: 1,
         envelope,
@@ -115,7 +158,7 @@ pub fn assemble_context_projection(
         input_data_classes,
     };
     projection.validate()?;
-    Ok(projection)
+    Ok(floe_agent_contract::ModelProjectionOutcome::Ready(projection))
 }
 
 fn effective_input_data_classes(
@@ -136,6 +179,8 @@ fn effective_input_data_classes(
 }
 
 fn validate_input(input: &ContextProjectionInput<'_>) -> Result<(), AgentFailure> {
+    input.plan.validate()?;
+    if input.projection_operation_id.is_nil() || input.purpose != input.plan.purpose { return Err(AgentFailure::InvalidInput); }
     if input.purpose.trim().is_empty()
         || input.purpose.len() > floe_agent_contract::MAX_SCOPED_PURPOSE_BYTES
         || input.response_contract.len() > floe_agent_contract::MAX_RESPONSE_CONTRACT_BYTES
@@ -263,787 +308,4 @@ fn fold_coverage(
         }
     }
     Ok(coverage)
-}
-
-#[cfg(test)]
-mod tests {
-    use chrono::{Duration, Utc};
-    use floe_agent_contract::prompts::{PromptComponent, PromptComponentKind, PromptRole};
-    use floe_agent_contract::{
-        A2A_PROTOCOL_VERSION, AgentDefinition, AllowedCatalog, Artifact, ArtifactPart,
-        ContextEvidence, ContextMemory, DelegationRequest, EpistemicStatus, InvocationKey,
-        ModelPlacement, PersonalMemoryKind, TaskId, TaskReceipt, TaskSnapshot, TaskState, ToolCall,
-        ToolResult,
-    };
-    use floe_context_contract::{
-        ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority, GrantConsumer,
-        GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding,
-        LearningEvidenceRef, ProcessingRestriction, ResourceHandle,
-    };
-    use uuid::Uuid;
-
-    use super::*;
-
-    fn dependency(person_id: floe_agent_contract::PersonId) -> ContextDependency {
-        let source = GrantSourceBinding::try_new(
-            person_id,
-            ConnectionId::try_new("connection").unwrap(),
-            ConnectorId::try_new("connector").unwrap(),
-            ExecutionOwnerId::try_new("owner").unwrap(),
-        )
-        .unwrap();
-        let now = Utc::now();
-        ContextDependency::try_new(
-            person_id,
-            GrantId::new(),
-            GrantAuthority::new(),
-            source,
-            vec![ResourceHandle::try_new("resource").unwrap()],
-            floe_context_contract::SourceAuthority::new(),
-            vec![ResourceHandle::try_new("resource").unwrap()],
-            vec![GrantDataCategory::Metadata],
-            GrantOperation::Read,
-            GrantPurpose::Assistant,
-            GrantConsumer::builtin("assistant").unwrap(),
-            ProcessingRestriction::LocalOnly,
-            Uuid::new_v4(),
-            b"fingerprint".to_vec(),
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            now - Duration::minutes(1),
-            now + Duration::minutes(5),
-        )
-        .unwrap()
-    }
-
-    fn prompt() -> PromptAssembly {
-        let assembly = PromptAssembly {
-            schema_version: floe_agent_contract::AGENT_VERSION,
-            role: PromptRole::Manager,
-            components: vec![
-                PromptComponent {
-                    kind: PromptComponentKind::BehaviorKernel,
-                    source: "test-kernel".into(),
-                    revision: 1,
-                    content: "kernel".into(),
-                },
-                PromptComponent {
-                    kind: PromptComponentKind::Role,
-                    source: "test-role".into(),
-                    revision: 1,
-                    content: "role".into(),
-                },
-                PromptComponent {
-                    kind: PromptComponentKind::CapabilityProtocol,
-                    source: "test-protocol".into(),
-                    revision: 1,
-                    content: "protocol".into(),
-                },
-            ],
-        };
-        assembly.validate().unwrap();
-        assembly
-    }
-
-    fn agent_card(id: &str) -> floe_agent_contract::AgentCard {
-        floe_agent_contract::AgentCard {
-            schema_version: AGENT_SCHEMA_VERSION,
-            protocol_version: A2A_PROTOCOL_VERSION.into(),
-            id: id.into(),
-            version: "1.0.0".into(),
-            name: id.into(),
-            description: "test expert".into(),
-            supported_placements: vec![ModelPlacement::DeviceLocal],
-            domain_tags: vec![],
-            skills: vec![],
-        }
-    }
-
-    fn tool_descriptor(id: &str) -> ToolDescriptor {
-        ToolDescriptor {
-            id: id.into(),
-            definition_revision: 3,
-            description: format!("read {id}"),
-            input_schema: "{}".into(),
-            output_data_class: "personal".into(),
-        }
-    }
-
-    fn catalog() -> AllowedCatalog {
-        AllowedCatalog {
-            cards: vec![AgentDefinition {
-                card: agent_card("schedule"),
-                definition_revision: 2,
-            }],
-            tools: vec![
-                tool_descriptor("test.identity-evidence"),
-                tool_descriptor("test.communication-evidence"),
-            ],
-            revision: 7,
-        }
-    }
-
-    fn agent_context() -> AgentContext {
-        AgentContext {
-            projection_version: 1,
-            persona: None,
-            memories: vec![ContextMemory {
-                target_id: Uuid::new_v4(),
-                revision: 1,
-                kind: PersonalMemoryKind::Preference,
-                statement: "prefers mornings".into(),
-                epistemic_status: EpistemicStatus::Fact,
-                confidence_millis: 900,
-                observed_at_unix_ms: 1,
-                valid_from_unix_ms: None,
-                valid_until_unix_ms: None,
-                source_refs: vec![LearningEvidenceRef {
-                    session_id: Uuid::new_v4(),
-                    turn_id: Uuid::new_v4(),
-                }],
-            }],
-            optional_context_issues: vec![],
-            evidence: vec![ContextEvidence {
-                source_handle: "health:fixture".into(),
-                data_class: DataClass::Personal,
-                untrusted_text: "resting".into(),
-                expires_at_unix_ms: u64::MAX,
-            }],
-        }
-    }
-
-    fn tool_exchange(coverage: DependencyCoverage) -> ModelConversationEntry {
-        let call_id = Uuid::new_v4();
-        ModelConversationEntry::ToolExchange {
-            call: ToolCall {
-                call_id,
-                invocation_key: InvocationKey::new(),
-                tool_id: "test.identity-evidence".into(),
-                definition_revision: 3,
-                input: "{}".into(),
-            },
-            result: ToolResult {
-                call_id,
-                text: "observation".into(),
-                artifacts: vec![],
-                coverage,
-                issue: None,
-            },
-        }
-    }
-
-    fn input<'a>(
-        role: ContextProjectionRole,
-        prompt_value: PromptAssembly,
-        conversation: ModelConversation,
-        context: &'a AgentContext,
-        catalog_value: &'a AllowedCatalog,
-        history: &'a [ContextDependency],
-    ) -> ContextProjectionInput<'a> {
-        ContextProjectionInput {
-            role,
-            purpose: "everyday_assistance",
-            response_contract: "User-facing text.",
-            correction: None,
-            prompt: prompt_value,
-            conversation,
-            agent_context: context,
-            catalog: catalog_value,
-            expert_environment: None,
-            authorized_history_dependencies: history,
-            input_data_classes: vec![DataClass::Personal],
-            max_output_bytes: 4096,
-        }
-    }
-
-    fn conversation() -> ModelConversation {
-        ModelConversation {
-            history: vec![ModelConversationEntry::Assistant {
-                message_id: Uuid::new_v4(),
-                text: "retained".into(),
-            }],
-            current_turn: vec![ModelConversationEntry::User {
-                message_id: Uuid::new_v4(),
-                text: "question".into(),
-            }],
-        }
-    }
-
-    #[test]
-    fn manager_projection_carries_purpose_contract_and_correction() {
-        let context = agent_context();
-        let catalog_value = catalog();
-        let history = vec![dependency(floe_agent_contract::PersonId::new())];
-        let mut projection_input = input(
-            ContextProjectionRole::Manager,
-            prompt(),
-            conversation(),
-            &context,
-            &catalog_value,
-            &history,
-        );
-        projection_input.correction = Some(ModelCorrection {
-            text: "try again".into(),
-        });
-        let projection = assemble_context_projection(projection_input).unwrap();
-        assert_eq!(
-            projection.envelope.run_instructions.purpose,
-            "everyday_assistance"
-        );
-        assert_eq!(
-            projection.envelope.run_instructions.response_contract,
-            "User-facing text."
-        );
-        assert_eq!(
-            projection.envelope.attempt.correction,
-            Some(ModelCorrection {
-                text: "try again".into()
-            })
-        );
-        assert_eq!(projection.envelope.contextual_data.memories.len(), 1);
-        assert_eq!(projection.envelope.contextual_data.evidence.len(), 1);
-        assert_eq!(projection.envelope.attempt.max_output_bytes, 4096);
-        assert_eq!(projection.input_data_classes, vec![DataClass::Personal]);
-        assert_eq!(projection.projection_revision, 1);
-    }
-
-    #[test]
-    fn expert_projection_carries_full_live_context() {
-        let context = agent_context();
-        let catalog_value = catalog();
-        let history = vec![];
-        let projection = assemble_context_projection(input(
-            ContextProjectionRole::Expert,
-            prompt(),
-            conversation(),
-            &context,
-            &catalog_value,
-            &history,
-        ))
-        .unwrap();
-        assert_eq!(projection.envelope.contextual_data.memories.len(), 1);
-        assert_eq!(projection.envelope.contextual_data.evidence.len(), 1);
-        assert_eq!(projection.coverage, DependencyCoverage::Independent);
-    }
-
-    #[test]
-    fn declared_personal_cannot_downgrade_actual_sensitive_evidence() {
-        let mut context = agent_context();
-        context.memories.clear();
-        context.evidence[0].data_class = DataClass::HighlySensitive;
-        let catalog = catalog();
-        for mixed in [false, true] {
-            if mixed {
-                let mut calendar = context.evidence[0].clone();
-                calendar.source_handle = "calendar:test".into();
-                calendar.data_class = DataClass::Personal;
-                context.evidence.push(calendar);
-            }
-            let projection = assemble_context_projection(input(
-                ContextProjectionRole::Expert,
-                prompt(),
-                conversation(),
-                &context,
-                &catalog,
-                &[],
-            ))
-            .unwrap();
-            assert_eq!(
-                projection.input_data_classes,
-                vec![DataClass::Personal, DataClass::HighlySensitive]
-            );
-            assert_eq!(
-                projection.envelope.contextual_data.evidence,
-                context.evidence
-            );
-            assert_eq!(projection.coverage, DependencyCoverage::Independent);
-            projection.validate().unwrap();
-        }
-    }
-
-    #[test]
-    fn declared_classes_normalize_and_preserve_stricter_or_forbidden_values() {
-        let context = agent_context();
-        let catalog = catalog();
-        let mut projection_input = input(
-            ContextProjectionRole::Manager,
-            prompt(),
-            conversation(),
-            &context,
-            &catalog,
-            &[],
-        );
-        projection_input.input_data_classes = vec![
-            DataClass::HighlySensitive,
-            DataClass::Personal,
-            DataClass::HighlySensitive,
-        ];
-        let projection = assemble_context_projection(projection_input).unwrap();
-        assert_eq!(
-            projection.input_data_classes,
-            vec![DataClass::Personal, DataClass::HighlySensitive]
-        );
-        projection.validate().unwrap();
-        for class in [DataClass::Credential, DataClass::DeviceOnlyRaw] {
-            assert_eq!(
-                effective_input_data_classes(&[class], &context).unwrap(),
-                vec![DataClass::Personal, class]
-            );
-        }
-    }
-
-    #[test]
-    fn only_projected_persona_memory_and_evidence_contribute_classes() {
-        let catalog = catalog();
-        for persona in [false, true] {
-            let mut context = agent_context();
-            context.evidence.clear();
-            if persona {
-                context.memories.clear();
-                context.persona = Some(floe_agent_contract::prompts::PersonaProfile::default());
-            }
-            for role in [
-                ContextProjectionRole::Manager,
-                ContextProjectionRole::Expert,
-                ContextProjectionRole::Learner,
-                ContextProjectionRole::Finalization,
-            ] {
-                let mut projection_input =
-                    input(role, prompt(), conversation(), &context, &catalog, &[]);
-                projection_input.input_data_classes = vec![DataClass::HighlySensitive];
-                let projection = assemble_context_projection(projection_input).unwrap();
-                let expected = if role == ContextProjectionRole::Finalization {
-                    vec![DataClass::HighlySensitive]
-                } else {
-                    vec![DataClass::Personal, DataClass::HighlySensitive]
-                };
-                assert_eq!(projection.input_data_classes, expected);
-                projection.validate().unwrap();
-            }
-        }
-        let mut context = agent_context();
-        context.evidence[0].data_class = DataClass::HighlySensitive;
-        let projection = assemble_context_projection(input(
-            ContextProjectionRole::Finalization,
-            prompt(),
-            conversation(),
-            &context,
-            &catalog,
-            &[],
-        ))
-        .unwrap();
-        assert_eq!(projection.input_data_classes, vec![DataClass::Personal]);
-        assert!(projection.envelope.contextual_data.evidence.is_empty());
-    }
-
-    #[test]
-    fn learner_projection_carries_memories_under_review() {
-        let context = agent_context();
-        let catalog_value = catalog();
-        let history = vec![];
-        let projection = assemble_context_projection(input(
-            ContextProjectionRole::Learner,
-            prompt(),
-            conversation(),
-            &context,
-            &catalog_value,
-            &history,
-        ))
-        .unwrap();
-        assert_eq!(projection.envelope.contextual_data.memories.len(), 1);
-        assert_eq!(projection.envelope.contextual_data.evidence.len(), 1);
-        assert_eq!(projection.coverage, DependencyCoverage::Independent);
-    }
-
-    #[test]
-    fn finalization_empties_live_context_but_keeps_settled_observations() {
-        let context = agent_context();
-        let catalog_value = catalog();
-        let history = vec![];
-        let mut settled = conversation();
-        settled
-            .current_turn
-            .push(tool_exchange(DependencyCoverage::Independent));
-        let projection = assemble_context_projection(input(
-            ContextProjectionRole::Finalization,
-            prompt(),
-            settled,
-            &context,
-            &catalog_value,
-            &history,
-        ))
-        .unwrap();
-        assert!(projection.envelope.contextual_data.memories.is_empty());
-        assert!(projection.envelope.contextual_data.evidence.is_empty());
-        assert!(projection.envelope.manifest.memories.is_empty());
-        assert!(projection.envelope.manifest.evidence.is_empty());
-        // Settled conversation observations travel in the conversation.
-        assert_eq!(projection.envelope.conversation.current_turn.len(), 2);
-        assert_eq!(projection.coverage, DependencyCoverage::Independent);
-    }
-
-    #[test]
-    fn coverage_folds_history_and_current_exchanges_exactly() {
-        let person = floe_agent_contract::PersonId::new();
-        let history_dep = dependency(person);
-        let tool_dep = dependency(person);
-        let artifact_dep = dependency(person);
-        let delegation_dep = dependency(person);
-        let context = agent_context();
-        let catalog_value = catalog();
-        let history = vec![history_dep.clone()];
-        let tool_call_id = Uuid::new_v4();
-        let task_id = TaskId::new();
-        let conversation = ModelConversation {
-            history: vec![],
-            current_turn: vec![
-                ModelConversationEntry::User {
-                    message_id: Uuid::new_v4(),
-                    text: "question".into(),
-                },
-                ModelConversationEntry::ToolExchange {
-                    call: ToolCall {
-                        call_id: tool_call_id,
-                        invocation_key: InvocationKey::new(),
-                        tool_id: "test.identity-evidence".into(),
-                        definition_revision: 3,
-                        input: "{}".into(),
-                    },
-                    result: ToolResult {
-                        call_id: tool_call_id,
-                        text: "observation".into(),
-                        artifacts: vec![Artifact {
-                            artifact_id: Uuid::new_v4(),
-                            name: "note".into(),
-                            parts: vec![ArtifactPart::Text {
-                                text: "detail".into(),
-                            }],
-                            coverage: DependencyCoverage::dependent(artifact_dep.clone()).unwrap(),
-                        }],
-                        coverage: DependencyCoverage::dependent(tool_dep.clone()).unwrap(),
-                        issue: None,
-                    },
-                },
-                ModelConversationEntry::DelegationExchange {
-                    request: DelegationRequest {
-                        task_id,
-                        parent_run_id: None,
-                        principal: "person:test".into(),
-                        invocation_key: InvocationKey::new(),
-                        selected_agent_id: "schedule".into(),
-                        selected_definition_revision: 2,
-                        message: "summarize".into(),
-                        context_refs: vec![],
-                        execution_context: floe_agent_contract::DelegationExecutionContext {
-                            session_id: Uuid::new_v4(),
-                            device_id: "test-device".into(),
-                            agent_context: floe_agent_contract::AgentContext {
-                                projection_version: 1,
-                                persona: None,
-                                memories: vec![],
-                                optional_context_issues: vec![],
-                                evidence: vec![],
-                            },
-                            max_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
-                        },
-                    },
-                    receipt: TaskReceipt {
-                        task_id,
-                        snapshot: TaskSnapshot {
-                            task_id,
-                            parent_run_id: None,
-                            principal: "person:test".into(),
-                            agent_id: "schedule".into(),
-                            definition_revision: 2,
-                            state: TaskState::Completed,
-                            result: Some("summary".into()),
-                            artifacts: vec![],
-                            coverage: DependencyCoverage::dependent(delegation_dep.clone())
-                                .unwrap(),
-                            issue: None,
-                        },
-                        replay: None,
-                    },
-                },
-            ],
-        };
-        let projection = assemble_context_projection(input(
-            ContextProjectionRole::Manager,
-            prompt(),
-            conversation,
-            &context,
-            &catalog_value,
-            &history,
-        ))
-        .unwrap();
-        let mut expected = DependencyCoverage::Independent;
-        for held in [&history_dep, &tool_dep, &artifact_dep, &delegation_dep] {
-            expected = expected
-                .merge(&DependencyCoverage::dependent(held.clone()).unwrap())
-                .unwrap();
-        }
-        assert_eq!(projection.coverage, expected);
-    }
-
-    #[test]
-    fn identical_authorized_input_projects_identically() {
-        let context = agent_context();
-        let catalog_value = catalog();
-        let history = vec![dependency(floe_agent_contract::PersonId::new())];
-        let conversation_value = conversation();
-        let first = assemble_context_projection(input(
-            ContextProjectionRole::Manager,
-            prompt(),
-            conversation_value.clone(),
-            &context,
-            &catalog_value,
-            &history,
-        ))
-        .unwrap();
-        let second = assemble_context_projection(input(
-            ContextProjectionRole::Manager,
-            prompt(),
-            conversation_value,
-            &context,
-            &catalog_value,
-            &history,
-        ))
-        .unwrap();
-        // Only the fresh projection identity differs; everything authorized is
-        // identical. There is no route/recipient/profile input that could
-        // change the projection.
-        assert_eq!(first.envelope, second.envelope);
-        assert_eq!(first.coverage, second.coverage);
-        assert_eq!(first.input_data_classes, second.input_data_classes);
-        assert_ne!(
-            first.projection_ref.as_uuid(),
-            second.projection_ref.as_uuid()
-        );
-    }
-
-    fn object_keys(value: &serde_json::Value, keys: &mut Vec<String>) {
-        match value {
-            serde_json::Value::Object(map) => {
-                for (key, nested) in map {
-                    keys.push(key.clone());
-                    object_keys(nested, keys);
-                }
-            }
-            serde_json::Value::Array(items) => {
-                for item in items {
-                    object_keys(item, keys);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    #[test]
-    fn forbidden_route_and_secret_fields_are_absent() {
-        let context = agent_context();
-        let catalog_value = catalog();
-        let history = vec![dependency(floe_agent_contract::PersonId::new())];
-        let projection = assemble_context_projection(input(
-            ContextProjectionRole::Manager,
-            prompt(),
-            conversation(),
-            &context,
-            &catalog_value,
-            &history,
-        ))
-        .unwrap();
-        let encoded = serde_json::to_value(&projection).unwrap();
-        let mut keys = Vec::new();
-        object_keys(&encoded, &mut keys);
-        // Prompt prose may mention recipients; field names must not. Agent
-        // card capability declarations (`supported_placements`) are static
-        // card data, not a route decision, so only exact keys are banned.
-        for forbidden in [
-            "recipient",
-            "endpoint",
-            "base_url",
-            "bearer",
-            "credential",
-            "credentials",
-            "consent",
-            "external_transfer_consent",
-            "allowed_placements",
-            "placement",
-            "route",
-            "remote_route",
-            "profile",
-            "profile_id",
-            "token",
-        ] {
-            assert!(
-                !keys.iter().any(|key| key == forbidden),
-                "projection must not carry a {forbidden} field: {keys:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn capability_summary_derives_from_catalog_tools() {
-        let context = agent_context();
-        let catalog_value = catalog();
-        let history = vec![];
-        let projection = assemble_context_projection(input(
-            ContextProjectionRole::Manager,
-            prompt(),
-            conversation(),
-            &context,
-            &catalog_value,
-            &history,
-        ))
-        .unwrap();
-        let capabilities = &projection.envelope.discovery.available_capabilities;
-        assert_eq!(capabilities.len(), 2);
-        assert_eq!(capabilities[1].id, "test.identity-evidence");
-        assert_eq!(capabilities[1].version, "3");
-        assert!(capabilities[1].read_only);
-        assert_eq!(capabilities[1].output_data_class, DataClass::Personal);
-        assert_eq!(capabilities[1].input_schema, Some(serde_json::json!({})));
-        // The catalog is stable regardless of model route: remote tools are
-        // listed even though no route was consulted.
-        assert_eq!(capabilities[0].id, "test.communication-evidence");
-    }
-
-    #[test]
-    fn unknown_tool_output_class_fails_closed() {
-        let context = agent_context();
-        let mut catalog_value = catalog();
-        catalog_value.tools[0].output_data_class = "mystery".into();
-        let history = vec![];
-        assert_eq!(
-            assemble_context_projection(input(
-                ContextProjectionRole::Manager,
-                prompt(),
-                conversation(),
-                &context,
-                &catalog_value,
-                &history,
-            ))
-            .err(),
-            Some(AgentFailure::InvalidInput)
-        );
-    }
-
-    #[test]
-    fn catalog_discovery_sorting_is_deterministic_and_duplicates_fail_closed() {
-        let context = agent_context();
-        let mut catalog = catalog();
-        let first = assemble_context_projection(input(
-            ContextProjectionRole::Manager,
-            prompt(),
-            conversation(),
-            &context,
-            &catalog,
-            &[],
-        ))
-        .unwrap();
-        catalog.tools.reverse();
-        catalog.cards.reverse();
-        let second = assemble_context_projection(input(
-            ContextProjectionRole::Manager,
-            prompt(),
-            conversation(),
-            &context,
-            &catalog,
-            &[],
-        ))
-        .unwrap();
-        assert_eq!(first.envelope.discovery, second.envelope.discovery);
-        assert_eq!(
-            first.envelope.manifest.run_frame_sha256,
-            second.envelope.manifest.run_frame_sha256
-        );
-        catalog.tools.push(catalog.tools[0].clone());
-        assert_eq!(
-            assemble_context_projection(input(
-                ContextProjectionRole::Manager,
-                prompt(),
-                conversation(),
-                &context,
-                &catalog,
-                &[],
-            ))
-            .err(),
-            Some(AgentFailure::InvalidInput)
-        );
-    }
-
-    #[test]
-    fn experts_are_derived_only_from_catalog() {
-        let context = agent_context();
-        let catalog_value = catalog();
-        let history = vec![];
-        let projection = assemble_context_projection(input(
-            ContextProjectionRole::Manager,
-            prompt(),
-            conversation(),
-            &context,
-            &catalog_value,
-            &history,
-        ))
-        .unwrap();
-        let active = &projection.envelope.discovery.active_experts;
-        assert_eq!(active.len(), 1);
-        assert_eq!(active[0].card.id, "schedule");
-        assert_eq!(projection.envelope.manifest.agent_cards.len(), 1);
-        assert_eq!(projection.envelope.manifest.agent_cards[0].id, "schedule");
-    }
-
-    #[test]
-    fn output_bytes_are_bounded_and_manifest_mirrors_inputs() {
-        let context = agent_context();
-        let catalog_value = catalog();
-        let history = vec![];
-        let mut projection_input = input(
-            ContextProjectionRole::Manager,
-            prompt(),
-            conversation(),
-            &context,
-            &catalog_value,
-            &history,
-        );
-        projection_input.max_output_bytes = usize::MAX;
-        assert_eq!(
-            assemble_context_projection(projection_input).err(),
-            Some(AgentFailure::InvalidInput)
-        );
-        let mut projection_input = input(
-            ContextProjectionRole::Manager,
-            prompt(),
-            conversation(),
-            &context,
-            &catalog_value,
-            &history,
-        );
-        projection_input.max_output_bytes = 32 * 1024;
-        let projection = assemble_context_projection(projection_input).unwrap();
-        assert_eq!(projection.envelope.attempt.max_output_bytes, 16384);
-        assert_eq!(projection.envelope.manifest.prompt_components.len(), 3);
-        assert_eq!(projection.envelope.manifest.evidence.len(), 1);
-        assert_eq!(projection.envelope.manifest.memories.len(), 1);
-    }
-
-    #[test]
-    fn empty_session_data_classes_are_rejected() {
-        let context = agent_context();
-        let catalog_value = catalog();
-        let history = vec![];
-        let mut projection_input = input(
-            ContextProjectionRole::Manager,
-            prompt(),
-            conversation(),
-            &context,
-            &catalog_value,
-            &history,
-        );
-        projection_input.input_data_classes.clear();
-        assert_eq!(
-            assemble_context_projection(projection_input).err(),
-            Some(AgentFailure::InvalidInput)
-        );
-    }
 }

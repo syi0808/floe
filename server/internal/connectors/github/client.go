@@ -1,6 +1,7 @@
 package github
 
 import (
+ "floe/server/internal/views"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"floe/server/internal/connectors/common"
+	
 )
 
 const (
@@ -55,8 +56,6 @@ type issue struct {
 	} `json:"labels"`
 }
 
-type WorkItem = common.WorkItem
-type WorkContextView = common.WorkContextView
 
 func New(tokens TokenSource) (*Client, error) {
 	return NewWithBaseURL(tokens, defaultBaseURL)
@@ -87,19 +86,19 @@ func NewWithBaseURL(tokens TokenSource, baseURL string) (*Client, error) {
 	}, nil
 }
 
-func (client *Client) WorkContext(ctx context.Context, owner, repository string, now time.Time) (WorkContextView, error) {
+func (client *Client) WorkContext(ctx context.Context, owner, repository string, now time.Time) (views.WorkContextView, error) {
 	if !identifier.MatchString(owner) || !identifier.MatchString(repository) {
-		return WorkContextView{}, ErrInvalidInput
+		return views.WorkContextView{}, ErrInvalidInput
 	}
 	var issues []issue
 	path := fmt.Sprintf("/repos/%s/%s/issues?state=open&per_page=%d", url.PathEscape(owner), url.PathEscape(repository), maxIssues)
 	if err := client.get(ctx, path, &issues); err != nil {
-		return WorkContextView{}, err
+		return views.WorkContextView{}, err
 	}
 	if len(issues) > maxIssues {
-		return WorkContextView{}, ErrInvalidResponse
+		return views.WorkContextView{}, ErrInvalidResponse
 	}
-	view := WorkContextView{
+	view := views.WorkContextView{
 		SchemaVersion:    1,
 		ViewID:           "work.context",
 		SourceHandle:     handle("github", owner+"/"+repository+":"+now.UTC().Format("2006-01-02T15:04")),
@@ -107,7 +106,7 @@ func (client *Client) WorkContext(ctx context.Context, owner, repository string,
 		ExpiresAtUnixMS:  now.Add(5 * time.Minute).UnixMilli(),
 		CoverageComplete: len(issues) < maxIssues,
 		ScopeHandle:      handle("workspace", owner+"/"+repository),
-		Items:            []WorkItem{},
+		Items:            []views.WorkItem{},
 	}
 	for _, item := range issues {
 		if item.PullRequest != nil {
@@ -115,7 +114,7 @@ func (client *Client) WorkContext(ctx context.Context, owner, repository string,
 		}
 		updated, err := time.Parse(time.RFC3339, item.UpdatedAt)
 		if err != nil || item.Number < 1 || item.State != "open" || item.Title == "" || len(item.Title) > 512 || updated.After(now.Add(time.Minute)) {
-			return WorkContextView{}, ErrInvalidResponse
+			return views.WorkContextView{}, ErrInvalidResponse
 		}
 		excerpt := truncate(strings.TrimSpace(item.Body), 2048)
 		var excerptPointer *string
@@ -126,14 +125,14 @@ func (client *Client) WorkContext(ctx context.Context, owner, repository string,
 		var blocker *string
 		for _, label := range item.Labels {
 			if len(label.Name) > 128 {
-				return WorkContextView{}, ErrInvalidResponse
+				return views.WorkContextView{}, ErrInvalidResponse
 			}
 			if strings.EqualFold(label.Name, "blocked") || strings.EqualFold(label.Name, "status: blocked") {
 				value := "Issue is labeled blocked"
 				blocker = &value
 			}
 		}
-		view.Items = append(view.Items, WorkItem{
+		view.Items = append(view.Items, views.WorkItem{
 			EvidenceHandle:   handle("github", fmt.Sprintf("%s/%s#%d", owner, repository, item.Number)),
 			Kind:             "project",
 			Title:            item.Title,
@@ -145,7 +144,7 @@ func (client *Client) WorkContext(ctx context.Context, owner, repository string,
 	}
 	encoded, err := json.Marshal(view)
 	if err != nil || len(encoded) > 65_536 {
-		return WorkContextView{}, ErrInvalidResponse
+		return views.WorkContextView{}, ErrInvalidResponse
 	}
 	return view, nil
 }

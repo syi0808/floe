@@ -1,6 +1,7 @@
 package homeassistant
 
 import (
+ "floe/server/internal/views"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"floe/server/internal/connectors/common"
+	
 )
 
 const maxEntities = 16
@@ -48,8 +49,6 @@ type stateResponse struct {
 	} `json:"attributes"`
 }
 
-type LogisticsItem = common.LogisticsItem
-type LogisticsView = common.LogisticsView
 
 func New(tokens TokenSource, baseURL, connectionID string) (*Client, error) {
 	if tokens == nil || !validIdentifier(connectionID) {
@@ -77,40 +76,40 @@ func New(tokens TokenSource, baseURL, connectionID string) (*Client, error) {
 	}, nil
 }
 
-func (client *Client) Logistics(ctx context.Context, entities []string, now time.Time) (LogisticsView, error) {
+func (client *Client) Logistics(ctx context.Context, entities []string, now time.Time) (views.LogisticsView, error) {
 	if len(entities) == 0 || len(entities) > maxEntities {
-		return LogisticsView{}, ErrInvalidInput
+		return views.LogisticsView{}, ErrInvalidInput
 	}
 	seen := map[string]bool{}
 	for _, entity := range entities {
 		if !allowedEntity.MatchString(entity) || seen[entity] {
-			return LogisticsView{}, ErrInvalidInput
+			return views.LogisticsView{}, ErrInvalidInput
 		}
 		seen[entity] = true
 	}
-	view := LogisticsView{
+	view := views.LogisticsView{
 		SchemaVersion:    1,
 		ViewID:           "life.logistics",
 		SourceHandle:     handle("home", client.connectionID+":"+now.UTC().Format("2006-01-02T15:04")),
 		ObservedAtUnixMS: now.UnixMilli(),
 		ExpiresAtUnixMS:  now.Add(5 * time.Minute).UnixMilli(),
 		CoverageComplete: true,
-		Items:            []LogisticsItem{},
+		Items:            []views.LogisticsItem{},
 	}
 	for _, entity := range entities {
 		var state stateResponse
 		if err := client.get(ctx, "/api/states/"+url.PathEscape(entity), &state); err != nil {
-			return LogisticsView{}, err
+			return views.LogisticsView{}, err
 		}
 		updated, err := time.Parse(time.RFC3339Nano, state.LastUpdated)
 		if err != nil || state.EntityID != entity || len(state.State) == 0 || len(state.State) > 128 || updated.After(now.Add(time.Minute)) || len(state.Attributes.FriendlyName) > 256 {
-			return LogisticsView{}, ErrInvalidResponse
+			return views.LogisticsView{}, ErrInvalidResponse
 		}
 		summary := strings.TrimSpace(state.Attributes.FriendlyName)
 		if summary == "" {
 			summary = "Selected home state"
 		}
-		view.Items = append(view.Items, LogisticsItem{
+		view.Items = append(view.Items, views.LogisticsItem{
 			EvidenceHandle: handle("home", client.connectionID+":"+entity),
 			Kind:           "home_state",
 			Summary:        summary,
@@ -120,7 +119,7 @@ func (client *Client) Logistics(ctx context.Context, entities []string, now time
 	}
 	encoded, err := json.Marshal(view)
 	if err != nil || len(encoded) > 65_536 {
-		return LogisticsView{}, ErrInvalidResponse
+		return views.LogisticsView{}, ErrInvalidResponse
 	}
 	return view, nil
 }

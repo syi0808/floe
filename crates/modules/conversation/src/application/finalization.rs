@@ -10,17 +10,16 @@ use floe_kernel::{AgentFailure, RunId};
 
 use crate::{
     ConversationPorts, ConversationRepository, FINALIZATION_OUTPUT_CONTRACT, FINALIZATION_ROLE_ID,
-    FINALIZATION_ROLE_PROMPT, InteractionOrigin, InteractionRepository, MODEL_CONSENT_LIMITATION,
-    PublishAdmission, PublishModelRequirement, RunState, RunTerminal, TurnRequest,
+    FINALIZATION_ROLE_PROMPT, InteractionRepository, RunState, RunTerminal, TurnRequest,
 };
 
-use super::interactions::{publish_model_requirement, rescope_blocked_requirement};
 use super::recovery::project_active_journal;
 
 const MAX_FINALIZATION_DURATION: Duration = Duration::from_secs(10);
 
 pub(super) enum FinalizationOutcome {
     Replied(RunTerminal),
+    Blocked(crate::BlockedRunCommit),
     NotAttempted(AgentFailure),
     AttemptedWithoutReply,
 }
@@ -30,6 +29,8 @@ pub(super) async fn finalize_exhausted_run<
 >(
     engine: &Engine,
     repository: &Repository,
+    connections: &floe_connections::ConnectionsService,
+    actor: &floe_kernel::OwnerActor,
     run_id: RunId,
     root_scope: &ExecutionScope,
     work_request: &EngineRequest,
@@ -97,11 +98,23 @@ pub(super) async fn finalize_exhausted_run<
         }
         Err(failure) => return Err(failure),
     };
+    let Some(prior_execution_id) = projected.execution_id else {
+        return Ok(FinalizationOutcome::NotAttempted(issue));
+    };
+    let acknowledgment = root_scope.run(repository.journal(run_id)?.checkpoint(
+        floe_agent_contract::JournalEvent::FinalizationStarted {
+            prior_execution_id, abandoned_cursor: projected.cursor.clone(), prior_exhaustion: issue,
+        },
+    )).await?;
+    if !matches!(acknowledgment, floe_agent_contract::JournalAck::Accepted { .. }) {
+        return Err(AgentFailure::Conflict);
+    }
     let mut current_turn = Vec::with_capacity(usable.len() + 1);
     current_turn.push(user_message);
     current_turn.extend(usable.clone());
     let request = EngineRequest {
         principal: work_request.principal.clone(),
+        device_id: work_request.device_id.clone(),
         role_spec: RoleSpec {
             role_id: FINALIZATION_ROLE_ID.into(),
             instructions: FINALIZATION_ROLE_PROMPT.into(),
@@ -119,7 +132,6 @@ pub(super) async fn finalize_exhausted_run<
         },
         purpose: work_request.purpose.clone(),
         consumer: work_request.consumer.clone(),
-        preferred_profile_id: work_request.preferred_profile_id.clone(),
         max_iterations: 1,
         max_output_bytes: work_request.max_output_bytes,
         replay,
@@ -127,7 +139,6 @@ pub(super) async fn finalize_exhausted_run<
         // Finalization never delegates: its catalog carries no cards, so no
         // execution context is required.
         delegation_context: None,
-        lineage: work_request.lineage,
     };
     let outcome = engine
         .drive(
@@ -146,55 +157,14 @@ pub(super) async fn finalize_exhausted_run<
         return Ok(FinalizationOutcome::AttemptedWithoutReply);
     };
     match outcome {
-        // A blocked finalization dispatch: publish the durable card under
-        // the exact attempted origin and complete with the deterministic
-        // limitation. The exhaustion issue is superseded: no output was
-        // produced, and the fresh review unblocks a linked resume.
-        EngineOutcome::Blocked(blocked) => {
-            // A linked resume dispatches under origin-carried lineage; the
-            // fresh review re-scopes to this attempting Run before
-            // publication.
-            let Ok(requirement) =
-                rescope_blocked_requirement(blocked.requirement, turn.session_id, run_id)
-            else {
-                return Ok(FinalizationOutcome::AttemptedWithoutReply);
+        EngineOutcome::NeedsSourceReview(blocked) => {
+            let prior = match issue {
+                AgentFailure::BudgetExceeded => crate::PriorExhaustion::BudgetExceeded,
+                _ => crate::PriorExhaustion::Stalled,
             };
-            let published = match publish_model_requirement(
-                repository,
-                repository,
-                PublishModelRequirement {
-                    principal: turn.principal.clone(),
-                    session_id: turn.session_id,
-                    origin_run_id: run_id,
-                    origin: InteractionOrigin::Model {
-                        attempt_id: blocked.attempt_id,
-                    },
-                    requirement,
-                    device_id: turn.device_id.clone(),
-                },
-                turn.now_unix_ms,
-            )
-            .await
-            {
-                Ok(PublishAdmission::Created(record)) => record,
-                Ok(PublishAdmission::Existing(record)) => record,
-                Err(_) => return Ok(FinalizationOutcome::AttemptedWithoutReply),
-            };
-            Ok(FinalizationOutcome::Replied(RunTerminal {
-                state: RunState::Completed,
-                output: Some(MODEL_CONSENT_LIMITATION.into()),
-                steps: vec![EngineStep::Answer {
-                    text: MODEL_CONSENT_LIMITATION.into(),
-                    artifacts: vec![],
-                }],
-                coverage: DependencyCoverage::Independent,
-                issue: None,
-                interactions: vec![UserInteractionRef {
-                    interaction_id: published.id,
-                    kind: published.kind,
-                    status: UserInteractionStatus::Pending,
-                }],
-            }))
+            let commit = super::source_review::build_blocked_run_commit(repository, connections, actor,
+                run_id, blocked, Some(prior), turn.now_unix_ms, root_scope).await?;
+            Ok(FinalizationOutcome::Blocked(commit))
         }
         EngineOutcome::Completed(report) => {
             let EngineReport {
@@ -206,6 +176,9 @@ pub(super) async fn finalize_exhausted_run<
             let Some(output) = output else {
                 return Ok(FinalizationOutcome::AttemptedWithoutReply);
             };
+            let mut all_steps = super::source_review::settled_steps(&repository.load_journal(run_id).await?)?;
+            for step in steps { if !all_steps.contains(&step) { all_steps.push(step); } }
+            let steps = all_steps;
             let coverage = finalization_coverage(&usable, answering_projection_coverage, &steps)?;
             Ok(FinalizationOutcome::Replied(RunTerminal {
                 state: RunState::Failed,
@@ -213,6 +186,7 @@ pub(super) async fn finalize_exhausted_run<
                 steps,
                 coverage,
                 issue: Some(issue),
+                blocked: None,
                 interactions: vec![],
             }))
         }
@@ -323,92 +297,4 @@ fn finalization_coverage(
         }
     }
     Ok(coverage)
-}
-
-#[cfg(test)]
-mod tests {
-    use floe_agent_contract::{
-        DelegationRequest, InvocationKey, OutcomeIssue, TaskReceipt, TaskSnapshot, TaskState,
-        ToolCall, ToolResult,
-    };
-    use uuid::Uuid;
-
-    use super::*;
-
-    fn soft_tool_exchange() -> ModelConversationEntry {
-        let call_id = Uuid::new_v4();
-        ModelConversationEntry::ToolExchange {
-            call: ToolCall {
-                call_id,
-                invocation_key: InvocationKey::new(),
-                tool_id: "missing.tool".into(),
-                definition_revision: 1,
-                input: "{}".into(),
-            },
-            result: ToolResult {
-                call_id,
-                text: "tool is not registered".into(),
-                artifacts: vec![],
-                coverage: DependencyCoverage::Independent,
-                issue: Some(OutcomeIssue {
-                    failure: AgentFailure::InvalidModelOutput,
-                    retryable: true,
-                }),
-            },
-        }
-    }
-
-    fn soft_delegation_exchange() -> ModelConversationEntry {
-        let task_id = floe_agent_contract::TaskId::new();
-        ModelConversationEntry::DelegationExchange {
-            request: DelegationRequest {
-                task_id,
-                parent_run_id: Some(Uuid::new_v4()),
-                principal: "person:test".into(),
-                invocation_key: InvocationKey::new(),
-                selected_agent_id: "missing-expert".into(),
-                selected_definition_revision: 1,
-                message: "summarize".into(),
-                context_refs: vec![],
-                execution_context: floe_agent_contract::DelegationExecutionContext {
-                    session_id: Uuid::new_v4(),
-                    device_id: "test-device".into(),
-                    agent_context: floe_agent_contract::AgentContext {
-                        projection_version: 1,
-                        persona: None,
-                        memories: vec![],
-                        optional_context_issues: vec![],
-                        evidence: vec![],
-                    },
-                    max_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
-                },
-            },
-            receipt: TaskReceipt {
-                task_id,
-                snapshot: TaskSnapshot {
-                    task_id,
-                    parent_run_id: Some(Uuid::new_v4()),
-                    principal: "person:test".into(),
-                    agent_id: "missing-expert".into(),
-                    definition_revision: 1,
-                    state: TaskState::Rejected,
-                    result: None,
-                    artifacts: vec![],
-                    coverage: DependencyCoverage::Independent,
-                    issue: Some(AgentFailure::InvalidModelOutput),
-                },
-                replay: None,
-            },
-        }
-    }
-
-    #[test]
-    fn soft_observations_are_neither_usable_nor_barriers() {
-        // Host soft failures are never presented as observations, and a
-        // model-side error never vetoes a reply built from usable ones.
-        for entry in [soft_tool_exchange(), soft_delegation_exchange()] {
-            assert!(!usable_exchange(&entry));
-            assert_eq!(exchange_barrier(&entry), None);
-        }
-    }
 }

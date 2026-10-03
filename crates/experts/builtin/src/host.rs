@@ -257,9 +257,7 @@ pub trait BuiltinExpertHost: Sync {
     /// One source read this Expert holds open while it reasons over it.
     type SourceRead: AuthorizedRead;
 
-    /// The model this turn runs on. Experts state the execution class they
-    /// require on each call; which provider satisfies it is the model
-    /// owner's answer, never a host-side selection.
+    /// The model port uses the shared purpose-bound planner before projection.
     fn model(&self) -> &Self::Model;
 
     fn policy(&self) -> &InferencePolicyDecision;

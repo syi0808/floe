@@ -75,6 +75,8 @@ pub struct NativeSubjectObservation {
 
 /// The Person's own record of which calendar this device is connected to.
 pub trait CalendarConnectionReader: Sync {
+    fn source_is_fenced(&self, person_id: PersonId, connection_id: &floe_context_contract::ConnectionId)
+        -> impl Future<Output = Result<bool, AgentFailure>> + Send;
     fn calendar_connection(
         &self,
     ) -> impl Future<Output = Result<Option<SourceConnection>, AgentFailure>> + Send;
@@ -117,6 +119,7 @@ pub async fn admit_current_native_calendar_read(
         .calendar_connection()
         .await?
         .ok_or(AgentFailure::AccessReviewRequired)?;
+    if connections.source_is_fenced(person_id, connection.connection_id()).await? { return Err(AgentFailure::PolicyDenied); }
     let provider = native_provider(&connection)?;
     if !is_native_calendar(provider) {
         return Err(AgentFailure::CapabilityUnavailable);
@@ -194,6 +197,7 @@ pub async fn admit_current_native_calendar_read(
         .calendar_connection()
         .await?
         .ok_or(AgentFailure::AccessReviewRequired)?;
+    if connections.source_is_fenced(person_id, connection.connection_id()).await? { return Err(AgentFailure::PolicyDenied); }
     if refreshed != connection {
         return Err(AgentFailure::StaleContext);
     }
@@ -364,6 +368,7 @@ async fn acquire(
         .calendar_connection()
         .await?
         .ok_or(AgentFailure::AccessReviewRequired)?;
+    if connections.source_is_fenced(request.person_id, connection.connection_id()).await? { return Err(AgentFailure::PolicyDenied); }
     let calendar_ids = connection_calendar_ids(&connection);
     let review = request.review(request.connection_id.as_deref());
     let authority = (acquisition.admit)(
@@ -407,6 +412,7 @@ async fn acquire(
         .calendar_connection()
         .await?
         .ok_or(AgentFailure::AccessReviewRequired)?;
+    if connections.source_is_fenced(request.person_id, connection.connection_id()).await? { return Err(AgentFailure::PolicyDenied); }
     let refreshed_ids = connection_calendar_ids(&refreshed);
     native_calendar_connection_unchanged(
         NativeCalendarConnection {

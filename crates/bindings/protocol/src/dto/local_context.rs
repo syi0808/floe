@@ -25,6 +25,8 @@ pub struct LocalContextAcquisitionRequestDto {
 #[serde(rename_all = "snake_case")]
 pub enum LocalContextAcquisitionModeDto {
     InspectSubject,
+    InspectCatalog,
+    RequestPermission,
     ReadEvents,
 }
 
@@ -63,27 +65,25 @@ pub struct LocalContextPersonalAcquisitionRequestDto {
     pub person_id: String,
     pub device_id: String,
     pub domain: LocalContextPersonalDomainDto,
+    pub mode: LocalContextPersonalAcquisitionModeDto,
     pub selected_handles: Vec<String>,
     pub deadline_unix_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_native_subject_fingerprint: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalContextPersonalAcquisitionModeDto {
+    ReadProjection,
+    InspectSubject,
+    InspectCatalog,
+    RequestPermission,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct LocalContextResultDto {
-    pub person_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub view_id: Option<String>,
-    pub removed_count: usize,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub view: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub acquisitions: Vec<LocalContextAcquisitionRequestDto>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attention_acquisitions: Vec<LocalContextAttentionAcquisitionRequestDto>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub personal_acquisitions: Vec<LocalContextPersonalAcquisitionRequestDto>,
+pub struct NativeSourceResourceDto {
+    pub handle: String,
+    pub label: String,
 }

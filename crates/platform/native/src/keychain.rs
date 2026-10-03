@@ -1,56 +1,51 @@
-//! Keychain item access. The caller owns what the bytes mean.
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum KeychainError {
-    /// The key slot could not be read.
-    Unavailable,
-    /// More than one item matched the exact slot.
-    Ambiguous,
-    /// The stored secret exceeded the caller's bound.
-    TooLarge,
-}
-
-/// Read one generic password for an exact service/account slot.
-///
-/// Returns `Ok(None)` when the slot has never been written. A slot that matches
-/// more than one item is an error, never a silent first-match.
-#[cfg(target_os = "macos")]
-pub fn read_generic_password(
-    service: &str,
-    account: &str,
-    max_bytes: usize,
-) -> Result<Option<Vec<u8>>, KeychainError> {
-    use security_framework::item::{ItemClass, ItemSearchOptions, SearchResult};
-    use security_framework_sys::base::errSecItemNotFound;
-
-    let mut query = ItemSearchOptions::new();
-    query
-        .class(ItemClass::generic_password())
-        .service(service)
-        .account(account)
-        .load_data(true)
-        .skip_authenticated_items(true);
-    let results = match query.search() {
-        Ok(results) => results,
-        Err(error) if error.code() == errSecItemNotFound => return Ok(None),
-        Err(_) => return Err(KeychainError::Unavailable),
-    };
-    let mut results = results.into_iter();
-    let secret = match (results.next(), results.next()) {
-        (Some(SearchResult::Data(secret)), None) => secret,
-        _ => return Err(KeychainError::Ambiguous),
-    };
-    if secret.len() > max_bytes {
-        return Err(KeychainError::TooLarge);
+//! Exact OS generic-password slots. Queries never show authentication UI or hide
+//! locked items as absence. Secret records are device-only and nonsynchronizing.
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub enum KeychainError{Unavailable,Locked,Ambiguous,TooLarge}
+#[cfg(any(target_os="macos",target_os="ios"))]
+mod apple{
+    use super::KeychainError;
+    use core_foundation::{array::CFArray,base::{CFType,TCFType},boolean::CFBoolean,data::CFData,dictionary::CFDictionary,string::{CFString,CFStringRef}};
+    use security_framework_sys::{access_control::kSecAttrAccessibleWhenUnlockedThisDeviceOnly,item::*,keychain_item::{SecItemAdd,SecItemCopyMatching,SecItemDelete,SecItemUpdate}};
+    fn key(value:CFStringRef)->CFString{unsafe{CFString::wrap_under_get_rule(value)}}
+    fn text(value:CFStringRef)->CFType{key(value).into_CFType()}
+    fn query(service:&str,account:&str)->Vec<(CFString,CFType)>{unsafe{vec![
+        (key(kSecClass),text(kSecClassGenericPassword)),(key(kSecAttrService),CFString::new(service).into_CFType()),
+        (key(kSecAttrAccount),CFString::new(account).into_CFType()),
+        (key(kSecAttrSynchronizable),CFBoolean::false_value().into_CFType()),
+        (key(kSecUseAuthenticationUI),text(kSecUseAuthenticationUIFail)),
+    ]}}
+    fn error(code:i32)->KeychainError{match code{-25308|-25293=>KeychainError::Locked,_=>KeychainError::Unavailable}}
+    pub fn read(service:&str,account:&str,max:usize)->Result<Option<Vec<u8>>,KeychainError>{
+        let mut fields=query(service,account);unsafe{fields.push((key(kSecReturnData),CFBoolean::true_value().into_CFType()));fields.push((key(kSecMatchLimit),text(kSecMatchLimitAll)));}
+        let query=CFDictionary::from_CFType_pairs(&fields);let mut output=std::ptr::null();
+        let code=unsafe{SecItemCopyMatching(query.as_concrete_TypeRef(),&mut output)};
+        if code==-25300{return Ok(None)}if code!=0{return Err(error(code))}if output.is_null(){return Err(KeychainError::Unavailable)}
+        let result=unsafe{CFType::wrap_under_create_rule(output)};
+        let array=result.downcast::<CFArray>().ok_or(KeychainError::Ambiguous)?;
+        if array.len()!=1{return Err(KeychainError::Ambiguous)}
+        let value=unsafe{CFType::wrap_under_get_rule(*array.get(0).ok_or(KeychainError::Unavailable)?)};
+        let data=value.downcast::<CFData>().ok_or(KeychainError::Unavailable)?;
+        if data.len() as usize>max{return Err(KeychainError::TooLarge)}Ok(Some(data.bytes().to_vec()))
     }
-    Ok(Some(secret))
+    pub fn replace(service:&str,account:&str,bytes:&[u8])->Result<(),KeychainError>{
+        let fields=query(service,account);
+        let mut attributes=vec![(unsafe{key(kSecValueData)},CFData::from_buffer(bytes).into_CFType()),(unsafe{key(kSecAttrAccessible)},unsafe{text(kSecAttrAccessibleWhenUnlockedThisDeviceOnly)})];
+        let query=CFDictionary::from_CFType_pairs(&fields);let update=CFDictionary::from_CFType_pairs(&attributes);
+        let status=unsafe{SecItemUpdate(query.as_concrete_TypeRef(),update.as_concrete_TypeRef())};
+        if status==0{return Ok(())}if status!=-25300{return Err(error(status))}
+        attributes.extend(fields);let add=CFDictionary::from_CFType_pairs(&attributes);
+        let status=unsafe{SecItemAdd(add.as_concrete_TypeRef(),std::ptr::null_mut())};if status==0{Ok(())}else{Err(error(status))}
+    }
+    pub fn delete(service:&str,account:&str)->Result<(),KeychainError>{
+        let query=CFDictionary::from_CFType_pairs(&query(service,account));let status=unsafe{SecItemDelete(query.as_concrete_TypeRef())};if status==0||status==-25300{Ok(())}else{Err(error(status))}
+    }
 }
-
-#[cfg(not(target_os = "macos"))]
-pub fn read_generic_password(
-    _service: &str,
-    _account: &str,
-    _max_bytes: usize,
-) -> Result<Option<Vec<u8>>, KeychainError> {
-    Ok(None)
-}
+#[cfg(any(target_os="macos",target_os="ios"))]
+pub use apple::{read as read_generic_password,replace as write_generic_password,delete as delete_generic_password};
+#[cfg(not(any(target_os="macos",target_os="ios")))]
+pub fn read_generic_password(_: &str,_: &str,_:usize)->Result<Option<Vec<u8>>,KeychainError>{Err(KeychainError::Unavailable)}
+#[cfg(not(any(target_os="macos",target_os="ios")))]
+pub fn write_generic_password(_: &str,_: &str,_:&[u8])->Result<(),KeychainError>{Err(KeychainError::Unavailable)}
+#[cfg(not(any(target_os="macos",target_os="ios")))]
+pub fn delete_generic_password(_: &str,_: &str)->Result<(),KeychainError>{Err(KeychainError::Unavailable)}

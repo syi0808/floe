@@ -5,7 +5,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_squircle.dart';
-import 'package:floe_client/features/conversation/application/agent_controller.dart';
+import 'package:floe_client/features/conversation/application/conversation_controller.dart';
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
 import 'package:floe_client/features/settings/presentation/agent_memory_review_settings.dart';
 
@@ -16,7 +16,7 @@ final class AgentMemorySettingsCard extends StatelessWidget {
     required this.onManage,
   });
 
-  final AgentController controller;
+  final ConversationController controller;
   final VoidCallback onManage;
 
   @override
@@ -69,7 +69,7 @@ final class AgentMemorySettings extends StatelessWidget {
     required this.onBack,
   });
 
-  final AgentController controller;
+  final ConversationController controller;
   final VoidCallback onBack;
 
   @override

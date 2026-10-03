@@ -50,10 +50,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if state_name(&envelope.action.state) != state || envelope.digest()? != stored_digest {
                 return Err(AgentFailure::VaultUnavailable);
             }
-            envelope.write_approval = false;
-            envelope.action.state = CalendarActionState::Blocked {
-                reason: floe_actions::ActionBlockReason::PolicyDenied,
-            };
+            if !envelope.invalidate_grant(self.person_id, grant_id, authority)? { continue; }
             let payload =
                 serde_json::to_string(&envelope).map_err(|_| AgentFailure::InvalidInput)?;
             let updated_digest = envelope.digest()?;
@@ -460,39 +457,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn admit_agent_action_dispatch(
-        &self,
-        execution_id: Uuid,
-        expected_digest: &str,
-        now: DateTime<Utc>,
-    ) -> Result<AgentActionAdmission, AgentFailure> {
-        self.admit_agent_action_dispatch_with_cancellation(
-            execution_id,
-            expected_digest,
-            now,
-            Cancellation::default(),
-        )
-        .await
-    }
 
-    #[cfg(test)]
-    pub(crate) async fn admit_agent_action_dispatch_with_cancellation(
-        &self,
-        execution_id: Uuid,
-        expected_digest: &str,
-        now: DateTime<Utc>,
-        cancellation: Cancellation,
-    ) -> Result<AgentActionAdmission, AgentFailure> {
-        self.admit_agent_action_dispatch_with_cancellation_and_fence(
-            execution_id,
-            expected_digest,
-            now,
-            cancellation,
-            || Ok(()),
-        )
-        .await
-    }
 
     pub(crate) async fn admit_agent_action_dispatch_with_cancellation_and_fence(
         &self,

@@ -7,7 +7,7 @@
 
 use chrono::{DateTime, Utc};
 use floe_agent_contract::{
-    AgentContext, AgentFailure, ContextSource, DataClass, InferencePolicyDecision, ModelPlacement,
+    AgentContext, AgentFailure, ContextSource, DataClass, InferencePolicyDecision,
     SessionProtection,
 };
 use floe_context_contract::{PersonId, acquire_optional_source, record_source_issue};
@@ -28,7 +28,6 @@ const MAX_DAY_CONTEXT_BYTES: usize = 8 * 1024;
 pub struct ExpertContextRequest<'a> {
     pub person_id: PersonId,
     pub policy: &'a InferencePolicyDecision,
-    pub placement: ModelPlacement,
     pub protection: SessionProtection,
     pub now: DateTime<Utc>,
     pub deadline: Instant,
@@ -43,7 +42,6 @@ impl ExpertContextRequest<'_> {
 
     fn authorize(&self, context: &AgentContext) -> Result<(), AgentFailure> {
         self.policy.authorize(
-            self.placement,
             self.protection,
             context,
             u64::try_from(self.now.timestamp_millis()).map_err(|_| AgentFailure::StaleContext)?,

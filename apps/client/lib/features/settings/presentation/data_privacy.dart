@@ -3,18 +3,12 @@ part of 'settings_screen.dart';
 class _DataPrivacy extends StatefulWidget {
   const _DataPrivacy({
     required this.controller,
-    required this.serverClient,
     required this.onManageMemory,
-    this.androidContext,
-    this.appleContext,
     this.platform,
   });
 
-  final AgentController controller;
-  final LocalServerClient? serverClient;
+  final ConversationController controller;
   final VoidCallback onManageMemory;
-  final AndroidContextApi? androidContext;
-  final AppleContextApi? appleContext;
   final TargetPlatform? platform;
 
   @override
@@ -25,7 +19,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   bool memoryRequested = false;
   bool savedMemoryRequested = false;
 
-  AgentController get controller => widget.controller;
+  ConversationController get controller => widget.controller;
 
   @override
   void initState() {
@@ -83,7 +77,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
         ),
         const SizedBox(height: FloeSpace.sm),
         Text(
-          'Manage source access from Connections. External actions use separate Action permissions, and external model processing requires exact recipient approval when needed.',
+          'Manage source access from Connections. External actions use separate Action permissions, and source reviews control whether processing stays on this device or may use your verified Gateway.',
           style: FloeType.body.copyWith(
             color: FloePalette.neutral600,
             height: 1.5,

@@ -1,371 +1,68 @@
 package pairing
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
-	"regexp"
-	"strings"
-	"time"
+ "context"
+ "crypto/ed25519"
+ "crypto/rand"
+ "crypto/subtle"
+ "encoding/base64"
+ "encoding/json"
+ "strings"
+ "time"
 
-	"floe/server/internal/authorization"
-	"floe/server/internal/operation"
+ "floe/server/internal/operation"
+ "floe/server/internal/trust"
 )
 
-func (operations *Operations) Execute(action string, input Request) (outcome operation.Result) {
-
-	if action == "start" && operations.allowLegacy && input.SchemaVersion == 0 && input.IssuerKeyID == "" && input.IssuerPublicKey == "" {
-		if !validPersonID(input.PersonID) || !validDeviceID(input.DeviceID) {
-			outcome = operation.Reject(operation.Invalid, "identity_required")
-			return
-		}
-		operations.mu.Lock()
-		now := operations.clock()
-		if failure := operations.host.Prepare(input.PersonID); failure.Code != "" {
-			operations.mu.Unlock()
-			return failure
-		}
-		if now.Sub(operations.lastPair) < 10*time.Second || (operations.pending != nil && operations.pending.Expires.After(now) && operations.pending.status != "rejected") {
-			operations.mu.Unlock()
-			outcome = operation.Reject(operation.Limited, "pairing_in_progress")
-			return
-		}
-
-		operations.lastPair = now
-		operations.pending = &Pending{ID: randomToken(), Code: strings.ToUpper(randomToken()[:8]), Expires: now.Add(5 * time.Minute), PersonID: input.PersonID, DeviceID: input.DeviceID, proof: randomToken()}
-		pending := *operations.pending
-		operations.mu.Unlock()
-		outcome = operation.Result{Category: operation.Ready, Value: map[string]any{"id": pending.ID, "code": pending.Code, "proof": pending.proof, "expires": pending.Expires}}
-		return
-	}
-	if action == "start" {
-		if input.SchemaVersion != 1 || !validPersonID(input.PersonID) || !validDeviceID(input.DeviceID) || !validConnectionID(input.IssuerKeyID) {
-			outcome = operation.Reject(operation.Invalid, "identity_required")
-			return
-		}
-		publicKey, err := base64.RawURLEncoding.DecodeString(input.IssuerPublicKey)
-		if err != nil || len(publicKey) != ed25519.PublicKeySize || base64.RawURLEncoding.EncodeToString(publicKey) != input.IssuerPublicKey {
-			outcome = operation.Reject(operation.Invalid, "validation")
-			return
-		}
-		metadata, err := operations.host.Metadata()
-		if err != nil {
-			outcome = operation.Reject(operation.Unavailable, "producer_unavailable")
-			return
-		}
-		audience, ok := metadata["audience"].(string)
-		if !ok || audience == "" {
-			outcome = operation.Reject(operation.Unavailable, "producer_unavailable")
-			return
-		}
-		operations.mu.Lock()
-		now := operations.clock()
-		if failure := operations.host.Prepare(input.PersonID); failure.Code != "" {
-			operations.mu.Unlock()
-			return failure
-		}
-		if now.Sub(operations.lastPair) < 10*time.Second || (operations.pending != nil && operations.pending.Expires.After(now) && operations.pending.status != "rejected") {
-			operations.mu.Unlock()
-			outcome = operation.Reject(operation.Limited, "pairing_in_progress")
-			return
-		}
-
-		operations.lastPair = now
-		pairingID, err := newConnectionID()
-		if err != nil {
-			operations.mu.Unlock()
-			outcome = operation.Reject(operation.Unavailable, "pairing_unavailable")
-			return
-		}
-		pollingProof := randomToken()
-		operations.mu.Unlock()
-		principal := authorization.Principal{ClientID: pairingID, PersonID: input.PersonID, DeviceID: input.DeviceID, Authenticated: true}
-		engine := operations.host.Engine()
-		if engine == nil {
-			outcome = operation.Reject(operation.Unavailable, "authority_unavailable")
-			return
-		}
-		enrollment, challenge, err := engine.BeginEnrollment(principal, input.IssuerKeyID, ed25519.PublicKey(publicKey), audience)
-		if err != nil {
-			outcome = operation.Reject(operation.Conflict, "pairing_denied")
-			return
-		}
-		producerFingerprint, _ := metadata["fingerprint"].(string)
-		pending := &Pending{
-			ID: pairingID, Code: strings.ToUpper(randomToken()[:8]), Expires: challenge.ExpiresAt,
-			PersonID: input.PersonID, DeviceID: input.DeviceID, IssuerKeyID: enrollment.KeyID,
-			IssuerPublicKey:   base64.RawURLEncoding.EncodeToString(publicKey),
-			IssuerFingerprint: enrollment.Fingerprint, ProducerFingerprint: producerFingerprint, ProducerAudience: audience,
-			enrollmentID: enrollment.ID, challengeID: challenge.ID, challengeBytes: append([]byte(nil), challenge.Bytes...),
-			challengeB64: challenge.BytesB64, producerSignature: operations.host.Sign(challenge.Bytes), proof: pollingProof,
-		}
-		operations.mu.Lock()
-		if operations.pending != nil && operations.pending.Expires.After(operations.clock()) {
-			operations.mu.Unlock()
-			_ = engine.ApproveEnrollment(enrollment.ID, enrollment.Fingerprint, false)
-			outcome = operation.Reject(operation.Limited, "pairing_in_progress")
-			return
-		}
-		operations.pending = pending
-		operations.mu.Unlock()
-		outcome = operation.Result{Category: operation.Ready, Value: map[string]any{
-			"schema_version": 1, "pairing_id": pending.ID, "code": pending.Code, "proof": pending.proof,
-			"expires_at_unix_ms": pending.Expires.UnixMilli(), "person_id": pending.PersonID, "device_id": pending.DeviceID,
-			"producer":     metadata,
-			"issuer":       map[string]any{"key_id": pending.IssuerKeyID, "public_key": pending.IssuerPublicKey, "fingerprint": pending.IssuerFingerprint},
-			"challenge_id": pending.challengeID, "challenge_b64url": pending.challengeB64,
-			"producer_signature": base64.RawURLEncoding.EncodeToString(pending.producerSignature),
-		}}
-		return
-	}
-	operations.mu.Lock()
-	now := operations.clock()
-	if operations.pending == nil || digest(input.Proof) != digest(operations.pending.proof) {
-		operations.mu.Unlock()
-		outcome = operation.Reject(operation.Unauthenticated, "pairing_expired")
-		return
-	}
-	if operations.pending.IssuerKeyID != "" && (action == "poll" || action == "cancel") && (input.SchemaVersion != 1 || input.PairingID != operations.pending.ID) {
-		operations.mu.Unlock()
-		outcome = operation.Reject(operation.Invalid, "validation")
-		return
-	}
-	if !operations.pending.Expires.After(now) {
-		if action == "poll" {
-			pending := *operations.pending
-			operations.mu.Unlock()
-			outcome = operation.Result{Category: operation.Ready, Value: map[string]any{"schema_version": 1, "pairing_id": pending.ID, "status": "expired", "person_id": pending.PersonID, "device_id": pending.DeviceID}}
-			return
-		}
-		operations.mu.Unlock()
-		outcome = operation.Reject(operation.Conflict, "pairing_expired")
-		return
-	}
-	if action == "cancel" {
-		enrollmentID, fingerprint := operations.pending.enrollmentID, operations.pending.IssuerFingerprint
-		operations.pending = nil
-		operations.mu.Unlock()
-		if engine := operations.host.Engine(); engine != nil {
-			_ = engine.ApproveEnrollment(enrollmentID, fingerprint, false)
-		}
-		outcome = operation.Result{Category: operation.Ready, Value: map[string]bool{"ok": true}}
-		return
-	}
-	if action == "confirm" {
-		pending := *operations.pending
-		operations.mu.Unlock()
-		if input.SchemaVersion != 1 || input.PairingID != pending.ID || input.ChallengeID != pending.challengeID || input.KeyID != pending.IssuerKeyID || input.Signature == "" {
-			outcome = operation.Reject(operation.Invalid, "validation")
-			return
-		}
-		engine := operations.host.Engine()
-		if engine == nil {
-			outcome = operation.Reject(operation.Unavailable, "authority_unavailable")
-			return
-		}
-		principal := authorization.Principal{ClientID: pending.ID, PersonID: pending.PersonID, DeviceID: pending.DeviceID, Authenticated: true}
-		if err := engine.CompleteEnrollment(pending.enrollmentID, principal, authorization.Proof{ChallengeID: input.ChallengeID, KeyID: input.KeyID, Signature: input.Signature}); err != nil {
-			outcome = operation.Reject(operation.Denied, "pairing_denied")
-			return
-		}
-		operations.mu.Lock()
-		if operations.pending == nil || operations.pending.ID != pending.ID {
-			operations.mu.Unlock()
-			_ = engine.ApproveEnrollment(pending.enrollmentID, pending.IssuerFingerprint, false)
-			outcome = operation.Reject(operation.Conflict, "pairing_expired")
-			return
-		}
-		operations.pending.LocalConfirmed = true
-		operations.pending.status = "local_confirmed"
-		operations.mu.Unlock()
-		outcome = operation.Result{Category: operation.Ready, Value: map[string]any{"schema_version": 1, "pairing_id": pending.ID, "status": "local_confirmed"}}
-		return
-	}
-	if action == "poll" {
-		pending := *operations.pending
-		operations.mu.Unlock()
-		status := pending.status
-		if status == "" {
-			status = "pending"
-		}
-		if pending.token != "" {
-			status = "approved"
-		}
-		response := map[string]any{"schema_version": 1, "pairing_id": pending.ID, "status": status, "person_id": pending.PersonID, "device_id": pending.DeviceID}
-		if pending.token != "" {
-			response["issuer"] = map[string]any{"key_id": pending.IssuerKeyID, "public_key": pending.IssuerPublicKey, "fingerprint": pending.IssuerFingerprint}
-			response["issuer_fingerprint"] = pending.IssuerFingerprint
-			response["client_id"], response["token"] = pending.ID, pending.token
-			if producer, err := operations.host.Metadata(); err == nil {
-				response["producer"] = producer
-			}
-		}
-		outcome = operation.Result{Category: operation.Ready, Value: response}
-		return
-	}
-	operations.mu.Unlock()
-	outcome = operation.Reject(operation.Missing, "not_found")
-	return
+func(o *Operations) Execute(ctx context.Context,action string,in Request)operation.Result{
+ if err:=ctx.Err();err!=nil{return trust.Result(err)}
+ if in.SchemaVersion!=1{return operation.Reject(operation.Invalid,"validation")}
+ if action=="start"{return o.start(in)}
+ o.mu.Lock();defer o.mu.Unlock();p,loadErr:=o.find(in.PairingID);if loadErr!=nil{return trust.Result(loadErr)}
+ if p==nil||in.PairingID!=p.ID||subtle.ConstantTimeCompare([]byte(trust.Digest(in.Proof)),[]byte(trust.Digest(p.proof)))!=1{return operation.Reject(operation.Unauthenticated,"pairing_expired")}
+ if action=="poll"{if _,err:=o.trust.ReadPairing(ctx,p.ID,in.Proof);err==nil{return o.readCommitted(ctx,p.ID,in.Proof)};if p.AdminApproved||p.status=="activating"{return operation.Reject(operation.Conflict,"pairing_repair_required")}}
+ if p.status=="activating"||p.AdminApproved{return operation.Reject(operation.Conflict,"pairing_already_committed")}
+ if action=="cancel"&&p.status=="cancelled"{return operation.Accept(map[string]bool{"ok":true})}
+ if !p.Expires.After(o.clock()){p.token="";p.status="expired";if action=="poll"{return operation.Accept(status(p))};return operation.Reject(operation.Conflict,"pairing_expired")}
+ switch action {
+ case "cancel":copy:=*p;copy.status="cancelled";if err:=o.save(&copy);err!=nil{return trust.Result(err)};o.pending=&copy;return operation.Accept(map[string]bool{"ok":true})
+ case "confirm":
+  if p.status=="rejected"||p.status=="cancelled"||in.ChallengeID!=p.challengeID||in.KeyID!=p.IssuerKeyID{return operation.Reject(operation.Conflict,"pairing_denied")}
+  publicKey,err:=trust.DecodeBase64(p.IssuerPublicKey,ed25519.PublicKeySize);proof:=trust.Proof{ChallengeID:in.ChallengeID,KeyID:in.KeyID,Signature:in.Signature}
+  if err!=nil||trust.VerifyProof(proof,p.challengeID,p.IssuerKeyID,p.challengeBytes,publicKey)!=nil{return operation.Reject(operation.Denied,"pairing_denied")}
+  if p.LocalConfirmed{if p.localProof!=proof{return operation.Reject(operation.Conflict,"pairing_denied")}}else{copy:=*p;copy.LocalConfirmed=true;copy.localProof=proof;copy.status="local_confirmed";if err:=o.save(&copy);err!=nil{return trust.Result(err)};p=&copy;o.pending=p};return operation.Accept(map[string]any{"schema_version":1,"pairing_id":p.ID,"status":p.status})
+ case "poll":return operation.Accept(status(p))
+ default:return operation.Reject(operation.Missing,"not_found")
+ }
 }
-func (operations *Operations) Approve(input ApprovalRequest) (outcome operation.Result) {
-
-	if input.SchemaVersion == 0 && input.PairingID == "" && input.ID != "" && input.Fingerprint == "" {
-		outcome = operations.approveLegacy(input.ID)
-		return
-	}
-	if input.SchemaVersion != 1 || input.PairingID == "" || input.ID != "" {
-		outcome = operation.Reject(operation.Invalid, "validation")
-		return
-	}
-	if input.Fingerprint == "" {
-		outcome = operation.Reject(operation.Invalid, "validation")
-		return
-	}
-
-	operations.mu.Lock()
-	pending := operations.pending
-	if pending == nil || pending.ID != input.PairingID {
-		operations.mu.Unlock()
-		outcome = operation.Reject(operation.Conflict, "pairing_expired")
-		return
-	}
-	if !pending.Expires.After(operations.clock()) {
-		operations.mu.Unlock()
-		outcome = operation.Reject(operation.Conflict, "pairing_expired")
-		return
-	}
-	if !pending.LocalConfirmed {
-		operations.mu.Unlock()
-		outcome = operation.Reject(operation.Conflict, "pairing_not_confirmed")
-		return
-	}
-	if pending.IssuerFingerprint != input.Fingerprint {
-		operations.mu.Unlock()
-		outcome = operation.Reject(operation.Conflict, "fingerprint_mismatch")
-		return
-	}
-	pendingCopy := *pending
-	token := randomToken()
-	operations.mu.Unlock()
-
-	engine := operations.host.Engine()
-	if engine == nil {
-		outcome = operation.Reject(operation.Unavailable, "authority_unavailable")
-		return
-	}
-	err := engine.ApproveEnrollmentWithCommit(
-		pendingCopy.enrollmentID,
-		pendingCopy.IssuerFingerprint,
-		func(record authorization.IssuerRecord) error {
-			return operations.commit(record, digest(token), pendingCopy)
-		},
-	)
-	if err != nil {
-		outcome = operation.Reject(operation.Conflict, "pairing_conflict")
-		return
-	}
-	operations.mu.Lock()
-	if operations.pending == nil || operations.pending.ID != pendingCopy.ID {
-		operations.mu.Unlock()
-		outcome = operation.Reject(operation.Conflict, "pairing_expired")
-		return
-	}
-	operations.pending.AdminApproved = true
-	operations.pending.status = "approved"
-	operations.pending.token = token
-	operations.mu.Unlock()
-	outcome = operation.Result{Category: operation.Ready, Value: map[string]any{"schema_version": 1, "pairing_id": pendingCopy.ID, "status": "approved"}}
-	return
+func(o *Operations) start(in Request)operation.Result{
+ if !trust.ValidID(in.OperationID)||!trust.ValidID(in.PersonID)||!trust.ValidDevice(in.DeviceID)||!trust.ValidID(in.IssuerKeyID){return operation.Reject(operation.Invalid,"identity_required")}
+ if _,err:=trust.DecodeBase64(in.Proof,32);err!=nil{return operation.Reject(operation.Invalid,"validation")}
+ publicKey,err:=trust.DecodeBase64(in.IssuerPublicKey,ed25519.PublicKeySize);if err!=nil{return operation.Reject(operation.Invalid,"validation")}
+ o.mu.Lock();defer o.mu.Unlock();index,err:=o.index();if err!=nil{return trust.Result(err)}
+ for _,entry:=range index.Entries{if entry.OperationID==in.OperationID{p,loadErr:=o.load(entry);if loadErr!=nil{return trust.Result(loadErr)};if p.PersonID!=in.PersonID||p.DeviceID!=in.DeviceID||p.IssuerKeyID!=in.IssuerKeyID||p.IssuerPublicKey!=in.IssuerPublicKey||subtle.ConstantTimeCompare([]byte(trust.Digest(p.proof)),[]byte(trust.Digest(in.Proof)))!=1{return operation.Reject(operation.Conflict,"pairing_operation_conflict")};if p.Expires.After(o.clock())&&p.status!="cancelled"&&p.status!="rejected"{o.pending=p};return startResult(p)}}
+ revision,err:=o.trust.PreparePairing(in.PersonID);if err!=nil{return trust.Result(err)};producer,err:=o.trust.ProducerMetadata();if err!=nil{return trust.Result(err)}
+ now:=o.clock();if now.Sub(o.lastPair)<10*time.Second{return operation.Reject(operation.Limited,"pairing_in_progress")};for _,entry:=range index.Entries{p,loadErr:=o.load(entry);if loadErr!=nil{return trust.Result(loadErr)};if p.Expires.After(now)&&p.status!="rejected"&&p.status!="cancelled"&&p.status!="approved"{return operation.Reject(operation.Limited,"pairing_in_progress")}}
+ id,challengeID:=trust.NewID(),trust.NewID();if err:=o.reserve(index,in.OperationID,id);err!=nil{return trust.Result(err)};nonce:=make([]byte,32);if _,err=rand.Read(nonce);err!=nil{return operation.Reject(operation.Unavailable,"pairing_unavailable")}
+ expires:=now.Add(30*time.Second)
+ challenge:=struct{Version int `json:"v"`;Operation string `json:"operation"`;ChallengeID string `json:"challenge_id"`;Nonce string `json:"nonce"`;KeyID string `json:"key_id"`;PersonID string `json:"person_id"`;ClientID string `json:"client_id"`;DeviceID string `json:"device_id"`;Audience string `json:"audience"`;Purpose string `json:"purpose"`;Consumer string `json:"consumer"`;Issued int64 `json:"issued_at_unix_ms"`;Expires int64 `json:"expires_at_unix_ms"`}{1,"enrollment",challengeID,base64.RawURLEncoding.EncodeToString(nonce),in.IssuerKeyID,in.PersonID,id,in.DeviceID,producer.Audience,"owner_enrollment","owner",now.UnixMilli(),expires.UnixMilli()}
+ encoded,err:=json.Marshal(challenge);if err!=nil{return operation.Reject(operation.Internal,"pairing_unavailable")};signature,err:=o.trust.SignProducerChallenge(encoded);if err!=nil{return trust.Result(err)}
+ p:=&Pending{operationID:in.OperationID,ID:id,Code:strings.ToUpper(trust.Token()[:8]),Expires:expires,PersonID:in.PersonID,DeviceID:in.DeviceID,IssuerKeyID:in.IssuerKeyID,IssuerPublicKey:in.IssuerPublicKey,IssuerFingerprint:trust.Digest(string(publicKey)),ProducerFingerprint:producer.Fingerprint,ProducerAudience:producer.Audience,challengeID:challengeID,challengeBytes:encoded,challengeB64:base64.RawURLEncoding.EncodeToString(encoded),producerSignature:signature,proof:in.Proof,producer:producer,expectedRevision:revision,status:"pending"};if err:=o.save(p);err!=nil{return trust.Result(err)};o.pending=p;o.lastPair=now
+ return startResult(p)
 }
-func (operations *Operations) Reject(input RejectionRequest) (outcome operation.Result) {
-	if input.PairingID != "" && input.ID != "" && input.PairingID != input.ID {
-		outcome = operation.Reject(operation.Invalid, "validation")
-		return
-	}
-	if input.PairingID == "" {
-		input.PairingID = input.ID
-	}
-	if input.PairingID == "" || input.SchemaVersion != 1 && input.ID == "" {
-		outcome = operation.Reject(operation.Invalid, "validation")
-		return
-	}
+func issuer(p *Pending)map[string]string{return map[string]string{"key_id":p.IssuerKeyID,"public_key":p.IssuerPublicKey,"fingerprint":p.IssuerFingerprint}}
+func status(p *Pending)map[string]any{out:=map[string]any{"schema_version":1,"pairing_id":p.ID,"status":p.status,"person_id":p.PersonID,"device_id":p.DeviceID};if p.token!=""&&p.AdminApproved{out["issuer"]=issuer(p);out["issuer_fingerprint"]=p.IssuerFingerprint;out["client_id"]=p.ID;out["token"]=p.token;out["producer"]=p.producer};return out}
+func(o *Operations) Approve(ctx context.Context,operator trust.OperatorPrincipal,in ApprovalRequest)operation.Result{
+ if in.SchemaVersion!=1||!trust.ValidID(in.PairingID)||len(in.Fingerprint)!=64{return operation.Reject(operation.Invalid,"validation")}
+ // Session fencing is short; the durable activation holds only pairing+trust transition locks.
+ if err:=o.trust.WithCurrentOperator(operator,func()error{return nil});err!=nil{return trust.Result(err)}
+ o.mu.Lock();defer o.mu.Unlock();p,loadErr:=o.find(in.PairingID);if loadErr!=nil{return trust.Result(loadErr)}
+ if p==nil||p.ID!=in.PairingID||!p.Expires.After(o.clock())||p.AdminApproved||p.status!="local_confirmed"{return operation.Reject(operation.Conflict,"pairing_expired")};if !p.LocalConfirmed||p.IssuerFingerprint!=in.Fingerprint{return operation.Reject(operation.Conflict,"pairing_not_confirmed")}
+ key,err:=trust.DecodeBase64(p.IssuerPublicKey,ed25519.PublicKeySize);if err!=nil{return operation.Reject(operation.Invalid,"validation")};token:=trust.Token()
+ activation:=trust.PairingActivation{PairingID:p.ID,PersonID:p.PersonID,DeviceID:p.DeviceID,Producer:p.producer,IssuerKeyID:p.IssuerKeyID,IssuerFingerprint:p.IssuerFingerprint,IssuerPublicKey:key,ChallengeID:p.challengeID,ChallengeBytes:append([]byte(nil),p.challengeBytes...),LocalProof:p.localProof,AdminFingerprint:in.Fingerprint,ExpectedRevision:p.expectedRevision,TokenHash:trust.Digest(token),PollProofHash:trust.Digest(p.proof),Operator:operator}
+ staged:=*p;staged.status="activating";if err:=o.save(&staged);err!=nil{return trust.Result(err)};o.pending=&staged;p=&staged
+ if o.credentials==nil||o.credentials.Put("FLOE_PAIRING_"+p.ID,token)!=nil{return operation.Reject(operation.Unavailable,"pairing_credential_unavailable")};if _,err=o.trust.ActivatePairing(ctx,activation);err!=nil{return trust.Result(err)};p.AdminApproved=true;p.status="approved";p.token=token;if err:=o.save(p);err!=nil{return trust.Result(err)};return operation.Accept(map[string]any{"schema_version":1,"pairing_id":p.ID,"status":"approved"})
+}
+func(o *Operations) Reject(ctx context.Context,operator trust.OperatorPrincipal,in RejectionRequest)operation.Result{if in.SchemaVersion!=1||!trust.ValidID(in.PairingID){return operation.Reject(operation.Invalid,"validation")};if err:=o.trust.WithCurrentOperator(operator,func()error{return nil});err!=nil{return trust.Result(err)};o.mu.Lock();defer o.mu.Unlock();p,err:=o.find(in.PairingID);if err!=nil{return trust.Result(err)};if p==nil||p.AdminApproved||p.status=="activating"{return operation.Reject(operation.Conflict,"pairing_expired")};p.status="rejected";p.LocalConfirmed=false;p.token="";if err:=o.save(p);err!=nil{return trust.Result(err)};o.pending=p;return operation.Accept(map[string]any{"schema_version":1,"pairing_id":in.PairingID,"status":"rejected"})}
 
-	operations.mu.Lock()
-	if operations.pending == nil || operations.pending.ID != input.PairingID {
-		operations.mu.Unlock()
-		outcome = operation.Reject(operation.Conflict, "pairing_expired")
-		return
-	}
-	pending := *operations.pending
-	operations.pending.status = "rejected"
-	operations.pending.LocalConfirmed = false
-	operations.pending.AdminApproved = false
-	operations.pending.token = ""
-	operations.mu.Unlock()
-
-	if engine := operations.host.Engine(); engine != nil {
-		_ = engine.ApproveEnrollment(pending.enrollmentID, pending.IssuerFingerprint, false)
-	}
-	outcome = operation.Result{Category: operation.Ready, Value: map[string]any{"schema_version": 1, "pairing_id": pending.ID, "status": "rejected"}}
-	return
-}
-func (operations *Operations) approveLegacy(pairingID string) (outcome operation.Result) {
-	operations.mu.Lock()
-	defer operations.mu.Unlock()
-	if operations.pending == nil || operations.pending.ID != pairingID || !operations.pending.Expires.After(operations.clock()) || operations.pending.token != "" {
-		outcome = operation.Reject(operation.Conflict, "pairing_expired")
-		return
-	}
-	if operations.pending.IssuerKeyID != "" {
-		outcome = operation.Reject(operation.Conflict, "pairing_confirmation_required")
-		return
-	}
-	token := randomToken()
-	if err := operations.host.CommitLegacy(*operations.pending, digest(token)); err != nil {
-		return operation.Reject(operation.Internal, "save_failed")
-	}
-	operations.pending.token = token
-	outcome = operation.Result{Category: operation.Ready, Value: map[string]bool{"ok": true}}
-	return
-}
-func (operations *Operations) commit(record authorization.IssuerRecord, tokenHash string, pending Pending) error {
-	operations.mu.Lock()
-	defer operations.mu.Unlock()
-	if operations.pending == nil || operations.pending.ID != pending.ID || !operations.pending.LocalConfirmed || operations.pending.IssuerKeyID != record.KeyID || operations.pending.IssuerFingerprint != issuerFingerprint(record.PublicKey) || record.EnrollmentID != pending.enrollmentID || operations.host.Fingerprint() != pending.ProducerFingerprint {
-		return authorization.ErrConflict
-	}
-	return operations.host.Commit(record, tokenHash, pending)
-}
-func randomToken() string {
-	return rand.Text() + rand.Text()
-}
-
-func digest(value string) string {
-	hash := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(hash[:])
-}
-
-func newConnectionID() (string, error) {
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	bytes[6] = bytes[6]&0x0f | 0x40
-	bytes[8] = bytes[8]&0x3f | 0x80
-	hexadecimal := hex.EncodeToString(bytes)
-	return hexadecimal[:8] + "-" + hexadecimal[8:12] + "-" + hexadecimal[12:16] + "-" + hexadecimal[16:20] + "-" + hexadecimal[20:], nil
-}
-
-var personIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
-var deviceIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
-var connectionIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
-
-func validPersonID(value string) bool     { return personIDPattern.MatchString(value) }
-func validDeviceID(value string) bool     { return deviceIDPattern.MatchString(value) }
-func validConnectionID(value string) bool { return connectionIDPattern.MatchString(value) }
-func issuerFingerprint(publicKey ed25519.PublicKey) string {
-	hash := sha256.Sum256(publicKey)
-	return hex.EncodeToString(hash[:])
-}
+func(o *Operations) readCommitted(ctx context.Context,id,proof string)operation.Result{if !trust.ValidID(id)||o.credentials==nil{return operation.Reject(operation.Conflict,"pairing_repair_required")};receipt,err:=o.trust.ReadPairing(ctx,id,proof);if err!=nil{return trust.Result(err)};token,err:=o.credentials.Get("FLOE_PAIRING_"+id);if err!=nil||trust.Digest(token)!=receipt.TokenHash{return operation.Reject(operation.Conflict,"pairing_repair_required")};return operation.Accept(map[string]any{"schema_version":1,"pairing_id":id,"status":"approved","client_id":id,"person_id":receipt.PersonID,"device_id":receipt.DeviceID,"token":token,"producer":receipt.Producer,"issuer_fingerprint":receipt.IssuerFingerprint,"issuer":map[string]string{"key_id":receipt.IssuerKeyID,"public_key":receipt.IssuerPublicKey,"fingerprint":receipt.IssuerFingerprint}})}

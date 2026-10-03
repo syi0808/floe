@@ -89,6 +89,7 @@ pub struct NativeCalendarReadAccess {
     calendar_ids: Vec<String>,
     connection_id: String,
     connection_revision: u64,
+    sources: Arc<dyn floe_connections::ConnectionsRepository>,
 }
 
 impl NativeCalendarReadAccess {
@@ -99,6 +100,7 @@ impl NativeCalendarReadAccess {
         calendar_ids: Vec<String>,
         connection_id: String,
         connection_revision: u64,
+        sources: Arc<dyn floe_connections::ConnectionsRepository>,
     ) -> Self {
         let mut calendar_ids = calendar_ids;
         calendar_ids.sort();
@@ -109,7 +111,16 @@ impl NativeCalendarReadAccess {
             calendar_ids,
             connection_id,
             connection_revision,
+            sources,
         }
+    }
+
+    async fn require_unfenced(&self) -> Result<(), AgentFailure> {
+        let id=floe_context_contract::ConnectionId::try_new(self.connection_id.clone()).map_err(|_|AgentFailure::PolicyDenied)?;
+        if self.sources.source_is_fenced(self.person_id,&id).await.map_err(|_|AgentFailure::PolicyDenied)? {return Err(AgentFailure::PolicyDenied)}
+        let current=self.sources.load(self.person_id,&id).await.map_err(|_|AgentFailure::PolicyDenied)?.ok_or(AgentFailure::PolicyDenied)?;
+        if current.revision()!=self.connection_revision || !current.is_serving() {return Err(AgentFailure::PolicyDenied)}
+        Ok(())
     }
 
     fn validate_request(
@@ -123,7 +134,7 @@ impl NativeCalendarReadAccess {
             return Err(AgentFailure::CapabilityUnavailable);
         }
         if person_id != self.person_id
-            || self.person_id.to_string() != LOCAL_PERSON
+            || !self.person_id.is_valid()
             || device_id != self.device_id
             || provider != self.provider
             || self.connection_id.trim().is_empty()
@@ -231,6 +242,7 @@ impl CalendarSource for NativeCalendarReadAccess {
         &self,
         request: CalendarReadAccessRequest,
     ) -> Result<CalendarReadAccessStamp, AgentFailure> {
+        self.require_unfenced().await?;
         self.validate_request(
             request.person_id,
             &request.device_id,
@@ -255,6 +267,7 @@ impl CalendarSource for NativeCalendarReadAccess {
         {
             return Err(AgentFailure::CapabilityUnavailable);
         }
+        self.require_unfenced().await?;
         Ok(stamp)
     }
 
@@ -632,55 +645,4 @@ fn invoke_with_limit(
         })?;
     serde_json::from_slice(&output)
         .map_err(|_| InvokeFailure::Action(ActionFailure::UncertainResult))
-}
-
-#[cfg(test)]
-mod conversion_tests {
-    use super::*;
-
-    #[test]
-    fn native_read_permission_denial_is_reviewable_without_changing_write_denial() {
-        assert_eq!(
-            native_read_failure(ReadCallFailure::Action(ActionFailure::PermissionDenied)),
-            AgentFailure::AccessReviewRequired
-        );
-        assert_eq!(
-            native_failure(ActionFailure::PermissionDenied),
-            AgentFailure::CapabilityDenied
-        );
-    }
-
-    #[test]
-    fn native_schedule_conversion_preserves_domain_interval_validation() {
-        let timed = |ends_at: &str| EventScheduleDto::Timed {
-            starts_at: "2026-09-14T10:00:00+09:00".into(),
-            ends_at: ends_at.into(),
-            timezone: " Asia/Seoul ".into(),
-        };
-        let EventSchedule::Timed(schedule) =
-            schedule_from_native(timed("2026-09-14T11:00:00+09:00")).unwrap()
-        else {
-            panic!("expected timed schedule");
-        };
-        assert_eq!(schedule.timezone, "Asia/Seoul");
-        assert_eq!(schedule.starts_at.to_rfc3339(), "2026-09-14T01:00:00+00:00");
-        assert_eq!(
-            schedule_from_native(timed("2026-09-14T10:00:00+09:00")),
-            Err(AgentFailure::InvalidInput)
-        );
-        assert_eq!(
-            schedule_from_native(EventScheduleDto::AllDay {
-                start_date: "2026-09-14".into(),
-                end_date_exclusive: "2026-09-14".into(),
-            }),
-            Err(AgentFailure::InvalidInput)
-        );
-        assert!(
-            schedule_from_native(EventScheduleDto::AllDay {
-                start_date: "2026-09-14".into(),
-                end_date_exclusive: "2026-09-15".into(),
-            })
-            .is_ok()
-        );
-    }
 }

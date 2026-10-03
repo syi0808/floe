@@ -1,6 +1,7 @@
 package microsoftmail
 
 import (
+ "floe/server/internal/views"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -65,27 +66,7 @@ type message struct {
 	} `json:"toRecipients"`
 }
 
-type CommunicationItem struct {
-	EvidenceHandle string   `json:"evidence_handle"`
-	ThreadHandle   string   `json:"thread_handle"`
-	ReceivedUnixMS int64    `json:"received_unix_ms"`
-	From           string   `json:"from,omitempty"`
-	To             string   `json:"to,omitempty"`
-	Subject        string   `json:"subject,omitempty"`
-	Snippet        string   `json:"snippet,omitempty"`
-	Labels         []string `json:"labels"`
-}
 
-type CommunicationView struct {
-	SchemaVersion    int                 `json:"schema_version"`
-	ViewID           string              `json:"view_id"`
-	SourceHandle     string              `json:"source_handle"`
-	ObservedAtUnixMS int64               `json:"observed_at_unix_ms"`
-	ExpiresAtUnixMS  int64               `json:"expires_at_unix_ms"`
-	CoverageComplete bool                `json:"coverage_complete"`
-	NextCursor       *int                `json:"next_cursor,omitempty"`
-	Items            []CommunicationItem `json:"items"`
-}
 
 func New(tokens TokenSource, connectionID string) (*Client, error) {
 	return NewWithBaseURL(tokens, defaultBaseURL, connectionID)
@@ -110,9 +91,9 @@ func NewWithBaseURL(tokens TokenSource, baseURL, connectionID string) (*Client, 
 	}, nil
 }
 
-func (client *Client) Communication(ctx context.Context, query string, cursor, limit int, now time.Time) (CommunicationView, error) {
+func (client *Client) Communication(ctx context.Context, query string, cursor, limit int, now time.Time) (views.CommunicationView, error) {
 	if len(query) > 512 || cursor < 0 || cursor > 10_000 || limit < 1 || limit > maxItems || strings.ContainsAny(query, "\r\n\x00") {
-		return CommunicationView{}, ErrInvalidInput
+		return views.CommunicationView{}, ErrInvalidInput
 	}
 	values := url.Values{
 		"$orderby": {"receivedDateTime desc"},
@@ -126,16 +107,16 @@ func (client *Client) Communication(ctx context.Context, query string, cursor, l
 	}
 	var response messageList
 	if err := client.get(ctx, "/me/mailFolders/inbox/messages?"+values.Encode(), &response); err != nil {
-		return CommunicationView{}, err
+		return views.CommunicationView{}, err
 	}
 	if len(response.Value) > limit {
-		return CommunicationView{}, ErrInvalidResponse
+		return views.CommunicationView{}, ErrInvalidResponse
 	}
-	view := CommunicationView{SchemaVersion: 1, ViewID: "mail.communication", SourceHandle: handle("mail", client.connectionID+":"+now.UTC().Format("2006-01-02T15:04")+":"+query), ObservedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: now.Add(5 * time.Minute).UnixMilli(), CoverageComplete: strings.TrimSpace(response.NextLink) == "", Items: []CommunicationItem{}}
+	view := views.CommunicationView{SchemaVersion: 1, ViewID: "mail.communication", SourceHandle: handle("mail", client.connectionID+":"+now.UTC().Format("2006-01-02T15:04")+":"+query), ObservedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: now.Add(5 * time.Minute).UnixMilli(), CoverageComplete: strings.TrimSpace(response.NextLink) == "", Items: []views.CommunicationItem{}}
 	if !view.CoverageComplete {
 		next := cursor + len(response.Value)
 		if next <= cursor || next > 10_000 {
-			return CommunicationView{}, ErrInvalidResponse
+			return views.CommunicationView{}, ErrInvalidResponse
 		}
 		view.NextCursor = &next
 	}
@@ -143,33 +124,33 @@ func (client *Client) Communication(ctx context.Context, query string, cursor, l
 	for _, item := range response.Value {
 		received, err := time.Parse(time.RFC3339Nano, item.ReceivedDateTime)
 		if err != nil || !validProviderID(item.ID) || !validProviderID(item.ConversationID) || seen[item.ID] || received.UnixMilli() < 0 || received.After(now) || len(item.Subject) > 4096 || len(item.BodyPreview) > 4096 || len(item.Categories) > 128 {
-			return CommunicationView{}, ErrInvalidResponse
+			return views.CommunicationView{}, ErrInvalidResponse
 		}
 		seen[item.ID] = true
 		to := make([]string, 0, len(item.ToRecipients))
 		for _, recipient := range item.ToRecipients {
 			if len(recipient.EmailAddress.Address) > 512 {
-				return CommunicationView{}, ErrInvalidResponse
+				return views.CommunicationView{}, ErrInvalidResponse
 			}
 			to = append(to, recipient.EmailAddress.Address)
 		}
 		if len(item.From.EmailAddress.Address) > 512 || len(strings.Join(to, ", ")) > 4096 {
-			return CommunicationView{}, ErrInvalidResponse
+			return views.CommunicationView{}, ErrInvalidResponse
 		}
 		labels := make([]string, 0, len(item.Categories))
 		labelSeen := map[string]bool{}
 		for _, label := range item.Categories {
 			if strings.TrimSpace(label) == "" || len(label) > 128 || labelSeen[label] {
-				return CommunicationView{}, ErrInvalidResponse
+				return views.CommunicationView{}, ErrInvalidResponse
 			}
 			labelSeen[label] = true
 			labels = append(labels, label)
 		}
-		view.Items = append(view.Items, CommunicationItem{EvidenceHandle: handle("mail", client.connectionID+":"+item.ID), ThreadHandle: handle("mail", client.connectionID+":"+item.ConversationID), ReceivedUnixMS: received.UnixMilli(), From: item.From.EmailAddress.Address, To: strings.Join(to, ", "), Subject: item.Subject, Snippet: truncate(item.BodyPreview, 1024), Labels: labels})
+		view.Items = append(view.Items, views.CommunicationItem{EvidenceHandle: handle("mail", client.connectionID+":"+item.ID), ThreadHandle: handle("mail", client.connectionID+":"+item.ConversationID), ReceivedUnixMS: received.UnixMilli(), From: item.From.EmailAddress.Address, To: strings.Join(to, ", "), Subject: item.Subject, Snippet: truncate(item.BodyPreview, 1024), Labels: labels})
 	}
 	encoded, err := json.Marshal(view)
 	if err != nil || len(encoded) > 65_536 {
-		return CommunicationView{}, ErrInvalidResponse
+		return views.CommunicationView{}, ErrInvalidResponse
 	}
 	return view, nil
 }

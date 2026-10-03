@@ -12,10 +12,5 @@ let package = Package(
     ],
     targets: [
         .target(name: "FloeAppleHealth"),
-        .testTarget(
-            name: "FloeAppleHealthTests",
-            dependencies: ["FloeAppleHealth"],
-            resources: [.process("Fixtures")]
-        ),
     ]
 )

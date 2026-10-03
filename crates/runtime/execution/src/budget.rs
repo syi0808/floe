@@ -1,8 +1,13 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use uuid::Uuid;
 
 use serde::{Deserialize, Serialize};
 
 use floe_kernel::AgentFailure;
+
+/// Includes acknowledged tombstones; admission fails before any new charge.
+pub const MAX_MODEL_ATTEMPTS_PER_SCOPE: usize = 256;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -11,43 +16,62 @@ pub struct ModelUsage {
     pub tokens: u64,
     pub cost_micros: u64,
     pub estimated_tokens: u64,
+    pub estimated_cost_micros: u64,
 }
 
-/// Compatibility projection over the canonical shared budget ledger. New
-/// execution scopes should use [`BudgetLedger`] and [`BudgetLease`] directly.
-#[derive(Clone, Debug)]
-pub struct UsageLedger {
-    budget: BudgetLedger,
-}
-
-impl Default for UsageLedger {
-    fn default() -> Self {
-        Self::new(u64::MAX, u64::MAX, ModelUsage::default())
+/// A durable conservative upper bound fixed before the intent is acknowledged.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelReservationCeiling { pub tokens: u64, pub cost_micros: u64 }
+impl ModelReservationCeiling {
+    pub fn for_lease(lease: &BudgetLease) -> Self {
+        Self { tokens: lease.max_tokens(), cost_micros: lease.max_cost_micros() }
+    }
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.tokens == 0 { Err(AgentFailure::InvalidInput) } else { Ok(()) }
     }
 }
 
-impl UsageLedger {
-    pub fn new(max_tokens: u64, max_cost_micros: u64, usage: ModelUsage) -> Self {
-        Self {
-            budget: BudgetLedger::new(BudgetConfig::new(max_tokens, max_cost_micros), usage),
+/// Provider observations and the certainty of each effective charge.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelAccounting {
+    pub observed_tokens: Option<u64>,
+    pub observed_cost_micros: Option<u64>,
+    pub unknown_tokens: bool,
+    pub unknown_cost: bool,
+}
+
+impl ModelAccounting {
+    pub fn validate_charge(&self, tokens: u64, cost_micros: u64) -> Result<(), AgentFailure> {
+        let valid = |observed: Option<u64>, unknown: bool, charged: u64| match observed {
+            Some(value) => !unknown && value == charged,
+            None => unknown || charged == 0,
+        };
+        if !valid(self.observed_tokens, self.unknown_tokens, tokens)
+            || !valid(self.observed_cost_micros, self.unknown_cost, cost_micros) {
+            return Err(AgentFailure::InvalidInput);
         }
+        Ok(())
     }
+}
 
-    pub fn snapshot(&self) -> ModelUsage {
-        self.budget.usage()
-    }
+/// Exactly one terminal receipt for an admitted attempt in this live scope.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelAttemptReceipt {
+    pub attempt_id: Uuid,
+    pub charged_tokens: u64,
+    pub charged_cost_micros: u64,
+    pub accounting: ModelAccounting,
+    pub dispatched: bool,
+}
 
-    pub fn work_lease(&self) -> BudgetLease {
-        self.budget.work_lease()
-    }
-
-    pub fn finalization_lease(&self) -> Result<BudgetLease, AgentFailure> {
-        self.budget.finalization_lease()
-    }
-
-    pub fn begin(&self, tokens: &mut u64, cost: &mut u64) -> Result<UsageAttempt, AgentFailure> {
-        self.budget.work_lease().begin(tokens, cost)
-    }
+#[derive(Debug)]
+enum ModelAttemptState {
+    Pending { dispatched: bool },
+    Terminal(ModelAttemptReceipt),
+    Acknowledged,
 }
 
 /// Identifies the root budget partition a lease may consume.
@@ -117,9 +141,12 @@ struct PartitionBudget {
 impl PartitionBudget {
     fn new(max_tokens: u64, max_cost_micros: u64, settled: ModelUsage) -> Self {
         let unknown_tokens = settled.estimated_tokens.min(settled.tokens);
+        let unknown_cost_micros = settled.estimated_cost_micros.min(settled.cost_micros);
         let settled = ModelUsage {
             tokens: settled.tokens.saturating_sub(unknown_tokens),
+            cost_micros: settled.cost_micros.saturating_sub(unknown_cost_micros),
             estimated_tokens: 0,
+            estimated_cost_micros: 0,
             ..settled
         };
         Self {
@@ -131,7 +158,7 @@ impl PartitionBudget {
             reserved_estimate_tokens: 0,
             reserved_estimate_cost_micros: 0,
             unknown_tokens,
-            unknown_cost_micros: 0,
+            unknown_cost_micros,
             unknown_attempts: 0,
             pending_attempts: 0,
             finalization_dispatched: false,
@@ -165,10 +192,11 @@ impl PartitionBudget {
                 .tokens
                 .saturating_add(self.reserved_estimate_tokens)
                 .saturating_add(self.unknown_tokens),
-            cost_micros: self.settled.cost_micros,
+            cost_micros: self.settled.cost_micros.saturating_add(self.unknown_cost_micros),
             estimated_tokens: self
                 .reserved_estimate_tokens
                 .saturating_add(self.unknown_tokens),
+            estimated_cost_micros: self.unknown_cost_micros,
         }
     }
 }
@@ -179,6 +207,7 @@ struct BudgetState {
     max_cost_micros: u64,
     work: PartitionBudget,
     finalization: PartitionBudget,
+    model_attempts: HashMap<Uuid, ModelAttemptState>,
 }
 
 #[derive(Debug, Default)]
@@ -341,6 +370,7 @@ impl BudgetLedger {
                     config.max_cost_micros.saturating_sub(finalization_cost),
                     work_usage,
                 ),
+                model_attempts: HashMap::new(),
                 finalization: PartitionBudget::new(
                     finalization_tokens,
                     finalization_cost,
@@ -383,6 +413,7 @@ impl BudgetLedger {
                     .cost_micros
                     .saturating_add(finalization.settled.cost_micros),
                 estimated_tokens: 0,
+                estimated_cost_micros: 0,
             },
             usage: ModelUsage {
                 attempts: work_usage
@@ -395,17 +426,44 @@ impl BudgetLedger {
                 estimated_tokens: work_usage
                     .estimated_tokens
                     .saturating_add(finalization_usage.estimated_tokens),
+                estimated_cost_micros: work_usage.estimated_cost_micros.saturating_add(finalization_usage.estimated_cost_micros),
             },
-            reserved_tokens: work.reserved_tokens + finalization.reserved_tokens,
-            reserved_cost_micros: work.reserved_cost_micros + finalization.reserved_cost_micros,
-            unknown_tokens: work.unknown_tokens + finalization.unknown_tokens,
-            unknown_cost_micros: work.unknown_cost_micros + finalization.unknown_cost_micros,
+            reserved_tokens: work.reserved_tokens.saturating_add(finalization.reserved_tokens),
+            reserved_cost_micros: work.reserved_cost_micros.saturating_add(finalization.reserved_cost_micros),
+            unknown_tokens: work.unknown_tokens.saturating_add(finalization.unknown_tokens),
+            unknown_cost_micros: work.unknown_cost_micros.saturating_add(finalization.unknown_cost_micros),
         }
     }
 
     pub fn usage(&self) -> ModelUsage {
         self.snapshot().usage
     }
+
+    pub fn model_attempt_admitted(&self, attempt_id: Uuid) -> bool {
+        self.inner.lock().unwrap().model_attempts.contains_key(&attempt_id)
+    }
+
+    pub fn model_attempt_receipt(&self, attempt_id: Uuid) -> Option<ModelAttemptReceipt> {
+        match self.inner.lock().unwrap().model_attempts.get(&attempt_id) {
+            Some(ModelAttemptState::Terminal(receipt)) => Some(*receipt),
+            _ => None,
+        }
+    }
+
+    /// Release a receipt only after its owner acknowledged durable ModelResult.
+    /// The admitted identity remains reserved until this bounded ledger is dropped.
+    pub fn acknowledge_model_attempt(&self, attempt_id: Uuid) -> Result<(), AgentFailure> {
+        let mut state = self.inner.lock().unwrap();
+        match state.model_attempts.get_mut(&attempt_id) {
+            Some(value @ ModelAttemptState::Terminal(_)) => {
+                *value = ModelAttemptState::Acknowledged;
+                Ok(())
+            }
+            Some(ModelAttemptState::Acknowledged) => Ok(()),
+            _ => Err(AgentFailure::Conflict),
+        }
+    }
+
 
     pub fn root_lease(&self) -> BudgetLease {
         self.lease(BudgetPartition::Work)
@@ -517,12 +575,20 @@ impl BudgetLease {
         self.child_lease(max_tokens, max_cost_micros)
     }
 
-    pub fn begin(
+    pub fn begin_model_attempt(
         &self,
+        attempt_id: Uuid,
         tokens: &mut u64,
         cost_micros: &mut u64,
     ) -> Result<BudgetAttempt, AgentFailure> {
+        if attempt_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
         let mut state = self.ledger.inner.lock().unwrap();
+        if state.model_attempts.contains_key(&attempt_id) {
+            return Err(AgentFailure::Conflict);
+        }
+        if state.model_attempts.len() >= MAX_MODEL_ATTEMPTS_PER_SCOPE { return Err(AgentFailure::BudgetExceeded); }
         let finalization_blocked = self.partition == BudgetPartition::Finalization
             && (state.finalization.finalization_dispatched
                 || state.finalization.finalization_in_flight);
@@ -593,7 +659,9 @@ impl BudgetLease {
         if self.partition == BudgetPartition::Finalization {
             partition.finalization_in_flight = true;
         }
+        state.model_attempts.insert(attempt_id, ModelAttemptState::Pending { dispatched: false });
         Ok(BudgetAttempt {
+            attempt_id,
             ledger: self.ledger.clone(),
             partition: self.partition,
             allowance_tokens,
@@ -608,13 +676,24 @@ impl BudgetLease {
     pub fn snapshot(&self) -> BudgetSnapshot {
         self.ledger.snapshot()
     }
-}
 
-pub type UsageAttempt = BudgetAttempt;
-pub type BudgetLeaseAttempt = BudgetAttempt;
+    pub fn model_attempt_admitted(&self, attempt_id: Uuid) -> bool {
+        self.ledger.model_attempt_admitted(attempt_id)
+    }
+
+    pub fn model_attempt_receipt(&self, attempt_id: Uuid) -> Option<ModelAttemptReceipt> {
+        self.ledger.model_attempt_receipt(attempt_id)
+    }
+
+    pub fn acknowledge_model_attempt(&self, attempt_id: Uuid) -> Result<(), AgentFailure> {
+        self.ledger.acknowledge_model_attempt(attempt_id)
+    }
+
+}
 
 #[derive(Debug)]
 pub struct BudgetAttempt {
+    attempt_id: Uuid,
     ledger: BudgetLedger,
     partition: BudgetPartition,
     allowance_tokens: u64,
@@ -646,60 +725,84 @@ impl BudgetAttempt {
             partition.finalization_in_flight = false;
             partition.finalization_dispatched = true;
         }
+        if let Some(ModelAttemptState::Pending { dispatched }) = state.model_attempts.get_mut(&self.attempt_id) {
+            *dispatched = true;
+        }
         self.dispatched = true;
     }
 
-    pub fn settle(mut self, tokens: u64, cost_micros: u64) -> Result<(), AgentFailure> {
+    pub fn settle(self, tokens: u64, cost_micros: u64) -> Result<(), AgentFailure> {
+        self.settle_observed(Some(tokens), Some(cost_micros)).map(|_| ())
+    }
+
+    pub fn settle_observed(
+        mut self,
+        tokens: Option<u64>,
+        cost_micros: Option<u64>,
+    ) -> Result<ModelAttemptReceipt, AgentFailure> {
         if !self.dispatched {
             return Err(AgentFailure::InvalidInput);
         }
+        let charged_tokens = tokens.unwrap_or(self.estimate_tokens);
+        let charged_cost_micros = cost_micros.unwrap_or(self.allowance_cost_micros);
+        let receipt = ModelAttemptReceipt {
+            attempt_id: self.attempt_id,
+            charged_tokens,
+            charged_cost_micros,
+            accounting: ModelAccounting {
+                observed_tokens: tokens,
+                observed_cost_micros: cost_micros,
+                unknown_tokens: tokens.is_none(),
+                unknown_cost: cost_micros.is_none(),
+            },
+            dispatched: true,
+        };
         let mut state = self.ledger.inner.lock().unwrap();
         let partition_overrun = {
             let partition = BudgetLedger::partition_mut(&mut state, self.partition);
-            partition.reserved_tokens = partition
-                .reserved_tokens
-                .saturating_sub(self.allowance_tokens);
-            partition.reserved_cost_micros = partition
-                .reserved_cost_micros
-                .saturating_sub(self.allowance_cost_micros);
-            partition.reserved_estimate_tokens = partition
-                .reserved_estimate_tokens
-                .saturating_sub(self.estimate_tokens);
-            partition.reserved_estimate_cost_micros = partition
-                .reserved_estimate_cost_micros
-                .saturating_sub(self.allowance_cost_micros);
+            self.release_reservation(partition);
             partition.unknown_attempts = partition.unknown_attempts.saturating_sub(1);
             partition.settled.attempts = partition.settled.attempts.saturating_add(1);
-            partition.settled.tokens = partition.settled.tokens.saturating_add(tokens);
-            partition.settled.cost_micros =
-                partition.settled.cost_micros.saturating_add(cost_micros);
-            tokens > self.allowance_tokens
-                || cost_micros > self.allowance_cost_micros
-                || tokens > self.quota.max_tokens
-                || cost_micros > self.quota.max_cost_micros
-                || partition.settled.tokens > partition.max_tokens
-                || partition.settled.cost_micros > partition.max_cost_micros
+            if let Some(tokens) = tokens {
+                partition.settled.tokens = partition.settled.tokens.saturating_add(tokens);
+            } else {
+                partition.unknown_tokens = partition.unknown_tokens.saturating_add(charged_tokens);
+            }
+            if let Some(cost) = cost_micros {
+                partition.settled.cost_micros = partition.settled.cost_micros.saturating_add(cost);
+            } else {
+                partition.unknown_cost_micros = partition.unknown_cost_micros.saturating_add(charged_cost_micros);
+            }
+            charged_tokens > self.allowance_tokens
+                || charged_cost_micros > self.allowance_cost_micros
+                || charged_tokens > self.quota.max_tokens
+                || charged_cost_micros > self.quota.max_cost_micros
+                || partition.outstanding_tokens() > partition.max_tokens
+                || partition.outstanding_cost() > partition.max_cost_micros
         };
+        // Publish once even for over-budget observations: accounting is never refunded.
+        state.model_attempts.insert(self.attempt_id, ModelAttemptState::Terminal(receipt));
         self.settled = true;
+        self.quota.settle(
+            self.allowance_tokens,
+            self.allowance_cost_micros,
+            charged_tokens,
+            charged_cost_micros,
+        );
         if BudgetLedger::total_outstanding_tokens(&state) > state.max_tokens
             || BudgetLedger::total_outstanding_cost(&state) > state.max_cost_micros
             || partition_overrun
         {
-            self.quota.settle(
-                self.allowance_tokens,
-                self.allowance_cost_micros,
-                tokens,
-                cost_micros,
-            );
             return Err(AgentFailure::BudgetExceeded);
         }
-        self.quota.settle(
-            self.allowance_tokens,
-            self.allowance_cost_micros,
-            tokens,
-            cost_micros,
-        );
-        Ok(())
+        Ok(receipt)
+    }
+
+    fn release_reservation(&self, partition: &mut PartitionBudget) {
+        partition.reserved_tokens = partition.reserved_tokens.saturating_sub(self.allowance_tokens);
+        partition.reserved_cost_micros = partition.reserved_cost_micros.saturating_sub(self.allowance_cost_micros);
+        partition.reserved_estimate_tokens = partition.reserved_estimate_tokens.saturating_sub(self.estimate_tokens);
+        partition.reserved_estimate_cost_micros = partition.reserved_estimate_cost_micros.saturating_sub(self.allowance_cost_micros);
     }
 }
 
@@ -710,216 +813,37 @@ impl Drop for BudgetAttempt {
         }
         let mut state = self.ledger.inner.lock().unwrap();
         let partition = BudgetLedger::partition_mut(&mut state, self.partition);
-        partition.reserved_tokens = partition
-            .reserved_tokens
-            .saturating_sub(self.allowance_tokens);
-        partition.reserved_cost_micros = partition
-            .reserved_cost_micros
-            .saturating_sub(self.allowance_cost_micros);
-        partition.reserved_estimate_tokens = partition
-            .reserved_estimate_tokens
-            .saturating_sub(self.estimate_tokens);
-        partition.reserved_estimate_cost_micros = partition
-            .reserved_estimate_cost_micros
-            .saturating_sub(self.allowance_cost_micros);
-        if self.dispatched {
-            partition.unknown_tokens = partition
-                .unknown_tokens
-                .saturating_add(self.estimate_tokens);
-            partition.unknown_cost_micros = partition
-                .unknown_cost_micros
-                .saturating_add(self.allowance_cost_micros);
+        self.release_reservation(partition);
+        let (charged_tokens, charged_cost_micros) = if self.dispatched {
+            partition.unknown_tokens = partition.unknown_tokens.saturating_add(self.estimate_tokens);
+            partition.unknown_cost_micros = partition.unknown_cost_micros.saturating_add(self.allowance_cost_micros);
             self.quota.abandon(
                 self.allowance_tokens,
                 self.allowance_cost_micros,
                 self.estimate_tokens,
                 self.allowance_cost_micros,
             );
+            (self.estimate_tokens, self.allowance_cost_micros)
         } else {
             partition.pending_attempts = partition.pending_attempts.saturating_sub(1);
             if self.partition == BudgetPartition::Finalization {
                 partition.finalization_in_flight = false;
             }
-            self.quota
-                .release(self.allowance_tokens, self.allowance_cost_micros);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn undispatched_lease_drop_restores_budget_without_charging_an_attempt() {
-        let ledger = UsageLedger::new(30, 7, ModelUsage::default());
-        let reservation = ledger.begin(&mut 30, &mut 7).unwrap();
-        assert_eq!(ledger.snapshot().estimated_tokens, 30);
-        drop(reservation);
-        assert_eq!(ledger.snapshot(), ModelUsage::default());
-
-        let mut reservation = ledger.begin(&mut 30, &mut 7).unwrap();
-        reservation.mark_dispatched();
-        reservation.settle(10, 2).unwrap();
-        assert_eq!(
-            ledger.snapshot(),
-            ModelUsage {
-                attempts: 1,
-                tokens: 10,
-                cost_micros: 2,
-                estimated_tokens: 0,
-            }
-        );
-    }
-
-    #[test]
-    fn undispatched_lease_cannot_settle_provider_usage() {
-        let ledger = UsageLedger::new(30, 7, ModelUsage::default());
-        let reservation = ledger.begin(&mut 30, &mut 7).unwrap();
-        assert_eq!(reservation.settle(10, 2), Err(AgentFailure::InvalidInput));
-        assert_eq!(ledger.snapshot(), ModelUsage::default());
-        assert!(ledger.begin(&mut 30, &mut 7).is_ok());
-    }
-
-    #[test]
-    fn shared_budget_leases_reserve_concurrently_without_oversubscription() {
-        let ledger = BudgetLedger::new(
-            BudgetConfig::new(100, 10).with_finalization_reserve(20, 2),
-            ModelUsage::default(),
-        );
-        let first_lease = ledger.work_lease();
-        let second_lease = first_lease.clone();
-        let mut first_tokens = 40;
-        let mut first_cost = 4;
-        let mut first = first_lease
-            .begin(&mut first_tokens, &mut first_cost)
-            .unwrap();
-        let mut second_tokens = 40;
-        let mut second_cost = 4;
-        let second = second_lease
-            .begin(&mut second_tokens, &mut second_cost)
-            .unwrap();
-        assert_eq!((first_tokens, first_cost), (40, 4));
-        assert_eq!((second_tokens, second_cost), (40, 4));
-        let mut rejected_tokens = 1;
-        let mut rejected_cost = 1;
-        assert!(matches!(
-            first_lease.begin(&mut rejected_tokens, &mut rejected_cost),
-            Err(AgentFailure::BudgetExceeded)
-        ));
-        first.mark_dispatched();
-        first.settle(10, 1).unwrap();
-        drop(second);
-        assert_eq!(ledger.snapshot().settled.tokens, 10);
-        assert_eq!(ledger.snapshot().reserved_tokens, 0);
-    }
-
-    #[test]
-    fn finalization_is_explicit_and_single_dispatch() {
-        let ledger = BudgetLedger::new(
-            BudgetConfig::new(100, 10).with_finalization_reserve(20, 2),
-            ModelUsage::default(),
-        );
-        let lease = ledger.finalization_lease().unwrap();
-        let mut tokens = 20;
-        let mut cost = 2;
-        let mut attempt = lease.begin(&mut tokens, &mut cost).unwrap();
-        attempt.mark_dispatched();
-        assert!(matches!(
-            lease.begin(&mut tokens, &mut cost),
-            Err(AgentFailure::BudgetExceeded)
-        ));
-        attempt.settle(8, 1).unwrap();
-        assert_eq!(ledger.snapshot().settled.tokens, 8);
-        assert!(matches!(
-            ledger.finalization_lease(),
-            Err(AgentFailure::BudgetExceeded)
-        ));
-    }
-
-    #[test]
-    fn child_lease_caps_allowance_and_dispatch_drop_keeps_one_unknown_estimate() {
-        let ledger = BudgetLedger::new(BudgetConfig::new(100, 10), ModelUsage::default());
-        let lease = ledger.work_lease().child(30, 3);
-        let mut tokens = 100;
-        let mut cost = 100;
-        let mut attempt = lease.begin(&mut tokens, &mut cost).unwrap();
-        assert_eq!((tokens, cost), (30, 3));
-        assert_eq!(attempt.estimated_tokens(), 30);
-        attempt.mark_dispatched();
-        drop(attempt);
-        let snapshot = ledger.snapshot();
-        assert_eq!(snapshot.unknown_tokens, 30);
-        assert_eq!(snapshot.unknown_cost_micros, 3);
-        assert_eq!(snapshot.settled.tokens, 0);
-    }
-
-    #[test]
-    fn provider_overrun_is_recorded_before_budget_error() {
-        let ledger = BudgetLedger::new(BudgetConfig::new(10, 2), ModelUsage::default());
-        let lease = ledger.work_lease();
-        let mut tokens = 10;
-        let mut cost = 2;
-        let mut attempt = lease.begin(&mut tokens, &mut cost).unwrap();
-        attempt.mark_dispatched();
-        assert_eq!(attempt.settle(12, 3), Err(AgentFailure::BudgetExceeded));
-        let snapshot = ledger.snapshot();
-        assert_eq!(snapshot.settled.tokens, 12);
-        assert_eq!(snapshot.settled.cost_micros, 3);
-    }
-
-    #[test]
-    fn abandoned_unknown_charge_survives_sibling_settlement() {
-        let ledger = BudgetLedger::new(BudgetConfig::new(100, 10), ModelUsage::default());
-        let lease = ledger.work_lease();
-        let mut first_tokens = 40;
-        let mut first_cost = 4;
-        let mut first = lease.begin(&mut first_tokens, &mut first_cost).unwrap();
-        let mut second_tokens = 40;
-        let mut second_cost = 4;
-        let mut second = lease.begin(&mut second_tokens, &mut second_cost).unwrap();
-        first.mark_dispatched();
-        drop(first);
-        second.mark_dispatched();
-        second.settle(10, 1).unwrap();
-        let snapshot = ledger.snapshot();
-        assert_eq!(snapshot.unknown_tokens, 40);
-        assert_eq!(snapshot.unknown_cost_micros, 4);
-        assert_eq!(snapshot.settled.tokens, 10);
-        assert_eq!(snapshot.settled.cost_micros, 1);
-    }
-
-    #[test]
-    fn resumed_usage_preserves_unknown_estimates_without_recharging() {
-        let initial = ModelUsage {
-            attempts: 2,
-            tokens: 13,
-            cost_micros: 3,
-            estimated_tokens: 5,
+            self.quota.release(self.allowance_tokens, self.allowance_cost_micros);
+            (0, 0)
         };
-        let ledger = BudgetLedger::new(BudgetConfig::new(100, 10), initial);
-        assert_eq!(ledger.usage(), initial);
-        assert_eq!(ledger.snapshot().settled.tokens, 8);
-        assert_eq!(ledger.snapshot().unknown_tokens, 5);
-        let mut attempt = ledger.work_lease().begin(&mut 10, &mut 2).unwrap();
-        attempt.mark_dispatched();
-        attempt.settle(7, 1).unwrap();
-        assert_eq!(ledger.usage().tokens, 20);
-        assert_eq!(ledger.usage().estimated_tokens, 5);
-        assert_eq!(ledger.usage().attempts, 3);
-    }
-
-    #[test]
-    fn active_dispatch_retains_full_allowance_not_only_unknown_estimate() {
-        let ledger = BudgetLedger::new(BudgetConfig::new(10_000, 10), ModelUsage::default());
-        let lease = ledger.work_lease();
-        let mut first = lease.begin(&mut 10_000, &mut 10).unwrap();
-        first.mark_dispatched();
-        assert_eq!(first.estimated_tokens(), 4096);
-        assert_eq!(ledger.snapshot().reserved_tokens, 10_000);
-        assert!(lease.begin(&mut 1, &mut 0).is_err());
-        drop(first);
-        assert_eq!(ledger.snapshot().reserved_tokens, 0);
-        assert_eq!(ledger.snapshot().unknown_tokens, 4096);
+        let receipt = ModelAttemptReceipt {
+            attempt_id: self.attempt_id,
+            charged_tokens,
+            charged_cost_micros,
+            accounting: ModelAccounting {
+                observed_tokens: None,
+                observed_cost_micros: None,
+                unknown_tokens: self.dispatched,
+                unknown_cost: self.dispatched,
+            },
+            dispatched: self.dispatched,
+        };
+        state.model_attempts.insert(self.attempt_id, ModelAttemptState::Terminal(receipt));
     }
 }

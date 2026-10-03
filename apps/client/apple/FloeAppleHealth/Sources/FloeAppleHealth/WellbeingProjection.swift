@@ -71,69 +71,27 @@ enum AppleHealthAvailability {
     }
 }
 
-struct AppleHealthAggregate: Equatable, Sendable {
-    let sleepHours: Double?
-    let steps: Double?
-    let exerciseMinutes: Double?
-}
-
-enum AppleWellbeingReducer {
+/// Constructs source metadata only after the mandatory local transform succeeds.
+enum AppleWellbeingProjection {
     static let freshnessMilliseconds: Int64 = 30 * 60 * 1_000
 
-    static func reduce(
-        aggregate: AppleHealthAggregate,
+    static func make(
+        output: HealthPrivacyTransformOutput,
         sourceHandle: String,
         observedAtUnixMs: Int64,
-        evidenceHandle: (String) -> String
-    ) -> AppleWellbeingView? {
-        let availableSignals = [aggregate.sleepHours, aggregate.steps, aggregate.exerciseMinutes].compactMap { $0 }
-        guard !availableSignals.isEmpty else { return nil }
-
-        let hasActivityEvidence = aggregate.steps != nil || aggregate.exerciseMinutes != nil
-        let capacity: AppleHealthCapacity
-        if let sleepHours = aggregate.sleepHours, hasActivityEvidence {
-            if sleepHours < 6 {
-                capacity = .reduced
-            } else if sleepHours >= 8,
-                      (aggregate.steps ?? 0) >= 8_000 || (aggregate.exerciseMinutes ?? 0) >= 30 {
-                capacity = .strong
-            } else {
-                capacity = .typical
-            }
-        } else {
-            capacity = .unknown
-        }
-
-        let recovery: AppleHealthRecovery
-        if let sleepHours = aggregate.sleepHours, sleepHours < 6 {
-            recovery = .needsRecovery
-        } else if let sleepHours = aggregate.sleepHours, sleepHours >= 8 {
-            recovery = .recovered
-        } else if aggregate.sleepHours != nil {
-            recovery = .typical
-        } else {
-            recovery = .unknown
-        }
-
-        var evidenceHandles: [String] = []
-        if capacity != .unknown || recovery != .unknown {
-            if aggregate.sleepHours != nil { evidenceHandles.append(evidenceHandle("health.sleep.window")) }
-            if capacity != .unknown, aggregate.steps != nil { evidenceHandles.append(evidenceHandle("health.steps.window")) }
-            if capacity != .unknown, aggregate.exerciseMinutes != nil { evidenceHandles.append(evidenceHandle("health.exercise.window")) }
-        }
-
-        let confidenceMillis = evidenceHandles.isEmpty ? 0 : min(700, 400 + evidenceHandles.count * 100)
-
+        evidenceHandle: String
+    ) -> AppleWellbeingView {
+        let known = output.capacity != .unknown || output.recovery != .unknown
         return AppleWellbeingView(
             schemaVersion: 1,
             viewId: "wellbeing.derived",
             sourceHandle: sourceHandle,
             observedAtUnixMs: observedAtUnixMs,
             expiresAtUnixMs: observedAtUnixMs + freshnessMilliseconds,
-            capacity: capacity,
-            recovery: recovery,
-            confidenceMillis: confidenceMillis,
-            evidenceHandles: evidenceHandles
+            capacity: AppleHealthCapacity(rawValue: output.capacity.rawValue)!,
+            recovery: AppleHealthRecovery(rawValue: output.recovery.rawValue)!,
+            confidenceMillis: known ? 600 : 0,
+            evidenceHandles: known ? [evidenceHandle] : []
         )
     }
 }

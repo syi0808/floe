@@ -1,6 +1,7 @@
 use floe_context_contract::{ConnectionId, ConnectorId};
 use floe_kernel::PersonId;
 use thiserror::Error;
+use floe_execution::BoxFuture;
 
 use crate::SourceConnection;
 
@@ -14,25 +15,25 @@ pub enum SourceRepositoryError {
     Corrupt,
 }
 
-#[allow(async_fn_in_trait)]
 pub trait SourceRepository: Send + Sync {
-    async fn load(
-        &self,
+    fn list_sources<'a>(&'a self,person_id:PersonId,limit:usize)->BoxFuture<'a,Result<Vec<SourceConnection>,SourceRepositoryError>>;
+    fn load<'a>(
+        &'a self,
         person_id: PersonId,
-        connection_id: &ConnectionId,
-    ) -> Result<Option<SourceConnection>, SourceRepositoryError>;
+        connection_id: &'a ConnectionId,
+    ) -> BoxFuture<'a, Result<Option<SourceConnection>, SourceRepositoryError>>;
 
-    async fn list_current(
-        &self,
+    fn list_current<'a>(
+        &'a self,
         person_id: PersonId,
-        connector_id: &ConnectorId,
-    ) -> Result<Vec<SourceConnection>, SourceRepositoryError>;
+        connector_id: &'a ConnectorId,
+    ) -> BoxFuture<'a, Result<Vec<SourceConnection>, SourceRepositoryError>>;
 
-    async fn create(&self, source: &SourceConnection) -> Result<(), SourceRepositoryError>;
+    fn create<'a>(&'a self, source: &'a SourceConnection) -> BoxFuture<'a, Result<(), SourceRepositoryError>>;
 
-    async fn update(
-        &self,
-        source: &SourceConnection,
+    fn update<'a>(
+        &'a self,
+        source: &'a SourceConnection,
         expected_revision: u64,
-    ) -> Result<(), SourceRepositoryError>;
+    ) -> BoxFuture<'a, Result<(), SourceRepositoryError>>;
 }

@@ -10,4 +10,6 @@ floe_native_artifact "${FRAMEWORKS_DIRECTORY}/libfloe_eventkit.dylib" swift \
   "${SRCROOT}/CalendarActions/EventKitActions.swift"
 floe_native_artifact "${FRAMEWORKS_DIRECTORY}/libfloe_local_model.dylib" swift \
   -emit-library -swift-version 6 -warnings-as-errors -target "${SWIFT_TARGET}" \
-  "${SRCROOT}/LocalModel/LocalModel.swift"
+  -Xlinker -weak_framework -Xlinker FoundationModels \
+  "${SRCROOT}/LocalModel/LocalModel.swift" \
+  "${SRCROOT}/../apple/FloeAppleHealth/Sources/FloeAppleHealth/HealthPrivacyTransform.swift"

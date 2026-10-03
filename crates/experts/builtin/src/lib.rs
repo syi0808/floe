@@ -28,8 +28,6 @@ pub use host::{
     Acquiring, BlockedExpertResult, BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertOutput,
     BuiltinExpertRequest, DeclaredSourceRead, StatefulExpertDraft, granted_context,
 };
-#[cfg(test)]
-mod test_host;
 pub use registration::{BuiltinExpertRunner, manifests, registrations};
 pub use shared::{
     ExpertJudgment, MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation,

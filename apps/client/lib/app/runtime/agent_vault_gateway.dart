@@ -1,3 +1,5 @@
+import 'package:floe_client/app/runtime/owner_failure.dart';
+
 enum AgentVaultState { missing, locked, ready, unavailable }
 
 class AgentVaultException implements Exception {
@@ -18,9 +20,18 @@ class AgentVaultException implements Exception {
     this.retryPolicy,
     this.reloadRequired,
     this.sealSession,
+    this.ownerFailure,
   });
 
+  factory AgentVaultException.fromAppWire(String failure, {OwnerFailure? ownerFailure, String? requestId, String? stage, Map<String,String> metadata = const {}}) =>
+      AgentVaultException(ownerFailure?.reason ?? failure, requestId: requestId, stage: stage, metadata: metadata, ownerFailure: ownerFailure,
+        recoveryAction: ownerFailure?.recovery, domain: ownerFailure?.domain, category: ownerFailure?.category,
+        reasonCode: ownerFailure?.reason, safeActions: ownerFailure?.safeActions.toList(growable: false) ?? const [],
+        incidentId: ownerFailure?.incidentId, correlationRequestId: ownerFailure?.correlationId,
+        reloadRequired: ownerFailure?.reloadRequired, sealSession: ownerFailure?.sealSession);
+
   final String failure;
+  final OwnerFailure? ownerFailure;
   final String? requestId;
   final String? stage;
   final Map<String, String> metadata;
@@ -41,19 +52,7 @@ class AgentVaultException implements Exception {
   /// Decided by the owner; the client stops applying results when set.
   final bool? sealSession;
 
-  bool get retryable =>
-      retryableOverride ??
-      const {
-        'model_unavailable',
-        'local_model_unavailable',
-        'server_model_unavailable',
-        'server_model_timeout',
-        'quota_exceeded',
-        'stalled',
-        'deadline_exceeded',
-        'interrupted',
-        'transport_unavailable',
-      }.contains(failure);
+  bool get retryable => retryableOverride ?? false;
 
   @override
   String toString() => requestId == null

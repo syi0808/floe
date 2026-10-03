@@ -65,7 +65,88 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             "CREATE INDEX IF NOT EXISTS learner_review_jobs_ready ON learner_review_jobs(person_id, state, available_at)",
             (),
         ).await.map_err(storage)?;
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS learner_execution_journal (job_id TEXT NOT NULL, person_id TEXT NOT NULL, claim_attempt INTEGER NOT NULL, sequence INTEGER NOT NULL, event_key TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(job_id, sequence), UNIQUE(job_id, event_key))",
+            (),
+        ).await.map_err(storage)?;
         Ok(())
+    }
+
+    /// A short encrypted-store transaction; no model or provider I/O is held inside it.
+    pub(crate) async fn append_learner_journal(
+        &self,
+        job_id: Uuid,
+        claim_attempt: u8,
+        event: floe_agent_contract::JournalEvent,
+    ) -> Result<u64, AgentFailure> {
+        use floe_agent_contract::JournalEvent;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).await.map_err(storage)?;
+        let result = async {
+            let job = learner_job_by_id(&transaction, self.person_id, job_id).await?.ok_or(AgentFailure::NotFound)?;
+            if job.state != LearnerJobState::Running || job.attempts != claim_attempt {
+                return Err(AgentFailure::Conflict);
+            }
+            let encoded = payload(&event)?;
+            if encoded.len() > 131_072 { return Err(AgentFailure::BudgetExceeded); }
+            let event_key = match &event {
+                JournalEvent::ModelIntent { attempt_id, parent_task_id, reservation_ceiling, projection_ref, plan } => {
+                    plan.validate()?;
+                    reservation_ceiling.validate()?;
+                    if parent_task_id.is_some() || attempt_id.is_nil() || projection_ref.as_uuid().is_nil()
+                        || plan.principal != self.person_id.to_string()
+                        || plan.purpose != floe_knowledge::LEARNER_INFERENCE_PURPOSE
+                        || plan.consumer != floe_knowledge::LEARNER_INFERENCE_CONSUMER {
+                        return Err(AgentFailure::PolicyDenied);
+                    }
+                    validate_learner_source(self, &transaction, &job.input).await?;
+                    format!("model-intent:{attempt_id}")
+                }
+                JournalEvent::ModelResult { attempt_id, usage, accounting } => {
+                    if attempt_id.is_nil() { return Err(AgentFailure::InvalidInput); }
+                    accounting.validate_charge(usage.tokens, usage.cost_micros)?;
+                    let mut rows = transaction.query(
+                        "SELECT 1 FROM learner_execution_journal WHERE job_id = ? AND person_id = ? AND claim_attempt = ? AND event_key = ?",
+                        (job_id.to_string(), self.person_id.to_string(), i64::from(claim_attempt), format!("model-intent:{attempt_id}")),
+                    ).await.map_err(storage)?;
+                    if rows.next().await.map_err(storage)?.is_none() { return Err(AgentFailure::Conflict); }
+                    format!("model-result:{attempt_id}")
+                }
+                JournalEvent::Output { text, artifacts } => {
+                    if text.trim().is_empty() || !artifacts.is_empty() { return Err(AgentFailure::InvalidModelOutput); }
+                    format!("output:{claim_attempt}:{}", hash(&event)?)
+                }
+                JournalEvent::Checkpoint { .. } | JournalEvent::ValidatedBatch { .. } | JournalEvent::BatchProgress { .. } => {
+                    format!("checkpoint:{claim_attempt}:{}", hash(&event)?)
+                }
+                _ => return Err(AgentFailure::CapabilityDenied),
+            };
+            let mut existing = transaction.query(
+                "SELECT sequence, claim_attempt, payload FROM learner_execution_journal WHERE job_id = ? AND person_id = ? AND event_key = ?",
+                (job_id.to_string(), self.person_id.to_string(), event_key.clone()),
+            ).await.map_err(storage)?;
+            if let Some(row) = existing.next().await.map_err(storage)? {
+                if row.get::<i64>(1).map_err(storage)? != i64::from(claim_attempt)
+                    || row.get::<String>(2).map_err(storage)? != encoded { return Err(AgentFailure::Conflict); }
+                self.check_access()?;
+                return u64::try_from(row.get::<i64>(0).map_err(storage)?).map_err(storage);
+            }
+            drop(existing);
+            let mut sequences = transaction.query(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM learner_execution_journal WHERE job_id = ? AND person_id = ?",
+                (job_id.to_string(), self.person_id.to_string()),
+            ).await.map_err(storage)?;
+            let sequence = sequences.next().await.map_err(storage)?.ok_or(AgentFailure::StorageUnavailable)?
+                .get::<i64>(0).map_err(storage)?;
+            drop(sequences);
+            transaction.execute(
+                "INSERT INTO learner_execution_journal (job_id, person_id, claim_attempt, sequence, event_key, payload) VALUES (?, ?, ?, ?, ?, ?)",
+                (job_id.to_string(), self.person_id.to_string(), i64::from(claim_attempt), sequence, event_key, encoded),
+            ).await.map_err(storage)?;
+            self.check_access()?;
+            u64::try_from(sequence).map_err(storage)
+        }.await;
+        finish_transaction(transaction, result).await
     }
 
     pub async fn stage_memory_candidate(
@@ -746,6 +827,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             {
                 return Err(AgentFailure::VaultUnavailable);
             }
+            // Recovery never reconstructs or resends an unresolved model attempt.
+            if learner_has_uncertain_attempt(&transaction, self.person_id, job.id).await? {
+                job.state = LearnerJobState::Failed;
+                job.finished_at = Some(now);
+                job.candidate_id = None;
+                job.last_failure = Some(AgentFailure::Interrupted);
+                let changed = transaction.execute(
+                    "UPDATE learner_review_jobs SET state = 'failed', payload = ? WHERE id = ? AND person_id = ? AND state = ? AND attempts = ?",
+                    (payload(&job)?, job.id.to_string(), self.person_id.to_string(), stored_state, stored_attempts),
+                ).await.map_err(storage)?;
+                if changed != 1 { return Err(AgentFailure::Conflict); }
+                self.check_access()?;
+                return Ok(None);
+            }
             let previous_state = learner_job_state(job.state).to_owned();
             let previous_attempts = job.attempts;
             let previous_available_at = timestamp(job.available_at);
@@ -855,6 +950,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if job.state != LearnerJobState::Running || job.attempts != expected_attempt {
                 return Err(AgentFailure::Conflict);
             }
+            let settlement = if matches!(settlement, LearnerJobSettlement::Deferred { .. })
+                && learner_has_uncertain_attempt(&transaction, self.person_id, job.id).await? {
+                LearnerJobSettlement::Failed { failure: AgentFailure::Interrupted }
+            } else { settlement };
             if let LearnerJobSettlement::Completed { candidate_id: Some(candidate_id) } = settlement {
                 let candidate = candidate_by_id(&transaction, self.person_id, candidate_id).await?;
                 let expected_sources = job
@@ -980,7 +1079,7 @@ fn explicit_learning_turn(
             .enumerate()
             .rev()
             .find_map(|(index, message)| match message {
-                floe_conversation::AgentMessage::User { turn_id, text } => {
+                floe_conversation::AgentMessage::User { turn_id, text, .. } => {
                     Some((index, *turn_id, text.trim()))
                 }
                 _ => None,
@@ -1167,6 +1266,36 @@ fn learner_job_state(state: LearnerJobState) -> &'static str {
 
 fn timestamp(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
+}
+
+/// Canonical intent/result events are the only durable model accounting source.
+async fn learner_has_uncertain_attempt(
+    transaction: &turso::transaction::Transaction<'_>,
+    person_id: floe_kernel::PersonId,
+    job_id: Uuid,
+) -> Result<bool, AgentFailure> {
+    use floe_agent_contract::JournalEvent;
+    let mut rows = transaction.query(
+        "SELECT payload FROM learner_execution_journal WHERE job_id = ? AND person_id = ? ORDER BY sequence",
+        (job_id.to_string(), person_id.to_string()),
+    ).await.map_err(storage)?;
+    let mut unsettled = HashSet::new();
+    let mut unknown = false;
+    while let Some(row) = rows.next().await.map_err(storage)? {
+        let event: JournalEvent = decode(&row.get::<String>(0).map_err(storage)?)?;
+        match event {
+            JournalEvent::ModelIntent { attempt_id, .. } => {
+                if !unsettled.insert(attempt_id) { return Err(AgentFailure::VaultUnavailable); }
+            }
+            JournalEvent::ModelResult { attempt_id, accounting, usage } => {
+                if !unsettled.remove(&attempt_id) { return Err(AgentFailure::VaultUnavailable); }
+                accounting.validate_charge(usage.tokens, usage.cost_micros).map_err(|_| AgentFailure::VaultUnavailable)?;
+                unknown |= accounting.unknown_tokens || accounting.unknown_cost;
+            }
+            _ => {},
+        }
+    }
+    Ok(unknown || !unsettled.is_empty())
 }
 
 async fn learner_job_by_key(

@@ -48,18 +48,6 @@ pub struct RemoteViewSourceReference {
     pub provider_identity: String,
 }
 
-/// What the Person reviewed when they approved this remote view.
-pub struct RemoteViewApproval<'a> {
-    pub producer_fingerprint: &'a str,
-    pub source_authority: SourceAuthority,
-    /// The server revision the review observed, when the reviewer probed
-    /// for it. `None` leaves the revision unbound: the review still binds
-    /// producer, authority, provider, recipient and grant.
-    pub connection_revision: Option<u64>,
-    pub provider_identity: &'a str,
-    pub recipient: &'a str,
-}
-
 /// That the server answering is the one the Person pinned.
 pub fn producer_is_pinned(
     pinned: &RemoteProducerIdentity,
@@ -90,26 +78,6 @@ pub fn source_matches_producer(
     Ok(())
 }
 
-/// That what the device observed is what the Person reviewed.
-pub fn matches_review(
-    approval: &RemoteViewApproval<'_>,
-    reference: &RemoteViewSourceReference,
-    producer: &RemoteProducerIdentity,
-    connection_revision: u64,
-) -> Result<(), AgentFailure> {
-    if producer.fingerprint != approval.producer_fingerprint
-        || reference.source_authority != approval.source_authority
-        || approval
-            .connection_revision
-            .is_some_and(|revision| revision != connection_revision)
-        || reference.provider_identity != approval.provider_identity
-        || producer.audience != approval.recipient
-    {
-        return Err(AgentFailure::PolicyDenied);
-    }
-    Ok(())
-}
-
 /// The source binding a signed remote view descriptor names.
 pub fn remote_view_source(
     reference: &RemoteViewSourceReference,
@@ -131,90 +99,6 @@ pub fn remote_view_source(
     .map_err(|_| AgentFailure::InvalidInput)
 }
 
-/// The scope one reviewed remote view grant carries.
-///
-/// The source audience is reviewed separately from the standing grant. The
-/// grant authorizes local use; model-recipient consent is a separate decision.
-pub fn remote_view_scope(
-    resource: &str,
-    categories: &[GrantDataCategory],
-    consumers: Vec<GrantConsumer>,
-) -> Result<GrantScope, AgentFailure> {
-    if categories.is_empty() {
-        return Err(AgentFailure::InvalidInput);
-    }
-    GrantScope::try_new(
-        vec![ResourceHandle::try_new(resource).map_err(|_| AgentFailure::InvalidInput)?],
-        categories.to_vec(),
-        vec![GrantOperation::Read],
-        vec![GrantPurpose::Assistant],
-        consumers,
-        ProcessingRestriction::LocalOnly,
-    )
-    .map_err(|_| AgentFailure::InvalidInput)
-}
-
-#[cfg(test)]
-mod remote_view_scope_tests {
-    use super::*;
-
-    #[test]
-    fn logical_calendar_scope_keeps_both_categories_and_local_processing() {
-        let scope = remote_view_scope(
-            "calendar.timeline:connection-one",
-            &[GrantDataCategory::Metadata, GrantDataCategory::Content],
-            vec![GrantConsumer::builtin("calendar.expert").unwrap()],
-        )
-        .unwrap();
-        assert_eq!(scope.resources()[0].as_str(), "calendar.timeline:connection-one");
-        assert_eq!(scope.categories(), &[GrantDataCategory::Metadata, GrantDataCategory::Content]);
-        assert_eq!(scope.processing(), &ProcessingRestriction::LocalOnly);
-        assert_eq!(
-            remote_view_scope("calendar.timeline:connection-one", &[], vec![GrantConsumer::builtin("calendar.expert").unwrap()]),
-            Err(AgentFailure::InvalidInput)
-        );
-    }
-}
-
-/// What a review does to the grant the Person already holds for this view.
-pub(crate) enum RemoteViewGrantReview {
-    /// The Person already granted exactly this. There is nothing to review.
-    AlreadyGranted,
-    /// Activate the grant under the reviewed scope, at the authority it is
-    /// expected to still be at.
-    Activate {
-        grant_id: GrantId,
-        expected: Option<GrantAuthority>,
-    },
-}
-
-/// Decide what this review does.
-///
-/// An active grant whose scope differs is the Person having approved something
-/// else; widening it silently is not this path's to do.
-pub(crate) fn review_remote_view_grant(
-    existing: Option<&DataAccessGrant>,
-    scope: &GrantScope,
-) -> Result<RemoteViewGrantReview, AgentFailure> {
-    if let Some(grant) = existing
-        && grant.state() == GrantState::Active
-        && grant.scope() == scope
-    {
-        return Ok(RemoteViewGrantReview::AlreadyGranted);
-    }
-    Ok(RemoteViewGrantReview::Activate {
-        grant_id: existing
-            .map(|grant| grant.id())
-            .unwrap_or_else(GrantId::new),
-        expected: existing.map(|grant| grant.authority()),
-    })
-}
-
-/// The signed source a remote read is about to use, still describing the grant
-/// it runs under.
-///
-/// A descriptor signed under a different source authority, or naming no
-/// connection revision or provider at all, describes some other read.
 pub fn admit_remote_view_source(
     reference: &RemoteViewSourceReference,
     source: &GrantSourceBinding,
@@ -307,7 +191,6 @@ pub fn remote_dependency_source_admits(
         || reference.execution_owner != dependency.source().execution_owner().as_str()
         || reference.connection_revision != connection_revision
         || reference.audience != recipient
-        || dependency.processing() != &ProcessingRestriction::LocalOnly
     {
         return Err(AgentFailure::PolicyDenied);
     }

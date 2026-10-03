@@ -87,7 +87,7 @@ pub use application::personal_sources::{
 };
 pub use application::projection::{CoverageProjection, project_coverage};
 pub use application::remote_sources::{
-    AdmittedRemoteRead, RemoteViewTransport, authorize_remote_dependency, read_remote_view,
+    AdmittedRemoteRead, RemoteViewTransport, authorize_remote_dependency, configured_remote_source_selections, read_configured_remote_view,
     read_selected_remote_view,
 };
 pub use application::remote_views::{
@@ -104,7 +104,7 @@ pub use application::source_view::SourceView;
 /// The authorization input Context's own coverage entry points take.
 pub use floe_access::{
     DependencyAuthorization, DependencyLiveness, DependencyResolver, RemoteCallWindow,
-    RemoteGrantStore, RemoteGrantTransport, RemotePairingIdentity, RemoteSourceQuery,
+    RemoteGrantTransport, RemotePairingIdentity, RemoteSourceQuery,
     SignedSourcePreview,
 };
 pub use floe_agent_contract::{HistoryMessageSize, bounded_history_start};
@@ -120,7 +120,7 @@ pub use ports::calendar_source::{
 pub use ports::evidence_reader::EvidenceReader;
 pub use ports::personal_source::{
     AcquiredSource, AttentionAcquisition, AttentionAcquisitionMode, PersonalAcquisition,
-    PersonalConnectionReader, PersonalDomain, PersonalGrantRecords, PersonalSourceDriver,
+    PersonalConnectionReader, PersonalDomain, PersonalSourceDriver,
     TrustedObservation,
 };
 pub use ports::source_reader::{
@@ -135,10 +135,8 @@ pub use application::routing::{
 };
 /// The immutable projection an authorized read produces.
 ///
-/// The view shapes, the evidence they yield and the memories that reach a
-/// context are the context contract's; what one turn may see and which
-/// placement may see it is the agent contract's. This module composes them —
-/// it does not define them, and an Expert names them from the contract.
+/// Shared contracts define the view and envelope values. Context assembles
+/// them against the prepared plan and current source-processing requirements.
 pub use floe_agent_contract::{
     AgentContext, ContextEvidence, InferencePolicyDecision, MAX_CONTEXT_EVIDENCE,
     MAX_CONTEXT_EVIDENCE_BYTES, MAX_CONTEXT_ISSUES,

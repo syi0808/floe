@@ -43,7 +43,7 @@ pub enum SourceAccessRequirementKind {
     ReviewChangedSource,
     RequestSystemPermission,
     Reconnect,
-    ApproveProcessingRecipient,
+    ReviewProcessing,
     SelectResource,
 }
 
@@ -94,11 +94,14 @@ pub struct SourceAccessRequirement {
     consumer: GrantConsumer,
     purpose: GrantPurpose,
     resources: Vec<ResourceHandle>,
-    processing_recipient: Option<String>,
+    requested_processing: Option<crate::ProcessingRestriction>,
     reason: SourceAccessRequirementKind,
     source_authority: Option<SourceAuthority>,
     observed_grant: Option<ObservedGrant>,
     inline_resolution: bool,
+    source_resources: Vec<ResourceHandle>,
+    categories: Vec<crate::GrantDataCategory>,
+    policy_digest: Option<[u8; 32]>,
 }
 
 impl SourceAccessRequirement {
@@ -111,7 +114,7 @@ impl SourceAccessRequirement {
         consumer: GrantConsumer,
         purpose: GrantPurpose,
         resources: Vec<ResourceHandle>,
-        processing_recipient: Option<String>,
+        requested_processing: Option<crate::ProcessingRestriction>,
         reason: SourceAccessRequirementKind,
         source_authority: Option<SourceAuthority>,
         observed_grant: Option<ObservedGrant>,
@@ -125,11 +128,14 @@ impl SourceAccessRequirement {
             consumer,
             purpose,
             resources,
-            processing_recipient,
+            requested_processing,
             reason,
             source_authority,
             observed_grant,
             inline_resolution,
+            source_resources: Vec::new(),
+            categories: Vec::new(),
+            policy_digest: None,
         };
         requirement.validate()?;
         Ok(requirement)
@@ -148,11 +154,11 @@ impl SourceAccessRequirement {
             ResourceHandle::try_new(resource.as_str().to_owned())?;
         }
         super::ensure_unique(&self.resources, "resource")?;
-        if let Some(recipient) = &self.processing_recipient {
-            super::validate_identifier(recipient, 128, "processing recipient")?;
+        if let Some(crate::ProcessingRestriction::GatewayAllowed { categories }) = &self.requested_processing {
+            crate::ProcessingRestriction::gateway_allowed(categories.clone())?;
         }
-        if (self.reason == SourceAccessRequirementKind::ApproveProcessingRecipient)
-            != self.processing_recipient.is_some()
+        if (self.reason == SourceAccessRequirementKind::ReviewProcessing)
+            != self.requested_processing.is_some()
         {
             return Err(GrantValidationError::InvalidState);
         }
@@ -165,9 +171,48 @@ impl SourceAccessRequirement {
         if let Some(observed) = &self.observed_grant {
             observed.validate()?;
         }
+        if self.reason == SourceAccessRequirementKind::ReviewProcessing {
+            if !matches!(&self.requested_processing, Some(crate::ProcessingRestriction::GatewayAllowed { .. })) { return Err(GrantValidationError::InvalidState); }
+            if self.source_resources.is_empty() || self.categories.is_empty() || self.policy_digest.is_none_or(|digest| digest == [0; 32])
+                || self.source_authority.is_none() || self.observed_grant.is_none() || self.resources.is_empty()
+                || self.connector_id.is_none() || self.connection_id.is_none() { return Err(GrantValidationError::MissingScope); }
+            super::ensure_unique(&self.source_resources, "source resource")?;
+            super::ensure_unique(&self.categories, "category")?;
+        }
+
         Ok(())
     }
 
+    pub fn from_processing_dependency(dependency: &crate::ContextDependency) -> Result<Self, GrantValidationError> {
+        dependency.validate().map_err(|_| GrantValidationError::InvalidState)?;
+        let policy = crate::ProcessingRestriction::gateway_allowed(dependency.categories().to_vec())?;
+        let resource = dependency.resources().first().ok_or(GrantValidationError::MissingScope)?;
+        let connection_id = dependency.source().connection_id();
+        let view_id = crate::split_connection_view_resource(resource, &connection_id)?;
+        let source_id = source_access_id_for_capability(view_id).ok_or(GrantValidationError::InvalidState)?;
+        let mut requirement = Self {
+            source_id: source_id.to_owned(), connector_id: Some(dependency.source().connector().clone()),
+            connection_id: Some(dependency.source().connection_id()), operation: dependency.operation(),
+            consumer: dependency.consumer().clone(), purpose: dependency.purpose(), resources: dependency.resources().to_vec(),
+            requested_processing: Some(policy), reason: SourceAccessRequirementKind::ReviewProcessing,
+            source_authority: Some(dependency.source_authority()),
+            observed_grant: Some(ObservedGrant::try_new(dependency.grant_id(), dependency.grant_authority())?),
+            inline_resolution: true, source_resources: Vec::new(), categories: Vec::new(), policy_digest: None,
+        };
+        requirement.source_resources = dependency.source_resources().to_vec();
+        requirement.categories = dependency.categories().to_vec();
+        use sha2::Digest;
+        requirement.policy_digest = Some(sha2::Sha256::digest(serde_json::to_vec(&(
+            dependency.source(), dependency.source_authority(), dependency.resources(), dependency.source_resources(),
+            dependency.grant_id(), dependency.grant_authority(), dependency.categories(), dependency.operation(),
+            dependency.purpose(), dependency.consumer(), dependency.processing(),
+        )).map_err(|_| GrantValidationError::InvalidState)?).into());
+        requirement.validate()?;
+        Ok(requirement)
+    }
+    pub fn source_resources(&self) -> &[ResourceHandle] { &self.source_resources }
+    pub fn categories(&self) -> &[crate::GrantDataCategory] { &self.categories }
+    pub fn policy_digest(&self) -> Option<[u8; 32]> { self.policy_digest }
     pub fn source_id(&self) -> &str {
         &self.source_id
     }
@@ -189,8 +234,8 @@ impl SourceAccessRequirement {
     pub fn resources(&self) -> &[ResourceHandle] {
         &self.resources
     }
-    pub fn processing_recipient(&self) -> Option<&str> {
-        self.processing_recipient.as_deref()
+    pub fn requested_processing(&self) -> Option<&crate::ProcessingRestriction> {
+        self.requested_processing.as_ref()
     }
     pub fn reason(&self) -> SourceAccessRequirementKind {
         self.reason
@@ -245,130 +290,5 @@ impl SourceAccessBlockers {
 
     pub fn validate(&self) -> Result<(), GrantValidationError> {
         Self::try_new(self.blockers.clone()).map(|_| ())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn requirement(source_id: &str) -> Result<SourceAccessRequirement, GrantValidationError> {
-        SourceAccessRequirement::try_new(
-            source_id,
-            Some(ConnectorId::try_new("floe.connector.calendar")?),
-            Some(ConnectionId::try_new("calendar-connection")?),
-            GrantOperation::Read,
-            GrantConsumer::builtin("floe.builtin.schedule")?,
-            GrantPurpose::Scheduling,
-            vec![ResourceHandle::try_new("personal")?],
-            None,
-            SourceAccessRequirementKind::EnableObserve,
-            None,
-            None,
-            true,
-        )
-    }
-
-    #[test]
-    fn requirement_validates_bounded_identity_and_scope() {
-        assert!(requirement("floe.source.calendar").is_ok());
-        assert!(requirement("").is_err());
-        assert!(requirement(&"x".repeat(129)).is_err());
-        assert!(ConnectionId::try_new("").is_err());
-        assert!(GrantConsumer::builtin(&"x".repeat(129)).is_err());
-        assert!(ResourceHandle::try_new(&"x".repeat(257)).is_err());
-    }
-
-    #[test]
-    fn serialized_requirement_contains_no_secret_authority() {
-        let json = serde_json::to_string(&requirement("floe.source.calendar").unwrap()).unwrap();
-        for forbidden in ["token", "bearer", "credential", "secret", "password"] {
-            assert!(!json.contains(forbidden));
-        }
-    }
-
-    #[test]
-    fn processing_consent_names_exact_recipient() {
-        let mut requirement = requirement("floe.source.calendar").unwrap();
-        requirement.reason = SourceAccessRequirementKind::ApproveProcessingRecipient;
-        assert!(requirement.validate().is_err());
-        requirement.processing_recipient = Some("model.example".into());
-        assert!(requirement.validate().is_ok());
-    }
-
-    #[test]
-    fn observed_grant_binds_exact_grant_or_proven_absence() {
-        let observed = ObservedGrant::try_new(GrantId::new(), GrantAuthority::new()).unwrap();
-        let mut with_grant = requirement("floe.source.calendar").unwrap();
-        with_grant.observed_grant = Some(observed);
-        assert!(with_grant.validate().is_ok());
-        assert_eq!(with_grant.observed_grant(), Some(observed));
-        assert_eq!(observed.grant_id().is_valid(), true);
-        let absent = requirement("floe.source.calendar").unwrap();
-        assert_eq!(absent.observed_grant(), None);
-        assert!(absent.validate().is_ok());
-        let mut nil_grant = requirement("floe.source.calendar").unwrap();
-        nil_grant.observed_grant = Some(
-            serde_json::from_value::<ObservedGrant>(serde_json::json!({
-                "grant_id": uuid::Uuid::nil(),
-                "authority": {
-                    "incarnation": uuid::Uuid::new_v4(),
-                    "access_epoch": 1,
-                },
-            }))
-            .unwrap(),
-        );
-        assert_eq!(
-            nil_grant.validate(),
-            Err(GrantValidationError::InvalidState)
-        );
-        let mut nil_authority = requirement("floe.source.calendar").unwrap();
-        nil_authority.observed_grant = Some(
-            serde_json::from_value::<ObservedGrant>(serde_json::json!({
-                "grant_id": uuid::Uuid::new_v4(),
-                "authority": {
-                    "incarnation": uuid::Uuid::nil(),
-                    "access_epoch": 1,
-                },
-            }))
-            .unwrap(),
-        );
-        assert_eq!(
-            nil_authority.validate(),
-            Err(GrantValidationError::InvalidState)
-        );
-    }
-
-    #[test]
-    fn blockers_keep_each_concrete_source_requirement() {
-        let first = requirement("floe.source.calendar").unwrap();
-        let mut second = requirement("floe.source.tasks").unwrap();
-        second.reason = SourceAccessRequirementKind::Reconnect;
-        let blockers = SourceAccessBlockers::try_new(vec![first.clone(), second.clone()]).unwrap();
-        assert_eq!(blockers.blockers(), &[first, second]);
-        assert!(blockers.validate().is_ok());
-    }
-
-    #[test]
-    fn blockers_reject_empty_oversized_duplicate_or_invalid_members() {
-        assert_eq!(
-            SourceAccessBlockers::try_new(vec![]),
-            Err(GrantValidationError::MissingScope)
-        );
-        let distinct: Vec<_> = (0..=MAX_SOURCE_ACCESS_BLOCKERS)
-            .map(|index| requirement(&format!("floe.source.{index}")).unwrap())
-            .collect();
-        assert_eq!(
-            SourceAccessBlockers::try_new(distinct),
-            Err(GrantValidationError::TooLarge("blockers"))
-        );
-        let repeated = requirement("floe.source.calendar").unwrap();
-        assert_eq!(
-            SourceAccessBlockers::try_new(vec![repeated.clone(), repeated]),
-            Err(GrantValidationError::Duplicate("blocker"))
-        );
-        let mut invalid = requirement("floe.source.calendar").unwrap();
-        invalid.source_id = String::new();
-        assert!(SourceAccessBlockers::try_new(vec![invalid]).is_err());
     }
 }

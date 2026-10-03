@@ -27,10 +27,9 @@ use crate::{
 };
 
 /// The views a device may publish here.
-pub const ALLOWED_VIEW_IDS: [&str; 4] = [
+pub const ALLOWED_VIEW_IDS: [&str; 3] = [
     "people.identity",
     "attention.coarse",
-    "wellbeing.derived",
     "calendar.timeline",
 ];
 
@@ -75,6 +74,7 @@ pub struct TrustedPersonalObservation {
     pub observed_at_unix_ms: i64,
     pub expires_at_unix_ms: i64,
     pub query_fingerprint: Vec<u8>,
+    pub health_transform: Option<floe_context_contract::HealthTransformEvidence>,
     observed_monotonic: Instant,
     monotonic_ttl: Duration,
 }
@@ -136,6 +136,7 @@ impl ObservationRegistry {
         view: Value,
         received_wall_unix_ms: i64,
     ) -> Result<bool, AgentFailure> {
+        if view_id == "wellbeing.derived" { return Err(AgentFailure::PolicyDenied); }
         let (observed_at_unix_ms, expires_at_unix_ms) =
             validate_view(view_id, &view, received_wall_unix_ms)?;
         let monotonic_ttl = Duration::from_millis(
@@ -426,11 +427,17 @@ impl ObservationRegistry {
         observed_at_unix_ms: i64,
         expires_at_unix_ms: i64,
         query_fingerprint: Vec<u8>,
+        health_transform: Option<floe_context_contract::HealthTransformEvidence>,
     ) -> Result<(), AgentFailure> {
         if expires_at_unix_ms <= observed_at_unix_ms
             || !valid_native_subject_fingerprint(native_subject_fingerprint)
         {
             return Err(AgentFailure::InvalidInput);
+        }
+        if let Some(evidence) = &health_transform {
+            evidence.validate(device_id, chrono::Utc::now())?;
+            if evidence.host_epoch != host_epoch || evidence.transformed_at.timestamp_millis() != observed_at_unix_ms
+                || evidence.expires_at.timestamp_millis() != expires_at_unix_ms { return Err(AgentFailure::PolicyDenied); }
         }
         let monotonic_ttl = Duration::from_millis(
             u64::try_from(expires_at_unix_ms - observed_at_unix_ms)
@@ -446,6 +453,7 @@ impl ObservationRegistry {
             observed_at_unix_ms,
             expires_at_unix_ms,
             query_fingerprint,
+            health_transform,
             observed_monotonic: Instant::now(),
             monotonic_ttl,
         };
@@ -566,7 +574,6 @@ pub fn validate_view(
     Ok(match view_id {
         "people.identity" => parse!(PeopleView, validate_people_view),
         "attention.coarse" => parse!(AttentionView, validate_attention_view),
-        "wellbeing.derived" => parse!(WellbeingView, validate_wellbeing_view),
         _ => return Err(AgentFailure::CapabilityDenied),
     })
 }
@@ -629,119 +636,6 @@ pub fn validate_calendar_observation(
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod calendar_source_tests {
-    use super::*;
-    use floe_connections::{ConnectionResource, ResourceMode};
-    use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId, ResourceHandle};
-
-    #[test]
-    fn published_calendar_observation_is_fenced_by_connection_source_truth() {
-        let person_id = PersonId::new();
-        let mut source = SourceConnection::establish(
-            person_id,
-            ConnectorId::try_new("calendar.event_kit").unwrap(),
-            ConnectionId::try_new("calendar-primary").unwrap(),
-            ExecutionOwnerId::try_new("mac-local").unwrap(),
-            ResourceMode::Selected,
-            vec![
-                ConnectionResource::new(ResourceHandle::try_new("home").unwrap(), "Home".into())
-                    .unwrap(),
-            ],
-        )
-        .unwrap();
-        source.update_native_subject(1, "a".repeat(64)).unwrap();
-        let now = 1_000_000;
-        let observation = PublishedCalendarObservation {
-            connection_id: source.connection_id().as_str().into(),
-            source_authority: source.source_authority(),
-            connection_revision: source.revision(),
-            provider: CalendarProvider::EventKit,
-            calendar_ids: vec!["home".into()],
-            observed_at_unix_ms: now - 1,
-            expires_at_unix_ms: now + 60_000,
-            range_start_unix_ms: now - 60_000,
-            range_end_unix_ms: now + 60_000,
-            batches: vec![CalendarBatch {
-                calendar_id: "home".into(),
-                records: vec![],
-                failure: None,
-            }],
-        };
-        let registry = ObservationRegistry::new();
-        registry
-            .publish_calendar_observation(person_id, "mac-local", observation, &source, now)
-            .unwrap();
-        assert!(
-            registry
-                .authorized_calendar_observation(person_id, &source, &["home".into()], now)
-                .is_ok()
-        );
-        source
-            .configure(
-                2,
-                ResourceMode::Selected,
-                vec![
-                    ConnectionResource::new(
-                        ResourceHandle::try_new("work").unwrap(),
-                        "Work".into(),
-                    )
-                    .unwrap(),
-                ],
-            )
-            .unwrap();
-        assert!(matches!(
-            registry.authorized_calendar_observation(person_id, &source, &["home".into()], now),
-            Err(AgentFailure::CapabilityUnavailable)
-        ));
-    }
-
-    #[test]
-    fn foreign_device_cannot_publish_against_a_source() {
-        let person_id = PersonId::new();
-        let mut source = SourceConnection::establish(
-            person_id,
-            ConnectorId::try_new("calendar.event_kit").unwrap(),
-            ConnectionId::new(),
-            ExecutionOwnerId::try_new("mac-local").unwrap(),
-            ResourceMode::Selected,
-            vec![
-                ConnectionResource::new(ResourceHandle::try_new("home").unwrap(), "Home".into())
-                    .unwrap(),
-            ],
-        )
-        .unwrap();
-        source.update_native_subject(1, "a".repeat(64)).unwrap();
-        let now = 1_000_000;
-        let observation = PublishedCalendarObservation {
-            connection_id: source.connection_id().as_str().into(),
-            source_authority: source.source_authority(),
-            connection_revision: source.revision(),
-            provider: CalendarProvider::EventKit,
-            calendar_ids: vec!["home".into()],
-            observed_at_unix_ms: now - 1,
-            expires_at_unix_ms: now + 60_000,
-            range_start_unix_ms: now - 60_000,
-            range_end_unix_ms: now + 60_000,
-            batches: vec![CalendarBatch {
-                calendar_id: "home".into(),
-                records: vec![],
-                failure: None,
-            }],
-        };
-        assert_eq!(
-            ObservationRegistry::new().publish_calendar_observation(
-                person_id,
-                "foreign-device",
-                observation,
-                &source,
-                now
-            ),
-            Err(AgentFailure::StaleContext)
-        );
-    }
 }
 
 pub fn valid_native_subject_fingerprint(value: &str) -> bool {

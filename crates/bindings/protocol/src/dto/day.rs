@@ -27,6 +27,51 @@ pub struct DaySnapshotDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DayRefreshStateDto {
+    Pending {
+        operation_ref: super::OperationRefDto,
+        revision: u64,
+    },
+    Running {
+        operation_ref: super::OperationRefDto,
+        revision: u64,
+    },
+    Completed {
+        operation_ref: super::OperationRefDto,
+        revision: u64,
+        day: DaySnapshotDto,
+    },
+    Failed {
+        operation_ref: super::OperationRefDto,
+        revision: u64,
+        failure: super::AppWireErrorDto,
+    },
+    Interrupted {
+        operation_ref: super::OperationRefDto,
+        revision: u64,
+        failure: super::AppWireErrorDto,
+    },
+}
+
+impl DayRefreshStateDto {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let revision = match self {
+            Self::Pending { revision, .. }
+            | Self::Running { revision, .. }
+            | Self::Completed { revision, .. }
+            | Self::Failed { revision, .. }
+            | Self::Interrupted { revision, .. } => revision,
+        };
+        if *revision == 0 || *revision > i64::MAX as u64 {
+            Err("day_refresh.revision")
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TimelineItemDto {
     Event(EventDto),

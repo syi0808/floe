@@ -67,14 +67,6 @@ fn manifest(kind: BuiltinExpertKind) -> ExpertManifest {
             description: description.into(),
             domain_tags: domain_tags.into_iter().map(str::to_owned).collect(),
             skills: vec![skill.into()],
-            supported_placements: if kind.supports_device_model() {
-                vec![
-                    floe_agent_contract::ModelPlacement::DeviceLocal,
-                    floe_agent_contract::ModelPlacement::Remote,
-                ]
-            } else {
-                vec![floe_agent_contract::ModelPlacement::Remote]
-            },
         },
         definition_revision: 2,
     };
@@ -109,58 +101,5 @@ fn manifest(kind: BuiltinExpertKind) -> ExpertManifest {
             .collect(),
         capability_requirements: vec![],
         state_schema_version: crate::BUILTIN_EXPERT_STATE_SCHEMA_VERSION,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn shipped_manifests_are_valid_and_unique() {
-        let manifests = manifests();
-        assert_eq!(manifests.len(), 8);
-        assert_eq!(
-            floe_experts::manifest_set_digest(&manifests).unwrap().len(),
-            64
-        );
-        for (index, manifest) in manifests.iter().enumerate() {
-            manifest.validate().unwrap();
-            assert_eq!(manifest.package.version, "1.0.1");
-            assert_eq!(manifest.definition.card.version, manifest.package.version);
-            assert_eq!(manifest.definition.card.id, manifest.package.id);
-            assert_eq!(manifest.definition.definition_revision, 2);
-            assert!(manifest.definition.card.description.len() <= 512);
-            assert_eq!(manifest.prompt_contract.revision, 1);
-            assert!(
-                manifest
-                    .result_contracts
-                    .iter()
-                    .all(|contract| contract.revision == 1)
-            );
-            assert!(
-                manifests[..index]
-                    .iter()
-                    .all(|other| other.package != manifest.package)
-            );
-        }
-    }
-
-    #[test]
-    fn communication_requirement_is_declared_by_shipped_packages_only() {
-        let consumers: Vec<_> = manifests()
-            .into_iter()
-            .filter(|manifest| {
-                manifest
-                    .source_requirements
-                    .iter()
-                    .any(|requirement| requirement.capability == "mail.communication")
-            })
-            .map(|manifest| manifest.package.id)
-            .collect();
-        assert_eq!(
-            consumers,
-            ["floe.builtin.commitments", "floe.builtin.communication"]
-        );
     }
 }

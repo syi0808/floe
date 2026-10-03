@@ -6,7 +6,7 @@ use uuid::Uuid;
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
 use floe_agent_contract::InferencePolicyDecision;
-use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
+use floe_agent_contract::{ExpertModel};
 use floe_context_contract::CommunicationView;
 
 use crate::prompts::communication_expert_prompt;
@@ -72,7 +72,6 @@ pub async fn run_communication_expert<Model: ExpertModel>(
     let response = match run_mail_model(
         model,
         policy,
-        ExpertModelRequirement::RemoteOnly,
         &invocation,
         communication_expert_prompt(),
         invocation.context.clone(),

@@ -947,23 +947,3 @@ impl AgentRegistry {
         Ok(())
     }
 }
-
-pub fn eligible_cards_for_availability(
-    cards: &[crate::AgentCard],
-    availability: floe_inference::InferenceAvailability,
-) -> Vec<crate::AgentCard> {
-    use floe_agent_contract::ModelPlacement;
-    use floe_inference::InferenceExecutionConstraint;
-    let mut seen = HashSet::new();
-    cards
-        .iter()
-        .filter(|card| {
-            (availability.can_execute(InferenceExecutionConstraint::DeviceOnly)
-                && card.runs_at(ModelPlacement::DeviceLocal))
-                || (availability.can_execute(InferenceExecutionConstraint::RemoteOnly)
-                    && card.runs_at(ModelPlacement::Remote))
-        })
-        .filter(|card| seen.insert(card.id.clone()))
-        .cloned()
-        .collect()
-}

@@ -67,6 +67,25 @@ public struct AppleContactsSubject: Equatable, Sendable {
     }
 }
 
+public struct AppleContactResource: Codable, Equatable, Sendable {
+    public let handle: String
+    public let label: String
+}
+
+public struct AppleContactsCatalog: Codable, Equatable, Sendable {
+    public let resources: [AppleContactResource]
+    public let nativeSubjectFingerprint: String
+    public let permissionClass: String
+    public let coverageComplete: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case resources
+        case nativeSubjectFingerprint = "native_subject_fingerprint"
+        case permissionClass = "permission_class"
+        case coverageComplete = "catalog_complete"
+    }
+}
+
 public struct AppleContactIdentity: Codable, Equatable, Sendable {
     public let identityHandle: String
     public let displayName: String

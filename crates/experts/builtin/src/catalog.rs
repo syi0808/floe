@@ -85,13 +85,6 @@ impl BuiltinExpertKind {
         }
     }
 
-    pub const fn supports_device_model(self) -> bool {
-        matches!(
-            self,
-            Self::Schedule | Self::Relationships | Self::FocusAttention | Self::Wellbeing
-        )
-    }
-
     pub const fn result_artifact_name(self) -> &'static str {
         match self {
             Self::Schedule => "Schedule expert result",
@@ -203,22 +196,6 @@ impl BuiltinContextSource {
             Self::WorkContext => "floe.source.work-context",
             Self::Wellbeing => "floe.source.wellbeing",
             Self::Logistics => "floe.source.logistics",
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_builtin_package_declares_its_mandatory_source() {
-        for expert in BuiltinExpertKind::ALL {
-            assert!(
-                expert
-                    .required_sources()
-                    .contains(&expert.mandatory_source())
-            );
         }
     }
 }

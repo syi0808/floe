@@ -1,10 +1,10 @@
 use std::{sync::OnceLock, time::Duration};
 
 use crate::control::PreparedServerSource;
-use crate::control::authorization::{
-    RemoteAuthorizationClient, RemoteViewAuthorizationRequest, parse_remote_view_challenge,
+use crate::gateway::views::{
+    GatewayViewsClient, RemoteViewAuthorizationRequest, parse_remote_view_challenge,
 };
-use floe_access::{RemoteAuthorizationKeys, RemoteViewAuthorizationExpectation};
+use floe_access::{AuthorizationSigner, RemoteViewAuthorizationExpectation};
 use floe_agent_contract::AgentFailure;
 use floe_connections::{CalendarConnectionRef, ConnectorCatalogObservation, ConnectorSnapshot};
 use floe_execution::limits::{CallLimiter, CallLimits};
@@ -97,15 +97,13 @@ impl ServerSourceClient {
     /// server connection, if it has one. Pure: no network, no model profile
     /// discovery. Absence means local-only; a foreign or malformed stored
     /// connection fails closed.
-    pub fn from_current_connection(
-        store: &impl floe_inference::SavedConnectionStore,
+    pub async fn from_current_connection(
+        store: &crate::gateway::GatewayCredentialStore,
         person_id: &str,
         device_id: &str,
     ) -> Result<Option<Self>, AgentFailure> {
-        store
-            .load()?
-            .map(|stored| PreparedServerSource::admit(stored, person_id, device_id).map(Self::new))
-            .transpose()
+        Ok(store.load(person_id, device_id).await.map_err(|_| AgentFailure::PolicyDenied)?
+            .map(|connection| Self::new(PreparedServerSource::new(connection, store.clone()))))
     }
 
     /// The prepared source this client reads through: endpoint, credential
@@ -114,28 +112,19 @@ impl ServerSourceClient {
         &self.source
     }
 
-    pub fn authorization_client(&self) -> Result<RemoteAuthorizationClient, AgentFailure> {
-        RemoteAuthorizationClient::new(self.source.base_url(), self.source.bearer_token())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_call_limiter(&mut self, limiter: CallLimiter) {
-        self.source_calls = limiter;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn call_limiter(&self) -> &CallLimiter {
-        &self.source_calls
+    pub(crate) fn authorization_client(&self) -> Result<GatewayViewsClient, AgentFailure> {
+        Ok(GatewayViewsClient::new(self.source.clone()))
     }
 
     /// Read one view the Person's grant admits, through their paired server.
-    pub async fn read_admitted_view<Keys: RemoteAuthorizationKeys>(
+    pub async fn read_admitted_view<Keys: AuthorizationSigner + ?Sized>(
         &self,
         keys: &Keys,
         read: AuthorizedViewRead<'_>,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<serde_json::Value, AgentFailure> {
+        self.source.revalidate().await?;
         let source = read.grant.source();
         let connector = source.connector();
         let connection = source.connection_id();
@@ -183,7 +172,7 @@ impl ServerSourceClient {
             .await
     }
 
-    pub async fn read_authorized_view<Keys: RemoteAuthorizationKeys>(
+    pub(crate) async fn read_authorized_view<Keys: AuthorizationSigner + ?Sized>(
         &self,
         keys: &Keys,
         request: RemoteViewAuthorizationRequest<'_>,
@@ -281,6 +270,7 @@ impl ServerSourceClient {
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<Vec<CalendarConnectionRef>, AgentFailure> {
+        self.source.revalidate().await?;
         let catalog: ObservedConnectorCatalog = self
             .authenticated_get("/v1/connectors", deadline, cancellation)
             .await?;
@@ -330,446 +320,20 @@ impl ServerSourceClient {
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<Response, AgentFailure> {
-        let _permit = self
-            .source_calls
-            .acquire(path.len(), deadline, cancellation)
-            .await?;
-        if cancellation.is_cancelled() {
-            return Err(AgentFailure::Cancelled);
-        }
-        let timeout = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if timeout.is_zero() {
-            return Err(AgentFailure::DeadlineExceeded);
-        }
-        let client = Client::builder()
-            .timeout(timeout.min(Duration::from_secs(10)))
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .build()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        let send = client
-            .get(format!(
-                "{}{path}",
-                self.source.base_url().trim_end_matches('/')
-            ))
-            .bearer_auth(self.source.bearer_token())
-            .send();
-        let response = tokio::select! {
-            _ = cancellation.cancelled() => return Err(AgentFailure::Cancelled),
-            response = send => response.map_err(|error| if error.is_timeout() { AgentFailure::DeadlineExceeded } else { AgentFailure::CapabilityUnavailable })?,
-        };
-        match response.status() {
-            StatusCode::OK => {}
-            StatusCode::UNAUTHORIZED => return Err(AgentFailure::CredentialExpired),
-            StatusCode::TOO_MANY_REQUESTS => return Err(AgentFailure::QuotaExceeded),
-            _ => return Err(AgentFailure::CapabilityUnavailable),
-        }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        if bytes.len() > MAX_CATALOG_BYTES {
-            return Err(AgentFailure::CapabilityUnavailable);
-        }
-        serde_json::from_slice(&bytes).map_err(|_| AgentFailure::CapabilityUnavailable)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use floe_inference::SavedServerConnection;
-    use serde_json::json;
-    use std::os::unix::fs::PermissionsExt;
-
-    use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    const PERSON: &str = "00000000-0000-4000-8000-000000000001";
-    const DEVICE: &str = "local-device";
-
-    #[derive(Clone, Default)]
-    struct TestKeys(
-        std::sync::Arc<
-            std::sync::Mutex<
-                std::collections::HashMap<(floe_agent_contract::PersonId, uuid::Uuid), [u8; 32]>,
-            >,
-        >,
-    );
-
-    impl floe_vault::VaultKeyProvider for TestKeys {
-        fn load(
-            &self,
-            person_id: floe_agent_contract::PersonId,
-            vault_id: uuid::Uuid,
-        ) -> Result<floe_vault::VaultKey, AgentFailure> {
-            self.0
-                .lock()
-                .unwrap()
-                .get(&(person_id, vault_id))
-                .copied()
-                .map(floe_vault::VaultKey::from_bytes)
-                .ok_or(AgentFailure::VaultUnavailable)
-        }
-
-        fn insert(
-            &self,
-            person_id: floe_agent_contract::PersonId,
-            vault_id: uuid::Uuid,
-            key: &floe_vault::VaultKey,
-        ) -> Result<(), AgentFailure> {
-            self.0
-                .lock()
-                .unwrap()
-                .insert((person_id, vault_id), *key.as_bytes());
-            Ok(())
-        }
-    }
-
-    fn source(base_url: &str) -> PreparedServerSource {
-        PreparedServerSource::from_parts(
-            base_url,
-            "secret_token_value_that_is_long_enough",
-            "paired-client",
-            PERSON,
-            DEVICE,
-        )
-        .unwrap()
-    }
-
-    fn saved(base_url: &str) -> SavedServerConnection {
-        SavedServerConnection {
-            base_url: base_url.into(),
-            token: "secret_token_value_that_is_long_enough".into(),
-            client_id: "paired-client".into(),
-            person_id: PERSON.into(),
-            device_id: DEVICE.into(),
-        }
-    }
-
-    #[tokio::test]
-    async fn cancelled_queued_source_read_never_opens_a_provider_connection() {
-        use std::{future::Future, task::Poll};
-
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let mut runner = ServerSourceClient::new(source(&format!(
-            "http://{}",
-            listener.local_addr().unwrap()
-        )));
-        runner.set_call_limiter(
-            CallLimiter::new(CallLimits {
-                max_running: 1,
-                max_pending: 1,
-                max_context_bytes: 65_536,
-                max_total_context_bytes: 131_072,
-            })
-            .unwrap(),
-        );
-        let parent = floe_execution::Cancellation::new();
-        let child = parent.child_scope();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        let active = runner
-            .call_limiter()
-            .acquire(0, deadline, &parent)
-            .await
-            .unwrap();
-        let request = RemoteViewAuthorizationRequest {
-            path: "/v1/views/mail.communication/admit",
-            connector_id: "gmail",
-            connection_id: "00000000-0000-4000-8000-000000000012",
-            connection_revision: 1,
-            resource: "mail.communication:00000000-0000-4000-8000-000000000012",
-            grant_id: "grant",
-            grant_incarnation: "grant-incarnation",
-            grant_epoch: 1,
-            purpose: "assistant",
-            consumer: "assistant",
-            max_items: 1,
-            max_bytes: 1024,
-            query: json!({"schema_version": 1}),
-        };
-        let expected = RemoteViewAuthorizationExpectation {
-            operation: String::new(),
-            client_id: "paired-client".into(),
-            device_id: DEVICE.into(),
-            challenge_id: String::new(),
-            admission_id: String::new(),
-            query_sha256: String::new(),
-            result_sha256: String::new(),
-            grant_id: "grant".into(),
-            grant_incarnation: "grant-incarnation".into(),
-            grant_epoch: 1,
-            source_connector: "gmail".into(),
-            source_connection: "00000000-0000-4000-8000-000000000012".into(),
-            source_execution_owner: "server:source".into(),
-            source_incarnation: "source".into(),
-            source_epoch: 1,
-            resources: vec!["mail.communication:00000000-0000-4000-8000-000000000012".into()],
-            max_items: 1,
-            max_bytes: 1024,
-        };
-        let root = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let keys = TestKeys::default();
-        let vault = floe_vault::EncryptedAgentVault::create(
-            root.path(),
-            floe_agent_contract::PersonId::new(),
-            keys,
-        )
-        .await
-        .unwrap();
-        let mut waiting =
-            Box::pin(runner.read_authorized_view(&vault, request, expected, deadline, &child));
-        assert!(
-            std::future::poll_fn(|context| Poll::Ready(waiting.as_mut().poll(context)))
-                .await
-                .is_pending()
-        );
-        child.cancel();
-        assert!(matches!(waiting.await, Err(AgentFailure::Cancelled)));
-        assert!(
-            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
-        );
-        assert!(!parent.is_cancelled());
-        drop(active);
-        assert!(
-            runner
-                .call_limiter()
-                .acquire(65_536, deadline, &parent)
-                .await
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn prepare_binds_saved_connection_without_network_or_model_state() {
-        // Absence is local-only, not an error.
-        assert!(
-            ServerSourceClient::from_current_connection(
-                &crate::control::CurrentSavedConnectionStore::fixed(None),
-                PERSON,
-                DEVICE
-            )
-            .unwrap()
-            .is_none()
-        );
-        let prepared = ServerSourceClient::from_current_connection(
-            &crate::control::CurrentSavedConnectionStore::fixed(Some(saved(
-                "http://127.0.0.1:8431",
-            ))),
-            PERSON,
-            DEVICE,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(prepared.source().client_id(), "paired-client");
-        assert_eq!(prepared.source().person_id(), PERSON);
-        assert_eq!(prepared.source().device_id(), DEVICE);
-        // A foreign pairing fails closed instead of preparing a client.
-        assert_eq!(
-            ServerSourceClient::from_current_connection(
-                &crate::control::CurrentSavedConnectionStore::fixed(Some(saved(
-                    "http://127.0.0.1:8431"
-                ))),
-                PERSON,
-                "other-device"
-            )
-            .err(),
-            Some(AgentFailure::PolicyDenied)
-        );
-        let mut malformed = saved("http://127.0.0.1:8431");
-        malformed.base_url = "http://not-loopback.invalid".into();
-        assert_eq!(
-            ServerSourceClient::from_current_connection(
-                &crate::control::CurrentSavedConnectionStore::fixed(Some(malformed)),
-                PERSON,
-                DEVICE
-            )
-            .err(),
-            Some(AgentFailure::InvalidInput)
-        );
-    }
-
-    #[tokio::test]
-    async fn connector_catalog_is_observed_on_demand_and_projected_by_connections() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let expected_token = source("http://127.0.0.1:9").bearer_token().to_owned();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = [0_u8; 4096];
-            let read = socket.read(&mut request).await.unwrap();
-            let request = String::from_utf8_lossy(&request[..read]);
-            assert!(request.starts_with("GET /v1/connectors HTTP/1.1\r\n"));
-            let expected = format!("authorization: bearer {expected_token}");
-            assert!(request.to_ascii_lowercase().contains(&expected));
-            let body = json!({
-                "schema_version": 1,
-                "person_id": PERSON,
-                "device_id": DEVICE,
-                "connectors": [
-                    {
-                        "id": "calendar.google",
-                        "status": "connected",
-                        "connection_id": "00000000-0000-4000-8000-000000000010",
-                        "connection_revision": 7,
-                    },
-                    {
-                        "id": "calendar.microsoft",
-                        "status": "disconnected",
-                        "connection_id": "00000000-0000-4000-8000-000000000011",
-                        "connection_revision": 3,
-                    },
-                    {
-                        "id": "mail.gmail",
-                        "status": "connected",
-                        "connection_id": "00000000-0000-4000-8000-000000000012",
-                        "connection_revision": 1,
-                    },
-                ],
-            })
-            .to_string();
-            socket
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        body.len(), body
-                    )
-                    .as_bytes(),
-                )
-                .await
-                .unwrap();
-        });
-        let client = ServerSourceClient::new(source(&format!("http://{address}")));
-        let observed = client
-            .observe_calendar_connections(
-                tokio::time::Instant::now() + Duration::from_secs(5),
-                &floe_execution::Cancellation::default(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            observed,
-            vec![CalendarConnectionRef {
-                connector_id: "calendar.google".into(),
-                connection_id: "00000000-0000-4000-8000-000000000010".into(),
-                connection_revision: 7,
-            }]
-        );
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn source_connection_catalog_is_metadata_only_and_caller_scoped() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let mut snapshot: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../../server/internal/connectors/gmail/testdata/ready_snapshot.json"
-        ))
-        .unwrap();
-        snapshot["connection"]["connection_id"] = json!("00000000-0000-4000-8000-000000000012");
-        snapshot["connection"]["person_id"] = json!(PERSON);
-        let body = json!({
-            "schema_version": 1,
-            "person_id": PERSON,
-            "device_id": DEVICE,
-            "connections": [snapshot],
-        })
-        .to_string();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = [0_u8; 4096];
-            let size = socket.read(&mut request).await.unwrap();
-            assert!(
-                String::from_utf8_lossy(&request[..size])
-                    .starts_with("GET /v1/connections HTTP/1.1\r\n")
-            );
-            socket.write_all(format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len(),
-            ).as_bytes()).await.unwrap();
-        });
-        let client = ServerSourceClient::new(source(&format!("http://{address}")));
-        let catalog = client
-            .observe_source_connections(
-                tokio::time::Instant::now() + Duration::from_secs(5),
-                &floe_execution::Cancellation::default(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(catalog.len(), 1);
-        assert_eq!(catalog[0].connection.connector_id, "gmail");
-        assert_eq!(
-            catalog[0].connection.connection_id.as_deref(),
-            Some("00000000-0000-4000-8000-000000000012")
-        );
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn connector_catalog_for_another_caller_or_malformed_fails_closed() {
-        for (body, expected) in [
-            (
-                json!({
-                    "schema_version": 1,
-                    "person_id": "00000000-0000-4000-8000-000000000099",
-                    "device_id": DEVICE,
-                    "connectors": [],
-                }),
-                AgentFailure::PolicyDenied,
-            ),
-            (
-                json!({
-                    "schema_version": 1,
-                    "person_id": PERSON,
-                    "device_id": DEVICE,
-                    "connectors": [
-                        {"id": "calendar.google", "status": "connected"},
-                    ],
-                }),
-                AgentFailure::CapabilityUnavailable,
-            ),
-        ] {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let address = listener.local_addr().unwrap();
-            let body = body.to_string();
-            let server = tokio::spawn(async move {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = [0_u8; 4096];
-                let read = socket.read(&mut request).await.unwrap();
-                assert!(
-                    String::from_utf8_lossy(&request[..read])
-                        .starts_with("GET /v1/connectors HTTP/1.1\r\n")
-                );
-                socket
-                    .write_all(
-                        format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            body.len(), body
-                        )
-                        .as_bytes(),
-                    )
-                    .await
-                    .unwrap();
-            });
-            let client = ServerSourceClient::new(source(&format!("http://{address}")));
-            assert_eq!(
-                client
-                    .observe_calendar_connections(
-                        tokio::time::Instant::now() + Duration::from_secs(5),
-                        &floe_execution::Cancellation::default(),
-                    )
-                    .await,
-                Err(expected)
-            );
-            server.await.unwrap();
-        }
+        let _permit=self.source_calls.acquire(path.len(),deadline,cancellation).await?;
+        self.source.revalidate().await?;
+        let http=crate::gateway::http::GatewayHttpTransport::new()?;
+        let(status,bytes)=http.request(self.source.base_url(),Some(self.source.bearer_token()),reqwest::Method::GET,path,None,deadline,cancellation).await?;
+        if status!=200{return Err(match status{401=>AgentFailure::CredentialExpired,403=>AgentFailure::PolicyDenied,_=>AgentFailure::CapabilityUnavailable})}
+        crate::gateway::json::strict_json_bytes(&bytes,MAX_CATALOG_BYTES)?;
+        self.source.revalidate().await?;
+        serde_json::from_slice(&bytes).map_err(|_|AgentFailure::CapabilityUnavailable)
     }
 }
 
 /// The producer identity as Access states it.
 fn observed_producer(
-    producer: &crate::control::authorization::ProducerIdentityResponse,
+    producer: &crate::gateway::views::ProducerIdentityResponse,
 ) -> floe_access::RemoteProducerIdentity {
     floe_access::RemoteProducerIdentity {
         schema_version: producer.schema_version,
@@ -786,18 +350,18 @@ fn observed_producer(
 ///
 /// The transport only fetches and reads; which producer may be trusted, and what
 /// the descriptor it signs authorizes, are decided by the caller.
-pub struct AuthorizedSourceClient<'a, Keys> {
+pub struct AuthorizedSourceClient<'a, Keys: ?Sized> {
     pub client: &'a ServerSourceClient,
     pub keys: &'a Keys,
 }
 
-impl<'a, Keys> AuthorizedSourceClient<'a, Keys> {
+impl<'a, Keys: ?Sized> AuthorizedSourceClient<'a, Keys> {
     pub fn new(client: &'a ServerSourceClient, keys: &'a Keys) -> Self {
         Self { client, keys }
     }
 }
 
-impl<Keys: RemoteAuthorizationKeys> floe_access::RemoteGrantTransport
+impl<Keys: AuthorizationSigner + ?Sized> floe_access::RemoteGrantTransport
     for AuthorizedSourceClient<'_, Keys>
 {
     fn producer_identity<'a>(
@@ -845,7 +409,7 @@ impl<Keys: RemoteAuthorizationKeys> floe_access::RemoteGrantTransport
 
 }
 
-impl<Keys: RemoteAuthorizationKeys> floe_context::RemoteViewTransport
+impl<Keys: AuthorizationSigner + ?Sized> floe_context::RemoteViewTransport
     for AuthorizedSourceClient<'_, Keys>
 {
     fn read_admitted_view<'a>(

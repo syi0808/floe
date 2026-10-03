@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
-import 'package:floe_client/app/runtime/floe_client.dart';
+import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_client.dart';
 import 'package:floe_client/app/runtime/app_read_model.dart';
 
 final class ConversationTurnCompletion {
@@ -31,16 +31,15 @@ abstract interface class ConversationRuntimeGateway {
   });
 
   Future<void> cancelConversationTurn(AgentConversationTurnRequest request);
-}
-
-abstract interface class ConversationRuntimeProvider {
-  ConversationRuntimeGateway? get conversationRuntime;
+  Future<void> cancelObservedRun(String runId);
+  Future<ConversationTurnCompletion> observeSessionRun(
+    AgentSession session, {required void Function(AppRunSnapshot run) onRun});
 }
 
 final class NativeConversationRuntimeGateway
     implements ConversationRuntimeGateway {
   factory NativeConversationRuntimeGateway({
-    required FloeClient client,
+    required AppWireConversationClient client,
     required AppReadModel readModel,
     required Future<AgentSession> Function(String personId, String sessionId)
     loadSession,
@@ -62,7 +61,7 @@ final class NativeConversationRuntimeGateway
     this._observationInterval,
   );
 
-  final FloeClient _client;
+  final AppWireConversationClient _client;
   @override
   final AppReadModel readModel;
   final Future<AgentSession> Function(String personId, String sessionId)
@@ -111,7 +110,6 @@ final class NativeConversationRuntimeGateway
         text: request.text,
         continuation: continuation,
         retryOf: retryOf,
-        profileId: request.profileId,
       );
       active.commandId = command.commandId;
       readModel.markCommandPending(command.commandId);
@@ -164,10 +162,33 @@ final class NativeConversationRuntimeGateway
     }
   }
 
+  @override
+  Future<ConversationTurnCompletion> observeSessionRun(
+    AgentSession session, {required void Function(AppRunSnapshot run) onRun}) async {
+    final runId = session.activeTurn;
+    if (runId == null || _active != null) throw StateError('No detached session Run is available.');
+    final active = _ActiveConversationTurn(null);
+    _active = active;
+    try {
+      await synchronizeConversation(session);
+      return await _observeRun(runId, session.revision, session, onRun: onRun);
+    } finally {
+      if (identical(_active, active)) _active = null;
+    }
+  }
+
   Future<ConversationTurnCompletion> _observeReceipt(
     AppCommandReceipt receipt,
     AgentSession session, {
     required void Function(AppRunSnapshot run) onRun,
+  }) => _observeRun(receipt.runId, receipt.sessionRevision, session, onRun: onRun, receipt: receipt);
+
+  Future<ConversationTurnCompletion> _observeRun(
+    String runId,
+    int minimumSessionRevision,
+    AgentSession session, {
+    required void Function(AppRunSnapshot run) onRun,
+    AppCommandReceipt? receipt,
   }) async {
     var lastNotifiedRevision = 0;
     while (true) {
@@ -182,7 +203,7 @@ final class NativeConversationRuntimeGateway
             throw const FormatException('Conversation event resync required.');
           }
       }
-      final durable = await _client.getRun(receipt.runId);
+      final durable = await _client.getRun(runId);
       if (!readModel.applyRunSnapshot(durable)) {
         final resync = await _client.readEvents();
         if (resync is! AppEventsResyncRequired) {
@@ -190,7 +211,7 @@ final class NativeConversationRuntimeGateway
         }
         await _bootstrapAt(resync, session, receipt: receipt);
       }
-      final run = readModel.conversation.runs[receipt.runId]!;
+      final run = readModel.conversation.runs[runId]!;
       if (run.sessionId != session.id) {
         throw const FormatException('Conversation Run scope mismatch.');
       }
@@ -198,15 +219,22 @@ final class NativeConversationRuntimeGateway
         lastNotifiedRevision = run.revision;
         onRun(run);
       }
-      if (run.state == AppRunState.finished) {
+      if (run.state.terminal) {
         final reloaded = await _loadSession(session.personId, session.id);
         if (reloaded.id != session.id ||
             reloaded.personId != session.personId ||
-            reloaded.activeTurn != null ||
-            reloaded.revision < receipt.sessionRevision) {
+            reloaded.activeTurn == runId ||
+            reloaded.revision < minimumSessionRevision) {
           throw const FormatException(
             'Conversation terminal snapshot mismatch.',
           );
+        }
+        if (reloaded.activeTurn case final linkedRunId?) {
+          runId = linkedRunId;
+          minimumSessionRevision = reloaded.revision;
+          receipt = null;
+          lastNotifiedRevision = 0;
+          continue;
         }
         return ConversationTurnCompletion(run: run, session: reloaded);
       }
@@ -225,6 +253,17 @@ final class NativeConversationRuntimeGateway
     active.cancelRequested = true;
     await active.receiptReady.future;
     if (active.receipt != null) await _cancel(active);
+  }
+
+  @override
+  Future<void> cancelObservedRun(String runId) async {
+    final run = readModel.conversation.runs[runId];
+    if (run == null || run.state.terminal) return;
+    final command = _client.prepareCancelRun(runId);
+    final receipt = await _submitCancel(command);
+    if (receipt.runId != runId || receipt.runtimeEpoch != run.runtimeEpoch) {
+      throw const FormatException('Observed Run cancellation mismatch.');
+    }
   }
 
   Future<void> _cancel(_ActiveConversationTurn active) async {
@@ -261,19 +300,10 @@ final class NativeConversationRuntimeGateway
   ) async {
     if (!request.continuation) return null;
     final reference = request.session.continuation;
-    if (reference == null || reference.level >= 3) {
+    if (reference == null) {
       throw const FormatException('Conversation continuation unavailable.');
     }
-    final source = await _client.getRun(reference.turnId);
-    if (source.sessionId != request.session.id ||
-        source.state != AppRunState.finished) {
-      throw const FormatException('Conversation continuation mismatch.');
-    }
-    return AppContinuationRef(
-      runId: source.runId,
-      executorGeneration: source.executorGeneration,
-      level: reference.level + 1,
-    );
+    return AppContinuationRef(id: reference.id);
   }
 
   Future<String?> _retryFor(AgentConversationTurnRequest request) async {
@@ -298,7 +328,6 @@ final class NativeConversationRuntimeGateway
       ...projection.runs.keys,
       ?receipt?.runId,
       ?session.activeTurn,
-      ?session.continuation?.turnId,
     };
     readModel.requireResync(boundary);
     final commands = <AppCommandReceipt>[];

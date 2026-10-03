@@ -1,295 +1,73 @@
-# Floe Inference Gateway
+# Floe Gateway
 
-Minimal Go network-inference module with no third-party Go dependencies and no
-CLIProxyAPI dependency. Architecture: [ADR 0011](../docs/decisions/0011-inference-performance-classes.md).
+The Go Gateway is a single-operator service bound to a literal loopback address. It owns paired-client trust, source integrations, signed read admission/release, and operator-configured inference. Rust owns source-processing permission, model planning and tool execution. No Go Actions or provider-write API is exposed.
 
-This is a manually launched, single-operator loopback service, not the hosted
-server. The local console adds target registration, macOS Keychain credentials,
-app pairing, and server-owned Codex OAuth ([ADR 0010](../docs/decisions/0010-local-connection-console.md)).
-Accounts, sync, Apple Foundation Models, general streaming and usage
-accounting remain separate work. Native models will not be forced through a remote server.
-
-## Local dashboard and app pairing
-
-On macOS with Go 1.25+ and Xcode command-line tools (cgo/Security.framework):
+The server has no third-party Go dependencies. Run on macOS with Go 1.25+ and Xcode command-line tools for the Security.framework Keychain adapter:
 
 ```sh
 cd server
-env -u FLOE_INFERENCE_CONFIG -u FLOE_INFERENCE_TOKEN go run ./cmd/floe-server
-```
-
-At startup the server loads `.env` from its working directory without overwriting existing process
-environment variables. Set `FLOE_ENV_FILE` to use another path. Copy `.env.example` for a new local
-configuration. Deployment-specific OAuth registration and secret requirements are documented in
-[`docs/deployment/oauth-configuration.md`](../docs/deployment/oauth-configuration.md).
-
-Open `http://127.0.0.1:8431/manage/`. Unlock with the administrator token in
-`~/Library/Application Support/FloeServer/admin-token`. Keep this file private;
-do not paste its contents into chat, logs or committed files. The server prints
-only its path. The containing directory must have mode 0700; generated files are 0600.
-
-1. In Floe, open **Settings → Remote server**.
-2. Enter `http://127.0.0.1:8431` (or `http://localhost:8431`, normalized to the literal address).
-3. Click **Pair this device**, compare the eight-character code in the dashboard,
-   and approve only the request you initiated. Requests expire after five minutes.
-4. The app confirms connectivity and saves its credential/address to Keychain.
-   Finder launches now work without shared shell environment variables.
-5. Select a provider. Codex uses OAuth; OpenAI-compatible APIs use an endpoint and
-   optional Keychain-backed API key. Claude OAuth is visible but not implemented.
-6. Under that provider, set a model and reasoning effort for **High effort**. The
-   Codex model field offers suggestions from the current public Codex catalog and
-   also accepts a custom model identifier. The curated list was refreshed from
-   OpenAI's `codex-rs/models-manager/models.json` on 2026-09-05; account-specific
-   availability still requires a connection test.
-   Saving makes this provider active for every non-empty class in the form.
-7. Click **Check connection** in Floe to verify the paired credential and server
-   reachability. Model selection remains in this dashboard.
-
-App pairing tokens never grant management access. **Forget connection** removes
-only the app's local copy; **Revoke** in the dashboard invalidates the token on the
-server. Removing a target deletes its Keychain entry; this does not revoke an API
-key at the provider. A changed provider or endpoint never inherits an old API key.
-
-`FLOE_SERVER_ADDRESS=127.0.0.1:9431` changes the local port. `FLOE_SERVER_DATA` sets
-a private state directory and explicitly selects console mode. No LAN, remote
-deployment, TLS termination or multi-user authorization is supported in this slice.
-Do not share one data directory between concurrently running server processes.
-
-### Codex / ChatGPT OAuth
-
-**Start browser login** runs a PKCE OAuth flow owned by the Go server, using a
-five-minute callback listener on `localhost:1455`. Access, refresh and identity
-tokens are stored as one macOS Keychain credential and are never returned through
-the management or app APIs. **Disconnect Codex** deletes that credential.
-
-After connecting, select Codex and enter or choose a model for each desired
-performance class. Suggested model IDs are conveniences, not an account capability
-check; custom IDs remain available. The endpoint and credential are fixed server-side. Requests go to
-the ChatGPT Codex Responses backend with an empty tool list, `tool_choice: none`,
-bounded context, structured output and the same per-request external-transfer
-consent as other network providers. The server refreshes expiring access tokens and
-stores the rotated result in Keychain. This integration follows the Codex CLI OAuth
-wire contract directly rather than launching `codex app-server`; upstream protocol,
-model availability and subscription limits can change and require live retesting.
-
-### Gmail read-only OAuth
-
-Create a Google **Desktop app** OAuth client in a project with the Gmail API enabled, then start
-the local node with its client ID. The client secret is optional for installed-app clients and,
-when supplied, must come from the process environment rather than repository configuration.
-
-```sh
-export FLOE_GOOGLE_OAUTH_CLIENT_ID='your-desktop-client-id'
-export FLOE_GOOGLE_OAUTH_CLIENT_SECRET='optional-client-secret'
 go run ./cmd/floe-server
 ```
 
-In the Floe app, open **Connections**, select Gmail, and start the browser login. Floe opens no
-embedded webview: the returned authorization URL must be opened in the system browser. The flow uses a
-random loopback callback port, PKCE S256, five-minute state, offline access and only
-`gmail.readonly`. Access and refresh tokens are stored together in macOS Keychain and are never
-returned to the app. Disconnect first revokes the Google grant and then deletes the
-Person-and-connection-scoped credential. Changing the configured client ID never inherits an older client's tokens.
+The service loads `.env` without overwriting process environment. `FLOE_ENV_FILE` selects another file. `FLOE_SERVER_ADDRESS` defaults to `127.0.0.1:8431`; `FLOE_SERVER_DATA` selects a private profile directory and otherwise defaults to `~/Library/Application Support/FloeServer`. The directory must be mode 0700; private files are 0600. Never run two processes against the same profile.
 
-The connector performs a bounded purpose-filtered metadata refresh every five minutes while
-connected. `FLOE_GMAIL_QUERY` can replace the default
-`newer_than:30d -in:spam -in:trash` query. OAuth setup and a live mailbox run are still required
-before Gmail evidence is available to Floe clients.
+Open `http://127.0.0.1:8431/manage/` and use the administrator token in that profile's `admin-token` file. The token is never printed. Do not copy credentials into chat, logs or source control. The old shared-bearer/headless mode and `FLOE_INFERENCE_CONFIG`/`FLOE_INFERENCE_TOKEN` execution path have been removed.
 
-The same Google client registration also enables a separate **Google Calendar** connection in the
-app. That flow stores an independently scoped credential and requests only
-`calendar.readonly`. Configure one or more Calendar IDs in the app, one opaque ID per line; commas
-inside an ID are preserved. The server stores a canonical `calendar_ids` set on the connection.
-Adding or removing an ID advances its connection revision and source epoch, while reordering does not.
-Paired clients use the generic `calendar.timeline` View preview/admit/read/release flow with one logical
-permission resource per connection. The signed preview names the exact current Calendar IDs; a bounded
-composite cursor pages across all configured Calendars. Requests cover up to 32 days. Floe exports title
-and timing only—calendar IDs, provider event IDs, descriptions, locations and attendees are excluded from
-Agent context. Editing source IDs does not automatically re-review an active Observe grant.
-The owner-key admission and release challenge binds the current `GrantAuthority` and
-`SourceAuthority` independently. It contains no separate policy epoch; source-transport
-audience is signed routing evidence and does not approve an external model recipient.
+## Pairing and trust
 
-### Microsoft Mail read-only OAuth
+Floe generates and retains its issuer key privately, submits the public identity through `/pair/start`, verifies the signed producer challenge, and proves possession with `/pair/confirm`. All pairing operations use POST and schema 1. Start requires a stable `operation_id` and a privately staged random 32-byte base64url `proof`; subsequent requests use the exact `pairing_id`/`proof` fields. A bounded private receipt reserves each start identity before generating its challenge, so exact start replay returns the original challenge and proof after response loss. Changed identity or proof conflicts; an expired operation never creates another challenge. The operator compares the request and exact issuer fingerprint before approval. The uncommitted proof challenge expires after 30 seconds.
 
-Register a Microsoft identity-platform application that allows public-client loopback redirects,
-then configure the local node with its client ID. A client secret is optional and, when present,
-must stay in the process environment.
+Trust atomically persists the app bearer hash and active issuer binding. Only after that commit may `/pair/poll` release the app token. A private Keychain pairing receipt supports the same approved polling readback after response loss or process restart. Missing private credential data returns an explicit repair error and never regenerates a bearer or issuer. `/pair/cancel` can cancel an uncommitted attempt; a committed binding must be explicitly revoked.
 
-```sh
-export FLOE_MICROSOFT_OAUTH_CLIENT_ID='your-application-client-id'
-export FLOE_MICROSOFT_OAUTH_CLIENT_SECRET='optional-client-secret'
-go run ./cmd/floe-server
-```
+App bearers cannot operate the dashboard, structured operator inference or traces. Operator sessions have their own expiry, rate limit, capacity and CSRF capability. Every client/issuer transition advances the shared trust generation, invalidating captured source and inference authority. Revocation persists issuer tombstones and an integration cleanup ticket before cleanup performs any provider I/O. The affected Person remains blocked until the exact durable cleanup receipt is acknowledged. A remaining same-Person client retains completed sources and unrelated attempts; last-client revocation removes that Person's sources.
 
-Use **Connections → Microsoft Mail → Connect** in the Floe app. The PKCE flow
-requests only `Mail.Read` and `offline_access`, stores the resulting credential under a separate
-Person-and-connection-scoped Keychain name, and binds stored tokens to the configured client ID. The paired communication
-route uses Gmail first when both providers are configured and falls back to Microsoft on absence or
-failure. Disconnect in Floe deletes the local credential; revoke the application's consent in the
-Microsoft account when the remote grant must also be invalidated.
+Trust state, source lifecycle and operator inference configuration have separate private files: `trust.json`, `integrations.json` and `inference.json`. Producer identity is retained separately. File/key read errors never replace identities or reset data. Post-rename durability uncertainty latches the affected owner closed. This cutover requires a deliberately selected clean development profile; there is no old-format decoder or automatic reset.
 
-The same Microsoft application registration enables a separate **Microsoft Calendar** connection
-with its own Person-scoped Keychain credential and exact `Calendars.Read` scope. Configure its
-`calendar_ids` set in the app as for Google Calendar. The paired timeline route tries configured Google Calendar first
-and Microsoft Calendar second, returning the first healthy bounded View without exposing routing
-policy, calendar IDs, bodies, locations or attendees to Agent context.
+## Sources
 
-### GitHub App user authorization
+Product setup starts with a stable operation UUID and reviewed scope. Product responses contain only an operation ID, revision, setup state and `/manage/setup/<operation_id>` reference. The admitted Gateway operator completes provider OAuth or enters the provider secret on that hosted page; raw provider URLs, user codes and secrets never appear in the paired product setup response. Cancellation checks the exact remote operation revision.
 
-Create a GitHub App with **Issues: read-only** repository permission and no write permission, then
-enable **Device Flow** in the app settings. Start the local node with the public client ID:
+Node factories open independent connection-scoped runtimes, with Keychain slots derived from connector namespace, Person and connection identity. OAuth completion, scope updates and disconnect use durable lifecycle records and revision checks. POST `/v1/connectors/{id}/disconnect` requires a stable `operation_id`, exact connection ID and revision. Its durable receipt reports `pending` or `completed`; exact replay does not issue a second source operation. Resources are canonicalized; a reordered resource set does not advance the source revision or epoch. Google and Microsoft Calendar may coexist. Each read remains bound to the exact admitted connection, revision, source incarnation/epoch and verified provider account; there is no cross-provider fallback.
 
-```sh
-export FLOE_GITHUB_OAUTH_CLIENT_ID='your-github-app-client-id'
-go run ./cmd/floe-server
-```
+Google Calendar validates the UserInfo subject, and Microsoft Calendar validates tenant/subject OIDC evidence. Missing account-identity support remains explicitly unverified and cannot authorize source reads. Provider snapshots/read normalization for the other source families remain part of the S2 adapter cutover; an unverified connection is never silently promoted.
 
-Floe opens GitHub's device page, displays the short-lived user code, polls at GitHub's required
-interval, and stores the resulting user and refresh tokens in the macOS Keychain. No client secret
-or redirect URL is used. Floe reads only the repository selected in **Connections → GitHub
-Issues**. Personal access-token entry is no longer exposed.
+Supported provider setup factories use:
 
-### Slack user authorization
+- `FLOE_GOOGLE_OAUTH_CLIENT_ID` and optional `FLOE_GOOGLE_OAUTH_CLIENT_SECRET` for Gmail, Drive and Calendar
+- `FLOE_MICROSOFT_OAUTH_CLIENT_ID` and optional `FLOE_MICROSOFT_OAUTH_CLIENT_SECRET` for Mail, Calendar and Teams
+- `FLOE_GITHUB_OAUTH_CLIENT_ID` for GitHub App device authorization with Issues read-only permission
+- `FLOE_SLACK_OAUTH_CLIENT_ID` and optional `FLOE_SLACK_OAUTH_CLIENT_SECRET` for Slack user authorization; its registered callback uses `http://localhost:1456/oauth/slack/callback`
+- A separately supplied Home Assistant credential for the selected instance and entities
 
-Create a Slack app in a development workspace. Enable PKCE, add the user scopes
-`channels:history` and `groups:history`, and register
-`http://localhost:1456/oauth/slack/callback` as its desktop redirect. Then start the local node:
+See [OAuth deployment configuration](../docs/deployment/oauth-configuration.md) for external registrations. Source credentials never enter normalized Views, Agent input, signed query payloads or diagnostics. Mail bodies remain outside the four exposed normalized View routes.
+
+## Inference schema 2
+
+Build the Gateway and Rust caller from the same snapshot. The wire has one schema and no compatibility decoder:
+
+- `GET /v1/inference-purposes`: paired-client inventory with exactly `quick_response`, `everyday_assistance`, `deep_work`
+- `POST /v1/agent`: paired-client invocation with purpose, opaque capability revision, fresh attempt UUID, admitted data classes, stable instructions, bounded canonical messages/tools and output limit
+- `POST /v1/generate`: operator-session structured invocation, using the same capability revision and accounting envelope
+- `GET /v1/traces` and `/v1/traces/{trace_id}`: operator-only bounded diagnostics
+
+Available inventory entries contain `status`, `capability_revision` and `capabilities:["chat"]`. Explicitly disabled or unconfigured purposes have only their status. Configured provider/account failures are errors, never an absence or local-fallback signal. The opaque revision is derived with a private HMAC and binds the current purpose, configured target, effort, configuration generation and provider/account identity. The service checks it before provider dispatch and before output release.
+
+Successful Agent output is a typed array of `preamble`, `answer` and `call` steps. All metadata is echoed exactly; call IDs preserve output order. Usage is `{tokens:integer|null,cost_micros:integer|null}`: reported zero is valid and missing dimensions remain null. Structured output is an object validated against the requested bounded schema. The Gateway neither executes proposed tools nor fabricates usage. Provider-native replay state does not cross the paired wire, and a lost response never triggers an automatic resend.
+
+Inference request bodies are limited to 98,304 bytes, and responses to 65,536 bytes. Decoding rejects invalid UTF-8, duplicate keys, unknown fixed-shape fields, forbidden nulls, non-integral/out-of-range DTO numbers, trailing values and excessive nesting. Agent input is limited to 32,768 bytes; generated Agent steps to the requested limit up to 16,384 bytes. Errors have schema 2, a stable code and a nullable trace ID. Provider error text, prompts, source content and credentials never enter traces.
+
+Paired routes reject all nonempty Origin headers. Operator mutations require the admitted dashboard session, matching Origin and CSRF. No CORS is enabled. Provider endpoints require HTTPS except literal-loopback local Ollama; redirects and environment proxies are disabled. The operator controls targets/models in the dashboard; product callers cannot select endpoints, accounts, model names or reasoning effort. Explicit connection probes use the separate operator-only `ProbeTarget` action with fixed bounded synthetic Agent input. A target may be probed before any purpose route selects it; probes do not fabricate a product principal or bypass product capability checks. Startup performs local initialization checks and does not dispatch model probes.
+
+## Ownership and verification
+
+`trust` owns immutable principals, issuer/producer identity, sessions and durable revocation. `pairing` owns temporary proof/approval state and private committed readback. `integrations` owns connection lifecycle, scopes and cleanup. `views` owns normalized payloads, typed queries and bounded validation. `authority` owns one-use source admission/staging/release. `inference` owns purpose selection and accounting; concrete adapters live under `inference/providers` and `inference/codex`. `transport/http` owns framing, routes, cookies and redacted DTOs. `node` composes these owners and real connector factories.
+
+During the coordinated architecture cutover, formatting/compilation runs only at the full G1 slice checkpoint. Final server qualification after the new S3 tests are written uses:
 
 ```sh
-export FLOE_SLACK_OAUTH_CLIENT_ID='your-slack-app-client-id'
-export FLOE_SLACK_OAUTH_CLIENT_SECRET='optional-for-PKCE-desktop-clients'
-go run ./cmd/floe-server
-```
-
-The flow requests user scopes rather than bot scopes so the selected public or private channel can
-be read with the authorizing user's access. Slack issues rotating desktop tokens for this PKCE
-flow; Floe keeps them in the macOS Keychain. Direct Slack token entry is no longer exposed. Port
-`1456` must be free while authorization is in progress.
-
-## Legacy headless mode
-
-The environment-configured mode below remains for existing development fixtures.
-Set `FLOE_INFERENCE_CONFIG` and leave `FLOE_SERVER_DATA` unset to select it. It has
-no browser dashboard and requires the shared gateway token as before.
-
-## Run with server-side Ollama (legacy)
-
-Go 1.25 or newer. Copy `config.example.json` to `config.local.json` and replace
-the placeholder with an already-installed Ollama model. Floe does not install or
-download models. Start Ollama with cloud disabled and verify it listens on the
-configured literal loopback address.
-
-From the repository root, in one shell:
-
-```sh
-cp server/config.example.json server/config.local.json
-export FLOE_INFERENCE_CONFIG="$PWD/server/config.local.json"
-export FLOE_INFERENCE_TOKEN="$(openssl rand -hex 32)"
-(cd server && go run ./cmd/floe-server) &
-```
-
-Edit the copied config **before** starting the service. Product features request a
-product purpose; the gateway resolves it to an operator-managed target. Target,
-model, provider and reasoning effort are operator-only configuration. Apps can see
-only purpose availability and data-boundary metadata through authenticated
-`GET /v1/inference-purposes`. Restart the gateway after changing configuration or credentials.
-This headless path exists for fixtures and direct development clients; native Floe
-uses console pairing instead. Device-local models execute inside the client runtime
-and do not use this gateway.
-
-## API-key target
-
-An OpenAI-compatible target can be configured as:
-
-```json
-{
-  "targets": {
-    "api-model": {
-      "provider": "openai_compatible",
-      "base_url": "https://api.openai.com/v1",
-      "model": "replace-with-supported-model",
-      "api_key_env": "FLOE_PROVIDER_API_KEY"
-    }
-  },
-  "routes": {
-    "high_effort": {
-      "target": "api-model",
-      "reasoning_effort": "high"
-    }
-  }
-}
-```
-
-Inject the actual key into the Go process environment using your secret manager
-or an interactive shell. Do not put it in JSON or command-line arguments. Only
-the environment-variable **name** belongs in config. The app receives no provider
-key. The model must support non-streaming Chat Completions JSON-schema output;
-compatibility is tested per model, not assumed for all APIs or subscription plans.
-
-Map the required performance class to `api-model` and explicitly allow external transfer for the
-request. This permission is required for every OpenAI-compatible target, even a loopback proxy:
-being on localhost does not mean its upstream runs locally. No automatic fallback,
-retry or account rotation occurs. Provider errors do not expose raw response text.
-
-Direct OAuth integration is **not** implemented by configuring a proxy. Supported
-auth flows, credential ownership and refresh/revocation must be evaluated per
-provider before adding an OAuth adapter. Existing Codex credentials are not read.
-
-## Inference contract
-
-Agent conversations now use `POST /v1/agent` (schema version 1), with native
-`input.messages` and `input.tools`, rather than a model-authored JSON step envelope.
-The gateway normalizes provider output; Rust alone executes tools and owns the
-single output/schema correction retry. Structured generation uses `/v1/generate`, also with schema version 1. Legacy class-selected APIs are removed.
-Build and deploy the matching server and client together; v2/v3 aliases are not supported. Native tool support is required
-on the selected route; there is no automatic downgrade or provider fallback.
-See [ADR 0016](../docs/decisions/0016-native-agent-model-protocol.md) for the migration
-boundary and the remaining session/replay/UI work.
-
-Bearer authentication is required for both endpoints. Console mode issues distinct
-app tokens; legacy mode uses the shared developer token. The default is `127.0.0.1:8431`.
-Requests with a browser Origin header are rejected. No CORS or public deployment
-mode is provided. Anyone holding this local token can use registered targets:
-it is not multi-user/Person authorization.
-
-`POST /v1/generate`:
-
-```json
-{
-  "schema_version": 1,
-  "inference_class": "high_effort",
-  "allow_external": false,
-  "instructions": "Domain-owned instructions",
-  "input": {"domain_owned": "minimal context"},
-  "output_schema": {"type": "object", "properties": {}}
-}
-```
-
-Success: `{"schema_version":1,"inference_class":"high_effort","output":"{...}"}`.
-Failure: `{"schema_version":1,"error":{"code":"model_timeout"}}`.
-Other codes include `unauthorized`, `validation`, `inference_class_unavailable`,
-`external_transfer_denied`, `model_busy`, `model_unavailable`, `invalid_proposal`.
-
-The gateway normalizes provider envelopes and checks output bounds/JSON, but
-does not implement feature-specific domain validation. No tool or mutation endpoint is exposed.
-
-Configuration is the endpoint allowlist; clients cannot submit URLs or credentials.
-HTTPS is required except literal loopback HTTP. Redirects and environment proxies
-are disabled. The administrator and configured endpoint remain trusted; this is
-not a sandbox around a malicious local proxy or Ollama process.
-
-Limits: four active requests, 96 KiB request envelope, 32 KiB input and schema
-each, 1 MiB provider envelope, 8 KiB returned JSON, 40-second provider deadline.
-Client disconnection and process shutdown cancel upstream work. Logs contain
-startup/failure summaries only, not prompts, outputs or credentials.
-
-## Validate
-
-```sh
+gofmt -w <changed-go-files>
 go test -race ./...
 go vet ./...
-FLOE_TEST_KEYCHAIN=1 go test ./internal/credentials
 ```
 
-Historical console/pairing validation snapshots live in Git history. This README is the current operational source for the loopback server.
+macOS Keychain and real provider OAuth behavior require their platform/provider prerequisites. A successful Linux compile cannot establish those behaviors.

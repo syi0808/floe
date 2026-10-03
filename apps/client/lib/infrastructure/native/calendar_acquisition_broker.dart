@@ -1,24 +1,20 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:flutter/services.dart';
 
-import 'package:floe_client/app/runtime/native_transport.dart';
+import 'package:floe_client/infrastructure/native/native_context_host_transport.dart';
 
 typedef CalendarAcquisitionReader = Future<Map<String, dynamic>> Function(
   Map<String, dynamic> request,
 );
 
 final class CalendarAcquisitionBroker {
-  CalendarAcquisitionBroker({
-    required this._transport,
-    required this._personId,
-    String? hostEpoch,
-  }) : _hostEpoch = hostEpoch ?? _newEpoch();
+  CalendarAcquisitionBroker({required NativeContextHostTransport transport})
+      : _transport = transport;
 
-  final LocalContextTransport _transport;
-  final String _personId;
-  final String _hostEpoch;
+  final NativeContextHostTransport _transport;
+  NativeHostRegistration? _registration;
+  String get _hostEpoch => _registration!.hostEpoch;
   bool _started = false;
   bool _disposed = false;
 
@@ -27,10 +23,12 @@ final class CalendarAcquisitionBroker {
   Future<void> start() async {
     _ensureOpen();
     if (_started) return;
-    await _transport.registerAcquisitionHost(
-      personId: _personId,
-      hostEpoch: _hostEpoch,
+    _registration = await _transport.registerAcquisitionHost(
     );
+    if (_disposed) {
+      await _transport.disposeAcquisitionHost(registration: _registration!);
+      throw StateError('Native host was detached during registration.');
+    }
     _started = true;
   }
 
@@ -38,8 +36,7 @@ final class CalendarAcquisitionBroker {
     _ensureOpen();
     await start();
     final requests = await _transport.pollAcquisitions(
-      personId: _personId,
-      hostEpoch: _hostEpoch,
+      registration: _registration!,
     );
     if (requests.isEmpty) return false;
     if (requests.length != 1) {
@@ -52,8 +49,7 @@ final class CalendarAcquisitionBroker {
     } on Object catch (error) {
       if (_disposed) return false;
       await _transport.failAcquisition(
-        personId: _personId,
-        hostEpoch: _hostEpoch,
+        registration: _registration!,
         requestId: request['request_id']! as String,
         failure: _failureCode(error),
       );
@@ -72,16 +68,14 @@ final class CalendarAcquisitionBroker {
       _validateResultIdentity(request, result);
     } on Object catch (error) {
       await _transport.failAcquisition(
-        personId: _personId,
-        hostEpoch: _hostEpoch,
+        registration: _registration!,
         requestId: request['request_id']! as String,
         failure: _failureCode(error),
       );
       rethrow;
     }
     await _transport.completeAcquisition(
-      personId: _personId,
-      hostEpoch: _hostEpoch,
+      registration: _registration!,
       result: Map.unmodifiable(result),
     );
   }
@@ -91,8 +85,7 @@ final class CalendarAcquisitionBroker {
     _disposed = true;
     if (_started) {
       await _transport.disposeAcquisitionHost(
-        personId: _personId,
-        hostEpoch: _hostEpoch,
+        registration: _registration!,
       );
     }
   }
@@ -120,6 +113,7 @@ final class CalendarAcquisitionBroker {
       'native_subject_fingerprint_before',
       'native_subject_fingerprint_after',
       'available_calendar_ids',
+      'available_calendars',
       'permission_class',
       'batches',
     };
@@ -147,6 +141,8 @@ final class CalendarAcquisitionBroker {
       throw const FormatException('Native acquisition generation changed.');
     }
     if (request['mode'] != 'inspect_subject' &&
+        request['mode'] != 'inspect_catalog' &&
+        request['mode'] != 'request_permission' &&
         request['mode'] != 'read_events') {
       throw const FormatException('Invalid native acquisition mode.');
     }
@@ -155,15 +151,32 @@ final class CalendarAcquisitionBroker {
     if (before is! String ||
         after is! String ||
         !_validFingerprint(before) ||
-        before != after) {
+        !_validFingerprint(after) ||
+        request['mode'] != 'request_permission' && before != after) {
       throw const FormatException('Invalid native subject evidence.');
     }
     if (request['mode'] == 'read_events' &&
         before != request['expected_native_subject_fingerprint']) {
       throw const FormatException('Native subject changed before acquisition.');
     }
+    if (request['mode'] == 'request_permission' &&
+        (!{'request_completed','denied','unavailable'}.contains(result['permission_class']) ||
+         (result['available_calendar_ids'] as List).isNotEmpty || (result['available_calendars'] as List).isNotEmpty)) {
+      throw const FormatException('Invalid Calendar permission outcome.');
+    }
+    final resources = result['available_calendars'];
+    if (resources is! List || resources.length > 256 || resources.any((value) =>
+        value is! Map || value.length != 2 || value['handle'] is! String || value['label'] is! String ||
+        (value['handle'] as String).isEmpty || (value['handle'] as String).length > 512 ||
+        (value['label'] as String).isEmpty || (value['label'] as String).length > 256 ||
+        RegExp(r'[\x00-\x1f\x7f]').hasMatch(value['label'] as String))) {
+      throw const FormatException('Invalid native Calendar catalog.');
+    }
+    final resourceIDs = resources.map((value) => (value as Map)['handle'] as String).toList();
     final available = result['available_calendar_ids'];
     if (available is! List ||
+        !_deepEqual(available, resourceIDs) ||
+        ({'inspect_catalog','request_permission'}.contains(request['mode']) && (request['calendar_ids'] as List).isNotEmpty) ||
         available.any((value) => value is! String) ||
         !_sortedUnique(available.cast<String>()) ||
         !(request['calendar_ids'] as List).every(available.contains) ||
@@ -174,7 +187,7 @@ final class CalendarAcquisitionBroker {
         (request['mode'] == 'read_events' &&
             (result['batches']! as List).length !=
                 (request['calendar_ids']! as List).length) ||
-        (request['mode'] == 'inspect_subject' &&
+        (request['mode'] != 'read_events' &&
             (result['batches']! as List).isNotEmpty)) {
       throw const FormatException('Invalid native acquisition batches.');
     }
@@ -219,21 +232,15 @@ final class CalendarAcquisitionBroker {
     return left == right;
   }
 
-  static String _newEpoch() {
-    final random = Random.secure();
-    return List<String>.generate(
-      32,
-      (_) => random.nextInt(16).toRadixString(16),
-    ).join();
-  }
+
 }
 
 final class CalendarAcquisitionService {
   CalendarAcquisitionService({
-    required this._broker,
-    required this._reader,
-    this._pollInterval = const Duration(milliseconds: 100),
-  });
+    required CalendarAcquisitionBroker broker,
+    required CalendarAcquisitionReader reader,
+    Duration pollInterval = const Duration(milliseconds: 100),
+  }) : _broker = broker, _reader = reader, _pollInterval = pollInterval;
 
   final CalendarAcquisitionBroker _broker;
   final CalendarAcquisitionReader _reader;

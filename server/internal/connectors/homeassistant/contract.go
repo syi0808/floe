@@ -1,21 +1,23 @@
 package homeassistant
 
 import (
+ "floe/server/internal/integrations"
+ "floe/server/internal/views"
 	"encoding/json"
 
-	"floe/server/internal/connectors/common"
+	
 )
 
 const observeScope = "home.states.read"
 
-func ConnectorDescriptor() common.Descriptor {
-	return common.Descriptor{
+func ConnectorDescriptor() integrations.Descriptor {
+	return integrations.Descriptor{
 		SchemaVersion: 1,
 		ID:            "home_assistant.states",
 		Version:       "1.0.0",
 		Provider:      "home_assistant",
 		Execution:     map[string]any{"kind": "server"},
-		Capabilities: []common.Capability{{
+		Capabilities: []integrations.Capability{{
 			SchemaVersion:  1,
 			ID:             "home.states.read",
 			Version:        "1.0.0",
@@ -23,7 +25,7 @@ func ConnectorDescriptor() common.Descriptor {
 			RequiredScopes: []string{observeScope},
 			OutputViewID:   "life.logistics",
 		}},
-		Views: []common.ViewDescriptor{{
+		Views: []views.ViewDescriptor{{
 			SchemaVersion:      1,
 			ID:                 "life.logistics",
 			Version:            "1.0.0",
@@ -37,15 +39,15 @@ func ConnectorDescriptor() common.Descriptor {
 	}
 }
 
-func ConnectionSnapshot(view LogisticsView) (common.Snapshot, error) {
+func ConnectionSnapshot(view views.LogisticsView) (integrations.Snapshot, error) {
 	encoded, err := json.Marshal(view)
 	if err != nil || len(encoded) > 65_536 || len(view.Items) > maxEntities {
-		return common.Snapshot{}, ErrInvalidResponse
+		return integrations.Snapshot{}, ErrInvalidResponse
 	}
 	lastSuccess := view.ObservedAtUnixMS
-	return common.Snapshot{
+	return integrations.Snapshot{
 		Descriptor: ConnectorDescriptor(),
-		Connection: common.Connection{
+		Connection: integrations.Connection{
 			SchemaVersion:       1,
 			ConnectorID:         "home_assistant.states",
 			State:               "ready",
@@ -53,7 +55,7 @@ func ConnectionSnapshot(view LogisticsView) (common.Snapshot, error) {
 			ObservedAtUnixMS:    view.ObservedAtUnixMS,
 			LastSuccessAtUnixMS: &lastSuccess,
 		},
-		Views: []common.ViewSnapshot{{
+		Views: []views.ViewSnapshot{{
 			SchemaVersion:    1,
 			ViewID:           view.ViewID,
 			SourceHandle:     view.SourceHandle,

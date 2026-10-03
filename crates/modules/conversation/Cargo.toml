@@ -6,6 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+floe-access = { path = "../access" }
+floe-connections = { path = "../connections" }
+floe-actions = { path = "../actions" }
+floe-context-contract = { path = "../../contracts/context" }
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-agent-runtime = { path = "../../runtime/agent" }
 floe-context = { path = "../context" }
@@ -14,12 +18,9 @@ floe-experts = { path = "../experts" }
 floe-inference = { path = "../inference" }
 floe-kernel = { path = "../../contracts/kernel" }
 floe-knowledge = { path = "../knowledge" }
+chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
 uuid.workspace = true
-
-[dev-dependencies]
-chrono.workspace = true
-floe-context-contract = { path = "../../contracts/context" }

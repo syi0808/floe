@@ -44,8 +44,8 @@ pub struct CalendarReadAccessAdmission {
 }
 
 impl CalendarReadAccessAdmission {
-    /// The admission a device-local read stands under: the Person's own grant,
-    /// read for the assistant, and never processed anywhere but this device.
+    /// Native acquisition uses the Person's exact read grant and preserves its
+    /// processing policy for later model projection and dispatch.
     #[allow(clippy::too_many_arguments)]
     pub fn device_local(
         person_id: PersonId,
@@ -62,11 +62,11 @@ impl CalendarReadAccessAdmission {
             grant_authority,
             source,
             source_authority,
+            processing: scope.processing().clone(),
             scope,
             operation: GrantOperation::Read,
             purpose: GrantPurpose::Assistant,
             consumer,
-            processing: ProcessingRestriction::LocalOnly,
         }
     }
 
@@ -223,12 +223,11 @@ pub fn admits_native_calendar_read(
             .contains(&GrantDataCategory::Content)
         || admission.scope.operations() != [GrantOperation::Read]
         || admission.scope.purposes() != [GrantPurpose::Assistant]
-        || admission.scope.consumers() != [consumer.clone()]
-        || admission.scope.processing() != &ProcessingRestriction::LocalOnly
+        || !admission.scope.consumers().contains(consumer)
         || admission.operation != GrantOperation::Read
         || admission.purpose != GrantPurpose::Assistant
         || admission.consumer != *consumer
-        || admission.processing != ProcessingRestriction::LocalOnly
+        || admission.processing != *admission.scope.processing()
     {
         return Err(AgentFailure::CapabilityDenied);
     }
@@ -242,27 +241,6 @@ pub fn native_calendar_resource(connection_id: &str) -> Result<ResourceHandle, A
             .map_err(|_| AgentFailure::InvalidInput)?,
     )
     .map_err(|_| AgentFailure::InvalidInput)
-}
-
-/// That where this run's model runs is where the grant said its contents may be
-/// processed.
-///
-/// A grant the Person confined to their device may not be read into a model
-/// somewhere else, and one approved for a named recipient is not what a
-/// device-local read stands on.
-pub fn admits_processing(
-    processing: &ProcessingRestriction,
-    remote_processing: bool,
-) -> Result<(), AgentFailure> {
-    match processing {
-        ProcessingRestriction::LocalOnly if remote_processing => Err(AgentFailure::PolicyDenied),
-        ProcessingRestriction::ApprovedRecipient { .. } if !remote_processing => {
-            Err(AgentFailure::PolicyDenied)
-        }
-        ProcessingRestriction::LocalOnly | ProcessingRestriction::ApprovedRecipient { .. } => {
-            Ok(())
-        }
-    }
 }
 
 /// Whether an admission still covers the source view that was assembled from it.
@@ -295,4 +273,34 @@ pub fn admission_matches_dependency(
         && admission.purpose == dependency.purpose()
         && admission.consumer == dependency.consumer().clone()
         && admission.processing == dependency.processing().clone()
+}
+
+/// Resolve the exact current native Calendar grant through the Access repository.
+/// Source lifecycle and native subject are independently checked by Connections
+/// and the acquisition host before and after the actual read.
+pub async fn current_native_calendar_grant(
+    repository: &(impl crate::GrantRepository + ?Sized),
+    person_id: PersonId,
+    connection_id: &str,
+    provider: CalendarProvider,
+    device_id: &str,
+    consumer: &GrantConsumer,
+) -> Result<crate::DataAccessGrant, AgentFailure> {
+    let connector = super::native_calendar::native_calendar_connector(provider).ok_or(AgentFailure::CapabilityUnavailable)?;
+    let source = GrantSourceBinding::try_new(person_id,
+        floe_context_contract::ConnectionId::try_new(connection_id).map_err(|_| AgentFailure::InvalidInput)?,
+        floe_context_contract::ConnectorId::try_new(connector).map_err(|_| AgentFailure::InvalidInput)?,
+        floe_context_contract::ExecutionOwnerId::try_new(device_id).map_err(|_| AgentFailure::InvalidInput)?)
+        .map_err(|_| AgentFailure::InvalidInput)?;
+    let snapshot = repository.snapshot(source.clone()).await?;
+    let resource = native_calendar_resource(connection_id)?;
+    let matching = snapshot.grants.into_iter().filter(|grant| grant.state() != crate::GrantState::Revoked
+        && grant.scope().resources().contains(&resource)).collect::<Vec<_>>();
+    let [grant] = matching.as_slice() else { return Err(AgentFailure::AccessReviewRequired); };
+    if grant.state() != crate::GrantState::Active || grant.review_required() || grant.authority_owner() != snapshot.authority_owner
+        || grant.source() != &source || grant.scope().resources() != [resource]
+        || grant.scope().categories() != [GrantDataCategory::Metadata, GrantDataCategory::Content]
+        || grant.scope().operations() != [GrantOperation::Read] || !grant.scope().purposes().contains(&GrantPurpose::Assistant)
+        || !grant.scope().consumers().contains(consumer) { return Err(AgentFailure::AccessReviewRequired); }
+    Ok(grant.clone())
 }

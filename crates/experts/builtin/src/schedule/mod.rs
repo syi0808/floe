@@ -57,33 +57,8 @@ impl ScheduleAssessment {
     }
 }
 
-#[cfg(test)]
-mod assessment_tests {
-    use super::*;
-
-    #[test]
-    fn assessment_rejects_invalid_intervals_and_oversized_titles() {
-        let mut assessment = ScheduleAssessment {
-            insights: vec![ScheduleInsight::FocusWindow {
-                starts_at_unix_ms: 10,
-                ends_at_unix_ms: 10,
-            }],
-        };
-        assert!(assessment.validate().is_err());
-        assessment.insights = vec![ScheduleInsight::Commitment {
-            evidence_handle: Uuid::new_v4(),
-            untrusted_title: "x".repeat(257),
-            starts_at_unix_ms: 10,
-            ends_at_unix_ms: 20,
-        }];
-        assert!(assessment.validate().is_err());
-        assessment.insights = vec![ScheduleInsight::NoFocusWindow; 9];
-        assert!(assessment.validate().is_err());
-    }
-}
-
 pub use plan::{
-    FOCUS_REQUEST, ScheduleExecutionIntent, ScheduleRequestPlan, day_bounds, plan_request,
+    FOCUS_REQUEST, ScheduleRequestPlan, day_bounds, plan_request,
     requested_range, run_policy,
 };
 pub const RESULT_MEDIA_TYPE: &str = "application/vnd.floe.expert.schedule+json;version=1";

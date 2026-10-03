@@ -48,9 +48,10 @@ Expected Rust stages are `agent_job_started`, optional `model_attempt_*` and
 
 ## Regression checks
 
-```sh
-cargo test -p floe-ffi --tests diagnostics
-cd apps/client
-flutter test test/infrastructure/diagnostics test/app/runtime/native_transport_error_test.dart
-flutter test test/app/runtime/agent_vault_gateway_test.dart
-```
+The previous diagnostics and transport suites were removed in T0 after their
+assertions were recorded in the [bindings](../plans/t0-bindings-behavior-ledger.md)
+and [client runtime](../plans/t0-client-behavior-ledger-runtime.md) behavior ledgers.
+Reconstruct regression coverage against the final owner and transport contracts
+in S3. The [active execution plan](../plans/2026-10-02-architecture-refactor.md)
+controls compilation, build and test gates; no removed test command is a current
+verification result.

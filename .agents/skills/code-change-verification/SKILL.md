@@ -51,7 +51,7 @@ Use targeted cargo tests before the full workspace gate when useful. Do not add 
 
 Crates that declare `autotests = false` with a named `integration` test target keep module files behind that harness rather than adding more standalone test executables. Run a module with `cargo test -p <crate> --test integration <module>::`. Keep provider live-server/native tests and FFI subprocess tests separate when process isolation is part of their semantics.
 
-The shared Go/Swift fixture builder is documented in `docs/development/test-performance.md`. When fixture tooling changes, run `python3 tools/validation/test_test_fixtures.py -v` and the affected real Rust/Flutter fixture tests, preserving private server data and native host bundles.
+Shared cross-language fixture policy is documented in `docs/development/test-performance.md`. The old builder and suites were removed at T0 under the active architecture plan; reconstruct and validate needed fixture tooling during S3 before using it. When retained fixture tooling changes, run its actual current tests and affected real Rust/Flutter boundary tests, preserving private server data and native host bundles.
 
 The final workspace test already compiles the covered library targets; do not precede it with a duplicate workspace-wide `cargo check`. Explicit task requirements for distinct targets/features still apply. For build-performance measurements, add `--timings` to the same gate, record cache/toolchain conditions, and compare compile/link and warm execution separately. Do not infer speedups from differently warmed caches.
 

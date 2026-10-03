@@ -1,11 +1,11 @@
 //! Conversation-owned durable user interactions.
 //!
 //! An interaction records that a running turn reached a recoverable owner
-//! requirement: the admitted origin (a Tool call, Delegation Task or Model
-//! attempt), the owner-produced semantic request, and the immutable reviewed
+//! requirement: the admitted origin (a Tool call, Delegation Task or pre-model
+//! projection), the owner-produced semantic request, and the immutable reviewed
 //! target the person's decision binds. Conversation owns interaction identity,
 //! origin, lifecycle, decision intent and resume linkage; it never owns source,
-//! grant or recipient authority. Those stay with Access, Connections and the
+//! grant or processing authority. Those stay with Access, Connections and the
 //! provider/native owners, which re-verify current authority when a decision
 //! resolves (05-C/05-D).
 //!
@@ -19,7 +19,7 @@
 //! [`UserInteractionRef`].
 
 use floe_agent_contract::{
-    AgentFailure, DataClass, PackageKind, PackageRef, ProcessingSourceScope, RecipientLineage,
+    AgentFailure, PackageKind, PackageRef,
     UserInteractionKind,
 };
 use floe_kernel::{CommandId, PersonId, RunId};
@@ -38,7 +38,6 @@ pub const MAX_REVIEWED_IDENTIFIER_BYTES: usize = 256;
 pub const MAX_REVIEWED_PURPOSE_BYTES: usize = 64;
 pub const MAX_TARGET_BUNDLE_MEMBERS: usize = 8;
 pub const MAX_REVIEWED_TARGET_BYTES: usize = 8 * 1024;
-pub const MAX_RECIPIENT_CONSENT_TARGET_BYTES: usize = 128 * 1024;
 
 /// Fixed namespace for deterministic interaction publication identity.
 pub const INTERACTION_ID_NAMESPACE: Uuid =
@@ -50,8 +49,8 @@ pub const INTERACTION_OPERATION_NAMESPACE: Uuid =
 /// The admitted invocation that produced the requirement.
 ///
 /// Identity is verified against the origin Run's durable journal: a Tool
-/// origin needs its ToolIntent, a Task origin its DelegationIntent, a Model
-/// origin its ModelIntent. An origin that the journal never admitted is
+/// origin needs its ToolIntent, a Task origin its DelegationIntent, a Projection
+/// origin its atomic blocked-run publication. An origin that the journal never admitted is
 /// rejected, however well-formed its ids look.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "origin", rename_all = "snake_case", deny_unknown_fields)]
@@ -63,8 +62,10 @@ pub enum InteractionOrigin {
         task_id: Uuid,
         capability_call_id: Option<Uuid>,
     },
-    Model {
-        attempt_id: Uuid,
+    Projection {
+        run_id: RunId,
+        projection_operation_id: Uuid,
+        target_digest: [u8; 32],
     },
 }
 
@@ -76,7 +77,8 @@ impl InteractionOrigin {
                 task_id,
                 capability_call_id,
             } => !task_id.is_nil() && capability_call_id.is_none_or(|call_id| !call_id.is_nil()),
-            Self::Model { attempt_id } => !attempt_id.is_nil(),
+            Self::Projection { run_id, projection_operation_id, target_digest } =>
+                run_id.is_valid() && !projection_operation_id.is_nil() && *target_digest != [0; 32],
         };
         valid.then_some(()).ok_or(AgentFailure::StorageUnavailable)
     }
@@ -94,7 +96,7 @@ pub enum InteractionRequirementKind {
     ReviewChangedSource,
     RequestSystemPermission,
     Reconnect,
-    ApproveProcessingRecipient,
+    ReviewProcessing,
     SelectResource,
     ConfigureExpertBinding,
 }
@@ -118,160 +120,6 @@ impl InteractionRequirement {
             })
             || validate_identifier(&self.consumer, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
             || validate_identifier(&self.purpose, MAX_REVIEWED_PURPOSE_BYTES).is_err()
-        {
-            return Err(AgentFailure::StorageUnavailable);
-        }
-        Ok(())
-    }
-}
-
-/// One observed source-authority revision.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AuthorityRevision {
-    pub incarnation: Uuid,
-    pub epoch: u64,
-}
-
-impl AuthorityRevision {
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.incarnation.is_nil() || self.epoch == 0 {
-            return Err(AgentFailure::StorageUnavailable);
-        }
-        Ok(())
-    }
-}
-
-/// The grant state the person reviewed, including expected absence.
-///
-/// A decision binds this expectation; resolution re-reads current authority
-/// and never treats a changed grant as the reviewed one.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ExpectedGrantState {
-    Absent,
-    Active {
-        grant_id: Uuid,
-        authority_incarnation: Uuid,
-        authority_epoch: u64,
-    },
-}
-
-impl ExpectedGrantState {
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        match self {
-            Self::Absent => Ok(()),
-            Self::Active {
-                grant_id,
-                authority_incarnation,
-                authority_epoch,
-            } => {
-                if grant_id.is_nil() || authority_incarnation.is_nil() || *authority_epoch == 0 {
-                    return Err(AgentFailure::StorageUnavailable);
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-/// One reviewed grant of an inline Observe bundle: the exact member, its
-/// resource, and the grant expectation (including expected absence) the decision binds. Members are the
-/// whole affected bundle, not just the view the blocked read named: a live
-/// member outside this set, or a changed per-member expectation, invalidates
-/// the review instead of widening it.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReviewedBundleMember {
-    pub member_id: String,
-    pub policy_digest: String,
-    pub resource: String,
-    pub expected_grant: ExpectedGrantState,
-}
-
-impl ReviewedBundleMember {
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        if validate_identifier(&self.member_id, MAX_REVIEWED_SOURCE_BYTES).is_err()
-            || validate_identifier(&self.resource, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
-            || self.policy_digest.len() != 64
-            || !self
-                .policy_digest
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err(AgentFailure::StorageUnavailable);
-        }
-        self.expected_grant.validate()?;
-        Ok(())
-    }
-}
-
-/// An inline-mutation target: connection-level Observe approval over the
-/// reviewed bundle. The bundle-level fields bind the owner identity the
-/// person reviewed (local connection revision, pinned remote producer,
-/// live native subject); the members bind every affected grant. The card
-/// discloses the whole bundle.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct InlineObserveTarget {
-    pub connection_id: String,
-    pub device_id: Option<String>,
-    pub source_id: String,
-    pub connector_id: Option<String>,
-    pub consumer: String,
-    pub purpose: String,
-    pub source_revision: Option<AuthorityRevision>,
-    pub connection_revision: Option<u64>,
-    pub reviewed_producer_fingerprint: Option<String>,
-    pub reviewed_native_subject: Option<String>,
-    pub members: Vec<ReviewedBundleMember>,
-}
-
-impl InlineObserveTarget {
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        if validate_identifier(&self.connection_id, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
-            || self.device_id.as_ref().is_some_and(|value| {
-                validate_identifier(value, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
-            })
-            || validate_identifier(&self.source_id, MAX_REVIEWED_SOURCE_BYTES).is_err()
-            || self
-                .connector_id
-                .as_ref()
-                .is_some_and(|value| validate_identifier(value, MAX_REVIEWED_SOURCE_BYTES).is_err())
-            || validate_identifier(&self.consumer, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
-            || validate_identifier(&self.purpose, MAX_REVIEWED_PURPOSE_BYTES).is_err()
-            || self
-                .connection_revision
-                .is_some_and(|revision| revision == 0)
-            || self
-                .reviewed_producer_fingerprint
-                .as_ref()
-                .is_some_and(|value| {
-                    validate_identifier(value, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
-                })
-            || self.reviewed_native_subject.as_ref().is_some_and(|value| {
-                validate_identifier(value, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
-            })
-            || self.members.is_empty()
-            || self.members.len() > MAX_TARGET_BUNDLE_MEMBERS
-        {
-            return Err(AgentFailure::StorageUnavailable);
-        }
-        if let Some(revision) = &self.source_revision {
-            revision.validate()?;
-        }
-        let mut previous: Option<(&str, &str)> = None;
-        for member in &self.members {
-            member.validate()?;
-            let key = (member.member_id.as_str(), member.resource.as_str());
-            if previous.is_some_and(|previous| previous >= key) {
-                return Err(AgentFailure::StorageUnavailable);
-            }
-            previous = Some(key);
-        }
-        if serde_json::to_vec(self)
-            .map(|encoded| encoded.len() > MAX_REVIEWED_TARGET_BYTES)
-            .unwrap_or(true)
         {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -318,32 +166,6 @@ impl NavigationOnlyTarget {
     }
 }
 
-/// An exact-recipient consent target: the reviewed dispatch the person's
-/// decision binds.
-///
-/// Stores the canonical requirement values verbatim: exact recipient,
-/// route/profile identity, purpose/consumer, data classes, source scopes,
-/// lineage, and device, plus the audit-only original projection identity.
-/// The decision grants an Access consent for exactly this review; a
-/// different recipient, profile, scope, lineage, or device requires a new
-/// review. The paired-connection (client) binding is ambient: resolution
-/// binds the live pairing, and dispatch re-checks it, so a re-pairing never
-/// reuses an old review.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RecipientConsentTarget {
-    pub recipient: String,
-    pub profile_id: String,
-    pub purpose: String,
-    pub consumer: String,
-    pub input_data_classes: Vec<DataClass>,
-    pub source_scopes: Vec<ProcessingSourceScope>,
-    pub lineage: RecipientLineage,
-    pub device_id: String,
-    pub projection_ref: Uuid,
-    pub projection_revision: u64,
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExpertBindingTarget {
@@ -385,55 +207,20 @@ impl ExpertBindingTarget {
     }
 }
 
-impl RecipientConsentTarget {
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        floe_agent_contract::ProcessingRequirement::try_new(
-            self.recipient.clone(),
-            self.profile_id.clone(),
-            self.purpose.clone(),
-            self.consumer.clone(),
-            self.input_data_classes.clone(),
-            self.source_scopes.clone(),
-            self.projection_ref,
-            self.projection_revision,
-            self.lineage,
-        )
-        .map_err(|_| AgentFailure::StorageUnavailable)?;
-        // The stored order is canonical: the digest serializes members in
-        // place, so unsorted storage would fork card identity.
-        let mut sorted_classes = self.input_data_classes.clone();
-        sorted_classes.sort();
-        let mut sorted_scopes = self.source_scopes.clone();
-        sorted_scopes.sort_by_cached_key(|scope| serde_json::to_vec(scope).unwrap_or_default());
-        if sorted_classes != self.input_data_classes
-            || sorted_scopes != self.source_scopes
-            || validate_identifier(&self.device_id, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
-            || serde_json::to_vec(self)
-                .map(|encoded| encoded.len() > MAX_RECIPIENT_CONSENT_TARGET_BYTES)
-                .unwrap_or(true)
-        {
-            return Err(AgentFailure::StorageUnavailable);
-        }
-        Ok(())
-    }
-}
-
 /// The immutable reviewed descriptor a decision binds.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum ReviewedTarget {
-    InlineObserve(InlineObserveTarget),
     NavigationOnly(NavigationOnlyTarget),
-    RecipientConsent(RecipientConsentTarget),
+    SourceReview(floe_access::ReviewRef),
     ExpertBinding(ExpertBindingTarget),
 }
 
 impl ReviewedTarget {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         match self {
-            Self::InlineObserve(target) => target.validate(),
             Self::NavigationOnly(target) => target.validate(),
-            Self::RecipientConsent(target) => target.validate(),
+            Self::SourceReview(reference) => reference.validate(),
             Self::ExpertBinding(target) => target.validate(),
         }
     }
@@ -446,13 +233,19 @@ impl ReviewedTarget {
 #[serde(deny_unknown_fields)]
 pub struct InteractionResolutionReceipt {
     pub decision_id: Uuid,
+    pub owner_command_id: Uuid,
+    pub owner_receipt: super::OwnerResolutionReceipt,
     pub owner_operation_id: Uuid,
     pub resolved_at_unix_ms: i64,
 }
 
 impl InteractionResolutionReceipt {
     pub fn validate(&self) -> Result<(), AgentFailure> {
+        self.owner_receipt.validate()?;
         if self.decision_id.is_nil()
+            || self.owner_command_id.is_nil()
+            || self.owner_receipt.command_id() != self.owner_command_id
+            || self.owner_receipt.operation_id() != self.owner_operation_id
             || self.owner_operation_id.is_nil()
             || self.resolved_at_unix_ms < 0
         {
@@ -471,7 +264,7 @@ pub enum InteractionState {
     Pending,
     Resolving {
         decision_id: Uuid,
-        owner_operation_id: Uuid,
+        owner_command_id: Uuid,
     },
     Resolved {
         receipt: InteractionResolutionReceipt,
@@ -494,9 +287,9 @@ impl InteractionState {
             Self::Pending | Self::Expired => Ok(()),
             Self::Resolving {
                 decision_id,
-                owner_operation_id,
+                owner_command_id,
             } => {
-                if decision_id.is_nil() || owner_operation_id.is_nil() {
+                if decision_id.is_nil() || owner_command_id.is_nil() {
                     return Err(AgentFailure::StorageUnavailable);
                 }
                 Ok(())
@@ -538,6 +331,7 @@ pub struct ConversationInteraction {
     pub origin_run_id: RunId,
     pub origin_turn_id: Uuid,
     pub origin: InteractionOrigin,
+    pub projection: Option<super::ProjectionReviewRecord>,
     pub kind: UserInteractionKind,
     pub requirement: InteractionRequirement,
     pub requirement_digest: [u8; 32],
@@ -552,6 +346,11 @@ pub struct ConversationInteraction {
 impl ConversationInteraction {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         self.origin.validate()?;
+        if let Some(record) = &self.projection {
+            record.validate()?;
+            if record.person_id != self.person_id || record.session_id != self.session_id || record.run_id != self.origin_run_id { return Err(AgentFailure::StorageUnavailable); }
+        }
+        if matches!(self.origin, InteractionOrigin::Projection { .. }) && self.projection.is_none() { return Err(AgentFailure::StorageUnavailable); }
         self.requirement.validate()?;
         self.target.validate()?;
         self.state.validate()?;
@@ -563,10 +362,11 @@ impl ConversationInteraction {
             || self.revision == 0
             || self.created_at_unix_ms < 0
             || self.expires_at_unix_ms != self.created_at_unix_ms + INTERACTION_PENDING_LIFETIME_MS
-            || (self.kind == UserInteractionKind::ProcessingRecipient)
-                != (self.requirement.kind == InteractionRequirementKind::ApproveProcessingRecipient)
-            || (self.kind == UserInteractionKind::ProcessingRecipient)
-                != matches!(self.target, ReviewedTarget::RecipientConsent(_))
+            || matches!(self.target, ReviewedTarget::SourceReview(_))
+                && self.kind != UserInteractionKind::SourceAccess
+            || self.requirement.kind == InteractionRequirementKind::ReviewProcessing
+                && !matches!(self.target, ReviewedTarget::SourceReview(_))
+            || matches!(&self.origin, InteractionOrigin::Projection { run_id, .. } if *run_id != self.origin_run_id)
             || (self.kind == UserInteractionKind::ExpertBinding)
                 != (self.requirement.kind == InteractionRequirementKind::ConfigureExpertBinding)
             || (self.kind == UserInteractionKind::ExpertBinding)
@@ -653,6 +453,7 @@ impl InteractionDecision {
     pub fn matches_recorded(&self, recorded: &Self) -> bool {
         self.command_id == recorded.command_id
             && self.interaction_id == recorded.interaction_id
+            && self.interaction_revision == recorded.interaction_revision
             && self.kind == recorded.kind
             && self.target_digest == recorded.target_digest
             && self.principal == recorded.principal
@@ -707,7 +508,7 @@ pub fn resume_command_id(origin_run_id: RunId) -> Result<CommandId, AgentFailure
 /// The stable owner-operation identity claimed by one decision command.
 /// 05-C owner operations claim exactly this identity, so a retried decision
 /// rejoins the same operation instead of performing the mutation again.
-pub fn decision_operation_id(command_id: Uuid) -> Uuid {
+pub fn decision_owner_command_id(command_id: Uuid) -> Uuid {
     Uuid::new_v5(
         &INTERACTION_OPERATION_NAMESPACE,
         format!("floe.conversation.decision-operation\0{command_id}").as_bytes(),
@@ -726,7 +527,7 @@ pub fn next_state_after_decision(
         (InteractionState::Pending, InteractionDecisionKind::Approve) => {
             Ok(InteractionState::Resolving {
                 decision_id: decision.command_id,
-                owner_operation_id: decision_operation_id(decision.command_id),
+                owner_command_id: decision_owner_command_id(decision.command_id),
             })
         }
         (InteractionState::Pending, InteractionDecisionKind::Deny) => {
@@ -746,27 +547,20 @@ pub fn next_state_after_decision(
 
 pub fn state_after_resolution(
     state: &InteractionState,
-    decision_id: Uuid,
-    owner_operation_id: Uuid,
-    resolved_at_unix_ms: i64,
+    resolution: &InteractionResolution,
+    owner_receipt: &super::OwnerResolutionReceipt,
 ) -> Result<InteractionState, AgentFailure> {
+    resolution.validate()?; owner_receipt.validate()?;
     match state {
-        InteractionState::Resolving {
-            decision_id: recorded_decision,
-            owner_operation_id: recorded_operation,
-        } if *recorded_decision == decision_id
-            && *recorded_operation == owner_operation_id
-            && !decision_id.is_nil()
-            && !owner_operation_id.is_nil()
-            && resolved_at_unix_ms >= 0 =>
-        {
-            Ok(InteractionState::Resolved {
-                receipt: InteractionResolutionReceipt {
-                    decision_id,
-                    owner_operation_id,
-                    resolved_at_unix_ms,
-                },
-            })
+        InteractionState::Resolving { decision_id, owner_command_id }
+            if *decision_id == resolution.decision_id && *owner_command_id == resolution.owner_command_id
+                && owner_receipt.command_id() == *owner_command_id
+                && owner_receipt.operation_id() == resolution.owner_operation_id => {
+            Ok(InteractionState::Resolved { receipt: InteractionResolutionReceipt {
+                decision_id: *decision_id, owner_command_id: *owner_command_id,
+                owner_operation_id: resolution.owner_operation_id, owner_receipt: owner_receipt.clone(),
+                resolved_at_unix_ms: resolution.resolved_at_unix_ms,
+            } })
         }
         _ => Err(AgentFailure::Conflict),
     }
@@ -787,7 +581,7 @@ pub fn canonical_requirement_digest(
         InteractionRequirementKind::ReviewChangedSource => 2,
         InteractionRequirementKind::RequestSystemPermission => 3,
         InteractionRequirementKind::Reconnect => 4,
-        InteractionRequirementKind::ApproveProcessingRecipient => 5,
+        InteractionRequirementKind::ReviewProcessing => 5,
         InteractionRequirementKind::SelectResource => 6,
         InteractionRequirementKind::ConfigureExpertBinding => 7,
     });
@@ -812,75 +606,6 @@ pub fn canonical_target_digest(target: &ReviewedTarget) -> Result<[u8; 32], Agen
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"floe.conversation.reviewed-target\0");
     match target {
-        ReviewedTarget::InlineObserve(target) => {
-            bytes.push(1);
-            append_str(&mut bytes, &target.connection_id);
-            match &target.device_id {
-                Some(device_id) => {
-                    bytes.push(1);
-                    append_str(&mut bytes, device_id);
-                }
-                None => bytes.push(0),
-            }
-            append_str(&mut bytes, &target.source_id);
-            match &target.connector_id {
-                Some(connector_id) => {
-                    bytes.push(1);
-                    append_str(&mut bytes, connector_id);
-                }
-                None => bytes.push(0),
-            }
-            append_str(&mut bytes, &target.consumer);
-            append_str(&mut bytes, &target.purpose);
-            match &target.connection_revision {
-                Some(revision) => {
-                    bytes.push(1);
-                    bytes.extend_from_slice(&revision.to_be_bytes());
-                }
-                None => bytes.push(0),
-            }
-            match &target.reviewed_producer_fingerprint {
-                Some(fingerprint) => {
-                    bytes.push(1);
-                    append_str(&mut bytes, fingerprint);
-                }
-                None => bytes.push(0),
-            }
-            match &target.reviewed_native_subject {
-                Some(subject) => {
-                    bytes.push(1);
-                    append_str(&mut bytes, subject);
-                }
-                None => bytes.push(0),
-            }
-            match &target.source_revision {
-                Some(revision) => {
-                    bytes.push(1);
-                    append_authority(&mut bytes, revision);
-                }
-                None => bytes.push(0),
-            }
-            let member_count = u64::try_from(target.members.len()).unwrap_or(u64::MAX);
-            bytes.extend_from_slice(&member_count.to_be_bytes());
-            for member in &target.members {
-                append_str(&mut bytes, &member.member_id);
-                append_str(&mut bytes, &member.policy_digest);
-                append_str(&mut bytes, &member.resource);
-                match &member.expected_grant {
-                    ExpectedGrantState::Absent => bytes.push(0),
-                    ExpectedGrantState::Active {
-                        grant_id,
-                        authority_incarnation,
-                        authority_epoch,
-                    } => {
-                        bytes.push(1);
-                        bytes.extend_from_slice(grant_id.as_bytes());
-                        bytes.extend_from_slice(authority_incarnation.as_bytes());
-                        bytes.extend_from_slice(&authority_epoch.to_be_bytes());
-                    }
-                }
-            }
-        }
         ReviewedTarget::NavigationOnly(target) => {
             bytes.push(2);
             bytes.push(match target.destination {
@@ -899,28 +624,11 @@ pub fn canonical_target_digest(target: &ReviewedTarget) -> Result<[u8; 32], Agen
             append_str(&mut bytes, &target.consumer);
             append_str(&mut bytes, &target.purpose);
         }
-        ReviewedTarget::RecipientConsent(target) => {
+        ReviewedTarget::SourceReview(reference) => {
             bytes.push(3);
-            append_str(&mut bytes, &target.recipient);
-            append_str(&mut bytes, &target.profile_id);
-            append_str(&mut bytes, &target.purpose);
-            append_str(&mut bytes, &target.consumer);
-            let class_count = u64::try_from(target.input_data_classes.len()).unwrap_or(u64::MAX);
-            bytes.extend_from_slice(&class_count.to_be_bytes());
-            for class in &target.input_data_classes {
-                bytes.push(data_class_byte(class));
-            }
-            let scope_count = u64::try_from(target.source_scopes.len()).unwrap_or(u64::MAX);
-            bytes.extend_from_slice(&scope_count.to_be_bytes());
-            for scope in &target.source_scopes {
-                let encoded = serde_json::to_vec(scope).map_err(|_| AgentFailure::InvalidInput)?;
-                append_bytes(&mut bytes, &encoded);
-            }
-            bytes.extend_from_slice(target.lineage.session_id().as_bytes());
-            bytes.extend_from_slice(target.lineage.origin_run_id().as_bytes());
-            append_str(&mut bytes, &target.device_id);
-            bytes.extend_from_slice(target.projection_ref.as_bytes());
-            bytes.extend_from_slice(&target.projection_revision.to_be_bytes());
+            bytes.extend_from_slice(reference.id.as_bytes());
+            bytes.extend_from_slice(&reference.revision.to_be_bytes());
+            bytes.extend_from_slice(&reference.digest);
         }
         ReviewedTarget::ExpertBinding(target) => {
             bytes.push(4);
@@ -979,9 +687,12 @@ pub fn interaction_publication_id(
                 None => bytes.push(0),
             }
         }
-        InteractionOrigin::Model { attempt_id } => {
+        InteractionOrigin::Projection { run_id, projection_operation_id, target_digest } => {
+            if *run_id != origin_run_id { return Err(AgentFailure::InvalidInput); }
             bytes.push(3);
-            bytes.extend_from_slice(attempt_id.as_bytes());
+            bytes.extend_from_slice(run_id.as_uuid().as_bytes());
+            bytes.extend_from_slice(projection_operation_id.as_bytes());
+            bytes.extend_from_slice(target_digest);
         }
     }
     bytes.extend_from_slice(requirement_digest);
@@ -1010,6 +721,8 @@ pub enum ExpireOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InteractionResolution {
+    pub owner_command_id: Uuid,
+    pub target_digest: [u8; 32],
     pub interaction_id: Uuid,
     pub person_id: PersonId,
     pub expected_revision: u64,
@@ -1020,7 +733,8 @@ pub struct InteractionResolution {
 
 impl InteractionResolution {
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.interaction_id.is_nil()
+        if self.owner_command_id.is_nil() || self.target_digest == [0; 32]
+            || self.interaction_id.is_nil()
             || !self.person_id.is_valid()
             || self.expected_revision == 0
             || self.decision_id.is_nil()
@@ -1070,21 +784,7 @@ impl ExpireInteraction {
     }
 }
 
-fn append_authority(bytes: &mut Vec<u8>, revision: &AuthorityRevision) {
-    bytes.extend_from_slice(revision.incarnation.as_bytes());
-    bytes.extend_from_slice(&revision.epoch.to_be_bytes());
-}
 
-fn data_class_byte(class: &DataClass) -> u8 {
-    match class {
-        DataClass::Synthetic => 1,
-        DataClass::Personal => 2,
-        DataClass::TemporaryAiContext => 3,
-        DataClass::HighlySensitive => 4,
-        DataClass::DeviceOnlyRaw => 5,
-        DataClass::Credential => 6,
-    }
-}
 
 fn append_str(bytes: &mut Vec<u8>, value: &str) {
     append_bytes(bytes, value.as_bytes());
@@ -1107,465 +807,15 @@ fn validate_identifier(value: &str, limit: usize) -> Result<(), AgentFailure> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    pub(crate) fn requirement() -> InteractionRequirement {
-        InteractionRequirement {
-            kind: InteractionRequirementKind::EnableObserve,
-            source_id: "floe.source.calendar".into(),
-            connection_id: Some("calendar-connection".into()),
-            consumer: "floe.builtin.schedule".into(),
-            purpose: "scheduling".into(),
-            inline: true,
-        }
-    }
-
-    pub(crate) fn member(member_id: &str, resource: &str) -> ReviewedBundleMember {
-        ReviewedBundleMember {
-            member_id: member_id.into(),
-            policy_digest: "a".repeat(64),
-            resource: resource.into(),
-            expected_grant: ExpectedGrantState::Absent,
-        }
-    }
-
-    pub(crate) fn target() -> ReviewedTarget {
-        ReviewedTarget::InlineObserve(InlineObserveTarget {
-            connection_id: "calendar-connection".into(),
-            device_id: None,
-            source_id: "floe.source.calendar".into(),
-            connector_id: Some("floe.connector.calendar".into()),
-            consumer: "floe.builtin.schedule".into(),
-            purpose: "scheduling".into(),
-            source_revision: None,
-            connection_revision: None,
-            reviewed_producer_fingerprint: None,
-            reviewed_native_subject: None,
-            members: vec![member("calendar.timeline", "personal")],
-        })
-    }
-
-    pub(crate) fn record() -> ConversationInteraction {
-        let requirement = requirement();
-        let target = target();
-        let requirement_digest = canonical_requirement_digest(&requirement).unwrap();
-        let target_digest = canonical_target_digest(&target).unwrap();
-        let origin_run_id = RunId::new();
-        let origin = InteractionOrigin::Tool {
-            call_id: Uuid::new_v4(),
-        };
-        let id =
-            interaction_publication_id(origin_run_id, &origin, &requirement_digest, &target_digest)
-                .unwrap();
-        ConversationInteraction {
-            id,
-            person_id: PersonId::new(),
-            session_id: Uuid::new_v4(),
-            origin_run_id,
-            origin_turn_id: origin_run_id.as_uuid(),
-            origin,
-            kind: UserInteractionKind::SourceAccess,
-            requirement,
-            requirement_digest,
-            target,
-            target_digest,
-            state: InteractionState::Pending,
-            revision: 1,
-            created_at_unix_ms: 1_700_000_000_000,
-            expires_at_unix_ms: 1_700_000_000_000 + INTERACTION_PENDING_LIFETIME_MS,
-        }
-    }
-
-    #[test]
-    fn valid_record_round_trips() {
-        let record = record();
-        assert!(record.validate().is_ok());
-        let decoded: ConversationInteraction =
-            serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
-        assert_eq!(decoded, record);
-    }
-
-    #[test]
-    fn obsolete_per_member_authorities_are_not_durable_target_fields() {
-        let target = target();
-        let mut old = serde_json::to_value(&target).unwrap();
-        old["value"]["members"][0]["policy_authority"] = serde_json::json!({
-            "incarnation": Uuid::new_v4(),
-            "epoch": 1,
-        });
-        assert!(serde_json::from_value::<ReviewedTarget>(old).is_err());
-        let mut old = serde_json::to_value(&target).unwrap();
-        old["value"]["members"][0]["source_revision"] = serde_json::json!({
-            "incarnation": Uuid::new_v4(),
-            "epoch": 1,
-        });
-        assert!(serde_json::from_value::<ReviewedTarget>(old).is_err());
-    }
-
-    #[test]
-    fn identity_is_deterministic_and_binds_origin_and_digests() {
-        let first = record();
-        let mut second = first.clone();
-        second.session_id = Uuid::new_v4();
-        second.person_id = PersonId::new();
-        let rebuilt = interaction_publication_id(
-            second.origin_run_id,
-            &second.origin,
-            &second.requirement_digest,
-            &second.target_digest,
-        )
-        .unwrap();
-        assert_eq!(rebuilt, first.id);
-
-        let mut changed = first.clone();
-        changed.origin = InteractionOrigin::Tool {
-            call_id: Uuid::new_v4(),
-        };
-        let changed_id = interaction_publication_id(
-            changed.origin_run_id,
-            &changed.origin,
-            &changed.requirement_digest,
-            &changed.target_digest,
-        )
-        .unwrap();
-        assert_ne!(changed_id, first.id);
-    }
-
-    #[test]
-    fn digests_distinguish_targets_and_expected_absence() {
-        let base = canonical_target_digest(&target()).unwrap();
-        let mut changed_policy = target();
-        let ReviewedTarget::InlineObserve(inline) = &mut changed_policy else {
-            panic!("test target is inline");
-        };
-        inline.members[0].policy_digest = "b".repeat(64);
-        assert_ne!(canonical_target_digest(&changed_policy).unwrap(), base);
-        let ReviewedTarget::InlineObserve(inline) = &mut changed_policy else {
-            panic!("test target is inline");
-        };
-        inline.members[0].policy_digest = "B".repeat(64);
-        assert!(canonical_target_digest(&changed_policy).is_err());
-        let mut absent = target();
-        let ReviewedTarget::InlineObserve(inline) = &mut absent else {
-            panic!("test target is inline");
-        };
-        inline.members[0].expected_grant = ExpectedGrantState::Active {
-            grant_id: Uuid::new_v4(),
-            authority_incarnation: Uuid::new_v4(),
-            authority_epoch: 3,
-        };
-        assert_ne!(canonical_target_digest(&absent).unwrap(), base);
-
-        let mut reordered = target();
-        let ReviewedTarget::InlineObserve(inline) = &mut reordered else {
-            panic!("test target is inline");
-        };
-        inline.members = vec![
-            member("calendar.timeline", "work"),
-            member("calendar.timeline", "personal"),
-        ];
-        assert!(canonical_target_digest(&reordered).is_err());
-    }
-
-    #[test]
-    fn kind_and_requirement_coherence_is_enforced() {
-        let mut processing = record();
-        processing.kind = UserInteractionKind::ProcessingRecipient;
-        assert_eq!(processing.validate(), Err(AgentFailure::StorageUnavailable));
-        processing.requirement.kind = InteractionRequirementKind::ApproveProcessingRecipient;
-        processing.requirement_digest =
-            canonical_requirement_digest(&processing.requirement).unwrap();
-        // A processing interaction with a source target is still incoherent.
-        assert_eq!(processing.validate(), Err(AgentFailure::StorageUnavailable));
-        processing.target = ReviewedTarget::RecipientConsent(consent_target());
-        processing.target_digest = canonical_target_digest(&processing.target).unwrap();
-        processing.id = interaction_publication_id(
-            processing.origin_run_id,
-            &processing.origin,
-            &processing.requirement_digest,
-            &processing.target_digest,
-        )
-        .unwrap();
-        assert!(processing.validate().is_ok());
-        // A source interaction with a consent target is incoherent.
-        let mut mismatched = record();
-        mismatched.target = ReviewedTarget::RecipientConsent(consent_target());
-        mismatched.target_digest = canonical_target_digest(&mismatched.target).unwrap();
-        mismatched.id = interaction_publication_id(
-            mismatched.origin_run_id,
-            &mismatched.origin,
-            &mismatched.requirement_digest,
-            &mismatched.target_digest,
-        )
-        .unwrap();
-        assert_eq!(mismatched.validate(), Err(AgentFailure::StorageUnavailable));
-    }
-
-    pub(crate) fn consent_target() -> RecipientConsentTarget {
-        RecipientConsentTarget {
-            recipient: "model.example".into(),
-            profile_id: "server-model".into(),
-            purpose: "everyday_assistance".into(),
-            consumer: "conversation.root".into(),
-            input_data_classes: vec![DataClass::Personal],
-            source_scopes: vec![],
-            lineage: RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4()).unwrap(),
-            device_id: "device".into(),
-            projection_ref: Uuid::new_v4(),
-            projection_revision: 1,
-        }
-    }
-
-    #[test]
-    fn consent_target_validates_digest_binds_and_round_trips() {
-        let target = consent_target();
-        assert!(target.validate().is_ok());
-        let digest =
-            canonical_target_digest(&ReviewedTarget::RecipientConsent(target.clone())).unwrap();
-        assert_ne!(digest, [0; 32]);
-        let decoded: RecipientConsentTarget =
-            serde_json::from_str(&serde_json::to_string(&target).unwrap()).unwrap();
-        assert_eq!(decoded, target);
-        // Every reviewed field enters the digest.
-        let mut changed = target.clone();
-        changed.recipient = "other.example".into();
-        assert_ne!(
-            canonical_target_digest(&ReviewedTarget::RecipientConsent(changed)).unwrap(),
-            digest
-        );
-        let mut changed = target.clone();
-        changed.profile_id = "other-model".into();
-        assert_ne!(
-            canonical_target_digest(&ReviewedTarget::RecipientConsent(changed)).unwrap(),
-            digest
-        );
-        let mut changed = target.clone();
-        changed.device_id = "other-device".into();
-        assert_ne!(
-            canonical_target_digest(&ReviewedTarget::RecipientConsent(changed)).unwrap(),
-            digest
-        );
-        let mut changed = target.clone();
-        changed.lineage = RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4()).unwrap();
-        assert_ne!(
-            canonical_target_digest(&ReviewedTarget::RecipientConsent(changed)).unwrap(),
-            digest
-        );
-        // Blank, wildcard, unsorted, and oversized reviews are rejected.
-        let mut blank = target.clone();
-        blank.recipient = String::new();
-        assert!(blank.validate().is_err());
-        let mut wildcard = target.clone();
-        wildcard.recipient = "*".into();
-        assert!(wildcard.validate().is_err());
-        let mut blank_device = target.clone();
-        blank_device.device_id = String::new();
-        assert!(blank_device.validate().is_err());
-        let mut unsorted = target.clone();
-        unsorted.input_data_classes = vec![DataClass::Personal, DataClass::Synthetic];
-        assert!(unsorted.validate().is_err());
-        let mut oversized = target.clone();
-        oversized.device_id = "x".repeat(MAX_REVIEWED_IDENTIFIER_BYTES + 1);
-        assert!(oversized.validate().is_err());
-    }
-
-    #[test]
-    fn expert_binding_target_binds_assignment_revision_and_selection_without_source() {
-        let target = ExpertBindingTarget {
-            registry_instance_id: Uuid::new_v4(),
-            assignment_id: Uuid::new_v4(),
-            package: PackageRef {
-                kind: PackageKind::Expert,
-                id: "example.test.expert".into(),
-                version: "1.0.0".into(),
-            },
-            definition_revision: 1,
-            requirement_key: "floe.source.calendar".into(),
-            capability: "calendar.timeline".into(),
-            contract_version: 1,
-            minimum_sources: 1,
-            maximum_sources: 16,
-            expected_binding_revision: 2,
-            admitted_selection_digest: [7; 32],
-        };
-        target.validate().unwrap();
-        let reviewed = ReviewedTarget::ExpertBinding(target.clone());
-        let digest = canonical_target_digest(&reviewed).unwrap();
-        let mut changed = target.clone();
-        changed.expected_binding_revision += 1;
-        assert_ne!(
-            canonical_target_digest(&ReviewedTarget::ExpertBinding(changed)).unwrap(),
-            digest
-        );
-        let mut changed = target.clone();
-        changed.admitted_selection_digest = [8; 32];
-        assert_ne!(
-            canonical_target_digest(&ReviewedTarget::ExpertBinding(changed)).unwrap(),
-            digest
-        );
-        let encoded = serde_json::to_string(&target).unwrap();
-        assert!(!encoded.contains("connector_id"));
-        assert!(!encoded.contains("grant_id"));
-        assert_eq!(
-            serde_json::from_str::<ExpertBindingTarget>(&encoded).unwrap(),
-            target
-        );
-        let mut interaction = record();
-        interaction.kind = UserInteractionKind::ExpertBinding;
-        interaction.requirement.kind = InteractionRequirementKind::ConfigureExpertBinding;
-        interaction.requirement_digest =
-            canonical_requirement_digest(&interaction.requirement).unwrap();
-        interaction.target = reviewed;
-        interaction.target_digest = digest;
-        interaction.id = interaction_publication_id(
-            interaction.origin_run_id,
-            &interaction.origin,
-            &interaction.requirement_digest,
-            &interaction.target_digest,
-        )
-        .unwrap();
-        interaction.validate().unwrap();
-    }
-
-    #[test]
-    fn tampered_digests_and_identity_fail_validation() {
-        let mut tampered = record();
-        tampered.target_digest = [7; 32];
-        assert_eq!(tampered.validate(), Err(AgentFailure::StorageUnavailable));
-        let mut reidentified = record();
-        reidentified.id = Uuid::new_v4();
-        assert_eq!(
-            reidentified.validate(),
-            Err(AgentFailure::StorageUnavailable)
-        );
-    }
-
-    #[test]
-    fn descriptor_bounds_reject_oversized_and_unsorted_targets() {
-        let mut unsorted = target();
-        let ReviewedTarget::InlineObserve(inline) = &mut unsorted else {
-            panic!("test target is inline");
-        };
-        inline.members = vec![
-            member("calendar.timeline", "b"),
-            member("calendar.timeline", "a"),
-        ];
-        assert!(unsorted.validate().is_err());
-
-        let mut oversized = target();
-        let ReviewedTarget::InlineObserve(inline) = &mut oversized else {
-            panic!("test target is inline");
-        };
-        inline.members = (0..=MAX_TARGET_BUNDLE_MEMBERS)
-            .map(|index| member("calendar.timeline", &format!("resource-{index:04}")))
-            .collect();
-        assert!(oversized.validate().is_err());
-
-        let mut empty = target();
-        let ReviewedTarget::InlineObserve(inline) = &mut empty else {
-            panic!("test target is inline");
-        };
-        inline.members.clear();
-        assert!(empty.validate().is_err());
-
-        let mut requirement = requirement();
-        requirement.source_id = "x".repeat(MAX_REVIEWED_SOURCE_BYTES + 1);
-        assert!(requirement.validate().is_err());
-    }
-
-    #[test]
-    fn expiry_projects_without_writing() {
-        let record = record();
-        assert!(record.is_actionable_at(record.created_at_unix_ms));
-        assert!(!record.projects_expired_at(record.created_at_unix_ms));
-        assert!(!record.is_actionable_at(record.expires_at_unix_ms));
-        assert!(record.projects_expired_at(record.expires_at_unix_ms));
-        let mut terminal = record.clone();
-        terminal.state = InteractionState::Denied {
-            decision_id: Uuid::new_v4(),
-        };
-        assert!(!terminal.projects_expired_at(i64::MAX));
-    }
-
-    #[test]
-    fn decision_transitions_follow_the_lifecycle() {
-        let pending = InteractionState::Pending;
-        let approve = InteractionDecision {
-            command_id: Uuid::new_v4(),
-            interaction_id: Uuid::new_v4(),
-            interaction_revision: 1,
-            kind: InteractionDecisionKind::Approve,
-            target_digest: [1; 32],
-            principal: PersonId::new().to_string(),
-            decided_at_unix_ms: 1,
-        };
-        let resolving = next_state_after_decision(&pending, &approve).unwrap();
-        let InteractionState::Resolving {
-            decision_id,
-            owner_operation_id,
-        } = resolving
-        else {
-            panic!("approve must resolve");
-        };
-        assert_eq!(decision_id, approve.command_id);
-        assert_eq!(
-            owner_operation_id,
-            decision_operation_id(approve.command_id)
-        );
-
-        let deny = InteractionDecision {
-            kind: InteractionDecisionKind::Deny,
-            ..approve.clone()
-        };
-        assert!(matches!(
-            next_state_after_decision(&pending, &deny).unwrap(),
-            InteractionState::Denied { .. }
-        ));
-        assert!(next_state_after_decision(&resolving, &deny).is_err());
-
-        let dismiss = InteractionDecision {
-            kind: InteractionDecisionKind::Dismiss,
-            ..approve.clone()
-        };
-        assert!(matches!(
-            next_state_after_decision(&pending, &dismiss).unwrap(),
-            InteractionState::Cancelled { .. }
-        ));
-        assert!(matches!(
-            next_state_after_decision(&resolving, &dismiss).unwrap(),
-            InteractionState::Cancelled { .. }
-        ));
-        assert!(next_state_after_decision(&resolving, &approve).is_err());
-
-        let resolved = state_after_resolution(
-            &resolving,
-            decision_id,
-            owner_operation_id,
-            approve.decided_at_unix_ms,
-        )
-        .unwrap();
-        assert!(matches!(resolved, InteractionState::Resolved { .. }));
-        assert!(state_after_resolution(&pending, decision_id, owner_operation_id, 1).is_err());
-        assert!(state_after_resolution(&resolving, Uuid::new_v4(), owner_operation_id, 1).is_err());
-    }
-
-    #[test]
-    fn identical_decision_matches_recorded_command() {
-        let decision = InteractionDecision {
-            command_id: Uuid::new_v4(),
-            interaction_id: Uuid::new_v4(),
-            interaction_revision: 1,
-            kind: InteractionDecisionKind::Approve,
-            target_digest: [1; 32],
-            principal: "person".into(),
-            decided_at_unix_ms: 1,
-        };
-        assert!(decision.validate().is_ok());
-        let mut changed = decision.clone();
-        changed.target_digest = [2; 32];
-        assert!(!decision.matches_recorded(&changed));
-        assert!(decision.matches_recorded(&decision.clone()));
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractionRefresh {
+    pub command_id: Uuid, pub person_id: PersonId, pub session_id: Uuid,
+    pub interaction_id: Uuid, pub expected_revision: u64,
+}
+impl InteractionRefresh {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.command_id.is_nil() || !self.person_id.is_valid() || self.session_id.is_nil()
+            || self.interaction_id.is_nil() || self.expected_revision == 0 { return Err(AgentFailure::InvalidInput); }
+        Ok(())
     }
 }

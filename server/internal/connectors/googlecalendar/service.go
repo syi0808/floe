@@ -1,33 +1,35 @@
 package googlecalendar
 
 import (
+ "floe/server/internal/integrations"
+ "floe/server/internal/views"
 	"context"
 	"errors"
 	"sync"
 	"time"
 
-	"floe/server/internal/connectors/common"
+	
 )
 
 type Service struct {
-	pager     *common.CalendarPager
+	pager     *views.CalendarPager
 	clock     func() time.Time
 	operation sync.Mutex
-	last      *CalendarView
+	last      *views.CalendarView
 }
 
 func NewService(clients ...*Client) (*Service, error) {
 	if len(clients) == 0 {
 		return nil, ErrInvalidInput
 	}
-	leaves := make([]common.CalendarLeaf, len(clients))
+	leaves := make([]views.CalendarLeaf, len(clients))
 	for index, client := range clients {
 		if client == nil || client.connectionID != clients[0].connectionID {
 			return nil, ErrInvalidInput
 		}
-		leaves[index] = common.CalendarLeaf{ResourceID: client.calendarID, Read: client.Calendar}
+		leaves[index] = views.CalendarLeaf{ResourceID: client.calendarID, Read: client.Calendar}
 	}
-	pager, err := common.NewCalendarPager(clients[0].connectionID, leaves)
+	pager, err := views.NewCalendarPager(clients[0].connectionID, leaves)
 	if err != nil {
 		return nil, ErrInvalidInput
 	}
@@ -38,10 +40,10 @@ func (service *Service) ReadCalendarView(ctx context.Context, rangeStart, rangeE
 	service.operation.Lock()
 	defer service.operation.Unlock()
 	view, err := service.pager.Read(ctx, rangeStart, rangeEnd, cursor, limit, service.clock())
-	if errors.Is(err, common.ErrCalendarCursor) {
+	if errors.Is(err, views.ErrCalendarCursor) {
 		return nil, ErrInvalidInput
 	}
-	if errors.Is(err, common.ErrCalendarResult) {
+	if errors.Is(err, views.ErrCalendarResult) {
 		return nil, ErrInvalidResponse
 	}
 	if err == nil {
@@ -67,11 +69,11 @@ func (service *Service) ConnectionSnapshot(ctx context.Context) (any, error) {
 		kind = "permission_denied"
 	case errors.Is(err, ErrRateLimited):
 		kind = "rate_limited"
-	case errors.Is(err, ErrInvalidResponse), errors.Is(err, common.ErrCalendarResult):
+	case errors.Is(err, ErrInvalidResponse), errors.Is(err, views.ErrCalendarResult):
 		kind = "partial_fetch"
 	}
 	observed := now.UnixMilli()
-	snapshot := common.Snapshot{Descriptor: ConnectorDescriptor(), Connection: common.Connection{SchemaVersion: 1, ConnectorID: "calendar.google", State: state, ObservedAtUnixMS: observed, LastFailure: &common.Failure{Kind: kind, ObservedAtUnixMS: observed}}, Views: []common.ViewSnapshot{}}
+	snapshot := integrations.Snapshot{Descriptor: ConnectorDescriptor(), Connection: integrations.Connection{SchemaVersion: 1, ConnectorID: "calendar.google", State: state, ObservedAtUnixMS: observed, LastFailure: &integrations.Failure{Kind: kind, ObservedAtUnixMS: observed}}, Views: []views.ViewSnapshot{}}
 	if service.last != nil {
 		snapshot.Connection.State = "degraded"
 		snapshot.Connection.GrantedScopes = []string{observeScope}

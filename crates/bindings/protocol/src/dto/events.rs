@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-use super::{APP_WIRE_VERSION, AppCommandReceiptDto, AppRunSnapshotDto};
+use super::{APP_WIRE_VERSION, AppCommandReceiptDto, AppRunSnapshotDto, RequestIdDto};
 
 pub const MAX_APP_EVENTS_PER_READ: u16 = 256;
 
@@ -9,7 +8,7 @@ pub const MAX_APP_EVENTS_PER_READ: u16 = 256;
 #[serde(deny_unknown_fields)]
 pub struct AppEventsRequestDto {
     pub schema_version: u32,
-    pub request_id: Uuid,
+    pub request_id: RequestIdDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_epoch: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -21,9 +20,6 @@ impl AppEventsRequestDto {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.schema_version != APP_WIRE_VERSION {
             return Err("schema_version");
-        }
-        if self.request_id.is_nil() {
-            return Err("request_id");
         }
         if self.limit == 0 || self.limit > MAX_APP_EVENTS_PER_READ {
             return Err("limit");

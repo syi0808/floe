@@ -12,11 +12,20 @@ crate-type = ["cdylib", "rlib"]
 chrono.workspace = true
 floe-app = { path = "../../app" }
 floe-protocol = { path = "../protocol" }
+floe-conversation = { path = "../../modules/conversation" }
+floe-connections = { path = "../../modules/connections" }
+floe-access = { path = "../../modules/access" }
+floe-context = { path = "../../modules/context" }
+floe-day = { path = "../../modules/day" }
+floe-actions = { path = "../../modules/actions" }
+floe-experts = { path = "../../modules/experts" }
+floe-knowledge = { path = "../../modules/knowledge" }
+floe-execution = { path = "../../runtime/execution" }
+floe-kernel = { path = "../../contracts/kernel" }
+floe-agent-contract = { path = "../../contracts/agent" }
+floe-context-contract = { path = "../../contracts/context" }
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
-
-[dev-dependencies]
-tempfile = "3.23.0"

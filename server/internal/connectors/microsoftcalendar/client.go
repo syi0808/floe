@@ -1,6 +1,7 @@
 package microsoftcalendar
 
 import (
+ "floe/server/internal/views"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"floe/server/internal/connectors/common"
+	
 )
 
 const (
@@ -63,7 +64,6 @@ type eventDateTime struct {
 	TimeZone string `json:"timeZone"`
 }
 
-type CalendarView = common.CalendarView
 
 func New(tokens TokenSource, calendarID, connectionID string) (*Client, error) {
 	return NewWithBaseURL(tokens, defaultBaseURL, calendarID, connectionID)
@@ -85,31 +85,31 @@ func NewWithBaseURL(tokens TokenSource, baseURL, calendarID, connectionID string
 	return &Client{tokens: tokens, baseURL: strings.TrimSuffix(endpoint.String(), "/"), calendarID: calendarID, connectionID: connectionID, http: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
-func (client *Client) Calendar(ctx context.Context, rangeStart, rangeEnd time.Time, cursor string, limit int, now time.Time) (CalendarView, error) {
+func (client *Client) Calendar(ctx context.Context, rangeStart, rangeEnd time.Time, cursor string, limit int, now time.Time) (views.CalendarView, error) {
 	if rangeStart.IsZero() || rangeEnd.IsZero() || !rangeStart.Before(rangeEnd) || rangeEnd.Sub(rangeStart) > 32*24*time.Hour || rangeStart.UnixMilli() < 0 || limit < 1 || limit > maxItems {
-		return CalendarView{}, ErrInvalidInput
+		return views.CalendarView{}, ErrInvalidInput
 	}
 	values := url.Values{"startDateTime": {rangeStart.UTC().Format(time.RFC3339Nano)}, "endDateTime": {rangeEnd.UTC().Format(time.RFC3339Nano)}, "$top": {strconv.Itoa(limit)}, "$select": {"id,subject,start,end,isAllDay,isCancelled"}}
 	if cursor != "" {
 		name, value, ok := decodeCursor(cursor)
 		if !ok {
-			return CalendarView{}, ErrInvalidInput
+			return views.CalendarView{}, ErrInvalidInput
 		}
 		values.Set(name, value)
 	}
 	path := "/me/calendars/" + url.PathEscape(client.calendarID) + "/calendarView"
 	var response eventList
 	if err := client.get(ctx, path+"?"+values.Encode(), &response); err != nil {
-		return CalendarView{}, err
+		return views.CalendarView{}, err
 	}
 	if len(response.Value) > limit {
-		return CalendarView{}, ErrInvalidResponse
+		return views.CalendarView{}, ErrInvalidResponse
 	}
 	nextCursor, err := client.nextCursor(response.NextLink)
 	if err != nil {
-		return CalendarView{}, err
+		return views.CalendarView{}, err
 	}
-	view := CalendarView{SchemaVersion: 1, ViewID: "calendar.timeline", SourceHandle: handle("calendar.timeline", client.connectionID+":"+client.calendarID), ObservedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: now.Add(5 * time.Minute).UnixMilli(), RangeStartUnixMS: rangeStart.UnixMilli(), RangeEndUnixMS: rangeEnd.UnixMilli(), CoverageComplete: nextCursor == "", Items: []common.CalendarItem{}}
+	view := views.CalendarView{SchemaVersion: 1, ViewID: "calendar.timeline", SourceHandle: handle("calendar.timeline", client.connectionID+":"+client.calendarID), ObservedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: now.Add(5 * time.Minute).UnixMilli(), RangeStartUnixMS: rangeStart.UnixMilli(), RangeEndUnixMS: rangeEnd.UnixMilli(), CoverageComplete: nextCursor == "", Items: []views.CalendarItem{}}
 	if nextCursor != "" {
 		view.NextCursor = &nextCursor
 	}
@@ -119,22 +119,22 @@ func (client *Client) Calendar(ctx context.Context, rangeStart, rangeEnd time.Ti
 			continue
 		}
 		if !validOpaque(event.ID, 512) || seen[event.ID] || len(event.Subject) > 4096 {
-			return CalendarView{}, ErrInvalidResponse
+			return views.CalendarView{}, ErrInvalidResponse
 		}
 		starts, err := parseEventTime(event.Start)
 		if err != nil {
-			return CalendarView{}, ErrInvalidResponse
+			return views.CalendarView{}, ErrInvalidResponse
 		}
 		ends, err := parseEventTime(event.End)
 		if err != nil || starts.UnixMilli() < 0 || !starts.Before(ends) || !starts.Before(rangeEnd) || !ends.After(rangeStart) {
-			return CalendarView{}, ErrInvalidResponse
+			return views.CalendarView{}, ErrInvalidResponse
 		}
 		seen[event.ID] = true
-		view.Items = append(view.Items, common.CalendarItem{EvidenceHandle: handle("calendar.event", client.connectionID+":"+client.calendarID+":"+event.ID), UntrustedTitle: truncate(event.Subject, 1024), StartsAtUnixMS: starts.UnixMilli(), EndsAtUnixMS: ends.UnixMilli(), AllDay: event.IsAllDay})
+		view.Items = append(view.Items, views.CalendarItem{EvidenceHandle: handle("calendar.event", client.connectionID+":"+client.calendarID+":"+event.ID), UntrustedTitle: truncate(event.Subject, 1024), StartsAtUnixMS: starts.UnixMilli(), EndsAtUnixMS: ends.UnixMilli(), AllDay: event.IsAllDay})
 	}
 	encoded, err := json.Marshal(view)
 	if err != nil || len(encoded) > 65_536 {
-		return CalendarView{}, ErrInvalidResponse
+		return views.CalendarView{}, ErrInvalidResponse
 	}
 	return view, nil
 }

@@ -210,11 +210,19 @@ private func nativeSubjectFingerprint(_ store: EKEventStore, _ identifiers: [Str
   return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
 }
 
+/// Shape validation only; the Rust owner admits Person authority before this boundary.
+private func admittedPerson(_ value: Any?) -> String? {
+  guard let text = value as? String, let id = UUID(uuidString: text),
+        id.uuidString.lowercased() == text,
+        text != "00000000-0000-0000-0000-000000000000" else { return nil }
+  return text
+}
+
 func calendarViewAccess(_ request: [String: Any], permission: () throws -> Void,
                         contains: (String) -> Bool, generation: () -> String,
                         subjectFingerprint: () throws -> String) throws -> [String: Any] {
   guard request["schema_version"] as? Int == 1,
-        request["person_id"] as? String == localPerson,
+        let personID = admittedPerson(request["person_id"]),
         let deviceID = request["device_id"] as? String,
         !deviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
         deviceID.utf8.count <= 128,
@@ -239,7 +247,7 @@ func calendarViewAccess(_ request: [String: Any], permission: () throws -> Void,
   guard identifiers.allSatisfy(contains) else { throw NativeFailure("provider_unavailable") }
   try permission()
   guard before == generation(), beforeSubject == (try subjectFingerprint()), Date() < deadline else { throw NativeFailure("timeout") }
-  return ["schema_version": 1, "person_id": localPerson, "device_id": deviceID,
+  return ["schema_version": 1, "person_id": personID, "device_id": deviceID,
           "provider": "event_kit", "calendar_ids": identifiers.sorted(),
           "native_subject_fingerprint": beforeSubject, "generation": before]
 }
@@ -300,7 +308,7 @@ private func normalizedObservationAllDayEnd(start: Date, end: Date, calendar: Ca
 
 private func calendarObservation(_ request: [String: Any]) throws -> [String: Any] {
   guard request["schema_version"] as? Int == 1,
-        request["person_id"] as? String == localPerson,
+        let personID = admittedPerson(request["person_id"]),
         let deviceID = request["device_id"] as? String,
         !deviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
         deviceID.utf8.count <= 128,
@@ -360,7 +368,7 @@ private func calendarObservation(_ request: [String: Any]) throws -> [String: An
   let formatter = ISO8601DateFormatter()
   formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
   let response: [String: Any] = [
-    "stamp": ["schema_version": 1, "person_id": localPerson, "device_id": deviceID,
+    "stamp": ["schema_version": 1, "person_id": personID, "device_id": deviceID,
       "provider": "event_kit",
       "calendar_ids": identifiers.sorted(), "native_subject_fingerprint": beforeSubject,
       "generation": before],

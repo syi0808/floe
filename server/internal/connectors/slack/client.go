@@ -1,6 +1,7 @@
 package slack
 
 import (
+ "floe/server/internal/views"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"floe/server/internal/connectors/common"
+	
 )
 
 const (
@@ -92,9 +93,9 @@ func NewWithBaseURL(tokens TokenSource, baseURL string) (*Client, error) {
 	}, nil
 }
 
-func (client *Client) WorkContext(ctx context.Context, channel, thread string, now time.Time) (common.WorkContextView, error) {
+func (client *Client) WorkContext(ctx context.Context, channel, thread string, now time.Time) (views.WorkContextView, error) {
 	if !channelPattern.MatchString(channel) || thread != "" && !threadPattern.MatchString(thread) {
-		return common.WorkContextView{}, ErrInvalidInput
+		return views.WorkContextView{}, ErrInvalidInput
 	}
 	values := url.Values{"channel": {channel}, "limit": {strconv.Itoa(maxMessages)}}
 	method := "conversations.history"
@@ -104,15 +105,15 @@ func (client *Client) WorkContext(ctx context.Context, channel, thread string, n
 	}
 	var response historyResponse
 	if err := client.get(ctx, "/"+method+"?"+values.Encode(), &response); err != nil {
-		return common.WorkContextView{}, err
+		return views.WorkContextView{}, err
 	}
 	if !response.OK {
-		return common.WorkContextView{}, providerError(response.Error)
+		return views.WorkContextView{}, providerError(response.Error)
 	}
 	if len(response.Messages) > maxMessages {
-		return common.WorkContextView{}, ErrInvalidResponse
+		return views.WorkContextView{}, ErrInvalidResponse
 	}
-	view := common.WorkContextView{
+	view := views.WorkContextView{
 		SchemaVersion:    1,
 		ViewID:           "work.context",
 		SourceHandle:     handle("slack", channel+":"+thread+":"+now.UTC().Format("2006-01-02T15:04")),
@@ -120,7 +121,7 @@ func (client *Client) WorkContext(ctx context.Context, channel, thread string, n
 		ExpiresAtUnixMS:  now.Add(5 * time.Minute).UnixMilli(),
 		CoverageComplete: strings.TrimSpace(response.Metadata.NextCursor) == "",
 		ScopeHandle:      handle("channel", channel+":"+thread),
-		Items:            []common.WorkItem{},
+		Items:            []views.WorkItem{},
 	}
 	seen := map[string]bool{}
 	for _, item := range response.Messages {
@@ -130,13 +131,13 @@ func (client *Client) WorkContext(ctx context.Context, channel, thread string, n
 		observed, err := slackTimestamp(item.TS)
 		text := strings.TrimSpace(item.Text)
 		if err != nil || observed > now.Add(time.Minute).UnixMilli() || text == "" || seen[item.TS] {
-			return common.WorkContextView{}, ErrInvalidResponse
+			return views.WorkContextView{}, ErrInvalidResponse
 		}
 		seen[item.TS] = true
 		excerpt := truncate(text, 2048)
 		title := truncate(strings.TrimSpace(strings.SplitN(excerpt, "\n", 2)[0]), 512)
 		status := "message"
-		view.Items = append(view.Items, common.WorkItem{
+		view.Items = append(view.Items, views.WorkItem{
 			EvidenceHandle:   handle("slack", channel+":"+item.TS),
 			Kind:             "communication",
 			Title:            title,
@@ -147,7 +148,7 @@ func (client *Client) WorkContext(ctx context.Context, channel, thread string, n
 	}
 	encoded, err := json.Marshal(view)
 	if err != nil || len(encoded) > 65_536 {
-		return common.WorkContextView{}, ErrInvalidResponse
+		return views.WorkContextView{}, ErrInvalidResponse
 	}
 	return view, nil
 }

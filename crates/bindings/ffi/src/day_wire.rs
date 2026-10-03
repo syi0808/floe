@@ -15,51 +15,6 @@ pub(crate) fn read(day: DayQueryDto) -> WireResult<floe_app::DayRead> {
 
 pub(crate) fn mutation(mutation: DayMutationDto) -> WireResult<floe_app::DayMutation> {
     Ok(match mutation {
-        DayMutationDto::ImportCalendarSources {
-            connection_id,
-            expected_mirror_revision,
-            range,
-            batches,
-            occurred_at,
-        } => floe_app::DayMutation::ImportCalendarSources {
-            connection_id: floe_app::ConnectionId::try_new(connection_id)
-                .map_err(|_| invalid("connection_id", "invalid Calendar connection"))?,
-            expected_mirror_revision,
-            range: conversion::calendar_range_from_dto(range),
-            batches: batches
-                .into_iter()
-                .map(conversion::calendar_batch_from_dto)
-                .collect(),
-            occurred_at: parse_time(&occurred_at, "occurred_at")?,
-        },
-        DayMutationDto::ImportCalendar {
-            connection_id,
-            expected_mirror_revision,
-            range,
-            records,
-            occurred_at,
-        } => floe_app::DayMutation::ImportCalendar {
-            connection_id: floe_app::ConnectionId::try_new(connection_id)
-                .map_err(|_| invalid("connection_id", "invalid Calendar connection"))?,
-            expected_mirror_revision,
-            range: conversion::calendar_range_from_dto(range),
-            records: records
-                .into_iter()
-                .map(conversion::calendar_record_from_dto)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(conversion_error)?,
-            occurred_at: parse_time(&occurred_at, "occurred_at")?,
-        },
-        DayMutationDto::CalendarFailed {
-            connection_id,
-            expected_mirror_revision,
-            failure,
-        } => floe_app::DayMutation::CalendarFailed {
-            connection_id: floe_app::ConnectionId::try_new(connection_id)
-                .map_err(|_| invalid("connection_id", "invalid Calendar connection"))?,
-            expected_mirror_revision,
-            failure: conversion::calendar_failure_from_dto(failure),
-        },
         DayMutationDto::SubmitCapture { input, occurred_at } => {
             floe_app::DayMutation::SubmitCapture {
                 input,

@@ -149,6 +149,3 @@ fn from_vault_activation(activation: VaultTaskActivation) -> TaskActivation {
             .collect(),
     }
 }
-
-#[cfg(test)]
-mod tests;

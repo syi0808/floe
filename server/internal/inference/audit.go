@@ -9,16 +9,15 @@ import (
 )
 
 type AuditRecord struct {
-	TraceID          string    `json:"trace_id"`
-	CreatedAt        time.Time `json:"created_at"`
-	Purpose          string    `json:"purpose"`
-	DataClasses      []string  `json:"data_classes"`
-	Placement        string    `json:"placement"`
-	ExternalTransfer bool      `json:"external_transfer"`
-	RequestDigest    string    `json:"request_digest"`
-	ResponseDigest   string    `json:"response_digest,omitempty"`
-	Outcome          string    `json:"outcome"`
-	ReplayOf         string    `json:"replay_of,omitempty"`
+ TraceID string `json:"trace_id"`
+ CreatedAt time.Time `json:"created_at"`
+ Purpose string `json:"purpose"`
+ DataClasses []string `json:"data_classes"`
+ RequestDigest string `json:"request_digest"`
+ ResponseDigest string `json:"response_digest,omitempty"`
+ IdentityDigest string `json:"identity_digest"`
+ Outcome string `json:"outcome"`
+ Usage UsageObservation `json:"usage"`
 }
 
 type auditLog struct {
@@ -63,35 +62,6 @@ func (log *auditLog) list(limit int) []AuditRecord {
 	return records
 }
 
-func (gateway *Gateway) Traces(limit int) []AuditRecord {
-	if limit < 0 || limit > 20 {
-		limit = 20
-	}
-	return gateway.audit.list(limit)
-}
-
-func requestDigest(request Request) string {
-	request.ReplayOf = ""
-	encoded, _ := json.Marshal(request)
-	digest := sha256.Sum256(encoded)
-	return hex.EncodeToString(digest[:])
-}
-
-func newAuditRecord(traceID string, request Request, placement, outcome, output string) AuditRecord {
-	record := AuditRecord{
-		TraceID:          traceID,
-		CreatedAt:        time.Now().UTC(),
-		Purpose:          request.Purpose,
-		DataClasses:      append([]string(nil), request.DataClasses...),
-		Placement:        placement,
-		ExternalTransfer: placement == "remote",
-		RequestDigest:    requestDigest(request),
-		Outcome:          outcome,
-		ReplayOf:         request.ReplayOf,
-	}
-	if output != "" {
-		responseDigest := sha256.Sum256([]byte(output))
-		record.ResponseDigest = hex.EncodeToString(responseDigest[:])
-	}
-	return record
+func newAuditRecord(trace,purpose string,classes []string,request any,identity,outcome string,output any,usage UsageObservation,started time.Time)AuditRecord {
+ raw,_:=json.Marshal(request);digest:=sha256.Sum256(raw);id:=sha256.Sum256([]byte(identity));record:=AuditRecord{TraceID:trace,CreatedAt:started.UTC(),Purpose:purpose,DataClasses:append([]string(nil),classes...),RequestDigest:hex.EncodeToString(digest[:]),IdentityDigest:hex.EncodeToString(id[:]),Outcome:outcome,Usage:usage};if output!=nil{raw,_=json.Marshal(output);digest=sha256.Sum256(raw);record.ResponseDigest=hex.EncodeToString(digest[:])};return record
 }

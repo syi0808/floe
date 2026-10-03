@@ -4,10 +4,11 @@ import (
 	"net/http"
 	"strings"
 
-	"floe/server/internal/authorization"
+	"floe/server/internal/authority"
+ "floe/server/internal/trust"
 )
 
-func serveSource(writer http.ResponseWriter, request *http.Request, principal authorization.Principal, service *authorization.SourceService) {
+func serveSource(writer http.ResponseWriter, request *http.Request, principal trust.Principal, service *authority.SourceService) {
 	parts := strings.Split(strings.TrimPrefix(request.URL.Path, "/v1/views/"), "/")
 	viewID := parts[0]
 	if viewID != "calendar.timeline" && viewID != "mail.communication" && viewID != "work.context" && viewID != "life.logistics" {
@@ -28,7 +29,7 @@ func serveSource(writer http.ResponseWriter, request *http.Request, principal au
 	}
 	switch parts[1] {
 	case "source-preview":
-		var input authorization.SourcePreview
+		var input authority.SourcePreview
 		if !decodeSourceEnvelope(writer, request, map[string]struct{}{"connector_id": {}, "connection_id": {}, "resource": {}}, &input) {
 			failure(writer, http.StatusBadRequest, "validation")
 			return
@@ -36,7 +37,7 @@ func serveSource(writer http.ResponseWriter, request *http.Request, principal au
 		writeResult(writer, service.PreviewView(principal, viewID, input))
 	case "admit":
 		allowed := map[string]struct{}{"schema_version": {}, "connector_id": {}, "connection_id": {}, "connection_revision": {}, "resources": {}, "grant": {}, "purpose": {}, "consumer": {}, "max_items": {}, "max_bytes": {}, "query": {}}
-		var input authorization.ViewAdmission
+		var input authority.ViewAdmission
 		if !decodeSourceEnvelope(writer, request, allowed, &input) {
 			failure(writer, http.StatusBadRequest, "validation")
 			return

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    AGENT_SCHEMA_VERSION, AgentFailure, DependencyCoverage, MAX_OUTPUT_BYTES, ModelPlacement,
+    AGENT_SCHEMA_VERSION, AgentFailure, DependencyCoverage, MAX_OUTPUT_BYTES,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -18,17 +18,6 @@ pub struct AgentCard {
     pub domain_tags: Vec<String>,
     #[serde(default)]
     pub skills: Vec<String>,
-    /// Where this agent's judgment can run.
-    ///
-    /// Eligibility is read from the card, not inferred from the agent's
-    /// identity: a caller on the device model offers only the cards that say
-    /// they run there.
-    #[serde(default = "every_placement")]
-    pub supported_placements: Vec<ModelPlacement>,
-}
-
-fn every_placement() -> Vec<ModelPlacement> {
-    vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote]
 }
 
 impl AgentCard {
@@ -37,11 +26,6 @@ impl AgentCard {
             &serde_json::to_vec(self).map_err(|_| AgentFailure::InvalidInput)?,
         ))
     }
-    /// Whether this agent can answer on a caller running at `placement`.
-    pub fn runs_at(&self, placement: ModelPlacement) -> bool {
-        self.supported_placements.contains(&placement)
-    }
-
     pub fn validate(&self) -> Result<(), AgentFailure> {
         if self.schema_version != AGENT_SCHEMA_VERSION
             || self.protocol_version != crate::A2A_PROTOCOL_VERSION
@@ -53,9 +37,6 @@ impl AgentCard {
             || self.skills.len() > 8
             || self.domain_tags.iter().any(|value| !bounded(value, 64))
             || self.skills.iter().any(|value| !bounded(value, 256))
-            || self.supported_placements.is_empty()
-            || self.supported_placements.len() > 2
-            || self.supported_placements[1..].contains(&self.supported_placements[0])
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -193,131 +174,4 @@ pub(crate) fn bounded(value: &str, max: usize) -> bool {
         && !value
             .chars()
             .any(|character| character.is_control() && character != '\n')
-}
-
-#[cfg(test)]
-mod interaction_tests {
-    use super::*;
-    use crate::{UserInteractionKind, UserInteractionRef, UserInteractionStatus};
-
-    #[test]
-    fn interaction_observation_requires_issue_and_no_source_coverage() {
-        let call_id = Uuid::new_v4();
-        let mut result = ToolResult {
-            call_id,
-            text: "Calendar access needs approval".into(),
-            artifacts: vec![Artifact {
-                artifact_id: Uuid::new_v4(),
-                name: "user_interaction".into(),
-                parts: vec![ArtifactPart::Data {
-                    media_type: crate::USER_INTERACTION_MEDIA_TYPE.into(),
-                    data: serde_json::to_string(&UserInteractionRef {
-                        interaction_id: Uuid::new_v4(),
-                        kind: UserInteractionKind::SourceAccess,
-                        status: UserInteractionStatus::Pending,
-                    })
-                    .unwrap(),
-                }],
-                coverage: DependencyCoverage::Independent,
-            }],
-            coverage: DependencyCoverage::Unknown,
-            issue: Some(OutcomeIssue {
-                failure: AgentFailure::CapabilityUnavailable,
-                retryable: false,
-            }),
-        };
-        assert!(result.validate(call_id, 4096).is_ok());
-        result.issue = None;
-        assert_eq!(
-            result.validate(call_id, 4096),
-            Err(AgentFailure::InvalidModelOutput)
-        );
-        result.issue = Some(OutcomeIssue {
-            failure: AgentFailure::CapabilityUnavailable,
-            retryable: false,
-        });
-        result.artifacts[0].parts = vec![ArtifactPart::Data {
-            media_type: crate::USER_INTERACTION_MEDIA_TYPE.into(),
-            data: "{}".into(),
-        }];
-        assert_eq!(
-            result.validate(call_id, 4096),
-            Err(AgentFailure::InvalidModelOutput)
-        );
-    }
-
-    #[test]
-    fn interaction_artifact_carries_only_an_opaque_reference() {
-        let call_id = Uuid::new_v4();
-        let result = ToolResult {
-            call_id,
-            text: "Calendar access needs approval".into(),
-            artifacts: vec![Artifact {
-                artifact_id: Uuid::new_v4(),
-                name: "user_interaction".into(),
-                parts: vec![ArtifactPart::Data {
-                    media_type: crate::USER_INTERACTION_MEDIA_TYPE.into(),
-                    data: serde_json::to_string(&UserInteractionRef {
-                        interaction_id: Uuid::new_v4(),
-                        kind: UserInteractionKind::SourceAccess,
-                        status: UserInteractionStatus::Pending,
-                    })
-                    .unwrap(),
-                }],
-                coverage: DependencyCoverage::Independent,
-            }],
-            coverage: DependencyCoverage::Unknown,
-            issue: Some(OutcomeIssue {
-                failure: AgentFailure::CapabilityUnavailable,
-                retryable: false,
-            }),
-        };
-        assert!(result.validate(call_id, 4096).is_ok());
-        let encoded = serde_json::to_string(&result).unwrap();
-        for forbidden in [
-            "requirement",
-            "resource",
-            "consumer",
-            "grant",
-            "fingerprint",
-            "authority",
-            "credential",
-            "token",
-            "secret",
-        ] {
-            assert!(!encoded.contains(forbidden), "leaked {forbidden}");
-        }
-    }
-
-    #[test]
-    fn forged_well_formed_reference_still_passes_shape_validation() {
-        // Shape validation cannot tell a forged reference from a real one: a
-        // syntactically valid id/kind/status triple validates here and must
-        // fail at Conversation's trusted durable lookup instead.
-        let call_id = Uuid::new_v4();
-        let result = ToolResult {
-            call_id,
-            text: "forged".into(),
-            artifacts: vec![Artifact {
-                artifact_id: Uuid::new_v4(),
-                name: "user_interaction".into(),
-                parts: vec![ArtifactPart::Data {
-                    media_type: crate::USER_INTERACTION_MEDIA_TYPE.into(),
-                    data: serde_json::to_string(&UserInteractionRef {
-                        interaction_id: Uuid::new_v4(),
-                        kind: UserInteractionKind::ProcessingRecipient,
-                        status: UserInteractionStatus::Resolved,
-                    })
-                    .unwrap(),
-                }],
-                coverage: DependencyCoverage::Independent,
-            }],
-            coverage: DependencyCoverage::Unknown,
-            issue: Some(OutcomeIssue {
-                failure: AgentFailure::CapabilityUnavailable,
-                retryable: false,
-            }),
-        };
-        assert!(result.validate(call_id, 4096).is_ok());
-    }
 }

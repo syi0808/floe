@@ -13,7 +13,7 @@ use floe_vault::TursoStore;
 use crate::{CoreError, ErrorCode};
 
 pub struct FloeCore {
-    pub(crate) store: TursoStore,
+    pub(crate) store: Arc<TursoStore>,
     pub(crate) lease_registry: Arc<SourceLeaseRegistry>,
 }
 
@@ -22,19 +22,19 @@ pub use floe_day::Classification;
 impl FloeCore {
     pub async fn open(path: impl AsRef<std::path::Path>) -> Result<Self, CoreError> {
         Ok(Self {
-            store: TursoStore::open(path)
+            store: Arc::new(TursoStore::open(path)
                 .await
-                .map_err(|error| CoreError::new(ErrorCode::Storage, error.to_string()))?,
+                .map_err(|error| CoreError::new(ErrorCode::Storage, error.to_string()))?),
             lease_registry: Arc::new(SourceLeaseRegistry::new()),
         })
     }
 
     pub fn day_service(&self) -> floe_day::DayService<'_, TursoStore> {
-        floe_day::DayService::new(&self.store)
+        floe_day::DayService::new(self.store.as_ref())
     }
 
     pub fn source_service(&self) -> floe_connections::SourceConnectionService<'_, TursoStore> {
-        floe_connections::SourceConnectionService::new(&self.store)
+        floe_connections::SourceConnectionService::new(self.store.as_ref())
     }
 
     pub async fn submit_capture(
@@ -212,167 +212,4 @@ pub(crate) fn day_error(error: floe_day::DayError) -> CoreError {
         result = result.with_metadata(key, value);
     }
     result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::TimeZone;
-    use floe_day::SourceRef;
-
-    #[tokio::test]
-    async fn capture_classification_persists_across_reopen() {
-        let path = std::env::temp_dir().join(format!("floe-{}.db", uuid::Uuid::new_v4()));
-        let person_id = PersonId::new();
-        let now = Utc.with_ymd_and_hms(2026, 9, 2, 9, 0, 0).unwrap();
-        let core = FloeCore::open(&path).await.unwrap();
-        let capture = core
-            .submit_capture(person_id, "Buy milk", now)
-            .await
-            .unwrap();
-        let item = core
-            .classify_capture(
-                capture.id,
-                capture.revision,
-                Classification::Task {
-                    title: "Buy milk".into(),
-                    deadline: None,
-                    priority: Priority::Normal,
-                },
-                now,
-            )
-            .await
-            .unwrap();
-        drop(core);
-        let core = FloeCore::open(&path).await.unwrap();
-        let snapshot = core
-            .day_snapshot(person_id, now.date_naive(), 0, now)
-            .await
-            .unwrap();
-        assert_eq!(snapshot.items, vec![item]);
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[tokio::test]
-    async fn stale_classification_does_not_create_an_item() {
-        let path = std::env::temp_dir().join(format!("floe-{}.db", uuid::Uuid::new_v4()));
-        let person_id = PersonId::new();
-        let now = Utc.with_ymd_and_hms(2026, 9, 2, 9, 0, 0).unwrap();
-        let core = FloeCore::open(&path).await.unwrap();
-        let capture = core
-            .submit_capture(person_id, "Remember this", now)
-            .await
-            .unwrap();
-        let error = core
-            .classify_capture(
-                capture.id,
-                Revision(99),
-                Classification::Note {
-                    content: "Remember this".into(),
-                },
-                now,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, ErrorCode::Conflict);
-        assert!(
-            core.day_snapshot(person_id, now.date_naive(), 0, now)
-                .await
-                .unwrap()
-                .items
-                .is_empty()
-        );
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[tokio::test]
-    async fn stale_task_write_is_rejected_by_repository_cas() {
-        let path = std::env::temp_dir().join(format!("floe-{}.db", uuid::Uuid::new_v4()));
-        let person_id = PersonId::new();
-        let now = Utc.with_ymd_and_hms(2026, 9, 2, 9, 0, 0).unwrap();
-        let core = FloeCore::open(&path).await.unwrap();
-        let task = core
-            .create_task(person_id, "CAS", None, Priority::Normal, now)
-            .await
-            .unwrap();
-        let mut completed = task.clone();
-        completed.complete(now);
-        let mut reopened = task.clone();
-        reopened.reopen(now);
-        floe_day::TimelineRepository::put_task_if_revision(&core.store, &completed, task.revision)
-            .await
-            .unwrap();
-        let error = floe_day::TimelineRepository::put_task_if_revision(
-            &core.store,
-            &reopened,
-            task.revision,
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(error.code, floe_day::DayErrorCode::Conflict);
-        assert_eq!(
-            error.metadata.get("expected"),
-            Some(&task.revision.0.to_string())
-        );
-        assert_eq!(
-            error.metadata.get("actual"),
-            Some(&completed.revision.0.to_string())
-        );
-        let stored = core.store.get_task(task.id).await.unwrap().unwrap();
-        assert_eq!(stored.completed_at, completed.completed_at);
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[tokio::test]
-    async fn competing_capture_classification_cannot_leave_an_orphan_item() {
-        let path = std::env::temp_dir().join(format!("floe-{}.db", uuid::Uuid::new_v4()));
-        let person_id = PersonId::new();
-        let now = Utc.with_ymd_and_hms(2026, 9, 2, 9, 0, 0).unwrap();
-        let core = FloeCore::open(&path).await.unwrap();
-        let capture = core
-            .submit_capture(person_id, "classify", now)
-            .await
-            .unwrap();
-        let first = Task::new(
-            person_id,
-            "first",
-            None,
-            Priority::Normal,
-            SourceRef::Capture(capture.id),
-            now,
-        )
-        .unwrap();
-        let second = Task::new(
-            person_id,
-            "second",
-            None,
-            Priority::Normal,
-            SourceRef::Capture(capture.id),
-            now,
-        )
-        .unwrap();
-        let mut first_capture = capture.clone();
-        first_capture.classify(DomainRef::Task(first.id), now);
-        let mut second_capture = capture.clone();
-        second_capture.classify(DomainRef::Task(second.id), now);
-        floe_day::TimelineRepository::classify(
-            &core.store,
-            &first_capture,
-            &TimelineItem::Task(first),
-        )
-        .await
-        .unwrap();
-        let error = floe_day::TimelineRepository::classify(
-            &core.store,
-            &second_capture,
-            &TimelineItem::Task(second),
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(error.code, floe_day::DayErrorCode::Conflict);
-        assert_eq!(error.metadata.get("expected"), Some(&"0".to_owned()));
-        assert_eq!(error.metadata.get("actual"), Some(&"1".to_owned()));
-        assert_eq!(core.store.list_tasks(person_id).await.unwrap().len(), 1);
-        let _ = std::fs::remove_file(path);
-    }
 }

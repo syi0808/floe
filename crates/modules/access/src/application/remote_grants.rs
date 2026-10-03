@@ -10,13 +10,11 @@ use floe_context_contract::{GrantConsumer, SourceAuthority};
 use floe_kernel::{AgentFailure, PersonId};
 
 use crate::application::remote_view::{
-    RemoteProducerIdentity, RemoteViewApproval, RemoteViewGrantReview, RemoteViewSourceReference,
-    matches_review, producer_is_pinned, remote_view_scope, remote_view_source,
-    review_remote_view_grant, source_matches_producer,
+    RemoteProducerIdentity, RemoteViewSourceReference, producer_is_pinned, source_matches_producer,
 };
 use crate::data_access_grant::DataAccessGrant;
 use crate::ports::remote_grants::{
-    RemoteCallWindow, RemoteGrantStore, RemoteGrantTransport, RemotePairingIdentity,
+    RemoteCallWindow, RemoteGrantTransport, RemotePairingIdentity,
     RemoteSourceQuery,
 };
 
@@ -43,37 +41,6 @@ pub struct RemoteViewGrantPreview {
     pub consumers: Vec<String>,
 }
 
-/// What the Person says they already reviewed: the live descriptor fields
-/// plus the exact grant (or reviewed absence) the
-/// decision binds. A fresh read never substitutes for these values.
-#[derive(Clone, Copy)]
-pub struct RemoteViewGrantExpectation<'a> {
-    pub producer_fingerprint: &'a str,
-    pub source_authority: SourceAuthority,
-    pub connection_revision: Option<u64>,
-    pub provider_identity: &'a str,
-    pub recipient: &'a str,
-    pub expected_grant: Option<(
-        floe_context_contract::GrantId,
-        floe_context_contract::GrantAuthority,
-    )>,
-}
-
-#[derive(Clone, Debug)]
-pub struct RemoteViewGrantActivation {
-    pub view_id: String,
-    pub grant_id: floe_context_contract::GrantId,
-    pub expected: Option<floe_context_contract::GrantAuthority>,
-    pub source: floe_context_contract::GrantSourceBinding,
-    pub scope: floe_context_contract::GrantScope,
-}
-
-#[derive(Clone, Debug)]
-pub enum RemoteViewGrantPreparation {
-    Current(DataAccessGrant),
-    Activate(RemoteViewGrantActivation),
-}
-
 fn admissible(request: &RemoteViewGrantRequest<'_>, resource_matches: bool) -> bool {
     request.pairing.person_id == request.person_id.to_string()
         && !request.pairing.client_id.is_empty()
@@ -87,8 +54,9 @@ fn admissible(request: &RemoteViewGrantRequest<'_>, resource_matches: bool) -> b
 /// Nothing is stored. The producer must already be the one they pinned, and the
 /// descriptor it signs must name this pairing, this source and this resource.
 pub async fn preview_remote_view_grant(
-    store: &impl RemoteGrantStore,
-    transport: &impl RemoteGrantTransport,
+    trust: &(impl crate::GatewayTrustReader + ?Sized),
+    verifier: &(impl crate::SourcePreviewVerifier + ?Sized),
+    transport: &(impl RemoteGrantTransport + ?Sized),
     request: RemoteViewGrantRequest<'_>,
     resource_matches_view: bool,
     is_remote_view: bool,
@@ -104,7 +72,7 @@ pub async fn preview_remote_view_grant(
         return Err(AgentFailure::InvalidInput);
     }
     let producer = transport.producer_identity(window).await?;
-    producer_is_pinned(&store.pinned_producer().await?, &producer)?;
+    producer_is_pinned(&trust.pinned_producer().await?, &producer)?;
     let query = RemoteSourceQuery {
         view_id: request.view_id,
         connector_id: request.connector_id,
@@ -112,8 +80,8 @@ pub async fn preview_remote_view_grant(
         resource: request.resource,
     };
     let preview = transport.view_source_preview(query, window).await?;
-    let reference = store
-        .verify_view_source_preview(&preview, request.pairing, query)
+    let reference = verifier
+        .verify(&preview, request.pairing, query)
         .await?;
     source_matches_producer(&reference, &producer, preview.connection_revision)?;
     Ok(RemoteViewGrantPreview {
@@ -128,106 +96,3 @@ pub async fn preview_remote_view_grant(
     })
 }
 
-/// Grant the view the Person reviewed, or report that it is already granted.
-///
-/// The preview is taken again here rather than carried across the decision: a
-/// producer, authority or revision that moved while the Person was deciding is
-/// not what they reviewed.
-pub async fn review_and_activate_remote_view_grant(
-    store: &impl RemoteGrantStore,
-    transport: &impl RemoteGrantTransport,
-    request: RemoteViewGrantRequest<'_>,
-    expectation: RemoteViewGrantExpectation<'_>,
-    resource_matches_view: bool,
-    is_remote_view: bool,
-    window: &RemoteCallWindow,
-) -> Result<DataAccessGrant, AgentFailure> {
-    let preparation = prepare_remote_view_grant_activation(
-        store,
-        transport,
-        request,
-        expectation,
-        resource_matches_view,
-        is_remote_view,
-        window,
-    )
-    .await?;
-    match preparation {
-        RemoteViewGrantPreparation::Current(grant) => Ok(grant),
-        RemoteViewGrantPreparation::Activate(activation) => {
-            store
-                .activate_view_grant(
-                    &activation.view_id,
-                    activation.grant_id,
-                    activation.expected,
-                    activation.source,
-                    activation.scope,
-                )
-                .await
-        }
-    }
-}
-
-pub async fn prepare_remote_view_grant_activation(
-    store: &impl RemoteGrantStore,
-    transport: &impl RemoteGrantTransport,
-    request: RemoteViewGrantRequest<'_>,
-    expectation: RemoteViewGrantExpectation<'_>,
-    resource_matches_view: bool,
-    is_remote_view: bool,
-    window: &RemoteCallWindow,
-) -> Result<RemoteViewGrantPreparation, AgentFailure> {
-    let preview = preview_remote_view_grant(
-        store,
-        transport,
-        request,
-        resource_matches_view,
-        is_remote_view,
-        window,
-    )
-    .await?;
-    matches_review(
-        &RemoteViewApproval {
-            producer_fingerprint: expectation.producer_fingerprint,
-            source_authority: expectation.source_authority,
-            connection_revision: expectation.connection_revision,
-            provider_identity: expectation.provider_identity,
-            recipient: expectation.recipient,
-        },
-        &preview.reference,
-        &preview.producer,
-        preview.connection_revision,
-    )?;
-    if expectation.connection_revision == Some(0) {
-        return Err(AgentFailure::InvalidInput);
-    }
-    let scope = remote_view_scope(
-        request.resource,
-        request.data_categories,
-        request.consumers.to_vec(),
-    )?;
-    let source = remote_view_source(&preview.reference)?;
-    let existing = store
-        .find_view_grant(request.view_id, &source)
-        .await?;
-    match (&expectation.expected_grant, existing.as_ref()) {
-        (None, None) => {}
-        (Some((grant_id, authority)), Some(grant))
-            if grant.id() == *grant_id && grant.authority() == *authority => {}
-        _ => return Err(AgentFailure::AccessReviewRequired),
-    }
-    match review_remote_view_grant(existing.as_ref(), &scope)? {
-        RemoteViewGrantReview::AlreadyGranted => Ok(RemoteViewGrantPreparation::Current(
-            existing.ok_or(AgentFailure::PolicyDenied)?,
-        )),
-        RemoteViewGrantReview::Activate { grant_id, expected } => Ok(
-            RemoteViewGrantPreparation::Activate(RemoteViewGrantActivation {
-                view_id: request.view_id.to_owned(),
-                grant_id,
-                expected,
-                source,
-                scope,
-            }),
-        ),
-    }
-}

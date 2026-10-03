@@ -18,10 +18,10 @@ use floe_native::{
 };
 use uuid::Uuid;
 
-pub struct NativePersonalDriver<'a> {
-    pub attention: &'a AttentionBroker,
-    pub personal: &'a PersonalBroker,
-    pub observations: &'a ObservationRegistry,
+pub struct NativePersonalDriver {
+    pub attention: std::sync::Arc<AttentionBroker>,
+    pub personal: std::sync::Arc<PersonalBroker>,
+    pub observations: std::sync::Arc<ObservationRegistry>,
 }
 
 /// A deadline as the acquisition queue states it.
@@ -43,7 +43,7 @@ fn now_unix_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-impl PersonalSourceDriver for NativePersonalDriver<'_> {
+impl PersonalSourceDriver for NativePersonalDriver {
     fn personal_host_epoch(&self, person_id: PersonId) -> Result<String, AgentFailure> {
         self.personal.host_epoch(person_id)
     }
@@ -71,6 +71,7 @@ impl PersonalSourceDriver for NativePersonalDriver<'_> {
                     PersonalDomain::People => NativePersonalDomain::People,
                     PersonalDomain::Wellbeing => NativePersonalDomain::Wellbeing,
                 },
+                mode: floe_native::PersonalAcquisitionMode::ReadProjection,
                 selected_handles: request.selected_handles,
                 deadline_unix_ms: deadline_unix_ms(request.deadline)?,
                 expected_native_subject_fingerprint: Some(request.expected_subject),
@@ -79,10 +80,27 @@ impl PersonalSourceDriver for NativePersonalDriver<'_> {
                 .personal
                 .submit(command, now_unix_ms(), cancellation)
                 .await?;
+            let health_transform = if result.domain == NativePersonalDomain::Wellbeing && result.view.is_some() {
+                let operation_id=result.transform_operation_id.ok_or(AgentFailure::PolicyDenied)?;
+                let view:floe_context_contract::WellbeingView=serde_json::from_value(result.view.clone().ok_or(AgentFailure::PolicyDenied)?).map_err(|_|AgentFailure::PolicyDenied)?;
+                let digest=floe_context_contract::health_output_digest(view.capacity,view.recovery);
+                let reference=floe_native::HealthTransformReceiptRef{operation_id,output_sha256:digest.iter().map(|byte|format!("{byte:02x}")).collect()};
+                let binding=floe_native::HealthTransformBinding{request_id:result.request_id,host_epoch:result.host_epoch.clone(),person_id:result.person_id,device_id:result.device_id.clone(),native_subject_fingerprint:result.native_subject_fingerprint_after.clone()};
+                let receipt=floe_native::consume_health_transform_receipt(&reference,&binding)?;
+                let output=serde_json::json!({"capacity":receipt.output.capacity,"recovery":receipt.output.recovery});
+                if serde_json::to_value(view.capacity).map_err(|_|AgentFailure::PolicyDenied)?!=output["capacity"]||serde_json::to_value(view.recovery).map_err(|_|AgentFailure::PolicyDenied)?!=output["recovery"] {return Err(AgentFailure::PolicyDenied)}
+                let digest=floe_context_contract::health_output_digest(view.capacity,view.recovery);
+                let hex:String=digest.iter().map(|byte|format!("{byte:02x}")).collect();
+                if reference.output_sha256!=hex {return Err(AgentFailure::PolicyDenied)}
+                let evidence=floe_context_contract::HealthTransformEvidence{operation_id:reference.operation_id,host_epoch:result.host_epoch.clone(),device_id:result.device_id.clone(),output_sha256:digest,
+                    transformed_at:chrono::DateTime::from_timestamp_millis(receipt.transformed_at_unix_ms).ok_or(AgentFailure::PolicyDenied)?,expires_at:chrono::DateTime::from_timestamp_millis(receipt.expires_at_unix_ms).ok_or(AgentFailure::PolicyDenied)?};
+                evidence.validate_view(&result.device_id,&view,chrono::Utc::now())?;Some(evidence)
+            }else{if result.transform_operation_id.is_some(){return Err(AgentFailure::PolicyDenied)}None};
             Ok(AcquiredSource {
                 view: result.view,
                 subject_before: result.native_subject_fingerprint_before,
                 subject_after: result.native_subject_fingerprint_after,
+                health_transform,
             })
         })
     }
@@ -126,6 +144,7 @@ impl PersonalSourceDriver for NativePersonalDriver<'_> {
                 view: result.view,
                 subject_before: result.native_subject_fingerprint_before,
                 subject_after: result.native_subject_fingerprint_after,
+                health_transform: None,
             })
         })
     }
@@ -141,6 +160,7 @@ impl PersonalSourceDriver for NativePersonalDriver<'_> {
         observed_at_unix_ms: i64,
         expires_at_unix_ms: i64,
         query_fingerprint: Vec<u8>,
+        health_transform: Option<floe_context_contract::HealthTransformEvidence>,
     ) -> Result<(), AgentFailure> {
         // The observation only counts under the host epoch that produced it.
         let host_epoch = self.personal.host_epoch(person_id)?;
@@ -154,6 +174,7 @@ impl PersonalSourceDriver for NativePersonalDriver<'_> {
             observed_at_unix_ms,
             expires_at_unix_ms,
             query_fingerprint,
+            health_transform,
         )
     }
 
@@ -178,6 +199,7 @@ impl PersonalSourceDriver for NativePersonalDriver<'_> {
             observed_at_unix_ms: observation.observed_at_unix_ms,
             expires_at_unix_ms: observation.expires_at_unix_ms,
             query_fingerprint: observation.query_fingerprint,
+            health_transform: observation.health_transform,
         })
     }
 
@@ -234,7 +256,7 @@ impl PersonalSourceDriver for NativePersonalDriver<'_> {
 ///
 /// An inspection never reads the source: it only asks which subject the device
 /// would answer for, so the Person can be shown what they are about to grant.
-impl floe_access::PersonalSubjectInspector for NativePersonalDriver<'_> {
+impl floe_access::PersonalSubjectInspector for NativePersonalDriver {
     fn inspect<'a>(
         &'a self,
         person_id: PersonId,
@@ -294,7 +316,8 @@ impl floe_access::PersonalSubjectInspector for NativePersonalDriver<'_> {
                         person_id,
                         device_id: device_id.to_owned(),
                         domain,
-                        selected_handles,
+                        mode: floe_native::PersonalAcquisitionMode::InspectSubject,
+                    selected_handles,
                         deadline_unix_ms: now_unix_ms().saturating_add(30_000),
                         expected_native_subject_fingerprint,
                     };

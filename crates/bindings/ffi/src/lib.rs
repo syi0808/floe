@@ -1,20 +1,22 @@
 //! C ABI boundary: raw pointers, JSON envelopes, DTO conversion, memory
 //! release and the panic barrier.
 //!
-//! No product judgment lives here. Every request is parsed into the app's own
-//! command and handed to `floe-app`.
+//! No product judgment lives here. App admits the verified caller and lifetime;
+//! typed requests invoke the owning service API and return its safe projection.
 
 mod abi;
 mod app_wire;
+mod connections_wire;
+mod conversation_wire;
 mod bridge;
 mod context_wire;
+mod native_lane;
 pub mod conversion;
 mod day_wire;
 mod diagnostics;
-mod remote_wire;
 
 pub use abi::*;
-pub use bridge::FloeHandle;
+pub use bridge::{FloeHandle, FloeNativeHostLane};
 
 use std::{
     ffi::{CStr, CString, c_char},
