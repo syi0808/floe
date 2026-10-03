@@ -1,7 +1,5 @@
 use crate::conversion;
-use floe_protocol::wire::{
-    WireResult, conversion_error, parse_date, parse_id, parse_time,
-};
+use floe_protocol::wire::{WireResult, conversion_error, parse_date, parse_id, parse_time};
 use floe_protocol::{DayMutationDto, DayQueryDto};
 
 pub(crate) fn read(day: DayQueryDto) -> WireResult<floe_app::DayRead> {

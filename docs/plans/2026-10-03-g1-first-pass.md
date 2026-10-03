@@ -44,3 +44,9 @@ Affected Rust compilation remains pending; Dart, Go, and Apple source remain unc
 Input `58f9c321ba92f0d70dc9ad12e1a8cae7bd5555a5`. All three App example compiler checks passed. Workspace compilation reached FFI and reported one query-wrapper type mismatch: the product query had already been unwrapped, but the Knowledge inspection branch compared the old envelope. The branch now binds its matched product query, preserving distinct Memory/Review owner intent. Two unused FFI imports are removed. Formatting and lockfiles produced no changes in this pass.
 
 Only the affected workspace Rust check remains pending for G1; unchanged example, Dart, Go and Apple passes are retained. No behavioral test or full application build has run.
+
+## G1 closure: 2026-10-03 04:46 UTC
+
+Workspace `cargo check --workspace --lib --bins --keep-going` passed on `42b2d92adeaef9002ece13191b43c68678ae891d` after the supplied final one-file formatter adjustment. That exact adjustment is integrated. The three App examples passed on `58f9c321`; their inputs did not change. Go internal packages and fifteen Apple compiler-only phases retain their first-pass success. Dart analysis passed on `3a698d76` with zero warnings/errors and 107 informational lints; its inputs did not change.
+
+G1 is complete at its stated compiler-only scope. Remaining compiler warnings are visible in saved logs and are not behavioral proof. Full application/build gates and tests have not run. Authorized S2 remaining-owner structural implementation now begins; its completed boundary is G2, followed by S3 test reconstruction and G3 qualification.
