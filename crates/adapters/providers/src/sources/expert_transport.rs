@@ -374,6 +374,7 @@ impl RemoteViewTransport for RetainedGatewaySource {
 impl ExpertRemoteTransport for RetainedGatewaySource {
     fn client_id(&self) -> &str { self.lease.credentials().client_id() }
     fn producer(&self) -> &RemoteProducerIdentity { &self.producer }
+    fn gateway_binding(&self) -> &floe_access::VerifiedGatewayBinding { self.lease.credentials().binding() }
 
     fn catalog<'a>(&'a self, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<Vec<ConnectorSnapshot>, AgentFailure>>

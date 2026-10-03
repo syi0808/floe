@@ -51,32 +51,22 @@ pub fn project_calendar_connector(
     let connector_id = source.connector_id().as_str();
     let provider =
         provider_for_connector(connector_id).ok_or(ConnectorProjectionError::InvalidObservation)?;
-    let mirror = mirror.filter(|mirror| {
-        mirror.state.source_connection_id == source.connection_id().as_str()
-            && mirror.state.provider == provider
-    });
+    let mirror_state = mirror.and_then(|mirror| mirror.state.source_state(source.connection_id().as_str()))
+        .filter(|state| state.source.provider == provider && state.source.revision.0 == source.revision() && state.source.authority == source.source_authority());
     let now_unix_ms = milliseconds(now)?;
     let statuses: BTreeMap<_, _> = source
         .resources()
         .iter()
         .map(|calendar| {
             let calendar_id = calendar.handle().as_str().to_owned();
-            let status = mirror
-                .and_then(|mirror| mirror.state.source_statuses.get(&calendar_id))
+            let status = mirror_state
+                .and_then(|state| state.calendar_statuses.get(&calendar_id))
                 .cloned()
                 .unwrap_or_else(|| CalendarSyncStatus {
-                    last_success_at: mirror
-                        .filter(|mirror| mirror.state.source_statuses.is_empty())
-                        .and_then(|mirror| mirror.state.last_success_at),
-                    last_range: mirror
-                        .filter(|mirror| mirror.state.source_statuses.is_empty())
-                        .and_then(|mirror| mirror.state.last_range.clone()),
-                    error: mirror
-                        .filter(|mirror| mirror.state.source_statuses.is_empty())
-                        .and_then(|mirror| mirror.state.error),
-                    error_at: mirror
-                        .filter(|mirror| mirror.state.source_statuses.is_empty())
-                        .and_then(|mirror| mirror.state.error_at),
+                    last_success_at: None,
+                    last_range: None,
+                    error: mirror_state.and_then(|state| state.error),
+                    error_at: mirror_state.and_then(|state| state.error_at),
                 });
             (calendar_id, status)
         })
@@ -118,11 +108,11 @@ pub fn project_calendar_connector(
     } else {
         ConnectionState::Pending
     };
-    let last_failure = if let Some(failure) = mirror.and_then(|mirror| mirror.state.error) {
+    let last_failure = if let Some(failure) = mirror_state.and_then(|state| state.error) {
         Some(SourceFailure {
             kind: source_failure_kind(failure),
-            observed_at_unix_ms: mirror
-                .and_then(|mirror| mirror.state.error_at)
+            observed_at_unix_ms: mirror_state
+                .and_then(|state| state.error_at)
                 .map(milliseconds)
                 .transpose()?
                 .unwrap_or(now_unix_ms),
@@ -162,9 +152,10 @@ pub fn project_calendar_connector(
                 .into_iter()
                 .flat_map(|mirror| mirror.events.iter())
                 .filter(|event| {
-                    matches!(&event.source, SourceRef::Calendar(source)
-                        if source.provider == provider
-                            && source.calendar_id == calendar_id)
+                    matches!(&event.source, SourceRef::Calendar(origin)
+                        if origin.provider == provider
+                            && origin.connection_id == *source.connection_id()
+                            && origin.calendar_id == calendar_id)
                 })
                 .collect();
             let projected_items: Vec<_> = source_events
@@ -277,7 +268,7 @@ fn provider_name(provider: CalendarProvider) -> &'static str {
 fn source_failure_kind(failure: CalendarFailure) -> SourceFailureKind {
     match failure {
         CalendarFailure::PermissionDenied => SourceFailureKind::PermissionDenied,
-        CalendarFailure::CalendarUnavailable | CalendarFailure::ProviderUnavailable => {
+        _ => {
             SourceFailureKind::Unavailable
         }
     }

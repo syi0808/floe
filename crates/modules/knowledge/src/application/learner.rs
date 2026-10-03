@@ -29,16 +29,6 @@ pub struct LearnerMemoryProposal {
     pub base_revision: Option<u64>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct LearnerReviewOutput {
-    pub schema_version: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub proposal: Option<LearnerMemoryProposal>,
-    pub used_tokens: u64,
-    pub cost_micros: u64,
-}
-
 /// Parse the single structured answer one Learner review accepts.
 ///
 /// The answer must name the current Knowledge schema and carry an explicit
@@ -71,7 +61,8 @@ struct StructuredLearnerAnswer {
     proposal: Option<LearnerMemoryProposal>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct LearnerBudget {
     pub max_input_bytes: usize,
     pub max_output_bytes: usize,
@@ -99,11 +90,13 @@ pub enum LearnerJobState {
     Running,
     Deferred,
     Completed,
+    Blocked,
     Failed,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LearnerJobSettlement {
+    Blocked { blockage: LearnerProjectionBlock },
     Completed {
         candidate_id: Option<Uuid>,
     },
@@ -116,6 +109,23 @@ pub enum LearnerJobSettlement {
     },
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LearnerProjectionBlock {
+    pub plan: floe_agent_contract::PreparedModelPlan,
+    pub review: floe_agent_contract::SourceProjectionReview,
+}
+impl LearnerProjectionBlock {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        self.plan.validate()?;
+        self.review.validate()?;
+        if self.plan.consumer != LEARNER_INFERENCE_CONSUMER || self.plan.purpose != LEARNER_INFERENCE_PURPOSE {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LearnerJobLifecycle {
     pub state: LearnerJobState,
@@ -125,6 +135,8 @@ pub struct LearnerJobLifecycle {
     pub finished_at: Option<DateTime<Utc>>,
     pub candidate_id: Option<Uuid>,
     pub last_failure: Option<AgentFailure>,
+    pub blocked: Option<LearnerProjectionBlock>,
+    pub claimed_device_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -136,11 +148,13 @@ pub enum LearnerJobClaim {
 pub fn claim_learner_job(
     lifecycle: &LearnerJobLifecycle,
     now: DateTime<Utc>,
+    device_id: &str,
 ) -> Result<LearnerJobClaim, AgentFailure> {
     validate_learner_job_lifecycle(lifecycle)?;
+    if device_id.trim().is_empty() || device_id.len() > 128 { return Err(AgentFailure::InvalidInput); }
     if !matches!(
         lifecycle.state,
-        LearnerJobState::Queued | LearnerJobState::Deferred | LearnerJobState::Running
+        LearnerJobState::Queued | LearnerJobState::Deferred
     ) || lifecycle.available_at > now
     {
         return Err(AgentFailure::Conflict);
@@ -163,6 +177,8 @@ pub fn claim_learner_job(
     claimed.finished_at = None;
     claimed.candidate_id = None;
     claimed.last_failure = None;
+    claimed.blocked = None;
+    claimed.claimed_device_id = Some(device_id.to_owned());
     Ok(LearnerJobClaim::Claimed(claimed))
 }
 
@@ -178,6 +194,14 @@ pub fn settle_learner_job(
     }
     let mut settled = lifecycle.clone();
     match settlement {
+        LearnerJobSettlement::Blocked { blockage } => {
+            blockage.validate()?;
+            settled.state = LearnerJobState::Blocked;
+            settled.finished_at = Some(settled_at);
+            settled.candidate_id = None;
+            settled.last_failure = None;
+            settled.blocked = Some(blockage);
+        }
         LearnerJobSettlement::Completed { candidate_id } => {
             settled.state = LearnerJobState::Completed;
             settled.finished_at = Some(settled_at);
@@ -250,7 +274,12 @@ pub const fn retryable_learner_failure(failure: AgentFailure) -> bool {
 }
 
 pub fn validate_learner_job_lifecycle(lifecycle: &LearnerJobLifecycle) -> Result<(), AgentFailure> {
-    if lifecycle.attempts > MAX_LEARNER_JOB_ATTEMPTS {
+    if lifecycle.attempts > MAX_LEARNER_JOB_ATTEMPTS
+        || (lifecycle.state == LearnerJobState::Blocked) != lifecycle.blocked.is_some()
+        || lifecycle.blocked.as_ref().is_some_and(|blockage| blockage.validate().is_err())
+        || (lifecycle.attempts > 0) != lifecycle.claimed_device_id.is_some()
+        || lifecycle.claimed_device_id.as_ref().is_some_and(|device| device.trim().is_empty() || device.len() > 128)
+    {
         return Err(AgentFailure::VaultUnavailable);
     }
     let valid = match lifecycle.state {
@@ -282,6 +311,10 @@ pub fn validate_learner_job_lifecycle(lifecycle: &LearnerJobLifecycle) -> Result
                 && lifecycle.finished_at.is_some()
                 && lifecycle.last_failure.is_none()
         }
+        LearnerJobState::Blocked => {
+            lifecycle.attempts > 0 && lifecycle.finished_at.is_some()
+                && lifecycle.last_failure.is_none() && lifecycle.candidate_id.is_none()
+        }
         LearnerJobState::Failed => {
             lifecycle.finished_at.is_some()
                 && lifecycle.candidate_id.is_none()
@@ -308,7 +341,6 @@ pub fn settlement_for_learner_result(
     }
 }
 
-const MAX_LEARNER_VERSION_BYTES: usize = 128;
 const MAX_OBSERVATION_DIGEST_BYTES: usize = 4 * 1024;
 const MAX_EVIDENCE_REFS: usize = 32;
 
@@ -382,137 +414,8 @@ pub struct LearnerReviewJob {
     pub candidate_id: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_failure: Option<AgentFailure>,
-}
-
-#[derive(Clone)]
-pub struct LearnerModelRequest {
-    pub claim_attempt: u8,
-    pub input: LearnerReviewInput,
-    pub remaining_tokens: u64,
-    pub remaining_cost_micros: u64,
-    pub max_output_bytes: usize,
-    pub deadline: tokio::time::Instant,
-    pub cancellation: floe_execution::Cancellation,
-}
-
-pub trait LearnerModel {
-    fn review(
-        &self,
-        request: LearnerModelRequest,
-    ) -> impl Future<Output = Result<LearnerReviewOutput, AgentFailure>> + Send;
-}
-
-pub trait MemoryCandidateSink {
-    fn person_id(&self) -> floe_kernel::PersonId;
-
-    fn stage_memory_candidate(
-        &self,
-        request: crate::StageMemoryCandidate,
-    ) -> impl Future<Output = Result<crate::KnowledgeCandidate, AgentFailure>> + Send;
-}
-
-pub struct LearnerRuntime<'runtime, Model, Sink> {
-    pub model: &'runtime Model,
-    pub candidates: &'runtime Sink,
-    pub budget: LearnerBudget,
-    pub extractor_version: &'runtime str,
-    pub prompt_version: &'runtime str,
-}
-
-impl<Model: LearnerModel + Sync, Sink: MemoryCandidateSink + Sync> LearnerRuntime<'_, Model, Sink> {
-    pub async fn review(
-        &self,
-        input: LearnerReviewInput,
-        claim_attempt: u8,
-        cancellation: floe_execution::Cancellation,
-    ) -> Result<Option<crate::KnowledgeCandidate>, AgentFailure> {
-        self.validate_input(&input)?;
-        if !(1..=MAX_LEARNER_JOB_ATTEMPTS).contains(&claim_attempt) {
-            return Err(AgentFailure::InvalidInput);
-        }
-        if cancellation.is_cancelled() {
-            return Err(AgentFailure::Cancelled);
-        }
-        let deadline = tokio::time::Instant::now()
-            + tokio::time::Duration::from_millis(self.budget.deadline_ms);
-        let output = tokio::select! {
-            _ = cancellation.cancelled() => return Err(AgentFailure::Cancelled),
-            _ = tokio::time::sleep_until(deadline) => return Err(AgentFailure::DeadlineExceeded),
-            output = self.model.review(LearnerModelRequest {
-                claim_attempt,
-                input: input.clone(),
-                remaining_tokens: self.budget.max_model_tokens,
-                remaining_cost_micros: self.budget.max_model_cost_micros,
-                max_output_bytes: self.budget.max_output_bytes,
-                deadline,
-                cancellation: cancellation.clone(),
-            }) => output?,
-        };
-        self.validate_output(&output)?;
-        let Some(mut proposal) = output.proposal else {
-            return Ok(None);
-        };
-        if cancellation.is_cancelled() {
-            return Err(AgentFailure::Cancelled);
-        }
-        proposal.value.observed_at = input.observed_at;
-        self.candidates
-            .stage_memory_candidate(crate::StageMemoryCandidate {
-                session_id: input.session_id,
-                expected_session_revision: input.session_revision,
-                turn_ids: input.turn_ids,
-                observation_kind: proposal.observation_kind,
-                digest: input.digest,
-                value: proposal.value,
-                target_id: proposal.target_id,
-                base_revision: proposal.base_revision,
-                extractor_version: self.extractor_version.to_owned(),
-                prompt_version: self.prompt_version.to_owned(),
-                actor: crate::KnowledgeActor::Learner {
-                    run_id: input.run_id,
-                },
-                created_at: input.observed_at,
-            })
-            .await
-            .map(Some)
-    }
-
-    fn validate_input(&self, input: &LearnerReviewInput) -> Result<(), AgentFailure> {
-        if input.schema_version != crate::KNOWLEDGE_VERSION {
-            return Err(AgentFailure::UnsupportedVersion);
-        }
-        validate_learner_input(input, self.candidates.person_id())?;
-        if self.extractor_version.trim().is_empty()
-            || self.extractor_version.len() > MAX_LEARNER_VERSION_BYTES
-            || self.prompt_version.trim().is_empty()
-            || self.prompt_version.len() > MAX_LEARNER_VERSION_BYTES
-            || self.budget.deadline_ms == 0
-            || self.budget.deadline_ms > 30_000
-            || self.budget.max_model_tokens == 0
-            || self.budget.max_model_cost_micros == 0
-            || serde_json::to_vec(input)
-                .map_err(|_| AgentFailure::InvalidInput)?
-                .len()
-                > self.budget.max_input_bytes
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        Ok(())
-    }
-
-    fn validate_output(&self, output: &LearnerReviewOutput) -> Result<(), AgentFailure> {
-        if output.schema_version != crate::KNOWLEDGE_VERSION
-            || output.used_tokens > self.budget.max_model_tokens
-            || output.cost_micros > self.budget.max_model_cost_micros
-            || serde_json::to_vec(output)
-                .map_err(|_| AgentFailure::InvalidModelOutput)?
-                .len()
-                > self.budget.max_output_bytes
-        {
-            return Err(AgentFailure::InvalidModelOutput);
-        }
-        Ok(())
-    }
+    pub blocked: Option<LearnerProjectionBlock>,
+    pub claimed_device_id: Option<String>,
 }
 
 pub fn explicit_learning_signal(text: &str) -> Option<crate::LearningObservationKind> {
@@ -557,4 +460,22 @@ pub fn explicit_learning_signal(text: &str) -> Option<crate::LearningObservation
         return Some(crate::LearningObservationKind::UserCorrection);
     }
     None
+}
+
+impl LearnerReviewJob {
+    pub fn lifecycle(&self) -> LearnerJobLifecycle {
+        LearnerJobLifecycle { state: self.state, attempts: self.attempts, available_at: self.available_at,
+            claimed_at: self.claimed_at, finished_at: self.finished_at, candidate_id: self.candidate_id,
+            last_failure: self.last_failure, blocked: self.blocked.clone(), claimed_device_id: self.claimed_device_id.clone() }
+    }
+    pub fn apply_lifecycle(&self, lifecycle: LearnerJobLifecycle) -> Result<Self, AgentFailure> {
+        validate_learner_job_lifecycle(&lifecycle)?;
+        let mut next = self.clone();
+        next.state = lifecycle.state; next.attempts = lifecycle.attempts;
+        next.available_at = lifecycle.available_at; next.claimed_at = lifecycle.claimed_at;
+        next.finished_at = lifecycle.finished_at; next.candidate_id = lifecycle.candidate_id;
+        next.last_failure = lifecycle.last_failure; next.blocked = lifecycle.blocked;
+        next.claimed_device_id = lifecycle.claimed_device_id;
+        Ok(next)
+    }
 }

@@ -14,5 +14,6 @@ floe-execution = { path = "../../runtime/execution" }
 floe-kernel = { path = "../../contracts/kernel" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 uuid.workspace = true

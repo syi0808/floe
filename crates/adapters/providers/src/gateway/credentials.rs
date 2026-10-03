@@ -66,6 +66,9 @@ impl GatewayCredentialStore {
     pub fn new(trust: Arc<dyn GatewayTrustReader>) -> Self {
         Self { trust }
     }
+    pub(crate) fn trust(&self) -> Arc<dyn GatewayTrustReader> {
+        self.trust.clone()
+    }
     pub(crate) async fn load(
         &self,
         person: &str,

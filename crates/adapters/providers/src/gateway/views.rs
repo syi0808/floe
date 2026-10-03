@@ -284,13 +284,15 @@ impl GatewayViewsClient {
             return Err(AgentFailure::InvalidInput);
         }
         let signature = keys
-            .sign_authorization(super::proof::authorization_command(
-                expected,
-                consumer,
-                &challenge.challenge_b64url,
-                &challenge.producer_signature,
-                access_producer_identity(&challenge.producer),
-            )?)
+            .sign_authorization(floe_access::AuthorizationSigningCommand::AssistantView(
+                super::proof::authorization_command(
+                    expected,
+                    consumer,
+                    &challenge.challenge_b64url,
+                    &challenge.producer_signature,
+                    access_producer_identity(&challenge.producer),
+                )?,
+            ))
             .await?;
         let body = RemoteViewProofRequest {
             schema_version: 1,
@@ -323,13 +325,15 @@ impl GatewayViewsClient {
             return Err(AgentFailure::InvalidInput);
         }
         let signature = keys
-            .sign_authorization(super::proof::authorization_command(
-                expected,
-                consumer,
-                &challenge.challenge_b64url,
-                &challenge.producer_signature,
-                access_producer_identity(&challenge.producer),
-            )?)
+            .sign_authorization(floe_access::AuthorizationSigningCommand::AssistantView(
+                super::proof::authorization_command(
+                    expected,
+                    consumer,
+                    &challenge.challenge_b64url,
+                    &challenge.producer_signature,
+                    access_producer_identity(&challenge.producer),
+                )?,
+            ))
             .await?;
         let body = RemoteViewProofRequest {
             schema_version: 1,

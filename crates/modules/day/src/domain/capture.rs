@@ -60,7 +60,7 @@ impl Capture {
             captured_at,
             source,
             processing: CaptureProcessing::Pending,
-            revision: Revision::default(),
+            revision: Revision(1),
         })
     }
 

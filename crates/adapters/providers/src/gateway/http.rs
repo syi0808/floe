@@ -30,6 +30,22 @@ impl GatewayHttpTransport {
         deadline: Instant,
         cancellation: &Cancellation,
     ) -> Result<(u16, Vec<u8>), AgentFailure> {
+        self.request_bounded(endpoint, token, method, path, body, deadline, cancellation, MAX_RESPONSE_BYTES).await
+    }
+    /// A real transport caller supplies its already admitted response ceiling.
+    /// Ordinary inference/source calls retain the existing default limit.
+    pub async fn request_bounded(
+        &self,
+        endpoint: &str,
+        token: Option<&str>,
+        method: Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+        deadline: Instant,
+        cancellation: &Cancellation,
+        max_response_bytes: usize,
+    ) -> Result<(u16, Vec<u8>), AgentFailure> {
+        if max_response_bytes == 0 || max_response_bytes > 1024 * 1024 + 1024 { return Err(AgentFailure::BudgetExceeded); }
         if !valid_endpoint(endpoint)
             || !path.starts_with('/')
             || path.contains('?')
@@ -80,7 +96,7 @@ impl GatewayHttpTransport {
             }
             if response
                 .content_length()
-                .is_some_and(|len| len > MAX_RESPONSE_BYTES as u64)
+                .is_some_and(|len| len > max_response_bytes as u64)
             {
                 return Err(AgentFailure::ServerModelInvalidOutput);
             }
@@ -91,7 +107,7 @@ impl GatewayHttpTransport {
                 .await
                 .map_err(|_| AgentFailure::ServerModelUnavailable)?
             {
-                if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+                if bytes.len().saturating_add(chunk.len()) > max_response_bytes {
                     return Err(AgentFailure::ServerModelInvalidOutput);
                 }
                 bytes.extend_from_slice(&chunk);

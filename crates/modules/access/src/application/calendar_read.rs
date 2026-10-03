@@ -5,8 +5,6 @@
 //! belong to the source adapter and to Context; the stamp both sides quote is a
 //! shared contract value.
 
-use std::future::Future;
-
 use floe_context_contract::{
     CALENDAR_CONTEXT_VIEW_ID, CalendarProvider, CalendarReadAccessStamp, ContextDependency,
     GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
@@ -70,30 +68,6 @@ impl CalendarReadAccessAdmission {
         }
     }
 
-    pub fn remote(
-        person_id: PersonId,
-        grant_id: GrantId,
-        grant_authority: GrantAuthority,
-        source: GrantSourceBinding,
-        source_authority: SourceAuthority,
-        scope: GrantScope,
-        consumer: GrantConsumer,
-        processing: ProcessingRestriction,
-    ) -> Self {
-        Self {
-            person_id,
-            grant_id,
-            grant_authority,
-            source,
-            source_authority,
-            scope,
-            operation: GrantOperation::Read,
-            purpose: GrantPurpose::Assistant,
-            consumer,
-            processing,
-        }
-    }
-
     pub fn person_id(&self) -> PersonId {
         self.person_id
     }
@@ -121,76 +95,6 @@ impl CalendarReadAccessAdmission {
     pub fn scope(&self) -> &GrantScope {
         &self.scope
     }
-}
-
-/// The grant side of a calendar read.
-///
-/// Whether this Person's grant still admits the read is Access's judgment; the
-/// subject check and the observation itself are the source adapter's.
-pub trait CalendarReadAdmission: Sync {
-    fn admission(
-        &self,
-        _: &CalendarReadAccessRequest,
-    ) -> impl Future<Output = Result<Option<CalendarReadAccessAdmission>, AgentFailure>> + Send
-    {
-        async { Ok(None) }
-    }
-
-    fn admission_after_check(
-        &self,
-        request: &CalendarReadAccessRequest,
-        _: &CalendarReadAccessStamp,
-    ) -> impl Future<Output = Result<Option<CalendarReadAccessAdmission>, AgentFailure>> + Send
-    {
-        self.admission(request)
-    }
-}
-
-/// That a calendar read request stays inside the grant it runs under.
-///
-/// A read for another Person, another device, another provider, or a calendar
-/// the grant does not name is not this grant's read, whatever admitted it.
-pub fn admits_calendar_read_request(
-    request: &CalendarReadAccessRequest,
-    person_id: PersonId,
-    provider: CalendarProvider,
-    device_id: &str,
-    calendar_ids: &[String],
-) -> Result<(), AgentFailure> {
-    if request.person_id != person_id
-        || request.provider != provider
-        || request.device_id != device_id
-        || request
-            .calendar_ids
-            .iter()
-            .any(|calendar_id| !calendar_ids.contains(calendar_id))
-    {
-        return Err(AgentFailure::CapabilityDenied);
-    }
-    Ok(())
-}
-
-/// That an admission is one the grant this read runs under may stand on.
-///
-/// The admission has to be this Person's, on the connector their source is
-/// reached through, and narrowed to calendars the grant names.
-pub fn admits_calendar_read(
-    admission: &CalendarReadAccessAdmission,
-    person_id: PersonId,
-    connector: &str,
-    calendar_ids: &[String],
-) -> Result<(), AgentFailure> {
-    if admission.person_id() != person_id
-        || admission.source().connector().as_str() != connector
-        || admission.scope().resources().iter().any(|resource| {
-            !calendar_ids
-                .iter()
-                .any(|calendar_id| calendar_id == resource.as_str())
-        })
-    {
-        return Err(AgentFailure::CapabilityDenied);
-    }
-    Ok(())
 }
 
 pub fn admits_native_calendar_read(
@@ -247,16 +151,6 @@ pub fn native_calendar_resource(connection_id: &str) -> Result<ResourceHandle, A
 ///
 /// Access does not know which Expert's view this is; it only checks that the
 /// scope and the dependency still match what was admitted.
-pub fn admission_matches(
-    admission: &CalendarReadAccessAdmission,
-    view: &impl floe_context_contract::HeldGrant,
-) -> bool {
-    let [binding] = view.bindings() else {
-        return false;
-    };
-    admission.scope == binding.scope && admission_matches_dependency(admission, &binding.dependency)
-}
-
 pub fn admission_matches_dependency(
     admission: &CalendarReadAccessAdmission,
     dependency: &ContextDependency,

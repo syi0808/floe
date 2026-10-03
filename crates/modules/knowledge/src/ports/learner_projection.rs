@@ -3,7 +3,8 @@ use floe_agent_contract::{AgentFailure, BoxFuture, ExecutionScope, ModelCorrecti
     ModelProjectionOutcome, OwnerActor, PreparedModelPlan};
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct LearnerClaimRef {
     pub job_id: Uuid,
     pub claim_attempt: u8,

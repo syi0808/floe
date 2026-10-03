@@ -12,9 +12,8 @@ use chrono::{DateTime, Utc};
 use floe_access::{CalendarReadAccessRequest, CalendarReadAccessStamp};
 use floe_agent_contract::{AgentFailure, PersonId};
 use floe_context_contract::CalendarProvider;
-use floe_day::{CalendarBatch, CalendarMirror};
+use floe_day::CalendarBatch;
 use floe_execution::Cancellation;
-use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 
 #[derive(Clone)]
@@ -37,29 +36,6 @@ pub struct CalendarObservation {
     pub batches: Vec<CalendarBatch>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProjectedCalendarObservation {
-    pub stamp: CalendarReadAccessStamp,
-    pub source_handle: String,
-    pub observed_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-    pub range_start: DateTime<Utc>,
-    pub range_end: DateTime<Utc>,
-    pub coverage_complete: bool,
-    pub next_cursor: Option<String>,
-    pub items: Vec<ProjectedCalendarItem>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProjectedCalendarItem {
-    pub evidence_handle: String,
-    pub untrusted_title: String,
-    pub starts_at: DateTime<Utc>,
-    pub ends_at: DateTime<Utc>,
-}
-
 /// The source a calendar read is acquired from.
 pub trait CalendarSource: Sync {
     /// Confirm the native subject this read will stand on, and stamp it.
@@ -75,19 +51,4 @@ pub trait CalendarSource: Sync {
         async { Ok(None) }
     }
 
-    fn observe_projected(
-        &self,
-        _: CalendarObserveRequest,
-    ) -> impl Future<Output = Result<Option<ProjectedCalendarObservation>, AgentFailure>> + Send
-    {
-        async { Ok(None) }
-    }
-}
-
-/// The stored calendar mirror a fixture-backed read falls back to.
-pub trait CalendarMirrorReader: Sync {
-    fn bounded_calendar_mirror(
-        &self,
-        person_id: PersonId,
-    ) -> impl Future<Output = Result<CalendarMirror, AgentFailure>> + Send;
 }

@@ -110,7 +110,15 @@ pub struct CalendarAcquisition {
 }
 impl CalendarAcquisition {
     pub fn validate(&self, request: &CalendarRefreshRequest, now: DateTime<Utc>) -> Result<(), DayError> {
-        if self.refresh_operation_id != request.refresh_operation_id || self.person_id != request.actor.person_id || self.device_id != request.actor.device_id || self.range != request.query.range()? || self.completed_at > now || self.inventory.len() > MAX_REFRESH_SOURCES || self.inventory.len() != self.sources.len() || self.inventory.windows(2).any(|pair| pair[0].source.connection_id() >= pair[1].source.connection_id()) || self.inventory.iter().map(|source| source.calendars.len()).sum::<usize>() > MAX_REFRESH_CALENDARS { return Err(DayError::validation("invalid calendar acquisition identity")); }
+        request.actor.validate().map_err(|_| DayError::validation("invalid acquisition actor"))?;
+        self.validate_identity(request.refresh_operation_id, request.actor.person_id, &request.actor.device_id, &request.query.range()?, now)
+    }
+    pub fn validate_record(&self, record: &RefreshRecord, now: DateTime<Utc>) -> Result<(), DayError> {
+        record.validate()?;
+        self.validate_identity(record.operation_id, record.person_id, &record.device_id, &record.query.range()?, now)
+    }
+    fn validate_identity(&self, operation_id: Uuid, person_id: PersonId, device_id: &str, range: &CalendarRange, now: DateTime<Utc>) -> Result<(), DayError> {
+        if self.refresh_operation_id != operation_id || self.person_id != person_id || self.device_id != device_id || &self.range != range || self.completed_at > now || self.inventory.len() > MAX_REFRESH_SOURCES || self.inventory.len() != self.sources.len() || self.inventory.windows(2).any(|pair| pair[0].source.connection_id() >= pair[1].source.connection_id()) || self.inventory.iter().map(|source| source.calendars.len()).sum::<usize>() > MAX_REFRESH_CALENDARS { return Err(DayError::validation("invalid calendar acquisition identity")); }
         let mut records = 0usize;
         for (expected, result) in self.inventory.iter().zip(&self.sources) {
             expected.validate(self.person_id)?;
@@ -163,6 +171,7 @@ impl RefreshRecord {
     pub fn validate(&self) -> Result<(), DayError> {
         if self.operation_id.is_nil() || self.command_id.is_nil() || self.executor_generation.is_nil() || !self.person_id.is_valid() || self.device_id.is_empty() || self.device_id.len() > 256 || self.revision.0 == 0 || self.revision.0 > i64::MAX as u64 || self.intent_digest != self.query.refresh_intent_digest(self.person_id, &self.device_id, self.command_id)? || self.updated_at < self.admitted_at { return Err(DayError::storage("invalid refresh record")); }
         self.expected_mirror_revision.next_revision()?;
+        if let DayRefreshState::Completed { day } = &self.state { day.validate_bounds()?; }
         Ok(())
     }
     pub fn snapshot(&self) -> DayRefreshSnapshot { DayRefreshSnapshot { operation_ref: self.operation_id, revision: self.revision, state: self.state.clone() } }
@@ -186,6 +195,12 @@ pub enum RefreshAdmissionResult { New(RefreshRecord), Existing(RefreshRecord) }
 pub struct RefreshLookup { pub operation_id: Uuid, pub person_id: PersonId, pub device_id: String }
 #[derive(Clone, Debug)]
 pub struct RefreshTransition { pub previous: RefreshRecord, pub next: RefreshRecord }
+impl RefreshTransition {
+    pub fn validate(&self) -> Result<(), DayError> {
+        if matches!(&self.next.state, DayRefreshState::Completed { .. }) || self.previous.transition(self.next.state.clone(), self.next.updated_at)? != self.next { return Err(DayError::conflict("refresh transition cannot bypass mirror commit")); }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug)]
 pub struct RefreshCommit { pub previous: RefreshRecord, pub next: RefreshRecord, pub acquisition: CalendarAcquisition, pub mirror: CalendarMirror }
 #[derive(Clone, Debug)]

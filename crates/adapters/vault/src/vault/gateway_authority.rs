@@ -4,8 +4,9 @@ use super::authority_keys::decode_exact;
 use super::{EncryptedAgentVault, VaultKeyProvider, storage};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use floe_access::{
-    AuthorizationSignature, AuthorizationSigner, AuthorizationSigningCommand, GatewayTrustReader,
-    RemoteProducerIdentity,
+    AssistantAuthorizationSigningCommand, AuthorizationSignature, AuthorizationSigner,
+    AuthorizationSigningCommand, GatewayTrustReader, ProductCalendarChallenge,
+    ProductCalendarSigningCommand, RemoteProducerIdentity, VerifiedGatewayBinding,
 };
 use floe_agent_contract::{AgentFailure, BoxFuture};
 use floe_connections::*;
@@ -16,6 +17,36 @@ use uuid::Uuid;
 const OWNER_SIGNATURE_DOMAIN: &[u8] = b"floe.remote.authorization.v1\0";
 const PRODUCER_SIGNATURE_DOMAIN: &[u8] = b"floe.remote.producer.v1\0";
 const MAX_RECORD: usize = 131_072;
+const PRODUCT_RECEIPT_TABLE_SQL: &str = "CREATE TABLE gateway_product_authorization_receipts(challenge_id TEXT PRIMARY KEY,request_digest TEXT NOT NULL,operation TEXT NOT NULL CHECK(operation IN ('day_calendar_admission','day_calendar_release')),admission_id TEXT NOT NULL,person_id TEXT NOT NULL,device_id TEXT NOT NULL,owner_key_id TEXT NOT NULL,gateway_runtime_generation INTEGER NOT NULL CHECK(gateway_runtime_generation>0),expires_at_unix_ms INTEGER NOT NULL,payload TEXT NOT NULL)";
+const PRODUCT_RELEASE_INDEX_SQL: &str = "CREATE UNIQUE INDEX gateway_product_one_release ON gateway_product_authorization_receipts(admission_id) WHERE operation='day_calendar_release'";
+
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProductAuthorizationReceipt {
+    challenge: ProductCalendarChallenge,
+    canonical_bytes_b64url: String,
+    producer_signature_b64url: String,
+    producer: RemoteProducerIdentity,
+    person_id: String,
+    device_id: String,
+    owner_key_id: String,
+    gateway_runtime_generation: u64,
+    signature: AuthorizationSignature,
+}
+impl ProductAuthorizationReceipt {
+    fn matches_command(&self, expected: &Self) -> bool {
+        self.challenge == expected.challenge
+            && self.canonical_bytes_b64url == expected.canonical_bytes_b64url
+            && self.producer_signature_b64url == expected.producer_signature_b64url
+            && self.producer == expected.producer
+            && self.person_id == expected.person_id
+            && self.device_id == expected.device_id
+            && self.owner_key_id == expected.owner_key_id
+            && self.gateway_runtime_generation == expected.gateway_runtime_generation
+            && self.signature.key_id == expected.signature.key_id
+    }
+}
 
 impl<K: VaultKeyProvider> EncryptedAgentVault<K> {
     pub(crate) async fn initialize_remote_authority_store(
@@ -41,19 +72,22 @@ impl<K: VaultKeyProvider> EncryptedAgentVault<K> {
                     "CREATE TABLE gateway_pin_receipts(operation_id TEXT PRIMARY KEY,payload TEXT NOT NULL)",
                     "CREATE TABLE gateway_enrollment_receipts(operation_id TEXT PRIMARY KEY,challenge_id TEXT UNIQUE NOT NULL,command_json TEXT NOT NULL)",
                     "CREATE TABLE gateway_authorization_receipts(operation_id TEXT PRIMARY KEY,challenge_id TEXT UNIQUE NOT NULL,request_digest TEXT NOT NULL,operation TEXT NOT NULL,admission_id TEXT NOT NULL,expectation_json TEXT NOT NULL,expires_at_unix_ms INTEGER NOT NULL)",
+                    PRODUCT_RECEIPT_TABLE_SQL,
+                    PRODUCT_RELEASE_INDEX_SQL,
                     "CREATE TABLE connections_product_records(record_ref TEXT PRIMARY KEY,person_id TEXT NOT NULL,command_id TEXT NOT NULL,revision INTEGER NOT NULL,payload TEXT NOT NULL,UNIQUE(person_id,command_id))",
                     "CREATE TABLE gateway_setup_receipts(target_ref TEXT PRIMARY KEY,person_id TEXT NOT NULL,command_id TEXT NOT NULL,payload TEXT NOT NULL,UNIQUE(person_id,command_id))",
                     "CREATE TABLE gateway_pairing_operations(operation_id TEXT PRIMARY KEY,person_id TEXT NOT NULL,command_id TEXT NOT NULL,revision INTEGER NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,UNIQUE(person_id,command_id))",
                 ]{tx.execute(sql,()).await.map_err(storage)?;}
-                tx.execute("INSERT INTO remote_authority_schema VALUES(1,1)",()).await.map_err(storage)?;
+                tx.execute("INSERT INTO remote_authority_schema VALUES(1,2)",()).await.map_err(storage)?;
                 tx.execute("INSERT INTO remote_authority_clock VALUES(1,0)",()).await.map_err(storage)?;
                 tx.execute("INSERT INTO gateway_credential_expectation VALUES(1,?)",(bounded_encode(&floe_access::GatewayCredentialExpectation::Unpaired)?,)).await.map_err(storage)?;
                 let(key,public,nonce,ciphertext)=self.generate_wrapped_owner_key()?;
                 tx.execute("INSERT INTO remote_authority_owner VALUES(1,?,?,?,?)",(key,public,nonce,ciphertext)).await.map_err(storage)?;
             }else{
                 let mut rows=tx.query("SELECT version FROM remote_authority_schema WHERE id=1",()).await.map_err(storage)?;
-                if rows.next().await.map_err(storage)?.ok_or(AgentFailure::VaultUnavailable)?.get::<i64>(0).map_err(storage)?!=1{return Err(AgentFailure::UnsupportedVersion)}
-                for table in ["remote_authority_owner","remote_authority_producer","remote_authority_clock","gateway_pin_receipts","gateway_enrollment_receipts","gateway_authorization_receipts","gateway_pairing_operations","gateway_setup_receipts","connections_product_records","gateway_credential_expectation"]{
+                if rows.next().await.map_err(storage)?.ok_or(AgentFailure::VaultUnavailable)?.get::<i64>(0).map_err(storage)?!=2{return Err(AgentFailure::UnsupportedVersion)}
+                validate_product_receipt_schema(&tx).await?;
+                for table in ["remote_authority_owner","remote_authority_producer","remote_authority_clock","gateway_pin_receipts","gateway_enrollment_receipts","gateway_authorization_receipts","gateway_product_authorization_receipts","gateway_pairing_operations","gateway_setup_receipts","connections_product_records","gateway_credential_expectation"]{
                     tx.query(&format!("SELECT * FROM {table} LIMIT 0"),()).await.map_err(storage)?;
                 }
             }
@@ -729,6 +763,434 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
     ) -> Self {
         Self { vault, verifier }
     }
+
+    async fn sign_assistant_authorization(
+        &self,
+        command: AssistantAuthorizationSigningCommand,
+    ) -> Result<AuthorizationSignature, AgentFailure> {
+        let owner = self.vault.remote_owner_public_key().await?;
+        let claims = self.verifier.verify(&command)?;
+        command.validate_claims(
+            &claims,
+            self.vault.person_id,
+            &owner.key_id,
+            chrono::Utc::now().timestamp_millis(),
+        )?;
+        verify_producer_signature(
+            &command.producer,
+            &command.canonical_bytes,
+            &command.producer_signature,
+        )?;
+        self.vault.validate_owner_key().await?;
+        let grant_id = floe_access::GrantId::from_uuid(
+            Uuid::parse_str(&command.expected.grant_id).map_err(|_| AgentFailure::PolicyDenied)?,
+        )
+        .ok_or(AgentFailure::PolicyDenied)?;
+        let mut connection = self.vault.connection()?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(storage)?;
+        let result = async {
+            let now = chrono::Utc::now().timestamp_millis();
+            self.vault.advance_clock(&tx, now).await?;
+            if command.expires_at_unix_ms <= now {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let mut pins = tx
+                .query(
+                    "SELECT identity_json FROM remote_authority_producer WHERE id=1",
+                    (),
+                )
+                .await
+                .map_err(storage)?;
+            let pinned: RemoteProducerIdentity = bounded_decode(
+                &pins
+                    .next()
+                    .await
+                    .map_err(storage)?
+                    .ok_or(AgentFailure::PolicyDenied)?
+                    .get::<String>(0)
+                    .map_err(storage)?,
+            )?;
+            if pinned != command.producer {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            drop(pins);
+            let grant = self
+                .vault
+                .read_data_access_grant_in_transaction(&tx, grant_id)
+                .await?;
+            floe_access::validate_authorization_grant(
+                &grant,
+                self.vault.person_id,
+                &command.expected,
+                command.purpose,
+                &command.consumer,
+            )?;
+            if command.expected.operation == "release" {
+                let mut rows = tx
+                    .query(
+                        "SELECT expectation_json,expires_at_unix_ms FROM gateway_authorization_receipts WHERE challenge_id=? AND operation='admission'",
+                        (command.expected.admission_id.clone(),),
+                    )
+                    .await
+                    .map_err(storage)?;
+                let row = rows.next().await.map_err(storage)?.ok_or(AgentFailure::PolicyDenied)?;
+                let admitted: floe_access::RemoteViewAuthorizationExpectation = bounded_decode(
+                    &row.get::<String>(0).map_err(storage)?,
+                )?;
+                if row.get::<i64>(1).map_err(storage)? <= now
+                    || !same_release(&admitted, &command.expected)
+                {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+            }
+            let mut prior = tx
+                .query(
+                    "SELECT operation_id FROM gateway_authorization_receipts WHERE operation_id=? OR challenge_id=?",
+                    (command.operation_id.to_string(), command.expected.challenge_id.clone()),
+                )
+                .await
+                .map_err(storage)?;
+            if prior.next().await.map_err(storage)?.is_some() {
+                return Err(AgentFailure::Conflict);
+            }
+            drop(prior);
+            tx.execute(
+                "INSERT INTO gateway_authorization_receipts VALUES(?,?,?,?,?,?,?)",
+                (
+                    command.operation_id.to_string(),
+                    command.expected.challenge_id.clone(),
+                    hex(&command.request_digest),
+                    command.expected.operation.clone(),
+                    command.expected.admission_id.clone(),
+                    bounded_encode(&command.expected)?,
+                    command.expires_at_unix_ms,
+                ),
+            )
+            .await
+            .map_err(storage)?;
+            Ok(())
+        }
+        .await;
+        self.vault.finish_access_grant_transaction(tx, result).await?;
+        self.vault.validate_owner_key().await?;
+        let (key, key_id) = self.vault.load_owner_key().await?;
+        if key_id != owner.key_id {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let mut bytes = Vec::with_capacity(OWNER_SIGNATURE_DOMAIN.len() + command.canonical_bytes.len());
+        bytes.extend_from_slice(OWNER_SIGNATURE_DOMAIN);
+        bytes.extend_from_slice(&command.canonical_bytes);
+        let signature = key.sign(&bytes);
+        self.vault.validate_owner_key().await?;
+        Ok(AuthorizationSignature {
+            key_id,
+            signature: URL_SAFE_NO_PAD.encode(signature.as_ref()),
+        })
+    }
+
+    async fn sign_product_authorization(
+        &self,
+        command: ProductCalendarSigningCommand<'_>,
+        supplied_producer: RemoteProducerIdentity,
+    ) -> Result<AuthorizationSignature, AgentFailure> {
+        let owner = self.vault.remote_owner_public_key().await?;
+        let pin = self
+            .vault
+            .current_pin_record()
+            .await?
+            .ok_or(AgentFailure::PolicyDenied)?;
+        if supplied_producer != pin.producer {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let verified = self.verifier.verify_product(&command)?;
+        verify_product_pin_binding(&verified, &supplied_producer)?;
+        verify_producer_signature(
+            &supplied_producer,
+            &command.canonical_bytes,
+            &command.producer_signature,
+        )?;
+        command
+            .validate_for_signing(&verified, self.vault.person_id, &owner.key_id)
+            .await?;
+        validate_product_result_digest(&verified)?;
+
+        let claims = verified.claims();
+        let binding = VerifiedGatewayBinding {
+            person_id: claims.person_id.clone(),
+            device_id: claims.device_id.clone(),
+            client_id: claims.client_id.clone(),
+            producer_instance: claims.producer_instance.clone(),
+            producer_key_fingerprint: claims.producer_key_fingerprint.clone(),
+            producer_audience: claims.audience.clone(),
+            enrollment_id: claims.enrollment_id.clone(),
+            credential_generation: claims.credential_generation,
+        };
+        binding.validate()?;
+        let runtime_generation = command
+            .permit
+            .gateway_runtime_generation()
+            .filter(|generation| *generation > 0 && *generation <= i64::MAX as u64)
+            .ok_or(AgentFailure::PolicyDenied)?;
+        let owner_key = {
+            self.vault.validate_owner_key().await?;
+            let (key, key_id) = self.vault.load_owner_key().await?;
+            if key_id != owner.key_id {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            self.vault.validate_owner_key().await?;
+            key
+        };
+
+        let challenge_id = verified.challenge_id();
+        let operation = product_operation(&verified);
+        let admission_id = product_admission_id(&verified).to_string();
+        let expires_at_unix_ms = verified.expires_at_unix_ms();
+        let request_digest = hex(&Sha256::digest(&command.canonical_bytes));
+        let expected_receipt = ProductAuthorizationReceipt {
+            challenge: verified.clone(),
+            canonical_bytes_b64url: URL_SAFE_NO_PAD.encode(&command.canonical_bytes),
+            producer_signature_b64url: URL_SAFE_NO_PAD.encode(&command.producer_signature),
+            producer: supplied_producer.clone(),
+            person_id: claims.person_id.clone(),
+            device_id: claims.device_id.clone(),
+            owner_key_id: owner.key_id.clone(),
+            gateway_runtime_generation: runtime_generation,
+            signature: AuthorizationSignature {
+                key_id: owner.key_id.clone(),
+                signature: String::new(),
+            },
+        };
+
+        let mut connection = self.vault.connection()?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(storage)?;
+        let result = async {
+            self.vault.check_access()?;
+            let now = chrono::Utc::now().timestamp_millis();
+            self.vault.advance_clock(&tx, now).await?;
+            product_signing_lifetime(&command, &verified, now)?;
+            if expires_at_unix_ms <= now {
+                return Err(AgentFailure::PolicyDenied);
+            }
+
+            let mut owner_rows = tx
+                .query("SELECT key_id,public_key FROM remote_authority_owner WHERE id=1", ())
+                .await
+                .map_err(storage)?;
+            let owner_row = owner_rows
+                .next()
+                .await
+                .map_err(storage)?
+                .ok_or(AgentFailure::VaultUnavailable)?;
+            if owner_row.get::<String>(0).map_err(storage)? != owner.key_id
+                || owner_row.get::<String>(1).map_err(storage)? != owner.public_key
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            drop(owner_rows);
+
+            let mut pin_rows = tx
+                .query(
+                    "SELECT identity_json,revision FROM remote_authority_producer WHERE id=1",
+                    (),
+                )
+                .await
+                .map_err(storage)?;
+            let pin_row = pin_rows
+                .next()
+                .await
+                .map_err(storage)?
+                .ok_or(AgentFailure::PolicyDenied)?;
+            let current_producer: RemoteProducerIdentity = bounded_decode(
+                &pin_row.get::<String>(0).map_err(storage)?,
+            )?;
+            let current_pin_revision = pin_row.get::<i64>(1).map_err(storage)?;
+            if current_producer != pin.producer
+                || current_pin_revision <= 0
+                || current_pin_revision as u64 != pin.revision
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            validate_producer(&current_producer)?;
+            drop(pin_rows);
+            validate_product_credential_in_transaction(
+                &tx,
+                &binding,
+                &owner,
+                &supplied_producer,
+                pin.revision,
+            )
+            .await?;
+
+            let mut existing_rows = tx
+                .query(
+                    "SELECT request_digest,operation,admission_id,person_id,device_id,owner_key_id,gateway_runtime_generation,expires_at_unix_ms,payload FROM gateway_product_authorization_receipts WHERE challenge_id=?",
+                    (challenge_id.to_string(),),
+                )
+                .await
+                .map_err(storage)?;
+            if let Some(row) = existing_rows.next().await.map_err(storage)? {
+                let request_digest_row = row.get::<String>(0).map_err(storage)?;
+                let operation_row = row.get::<String>(1).map_err(storage)?;
+                let admission_id_row = row.get::<String>(2).map_err(storage)?;
+                let person_id_row = row.get::<String>(3).map_err(storage)?;
+                let device_id_row = row.get::<String>(4).map_err(storage)?;
+                let owner_key_id_row = row.get::<String>(5).map_err(storage)?;
+                let generation_row = row.get::<i64>(6).map_err(storage)?;
+                let expires_row = row.get::<i64>(7).map_err(storage)?;
+                let prior: ProductAuthorizationReceipt =
+                    bounded_decode(&row.get::<String>(8).map_err(storage)?)?;
+                if request_digest_row != request_digest
+                    || operation_row != operation
+                    || admission_id_row != admission_id
+                    || person_id_row != claims.person_id
+                    || device_id_row != claims.device_id
+                    || owner_key_id_row != owner.key_id
+                    || generation_row <= 0
+                    || generation_row as u64 != runtime_generation
+                    || expires_row != expires_at_unix_ms
+                    || !prior.matches_command(&expected_receipt)
+                    || prior.signature.signature.is_empty()
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                verify_owner_receipt_signature(
+                    &owner,
+                    &command.canonical_bytes,
+                    &prior.signature.signature,
+                )?;
+                decode_exact(&prior.signature.signature, 64)
+                    .map_err(|_| AgentFailure::VaultUnavailable)?;
+                drop(existing_rows);
+                return Ok(prior.signature);
+            }
+            drop(existing_rows);
+
+            if let ProductCalendarChallenge::Release { admission_id, .. } = &verified {
+                let admission_id_text = admission_id.to_string();
+                let mut admission_rows = tx
+                    .query(
+                        "SELECT request_digest,operation,admission_id,person_id,device_id,owner_key_id,gateway_runtime_generation,expires_at_unix_ms,payload FROM gateway_product_authorization_receipts WHERE challenge_id=?",
+                        (admission_id_text.clone(),),
+                    )
+                    .await
+                    .map_err(storage)?;
+                let row = admission_rows
+                    .next()
+                    .await
+                    .map_err(storage)?
+                    .ok_or(AgentFailure::PolicyDenied)?;
+                let admission_digest_row = row.get::<String>(0).map_err(storage)?;
+                let operation_row = row.get::<String>(1).map_err(storage)?;
+                let admission_id_row = row.get::<String>(2).map_err(storage)?;
+                let person_id_row = row.get::<String>(3).map_err(storage)?;
+                let device_id_row = row.get::<String>(4).map_err(storage)?;
+                let owner_key_id_row = row.get::<String>(5).map_err(storage)?;
+                let generation_row = row.get::<i64>(6).map_err(storage)?;
+                let expires_row = row.get::<i64>(7).map_err(storage)?;
+                let admitted: ProductAuthorizationReceipt =
+                    bounded_decode(&row.get::<String>(8).map_err(storage)?)?;
+                let admitted_bytes = decode_canonical(&admitted.canonical_bytes_b64url, 64 * 1024)
+                    .map_err(|_| AgentFailure::VaultUnavailable)?;
+                let admitted_challenge: ProductCalendarChallenge =
+                    serde_json::from_slice(&admitted_bytes)
+                        .map_err(|_| AgentFailure::VaultUnavailable)?;
+                if hex(&Sha256::digest(&admitted_bytes)) != admission_digest_row
+                    || admitted_challenge != admitted.challenge
+                {
+                    return Err(AgentFailure::VaultUnavailable);
+                }
+                if operation_row != "day_calendar_admission"
+                    || admission_id_row != admission_id_text
+                    || person_id_row != claims.person_id
+                    || device_id_row != claims.device_id
+                    || owner_key_id_row != owner.key_id
+                    || generation_row <= 0
+                    || generation_row as u64 != runtime_generation
+                    || expires_row <= now
+                    || admitted.gateway_runtime_generation != runtime_generation
+                    || admitted.owner_key_id != owner.key_id
+                    || admitted.producer != pin.producer
+                    || admitted.person_id != claims.person_id
+                    || admitted.device_id != claims.device_id
+                    || admitted.signature.key_id != owner.key_id
+                    || !matches!(
+                        &admitted.challenge,
+                        ProductCalendarChallenge::Admission { challenge_id: id, .. }
+                            if id.to_string() == admission_id_text
+                    )
+                    || admitted.challenge.claims() != claims
+                {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                let admitted_producer_signature =
+                    decode_exact(&admitted.producer_signature_b64url, 64)
+                        .map_err(|_| AgentFailure::VaultUnavailable)?;
+                verify_producer_signature(
+                    &admitted.producer,
+                    &admitted_bytes,
+                    &admitted_producer_signature,
+                )?;
+                verify_owner_receipt_signature(
+                    &owner,
+                    &admitted_bytes,
+                    &admitted.signature.signature,
+                )?;
+                drop(admission_rows);
+
+                let mut released_rows = tx
+                    .query(
+                        "SELECT challenge_id FROM gateway_product_authorization_receipts WHERE operation='day_calendar_release' AND admission_id=? LIMIT 1",
+                        (admission_id_text,),
+                    )
+                    .await
+                    .map_err(storage)?;
+                if released_rows.next().await.map_err(storage)?.is_some() {
+                    return Err(AgentFailure::Conflict);
+                }
+            }
+
+            let mut receipt = expected_receipt.clone();
+            let mut signed_bytes =
+                Vec::with_capacity(OWNER_SIGNATURE_DOMAIN.len() + command.canonical_bytes.len());
+            signed_bytes.extend_from_slice(OWNER_SIGNATURE_DOMAIN);
+            signed_bytes.extend_from_slice(&command.canonical_bytes);
+            receipt.signature.signature =
+                URL_SAFE_NO_PAD.encode(owner_key.sign(&signed_bytes).as_ref());
+            let payload = bounded_encode(&receipt)?;
+            tx.execute(
+                "INSERT INTO gateway_product_authorization_receipts(challenge_id,request_digest,operation,admission_id,person_id,device_id,owner_key_id,gateway_runtime_generation,expires_at_unix_ms,payload) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (
+                    challenge_id.to_string(),
+                    request_digest,
+                    operation,
+                    admission_id,
+                    claims.person_id.clone(),
+                    claims.device_id.clone(),
+                    owner.key_id.clone(),
+                    runtime_generation as i64,
+                    expires_at_unix_ms,
+                    payload,
+                ),
+            )
+            .await
+            .map_err(storage)?;
+            Ok(receipt.signature)
+        }
+        .await;
+        let signature = self.vault.finish_access_grant_transaction(tx, result).await?;
+        let current_owner = self.vault.remote_owner_public_key().await?;
+        if current_owner != owner {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        self.vault.validate_owner_key().await?;
+        Ok(signature)
+    }
 }
 impl<K: VaultKeyProvider> AuthorizationSigner for VaultAuthorizationSigner<K> {
     fn public_key<'a>(
@@ -738,72 +1200,19 @@ impl<K: VaultKeyProvider> AuthorizationSigner for VaultAuthorizationSigner<K> {
     }
     fn sign_authorization<'a>(
         &'a self,
-        command: AuthorizationSigningCommand,
+        command: AuthorizationSigningCommand<'a>,
     ) -> BoxFuture<'a, Result<AuthorizationSignature, AgentFailure>> {
         Box::pin(async move {
-            let owner = self.vault.remote_owner_public_key().await?;
-            let claims = self.verifier.verify(&command)?;
-            command.validate_claims(
-                &claims,
-                self.vault.person_id,
-                &owner.key_id,
-                chrono::Utc::now().timestamp_millis(),
-            )?;
-            verify_producer_signature(
-                &command.producer,
-                &command.canonical_bytes,
-                &command.producer_signature,
-            )?;
-            self.vault.validate_owner_key().await?;
-            let grant_id = floe_access::GrantId::from_uuid(
-                Uuid::parse_str(&command.expected.grant_id)
-                    .map_err(|_| AgentFailure::PolicyDenied)?,
-            )
-            .ok_or(AgentFailure::PolicyDenied)?;
-            let mut connection = self.vault.connection()?;
-            let tx = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .await
-                .map_err(storage)?;
-            let result=async{
-            let now=chrono::Utc::now().timestamp_millis();self.vault.advance_clock(&tx,now).await?;
-            if command.expires_at_unix_ms<=now{return Err(AgentFailure::PolicyDenied)}
-            let mut pins=tx.query("SELECT identity_json FROM remote_authority_producer WHERE id=1",()).await.map_err(storage)?;
-            let pinned:RemoteProducerIdentity=bounded_decode(&pins.next().await.map_err(storage)?.ok_or(AgentFailure::PolicyDenied)?.get::<String>(0).map_err(storage)?)?;
-            if pinned!=command.producer{return Err(AgentFailure::PolicyDenied)}drop(pins);
-            let grant=self.vault.read_data_access_grant_in_transaction(&tx,grant_id).await?;
-            floe_access::validate_authorization_grant(&grant,self.vault.person_id,&command.expected,command.purpose,&command.consumer)?;
-            if command.expected.operation=="release"{
-                let mut rows=tx.query("SELECT expectation_json,expires_at_unix_ms FROM gateway_authorization_receipts WHERE challenge_id=? AND operation='admission'",(command.expected.admission_id.clone(),)).await.map_err(storage)?;
-                let row=rows.next().await.map_err(storage)?.ok_or(AgentFailure::PolicyDenied)?;
-                let admitted:floe_access::RemoteViewAuthorizationExpectation=bounded_decode(&row.get::<String>(0).map_err(storage)?)?;
-                if row.get::<i64>(1).map_err(storage)?<=now||!same_release(&admitted,&command.expected){return Err(AgentFailure::PolicyDenied)}
+            match command {
+                AuthorizationSigningCommand::AssistantView(command) => {
+                    self.sign_assistant_authorization(command).await
+                }
+                AuthorizationSigningCommand::DayCalendarRefresh(command) => {
+                    let supplied_producer = command.producer.clone();
+                    self.sign_product_authorization(command, supplied_producer)
+                        .await
+                }
             }
-            // Single use applies to authorization challenges. This is deliberately
-            // distinct from enrollment receipt readback, which can rejoin a proof.
-            let mut prior=tx.query("SELECT operation_id FROM gateway_authorization_receipts WHERE operation_id=? OR challenge_id=?",(command.operation_id.to_string(),command.expected.challenge_id.clone())).await.map_err(storage)?;
-            if prior.next().await.map_err(storage)?.is_some(){return Err(AgentFailure::Conflict)}drop(prior);
-            tx.execute("INSERT INTO gateway_authorization_receipts VALUES(?,?,?,?,?,?,?)",(command.operation_id.to_string(),command.expected.challenge_id.clone(),hex(&command.request_digest),command.expected.operation.clone(),command.expected.admission_id.clone(),bounded_encode(&command.expected)?,command.expires_at_unix_ms)).await.map_err(storage)?;
-            Ok(())
-        }.await;
-            self.vault
-                .finish_access_grant_transaction(tx, result)
-                .await?;
-            self.vault.validate_owner_key().await?;
-            let (key, key_id) = self.vault.load_owner_key().await?;
-            if key_id != owner.key_id {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            let mut bytes =
-                Vec::with_capacity(OWNER_SIGNATURE_DOMAIN.len() + command.canonical_bytes.len());
-            bytes.extend_from_slice(OWNER_SIGNATURE_DOMAIN);
-            bytes.extend_from_slice(&command.canonical_bytes);
-            let signature = key.sign(&bytes);
-            self.vault.validate_owner_key().await?;
-            Ok(AuthorizationSignature {
-                key_id,
-                signature: URL_SAFE_NO_PAD.encode(signature.as_ref()),
-            })
         })
     }
 }
@@ -829,6 +1238,203 @@ fn same_release(
         && admitted.resources == released.resources
         && admitted.max_items == released.max_items
         && admitted.max_bytes == released.max_bytes
+}
+
+fn product_operation(challenge: &ProductCalendarChallenge) -> &'static str {
+    match challenge {
+        ProductCalendarChallenge::Admission { .. } => "day_calendar_admission",
+        ProductCalendarChallenge::Release { .. } => "day_calendar_release",
+    }
+}
+
+fn product_admission_id(challenge: &ProductCalendarChallenge) -> Uuid {
+    match challenge {
+        ProductCalendarChallenge::Admission { challenge_id, .. } => *challenge_id,
+        ProductCalendarChallenge::Release { admission_id, .. } => *admission_id,
+    }
+}
+
+fn validate_product_result_digest(
+    challenge: &ProductCalendarChallenge,
+) -> Result<(), AgentFailure> {
+    if let ProductCalendarChallenge::Release { result_sha256, .. } = challenge {
+        if result_sha256.len() != 64
+            || !result_sha256.bytes().all(|byte| {
+                byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+            })
+            || result_sha256.bytes().all(|byte| byte == b'0')
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+    }
+    Ok(())
+}
+
+fn verify_product_pin_binding(
+    challenge: &ProductCalendarChallenge,
+    producer: &RemoteProducerIdentity,
+) -> Result<(), AgentFailure> {
+    validate_producer(producer)?;
+    let claims = challenge.claims();
+    if claims.producer_instance != producer.instance_id
+        || claims.producer_key_fingerprint != producer.fingerprint
+        || claims.audience != producer.audience
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok(())
+}
+
+fn product_signing_lifetime(
+    command: &ProductCalendarSigningCommand<'_>,
+    challenge: &ProductCalendarChallenge,
+    now_unix_ms: i64,
+) -> Result<(), AgentFailure> {
+    let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(now_unix_ms)
+        .ok_or(AgentFailure::InvalidInput)?;
+    command.permit.check_lifetime(now)?;
+    if command.scope.cancellation().is_cancelled() {
+        return Err(AgentFailure::Cancelled);
+    }
+    if tokio::time::Instant::now() >= command.scope.deadline() {
+        return Err(AgentFailure::DeadlineExceeded);
+    }
+    challenge.validate_permit(command.permit, now)
+}
+
+fn verify_owner_receipt_signature(
+    owner: &floe_access::RemoteOwnerPublicKey,
+    canonical_bytes: &[u8],
+    encoded_signature: &str,
+) -> Result<(), AgentFailure> {
+    let public_key = decode_exact(&owner.public_key, 32)
+        .map_err(|_| AgentFailure::VaultUnavailable)?;
+    let proof = decode_exact(encoded_signature, 64)
+        .map_err(|_| AgentFailure::VaultUnavailable)?;
+    let mut message = Vec::with_capacity(OWNER_SIGNATURE_DOMAIN.len() + canonical_bytes.len());
+    message.extend_from_slice(OWNER_SIGNATURE_DOMAIN);
+    message.extend_from_slice(canonical_bytes);
+    signature::UnparsedPublicKey::new(&signature::ED25519, public_key)
+        .verify(&message, &proof)
+        .map_err(|_| AgentFailure::VaultUnavailable)
+}
+
+async fn validate_product_credential_in_transaction(
+    tx: &Transaction<'_>,
+    expected: &VerifiedGatewayBinding,
+    owner: &floe_access::RemoteOwnerPublicKey,
+    producer: &RemoteProducerIdentity,
+    pin_revision: u64,
+) -> Result<(), AgentFailure> {
+    let mut expectation_rows = tx
+        .query(
+            "SELECT payload FROM gateway_credential_expectation WHERE id=1",
+            (),
+        )
+        .await
+        .map_err(storage)?;
+    let expectation: floe_access::GatewayCredentialExpectation = bounded_decode(
+        &expectation_rows
+            .next()
+            .await
+            .map_err(storage)?
+            .ok_or(AgentFailure::PolicyDenied)?
+            .get::<String>(0)
+            .map_err(storage)?,
+    )?;
+    let (operation_id, generation) = match expectation {
+        floe_access::GatewayCredentialExpectation::Committed {
+            operation_id,
+            generation,
+        } if generation == expected.credential_generation => (operation_id, generation),
+        _ => return Err(AgentFailure::PolicyDenied),
+    };
+    drop(expectation_rows);
+
+    let mut pairing_rows = tx
+        .query(
+            "SELECT revision,state,payload FROM gateway_pairing_operations WHERE operation_id=? AND person_id=?",
+            (operation_id.to_string(), expected.person_id.clone()),
+        )
+        .await
+        .map_err(storage)?;
+    let pairing_row = pairing_rows
+        .next()
+        .await
+        .map_err(storage)?
+        .ok_or(AgentFailure::PolicyDenied)?;
+    let revision = pairing_row.get::<i64>(0).map_err(storage)?;
+    let state = pairing_row.get::<String>(1).map_err(storage)?;
+    let pairing: PairingRecord = bounded_decode(&pairing_row.get::<String>(2).map_err(storage)?)?;
+    if revision <= 0
+        || revision as u64 != pairing.revision
+        || state != pairing_state(pairing.state)
+        || pairing.operation_id != operation_id
+        || pairing.person_id.to_string() != expected.person_id
+        || pairing.device_id != expected.device_id
+        || pairing.state != PairingState::Paired
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    pairing
+        .validate()
+        .map_err(|_| AgentFailure::PolicyDenied)?;
+    let enrollment = pairing.enrollment.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+    enrollment
+        .binding
+        .validate()
+        .map_err(|_| AgentFailure::PolicyDenied)?;
+    let gateway = pairing.gateway.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+    if enrollment.operation_id != operation_id
+        || enrollment.binding != *expected
+        || enrollment.issuer.key_id != owner.key_id
+        || enrollment.issuer.public_key != owner.public_key
+        || enrollment.pin_revision != pin_revision
+        || gateway.gateway_ref != operation_id
+        || gateway.revision != generation
+        || gateway.state != GatewayState::Paired
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    drop(pairing_rows);
+
+    let mut enrollment_rows = tx
+        .query(
+            "SELECT command_json FROM gateway_enrollment_receipts WHERE operation_id=?",
+            (operation_id.to_string(),),
+        )
+        .await
+        .map_err(storage)?;
+    let enrollment_command: EnrollmentSigningCommand = bounded_decode(
+        &enrollment_rows
+            .next()
+            .await
+            .map_err(storage)?
+            .ok_or(AgentFailure::PolicyDenied)?
+            .get::<String>(0)
+            .map_err(storage)?,
+    )?;
+    if enrollment_command.operation_id != operation_id
+        || enrollment_command.person_id.to_string() != expected.person_id
+        || enrollment_command.device_id != expected.device_id
+        || enrollment_command.client_id != expected.client_id
+        || enrollment_command.issuer.key_id != owner.key_id
+        || enrollment_command.issuer.public_key != owner.public_key
+        || enrollment_command.producer != *producer
+        || enrollment_command.challenge_id.is_nil()
+        || enrollment_command.canonical_bytes.is_empty()
+        || enrollment_command.producer_signature.len() != 64
+        || enrollment_command.request_digest
+            != <[u8; 32]>::from(Sha256::digest(&enrollment_command.canonical_bytes))
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    verify_producer_signature(
+        &enrollment_command.producer,
+        &enrollment_command.canonical_bytes,
+        &enrollment_command.producer_signature,
+    )?;
+    Ok(())
 }
 
 impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K> {
@@ -942,4 +1548,14 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
             self.finish_access_grant_transaction(tx, result).await
         })
     }
+}
+
+async fn validate_product_receipt_schema(tx: &Transaction<'_>) -> Result<(), AgentFailure> {
+    for (name, expected) in [("gateway_product_authorization_receipts", PRODUCT_RECEIPT_TABLE_SQL), ("gateway_product_one_release", PRODUCT_RELEASE_INDEX_SQL)] {
+        let mut rows = tx.query("SELECT sql FROM sqlite_master WHERE name=? AND type IN ('table','index')", (name,)).await.map_err(storage)?;
+        let actual: String = rows.next().await.map_err(storage)?.ok_or(AgentFailure::UnsupportedVersion)?.get(0).map_err(storage)?;
+        let canonical = |value: &str| value.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase();
+        if canonical(&actual) != canonical(expected) || rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::UnsupportedVersion); }
+    }
+    Ok(())
 }

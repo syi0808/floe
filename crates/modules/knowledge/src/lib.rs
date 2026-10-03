@@ -3,24 +3,32 @@ pub mod prompts;
 pub mod ports {
     pub mod evidence;
     pub mod learner_projection;
-    pub mod repository;
+    pub mod learner_repository;
+    pub mod knowledge_repository;
 }
 pub use application::learner::validate_learner_input;
-pub use application::learner_scheduling::{LearnerLease, LearnerScheduling};
+pub use application::learner_scheduling::{KnowledgeForegroundLease, LearnerLease, LearnerScheduling};
 pub use application::learner_service::LearnerService;
+pub use application::service::{KnowledgeClock, KnowledgeDependencies, KnowledgeOwner,
+    KnowledgeRead, KnowledgeService, SystemKnowledgeClock};
 pub use ports::evidence::EvidenceReader;
 pub use ports::learner_projection::{LearnerClaimRef, LearnerEvidenceRepository,
     LearnerProjectionBounds, LearnerProjectionPort, LearnerProjectionRequest};
-pub use ports::repository::{
-    LearnerJobRepository, LearnerJournalFactory, MemoryContextReader, MemoryReviewRepository,
-};
+pub use ports::learner_repository::{LearnerJobRepository, LearnerJournalFactory,
+    LearningSessionSnapshot, LearningTranscriptMessage};
+pub use ports::knowledge_repository::{KnowledgeRepository, MemoryDecisionRequest,
+    MemoryStageOrigin, MemoryStageRequest};
 pub mod application {
+    pub mod discovery;
     pub mod learner;
     pub mod learner_scheduling;
     pub mod learner_service;
     pub mod memory;
     pub mod playbooks;
     pub mod review;
+    pub mod service;
+    pub mod storage_policy;
+    pub mod learner_journal;
 }
 
 pub use api::{
@@ -36,12 +44,13 @@ pub use api::{
 pub use application::learner::{
     LEARNER_INFERENCE_CONSUMER, LEARNER_INFERENCE_PURPOSE, LEARNER_JOB_LEASE_SECONDS,
     LEARNER_JOB_RETRY_DELAY_SECONDS, LearnerBudget, LearnerJobClaim, LearnerJobLifecycle,
-    LearnerJobSettlement, LearnerJobState, LearnerMemoryProposal, LearnerModel,
-    LearnerModelRequest, LearnerReviewInput, LearnerReviewJob, LearnerReviewOutput, LearnerRuntime,
-    MAX_LEARNER_JOB_ATTEMPTS, MemoryCandidateSink, claim_learner_job, explicit_learning_signal,
+    LearnerJobSettlement, LearnerJobState, LearnerMemoryProposal, LearnerProjectionBlock,
+    LearnerReviewInput, LearnerReviewJob,
+    MAX_LEARNER_JOB_ATTEMPTS, claim_learner_job, explicit_learning_signal,
     parse_learner_review_output, reject_learner_claim, retryable_learner_failure,
     settle_learner_job, settlement_for_learner_result, validate_learner_job_lifecycle,
 };
+pub use application::discovery::explicit_review_input;
 pub use application::memory::{
     admit_learning_evidence, project_memory_summary, validate_learning_evidence,
     validate_memory_overview_limit, validate_stage_request,
@@ -52,7 +61,12 @@ pub use application::playbooks::{
     PlaybookIndexEntry, PlaybookRef, PlaybookRegistry, PlaybookSession,
 };
 pub use application::review::{
-    MemoryReviewDecision, MemoryReviewResult, ReviewAdmission, ReviewPlan, plan_review,
-    review_memory, validate_approval_candidate, validate_memory_review_candidate,
+    ReviewAdmission, ReviewPlan, plan_review, validate_approval_candidate, validate_memory_review_candidate,
     validate_review_actor, validate_review_candidate,
 };
+
+pub use application::storage_policy::{MemoryStageIdentity, MemoryStagePlan, MemoryContextFact,
+    knowledge_content_hash, memory_stage_identity, plan_memory_stage, project_memory_context,
+    learner_job_key, new_learner_job};
+pub use application::learner_journal::{LearnerClaimJournal, LearnerJournalHead,
+    advance_learner_journal, validate_learner_journal, validate_learner_budget, recover_learner_claim, validate_learner_stage};

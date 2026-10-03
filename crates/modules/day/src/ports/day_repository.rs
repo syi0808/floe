@@ -54,6 +54,7 @@ impl DayError {
 }
 
 pub trait DayRepository: super::refresh_repository::DayRefreshRepository + Send + Sync {
+    fn collect_action<'a>(&'a self, commit: crate::DayCollectionCommit) -> floe_execution::BoxFuture<'a, Result<crate::DayCollectionReceipt, DayError>>;
     fn put_capture<'a>(&'a self, value: &'a Capture) -> floe_execution::BoxFuture<'a, Result<(), DayError>>;
     fn put_event<'a>(&'a self, value: &'a Event) -> floe_execution::BoxFuture<'a, Result<(), DayError>>;
     fn put_event_if_revision<'a>(&'a self, value: &'a Event, expected: Revision) -> floe_execution::BoxFuture<'a, Result<(), DayError>>;

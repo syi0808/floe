@@ -308,9 +308,43 @@ fn authorization_consumer(
 }
 
 impl floe_access::AuthorizationProofVerifier for GatewayProofVerifier {
+    fn verify_product(
+        &self,
+        command: &floe_access::ProductCalendarSigningCommand<'_>,
+    ) -> Result<floe_access::ProductCalendarChallenge, AgentFailure> {
+        if command.canonical_bytes.is_empty() || command.canonical_bytes.len() > MAX_CHALLENGE_BYTES {
+            return Err(AgentFailure::InvalidInput);
+        }
+        strict_json_bytes(&command.canonical_bytes, MAX_CHALLENGE_BYTES)?;
+        let challenge: floe_access::ProductCalendarChallenge =
+            serde_json::from_slice(&command.canonical_bytes)
+                .map_err(|_| AgentFailure::InvalidInput)?;
+        let now = chrono::Utc::now();
+        command.validate_claims(
+            &challenge,
+            command.permit.request().actor.person_id,
+            challenge.key_id(),
+            now,
+        )?;
+        if command.producer.schema_version != 1
+            || command.producer.instance_id != challenge.claims().producer_instance
+            || command.producer.fingerprint != challenge.claims().producer_key_fingerprint
+            || command.producer.audience != challenge.claims().audience
+            || command.producer.execution_owner != challenge.claims().source.execution_owner
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        verify_signature(
+            &command.producer,
+            &command.canonical_bytes,
+            &command.producer_signature,
+        )?;
+        Ok(challenge)
+    }
+
     fn verify(
         &self,
-        command: &floe_access::AuthorizationSigningCommand,
+        command: &floe_access::AssistantAuthorizationSigningCommand,
     ) -> Result<floe_access::VerifiedAuthorizationClaims, AgentFailure> {
         let wire = parse_challenge(&command.canonical_bytes)?;
         verify_signature(
@@ -369,7 +403,7 @@ pub(crate) fn authorization_command(
     challenge: &str,
     signature: &str,
     producer: RemoteProducerIdentity,
-) -> Result<floe_access::AuthorizationSigningCommand, AgentFailure> {
+) -> Result<floe_access::AssistantAuthorizationSigningCommand, AgentFailure> {
     let canonical_bytes = decode_canonical(challenge, 65536)?;
     let producer_signature = decode_exact(signature, 64)?;
     let wire = parse_challenge(&canonical_bytes)?;
@@ -382,7 +416,7 @@ pub(crate) fn authorization_command(
         _ => return Err(AgentFailure::PolicyDenied),
     };
     let consumer = authorization_consumer(&wire._consumer, admitted_consumer)?;
-    let command = floe_access::AuthorizationSigningCommand {
+    let command = floe_access::AssistantAuthorizationSigningCommand {
         operation_id: Uuid::parse_str(&expected.challenge_id)
             .map_err(|_| AgentFailure::PolicyDenied)?,
         request_digest: Sha256::digest(&canonical_bytes).into(),

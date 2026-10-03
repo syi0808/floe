@@ -11,7 +11,7 @@ use floe_agent_contract::{
     SessionProtection,
 };
 use floe_context_contract::{PersonId, acquire_optional_source, record_source_issue};
-use floe_day::TimelineRepository;
+use floe_day::DayRepository;
 use floe_execution::Cancellation;
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -56,7 +56,7 @@ impl ExpertContextRequest<'_> {
 /// acquired and the result authorized again.
 pub async fn prepare_expert_context(
     context: &mut AgentContext,
-    repository: &impl TimelineRepository,
+    repository: &(impl DayRepository + ?Sized),
     request: ExpertContextRequest<'_>,
 ) -> Result<(), AgentFailure> {
     if request.carries_personal_day() {

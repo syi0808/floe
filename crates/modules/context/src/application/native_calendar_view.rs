@@ -239,7 +239,7 @@ fn project_native_items(
         if let Some(failure) = batch.failure {
             return Err(match failure {
                 CalendarFailure::PermissionDenied => AgentFailure::AccessReviewRequired,
-                CalendarFailure::CalendarUnavailable | CalendarFailure::ProviderUnavailable => {
+                _ => {
                     AgentFailure::CapabilityUnavailable
                 }
             });
@@ -247,7 +247,7 @@ fn project_native_items(
         for record in batch.records {
             if record.calendar_id != batch.calendar_id
                 || record.external_id.trim().is_empty()
-                || record.external_revision.trim().is_empty()
+                || !record.external_revision.is_valid()
             {
                 return Err(AgentFailure::CapabilityUnavailable);
             }

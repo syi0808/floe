@@ -13,10 +13,7 @@ use std::{
 };
 
 use floe_agent_contract::AgentFailure;
-use floe_connections::SourceConnection;
-use floe_context_contract::CalendarProvider;
 use floe_context_contract::PersonId;
-use floe_day::CalendarBatch;
 use serde_json::Value;
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -24,8 +21,7 @@ use uuid::Uuid;
 use crate::{AttentionView, PeopleView, validate_attention_view, validate_people_view};
 
 /// The views a device may publish here.
-pub const ALLOWED_VIEW_IDS: [&str; 3] =
-    ["people.identity", "attention.coarse", "calendar.timeline"];
+pub const ALLOWED_VIEW_IDS: [&str; 2] = ["people.identity", "attention.coarse"];
 
 /// The most trusted observations kept per kind.
 const MAX_TRUSTED_ATTENTION: usize = 16;
@@ -73,25 +69,9 @@ pub struct TrustedPersonalObservation {
     monotonic_ttl: Duration,
 }
 
-/// One calendar observation a device published, before any grant is applied.
-#[derive(Clone)]
-pub struct PublishedCalendarObservation {
-    pub connection_id: String,
-    pub source_authority: floe_context_contract::SourceAuthority,
-    pub connection_revision: u64,
-    pub provider: CalendarProvider,
-    pub calendar_ids: Vec<String>,
-    pub observed_at_unix_ms: i64,
-    pub expires_at_unix_ms: i64,
-    pub range_start_unix_ms: i64,
-    pub range_end_unix_ms: i64,
-    pub batches: Vec<CalendarBatch>,
-}
-
 /// The device observations one process is willing to stand behind.
 pub struct ObservationRegistry {
     entries: Mutex<HashMap<(PersonId, String, String), ObservationEntry>>,
-    calendar_observations: Mutex<HashMap<(PersonId, String), PublishedCalendarObservation>>,
     trusted_attention: Mutex<VecDeque<TrustedAttentionObservation>>,
     trusted_personal: Mutex<VecDeque<TrustedPersonalObservation>>,
     process_incarnation: Uuid,
@@ -101,7 +81,6 @@ impl Default for ObservationRegistry {
     fn default() -> Self {
         Self {
             entries: Mutex::new(HashMap::new()),
-            calendar_observations: Mutex::new(HashMap::new()),
             trusted_attention: Mutex::new(VecDeque::new()),
             trusted_personal: Mutex::new(VecDeque::new()),
             process_incarnation: Uuid::new_v4(),
@@ -167,43 +146,6 @@ impl ObservationRegistry {
         Ok(true)
     }
 
-    /// Record one calendar observation, once the connection it names still
-    /// matches what the device reported.
-    pub fn publish_calendar_observation(
-        &self,
-        person_id: PersonId,
-        device_id: &str,
-        observation: PublishedCalendarObservation,
-        connection: &SourceConnection,
-        now_unix_ms: i64,
-    ) -> Result<(), AgentFailure> {
-        validate_calendar_observation(&observation, now_unix_ms)?;
-        let mut expected_ids: Vec<_> = connection
-            .resources()
-            .iter()
-            .map(|resource| resource.handle().as_str().to_owned())
-            .collect();
-        let mut actual_ids = observation.calendar_ids.clone();
-        expected_ids.sort();
-        actual_ids.sort();
-        if !connection.is_serving()
-            || connection.person_id() != person_id
-            || connection.connection_id().as_str() != observation.connection_id
-            || connection.execution_owner_id().as_str() != device_id
-            || connection.connector_id().as_str() != connector_for_provider(observation.provider)
-            || connection.revision() != observation.connection_revision
-            || connection.source_authority() != observation.source_authority
-            || expected_ids != actual_ids
-        {
-            return Err(AgentFailure::StaleContext);
-        }
-        self.calendar_observations
-            .lock()
-            .map_err(|_| AgentFailure::Interrupted)?
-            .insert((person_id, device_id.to_owned()), observation);
-        Ok(())
-    }
-
     pub fn read_entry(
         &self,
         person_id: PersonId,
@@ -247,16 +189,8 @@ impl ObservationRegistry {
                 || view_id.is_some_and(|view_id| view_id != id)
                 || (id == "attention.coarse" && entry.native_subject_fingerprint.is_some())
         });
-        let mut removed_count = before - entries.len();
+        let removed_count = before - entries.len();
         drop(entries);
-        if view_id.is_none_or(|id| id == "calendar.timeline") {
-            removed_count += self
-                .calendar_observations
-                .lock()
-                .map_err(|_| AgentFailure::Interrupted)?
-                .remove(&(person_id, device_id.to_owned()))
-                .is_some() as usize;
-        }
         Ok(removed_count)
     }
 
@@ -503,57 +437,6 @@ impl ObservationRegistry {
             .ok_or(AgentFailure::StaleContext)
     }
 
-    /// The calendar observation a grant admits, narrowed to the calendars it
-    /// actually names.
-    pub fn authorized_calendar_observation(
-        &self,
-        person_id: PersonId,
-        connection: &SourceConnection,
-        calendar_ids: &[String],
-        now_unix_ms: i64,
-    ) -> Result<PublishedCalendarObservation, AgentFailure> {
-        let authority = connection.source_authority();
-        if !authority.is_valid() {
-            return Err(AgentFailure::AccessReviewRequired);
-        }
-        let observations = self
-            .calendar_observations
-            .lock()
-            .map_err(|_| AgentFailure::Interrupted)?;
-        let observation = observations
-            .get(&(
-                person_id,
-                connection.execution_owner_id().as_str().to_owned(),
-            ))
-            .filter(|observation| {
-                observation.connection_id == connection.connection_id().as_str()
-                    && observation.source_authority == authority
-                    && connection.connector_id().as_str()
-                        == connector_for_provider(observation.provider)
-                    && observation.connection_revision == connection.revision()
-                    && calendar_ids
-                        .iter()
-                        .all(|identifier| observation.calendar_ids.contains(identifier))
-            })
-            .ok_or(AgentFailure::CapabilityUnavailable)?;
-        validate_calendar_observation(observation, now_unix_ms)?;
-        let mut projected = observation.clone();
-        projected.calendar_ids = calendar_ids.to_vec();
-        projected
-            .batches
-            .retain(|batch| calendar_ids.contains(&batch.calendar_id));
-        Ok(projected)
-    }
-}
-
-fn connector_for_provider(provider: CalendarProvider) -> &'static str {
-    match provider {
-        CalendarProvider::EventKit => "calendar.event_kit",
-        CalendarProvider::Android => "calendar.android",
-        CalendarProvider::Google => "calendar.google",
-        CalendarProvider::Microsoft => "calendar.microsoft",
-        CalendarProvider::Fixture => "calendar.fixture",
-    }
 }
 
 /// Whether the view a device published is one Context accepts, and when it
@@ -576,66 +459,6 @@ pub fn validate_view(
         "attention.coarse" => parse!(AttentionView, validate_attention_view),
         _ => return Err(AgentFailure::CapabilityDenied),
     })
-}
-
-pub fn validate_calendar_observation(
-    observation: &PublishedCalendarObservation,
-    now_unix_ms: i64,
-) -> Result<(), AgentFailure> {
-    let identifiers: std::collections::HashSet<_> = observation.calendar_ids.iter().collect();
-    let batch_ids: std::collections::HashSet<_> = observation
-        .batches
-        .iter()
-        .map(|batch| batch.calendar_id.as_str())
-        .collect();
-    if !matches!(
-        observation.provider,
-        CalendarProvider::EventKit | CalendarProvider::Android
-    ) || observation.connection_revision == 0
-        || observation.calendar_ids.is_empty()
-        || observation
-            .batches
-            .iter()
-            .map(|batch| batch.records.len())
-            .sum::<usize>()
-            > 10_000
-        || identifiers.len() != observation.calendar_ids.len()
-        || observation
-            .calendar_ids
-            .iter()
-            .any(|id| id.trim().is_empty() || id.len() > 512)
-        || observation.batches.len() != observation.calendar_ids.len()
-        || batch_ids.len() != observation.batches.len()
-        || !observation
-            .calendar_ids
-            .iter()
-            .all(|id| batch_ids.contains(id.as_str()))
-        || observation.observed_at_unix_ms > now_unix_ms
-        || observation.expires_at_unix_ms <= now_unix_ms
-        || observation.expires_at_unix_ms <= observation.observed_at_unix_ms
-        || observation.expires_at_unix_ms - observation.observed_at_unix_ms > 300_000
-        || observation.range_start_unix_ms < 0
-        || observation.range_end_unix_ms <= observation.range_start_unix_ms
-        || observation.range_end_unix_ms - observation.range_start_unix_ms > 32 * 86_400_000
-    {
-        return Err(AgentFailure::InvalidInput);
-    }
-    for batch in &observation.batches {
-        if (batch.failure.is_some() && !batch.records.is_empty())
-            || batch.records.len() > 10_000
-            || batch.records.iter().any(|record| {
-                record.calendar_id != batch.calendar_id
-                    || record.external_id.trim().is_empty()
-                    || record.external_id.len() > 512
-                    || record.external_revision.trim().is_empty()
-                    || record.external_revision.len() > 512
-                    || record.title.len() > 4096
-            })
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-    }
-    Ok(())
 }
 
 pub fn valid_native_subject_fingerprint(value: &str) -> bool {

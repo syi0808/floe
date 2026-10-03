@@ -317,12 +317,21 @@ final class CalendarChannel {
       "ends_at": formatter.string(from: event.endDate),
       "timezone": (event.timeZone ?? TimeZone.current).identifier,
     ]
-    let title = event.title?.trimmingCharacters(in: .whitespacesAndNewlines)
-    let normalizedTitle = title?.isEmpty == false ? title! : "(Untitled)"
+    // Fingerprint input is a private native comparison contract, separate
+    // from the flat transport schedule. Keep it identical to EventKitActions.
+    let fingerprintSchedule: [String: Any] = event.isAllDay ? ["AllDay": [
+      "start_date": dayFormatter.string(from: event.startDate),
+      "end_date_exclusive": dayFormatter.string(from: allDayEnd),
+    ]] : ["Timed": [
+      "starts_at": formatter.string(from: event.startDate),
+      "ends_at": formatter.string(from: event.endDate),
+      "timezone": (event.timeZone ?? TimeZone.current).identifier,
+    ]]
+    let rawTitle = event.title ?? ""
     let revisionData = try! JSONSerialization.data(
       withJSONObject: [
-        "title": normalizedTitle,
-        "schedule": schedule,
+        "title": rawTitle,
+        "schedule": fingerprintSchedule,
         "modified": event.lastModifiedDate.map { formatter.string(from: $0) } ?? "",
       ],
       options: [.sortedKeys]
@@ -334,7 +343,7 @@ final class CalendarChannel {
         !event.isAllDay && !event.hasRecurrenceRules && !event.isDetached && !event.hasAttendees &&
         event.endDate > event.startDate && event.endDate.timeIntervalSince(event.startDate) <= 86_400,
       "external_revision": revision,
-      "title": normalizedTitle,
+      "title": rawTitle,
       "schedule": schedule,
       "provider": Self.provider,
       "device_id": boundDeviceID!,

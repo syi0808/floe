@@ -134,4 +134,4 @@ impl ProductCalendarSigningCommand<'_> {
     }
 }
 pub fn hex_sha256(bytes: &[u8]) -> String { Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect() }
-pub fn is_hex_digest(value: &str) -> bool { value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) }
+pub fn is_hex_digest(value: &str) -> bool { value.len() == 64 && value.bytes().any(|byte| byte != b'0') && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) }

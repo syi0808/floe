@@ -56,9 +56,8 @@ pub use ports::remote_grants::{
 };
 
 pub use application::calendar_read::{
-    CalendarReadAccessAdmission, CalendarReadAccessRequest, CalendarReadAdmission,
-    admission_matches, admission_matches_dependency, admits_calendar_read,
-    admits_calendar_read_request, admits_native_calendar_read, current_native_calendar_grant,
+    CalendarReadAccessAdmission, CalendarReadAccessRequest,
+    admission_matches_dependency, admits_native_calendar_read, current_native_calendar_grant,
     native_calendar_resource,
 };
 pub use floe_context_contract::{CalendarProvider, CalendarReadAccessStamp, CalendarScope};

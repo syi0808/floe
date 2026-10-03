@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "Historical G1 passed at665df6b3. S2 saved Task journal/receipt capacity, reviewed Actions/native writes, builtin Program migration, recovered Task acknowledgement, typed App and safe command contracts. Overall S2 is incomplete and uncompiled; no S2 formatter/build/tests/checkers have run.",
+  "verification": "Historical G1 passed at665df6b3. S2 Day/source ownership, reviewed binding storage, lifecycle-only queue and Knowledge owner/storage contract are saved. Overall S2 remains incomplete and uncompiled; no S2 executable validation.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "1cf207121a9345e0a9a0e096ea4d8d4bfc47988f",
+  "current_correction_source_commit": "f99cdadb187627477ad551dec5706643e48dc4ea",
   "current_status_document": "docs/plans/2026-10-03-g1-first-pass.md"
 }

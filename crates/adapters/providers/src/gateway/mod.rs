@@ -20,8 +20,14 @@ pub use proof::GatewayProofVerifier;
 
 pub(crate) mod views;
 
+pub mod calendar_mirror;
+pub use calendar_mirror::GatewayCalendarMirrorClient;
+
 mod source_cleanup;
 pub use source_cleanup::GatewaySourceCleanup;
+
+pub mod product_lease;
+pub use product_lease::{ProductGatewayLease, ProductGatewayLeaseRegistry};
 
 mod integrations;
 pub use integrations::GatewayIntegrationAdapter;

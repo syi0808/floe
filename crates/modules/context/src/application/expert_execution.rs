@@ -1,4 +1,5 @@
 //! Ready-generation Context adapters for the Experts-owned Engine.
+use super::source_adapters::{PersonalConnections, CalendarConnections, NativeCalendar, NativeGrants};
 use std::{collections::HashSet, sync::{Arc, Mutex}};
 
 use chrono::Utc;
@@ -121,6 +122,7 @@ impl floe_experts::ExpertProjectionPort for ContextExpertProjection {
             let mut coverage = input.inherited_coverage.clone();
             let mut seen = HashSet::new();
             let mut seen_calls = HashSet::new();
+            let mut captured_issues = std::collections::BTreeMap::new();
             for entry in &request.conversation.current_turn {
                 match entry {
                     ModelConversationEntry::ToolExchange { call, result } => {
@@ -148,6 +150,17 @@ impl floe_experts::ExpertProjectionPort for ContextExpertProjection {
                                 { return Err(AgentFailure::PolicyDenied); }
                             }
                         }
+                        let declared = manifest.source_requirements.iter().find(|requirement| requirement.key == observation.requirement_key).ok_or(AgentFailure::PolicyDenied)?;
+                        let source = match declared.capability.as_str() {
+                            "calendar.timeline" => Some(floe_context_contract::ContextSource::Calendar),
+                            "floe.tasks" => Some(floe_context_contract::ContextSource::Tasks),
+                            "floe.notes" => Some(floe_context_contract::ContextSource::Notes),
+                            "memory.confirmed" => Some(floe_context_contract::ContextSource::Memory),
+                            _ => None,
+                        };
+                        if let Some(source) = source {
+                            captured_issues.insert((source, observation.requirement_key.clone()), matches!(&observation.outcome, floe_experts::ExpertSourceObservation::Unavailable { .. }));
+                        }
                         let observed = observation.coverage();
                         authorize_coverage(dependencies, &observed, scope).await?;
                         coverage = coverage.merge(&observed).map_err(|_| AgentFailure::PolicyDenied)?;
@@ -161,6 +174,15 @@ impl floe_experts::ExpertProjectionPort for ContextExpertProjection {
             input.context.memories = memory.memories;
             floe_context_contract::record_source_issue(&mut input.context.optional_context_issues,
                 floe_agent_contract::ContextSource::Memory, memory.issue);
+            // Only actual captured calls affect these annotations. A later
+            // Ready read clears that requirement's earlier unavailable state;
+            // another still-unavailable requirement keeps the source warning.
+            let observed_sources = captured_issues.keys().map(|(source, _)| *source).collect::<std::collections::BTreeSet<_>>();
+            for source in observed_sources {
+                if source == floe_context_contract::ContextSource::Memory && memory.issue.is_some() { continue; }
+                let unavailable = captured_issues.iter().any(|((observed, _), unavailable)| *observed == source && *unavailable);
+                floe_context_contract::record_source_issue(&mut input.context.optional_context_issues, source, unavailable.then_some(floe_context_contract::ContextIssueReason::Unavailable));
+            }
             coverage = coverage.merge(&memory_coverage).map_err(|_| AgentFailure::PolicyDenied)?;
             let mut classes = vec![DataClass::Personal, input.package_data_class];
             classes.extend(input.context.evidence.iter().map(|evidence| evidence.data_class));
@@ -531,47 +553,6 @@ impl LocalSources<'_> {
     }
 }
 
-struct PersonalConnections<'a>(&'a dyn ConnectionsRepository);
-impl PersonalConnectionReader for PersonalConnections<'_> {
-    fn source_is_fenced<'a>(&'a self, person: PersonId, connection: &'a floe_context_contract::ConnectionId)
-        -> BoxFuture<'a, Result<bool, AgentFailure>>
-    { Box::pin(async move { self.0.source_is_fenced(person, connection).await.map_err(|_| AgentFailure::StorageUnavailable) }) }
-    fn load<'a>(&'a self, person: PersonId, connection: &'a floe_context_contract::ConnectionId)
-        -> BoxFuture<'a, Result<Option<SourceConnection>, AgentFailure>>
-    { Box::pin(async move { self.0.load(person, connection).await.map_err(|_| AgentFailure::StorageUnavailable) }) }
-}
-
-struct CalendarConnections<'a> { repository: &'a dyn ConnectionsRepository,
-    person_id: PersonId, connection_id: &'a floe_context_contract::ConnectionId }
-impl CalendarConnectionReader for CalendarConnections<'_> {
-    async fn source_is_fenced(&self, person: PersonId, connection: &floe_context_contract::ConnectionId)
-        -> Result<bool, AgentFailure>
-    { self.repository.source_is_fenced(person, connection).await.map_err(|_| AgentFailure::StorageUnavailable) }
-    async fn calendar_connection(&self) -> Result<Option<SourceConnection>, AgentFailure>
-    { self.repository.load(self.person_id, self.connection_id).await.map_err(|_| AgentFailure::StorageUnavailable) }
-}
-
-struct NativeCalendar<'a> { actor: &'a OwnerActor, connection: &'a SourceConnection,
-    transport: &'a dyn ExpertSourceTransport }
-impl CalendarSource for NativeCalendar<'_> {
-    async fn check(&self, request: floe_access::CalendarReadAccessRequest)
-        -> Result<floe_access::CalendarReadAccessStamp, AgentFailure>
-    { self.transport.check_calendar(self.actor, self.connection, request).await }
-    async fn observe(&self, request: CalendarObserveRequest) -> Result<Option<crate::CalendarObservation>, AgentFailure>
-    { self.transport.observe_calendar(self.actor, self.connection, request).await.map(Some) }
-}
-struct NativeGrants<'a>(&'a dyn GrantRepository);
-impl NativeCalendarGrantReader for NativeGrants<'_> {
-    async fn admit(&self, connection: &SourceConnection, person: PersonId, consumer: &str)
-        -> Result<floe_access::CalendarReadAccessAdmission, AgentFailure>
-    {
-        let consumer = GrantConsumer::builtin(consumer).map_err(|_| AgentFailure::CapabilityDenied)?;
-        let grant = floe_access::current_native_calendar_grant(self.0, person, connection.connection_id().as_str(),
-            floe_context_contract::CalendarProvider::EventKit, connection.execution_owner_id().as_str(), &consumer).await?;
-        Ok(floe_access::CalendarReadAccessAdmission::device_local(person, grant.id(), grant.authority(),
-            grant.source().clone(), connection.source_authority(), grant.scope().clone(), consumer))
-    }
-}
 
 fn map_personal<T: serde::Serialize>(outcome: SourceReadOutcome<(T, ContextDependency)>)
     -> Result<SourceReadOutcome<(Value, Vec<ContextDependency>)>, AgentFailure>

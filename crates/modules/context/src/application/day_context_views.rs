@@ -6,13 +6,13 @@ use chrono::{DateTime, Utc};
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::{AgentFailure, DataClass};
 use floe_context_contract::PersonId;
-use floe_day::{Priority, TimelineRepository};
+use floe_day::{Priority, DayRepository};
 use uuid::Uuid;
 
 const NATIVE_CONTEXT_TTL: chrono::Duration = chrono::Duration::minutes(5);
 
 pub async fn task_context_view(
-    repository: &impl TimelineRepository,
+    repository: &(impl DayRepository + ?Sized),
     person_id: PersonId,
     handle: Uuid,
     now: DateTime<Utc>,
@@ -85,7 +85,7 @@ pub async fn task_context_view(
 }
 
 pub async fn note_context_view(
-    repository: &impl TimelineRepository,
+    repository: &(impl DayRepository + ?Sized),
     person_id: PersonId,
     handle: Uuid,
     now: DateTime<Utc>,

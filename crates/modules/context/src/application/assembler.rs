@@ -7,13 +7,13 @@ use floe_agent_contract::AgentFailure;
 use floe_context_contract::{ContextSource, acquire_optional_source};
 
 pub async fn acquire_memory_context(
-    reader: &impl floe_knowledge::MemoryContextReader,
-    now: chrono::DateTime<chrono::Utc>,
+    reader: &(impl floe_knowledge::KnowledgeRead + ?Sized),
+    actor: &floe_kernel::OwnerActor,
+    scope: &floe_execution::ExecutionScope,
 ) -> Result<floe_knowledge::MemoryContextSnapshot, AgentFailure> {
-    let acquired =
-        acquire_optional_source(ContextSource::Memory, reader.read_memory_context(now)).await?;
-    Ok(floe_knowledge::MemoryContextSnapshot {
-        memories: acquired.value.unwrap_or_default(),
-        issue: acquired.issue.map(|issue| issue.reason),
-    })
+    let acquired = acquire_optional_source(ContextSource::Memory, reader.read_context(actor, scope)).await?;
+    match acquired.value {
+        Some(value) => Ok(value),
+        None => Ok(floe_knowledge::MemoryContextSnapshot { memories: vec![], issue: acquired.issue.map(|issue| issue.reason) }),
+    }
 }

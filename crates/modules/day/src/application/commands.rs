@@ -2,7 +2,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 
 use crate::{
     Capture, CaptureProcessing, CaptureSource, DayError, DaySnapshot, DomainError, DomainRef,
-    Event, EventSchedule, Note, Priority, SourceRef, Task, TimelineItem, TimelineRepository,
+    Event, EventSchedule, Note, Priority, SourceRef, Task, TimelineItem, DayRepository,
     project_day_with_end_offset,
 };
 use floe_kernel::{CaptureId, EventId, NoteId, PersonId, Revision, TaskId};
@@ -23,39 +23,45 @@ pub enum Classification {
     },
 }
 
-pub struct DayService<'a, R: TimelineRepository + ?Sized> {
-    pub(crate) repository: &'a R,
+#[derive(Clone)]
+pub struct DayService {
+    pub(crate) repository: std::sync::Arc<dyn DayRepository>,
+    pub(crate) acquisition: std::sync::Arc<dyn crate::CalendarAcquisitionPort>,
+    pub(crate) clock: std::sync::Arc<dyn crate::DayClock>,
+    pub(crate) lifecycle: std::sync::Arc<super::refresh::DayLifecycle>,
 }
 
-impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
-    pub fn new(repository: &'a R) -> Self {
-        Self { repository }
+impl DayService {
+    pub fn new(repository: std::sync::Arc<dyn DayRepository>, acquisition: std::sync::Arc<dyn crate::CalendarAcquisitionPort>, clock: std::sync::Arc<dyn crate::DayClock>) -> Self {
+        Self { repository, acquisition, clock, lifecycle: std::sync::Arc::new(super::refresh::DayLifecycle::new()) }
     }
 
-    pub async fn submit_capture(
+    pub(crate) async fn submit_capture(
         &self,
         person_id: PersonId,
         input: impl Into<String>,
         now: DateTime<Utc>,
     ) -> Result<Capture, DayError> {
+        self.admit_person(person_id)?;
         let capture = Capture::new(person_id, input, now, CaptureSource::Typed)?;
         self.repository.put_capture(&capture).await?;
         Ok(capture)
     }
 
-    pub async fn create_event(
+    pub(crate) async fn create_event(
         &self,
         person_id: PersonId,
         title: impl Into<String>,
         schedule: EventSchedule,
         now: DateTime<Utc>,
     ) -> Result<Event, DayError> {
+        self.admit_person(person_id)?;
         let event = Event::new(person_id, title, schedule, SourceRef::Manual, now)?;
         self.repository.put_event(&event).await?;
         Ok(event)
     }
 
-    pub async fn create_task(
+    pub(crate) async fn create_task(
         &self,
         person_id: PersonId,
         title: impl Into<String>,
@@ -63,23 +69,25 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
         priority: Priority,
         now: DateTime<Utc>,
     ) -> Result<Task, DayError> {
+        self.admit_person(person_id)?;
         let task = Task::new(person_id, title, deadline, priority, SourceRef::Manual, now)?;
         self.repository.put_task(&task).await?;
         Ok(task)
     }
 
-    pub async fn create_note(
+    pub(crate) async fn create_note(
         &self,
         person_id: PersonId,
         content: impl Into<String>,
         now: DateTime<Utc>,
     ) -> Result<Note, DayError> {
+        self.admit_person(person_id)?;
         let note = Note::new(person_id, content, SourceRef::Manual, now)?;
         self.repository.put_note(&note).await?;
         Ok(note)
     }
 
-    pub async fn classify_capture(
+    pub(crate) async fn classify_capture(
         &self,
         capture_id: CaptureId,
         expected_revision: Revision,
@@ -91,6 +99,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
             .get_capture(capture_id)
             .await?
             .ok_or_else(|| DayError::not_found("capture", capture_id))?;
+        self.admit_person(capture.person_id)?;
         ensure_revision(capture.revision, expected_revision)?;
         if !matches!(capture.processing, CaptureProcessing::Pending) {
             return Err(DayError::conflict("capture has already been resolved"));
@@ -126,7 +135,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
         Ok(item)
     }
 
-    pub async fn set_task_completed(
+    pub(crate) async fn set_task_completed(
         &self,
         task_id: TaskId,
         expected_revision: Revision,
@@ -138,6 +147,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
             .get_task(task_id)
             .await?
             .ok_or_else(|| DayError::not_found("task", task_id))?;
+        self.admit_person(task.person_id)?;
         ensure_revision(task.revision, expected_revision)?;
         if completed {
             task.complete(now);
@@ -150,7 +160,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
         Ok(task)
     }
 
-    pub async fn update_event(
+    pub(crate) async fn update_event(
         &self,
         event_id: EventId,
         expected_revision: Revision,
@@ -163,6 +173,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
             .get_event(event_id)
             .await?
             .ok_or_else(|| DayError::not_found("event", event_id))?;
+        self.admit_person(event.person_id)?;
         ensure_revision(event.revision, expected_revision)?;
         ensure_local_event(&event)?;
         event.update(title, schedule, now)?;
@@ -172,7 +183,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
         Ok(event)
     }
 
-    pub async fn update_task(
+    pub(crate) async fn update_task(
         &self,
         task_id: TaskId,
         expected_revision: Revision,
@@ -186,6 +197,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
             .get_task(task_id)
             .await?
             .ok_or_else(|| DayError::not_found("task", task_id))?;
+        self.admit_person(task.person_id)?;
         ensure_revision(task.revision, expected_revision)?;
         task.update(title, deadline, priority, now)?;
         self.repository
@@ -194,7 +206,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
         Ok(task)
     }
 
-    pub async fn update_note(
+    pub(crate) async fn update_note(
         &self,
         note_id: NoteId,
         expected_revision: Revision,
@@ -206,6 +218,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
             .get_note(note_id)
             .await?
             .ok_or_else(|| DayError::not_found("note", note_id))?;
+        self.admit_person(note.person_id)?;
         ensure_revision(note.revision, expected_revision)?;
         note.update(content, now)?;
         self.repository
@@ -214,7 +227,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
         Ok(note)
     }
 
-    pub async fn delete_item(
+    pub(crate) async fn delete_item(
         &self,
         reference: DomainRef,
         expected_revision: Revision,
@@ -227,6 +240,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
                     .get_event(id)
                     .await?
                     .ok_or_else(|| DayError::not_found("event", id))?;
+                self.admit_person(value.person_id)?;
                 ensure_revision(value.revision, expected_revision)?;
                 ensure_local_event(&value)?;
                 value.delete(now);
@@ -240,6 +254,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
                     .get_task(id)
                     .await?
                     .ok_or_else(|| DayError::not_found("task", id))?;
+                self.admit_person(value.person_id)?;
                 ensure_revision(value.revision, expected_revision)?;
                 value.delete(now);
                 self.repository
@@ -252,6 +267,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
                     .get_note(id)
                     .await?
                     .ok_or_else(|| DayError::not_found("note", id))?;
+                self.admit_person(value.person_id)?;
                 ensure_revision(value.revision, expected_revision)?;
                 value.delete(now);
                 self.repository
@@ -262,18 +278,19 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
         Ok(())
     }
 
-    pub async fn day_snapshot(
+    pub(crate) async fn day_snapshot(
         &self,
         person_id: PersonId,
         date: NaiveDate,
         timezone_offset_seconds: i32,
         now: DateTime<Utc>,
     ) -> Result<DaySnapshot, DayError> {
+        self.admit_person(person_id)?;
         self.day_snapshot_with_end_offset(person_id, date, timezone_offset_seconds, None, now)
             .await
     }
 
-    pub async fn day_snapshot_with_end_offset(
+    pub(crate) async fn day_snapshot_with_end_offset(
         &self,
         person_id: PersonId,
         date: NaiveDate,
@@ -281,6 +298,7 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
         end_timezone_offset_seconds: Option<i32>,
         now: DateTime<Utc>,
     ) -> Result<DaySnapshot, DayError> {
+        self.admit_person(person_id)?;
         let end_date_exclusive = date
             .succ_opt()
             .ok_or_else(|| DayError::validation("date out of range"))?;
@@ -307,9 +325,10 @@ impl<'a, R: TimelineRepository + ?Sized> DayService<'a, R> {
             events,
             self.repository.list_tasks(person_id).await?,
             self.repository.list_notes(person_id).await?,
-        );
+        )?;
         snapshot.calendar_mirror_revision = mirror.as_ref().map(|mirror| mirror.mirror_revision);
-        snapshot.calendar = mirror.map(|mirror| mirror.state);
+        snapshot.calendar = mirror.map(|mirror| crate::project_calendar_coverage(&mirror.state, now));
+        snapshot.validate_bounds()?;
         Ok(snapshot)
     }
 }

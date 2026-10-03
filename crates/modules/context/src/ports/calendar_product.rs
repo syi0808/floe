@@ -34,7 +34,14 @@ pub enum CalendarProductPageOutcome {
     Failed { reason: floe_day::CalendarFailure },
 }
 
-pub struct CalendarProductReadResult { pub batches: Vec<CalendarResourceOutcome>, pub binding: ProductCalendarResultBinding }
+pub struct CalendarProductReadResult {
+    pub batches: Vec<CalendarResourceOutcome>,
+    pub binding: ProductCalendarResultBinding,
+    /// Actual cumulative acquisition, including pages discarded on failure.
+    /// Counts must cover retained normalized batches and stay inside the permit.
+    pub consumed_records: u32,
+    pub consumed_bytes: u32,
+}
 
 pub trait CalendarProductTransport: Send + Sync {
     /// Metadata-only permission/subject/provider probe over this exact source.

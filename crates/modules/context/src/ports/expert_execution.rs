@@ -13,6 +13,7 @@ use crate::{CalendarObservation, CalendarObserveRequest, RemoteViewTransport};
 pub trait ExpertRemoteTransport: RemoteViewTransport + Send {
     fn client_id(&self) -> &str;
     fn producer(&self) -> &floe_access::RemoteProducerIdentity;
+    fn gateway_binding(&self) -> &floe_access::VerifiedGatewayBinding;
     fn catalog<'a>(&'a self, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<Vec<ConnectorSnapshot>, AgentFailure>>;
 }

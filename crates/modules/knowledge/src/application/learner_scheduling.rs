@@ -94,3 +94,15 @@ impl Drop for LearnerLease {
         }
     }
 }
+
+/// An admitted foreground owner holds this while its execution is active.
+pub struct KnowledgeForegroundLease { scheduling: LearnerScheduling }
+impl KnowledgeForegroundLease {
+    pub(crate) fn acquire(scheduling: LearnerScheduling) -> Result<Self, AgentFailure> {
+        scheduling.foreground_submitted()?;
+        Ok(Self { scheduling })
+    }
+}
+impl Drop for KnowledgeForegroundLease {
+    fn drop(&mut self) { let _ = self.scheduling.foreground_finished(); }
+}

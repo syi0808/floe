@@ -1,14 +1,15 @@
 //! Owner-scoped repository implementations over the local encrypted engine.
 
 mod actions;
+pub use actions::VaultActionsRepository;
 mod connections;
 #[cfg(unix)]
 mod context_evidence;
 #[cfg(unix)]
 mod conversation;
 mod day;
-#[cfg(unix)]
-mod expert_actions;
+mod day_refresh;
+mod day_collection;
 #[cfg(unix)]
 mod memory_review;
 #[cfg(unix)]
@@ -27,3 +28,5 @@ mod learner_journal;
 pub use learner_journal::VaultLearnerJournalFactory;
 
 pub(crate) use connections::initialize_source_operations;
+
+pub(crate) use day::{initialize_day_schema, validate_day_schema};

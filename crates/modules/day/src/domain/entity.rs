@@ -34,6 +34,8 @@ pub enum SourceRef {
 pub struct TimedSchedule {
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
+    /// Display zone; exact UTC endpoints remain authoritative for timed events.
+    /// A cross-zone provider event retains its genuine start/display zone.
     pub timezone: String,
 }
 
@@ -94,6 +96,12 @@ pub struct Event {
 }
 
 impl Event {
+    /// Provider observations preserve an absent or whitespace-only title.
+    /// Requiring a title remains a rule for locally authored Event::new.
+    pub(crate) fn observed_calendar(person_id: PersonId, title: String, schedule: EventSchedule, source: CalendarSource, now: DateTime<Utc>) -> Result<Self, DomainError> {
+        match &schedule { EventSchedule::Timed(value) => { TimedSchedule::new(value.starts_at, value.ends_at, &value.timezone)?; }, EventSchedule::AllDay(value) => { AllDaySchedule::new(value.start_date, value.end_date_exclusive)?; } }
+        Ok(Self { id: EventId::new(), person_id, title, schedule, source: SourceRef::Calendar(source), created_at: now, updated_at: now, revision: Revision(1), deleted_at: None })
+    }
     pub fn new(
         person_id: PersonId,
         title: impl Into<String>,
@@ -109,7 +117,7 @@ impl Event {
             source,
             created_at: now,
             updated_at: now,
-            revision: Revision::default(),
+            revision: Revision(1),
             deleted_at: None,
         })
     }
@@ -176,7 +184,7 @@ impl Task {
             source,
             created_at: now,
             updated_at: now,
-            revision: Revision::default(),
+            revision: Revision(1),
             deleted_at: None,
         })
     }
@@ -241,7 +249,7 @@ impl Note {
             source,
             created_at: now,
             updated_at: now,
-            revision: Revision::default(),
+            revision: Revision(1),
             deleted_at: None,
         })
     }
