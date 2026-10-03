@@ -234,9 +234,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                   _DayToolbar(
                     controller,
                     narrow: narrow,
-                    onCreateEvent: actionController == null
-                        ? null
-                        : () => _openCalendarEditor(),
+                    onCreateEvent: actionController?.calendarChangesAvailable == true &&
+                            actionController?.busy == false
+                        ? () => _openCalendarEditor()
+                        : null,
                   ),
                   Expanded(child: _content(narrow, snapshot)),
                 ],
@@ -266,6 +267,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
 
   Widget _content(bool narrow, DaySnapshot snapshot) {
     final actions = actionController;
+    final calendarChangesAvailable = actions != null &&
+        actions.calendarChangesAvailable && !actions.busy;
     final showReviews =
         actions != null && actions.actions.any((action) =>
           action.allowedActions.contains(ActionAllowedAction.approve) ||
@@ -278,13 +281,13 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       loading: controller.loadState == DayLoadState.loading,
       onConnections: () => _selectDestination(_DestinationView.connections),
       onRefresh: controller.canRefresh ? controller.refresh : null,
-      onCreateEvent: actionController == null
+      onCreateEvent: !calendarChangesAvailable
           ? null
           : (startsAt) => _openCalendarEditor(startsAt),
       draftStartsAt: draftEventStart,
-      onEditEvent: actionController == null ? null : _editCalendarEvent,
-      onDeleteEvent: actionController == null ? null : _deleteCalendarEvent,
-      onMoveEvent: actionController == null ? null : _moveCalendarEvent,
+      onEditEvent: calendarChangesAvailable ? _editCalendarEvent : null,
+      onDeleteEvent: calendarChangesAvailable ? _deleteCalendarEvent : null,
+      onMoveEvent: calendarChangesAvailable ? _moveCalendarEvent : null,
     );
     final rail = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -483,7 +486,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     EventItem? event,
   }) async {
     final actions = actionController;
-    if (actions == null) return;
+    if (actions == null || actions.busy || !actions.calendarChangesAvailable) return;
     final date = controller.query.date;
     final now = DateTime.now();
     final createStart =
@@ -514,30 +517,39 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       _showCalendarComposer(initialStart: start, event: event);
 
   Future<void> _deleteCalendarEvent(EventItem event) async {
+    final actions = actionController;
+    if (actions == null || actions.busy || !actions.calendarChangesAvailable ||
+        event.actionTarget == null) return;
     final confirmed = await showFloeDialog<bool>(
       context,
-      (dialogContext) => FloeDetailDialog(
-        title: 'Delete event?',
-        children: [
-          Text(
-            '“${event.title}” will be removed from ${event.calendarLabel ?? 'its Calendar source'}.',
-          ),
-          const SizedBox(height: FloeSpace.base),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              FloeButton.text(
-                onPressed: () => Navigator.of(dialogContext).pop(false),
-                child: const Text('Cancel'),
-              ),
-              const SizedBox(width: FloeSpace.md),
-              FloeButton.filled(
-                onPressed: () => Navigator.of(dialogContext).pop(true),
-                child: const Text('Delete event'),
-              ),
-            ],
-          ),
-        ],
+      (dialogContext) => AnimatedBuilder(
+        animation: actions,
+        builder: (dialogContext, _) => FloeDetailDialog(
+          title: 'Delete event?',
+          children: [
+            Text(
+              '“${event.title}” will be removed from ${event.calendarLabel ?? 'its Calendar source'}.',
+            ),
+            if (!actions.calendarChangesAvailable)
+              const Text('Calendar changes are unavailable. No writable Calendar destination could be confirmed.'),
+            const SizedBox(height: FloeSpace.base),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                FloeButton.text(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                const SizedBox(width: FloeSpace.md),
+                FloeButton.filled(
+                  onPressed: actions.busy || !actions.calendarChangesAvailable
+                      ? null : () => Navigator.of(dialogContext).pop(true),
+                  child: const Text('Delete event'),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
     if (confirmed == true && mounted) {
@@ -548,7 +560,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   Future<void> _deleteCalendarEventAtOwner(EventItem event) async {
     final actions = actionController;
     final target = event.actionTarget;
-    if (actions == null || target == null) return;
+    if (actions == null || actions.busy || !actions.calendarChangesAvailable ||
+        target == null) return;
     try {
       final result = await actions.submit(
         DirectDelete(

@@ -1,7 +1,7 @@
 {
   "baseline": "3f4b407f8079d611224cd7adbef121f9e7e75e8e",
   "branch": "refactor/architecture-20261002",
-  "stage": "S2 active: Day and Task source/client fixes committed; Actions client and Knowledge adapter review plus confirmed Conversation terminal-settlement/backlog recovery remain before G2.",
+  "stage": "S2 source closure complete; G2 production build gate ready to run on one exact published checkpoint. No S2 executable validation has run; S3 test reconstruction remains blocked on G2.",
   "registration_counts": {
     "rust": 1298,
     "rust_retained_owners": 751,
@@ -139,7 +139,7 @@
     "client_day": "active, safe Day UI/refresh with no client source orchestration",
     "client_experts_knowledge": "active, safe review/settings plus bounded ExpertBinding card branches"
   },
-  "updated_at": "2026-10-03T08:12:00Z",
+  "updated_at": "2026-10-03T08:43:00Z",
   "publication_identity": {
     "author": "syi0808",
     "email": "66503450+syi0808@users.noreply.github.com",
@@ -147,9 +147,23 @@
   },
   "s2_recovery_review": {
     "document": "2026-10-03-s2-adversarial-adjudication.md",
-    "F1_F2": "Confirmed; internal pending-terminal intent, actor-scoped pages and owner recovery driver being implemented.",
+    "F1_F2": "Source fixed at982c6f87: pending-terminal intent, actor-scoped pages, consistent receipt reads and retained recovery driver; unverified.",
     "F3_H3": "Source fixed at199d2fa2, unverified.",
     "F4": "Source fixed at81e47512/742eb1bf, unverified.",
-    "H1_H2": "Refuted against current source with exact dependency/ordering evidence."
+    "H1_H2": "Refuted against current source with exact dependency/ordering evidence.",
+    "vault_failure_policy": "App physical lifecycle projection atd48ac64b; obsolete FFI policy removed.",
+    "client_availability": "84df2a3e gates changes on observed writable destinations; no iOS write executor was removed from baseline."
+  },
+  "g2": {
+    "status": "ready_not_run",
+    "source_owner_checkpoint": "84df2a3e",
+    "command_sheet": "s2-g2-command-sheet.md",
+    "formatting_baseline": "229b468fd440e3c0d4b31fa7d0e976806313dcf4",
+    "targets": [
+      "cloud Rust production workspace/examples and Go executable/packages",
+      "dependency policy and diff audit",
+      "Mac Flutter analysis and same-snapshot macOS/iOS simulator/unsigned device builds"
+    ],
+    "next": "Parent supplies the exact published closure commit to both existing validation executors."
   }
 }

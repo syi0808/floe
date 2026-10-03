@@ -13,7 +13,7 @@ mod run_record;
 mod source_review;
 pub use run_record::{
     PriorExhaustion, BlockedInteractionLink, RunBlockOrigin, RunBlockRecord, RunReceipt, RunRecord, RunState, RunTerminal,
-    UnresolvedModelAttempt,
+    UnresolvedModelAttempt, PendingRunTerminal,
 };
 pub use source_review::{
     BlockedRunCommit, InteractionResolutionCommit, OwnerResolutionReceipt,

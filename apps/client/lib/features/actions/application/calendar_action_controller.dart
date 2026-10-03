@@ -79,6 +79,10 @@ final class CalendarActionController extends ChangeNotifier {
   CalendarActionError? get error => _error;
   CalendarActionError? get destinationsError => _destinationsError;
   bool get destinationsLoaded => _destinationsLoaded;
+  /// Display availability observed from the owner. Every submitted command
+  /// still needs the owner's current target and permission admission.
+  bool get calendarChangesAvailable => _destinationsLoaded &&
+      _destinationsError == null && _destinations.isNotEmpty;
   bool get busy => _busy;
   bool get loaded => _loaded;
 
@@ -93,6 +97,8 @@ final class CalendarActionController extends ChangeNotifier {
     if (_busy || _disposed) return;
     _busy = true;
     _error = null;
+    _destinationsLoaded = false;
+    _destinationsError = null;
     notifyListeners();
     try {
       // Reading durable history/authority must not depend on native Calendar

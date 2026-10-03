@@ -41,10 +41,11 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
   List<ActionDestinationChoice> destinations = const [];
   String? destinationRef;
   String? artifactId;
-  late ActionCommandReplay pendingCommands;
+  ActionCommandReplay? pendingCommands;
   final Map<String, CalendarAction> actionsByIntent = {};
   CalendarActionError? error;
   bool loadingDestinations = false;
+  bool destinationsLoaded = false;
   bool submitting = false;
   int _messageEpoch = 0;
 
@@ -56,6 +57,11 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
     final receipt = widget.message.executionReceipt;
     return receipt != null && receipt.execution.taskId == widget.message.callId;
   }
+
+  bool get calendarChangesAvailable =>
+      widget.controller.owners.actions != null &&
+      pendingCommands != null && destinationsLoaded &&
+      !loadingDestinations && destinations.isNotEmpty;
 
   CalendarAction? get selectedAction {
     final receipt = widget.message.executionReceipt;
@@ -70,10 +76,11 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
   @override
   void initState() {
     super.initState();
-    pendingCommands = ActionCommandReplay.forGateway(widget.controller.owners.actions);
+    final gateway = widget.controller.owners.actions;
+    pendingCommands = gateway == null ? null : ActionCommandReplay.forGateway(gateway);
     final proposals = this.proposals;
     artifactId = proposals.length == 1 ? proposals.single.id : null;
-    if (receiptMatches) unawaited(_loadDestinations());
+    if (receiptMatches && gateway != null) unawaited(_loadDestinations());
   }
 
   @override
@@ -81,7 +88,8 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
     super.didUpdateWidget(oldWidget);
     final gatewayChanged = oldWidget.controller.owners.actions != widget.controller.owners.actions;
     if (gatewayChanged) {
-      pendingCommands = ActionCommandReplay.forGateway(widget.controller.owners.actions);
+      final gateway = widget.controller.owners.actions;
+      pendingCommands = gateway == null ? null : ActionCommandReplay.forGateway(gateway);
       actionsByIntent.clear();
     }
     if (gatewayChanged || oldWidget.message.callId != widget.message.callId ||
@@ -95,7 +103,8 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       error = null;
       submitting = false;
       loadingDestinations = false;
-      if (receiptMatches) unawaited(_loadDestinations());
+      destinationsLoaded = false;
+      if (receiptMatches && widget.controller.owners.actions != null) unawaited(_loadDestinations());
     }
   }
 
@@ -108,8 +117,12 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
   Future<void> _loadDestinations() async {
     final messageEpoch = _messageEpoch;
     final gateway = widget.controller.owners.actions;
+    if (gateway == null) return;
     setState(() {
       loadingDestinations = true;
+      destinationsLoaded = false;
+      destinations = const [];
+      destinationRef = null;
       error = null;
     });
     try {
@@ -119,6 +132,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
         destinations = List.unmodifiable(values);
         destinationRef = values.length == 1 ? values.single.destinationRef : null;
         loadingDestinations = false;
+        destinationsLoaded = true;
       });
     } on Object catch (failure) {
       if (!mounted || messageEpoch != _messageEpoch) return;
@@ -138,11 +152,15 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
   }
 
   Future<void> _submit(AgentArtifact artifact) async {
+    final gateway = widget.controller.owners.actions;
+    final commands = pendingCommands;
     final receipt = widget.message.executionReceipt;
     final destination = destinationRef;
-    if (receipt == null ||
+    if (gateway == null || commands == null || !calendarChangesAvailable ||
+        receipt == null ||
         receipt.execution.taskId != widget.message.callId ||
         destination == null ||
+        !destinations.any((choice) => choice.destinationRef == destination) ||
         submitting ||
         !form.currentState!.validate()) {
       return;
@@ -158,8 +176,6 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       'intent': intent.toJson(),
     };
     final payloadKey = jsonEncode(payload);
-    final commands = pendingCommands;
-    final gateway = widget.controller.owners.actions;
     final messageEpoch = _messageEpoch;
     setState(() {
       submitting = true;
@@ -191,12 +207,12 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
   }
 
   Future<void> _refreshAction(CalendarAction action) async {
+    final gateway = widget.controller.owners.actions;
     final receipt = widget.message.executionReceipt;
     final selectedArtifact = artifactId;
-    if (submitting || receipt == null || selectedArtifact == null) return;
+    if (gateway == null || submitting || receipt == null || selectedArtifact == null) return;
     final key = _actionKey(receipt, selectedArtifact);
     final epoch = _messageEpoch;
-    final gateway = widget.controller.owners.actions;
     setState(() { submitting = true; error = null; });
     try {
       final observed = await gateway.inspect(action.actionRef);
@@ -217,6 +233,9 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
 
   String _statusText(AppLocalizations strings, CalendarAction? action) {
     if (action == null) {
+      if (widget.controller.owners.actions == null) {
+        return 'Calendar Actions are unavailable in this view.';
+      }
       if (widget.message.executionReceipt == null) {
         return 'This proposal is not ready to submit yet.';
       }
@@ -307,6 +326,9 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                     ? 'This proposal is not ready to submit yet. Refresh the conversation.'
                     : 'This proposal could not be verified. Refresh the conversation.',
               ),
+            ] else if (widget.controller.owners.actions == null) ...[
+              const SizedBox(height: 8),
+              const Text('Calendar Actions are unavailable in this view.'),
             ] else ...[
               const SizedBox(height: 12),
               if (artifacts.length > 1)
@@ -383,7 +405,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                 ],
                 FloeButton.filled(
                   onPressed: selectedArtifact == null ||
-                          loadingDestinations ||
+                          !calendarChangesAvailable ||
                           submitting ||
                           destinationRef == null
                       ? null
@@ -395,7 +417,8 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                 Text(currentAction.title),
                 if (error case final actionError?) Text(actionError.message),
                 FloeButton.text(
-                  onPressed: submitting ? null : () => _refreshAction(currentAction),
+                  onPressed: submitting || widget.controller.owners.actions == null
+                      ? null : () => _refreshAction(currentAction),
                   child: const Text('Refresh Action'),
                 ),
                 if (currentAction.status.state ==

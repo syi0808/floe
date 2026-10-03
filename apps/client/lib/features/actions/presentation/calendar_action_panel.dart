@@ -322,9 +322,17 @@ class ActionReviewDialog extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 12),
+            if (action.allowedActions.contains(ActionAllowedAction.approve) &&
+                !controller.calendarChangesAvailable) ...[
+              const Text('Calendar changes are unavailable. Refresh to check for writable Calendar destinations.'),
+              FloeButton.text(
+                onPressed: controller.busy ? null : controller.load,
+                child: Text(strings.actionReload),
+              ),
+            ],
             if (action.allowedActions.contains(ActionAllowedAction.approve))
               FloeButton.filled(
-                onPressed: controller.busy
+                onPressed: controller.busy || !controller.calendarChangesAvailable
                     ? null
                     : () => _decide(
                         controller,
@@ -444,6 +452,8 @@ void _decide(
   CalendarAction action,
   CalendarActionDecision decision,
 ) {
+  if (decision == CalendarActionDecision.approve &&
+      !controller.calendarChangesAvailable) return;
   unawaited(
     controller.decide(action, decision).then<void>(
       (_) {},

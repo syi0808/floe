@@ -59,6 +59,7 @@ pub fn project_run_snapshot(run: &RunReceipt) -> Result<RunSnapshot, AgentFailur
         aggregate_revision: run.aggregate_revision,
         executor_generation: run.executor_generation,
         state: run.state,
+        pending_terminal: run.pending_terminal,
         generated_reply: run.output.is_some(),
         issue: run.issue,
         attempt_refs: run.attempt_refs.clone(),
@@ -85,6 +86,7 @@ pub fn project_run_event(run: RunEventRecord) -> Result<RunSnapshot, AgentFailur
             && (run.generated_reply || run.issue.is_some() || run.interaction_refs.is_empty())
         || run.state != RunState::Blocked && !run.interaction_refs.is_empty()
         || run.state == RunState::Working && (run.generated_reply || run.issue.is_some())
+        || run.pending_terminal.is_some_and(|pending| pending.validate().is_err() || run.state != RunState::Working)
         || run.state == RunState::Completed && (!run.generated_reply || run.issue.is_some())
     {
         return Err(AgentFailure::StorageUnavailable);
@@ -118,11 +120,14 @@ pub fn project_run_event(run: RunEventRecord) -> Result<RunSnapshot, AgentFailur
         revision: run.aggregate_revision,
         executor_generation: run.executor_generation,
         state: match run.state {
+            RunState::Working if run.pending_terminal.is_some_and(|pending| pending.failure == AgentFailure::Cancelled) => PublicRunState::Cancelling,
+            RunState::Working if run.pending_terminal.is_some() => PublicRunState::Finalizing,
             RunState::Working => PublicRunState::Executing,
             RunState::Blocked => PublicRunState::Blocked,
             _ => PublicRunState::Finished,
         },
         progress: match run.state {
+            RunState::Working if run.pending_terminal.is_some() => "awaiting_task_settlement",
             RunState::Working => "executing",
             RunState::Blocked => "blocked",
             RunState::Completed => "completed",

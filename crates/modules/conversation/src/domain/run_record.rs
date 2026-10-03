@@ -95,6 +95,22 @@ impl RunState {
     }
 }
 
+/// An immutable request to stop a Run whose dispatched Task evidence has not
+/// settled yet. The Session remains active until the exact receipt is attached.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingRunTerminal {
+    pub failure: AgentFailure,
+    pub requested_from_revision: u64,
+}
+
+impl PendingRunTerminal {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.requested_from_revision != 1 { return Err(AgentFailure::StorageUnavailable); }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunReceipt {
     pub expert_environment: floe_experts::RunExpertEnvironmentIdentity,
@@ -106,6 +122,7 @@ pub struct RunReceipt {
     pub user_message_id: Uuid,
     pub request_digest: [u8; 32],
     pub state: RunState,
+    pub pending_terminal: Option<PendingRunTerminal>,
     pub output: Option<String>,
     pub coverage: DependencyCoverage,
     pub issue: Option<AgentFailure>,
@@ -121,6 +138,7 @@ pub struct RunReceipt {
     pub resume_lineage: u8,
     pub attempt_refs: Vec<Uuid>,
     pub unresolved_attempts: Vec<UnresolvedModelAttempt>,
+    pub unresolved_delegations: Vec<floe_agent_contract::TaskId>,
     pub task_refs: Vec<Uuid>,
 }
 
@@ -160,6 +178,14 @@ impl RunReceipt {
                     || !attempt.accounting.unknown_cost
             })
             || self.task_refs.len() > 64
+            || self.unresolved_delegations.len() > 64
+            || (!self.unresolved_delegations.is_empty() && matches!(self.state, RunState::Completed | RunState::Blocked))
+            || self.unresolved_delegations.iter().any(|id| !id.is_valid()
+                || !self.task_refs.contains(&id.as_uuid()))
+            || self.unresolved_delegations.iter().collect::<std::collections::HashSet<_>>().len()
+                != self.unresolved_delegations.len()
+            || self.pending_terminal.is_some_and(|pending| pending.validate().is_err()
+                || self.state != RunState::Working || self.aggregate_revision < 2)
             || self.attempt_refs.iter().any(Uuid::is_nil)
             || self.task_refs.iter().any(Uuid::is_nil)
             || self
@@ -235,7 +261,9 @@ impl RunReceipt {
 
     pub fn continuation(&self) -> Option<ContinuationRef> {
         (self.output.is_none()
+            && self.pending_terminal.is_none()
             && self.unresolved_attempts.is_empty()
+            && self.unresolved_delegations.is_empty()
             && matches!(
                 (self.state, self.issue),
                 (RunState::TimedOut, Some(AgentFailure::DeadlineExceeded))
@@ -392,6 +420,7 @@ pub struct RunRecord {
     pub initial_session_revision: u64,
     pub request_digest: [u8; 32],
     pub state: RunState,
+    pub pending_terminal: Option<PendingRunTerminal>,
     pub output: Option<String>,
     pub coverage: DependencyCoverage,
     pub issue: Option<AgentFailure>,
@@ -439,6 +468,8 @@ impl RunRecord {
             || self.resume_of == Some(self.run_id)
             || self.resume_lineage > MAX_RESUME_LINEAGE
             || self.journal_revision > 512
+            || self.pending_terminal.is_some_and(|pending| pending.validate().is_err()
+                || self.state != RunState::Working)
             || self
                 .blocked
                 .as_ref()
@@ -466,7 +497,8 @@ impl RunRecord {
         let valid = match self.state {
             RunState::Working => {
                 self.session_revision == admitted_revision
-                    && self.aggregate_revision == 1
+                    && (if self.pending_terminal.is_some() { self.aggregate_revision >= 2 }
+                        else { self.aggregate_revision == 1 })
                     && self.output.is_none()
                     && self.coverage == DependencyCoverage::Unknown
                     && self.issue.is_none()
@@ -508,15 +540,15 @@ impl RunRecord {
                         )
                 }
                 None => {
-                    self.session_revision == terminal_revision
-                        && self.aggregate_revision == 2
+                    self.session_revision >= terminal_revision
+                        && self.aggregate_revision >= 2
                         && self.coverage == DependencyCoverage::Unknown
                         && self.issue.is_some()
                 }
             },
             RunState::Cancelled | RunState::TimedOut | RunState::Interrupted => {
-                self.session_revision == terminal_revision
-                    && self.aggregate_revision == 2
+                self.session_revision >= terminal_revision
+                    && self.aggregate_revision >= 2
                     && self.output.is_none()
                     && self.coverage == DependencyCoverage::Unknown
                     && self.issue.is_some()

@@ -21,9 +21,10 @@ mod session;
 mod source_review;
 mod storage_projection;
 pub use storage_projection::{
-    RunAccountingProjection, apply_terminal, contract_message, interrupt_for_activation,
+    RunAccountingProjection, apply_terminal, contract_message,
     project_run_accounting, project_run_receipt, project_session_receipt, project_transcript,
     terminal_messages, validate_terminal_steps,
+    unresolved_run_delegations, project_lineage_accounting, defer_run_terminal,
 };
 
 pub use admission::{PreparedResume, ResumePreparationRequest, prepare_resume};

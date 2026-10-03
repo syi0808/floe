@@ -5,12 +5,12 @@
 use crate::android_vault_keys::AndroidVaultKeys as PlatformVaultKeys;
 #[cfg(not(target_os = "android"))]
 use floe_vault::KeyringVaultKeys as PlatformVaultKeys;
-use crate::{CallerContext, FloeCore, VaultLifecycleResult, VaultState};
+use crate::{CallerContext, FloeCore, VaultLifecycleFailureProjection, VaultLifecycleRecovery, VaultLifecycleResult, VaultState};
 use crate::local_context::LocalContextHost;
 use crate::owner_handles::ReadyOwners;
 use crate::ready_generation::ReadyGeneration;
 use floe_execution::{CancelReason, Cancellation};
-use floe_kernel::{AgentFailure, PersonId};
+use floe_kernel::{AgentFailure, AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction, AgentRetryPolicy, PersonId};
 use floe_vault::EncryptedAgentVault;
 use std::{
     collections::HashMap,
@@ -35,6 +35,33 @@ impl VaultLifecycleIntent {
     fn stage(self) -> &'static str {
         match self { Self::Create => "create",
             Self::Unlock => "unlock", Self::Lock => "lock" }
+    }
+}
+
+/// These failures retire the published generation before an outcome is exposed.
+fn requires_retirement(failure: AgentFailure) -> bool {
+    matches!(failure, AgentFailure::VaultUnavailable | AgentFailure::VaultLocked
+        | AgentFailure::StorageUnavailable | AgentFailure::Interrupted | AgentFailure::DeadlineExceeded)
+}
+
+pub(crate) fn project_failure(failure: AgentFailure, stage: &str) -> VaultLifecycleFailureProjection {
+    // Lock closes admission before draining. Other failures seal the client only
+    // when the lifecycle has retired the generation; recovery never replays work.
+    let seal_session = stage == "lock" || requires_retirement(failure);
+    let category = match failure {
+        AgentFailure::VaultLocked | AgentFailure::NotFound | AgentFailure::ConsentRequired => AgentFailureCategory::UserConfiguration,
+        AgentFailure::Conflict | AgentFailure::StaleContext | AgentFailure::UnsupportedVersion => AgentFailureCategory::Integrity,
+        AgentFailure::PolicyDenied | AgentFailure::CapabilityDenied => AgentFailureCategory::Security,
+        AgentFailure::VaultUnavailable | AgentFailure::StorageUnavailable | AgentFailure::Interrupted
+        | AgentFailure::DeadlineExceeded | AgentFailure::Cancelled | AgentFailure::BudgetExceeded => AgentFailureCategory::Transient,
+        _ => AgentFailureCategory::Internal,
+    };
+    VaultLifecycleFailureProjection {
+        failure, domain: AgentFailureDomain::Vault, category,
+        safe_actions: if seal_session { vec![AgentFailureSafeAction::ReopenVault] } else { vec![] },
+        retry_policy: AgentRetryPolicy::Never, retryable: false,
+        recovery: if seal_session { VaultLifecycleRecovery::ReopenVault } else { VaultLifecycleRecovery::None },
+        reload_required: seal_session, seal_session,
     }
 }
 
@@ -206,9 +233,7 @@ impl Worker {
                         let mut slot = published.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                         slot.failure = Some(failure);
                     }
-                    if matches!(outcome, Err(AgentFailure::VaultUnavailable | AgentFailure::VaultLocked
-                        | AgentFailure::Interrupted | AgentFailure::DeadlineExceeded))
-                    {
+                    if outcome.as_ref().err().is_some_and(|failure| requires_retirement(*failure)) {
                         if let Err(failure) = retire(&runtime, &core, &published, &mut current, job.id) {
                             shutdown_failure.get_or_insert(failure);
                         }

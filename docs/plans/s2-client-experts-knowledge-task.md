@@ -23,3 +23,13 @@ knowledge.memory.decide{candidate_id,decision:'approve'|'reject'} returns knowle
 Keep AppWireMemoryGateway/AgentMemoryController construction names where practical, remove old polling/Conversation settings proxies, and migrate both owned settings screens. App runtime composition will be updated by native coordinator from your exact exported interfaces. Preserve user-facing memory content/review behavior and existing visual style; do not add architecture details to UI.
 
 Return full owned files + patch and explicit unowned caller/callback changes. No tests or executable verification in this phase.
+
+## Native integration and S3 regression cases
+
+The integration preserves optional owner gateways used by preview composition, while production constructs one AppRuntime gateway per owner. Controller clear/dispose advances a generation; every asynchronous assignment, success result, fatal callback and finally notification must be fenced. An old response after lock/unlock cannot repopulate current state. Uncertain command payloads/IDs live in the app gateway and remain available for explicit retry after view replacement.
+
+Correlated owner Conflict/NotFound/InvalidInput/StaleContext may release a pending Experts/Knowledge command only because these mean a rejected transaction in the final owner path. Experts maps postcommit readback/projection/Directory-publication failures to storage uncertainty; storage rollback failure is also uncertain. A lost acknowledgement retains the exact immutable command body and ID. Review expiry is stale review, distinct from an observer deadline. Test both a definite rejected CAS followed by a new reviewed command and a committed-but-unacknowledged command followed by identical replay.
+
+Required source counts govern Task execution, not whether a user may clear a stored binding. The UI permits saving an empty selection under the owner-issued review and shows the missing requirement; the next Task must produce the actual typed Blocked receipt. It must not silently choose a candidate or prohibit removing an unavailable required source. Binding refresh/resume runs only after the actual replacement acknowledgement, never on opening settings.
+
+Knowledge decision replay must return its originally committed timestamp even when the retry's current clock changes. Changed candidate/kind under the same command must conflict. Acknowledged decisions followed by display-query failure stay acknowledged; retrying the display must not create another decision.

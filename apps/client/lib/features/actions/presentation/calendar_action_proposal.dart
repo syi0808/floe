@@ -54,7 +54,7 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
     destinationRef = destinations.isEmpty
         ? null
         : destinations.first.destinationRef;
-    if (!widget.controller.loaded || (event == null && !widget.controller.destinationsLoaded)) {
+    if (!widget.controller.loaded || !widget.controller.destinationsLoaded) {
       unawaited(widget.controller.load());
     }
   }
@@ -74,12 +74,15 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
   }
 
   Future<void> save() async {
-    if (saving || submittedAction != null || !form.currentState!.validate()) {
+    if (saving || widget.controller.busy ||
+        !widget.controller.calendarChangesAvailable ||
+        submittedAction != null || !form.currentState!.validate()) {
       return;
     }
     final event = widget.event;
     final target = event?.actionTarget;
-    if (event == null && destinationRef == null ||
+    if (event == null && !widget.controller.destinations.any(
+          (choice) => choice.destinationRef == destinationRef) ||
         event != null && target == null) {
       return;
     }
@@ -164,9 +167,10 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
             !saving &&
             !widget.controller.busy &&
             widget.controller.error == null &&
+            widget.controller.calendarChangesAvailable &&
             submittedAction == null &&
             (event == null
-                ? destinationRef != null && widget.controller.destinationsLoaded && destinationError == null
+                ? destinations.any((choice) => choice.destinationRef == destinationRef)
                 : target != null);
         return FloeDetailDialog(
           title: event == null ? 'New event' : 'Edit event',
@@ -246,9 +250,12 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
                         ? null
                         : strings.actionFormInvalid,
                   ),
-                  if (event == null && destinationError != null) ...[
+                  if (!widget.controller.calendarChangesAvailable) ...[
                     const SizedBox(height: 16),
-                    Text(destinationError.message),
+                    Text(widget.controller.busy
+                        ? 'Checking whether Calendar changes are available…'
+                        : 'Calendar changes are unavailable. No writable Calendar destination could be confirmed.'),
+                    if (destinationError != null) Text(destinationError.message),
                     FloeButton.text(
                       onPressed: widget.controller.busy ? null : widget.controller.load,
                       child: Text(strings.actionReload),
@@ -292,11 +299,6 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
                         event == null ? 'Create event' : 'Save changes',
                       ),
                     ),
-                  if (event == null &&
-                      destinations.isEmpty &&
-                      widget.controller.error == null &&
-                      widget.controller.destinationsLoaded && destinationError == null)
-                    const Text('No Calendar destinations are currently available.'),
                 ],
               ),
             ),

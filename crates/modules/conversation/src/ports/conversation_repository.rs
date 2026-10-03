@@ -3,10 +3,15 @@ use crate::{
     RecoveryReceipt, RecoveryRequest, RunReceipt, RunTerminal, TurnAdmission, TurnAdmissionRequest,
 };
 use floe_agent_contract::{BoxFuture, ExecutionJournal};
-use floe_kernel::{AgentFailure, RunId};
+use floe_kernel::{AgentFailure, OwnerActor, RunId};
 use std::sync::Arc;
 
 pub trait ConversationRepository: Send + Sync {
+    fn recovery_runs<'a>(&'a self, actor: &'a OwnerActor, after: Option<RunId>, limit: usize)
+        -> BoxFuture<'a, Result<crate::RecoveryPage<RunId, RunId>, AgentFailure>>;
+    /// Complete an immutable deferred failure only after all Task results exist.
+    fn settle_pending_terminal<'a>(&'a self, actor: &'a OwnerActor, run_id: RunId)
+        -> BoxFuture<'a, Result<RunReceipt, AgentFailure>>;
     /// Settle only an already-recorded delegation intent after owner recovery.
     fn reconcile_delegation<'a>(&'a self, run_id: RunId, receipt: floe_agent_contract::TaskReceipt)
         -> BoxFuture<'a, Result<(), AgentFailure>>;

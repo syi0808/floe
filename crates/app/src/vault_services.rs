@@ -2,6 +2,7 @@
 use uuid::Uuid;
 use crate::{AgentFailure, AppComposition, CallerContext};
 use crate::vault_lifecycle::VaultLifecycleIntent;
+use floe_kernel::{AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction, AgentRetryPolicy};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum VaultState { #[default] Missing, Locked, Ready, Unavailable }
@@ -11,6 +12,26 @@ pub enum VaultLifecycleCommand { Create, Unlock, Lock }
 pub struct VaultLifecycleResult {
     pub operation_id: Uuid, pub stage: String, pub done: bool,
     pub state: Option<VaultState>, pub failure: Option<AgentFailure>,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VaultLifecycleRecovery { None, ReopenVault }
+/// Recovery for the physical Vault lifecycle, projected before wire conversion.
+#[derive(Clone, Debug)]
+pub struct VaultLifecycleFailureProjection {
+    pub failure: AgentFailure,
+    pub domain: AgentFailureDomain,
+    pub category: AgentFailureCategory,
+    pub safe_actions: Vec<AgentFailureSafeAction>,
+    pub retry_policy: AgentRetryPolicy,
+    pub retryable: bool,
+    pub recovery: VaultLifecycleRecovery,
+    pub reload_required: bool,
+    pub seal_session: bool,
+}
+impl VaultLifecycleResult {
+    pub fn failure_projection(&self) -> Option<VaultLifecycleFailureProjection> {
+        self.failure.map(|failure| crate::vault_lifecycle::project_failure(failure, &self.stage))
+    }
 }
 pub trait VaultLifecycleCommands {
     fn vault_command(&self, caller:&CallerContext, operation_id:Uuid, command:VaultLifecycleCommand)

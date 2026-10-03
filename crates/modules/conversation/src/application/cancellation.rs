@@ -79,6 +79,16 @@ pub struct RunCancellationRegistry {
 }
 
 impl RunCancellationRegistry {
+    pub(crate) fn is_active(&self, run_id: RunId, principal: &str) -> Result<bool, AgentFailure> {
+        validate_principal(principal)?;
+        let state = self.state.lock().map_err(|_| AgentFailure::Interrupted)?;
+        match state.runs.get(&run_id) {
+            Some(tracked) if tracked.principal != principal => Err(AgentFailure::PolicyDenied),
+            Some(tracked) => Ok(tracked.cancellation.is_some()),
+            None => Ok(false),
+        }
+    }
+
     pub fn cancel_run(&self, request: CancelRunRequest) -> Result<CancelRunStatus, AgentFailure> {
         validate_principal(&request.principal)?;
         if !request.run_id.is_valid() {

@@ -91,5 +91,6 @@ pub use owner_handles::{ReadyOwners, host_scope};
 
 #[cfg(unix)]
 pub use vault_services::{
-    VaultLifecycleCommand, VaultLifecycleCommands, VaultLifecycleQueries, VaultLifecycleResult, VaultState,
+    VaultLifecycleCommand, VaultLifecycleCommands, VaultLifecycleFailureProjection, VaultLifecycleQueries,
+    VaultLifecycleRecovery, VaultLifecycleResult, VaultState,
 };

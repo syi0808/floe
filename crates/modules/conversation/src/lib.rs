@@ -35,7 +35,7 @@ pub use domain::{
     MAX_RESUME_LINEAGE, MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES,
     MAX_REVIEWED_SOURCE_BYTES, MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN,
     MAX_TARGET_BUNDLE_MEMBERS, MAX_TURN_TEXT_BYTES, NavigationDestination, NavigationOnlyTarget,
-    PriorExhaustion, RecoveryReceipt, RecoveryRequest, ReviewedTarget,
+    PriorExhaustion, PendingRunTerminal, RecoveryReceipt, RecoveryRequest, ReviewedTarget,
     BlockedInteractionLink, RunBlockOrigin, RunBlockRecord, RunQuery, RunReceipt, RunRecord, RunState, RunTerminal,
     SessionReadRequest, SessionReceipt, SessionRequest, StartSessionRequest, StartTurn,
     SupersedeInteraction, TurnAdmission, TurnAdmissionRequest, TurnMode, UnresolvedModelAttempt,
@@ -52,6 +52,7 @@ pub use floe_agent_contract::{
 pub use floe_agent_runtime::FinalPayloadValidator;
 pub use ports::{
     ConversationRepository, InteractionRepository, SessionArchiveRepository, SessionRepository,
+    RecoveryPage, InteractionRecoveryCursor,
 };
 
 pub use turn::{
@@ -70,6 +71,7 @@ pub use application::{
     RunAccountingProjection, apply_terminal, build_resume_required, contract_message,
     project_run_accounting, project_run_receipt, project_session_receipt, project_transcript,
     terminal_messages, validate_terminal_steps,
+    unresolved_run_delegations, project_lineage_accounting, defer_run_terminal,
 };
 
 pub use application::{apply_source_interaction, recover_source_interaction};
@@ -103,7 +105,6 @@ pub use application::{
     project_run_snapshot,
 };
 
-pub use application::interrupt_for_activation;
 
 pub use application::{ConversationFailure, ConversationRecovery, project_conversation_failure};
 

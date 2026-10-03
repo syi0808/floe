@@ -986,21 +986,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub async fn resolving_conversation_interactions(
         &self,
-        person_id: PersonId,
+        actor: &floe_kernel::OwnerActor,
+        after: Option<floe_conversation::InteractionRecoveryCursor>,
         limit: usize,
-    ) -> Result<Vec<ConversationInteraction>, AgentFailure> {
+    ) -> Result<floe_conversation::RecoveryPage<ConversationInteraction, floe_conversation::InteractionRecoveryCursor>, AgentFailure> {
+        actor.validate()?;
+        let person_id = actor.person_id;
         if person_id != self.person_id {
             return Err(AgentFailure::CapabilityDenied);
         }
-        if limit == 0 || limit > 64 {
+        if limit == 0 || limit > 64 || after.is_some_and(|cursor| cursor.interaction_id.is_nil()) {
             return Err(AgentFailure::InvalidInput);
         }
         let connection = self.connection()?;
         if !table_exists(&connection, "agent_conversation_interactions").await? {
             self.check_access()?;
-            return Ok(Vec::new());
+            return Ok(floe_conversation::RecoveryPage { items: Vec::new(), next_cursor: None });
         }
-        let mut rows = connection.query("SELECT interaction_id FROM agent_conversation_interactions WHERE person_id = ? AND state = 'resolving' ORDER BY created_at, interaction_id LIMIT ?", (person_id.to_string(), integer(limit as u64 + 1)?)).await.map_err(storage)?;
+        let created = after.map_or(i64::MIN, |cursor| cursor.created_at_unix_ms);
+        let id = after.map_or_else(String::new, |cursor| cursor.interaction_id.to_string());
+        let mut rows = connection.query("SELECT interaction_id FROM agent_conversation_interactions WHERE person_id = ? AND json_extract(payload, '$.audit.device_id') = ? AND state = 'resolving' AND (created_at > ? OR (created_at = ? AND interaction_id > ?)) ORDER BY created_at, interaction_id LIMIT ?", (person_id.to_string(), actor.device_id.clone(), created, created, id, integer(limit as u64 + 1)?)).await.map_err(storage)?;
         let mut result = Vec::new();
         while let Some(row) = rows.next().await.map_err(storage)? {
             let id =
@@ -1008,15 +1013,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let record = read_interaction(&connection, person_id, id)
                 .await?
                 .ok_or(AgentFailure::StorageUnavailable)?;
+            if record.audit.device_id != actor.device_id { return Err(AgentFailure::StorageUnavailable); }
             if !matches!(record.state, InteractionState::Resolving { .. }) {
                 return Err(AgentFailure::Conflict);
             }
             result.push(record);
-            if result.len() > limit {
-                return Err(AgentFailure::BudgetExceeded);
-            }
         }
+        let more = result.len() > limit;
+        result.truncate(limit);
+        let next_cursor = if more { result.last().map(|record| floe_conversation::InteractionRecoveryCursor {
+            created_at_unix_ms: record.created_at_unix_ms, interaction_id: record.id }) } else { None };
         self.check_access()?;
-        Ok(result)
+        Ok(floe_conversation::RecoveryPage { items: result, next_cursor })
     }
 }

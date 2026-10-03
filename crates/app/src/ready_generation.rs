@@ -48,6 +48,12 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
         let vault = Arc::new(vault);
         let mut guard = ActivationGuard { vault: vault.clone(), core: core.clone(), owners: None, armed: true, generation: None };
         let scope = crate::host_scope(operation_id, cancellation.clone(), Duration::from_secs(55));
+        // Tasks settle abandoned journals before any parent recovery. Conversation
+        // subsequently reloads each exact receipt from its acknowledged intent.
+        let task_repository = Arc::new(floe_vault::VaultTaskRepository::new(vault.clone()));
+        let (tasks, _) = scope.run(floe_experts::TaskCoordinator::activate(floe_experts::Directory::default(),
+            task_repository.clone(), floe_conversation::CONVERSATION_PURPOSE, floe_agent_contract::MAX_OUTPUT_BYTES)).await?;
+        let tasks = Arc::new(tasks);
         let activation = scope.run(vault.activate_conversation_executor()).await?;
         let sources = crate::connection_observe::SourceServices::new(vault.clone(), core.clone(), local_context, actor.clone())?;
         core.product_gateway.publish(activation.executor_generation, actor.clone(),
@@ -66,10 +72,6 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             model: model.clone(), projection: learner_projection,
             clock: Arc::new(floe_knowledge::SystemKnowledgeClock), learner_budget: floe_knowledge::LearnerBudget::default(),
         })?);
-        let task_repository = Arc::new(floe_vault::VaultTaskRepository::new(vault.clone()));
-        let (tasks, _) = scope.run(floe_experts::TaskCoordinator::activate(floe_experts::Directory::default(),
-            task_repository.clone(), floe_conversation::CONVERSATION_PURPOSE, floe_agent_contract::MAX_OUTPUT_BYTES)).await?;
-        let tasks = Arc::new(tasks);
         let context = Arc::new(floe_context::ExpertContextDependencies {
             actor: actor.clone(), manifests: floe_experts_builtin::manifests(),
             connections: core.store.clone(), grants: vault.clone(), personal: sources.personal.clone(),

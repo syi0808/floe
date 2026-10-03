@@ -257,7 +257,7 @@ fn vault_result(result: floe_app::VaultLifecycleResult) -> floe_protocol::VaultL
         operation_id: result.operation_id,
         done: result.done,
         state: result.state.map(crate::conversion::owners::vault_state_dto),
-        failure: result.failure.as_ref().map(|failure| {
+        failure: result.failure_projection().map(|failure| {
             crate::conversion::owners::failure_envelope(
                 failure,
                 &result.stage,

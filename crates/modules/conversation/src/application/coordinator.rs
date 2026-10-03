@@ -161,10 +161,8 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
             TurnMode::Resume(reference) => {
                 let pending = self
                     .repository
-                    .pending_resume_requests(64)
+                    .pending_resume_request(actor, reference.origin_run_id)
                     .await?
-                    .into_iter()
-                    .find(|pending| pending.origin_run_id == reference.origin_run_id)
                     .ok_or(AgentFailure::Conflict)?;
                 self.repository
                     .claim_resume(crate::ResumeChildAdmission {
@@ -247,7 +245,7 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
         request: TurnRequest,
         ports: ConversationPorts<'_>,
         prepared: PreparedRun,
-        _cancellation_guard: super::cancellation::RunCancellationGuard,
+        _cancellation_guard: &super::cancellation::RunCancellationGuard,
     ) -> Result<RunReceipt, AgentFailure> {
         let PreparedRun {
             admitted,

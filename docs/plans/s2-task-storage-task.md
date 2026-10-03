@@ -1,3 +1,5 @@
+Historical S2 task handoff/inventory, retained for provenance. Its implementation is complete; current source and the central execution status govern remaining work. Do not restart the handoff from this file.
+
 # Implement canonical Vault Task storage
 
 Implementation handoff for the saved-cloud worker. Frozen owner-contract checkpoint: `735a8b4f`. The coordinator will publish the shared bundle before starting this task. Work on the coordinator-provided branch and source snapshot; do not fetch an unrelated baseline or preserve the obsolete Task API for compatibility.

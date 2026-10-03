@@ -172,39 +172,35 @@ impl<Keys: VaultKeyProvider> VaultConversationRepository<Keys> {
         Ok(())
     }
 
-    async fn attach_run_references(
-        &self,
-        mut receipt: RunReceipt,
-    ) -> Result<RunReceipt, AgentFailure> {
-        let entries = self
-            .vault
-            .conversation_journal(receipt.run_id)
-            .await?
-            .into_iter()
-            .map(|entry| {
-                let event = serde_json::from_str::<JournalEvent>(&entry.payload)
-                    .map_err(|_| AgentFailure::StorageUnavailable)?;
-                if entry.kind != journal_event_kind(&event) {
-                    return Err(AgentFailure::StorageUnavailable);
-                }
-                Ok(JournalEntry {
-                    revision: entry.revision,
-                    event,
-                })
-            })
-            .collect::<Result<Vec<_>, AgentFailure>>()?;
-        let accounting = floe_conversation::project_run_accounting(&receipt, &entries)?;
-        receipt.attempt_refs = accounting.attempt_refs;
-        receipt.task_refs = accounting.task_refs;
-        receipt.unresolved_attempts = accounting.unresolved_attempts;
-        receipt.validate()?;
-        Ok(receipt)
+    async fn attach_run_references(&self, receipt: RunReceipt) -> Result<RunReceipt, AgentFailure> {
+        let current = self.vault.accounted_conversation_receipt(receipt.run_id).await?
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        if current.command_id != receipt.command_id || current.principal != receipt.principal
+            || current.device_id != receipt.device_id || current.session_id != receipt.session_id
+            || current.request_digest != receipt.request_digest || current.expert_environment != receipt.expert_environment
+            || current.executor_generation != receipt.executor_generation
+            || current.aggregate_revision < receipt.aggregate_revision {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        Ok(current)
     }
+
 }
 
 impl<Keys: VaultKeyProvider + 'static> ConversationRepository
     for VaultConversationRepository<Keys>
 {
+    fn recovery_runs<'a>(&'a self, actor: &'a floe_kernel::OwnerActor, after: Option<RunId>, limit: usize)
+        -> BoxFuture<'a, Result<floe_conversation::RecoveryPage<RunId, RunId>, AgentFailure>> {
+        Box::pin(async move { self.vault.conversation_recovery_runs(actor, after, limit).await })
+    }
+    fn settle_pending_terminal<'a>(&'a self, actor: &'a floe_kernel::OwnerActor, run_id: RunId)
+        -> BoxFuture<'a, Result<RunReceipt, AgentFailure>> {
+        Box::pin(async move {
+            let record = self.vault.settle_pending_conversation_terminal(actor, run_id).await?;
+            self.attach_run_references(floe_conversation::project_run_receipt(record)?).await
+        })
+    }
     fn reconcile_delegation<'a>(&'a self, run_id: RunId, receipt: floe_agent_contract::TaskReceipt)
         -> BoxFuture<'a, Result<(), AgentFailure>> {
         Box::pin(async move { self.vault.reconcile_conversation_delegation(run_id, receipt).await })
@@ -499,20 +495,31 @@ impl<Keys: VaultKeyProvider + 'static> InteractionRepository for VaultConversati
     }
     fn resolving_interactions<'a>(
         &'a self,
-        person_id: floe_kernel::PersonId,
+        actor: &'a floe_kernel::OwnerActor,
+        after: Option<floe_conversation::InteractionRecoveryCursor>,
         limit: usize,
-    ) -> BoxFuture<'a, Result<Vec<ConversationInteraction>, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<floe_conversation::RecoveryPage<ConversationInteraction, floe_conversation::InteractionRecoveryCursor>, AgentFailure>> {
         Box::pin(async move {
             self.vault
-                .resolving_conversation_interactions(person_id, limit)
+                .resolving_conversation_interactions(actor, after, limit)
                 .await
         })
     }
     fn pending_resume_requests<'a>(
         &'a self,
+        actor: &'a floe_kernel::OwnerActor,
+        after: Option<RunId>,
         limit: usize,
-    ) -> BoxFuture<'a, Result<Vec<floe_conversation::ResumeRequired>, AgentFailure>> {
-        Box::pin(async move { self.vault.pending_conversation_resume_requests(limit).await })
+    ) -> BoxFuture<'a, Result<floe_conversation::RecoveryPage<floe_conversation::ResumeRequired, RunId>, AgentFailure>> {
+        Box::pin(async move { self.vault.pending_conversation_resume_requests(actor, after, limit).await })
+    }
+    fn pending_resume_request<'a>(&'a self, actor: &'a floe_kernel::OwnerActor, origin: RunId)
+        -> BoxFuture<'a, Result<Option<floe_conversation::ResumeRequired>, AgentFailure>> {
+        Box::pin(async move { self.vault.pending_conversation_resume_request(actor, origin).await })
+    }
+    fn reconcile_resume_request<'a>(&'a self, actor: &'a floe_kernel::OwnerActor, origin: RunId)
+        -> BoxFuture<'a, Result<Option<floe_conversation::ResumeRequired>, AgentFailure>> {
+        Box::pin(async move { self.vault.reconcile_conversation_resume_request(actor, origin).await })
     }
     fn claim_resume<'a>(
         &'a self,

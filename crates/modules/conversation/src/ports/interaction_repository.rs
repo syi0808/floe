@@ -1,11 +1,22 @@
 use floe_agent_contract::BoxFuture;
-use floe_kernel::{AgentFailure, PersonId, RunId};
+use floe_kernel::{AgentFailure, OwnerActor, PersonId, RunId};
 use uuid::Uuid;
 
 use crate::{
     ConversationInteraction, DecisionAdmission, ExpireInteraction, ExpireOutcome,
     InteractionDecision, SupersedeInteraction,
 };
+
+pub struct RecoveryPage<Item, Cursor> {
+    pub items: Vec<Item>,
+    pub next_cursor: Option<Cursor>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InteractionRecoveryCursor {
+    pub created_at_unix_ms: i64,
+    pub interaction_id: Uuid,
+}
 
 /// Durable Conversation interaction storage.
 ///
@@ -17,9 +28,10 @@ use crate::{
 pub trait InteractionRepository: Send + Sync {
     fn resolving_interactions<'a>(
         &'a self,
-        person_id: PersonId,
+        actor: &'a OwnerActor,
+        after: Option<InteractionRecoveryCursor>,
         limit: usize,
-    ) -> BoxFuture<'a, Result<Vec<ConversationInteraction>, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<RecoveryPage<ConversationInteraction, InteractionRecoveryCursor>, AgentFailure>>;
     fn admit_refresh<'a>(
         &'a self,
         request: crate::InteractionRefresh,
@@ -30,8 +42,15 @@ pub trait InteractionRepository: Send + Sync {
     ) -> BoxFuture<'a, Result<crate::InteractionResolutionReceipt, AgentFailure>>;
     fn pending_resume_requests<'a>(
         &'a self,
+        actor: &'a OwnerActor,
+        after: Option<RunId>,
         limit: usize,
-    ) -> BoxFuture<'a, Result<Vec<crate::ResumeRequired>, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<RecoveryPage<crate::ResumeRequired, RunId>, AgentFailure>>;
+    fn pending_resume_request<'a>(&'a self, actor: &'a OwnerActor, origin: RunId)
+        -> BoxFuture<'a, Result<Option<crate::ResumeRequired>, AgentFailure>>;
+    /// Retire only a request whose exact Session has moved on; no child is admitted.
+    fn reconcile_resume_request<'a>(&'a self, actor: &'a OwnerActor, origin: RunId)
+        -> BoxFuture<'a, Result<Option<crate::ResumeRequired>, AgentFailure>>;
     fn claim_resume<'a>(
         &'a self,
         request: crate::ResumeChildAdmission,

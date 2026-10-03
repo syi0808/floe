@@ -16,6 +16,7 @@ pub fn project_run_receipt(record: crate::RunRecord) -> Result<RunReceipt, Agent
         user_message_id: record.user_message_id,
         request_digest: record.request_digest,
         state: record.state,
+        pending_terminal: record.pending_terminal,
         output: record.output,
         coverage: record.coverage,
         issue: record.issue,
@@ -31,6 +32,7 @@ pub fn project_run_receipt(record: crate::RunRecord) -> Result<RunReceipt, Agent
         resume_lineage: record.resume_lineage,
         attempt_refs: vec![],
         unresolved_attempts: vec![],
+        unresolved_delegations: vec![],
         task_refs: vec![],
     };
     receipt.validate()?;
@@ -210,6 +212,7 @@ pub struct RunAccountingProjection {
     pub attempt_refs: Vec<Uuid>,
     pub task_refs: Vec<Uuid>,
     pub unresolved_attempts: Vec<crate::UnresolvedModelAttempt>,
+    pub unresolved_delegations: Vec<floe_agent_contract::TaskId>,
 }
 
 /// Project acknowledged charges and unresolved conservative ceilings from the
@@ -239,7 +242,94 @@ pub fn project_run_accounting(
         attempt_refs: projected.attempt_refs,
         task_refs: projected.task_refs.into_iter().map(|id| id.as_uuid()).collect(),
         unresolved_attempts: projected.unresolved_attempts,
+        unresolved_delegations: pending_delegations(entries).into_iter().map(|request| request.task_id).collect(),
     })
+}
+
+fn pending_delegations(entries: &[crate::JournalEntry]) -> Vec<floe_agent_contract::DelegationRequest> {
+    let mut pending = std::collections::BTreeMap::new();
+    for entry in entries {
+        match &entry.event {
+            floe_agent_contract::JournalEvent::DelegationIntent { request } => { pending.insert(request.task_id, request.clone()); }
+            floe_agent_contract::JournalEvent::DelegationResult { receipt } => { pending.remove(&receipt.task_id); }
+            _ => {}
+        }
+    }
+    pending.into_values().collect()
+}
+
+pub fn unresolved_run_delegations(receipt: &RunReceipt, entries: &[crate::JournalEntry])
+    -> Result<Vec<floe_agent_contract::DelegationRequest>, AgentFailure>
+{
+    crate::validate_run_journal(receipt, entries)?;
+    Ok(pending_delegations(entries))
+}
+
+/// Oldest-to-newest continuation accounting. Root attempts are counted once
+/// per Run; the common aggregator deduplicates immutable Task receipts.
+pub fn project_lineage_accounting(chain: &[(RunReceipt, Vec<crate::JournalEntry>)])
+    -> Result<RunAccountingProjection, AgentFailure>
+{
+    if chain.is_empty() || chain.len() > 4 { return Err(AgentFailure::StorageUnavailable); }
+    let mut own = Vec::new(); let mut delegated = Vec::new();
+    let mut tasks = std::collections::BTreeSet::new();
+    let mut tools = std::collections::BTreeSet::new();
+    let mut pending = std::collections::BTreeSet::new();
+    let mut runs = std::collections::HashSet::new();
+    let mut iterations = 0u32;
+    for (index, (receipt, journal)) in chain.iter().enumerate() {
+        receipt.validate()?;
+        if !runs.insert(receipt.run_id) { return Err(AgentFailure::StorageUnavailable); }
+        if index == 0 && receipt.continuation_of.is_some() { return Err(AgentFailure::StorageUnavailable); }
+        if index > 0 {
+            let parent = &chain[index - 1].0;
+            if receipt.continuation_of != Some(parent.run_id)
+                || parent.pending_terminal.is_some() || parent.output.is_some()
+                || !matches!((parent.state, parent.issue),
+                    (crate::RunState::TimedOut, Some(AgentFailure::DeadlineExceeded))
+                        | (crate::RunState::Failed, Some(AgentFailure::BudgetExceeded)))
+                || receipt.continuation_executor_generation != Some(parent.executor_generation)
+                || receipt.continuation_level != parent.continuation_level + 1
+                || receipt.session_id != parent.session_id || receipt.principal != parent.principal
+                || receipt.device_id != parent.device_id || receipt.user_message_id != parent.user_message_id {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+        }
+        let projected = floe_agent_runtime::project_execution_journal(
+            &super::recovery::journal_binding(receipt, journal), journal,
+            floe_agent_runtime::JournalProjectionMode::DurablePrefix)?;
+        own.push(projected.own_accounting);
+        delegated.extend(projected.delegated_receipts);
+        tasks.extend(projected.task_refs.into_iter().map(|id| id.as_uuid()));
+        pending.extend(pending_delegations(journal).into_iter().map(|request| request.task_id));
+        iterations = iterations.checked_add(projected.completed_iterations).ok_or(AgentFailure::BudgetExceeded)?;
+        for entry in journal { if let floe_agent_contract::JournalEvent::ToolIntent { call } = &entry.event { tools.insert(call.call_id); } }
+    }
+    let total = floe_agent_runtime::aggregate_model_accounting(&own, &delegated)?;
+    Ok(RunAccountingProjection {
+        usage: crate::AgentUsage { unknown_token_attempts: total.unknown_token_attempts,
+            unknown_cost_attempts: total.unknown_cost_attempts, model_attempts: total.usage.attempts,
+            estimated_tokens: total.usage.estimated_tokens, estimated_cost_micros: total.usage.estimated_cost_micros,
+            iterations, capability_calls: u32::try_from(tools.len()).map_err(|_| AgentFailure::BudgetExceeded)?,
+            tokens: total.usage.tokens, cost_micros: total.usage.cost_micros },
+        attempt_refs: total.attempt_refs, task_refs: tasks.into_iter().collect(),
+        unresolved_attempts: total.unresolved_attempts, unresolved_delegations: pending.into_iter().collect(),
+    })
+}
+
+pub fn defer_run_terminal(record: &crate::RunRecord, failure: AgentFailure)
+    -> Result<crate::RunRecord, AgentFailure>
+{
+    record.validate(record.person_id)?;
+    if record.state != crate::RunState::Working { return Err(AgentFailure::Conflict); }
+    if let Some(pending) = record.pending_terminal {
+        return if pending.failure == failure { Ok(record.clone()) } else { Err(AgentFailure::Conflict) };
+    }
+    let mut next = record.clone();
+    next.pending_terminal = Some(crate::PendingRunTerminal { failure, requested_from_revision: record.aggregate_revision });
+    next.aggregate_revision = next.aggregate_revision.checked_add(1).ok_or(AgentFailure::BudgetExceeded)?;
+    next.validate(next.person_id)?;
+    Ok(next)
 }
 
 pub fn validate_terminal_steps(
@@ -290,6 +380,11 @@ pub fn apply_terminal(
     }
     let receipt = project_run_receipt(record.clone())?;
     let accounting = project_run_accounting(&receipt, journal)?;
+    if !accounting.unresolved_delegations.is_empty() { return Err(AgentFailure::Conflict); }
+    if record.pending_terminal.is_some_and(|pending| terminal.output.is_some()
+        || terminal.issue != Some(pending.failure) || terminal.state != RunTerminal::from_failure(pending.failure).state) {
+        return Err(AgentFailure::Conflict);
+    }
     if matches!(
         terminal.state,
         crate::RunState::Completed | crate::RunState::Blocked
@@ -354,6 +449,7 @@ pub fn apply_terminal(
         .ok_or(AgentFailure::Conflict)?;
     let next = crate::RunRecord {
         state: terminal.state,
+        pending_terminal: None,
         output: terminal.output.clone(),
         coverage: terminal.coverage.clone(),
         issue: terminal.issue,
@@ -367,28 +463,4 @@ pub fn apply_terminal(
     };
     next.validate(record.person_id)?;
     Ok((next, session))
-}
-
-/// Activation interrupts abandoned work under a strictly newer executor fence.
-/// All acknowledged and unresolved accounting comes from the original journal.
-pub fn interrupt_for_activation(
-    record: &crate::RunRecord,
-    session: &crate::AgentSession,
-    journal: &[crate::JournalEntry],
-    next_generation: u64,
-) -> Result<(crate::RunRecord, crate::AgentSession), AgentFailure> {
-    if record.state != crate::RunState::Working || next_generation <= record.executor_generation {
-        return Err(AgentFailure::Conflict);
-    }
-    let receipt = project_run_receipt(record.clone())?;
-    super::recovery::validate_run_journal(&receipt, journal)?;
-    let (mut record, session) = apply_terminal(
-        record,
-        session,
-        &RunTerminal::from_failure(AgentFailure::Interrupted),
-        journal,
-    )?;
-    record.executor_generation = next_generation;
-    record.validate(session.person_id)?;
-    Ok((record, session))
 }

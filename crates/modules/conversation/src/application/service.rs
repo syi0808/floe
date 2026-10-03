@@ -10,9 +10,11 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, Notify};
 use tokio::task::JoinSet;
 use uuid::Uuid;
+
+mod recovery_driver;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandReceipt {
@@ -197,6 +199,8 @@ struct ServiceState<R, S, T> {
     closing: AtomicBool,
     admission: RwLock<()>,
     tasks: Mutex<JoinSet<()>>,
+    recovery_started: AtomicBool,
+    recovery_wake: Notify,
 }
 
 impl<R, S, T> ConversationService<R, S, T>
@@ -229,6 +233,8 @@ where
                 closing: AtomicBool::new(false),
                 admission: RwLock::new(()),
                 tasks: Mutex::new(JoinSet::new()),
+                recovery_started: AtomicBool::new(false),
+                recovery_wake: Notify::new(),
             }),
         })
     }
@@ -326,6 +332,10 @@ where
         let mut tasks = self.tasks.lock().await;
         while tasks.try_join_next().is_some() {}
         tasks.spawn(async move {
+            let _wake = recovery_driver::WakeOnDrop(&state.recovery_wake);
+            // Keep the retained-driver proof through outer error settlement.
+            // The wake is declared first so this guard drops before notification.
+            let driver_guard = guard;
             let mut request = request;
             let outcome = async {
                 let _foreground = state.dependencies.knowledge.foreground_lease()?;
@@ -370,7 +380,7 @@ where
                             validator: &super::manager_policy::ManagerPayloadValidator,
                         },
                         prepared,
-                        guard,
+                        &driver_guard,
                     )
                     .await
             }
@@ -397,73 +407,8 @@ where
             if let Ok(receipt) = settled {
                 let _ = state.events.publish_run(&receipt);
             }
-            if !state.closing.load(Ordering::Acquire) {
-                let ledger = BudgetLedger::new(state.config.budget, Default::default());
-                let scope = ExecutionScope::root(
-                    state.shutdown.child_scope(),
-                    tokio::time::Instant::now() + state.config.max_run_duration,
-                    ledger.work_lease(),
-                    TraceContext::new(Uuid::new_v4()),
-                );
-                let _ = state.resume_pending(&actor, &scope).await;
-            }
         });
         Ok(CommandReceipt::from(&receipt))
-    }
-
-    fn resume_pending<'a>(
-        self: &'a Arc<Self>,
-        actor: &'a OwnerActor,
-        scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<Vec<CommandReceipt>, AgentFailure>> {
-        Box::pin(async move {
-            self.check(actor)?;
-            let pending = scope
-                .run(self.dependencies.repository.pending_resume_requests(64))
-                .await?;
-            let mut receipts = Vec::new();
-            for pending in pending {
-                if pending.person_id != actor.person_id || pending.device_id != actor.device_id {
-                    continue;
-                }
-                let prepared = prepare_resume(
-                    self.dependencies.repository.as_ref(),
-                    self.dependencies.sessions.as_ref(),
-                    ResumePreparationRequest {
-                        principal: actor.person_id.to_string(),
-                        person_id: actor.person_id,
-                        session_id: pending.session_id,
-                        resume: InteractionResumeRef {
-                            origin_run_id: pending.origin_run_id,
-                            lineage: pending.lineage,
-                        },
-                    },
-                )
-                .await?;
-                let intent = CanonicalTurnIntent {
-                    session_id: pending.session_id,
-                    expected_revision: pending.expected_session_revision,
-                    text: prepared.text,
-                    mode: prepared.mode,
-                    retry_of: None,
-                };
-                match self
-                    .submit(
-                        actor,
-                        resume_command_id(pending.origin_run_id)?,
-                        intent,
-                        prepared.session,
-                        scope,
-                    )
-                    .await
-                {
-                    Ok(receipt) => receipts.push(receipt),
-                    Err(AgentFailure::Conflict) => {}
-                    Err(failure) => return Err(failure),
-                }
-            }
-            Ok(receipts)
-        })
     }
 
     async fn interaction(
@@ -849,6 +794,7 @@ where
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<InteractionResult, AgentFailure>> {
         Box::pin(async move {
+            let _wake = recovery_driver::WakeOnDrop(&self.inner.recovery_wake);
             let admission = self.inner.admission.read().await;
             self.inner
                 .interaction(
@@ -876,7 +822,7 @@ where
             )
             .await?;
             drop(admission);
-            self.inner.resume_pending(actor, scope).await?;
+            self.inner.recovery_wake.notify_one();
             let linked = self
                 .read_command(actor, resume_command_id(interaction.origin_run_id)?, scope)
                 .await?
@@ -904,6 +850,7 @@ where
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<InteractionResult, AgentFailure>> {
         Box::pin(async move {
+            let _wake = recovery_driver::WakeOnDrop(&self.inner.recovery_wake);
             let admission = self.inner.admission.read().await;
             self.inner
                 .interaction(
@@ -942,7 +889,7 @@ where
                     chrono::Utc::now().timestamp_millis(), scope).await?
             };
             drop(admission);
-            self.inner.resume_pending(actor, scope).await?;
+            self.inner.recovery_wake.notify_one();
             let linked = self
                 .read_command(actor, resume_command_id(interaction.origin_run_id)?, scope)
                 .await?
@@ -981,41 +928,7 @@ where
     ) -> BoxFuture<'a, Result<(), AgentFailure>> {
         Box::pin(async move {
             self.inner.check(actor)?;
-            let records = scope
-                .run(
-                    self.inner
-                        .dependencies
-                        .repository
-                        .resolving_interactions(actor.person_id, 64),
-                )
-                .await?;
-            for record in records {
-                let origin = scope
-                    .run(
-                        self.inner
-                            .dependencies
-                            .repository
-                            .load_receipt(record.origin_run_id),
-                    )
-                    .await?
-                    .ok_or(AgentFailure::StorageUnavailable)?;
-                if origin.principal != actor.person_id.to_string() {
-                    return Err(AgentFailure::PolicyDenied);
-                }
-                if origin.device_id != actor.device_id {
-                    continue;
-                }
-                recover_source_interaction(
-                    self.inner.dependencies.repository.as_ref(),
-                    self.inner.dependencies.connections.as_ref(),
-                    actor,
-                    record.id,
-                    chrono::Utc::now().timestamp_millis(),
-                    scope,
-                )
-                .await?;
-            }
-            self.inner.resume_pending(actor, scope).await?;
+            self.inner.start_recovery(actor, scope).await?;
             Ok(())
         })
     }
