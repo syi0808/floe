@@ -359,7 +359,11 @@ impl GatewayPairingPort for GatewayPairingAdapter {
             }
             let address = address.trim_end_matches('/').to_owned();
             let expectation = self.store.expectation().await.map_err(|failure| {
-                credential_failure(setup_failure(Some(command_id), SetupStorageStage::Expectation, failure))
+                credential_failure(setup_failure(
+                    Some(command_id),
+                    SetupStorageStage::Expectation,
+                    failure,
+                ))
             })?;
             self.store
                 .mutate_setup(command_id, |record| {

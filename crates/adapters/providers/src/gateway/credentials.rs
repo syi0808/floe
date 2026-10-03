@@ -239,15 +239,23 @@ impl GatewayCredentialStore {
             store_lock().clone().lock_owned(),
         )
         .await
-        .map_err(|_| setup_failure(target_ref, SetupStorageStage::SlotLock, GatewayCredentialError::Timeout))?;
-        let mut record = read_record().await
-            .map_err(|failure| setup_failure(target_ref, SetupStorageStage::SlotRead, failure))?;
-        let floor = match self
-            .trust
-            .credential_expectation()
+        .map_err(|_| {
+            setup_failure(
+                target_ref,
+                SetupStorageStage::SlotLock,
+                GatewayCredentialError::Timeout,
+            )
+        })?;
+        let mut record = read_record()
             .await
-            .map_err(|_| setup_failure(target_ref, SetupStorageStage::ExpectationRecheck, GatewayCredentialError::Unavailable))?
-        {
+            .map_err(|failure| setup_failure(target_ref, SetupStorageStage::SlotRead, failure))?;
+        let floor = match self.trust.credential_expectation().await.map_err(|_| {
+            setup_failure(
+                target_ref,
+                SetupStorageStage::ExpectationRecheck,
+                GatewayCredentialError::Unavailable,
+            )
+        })? {
             floe_access::GatewayCredentialExpectation::Committed { generation, .. }
             | floe_access::GatewayCredentialExpectation::Forgotten { generation, .. } => generation,
             _ => 0,
@@ -255,32 +263,73 @@ impl GatewayCredentialStore {
         record.generation = record.generation.max(floor);
         let result = update(&mut record)
             .map_err(|failure| setup_failure(target_ref, SetupStorageStage::Staging, failure))?;
-        let bytes = Zeroizing::new(
-            serde_json::to_vec(&record).map_err(|_| setup_failure(target_ref, SetupStorageStage::Staging, GatewayCredentialError::Malformed))?,
-        );
+        let bytes = Zeroizing::new(serde_json::to_vec(&record).map_err(|_| {
+            setup_failure(
+                target_ref,
+                SetupStorageStage::Staging,
+                GatewayCredentialError::Malformed,
+            )
+        })?);
         if bytes.len() > MAX_RECORD_BYTES {
-            return Err(setup_failure(target_ref, SetupStorageStage::Staging, GatewayCredentialError::Malformed));
+            return Err(setup_failure(
+                target_ref,
+                SetupStorageStage::Staging,
+                GatewayCredentialError::Malformed,
+            ));
         }
         // The owned guard stays with the worker even if the observer times out.
         // A late OS write cannot race a subsequent mutation or become absence.
         let work = tokio::task::spawn_blocking(move || {
             let _guard = guard;
-            floe_native::write_generic_password(SERVICE, ACCOUNT, &bytes)
-                .map_err(|error| setup_failure(target_ref, SetupStorageStage::SlotWrite, native_error(error)))?;
+            floe_native::write_generic_password(SERVICE, ACCOUNT, &bytes).map_err(|error| {
+                setup_failure(
+                    target_ref,
+                    SetupStorageStage::SlotWrite,
+                    native_error(error),
+                )
+            })?;
             let readback = Zeroizing::new(
                 floe_native::read_generic_password(SERVICE, ACCOUNT, MAX_RECORD_BYTES)
-                    .map_err(|error| setup_failure(target_ref, SetupStorageStage::SlotReadback, native_error(error)))?
-                    .ok_or_else(|| setup_failure(target_ref, SetupStorageStage::SlotReadback, GatewayCredentialError::Unavailable))?,
+                    .map_err(|error| {
+                        setup_failure(
+                            target_ref,
+                            SetupStorageStage::SlotReadback,
+                            native_error(error),
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        setup_failure(
+                            target_ref,
+                            SetupStorageStage::SlotReadback,
+                            GatewayCredentialError::Unavailable,
+                        )
+                    })?,
             );
             if readback.as_slice() != bytes.as_slice() {
-                return Err(setup_failure(target_ref, SetupStorageStage::SlotReadback, GatewayCredentialError::Conflict));
+                return Err(setup_failure(
+                    target_ref,
+                    SetupStorageStage::SlotReadback,
+                    GatewayCredentialError::Conflict,
+                ));
             }
             Ok(result)
         });
         tokio::time::timeout(std::time::Duration::from_secs(3), work)
             .await
-            .map_err(|_| setup_failure(target_ref, SetupStorageStage::SlotWorker, GatewayCredentialError::Timeout))?
-            .map_err(|_| setup_failure(target_ref, SetupStorageStage::SlotWorker, GatewayCredentialError::Unavailable))?
+            .map_err(|_| {
+                setup_failure(
+                    target_ref,
+                    SetupStorageStage::SlotWorker,
+                    GatewayCredentialError::Timeout,
+                )
+            })?
+            .map_err(|_| {
+                setup_failure(
+                    target_ref,
+                    SetupStorageStage::SlotWorker,
+                    GatewayCredentialError::Unavailable,
+                )
+            })?
     }
     pub async fn current_binding(
         &self,

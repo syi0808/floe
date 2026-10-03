@@ -27,3 +27,6 @@ printf 'Private diagnostic log: %s\n' "$floe_diagnostic_log"
 The user performs Prepare themselves. Inspect only matching fixed diagnostic events and correlation IDs; do not upload the full raw console log, which may include unrelated private activity. Preserve the log and all prior evidence. No tool-side app launch, pairing, key operation, security setting change or user-data reset is authorized by this document.
 
 The diagnostic patch is source-reviewed but awaits compilation/formatting and a manual failing-stage observation. It is not a guessed credential-storage fix.
+
+
+Cloud workspace build with --locked, dependency policy (23 nodes/126 edges) and diff audit passed on839ea999. The captured formatting-only delta for three Rust files is integrated; native keychain formatting was unchanged. No tests, real key operations or diagnostic-triggering runtime calls ran. macOS rebuild/manual observation remains pending.

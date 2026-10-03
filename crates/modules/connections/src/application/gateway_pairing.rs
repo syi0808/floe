@@ -231,7 +231,8 @@ impl GatewayPairingService {
         let setup = self
             .transport
             .prepare_setup(target_ref, address, scope)
-            .await.map_err(|error| {
+            .await
+            .map_err(|error| {
                 trace_prepare_failure(command_id, target_ref, "adapter_prepare", error)
             })?;
         let record = self
@@ -243,7 +244,8 @@ impl GatewayPairingService {
                 address_digest,
                 setup,
             })
-            .await.map_err(|error| {
+            .await
+            .map_err(|error| {
                 trace_prepare_failure(command_id, target_ref, "setup_receipt_store", error)
             })?;
         Ok(record.setup)
