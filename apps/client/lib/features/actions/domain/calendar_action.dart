@@ -181,10 +181,7 @@ final class DirectUpdate extends ActionIntent {
 }
 
 final class DirectDelete extends ActionIntent {
-  const DirectDelete({
-    required this.eventRef,
-    required this.expectedRevision,
-  });
+  const DirectDelete({required this.eventRef, required this.expectedRevision});
 
   final String eventRef;
   final int expectedRevision;
@@ -270,11 +267,15 @@ final class TaskExecutionReceiptReference {
   final String digest;
 
   @override
-  bool operator ==(Object other) => other is TaskExecutionReceiptReference &&
-      execution == other.execution && taskRevision == other.taskRevision &&
-      journalRevision == other.journalRevision && digest == other.digest;
+  bool operator ==(Object other) =>
+      other is TaskExecutionReceiptReference &&
+      execution == other.execution &&
+      taskRevision == other.taskRevision &&
+      journalRevision == other.journalRevision &&
+      digest == other.digest;
   @override
-  int get hashCode => Object.hash(execution, taskRevision, journalRevision, digest);
+  int get hashCode =>
+      Object.hash(execution, taskRevision, journalRevision, digest);
 
   void validate() {
     if (execution.executorGeneration <= 0 ||
@@ -306,11 +307,7 @@ final class TaskExecutionKeyReference {
   });
 
   factory TaskExecutionKeyReference.fromJson(Map<String, dynamic> json) {
-    _expectKeys(json, const {
-      'task_id',
-      'execution_id',
-      'executor_generation',
-    });
+    _expectKeys(json, const {'task_id', 'execution_id', 'executor_generation'});
     return TaskExecutionKeyReference(
       taskId: _string(json['task_id'], 'receipt.execution.task_id'),
       executionId: _string(
@@ -329,8 +326,10 @@ final class TaskExecutionKeyReference {
   final int executorGeneration;
 
   @override
-  bool operator ==(Object other) => other is TaskExecutionKeyReference &&
-      taskId == other.taskId && executionId == other.executionId &&
+  bool operator ==(Object other) =>
+      other is TaskExecutionKeyReference &&
+      taskId == other.taskId &&
+      executionId == other.executionId &&
       executorGeneration == other.executorGeneration;
   @override
   int get hashCode => Object.hash(taskId, executionId, executorGeneration);
@@ -429,7 +428,10 @@ final class ActionReviewReference {
     _utcInstant(reference.expiresAt, 'review_ref.expires_at');
     _validateUuid(reference.id, 'review_ref.id');
     _validateUuid(reference.actionId, 'review_ref.action_id');
-    _validateRevision(reference.authorityRevision, 'review_ref.authority_revision');
+    _validateRevision(
+      reference.authorityRevision,
+      'review_ref.authority_revision',
+    );
     _validateDigest(reference.effectDigest, 'review_ref.effect_digest');
     _validateDigest(reference.sourceDigest, 'review_ref.source_digest');
     return reference;
@@ -556,7 +558,10 @@ ActionEffectSummary _actionEffectFromJson(Map<String, dynamic> json) {
         'schedule',
       });
       final effect = CreateActionEffect(
-        destinationLabel: _string(json['destination_label'], 'effect.destination_label'),
+        destinationLabel: _string(
+          json['destination_label'],
+          'effect.destination_label',
+        ),
         title: _string(json['title'], 'effect.title'),
         schedule: ActionSchedule.fromJson(
           _object(json['schedule'], 'effect.schedule'),
@@ -583,7 +588,10 @@ ActionEffectSummary _actionEffectFromJson(Map<String, dynamic> json) {
           json['expected_revision'],
           'effect.expected_revision',
         ),
-        destinationLabel: _string(json['destination_label'], 'effect.destination_label'),
+        destinationLabel: _string(
+          json['destination_label'],
+          'effect.destination_label',
+        ),
         previousTitle: _string(json['previous_title'], 'effect.previous_title'),
         previousSchedule: ActionSchedule.fromJson(
           _object(json['previous_schedule'], 'effect.previous_schedule'),
@@ -616,7 +624,10 @@ ActionEffectSummary _actionEffectFromJson(Map<String, dynamic> json) {
           json['expected_revision'],
           'effect.expected_revision',
         ),
-        destinationLabel: _string(json['destination_label'], 'effect.destination_label'),
+        destinationLabel: _string(
+          json['destination_label'],
+          'effect.destination_label',
+        ),
         title: _string(json['title'], 'effect.title'),
         schedule: ActionSchedule.fromJson(
           _object(json['schedule'], 'effect.schedule'),
@@ -662,7 +673,9 @@ CalendarActionStatus _actionStatusFromJson(Map<String, dynamic> json) {
   switch (state) {
     case 'pending_review':
       _expectKeys(json, const {'state'});
-      return const CalendarActionStatus(state: CalendarActionState.pendingReview);
+      return const CalendarActionStatus(
+        state: CalendarActionState.pendingReview,
+      );
     case 'approved':
       _expectKeys(json, const {'state'});
       return const CalendarActionStatus(state: CalendarActionState.approved);
@@ -835,20 +848,25 @@ final class CalendarAction {
   /// Poll hints and allowed controls are owner projections, not stored revision
   /// changes. The owner can also project expiry without mutating the record.
   bool follows(CalendarAction previous) =>
-      hasSameImmutableIdentity(previous) && revision >= previous.revision &&
+      hasSameImmutableIdentity(previous) &&
+      revision >= previous.revision &&
       (revision > previous.revision ||
           jsonEncode(status.toJson()) == jsonEncode(previous.status.toJson()) ||
           (status.state == CalendarActionState.expired &&
-              {CalendarActionState.pendingReview, CalendarActionState.approved}
-                  .contains(previous.status.state)));
+              {
+                CalendarActionState.pendingReview,
+                CalendarActionState.approved,
+              }.contains(previous.status.state)));
 
   bool isOlderObservationThan(CalendarAction current) =>
       hasSameImmutableIdentity(current) &&
       (revision < current.revision ||
           (revision == current.revision &&
               current.status.state == CalendarActionState.expired &&
-              {CalendarActionState.pendingReview, CalendarActionState.approved}
-                  .contains(status.state)));
+              {
+                CalendarActionState.pendingReview,
+                CalendarActionState.approved,
+              }.contains(status.state)));
 }
 
 final class ActionsPage {
@@ -988,8 +1006,16 @@ DateTime _utcInstant(Object? value, String field) {
   }
   try {
     final parsed = DateTime.parse(value).toUtc();
-    final fields = RegExp(r'^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})').firstMatch(value)!;
-    final actual = [parsed.year, parsed.month, parsed.day, parsed.hour, parsed.minute, parsed.second];
+    final fields = RegExp(r'^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})')
+        .firstMatch(value)!;
+    final actual = [
+      parsed.year,
+      parsed.month,
+      parsed.day,
+      parsed.hour,
+      parsed.minute,
+      parsed.second,
+    ];
     for (var index = 0; index < actual.length; index++) {
       if (actual[index] != int.parse(fields.group(index + 1)!)) {
         throw FormatException('Invalid $field.');
@@ -1003,9 +1029,8 @@ DateTime _utcInstant(Object? value, String field) {
 
 void _validateUuid(Object? value, String field) {
   if (value is! String ||
-      !RegExp(
-        r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-      ).hasMatch(value) ||
+      !RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+          .hasMatch(value) ||
       value == '00000000-0000-0000-0000-000000000000') {
     throw FormatException('Invalid $field.');
   }

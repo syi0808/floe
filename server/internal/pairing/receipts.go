@@ -2,7 +2,7 @@ package pairing
 
 import (
 	"bytes"
-    "context"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"floe/server/internal/operation"
@@ -24,19 +24,19 @@ type receiptIndex struct {
 	Entries []receiptIndexEntry `json:"entries"`
 }
 type privateReceipt struct {
-	Version           int                    `json:"version"`
-	OperationID       string                 `json:"operation_id"`
-	Pending           Pending                `json:"pending"`
-	Status            string                 `json:"status"`
-	ChallengeID       string                 `json:"challenge_id"`
-	ChallengeBytes    []byte                 `json:"challenge_bytes"`
-	ChallengeB64      string                 `json:"challenge_b64"`
-	ProducerSignature []byte                 `json:"producer_signature"`
-	Proof             string                 `json:"proof"`
-	LocalProof        trust.Proof            `json:"local_proof"`
-	Producer          trust.ProducerMetadata `json:"producer"`
-	ActivationTokenHash string `json:"activation_token_hash,omitempty"`
-	ExpectedRevision  uint64                 `json:"expected_revision"`
+	Version             int                    `json:"version"`
+	OperationID         string                 `json:"operation_id"`
+	Pending             Pending                `json:"pending"`
+	Status              string                 `json:"status"`
+	ChallengeID         string                 `json:"challenge_id"`
+	ChallengeBytes      []byte                 `json:"challenge_bytes"`
+	ChallengeB64        string                 `json:"challenge_b64"`
+	ProducerSignature   []byte                 `json:"producer_signature"`
+	Proof               string                 `json:"proof"`
+	LocalProof          trust.Proof            `json:"local_proof"`
+	Producer            trust.ProducerMetadata `json:"producer"`
+	ActivationTokenHash string                 `json:"activation_token_hash,omitempty"`
+	ExpectedRevision    uint64                 `json:"expected_revision"`
 }
 
 func repair() error { return operation.Fail(operation.Conflict, "pairing_repair_required") }
@@ -81,7 +81,7 @@ func (o *Operations) reserve(ctx context.Context, index receiptIndex, op, id str
 	return nil
 }
 func (o *Operations) save(ctx context.Context, p *Pending) error {
-	record := privateReceipt{Version: 1, OperationID: p.operationID, Pending: *p, Status: p.status, ChallengeID: p.challengeID, ChallengeBytes: p.challengeBytes, ChallengeB64: p.challengeB64, ProducerSignature: p.producerSignature, Proof: p.proof, LocalProof: p.localProof, Producer: p.producer, ExpectedRevision: p.expectedRevision, ActivationTokenHash:p.activationTokenHash}
+	record := privateReceipt{Version: 1, OperationID: p.operationID, Pending: *p, Status: p.status, ChallengeID: p.challengeID, ChallengeBytes: p.challengeBytes, ChallengeB64: p.challengeB64, ProducerSignature: p.producerSignature, Proof: p.proof, LocalProof: p.localProof, Producer: p.producer, ExpectedRevision: p.expectedRevision, ActivationTokenHash: p.activationTokenHash}
 	encoded, err := json.Marshal(record)
 	if err != nil || len(encoded) > 32768 {
 		return repair()
@@ -92,7 +92,7 @@ func (o *Operations) save(ctx context.Context, p *Pending) error {
 	return nil
 }
 func (o *Operations) load(ctx context.Context, entry receiptIndexEntry) (*Pending, error) {
-	raw, err := o.credentials.Get(ctx, "FLOE_PAIRING_ATTEMPT_" + entry.OperationID)
+	raw, err := o.credentials.Get(ctx, "FLOE_PAIRING_ATTEMPT_"+entry.OperationID)
 	if err != nil {
 		return nil, operation.Fail(operation.Unavailable, "pairing_credential_unavailable")
 	}
@@ -111,7 +111,7 @@ func (o *Operations) load(ctx context.Context, entry receiptIndexEntry) (*Pendin
 	p.localProof = record.LocalProof
 	p.producer = record.Producer
 	p.expectedRevision = record.ExpectedRevision
-    p.activationTokenHash = record.ActivationTokenHash
+	p.activationTokenHash = record.ActivationTokenHash
 	if !trust.ValidID(p.PersonID) || !trust.ValidDevice(p.DeviceID) || !trust.ValidID(p.IssuerKeyID) || !trust.ValidID(p.challengeID) || len(p.challengeBytes) == 0 || len(p.producerSignature) != 64 {
 		return nil, repair()
 	}

@@ -10,9 +10,9 @@ import (
 )
 
 type Service struct {
-	client   *Client
-	folderID string
-	clock    func() time.Time
+	client    *Client
+	folderID  string
+	clock     func() time.Time
 	operation chan struct{}
 
 	statusMu            sync.RWMutex
@@ -58,7 +58,7 @@ func (service *Service) Read(ctx context.Context, request views.ReadRequest) (vi
 		return service.readFailure(ctx, err)
 	}
 	result := views.Result{ViewID: views.WorkContext, Work: &view}
-	encoded, _, err := views.EncodeBounded(result,views.Bounds{MaxItems:uint32(itemLimit),MaxBytes:uint32(byteLimit)})
+	encoded, _, err := views.EncodeBounded(result, views.Bounds{MaxItems: uint32(itemLimit), MaxBytes: uint32(byteLimit)})
 	if err != nil || len(encoded) > byteLimit || len(view.Items) > itemLimit {
 		return service.readFailure(ctx, ErrInvalidResponse)
 	}
@@ -78,7 +78,9 @@ func (service *Service) Read(ctx context.Context, request views.ReadRequest) (vi
 	if err := ctx.Err(); err != nil {
 		return service.readFailure(ctx, err)
 	}
-	if err:=service.recordSuccess(ctx,metadata,view.ObservedAtUnixMS);err!=nil{return service.readFailure(ctx,err)}
+	if err := service.recordSuccess(ctx, metadata, view.ObservedAtUnixMS); err != nil {
+		return service.readFailure(ctx, err)
+	}
 	return result, nil
 }
 
@@ -164,15 +166,17 @@ func (service *Service) readFailure(ctx context.Context, err error) (views.Resul
 	return views.Result{}, normalized
 }
 
-func (service *Service) recordSuccess(ctx context.Context,view views.ViewSnapshot, observed int64) error {
+func (service *Service) recordSuccess(ctx context.Context, view views.ViewSnapshot, observed int64) error {
 	service.statusMu.Lock()
 	defer service.statusMu.Unlock()
-	if err:=ctx.Err();err!=nil{return err}
-    service.observedAtUnixMS = observed
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	service.observedAtUnixMS = observed
 	service.lastSuccessAtUnixMS = &observed
 	service.lastFailure = nil
 	service.lastView = &view
-    return nil
+	return nil
 }
 
 func (service *Service) recordFailure(kind string, observed int64) {

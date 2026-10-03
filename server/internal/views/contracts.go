@@ -63,7 +63,7 @@ type Query struct {
 	Mail      *MailQuery
 	Work      *WorkQuery
 	Logistics *LogisticsQuery
-    Mirror *CalendarMirrorQuery
+	Mirror    *CalendarMirrorQuery
 }
 type ParsedQuery struct {
 	Query     Query
@@ -71,10 +71,10 @@ type ParsedQuery struct {
 	Digest    [32]byte
 }
 type ReadRequest struct {
-	Source SourceSnapshot
-	Query  Query
-	Bounds Bounds
-    ProviderCursor string
+	Source         SourceSnapshot
+	Query          Query
+	Bounds         Bounds
+	ProviderCursor string
 }
 type Reader interface {
 	Read(context.Context, ReadRequest) (Result, error)
@@ -89,7 +89,7 @@ type Result struct {
 	Communication *CommunicationView
 	Work          *WorkContextView
 	Logistics     *LogisticsView
-    Mirror *CalendarMirrorResult
+	Mirror        *CalendarMirrorResult
 }
 
 var ErrInvalid = errors.New("invalid normalized view")
@@ -290,40 +290,49 @@ func EncodeBounded(result Result, b Bounds) ([]byte, uint32, error) {
 
 // ReadError carries a closed, content-free failure across the provider boundary.
 type ReadErrorKind string
+
 const (
-    InvalidQuery ReadErrorKind = "invalid_query"
-    CredentialExpired ReadErrorKind = "credential_expired"
-    PermissionDenied ReadErrorKind = "permission_denied"
-    RateLimited ReadErrorKind = "rate_limited"
-    Unavailable ReadErrorKind = "unavailable"
-    InvalidProviderResponse ReadErrorKind = "invalid_provider_response"
+	InvalidQuery            ReadErrorKind = "invalid_query"
+	CredentialExpired       ReadErrorKind = "credential_expired"
+	PermissionDenied        ReadErrorKind = "permission_denied"
+	RateLimited             ReadErrorKind = "rate_limited"
+	Unavailable             ReadErrorKind = "unavailable"
+	InvalidProviderResponse ReadErrorKind = "invalid_provider_response"
 )
-type ReadError struct { Kind ReadErrorKind }
+
+type ReadError struct{ Kind ReadErrorKind }
+
 func (e ReadError) Error() string { return string(e.Kind) }
 
 func CloneSource(source SourceSnapshot) SourceSnapshot {
-    source.Resources = append([]string(nil), source.Resources...)
-    return source
+	source.Resources = append([]string(nil), source.Resources...)
+	return source
 }
 
 // ValidateResultRequest binds the normalized response to the admitted typed query.
 func ValidateResultRequest(result Result, request ReadRequest) error {
-    if result.ViewID != request.Query.ViewID || string(result.ViewID) != request.Source.Descriptor.ID {
-        return ErrInvalid
-    }
-    if q := request.Query.Calendar; q != nil {
-        if result.Calendar == nil || result.Calendar.RangeStartUnixMS != q.RangeStartUnixMS || result.Calendar.RangeEndUnixMS != q.RangeEndUnixMS || len(result.Calendar.Items) > q.Limit {
-            return ErrInvalid
-        }
-    }
-    if q := request.Query.Mail; q != nil {
-        if result.Communication == nil || len(result.Communication.Items) > q.Limit { return ErrInvalid }
-    }
-    return nil
+	if result.ViewID != request.Query.ViewID || string(result.ViewID) != request.Source.Descriptor.ID {
+		return ErrInvalid
+	}
+	if q := request.Query.Calendar; q != nil {
+		if result.Calendar == nil || result.Calendar.RangeStartUnixMS != q.RangeStartUnixMS || result.Calendar.RangeEndUnixMS != q.RangeEndUnixMS || len(result.Calendar.Items) > q.Limit {
+			return ErrInvalid
+		}
+	}
+	if q := request.Query.Mail; q != nil {
+		if result.Communication == nil || len(result.Communication.Items) > q.Limit {
+			return ErrInvalid
+		}
+	}
+	return nil
 }
 
-func ValidateQueryBounds(query Query,bounds Bounds) error {
-    if bounds.MaxItems==0 || bounds.MaxItems>128 || bounds.MaxBytes==0 || bounds.MaxBytes>1<<20{return ErrInvalid}
-    if query.Calendar!=nil && uint32(query.Calendar.Limit)>bounds.MaxItems || query.Mail!=nil && uint32(query.Mail.Limit)>bounds.MaxItems{return ErrInvalid}
-    return nil
+func ValidateQueryBounds(query Query, bounds Bounds) error {
+	if bounds.MaxItems == 0 || bounds.MaxItems > 128 || bounds.MaxBytes == 0 || bounds.MaxBytes > 1<<20 {
+		return ErrInvalid
+	}
+	if query.Calendar != nil && uint32(query.Calendar.Limit) > bounds.MaxItems || query.Mail != nil && uint32(query.Mail.Limit) > bounds.MaxItems {
+		return ErrInvalid
+	}
+	return nil
 }

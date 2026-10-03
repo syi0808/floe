@@ -15,9 +15,7 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
 
   @override
   Future<AgentDirectorySnapshot> readDirectory() async =>
-      _readDirectoryResult(
-        await _query(const {'kind': 'experts.directory'}),
-      );
+      _readDirectoryResult(await _query(const {'kind': 'experts.directory'}));
 
   @override
   Future<AgentDirectorySnapshot> setInstallationEnabled({
@@ -149,35 +147,27 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
       AgentRegistryCommandKind.installationSetEnabled ||
       AgentRegistryCommandKind.bindingReplace => AgentDirectoryCommandResult(
         pending.kind,
-        await _runPending(
-          pending,
-          (result) {
-            final directory = _readDirectoryResult(result);
-            if (pending.kind ==
-                    AgentRegistryCommandKind.installationSetEnabled &&
-                !directory.installations.any(
-                  (entry) =>
-                      entry.installationRef ==
-                          pending.intent['installation_ref'] &&
-                      entry.enabled == pending.intent['enabled'],
-                )) {
-              throw const FormatException(
-                'Installation missing from owner reply.',
-              );
-            }
-            if (pending.kind == AgentRegistryCommandKind.bindingReplace &&
-                !directory.assignments.any(
-                  (entry) =>
-                      entry.assignmentRef ==
-                      pending.expectedAssignmentRef,
-                )) {
-              throw const FormatException(
-                'Assignment missing from owner reply.',
-              );
-            }
-            return directory;
-          },
-        ),
+        await _runPending(pending, (result) {
+          final directory = _readDirectoryResult(result);
+          if (pending.kind == AgentRegistryCommandKind.installationSetEnabled &&
+              !directory.installations.any(
+                (entry) =>
+                    entry.installationRef ==
+                        pending.intent['installation_ref'] &&
+                    entry.enabled == pending.intent['enabled'],
+              )) {
+            throw const FormatException(
+              'Installation missing from owner reply.',
+            );
+          }
+          if (pending.kind == AgentRegistryCommandKind.bindingReplace &&
+              !directory.assignments.any(
+                (entry) => entry.assignmentRef == pending.expectedAssignmentRef,
+              )) {
+            throw const FormatException('Assignment missing from owner reply.');
+          }
+          return directory;
+        }),
       ),
       AgentRegistryCommandKind.bindingPrepareReview =>
         AgentBindingReviewCommandResult(
@@ -247,10 +237,14 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
     } on NativeTransportException catch (error) {
       // Only these correlated owner rejections are proven precommit. A
       // transport/decode/storage failure retains the immutable retry request.
-      if ((error.code == 'conflict' && error.metadata['reason_code'] == 'conflict') ||
-          (error.code == 'not_found' && error.metadata['reason_code'] == 'not_found') ||
-          (error.code == 'validation' && error.metadata['reason_code'] == 'invalid_input') ||
-          (error.code == 'unavailable' && error.metadata['reason_code'] == 'stale_context')) {
+      if ((error.code == 'conflict' &&
+              error.metadata['reason_code'] == 'conflict') ||
+          (error.code == 'not_found' &&
+              error.metadata['reason_code'] == 'not_found') ||
+          (error.code == 'validation' &&
+              error.metadata['reason_code'] == 'invalid_input') ||
+          (error.code == 'unavailable' &&
+              error.metadata['reason_code'] == 'stale_context')) {
         if (identical(_pendingCommand, pending)) _pendingCommand = null;
       }
       // The transport error may follow a committed owner command whose
@@ -272,11 +266,10 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
     ownerFailure: error.ownerFailure,
   );
 
-  AgentDirectorySnapshot _readDirectoryResult(
-    Map<String, dynamic> result,
-  ) => AgentDirectorySnapshot.fromJson(
-    _payload(result, 'experts.directory', 'directory'),
-  );
+  AgentDirectorySnapshot _readDirectoryResult(Map<String, dynamic> result) =>
+      AgentDirectorySnapshot.fromJson(
+        _payload(result, 'experts.directory', 'directory'),
+      );
 
   AgentBindingReview _readBindingReviewResult(
     Map<String, dynamic> result, {
@@ -328,7 +321,9 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
       if (candidate == null ||
           candidate.availability == AgentCandidateAvailability.unavailable &&
               !candidate.selected) {
-        throw const FormatException('Candidate is outside the prepared review.');
+        throw const FormatException(
+          'Candidate is outside the prepared review.',
+        );
       }
     }
   }

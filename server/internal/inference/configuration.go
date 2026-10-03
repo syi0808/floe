@@ -1,7 +1,7 @@
 package inference
 
 import (
-    "context"
+	"context"
 	"errors"
 	"sync"
 
@@ -88,9 +88,11 @@ func (c *Configuration) open(ctx context.Context, state configurationState) (map
 	}
 	for provider, profile := range state.Providers {
 		for purpose := range profile.Purposes {
-			id:=profileTargetID(provider,purpose)
-            if _,exists:=targets[id];exists{return nil,nil,errors.New("duplicate inference target")}
-            targets[id] = profileTarget(provider, purpose, profile)
+			id := profileTargetID(provider, purpose)
+			if _, exists := targets[id]; exists {
+				return nil, nil, errors.New("duplicate inference target")
+			}
+			targets[id] = profileTarget(provider, purpose, profile)
 		}
 	}
 	if len(targets) > 32 {

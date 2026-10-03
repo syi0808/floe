@@ -32,20 +32,19 @@ String _statusLabel(AppLocalizations strings, CalendarAction action) =>
       },
     };
 
-FloeBadgeTone _statusTone(CalendarAction action) => switch (
-  action.status.state
-) {
-  CalendarActionState.succeeded => FloeBadgeTone.success,
-  CalendarActionState.rejected ||
-  CalendarActionState.cancelled ||
-  CalendarActionState.expired ||
-  CalendarActionState.blocked ||
-  CalendarActionState.failed => FloeBadgeTone.danger,
-  CalendarActionState.pendingReview ||
-  CalendarActionState.approved ||
-  CalendarActionState.executing ||
-  CalendarActionState.unknown => FloeBadgeTone.info,
-};
+FloeBadgeTone _statusTone(CalendarAction action) =>
+    switch (action.status.state) {
+      CalendarActionState.succeeded => FloeBadgeTone.success,
+      CalendarActionState.rejected ||
+      CalendarActionState.cancelled ||
+      CalendarActionState.expired ||
+      CalendarActionState.blocked ||
+      CalendarActionState.failed => FloeBadgeTone.danger,
+      CalendarActionState.pendingReview ||
+      CalendarActionState.approved ||
+      CalendarActionState.executing ||
+      CalendarActionState.unknown => FloeBadgeTone.info,
+    };
 
 bool _hasDecision(CalendarAction action) =>
     action.allowedActions.contains(ActionAllowedAction.approve) ||
@@ -75,8 +74,14 @@ class ReviewRequestPanel extends StatelessWidget {
               Text(strings.calendarProposals, style: FloeType.title),
               const SizedBox(height: 12),
               if (controller.error case final error?)
-                Text(error.isVaultLocked ? 'Vault locked. Unlock to review Actions.' : error.message),
-              if (!controller.loaded && !controller.busy && controller.error == null)
+                Text(
+                  error.isVaultLocked
+                      ? 'Vault locked. Unlock to review Actions.'
+                      : error.message,
+                ),
+              if (!controller.loaded &&
+                  !controller.busy &&
+                  controller.error == null)
                 const Text('Load Actions to see requests for review.'),
               if (controller.loaded &&
                   !controller.busy &&
@@ -100,10 +105,9 @@ class ReviewRequestPanel extends StatelessWidget {
                       FloeButton.text(
                         onPressed: () {
                           unawaited(
-                            controller.inspect(action.actionRef).then<void>(
-                              (_) {},
-                              onError: (Object _) {},
-                            ),
+                            controller
+                                .inspect(action.actionRef)
+                                .then<void>((_) {}, onError: (Object _) {}),
                           );
                           showFloeDialog<void>(
                             context,
@@ -164,8 +168,14 @@ class ActivityPanel extends StatelessWidget {
             const Text('Actions submitted by you or Experts appear here.'),
             const SizedBox(height: 28),
             if (controller.error case final error?)
-              Text(error.isVaultLocked ? 'Vault locked. Unlock to load Activity.' : error.message),
-            if (!controller.loaded && !controller.busy && controller.error == null)
+              Text(
+                error.isVaultLocked
+                    ? 'Vault locked. Unlock to load Activity.'
+                    : error.message,
+              ),
+            if (!controller.loaded &&
+                !controller.busy &&
+                controller.error == null)
               const Text('Load Actions to see Activity.'),
             if (controller.loaded &&
                 !controller.busy &&
@@ -196,7 +206,9 @@ class ActivityPanel extends StatelessWidget {
                                 action.status.collection ==
                                     ActionCollectionStatus.pending) ...[
                               const SizedBox(height: 6),
-                              const Text('Calendar change succeeded; Day collection is pending.'),
+                              const Text(
+                                'Calendar change succeeded; Day collection is pending.',
+                              ),
                             ],
                           ],
                         ),
@@ -277,7 +289,9 @@ class ActionReviewDialog extends StatelessWidget {
             const SizedBox(height: 12),
             Text(strings.actionWhen, style: FloeType.controlLabel),
             Text(localInterval(action.schedule)),
-            if (action.effect case UpdateActionEffect(:final previousTitle)) ...[
+            if (action.effect case UpdateActionEffect(
+              :final previousTitle,
+            )) ...[
               const SizedBox(height: 12),
               const Text('Current event title', style: FloeType.controlLabel),
               Text(previousTitle),
@@ -306,10 +320,13 @@ class ActionReviewDialog extends StatelessWidget {
             if (action.status.state == CalendarActionState.succeeded &&
                 action.status.collection == ActionCollectionStatus.pending) ...[
               const SizedBox(height: 8),
-              const Text('Calendar change succeeded; Day collection is pending.'),
+              const Text(
+                'Calendar change succeeded; Day collection is pending.',
+              ),
             ],
             if (action.status.state == CalendarActionState.succeeded &&
-                action.status.collection == ActionCollectionStatus.collected) ...[
+                action.status.collection ==
+                    ActionCollectionStatus.collected) ...[
               const SizedBox(height: 8),
               Text(strings.actionCollected),
             ],
@@ -324,7 +341,9 @@ class ActionReviewDialog extends StatelessWidget {
             const SizedBox(height: 12),
             if (action.allowedActions.contains(ActionAllowedAction.approve) &&
                 !controller.calendarChangesAvailable) ...[
-              const Text('Calendar changes are unavailable. Refresh to check for writable Calendar destinations.'),
+              const Text(
+                'Calendar changes are unavailable. Refresh to check for writable Calendar destinations.',
+              ),
               FloeButton.text(
                 onPressed: controller.busy ? null : controller.load,
                 child: Text(strings.actionReload),
@@ -332,7 +351,8 @@ class ActionReviewDialog extends StatelessWidget {
             ],
             if (action.allowedActions.contains(ActionAllowedAction.approve))
               FloeButton.filled(
-                onPressed: controller.busy || !controller.calendarChangesAvailable
+                onPressed:
+                    controller.busy || !controller.calendarChangesAvailable
                     ? null
                     : () => _decide(
                         controller,
@@ -406,10 +426,9 @@ class ActionReviewDialog extends StatelessWidget {
             onPressed: controller.busy
                 ? null
                 : () => unawaited(
-                    controller.inspect(actionRef).then<void>(
-                      (_) {},
-                      onError: (Object _) {},
-                    ),
+                    controller
+                        .inspect(actionRef)
+                        .then<void>((_) {}, onError: (Object _) {}),
                   ),
             child: Text(strings.actionReload),
           ),
@@ -419,25 +438,23 @@ class ActionReviewDialog extends StatelessWidget {
   );
 }
 
-String _blockedMessage(
-  AppLocalizations strings,
-  ActionBlockedReason? reason,
-) => switch (reason) {
-  ActionBlockedReason.permissionDenied => strings.actionPermissionReason,
-  ActionBlockedReason.policyDenied => 'Blocked by the current Actions policy.',
-  ActionBlockedReason.sourceChanged => 'The Calendar source changed. Review a new Action.',
-  ActionBlockedReason.executorUnavailable => 'The Calendar action executor is unavailable.',
-  ActionBlockedReason.scheduleConflict => strings.actionConflictReason,
-  null => strings.actionUnavailableReason,
-};
+String _blockedMessage(AppLocalizations strings, ActionBlockedReason? reason) =>
+    switch (reason) {
+      ActionBlockedReason.permissionDenied => strings.actionPermissionReason,
+      ActionBlockedReason.policyDenied =>
+        'Blocked by the current Actions policy.',
+      ActionBlockedReason.sourceChanged =>
+        'The Calendar source changed. Review a new Action.',
+      ActionBlockedReason.executorUnavailable =>
+        'The Calendar action executor is unavailable.',
+      ActionBlockedReason.scheduleConflict => strings.actionConflictReason,
+      null => strings.actionUnavailableReason,
+    };
 
 String _notAppliedMessage(ActionNotAppliedReason? reason) => switch (reason) {
-  ActionNotAppliedReason.permissionDenied =>
-    'The owner confirmed the change was not applied because write permission was denied.',
-  ActionNotAppliedReason.providerRejected =>
-    'The owner confirmed the provider rejected the change before it was applied.',
-  ActionNotAppliedReason.providerUnavailable =>
-    'The owner confirmed the provider was unavailable before the change was applied.',
+  ActionNotAppliedReason.permissionDenied => 'The owner confirmed the change was not applied because write permission was denied.',
+  ActionNotAppliedReason.providerRejected => 'The owner confirmed the provider rejected the change before it was applied.',
+  ActionNotAppliedReason.providerUnavailable => 'The owner confirmed the provider was unavailable before the change was applied.',
   ActionNotAppliedReason.sourceChanged =>
     'The Calendar source changed before this action. No change was applied.',
   ActionNotAppliedReason.cancelled =>
@@ -453,23 +470,17 @@ void _decide(
   CalendarActionDecision decision,
 ) {
   if (decision == CalendarActionDecision.approve &&
-      !controller.calendarChangesAvailable) return;
+      !controller.calendarChangesAvailable)
+    return;
   unawaited(
-    controller.decide(action, decision).then<void>(
-      (_) {},
-      onError: (Object _) {},
-    ),
+    controller
+        .decide(action, decision)
+        .then<void>((_) {}, onError: (Object _) {}),
   );
 }
 
-void _reconcile(
-  CalendarActionController controller,
-  CalendarAction action,
-) {
+void _reconcile(CalendarActionController controller, CalendarAction action) {
   unawaited(
-    controller.reconcile(action).then<void>(
-      (_) {},
-      onError: (Object _) {},
-    ),
+    controller.reconcile(action).then<void>((_) {}, onError: (Object _) {}),
   );
 }

@@ -8,7 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-    "floe/server/internal/integrations"
+	"floe/server/internal/integrations"
 	"html"
 	"io"
 	"net"
@@ -69,7 +69,7 @@ type loginFlow struct {
 }
 
 type Runtime struct {
-    credentialReadError error
+	credentialReadError  error
 	operation            sync.Mutex
 	identityFence        sync.RWMutex
 	mu                   sync.RWMutex
@@ -105,9 +105,11 @@ func New(ctx context.Context, store Store, config Config, boundCredential string
 	}
 	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 5 * time.Second, MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second}
 	runtime := &Runtime{store: store, config: config, client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, authURL: defaultAuthURL, tokenURL: defaultTokenURL, metadataURL: defaultMetadataURL, callbackAddress: "127.0.0.1:0", credentialName: boundCredential, credentialNamespace: name, scope: scope}
-    runtime.load(ctx)
-    if err:=runtime.credentialReadFailure();err!=nil{return nil,err}
-    return runtime, nil
+	runtime.load(ctx)
+	if err := runtime.credentialReadFailure(); err != nil {
+		return nil, err
+	}
+	return runtime, nil
 }
 
 func NewCalendar(ctx context.Context, store Store, config Config, boundCredential string) (*Runtime, error) {
@@ -122,7 +124,11 @@ func NewTeams(ctx context.Context, store Store, config Config, boundCredential s
 	return New(ctx, store, config, boundCredential)
 }
 
-func (runtime *Runtime) Ready() bool { runtime.mu.RLock(); defer runtime.mu.RUnlock(); return runtime.tokens != nil }
+func (runtime *Runtime) Ready() bool {
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	return runtime.tokens != nil
+}
 
 func (runtime *Runtime) credentialKey() string {
 	runtime.mu.RLock()
@@ -134,7 +140,9 @@ func (runtime *Runtime) Token(ctx context.Context) (string, error) {
 	runtime.operation.Lock()
 	defer runtime.operation.Unlock()
 	current := runtime.load(ctx)
-    if err:=runtime.credentialReadFailure();err!=nil{return "",err}
+	if err := runtime.credentialReadFailure(); err != nil {
+		return "", err
+	}
 	if current == nil {
 		return "", ErrCredentialExpired
 	}
@@ -183,7 +191,9 @@ func (runtime *Runtime) ProviderIdentity(ctx context.Context) (string, error) {
 	runtime.operation.Lock()
 	defer runtime.operation.Unlock()
 	current := runtime.load(ctx)
-    if err:=runtime.credentialReadFailure();err!=nil{return "",err}
+	if err := runtime.credentialReadFailure(); err != nil {
+		return "", err
+	}
 	if current == nil || !runtime.requiresProviderIdentity() || !hasScope(current.Scope, openidScope) || !hasScope(current.Scope, profileScope) {
 		return "", ErrCredentialExpired
 	}
@@ -230,11 +240,28 @@ func (runtime *Runtime) WithVerifiedProviderIdentity(expectedCredential, expecte
 }
 
 type authorizationCommand uint8
-const ( authorizationStatus authorizationCommand = iota; authorizationBegin; authorizationCancel; authorizationDisconnect )
-func (runtime *Runtime) BeginAuthorization(ctx context.Context) (integrations.AuthorizationProgress,error) {return runtime.authorization(ctx,authorizationBegin)}
-func (runtime *Runtime) PollAuthorization(ctx context.Context) (integrations.AuthorizationProgress,error) {return runtime.authorization(ctx,authorizationStatus)}
-func (runtime *Runtime) CancelAuthorization(ctx context.Context) error {_,err:=runtime.authorization(ctx,authorizationCancel);return err}
-func (runtime *Runtime) DisconnectAuthorization(ctx context.Context) error {_,err:=runtime.authorization(ctx,authorizationDisconnect);return err}
+
+const (
+	authorizationStatus authorizationCommand = iota
+	authorizationBegin
+	authorizationCancel
+	authorizationDisconnect
+)
+
+func (runtime *Runtime) BeginAuthorization(ctx context.Context) (integrations.AuthorizationProgress, error) {
+	return runtime.authorization(ctx, authorizationBegin)
+}
+func (runtime *Runtime) PollAuthorization(ctx context.Context) (integrations.AuthorizationProgress, error) {
+	return runtime.authorization(ctx, authorizationStatus)
+}
+func (runtime *Runtime) CancelAuthorization(ctx context.Context) error {
+	_, err := runtime.authorization(ctx, authorizationCancel)
+	return err
+}
+func (runtime *Runtime) DisconnectAuthorization(ctx context.Context) error {
+	_, err := runtime.authorization(ctx, authorizationDisconnect)
+	return err
+}
 
 func (runtime *Runtime) authorization(ctx context.Context, action authorizationCommand) (integrations.AuthorizationProgress, error) {
 	if action != authorizationStatus && action != authorizationBegin && action != authorizationCancel && action != authorizationDisconnect {
@@ -262,9 +289,11 @@ func (runtime *Runtime) authorization(ctx context.Context, action authorizationC
 	if action == authorizationCancel {
 		runtime.cancelLogin()
 	}
-	current:=runtime.load(ctx)
-    if err:=runtime.credentialReadFailure();err!=nil{return integrations.AuthorizationProgress{},err}
-    if action == authorizationBegin && (current == nil || runtime.requiresProviderIdentity() && !runtime.identityReady(ctx)) {
+	current := runtime.load(ctx)
+	if err := runtime.credentialReadFailure(); err != nil {
+		return integrations.AuthorizationProgress{}, err
+	}
+	if action == authorizationBegin && (current == nil || runtime.requiresProviderIdentity() && !runtime.identityReady(ctx)) {
 		runtime.mu.RLock()
 		pending := runtime.flow != nil && runtime.flow.expires.After(time.Now())
 		runtime.mu.RUnlock()
@@ -278,14 +307,16 @@ func (runtime *Runtime) authorization(ctx context.Context, action authorizationC
 	flow := runtime.flow
 	runtime.mu.RUnlock()
 	status, authURL := "disconnected", ""
-	current=runtime.load(ctx)
-    if err:=runtime.credentialReadFailure();err!=nil{return integrations.AuthorizationProgress{},err}
-    if current != nil {
+	current = runtime.load(ctx)
+	if err := runtime.credentialReadFailure(); err != nil {
+		return integrations.AuthorizationProgress{}, err
+	}
+	if current != nil {
 		status = "connected"
 	} else if flow != nil && flow.expires.After(time.Now()) {
 		status, authURL = "pending", flow.authURL
 	}
-return integrations.AuthorizationProgress{State:integrations.AuthorizationState(status),AuthorizationURL:authURL}, nil
+	return integrations.AuthorizationProgress{State: integrations.AuthorizationState(status), AuthorizationURL: authURL}, nil
 }
 func (runtime *Runtime) startLogin() error {
 	runtime.cancelLogin()
@@ -451,12 +482,20 @@ func (runtime *Runtime) load(ctx context.Context) *tokenBundle {
 	runtime.mu.RUnlock()
 	encoded, err := runtime.store.Get(ctx, credentialName)
 	runtime.noteCredentialRead(err)
-    if err!=nil{return nil}
-    if encoded==""{return nil}
-    if len(encoded)>32768{runtime.noteCredentialRead(ErrUnavailable);return nil}
+	if err != nil {
+		return nil
+	}
+	if encoded == "" {
+		return nil
+	}
+	if len(encoded) > 32768 {
+		runtime.noteCredentialRead(ErrUnavailable)
+		return nil
+	}
 	var value tokenBundle
 	if !decodePersistedTokenBundle(encoded, &value) || value.ClientID != runtime.config.ClientID || !validCredential(value.AccessToken, 16384) || !validCredential(value.RefreshToken, 16384) || !hasScope(value.Scope, runtime.scope) || value.ExpiresAt.IsZero() || !runtime.validPersistedIdentity(value) {
-		runtime.noteCredentialRead(ErrUnavailable);return nil
+		runtime.noteCredentialRead(ErrUnavailable)
+		return nil
 	}
 	if runtime.requiresProviderIdentity() && (!hasScope(value.Scope, openidScope) || !hasScope(value.Scope, profileScope)) {
 		value.ProviderIdentity, value.IdentityVerified = "", false
@@ -547,7 +586,7 @@ func (runtime *Runtime) save(ctx context.Context, value *tokenBundle) error {
 	runtime.identityFence.Lock()
 	runtime.mu.Lock()
 	runtime.tokens = &copy
-    runtime.credentialReadError=nil
+	runtime.credentialReadError = nil
 	runtime.mu.Unlock()
 	runtime.identityFence.Unlock()
 	return nil
@@ -642,5 +681,13 @@ func callbackPage(title, message string) string {
 	return "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>" + html.EscapeString(title) + "</title><body style='font:16px system-ui;padding:48px'><h1>" + html.EscapeString(title) + "</h1><p>" + html.EscapeString(message) + "</p></body>"
 }
 
-func (runtime *Runtime) noteCredentialRead(err error){runtime.mu.Lock();runtime.credentialReadError=err;runtime.mu.Unlock()}
-func (runtime *Runtime) credentialReadFailure()error{runtime.mu.RLock();defer runtime.mu.RUnlock();return runtime.credentialReadError}
+func (runtime *Runtime) noteCredentialRead(err error) {
+	runtime.mu.Lock()
+	runtime.credentialReadError = err
+	runtime.mu.Unlock()
+}
+func (runtime *Runtime) credentialReadFailure() error {
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	return runtime.credentialReadError
+}

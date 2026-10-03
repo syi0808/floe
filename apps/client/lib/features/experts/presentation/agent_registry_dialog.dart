@@ -78,10 +78,7 @@ class _AgentRegistrySettingsState extends State<AgentRegistrySettings> {
           Text(strings.agentRegistryTitle, style: FloeType.title),
           if (widget.focus != null) ...[
             const SizedBox(height: FloeSpace.xs),
-            Text(
-              widget.focus!.review.requirementRef,
-              style: FloeType.body,
-            ),
+            Text(widget.focus!.review.requirementRef, style: FloeType.body),
           ],
           const SizedBox(height: FloeSpace.xs),
           Text(
@@ -208,7 +205,8 @@ class _InstallationCard extends StatelessWidget {
                 requirement: requirement,
                 focusedReview:
                     focusedReview?.assignmentRef == assignment.assignmentRef &&
-                        focusedReview?.requirementRef == requirement.requirementRef
+                        focusedReview?.requirementRef ==
+                            requirement.requirementRef
                     ? focusedReview
                     : null,
                 onBindingReplaced: onBindingReplaced,
@@ -321,7 +319,8 @@ class _RequirementSectionState extends State<_RequirementSection> {
         if (inspection != null)
           for (final candidate in inspection.candidates)
             _InspectionRow(candidate: candidate),
-        if (inspection == null && review == null &&
+        if (inspection == null &&
+            review == null &&
             widget.requirement.selectedCount > 0)
           Text(strings.expertSourceUnavailable),
         if (inspection != null && inspection.candidates.isEmpty)
@@ -335,9 +334,10 @@ class _RequirementSectionState extends State<_RequirementSection> {
               enabled: _canChange(review, candidate),
             ),
           if (draft.length < widget.requirement.minimumSources)
-            const Text('This Expert needs more sources before it can run a Task.'),
-          if (review.expired)
-            Text(strings.agentInteractionExpired),
+            const Text(
+              'This Expert needs more sources before it can run a Task.',
+            ),
+          if (review.expired) Text(strings.agentInteractionExpired),
           Wrap(
             spacing: FloeSpace.sm,
             children: [
@@ -351,9 +351,7 @@ class _RequirementSectionState extends State<_RequirementSection> {
                 child: Text(strings.agentRegistryRefresh),
               ),
               FloeButton.filled(
-                onPressed: _canReplace(review)
-                    ? () => _replace(draft)
-                    : null,
+                onPressed: _canReplace(review) ? () => _replace(draft) : null,
                 child: Text(strings.expertSourceSave),
               ),
               if (draft.isNotEmpty)
@@ -379,10 +377,7 @@ class _RequirementSectionState extends State<_RequirementSection> {
     );
   }
 
-  bool _canChange(
-    AgentBindingReview review,
-    AgentBindingCandidate candidate,
-  ) {
+  bool _canChange(AgentBindingReview review, AgentBindingCandidate candidate) {
     if (!widget.controller.canManage || !review.canReplace) return false;
     if (candidate.availability == AgentCandidateAvailability.available) {
       return draft.contains(candidate.candidateRef) || draft.length < 16;
@@ -406,9 +401,7 @@ class _RequirementSectionState extends State<_RequirementSection> {
   }
 
   bool _canReplace(AgentBindingReview review) =>
-      widget.controller.canManage &&
-      review.canReplace &&
-      draft.length <= 16;
+      widget.controller.canManage && review.canReplace && draft.length <= 16;
 
   Future<void> _replace(Set<String> refs) async {
     final replaced = await widget.controller.replaceBinding(refs);
@@ -428,7 +421,9 @@ class _InspectionRow extends StatelessWidget {
     subtitle: candidate.availability == AgentCandidateAvailability.unavailable
         ? Text(AppLocalizations.of(context).expertSourceUnavailable)
         : null,
-    trailing: candidate.selected ? const Icon(Icons.check_circle_outline) : null,
+    trailing: candidate.selected
+        ? const Icon(Icons.check_circle_outline)
+        : null,
   );
 }
 

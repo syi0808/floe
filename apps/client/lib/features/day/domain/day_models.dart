@@ -40,13 +40,10 @@ final class DayQuery {
     date.day,
   ).subtract(Duration(seconds: timezoneOffsetSeconds));
 
-  DateTime get endsAt => DateTime.utc(
-    date.year,
-    date.month,
-    date.day + 1,
-  ).subtract(
-    Duration(seconds: endTimezoneOffsetSeconds ?? timezoneOffsetSeconds),
-  );
+  DateTime get endsAt =>
+      DateTime.utc(date.year, date.month, date.day + 1).subtract(
+        Duration(seconds: endTimezoneOffsetSeconds ?? timezoneOffsetSeconds),
+      );
 }
 
 sealed class DayItemSource {
@@ -218,34 +215,37 @@ final class DayCalendarRange {
     startDate.day,
   ).subtract(Duration(seconds: timezoneOffsetSeconds));
 
-  DateTime get endsAt => DateTime.utc(
-    endDateExclusive.year,
-    endDateExclusive.month,
-    endDateExclusive.day,
-  ).subtract(
-    Duration(
-      seconds: endTimezoneOffsetSeconds ?? timezoneOffsetSeconds,
-    ),
-  );
+  DateTime get endsAt =>
+      DateTime.utc(
+        endDateExclusive.year,
+        endDateExclusive.month,
+        endDateExclusive.day,
+      ).subtract(
+        Duration(seconds: endTimezoneOffsetSeconds ?? timezoneOffsetSeconds),
+      );
 
   /// Presentation-only coverage test against the selected Day query.
   bool covers(DayQuery query) {
-    final queryDate = DateTime(query.date.year, query.date.month, query.date.day);
+    final queryDate = DateTime(
+      query.date.year,
+      query.date.month,
+      query.date.day,
+    );
     final queryEndDate = DateTime(
       query.date.year,
       query.date.month,
       query.date.day + 1,
     );
-    final rangeStartsNoLater =
-        !DateTime(startDate.year, startDate.month, startDate.day).isAfter(
-          queryDate,
-        );
-    final rangeEndsNoEarlier =
-        !DateTime(
-          endDateExclusive.year,
-          endDateExclusive.month,
-          endDateExclusive.day,
-        ).isBefore(queryEndDate);
+    final rangeStartsNoLater = !DateTime(
+      startDate.year,
+      startDate.month,
+      startDate.day,
+    ).isAfter(queryDate);
+    final rangeEndsNoEarlier = !DateTime(
+      endDateExclusive.year,
+      endDateExclusive.month,
+      endDateExclusive.day,
+    ).isBefore(queryEndDate);
     return rangeStartsNoLater &&
         rangeEndsNoEarlier &&
         !startsAt.isAfter(query.startsAt) &&

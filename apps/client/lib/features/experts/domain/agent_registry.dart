@@ -62,12 +62,18 @@ final class AgentDirectorySnapshot {
   AgentDirectorySnapshot.fromJson(Map<String, dynamic> json)
     : revision = _number(json['revision'], 'directory.revision'),
       installations = List.unmodifiable(
-        _entries(json['installations'], 128, 'directory.installations')
-            .map(AgentInstallation.fromJson),
+        _entries(
+          json['installations'],
+          128,
+          'directory.installations',
+        ).map(AgentInstallation.fromJson),
       ),
       assignments = List.unmodifiable(
-        _entries(json['assignments'], 256, 'directory.assignments')
-            .map(AgentAssignment.fromJson),
+        _entries(
+          json['assignments'],
+          256,
+          'directory.assignments',
+        ).map(AgentAssignment.fromJson),
       ) {
     _exactKeys(json, const {'revision', 'installations', 'assignments'});
     if (installations.map((entry) => entry.installationRef).toSet().length !=
@@ -130,8 +136,11 @@ final class AgentAssignment {
         'assignment.binding_revision',
       ),
       requirements = List.unmodifiable(
-        _entries(json['requirements'], 32, 'assignment.requirements')
-            .map(AgentSourceRequirement.fromJson),
+        _entries(
+          json['requirements'],
+          32,
+          'assignment.requirements',
+        ).map(AgentSourceRequirement.fromJson),
       ) {
     _exactKeys(json, const {
       'assignment_ref',
@@ -159,7 +168,10 @@ final class AgentSourceRequirement {
   AgentSourceRequirement.fromJson(Map<String, dynamic> json)
     : requirementRef = _identifier(json['requirement_ref'], 'requirement_ref'),
       label = _text(json['label'], 128, 'requirement.label'),
-      selectedCount = _number(json['selected_count'], 'requirement.selected_count'),
+      selectedCount = _number(
+        json['selected_count'],
+        'requirement.selected_count',
+      ),
       minimumSources = _number(
         json['minimum_sources'],
         'requirement.minimum_sources',
@@ -251,7 +263,8 @@ final class AgentBindingReview {
         candidates.where((candidate) => candidate.selected).length > 16 ||
         candidates.any(
           (candidate) =>
-              candidate.availability == AgentCandidateAvailability.unavailable &&
+              candidate.availability ==
+                  AgentCandidateAvailability.unavailable &&
               !candidate.selected,
         ) ||
         allowedActions.isEmpty ||
@@ -310,8 +323,11 @@ final class AgentBindingInspection {
         'binding_revision',
       ),
       candidates = List.unmodifiable(
-        _entries(json['candidates'], 64, 'binding.candidates')
-            .map(AgentBindingInspectionCandidate.fromJson),
+        _entries(
+          json['candidates'],
+          64,
+          'binding.candidates',
+        ).map(AgentBindingInspectionCandidate.fromJson),
       ) {
     _exactKeys(json, const {
       'assignment_ref',
@@ -365,9 +381,8 @@ String _identifier(Object? value, String field) {
 String _uuid(Object? value, String field) {
   if (value is! String ||
       value == '00000000-0000-0000-0000-000000000000' ||
-      !RegExp(
-        r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-      ).hasMatch(value)) {
+      !RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+          .hasMatch(value)) {
     throw FormatException('Invalid $field.');
   }
   return value;
@@ -421,11 +436,7 @@ Map<String, dynamic> _object(Object? value, String field) {
   return Map<String, dynamic>.from(value);
 }
 
-List<Map<String, dynamic>> _entries(
-  Object? value,
-  int maximum,
-  String field,
-) {
+List<Map<String, dynamic>> _entries(Object? value, int maximum, String field) {
   if (value is! List || value.length > maximum) {
     throw FormatException('Invalid $field.');
   }
@@ -433,7 +444,8 @@ List<Map<String, dynamic>> _entries(
 }
 
 void _exactKeys(Map<String, dynamic> value, Set<String> fields) {
-  if (value.length != fields.length || !value.keys.toSet().containsAll(fields)) {
+  if (value.length != fields.length ||
+      !value.keys.toSet().containsAll(fields)) {
     throw const FormatException('Unexpected wire fields.');
   }
 }
@@ -447,11 +459,13 @@ List<T> _enumList<T extends Enum>(
   if (value is! List || value.length > maximum) {
     throw FormatException('Invalid $field.');
   }
-  return value.map((entry) {
-    if (entry is! String) throw FormatException('Invalid $field.');
-    for (final option in allowed) {
-      if (option.name == entry) return option;
-    }
-    throw FormatException('Invalid $field.');
-  }).toList(growable: false);
+  return value
+      .map((entry) {
+        if (entry is! String) throw FormatException('Invalid $field.');
+        for (final option in allowed) {
+          if (option.name == entry) return option;
+        }
+        throw FormatException('Invalid $field.');
+      })
+      .toList(growable: false);
 }

@@ -37,7 +37,7 @@ type disconnectOperation struct {
 type diskState struct {
 	SchemaVersion int                             `json:"schema_version"`
 	Revision      uint64                          `json:"revision"`
-	Connections   map[string]Record   `json:"connections"`
+	Connections   map[string]Record               `json:"connections"`
 	Attempts      map[string]attemptRecord        `json:"attempts"`
 	Cleanup       map[string]cleanupRecord        `json:"cleanup"`
 	Receipts      map[string]trust.CleanupReceipt `json:"receipts"`
@@ -134,13 +134,15 @@ func readState(directory string) (diskState, error) {
 			return st, errors.New("invalid integration attempt")
 		}
 	}
-    for _,attempt:=range st.Attempts {
-        if len(attempt.RequestedScope)>0 {
-            definition,ok:=DefinitionFor(attempt.ConnectorID)
-            canonical,err:=ValidatedConnectorScope(definition,attempt.RequestedScope)
-            if !ok || err!=nil || !reflect.DeepEqual(canonical,CloneConnectorScope(attempt.RequestedScope)){return st,errors.New("invalid integration request identity")}
-        }
-    }
+	for _, attempt := range st.Attempts {
+		if len(attempt.RequestedScope) > 0 {
+			definition, ok := DefinitionFor(attempt.ConnectorID)
+			canonical, err := ValidatedConnectorScope(definition, attempt.RequestedScope)
+			if !ok || err != nil || !reflect.DeepEqual(canonical, CloneConnectorScope(attempt.RequestedScope)) {
+				return st, errors.New("invalid integration request identity")
+			}
+		}
+	}
 	for id, c := range st.Cleanup {
 		if id != c.ID || !trust.ValidID(id) || c.RuntimeDone == nil || c.VaultDone == nil {
 			return st, errors.New("invalid integration cleanup")

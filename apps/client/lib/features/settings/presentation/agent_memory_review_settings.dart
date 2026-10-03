@@ -15,65 +15,65 @@ final class AgentMemoryReviewSettings extends StatelessWidget {
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: controller,
     builder: (context, _) {
-    final candidates = controller.candidates;
-    return FloeSquircle(
-      padding: const EdgeInsets.all(FloeSpace.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Memory review', style: FloeType.titleLarge),
-          const SizedBox(height: FloeSpace.xs),
-          Text(
-            'Floe only saves proposed personal knowledge after you approve it.',
-            style: FloeType.body.copyWith(color: FloePalette.neutral600),
-          ),
-          const SizedBox(height: FloeSpace.md),
-          if (controller.reviewFailure != null)
+      final candidates = controller.candidates;
+      return FloeSquircle(
+        padding: const EdgeInsets.all(FloeSpace.lg),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Memory review', style: FloeType.titleLarge),
+            const SizedBox(height: FloeSpace.xs),
             Text(
-              'Memory review is temporarily unavailable.',
-              style: FloeType.body.copyWith(color: FloePalette.error600),
-            )
-          else if (candidates == null)
-            Text(
-              'Loading proposed memories…',
+              'Floe only saves proposed personal knowledge after you approve it.',
               style: FloeType.body.copyWith(color: FloePalette.neutral600),
-            )
-          else if (candidates.isEmpty)
-            Text(
-              'No pending memory changes.',
-              style: FloeType.body.copyWith(color: FloePalette.neutral600),
-            )
-          else
-            for (final candidate in candidates) ...[
-              _Candidate(controller: controller, candidate: candidate),
-              if (candidate != candidates.last)
-                const SizedBox(height: FloeSpace.sm),
+            ),
+            const SizedBox(height: FloeSpace.md),
+            if (controller.reviewFailure != null)
+              Text(
+                'Memory review is temporarily unavailable.',
+                style: FloeType.body.copyWith(color: FloePalette.error600),
+              )
+            else if (candidates == null)
+              Text(
+                'Loading proposed memories…',
+                style: FloeType.body.copyWith(color: FloePalette.neutral600),
+              )
+            else if (candidates.isEmpty)
+              Text(
+                'No pending memory changes.',
+                style: FloeType.body.copyWith(color: FloePalette.neutral600),
+              )
+            else
+              for (final candidate in candidates) ...[
+                _Candidate(controller: controller, candidate: candidate),
+                if (candidate != candidates.last)
+                  const SizedBox(height: FloeSpace.sm),
+              ],
+            if (controller.acknowledgement case final acknowledgement?) ...[
+              const SizedBox(height: FloeSpace.sm),
+              Text(
+                'Confirmed ${acknowledgement.decision.name} · '
+                '${acknowledgement.committedAt.toLocal()}',
+                key: const ValueKey('memory-decision-acknowledgement'),
+                style: FloeType.bodySmall.copyWith(
+                  color: FloePalette.neutral600,
+                ),
+              ),
             ],
-          if (controller.acknowledgement case final acknowledgement?) ...[
-            const SizedBox(height: FloeSpace.sm),
-            Text(
-              'Confirmed ${acknowledgement.decision.name} · '
-              '${acknowledgement.committedAt.toLocal()}',
-              key: const ValueKey('memory-decision-acknowledgement'),
-              style: FloeType.bodySmall.copyWith(
-                color: FloePalette.neutral600,
+            if (controller.canRetryDecision) ...[
+              const SizedBox(height: FloeSpace.sm),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FloeButton.outlined(
+                  key: const ValueKey('memory-decision-retry'),
+                  onPressed: controller.retryPendingDecision,
+                  child: const Text('Retry pending decision'),
+                ),
               ),
-            ),
+            ],
           ],
-          if (controller.canRetryDecision) ...[
-            const SizedBox(height: FloeSpace.sm),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: FloeButton.outlined(
-                key: const ValueKey('memory-decision-retry'),
-                onPressed: controller.retryPendingDecision,
-                child: const Text('Retry pending decision'),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
+        ),
+      );
     },
   );
 }
@@ -106,7 +106,8 @@ final class _Candidate extends StatelessWidget {
             FloeButton.filled(
               key: ValueKey('memory-approve-${candidate.id}'),
               size: FloeButtonSize.compact,
-              onPressed: controller.canReview &&
+              onPressed:
+                  controller.canReview &&
                       candidate.allowedActions.contains(
                         AgentMemoryDecision.approve,
                       )
@@ -120,7 +121,8 @@ final class _Candidate extends StatelessWidget {
             FloeButton.text(
               key: ValueKey('memory-reject-${candidate.id}'),
               size: FloeButtonSize.compact,
-              onPressed: controller.canReview &&
+              onPressed:
+                  controller.canReview &&
                       candidate.allowedActions.contains(
                         AgentMemoryDecision.reject,
                       )

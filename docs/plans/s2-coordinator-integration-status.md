@@ -1,5 +1,7 @@
 # S2 coordinator integration checkpoint
 
+Current status (2026-10-03 09:19 UTC): G2 first attempt failed; known compiler/format corrections are prepared but unvalidated. The exact prior ChatGPT discussion revealed a missing Health transform/model-executor separation, so whole-structure closure is reopened pending that scope. Historical entries below describe their own checkpoints. See `2026-10-03-g2-first-attempt.md`.
+
 S2 is active and intentionally incomplete. G1 completed on the earlier first-vertical snapshot; no S2 formatter, compiler, build, checker, or tests have run. G2 remains after full structural closure.
 
 Completed source transformations in this checkpoint:

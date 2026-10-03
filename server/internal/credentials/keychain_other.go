@@ -2,4 +2,4 @@
 
 package credentials
 
-func nativeKeychain(string,string,int)(string,error){return "",ErrUnavailable}
+func nativeKeychain(string, string, int) (string, error) { return "", ErrUnavailable }

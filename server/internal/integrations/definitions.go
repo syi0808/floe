@@ -34,9 +34,12 @@ var definitions = []Definition{
 
 // Definitions returns owned copies of the fixed provider setup inventory.
 func Definitions() []Definition {
-    out:=append([]Definition(nil),definitions...)
-    for i:=range out {out[i].RequiredScopes=append([]string{},out[i].RequiredScopes...);out[i].ScopeFields=append([]string{},out[i].ScopeFields...)}
-    return out
+	out := append([]Definition(nil), definitions...)
+	for i := range out {
+		out[i].RequiredScopes = append([]string{}, out[i].RequiredScopes...)
+		out[i].ScopeFields = append([]string{}, out[i].ScopeFields...)
+	}
+	return out
 }
 
 func DefinitionFor(identifier string) (Definition, bool) {
@@ -150,7 +153,7 @@ func ValidatedConnectorScope(definition Definition, scope map[string]any) (map[s
 		return map[string]any{"folder_id": folderID}, nil
 	case "calendar.google", "calendar.microsoft":
 		calendarIDs, ok := ConnectorScopeStrings(scope["calendar_ids"])
-		if !ok || len(calendarIDs) == 0 || len(calendarIDs)>256 {
+		if !ok || len(calendarIDs) == 0 || len(calendarIDs) > 256 {
 			return nil, errors.New("invalid calendar scope")
 		}
 		for _, calendarID := range calendarIDs {
@@ -194,7 +197,7 @@ func CloneConnectorScope(scope map[string]any) map[string]any {
 }
 
 const (
-	HomeTokenKey   = "FLOE_CONNECTOR_HOME_ASSISTANT_TOKEN"
+	HomeTokenKey = "FLOE_CONNECTOR_HOME_ASSISTANT_TOKEN"
 )
 
 func ConnectorScopeStrings(value any) ([]string, bool) {

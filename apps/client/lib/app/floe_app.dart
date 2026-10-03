@@ -22,7 +22,6 @@ class FloeApp extends StatefulWidget {
     required this.gateway,
     required this.personId,
     this.calendarActions,
-    this.dayRefreshGateway,
     this.query,
     this.agentGateway,
     this.connectionsGateway,
@@ -37,7 +36,6 @@ class FloeApp extends StatefulWidget {
 
   /// Proposal, approval and execution of calendar actions.
   final CalendarActionGateway? calendarActions;
-  final DayRefreshGateway? dayRefreshGateway;
 
   final DayQuery? query;
   final AgentConversationGateway? agentGateway;
@@ -93,7 +91,6 @@ class _FloeAppState extends State<FloeApp> {
       child: PersonalDayScreen(
         gateway: widget.gateway,
         calendarActions: widget.calendarActions,
-        dayRefreshGateway: widget.dayRefreshGateway,
         query: effectiveQuery,
         agentGateway: widget.agentGateway,
         connectionsController: connectionsController,

@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"floe/server/internal/authority"
-	"floe/server/internal/integrations"
 	"floe/server/internal/inference"
+	"floe/server/internal/integrations"
 	"floe/server/internal/operation"
 	"floe/server/internal/pairing"
 	"floe/server/internal/trust"
@@ -37,17 +37,17 @@ type TestRequest struct {
 	ID string `json:"id"`
 }
 type Handler struct {
-    Address string
-    Trust *trust.Service
-    Inference *InferenceHandler
-    Setup HostedSetup
-    Pairing *pairing.Operations
-    Integrations *integrations.Service
-    Sources *authority.SourceService
-    Mirror *authority.CalendarMirrorService
-    Configuration *inference.Configuration
-    Accounts *inference.AccountManagement
-    Clients *trust.ClientAdministration
+	Address       string
+	Trust         *trust.Service
+	Inference     *InferenceHandler
+	Setup         HostedSetup
+	Pairing       *pairing.Operations
+	Integrations  *integrations.Service
+	Sources       *authority.SourceService
+	Mirror        *authority.CalendarMirrorService
+	Configuration *inference.Configuration
+	Accounts      *inference.AccountManagement
+	Clients       *trust.ClientAdministration
 }
 
 func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -151,8 +151,11 @@ func (handler *Handler) serveClient(writer http.ResponseWriter, request *http.Re
 		writeResult(writer, trust.Result(err))
 		return
 	}
-	if strings.HasPrefix(request.URL.Path,"/v1/calendar/mirror/"){serveCalendarMirror(writer,request,principal,handler.Mirror);return}
-    if strings.HasPrefix(request.URL.Path, "/v1/connectors") {
+	if strings.HasPrefix(request.URL.Path, "/v1/calendar/mirror/") {
+		serveCalendarMirror(writer, request, principal, handler.Mirror)
+		return
+	}
+	if strings.HasPrefix(request.URL.Path, "/v1/connectors") {
 		ServeConnectors(writer, request, principal, handler.Integrations)
 		return
 	}
@@ -202,22 +205,32 @@ func (handler *Handler) manage(writer http.ResponseWriter, request *http.Request
 			return handler.Pairing.Approve(request.Context(), operator, in)
 		})
 	case "/manage/api/pair/recover":
-        dispatch(writer,request,func(in pairing.RecoveryRequest) operation.Result{return handler.Pairing.Recover(request.Context(),operator,in)})
-    case "/manage/api/pair/reject":
+		dispatch(writer, request, func(in pairing.RecoveryRequest) operation.Result {
+			return handler.Pairing.Recover(request.Context(), operator, in)
+		})
+	case "/manage/api/pair/reject":
 		dispatch(writer, request, func(in pairing.RejectionRequest) operation.Result {
 			return handler.Pairing.Reject(request.Context(), operator, in)
 		})
 	case "/manage/api/route":
-		dispatch(writer, request, func(in RouteRequest) operation.Result { return handler.Configuration.UpdateRoute(request.Context(),operator,inference.RouteUpdate{Purpose:in.Purpose,Enabled:in.Enabled,Target:in.Target,ReasoningEffort:in.ReasoningEffort}) })
+		dispatch(writer, request, func(in RouteRequest) operation.Result {
+			return handler.Configuration.UpdateRoute(request.Context(), operator, inference.RouteUpdate{Purpose: in.Purpose, Enabled: in.Enabled, Target: in.Target, ReasoningEffort: in.ReasoningEffort})
+		})
 	case "/manage/api/target":
-		dispatch(writer, request, func(in TargetRequest) operation.Result { return handler.Configuration.UpdateTarget(request.Context(),operator,inference.TargetUpdate{ID:in.ID,Provider:in.Provider,BaseURL:in.BaseURL,Model:in.Model,APIKey:in.APIKey}) })
+		dispatch(writer, request, func(in TargetRequest) operation.Result {
+			return handler.Configuration.UpdateTarget(request.Context(), operator, inference.TargetUpdate{ID: in.ID, Provider: in.Provider, BaseURL: in.BaseURL, Model: in.Model, APIKey: in.APIKey})
+		})
 	case "/manage/api/provider":
-		dispatch(writer, request, func(in ProviderRequest) operation.Result { return handler.Configuration.UpdateProvider(request.Context(),operator,inference.ProviderUpdate{Provider:in.Provider,BaseURL:in.BaseURL,APIKey:in.APIKey,Purposes:in.Purposes}) })
+		dispatch(writer, request, func(in ProviderRequest) operation.Result {
+			return handler.Configuration.UpdateProvider(request.Context(), operator, inference.ProviderUpdate{Provider: in.Provider, BaseURL: in.BaseURL, APIKey: in.APIKey, Purposes: in.Purposes})
+		})
 	case "/manage/api/test":
 		dispatch(writer, request, func(input TestRequest) operation.Result {
-			result,err:=handler.Inference.Service.ProbeTarget(request.Context(),operator,input.ID)
-            if err!=nil {return operation.Reject(operation.Upstream,"model_unavailable")}
-            return operation.Accept(map[string]any{"ok":true,"elapsed_ms":result.ElapsedMS,"trace_id":result.TraceID})
+			result, err := handler.Inference.Service.ProbeTarget(request.Context(), operator, input.ID)
+			if err != nil {
+				return operation.Reject(operation.Upstream, "model_unavailable")
+			}
+			return operation.Accept(map[string]any{"ok": true, "elapsed_ms": result.ElapsedMS, "trace_id": result.TraceID})
 		})
 	case "/manage/api/client/delete", "/manage/api/target/delete":
 		var input struct {
@@ -228,13 +241,13 @@ func (handler *Handler) manage(writer http.ResponseWriter, request *http.Request
 			return
 		}
 		if request.URL.Path == "/manage/api/client/delete" {
-			writeResult(writer, handler.Clients.Revoke(request.Context(),operator,input.ID))
+			writeResult(writer, handler.Clients.Revoke(request.Context(), operator, input.ID))
 		} else {
-			writeResult(writer, handler.Configuration.DeleteTarget(request.Context(),operator,input.ID))
+			writeResult(writer, handler.Configuration.DeleteTarget(request.Context(), operator, input.ID))
 		}
 	default:
 		if strings.HasPrefix(request.URL.Path, "/manage/api/codex/") {
-			writeResult(writer, handler.Accounts.Execute(request.Context(),operator,inference.AccountCommand(strings.TrimPrefix(request.URL.Path, "/manage/api/codex/"))))
+			writeResult(writer, handler.Accounts.Execute(request.Context(), operator, inference.AccountCommand(strings.TrimPrefix(request.URL.Path, "/manage/api/codex/"))))
 			return
 		}
 		failure(writer, http.StatusNotFound, "not_found")
@@ -284,17 +297,37 @@ func writeResult(writer http.ResponseWriter, result operation.Result) {
 }
 
 // managementState is a redacted transport projection of owner snapshots.
-func (handler *Handler) managementState(request *http.Request,operator trust.OperatorPrincipal) operation.Result {
-    config,err:=handler.Configuration.Snapshot(request.Context(),operator)
-    if err!=nil{return operation.Reject(operation.Unavailable,"configuration_unavailable")}
-    clients,err:=handler.Trust.Clients();if err!=nil{return trust.Result(err)}
-    ids:=[]string{};scopes:=map[string]any{}
-    for _,client:=range clients {ids=append(ids,client.ClientID);scopes[client.ClientID]=map[string]string{"person_id":client.PersonID,"device_id":client.DeviceID}}
-    traces,err:=handler.Inference.Service.Traces(operator,20);if err!=nil{return operation.Reject(operation.Unauthenticated,"unauthorized")}
-    var inventory any=config.Inventory
-    if !config.InventoryAvailable {inventory=nil}
-    pending,err:=handler.Pairing.Pending(request.Context());if err!=nil{return trust.Result(err)}
-    return operation.Accept(map[string]any{"providers":config.Profiles,"clients":ids,"client_scopes":scopes,"pairing":pending,"address":"http://"+handler.Address,"traces":traces,"inventory":inventory})
+func (handler *Handler) managementState(request *http.Request, operator trust.OperatorPrincipal) operation.Result {
+	config, err := handler.Configuration.Snapshot(request.Context(), operator)
+	if err != nil {
+		return operation.Reject(operation.Unavailable, "configuration_unavailable")
+	}
+	clients, err := handler.Trust.Clients()
+	if err != nil {
+		return trust.Result(err)
+	}
+	ids := []string{}
+	scopes := map[string]any{}
+	for _, client := range clients {
+		ids = append(ids, client.ClientID)
+		scopes[client.ClientID] = map[string]string{"person_id": client.PersonID, "device_id": client.DeviceID}
+	}
+	traces, err := handler.Inference.Service.Traces(operator, 20)
+	if err != nil {
+		return operation.Reject(operation.Unauthenticated, "unauthorized")
+	}
+	var inventory any = config.Inventory
+	if !config.InventoryAvailable {
+		inventory = nil
+	}
+	pending, err := handler.Pairing.Pending(request.Context())
+	if err != nil {
+		return trust.Result(err)
+	}
+	return operation.Accept(map[string]any{"providers": config.Profiles, "clients": ids, "client_scopes": scopes, "pairing": pending, "address": "http://" + handler.Address, "traces": traces, "inventory": inventory})
 }
 
-func (handler *Handler) ServeUnavailable(writer http.ResponseWriter){writer.Header().Set("Cache-Control","no-store");failure(writer,http.StatusServiceUnavailable,"node_closed")}
+func (handler *Handler) ServeUnavailable(writer http.ResponseWriter) {
+	writer.Header().Set("Cache-Control", "no-store")
+	failure(writer, http.StatusServiceUnavailable, "node_closed")
+}

@@ -13,8 +13,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"floe/server/internal/trust"
 	"floe/server/internal/views"
-    "floe/server/internal/trust"
 )
 
 const mirrorMaxResponse = 1 << 20
@@ -35,12 +35,12 @@ type mirrorPage struct {
 }
 
 type mirrorEvent struct {
-	ID      string          `json:"id"`
-	ETag    string          `json:"etag"`
-	Status  string          `json:"status"`
-	Summary string          `json:"summary"`
-	Start   mirrorDateTime  `json:"start"`
-	End     mirrorDateTime  `json:"end"`
+	ID      string         `json:"id"`
+	ETag    string         `json:"etag"`
+	Status  string         `json:"status"`
+	Summary string         `json:"summary"`
+	Start   mirrorDateTime `json:"start"`
+	End     mirrorDateTime `json:"end"`
 }
 
 type mirrorDateTime struct {
@@ -127,11 +127,11 @@ func (reader *mirrorReader) Read(ctx context.Context, request views.ReadRequest)
 			return mirrorReadError(views.InvalidProviderResponse)
 		}
 		record := views.CalendarRecord{
-			CanModify: false,
+			CanModify:  false,
 			CalendarID: query.CalendarID,
 			ExternalID: event.ID,
-			Title:     event.Summary,
-			Schedule:  schedule,
+			Title:      event.Summary,
+			Schedule:   schedule,
 		}
 		if event.ETag != "" {
 			if !validMirrorText(event.ETag, 512) {
@@ -181,7 +181,7 @@ func (client *Client) readMirrorPage(ctx context.Context, query views.CalendarMi
 	if err := client.getMirror(ctx, path, &page); err != nil {
 		return mirrorPage{}, err
 	}
-	if page.Items==nil || !validMirrorText(page.TimeZone,128) || len(page.Items) > int(query.Limit) || !validMirrorCursor(page.NextPageToken, 4096) {
+	if page.Items == nil || !validMirrorText(page.TimeZone, 128) || len(page.Items) > int(query.Limit) || !validMirrorCursor(page.NextPageToken, 4096) {
 		return mirrorPage{}, ErrInvalidResponse
 	}
 	return page, nil
@@ -201,14 +201,18 @@ func (client *Client) getMirror(ctx context.Context, path string, output any) er
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	response, err := client.http.Do(request)
-    if response!=nil && response.Body!=nil {defer response.Body.Close()}
+	if response != nil && response.Body != nil {
+		defer response.Body.Close()
+	}
 	if contextErr := mirrorContextFailure(ctx, err); contextErr != nil {
 		return contextErr
 	}
 	if err != nil {
 		return ErrUnavailable
 	}
-    if response==nil || response.Body==nil{return ErrInvalidResponse}
+	if response == nil || response.Body == nil {
+		return ErrInvalidResponse
+	}
 	if contextErr := mirrorContextFailure(ctx, nil); contextErr != nil {
 		return contextErr
 	}
@@ -227,7 +231,7 @@ func (client *Client) getMirror(ctx context.Context, path string, output any) er
 	if contextErr := mirrorContextFailure(ctx, err); contextErr != nil {
 		return contextErr
 	}
-	if err != nil || len(data) > mirrorMaxResponse || !utf8.Valid(data) || trust.StrictJSON(data,mirrorMaxResponse,32)!=nil || json.Unmarshal(data, output) != nil {
+	if err != nil || len(data) > mirrorMaxResponse || !utf8.Valid(data) || trust.StrictJSON(data, mirrorMaxResponse, 32) != nil || json.Unmarshal(data, output) != nil {
 		return ErrInvalidResponse
 	}
 	return nil

@@ -95,7 +95,8 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
     final axis = CalendarDayAxis(
       widget.snapshot.date,
       widget.snapshot.timezoneOffsetSeconds,
-      endOffsetSeconds: widget.query.endTimezoneOffsetSeconds ??
+      endOffsetSeconds:
+          widget.query.endTimezoneOffsetSeconds ??
           widget.query.timezoneOffsetSeconds,
     );
     final minutes =
@@ -259,7 +260,8 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
       events,
       snapshot.date,
       snapshot.timezoneOffsetSeconds,
-      endOffsetSeconds: widget.query.endTimezoneOffsetSeconds ??
+      endOffsetSeconds:
+          widget.query.endTimezoneOffsetSeconds ??
           widget.query.timezoneOffsetSeconds,
     );
     final empty = events.isEmpty && !widget.loading;
@@ -268,7 +270,8 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
     final axis = CalendarDayAxis(
       snapshot.date,
       snapshot.timezoneOffsetSeconds,
-      endOffsetSeconds: widget.query.endTimezoneOffsetSeconds ??
+      endOffsetSeconds:
+          widget.query.endTimezoneOffsetSeconds ??
           widget.query.timezoneOffsetSeconds,
     );
     final currentMinute = axis.minute(snapshot.generatedAt);
@@ -682,7 +685,9 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                 onConnections: widget.onConnections,
                                 onRefresh: widget.onRefresh,
                                 hasSources:
-                                    snapshot.calendarCoverage?.sources
+                                    snapshot
+                                        .calendarCoverage
+                                        ?.sources
                                         .isNotEmpty ==
                                     true,
                               ),

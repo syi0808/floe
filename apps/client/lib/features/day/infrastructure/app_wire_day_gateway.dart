@@ -40,7 +40,9 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
       if (_pendingRefreshes.length >= 4096) {
         throw StateError('Too many unconfirmed Day refresh commands.');
       }
-      if (_pendingRefreshes.values.any((value) => value.commandId == commandId)) {
+      if (_pendingRefreshes.values.any(
+        (value) => value.commandId == commandId,
+      )) {
         throw StateError('A Day refresh command changed its query.');
       }
       pending = _PendingRefreshCommand(
@@ -127,18 +129,23 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
   }
 
   @override
-  Future<CaptureReceipt> submitCapture(String input, DayQuery query) =>
-      _mutate(query, {
-        'type': 'submit_capture',
-        'input': input,
-        'occurred_at': _timestamp(_clock()),
-      }, (result) {
-        final capture = result.capture;
-        if (capture == null) {
-          throw const FormatException('Day capture acknowledgement omitted its receipt.');
-        }
-        return capture;
-      });
+  Future<CaptureReceipt> submitCapture(String input, DayQuery query) => _mutate(
+    query,
+    {
+      'type': 'submit_capture',
+      'input': input,
+      'occurred_at': _timestamp(_clock()),
+    },
+    (result) {
+      final capture = result.capture;
+      if (capture == null) {
+        throw const FormatException(
+          'Day capture acknowledgement omitted its receipt.',
+        );
+      }
+      return capture;
+    },
+  );
 
   @override
   Future<DaySnapshot> classifyCapture(
@@ -239,11 +246,11 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
         'day': requestDay,
         'mutation': requestMutation,
       });
-      _requireKeys(
-        result,
-        const {'kind', 'command_id', 'mutation'},
-        'Day mutation result',
-      );
+      _requireKeys(result, const {
+        'kind',
+        'command_id',
+        'mutation',
+      }, 'Day mutation result');
       if (result['kind'] != 'day_mutation' ||
           result['command_id'] != commandId) {
         throw const FormatException('Invalid Day mutation correlation.');
@@ -338,11 +345,11 @@ _DecodedMutation _decodeMutationResult(
   Map<String, dynamic> json,
   DayQuery query,
 ) {
-  _requireKeys(
-    json,
-    const {'snapshot', 'changed_item', 'capture'},
-    'Day mutation payload',
-  );
+  _requireKeys(json, const {
+    'snapshot',
+    'changed_item',
+    'capture',
+  }, 'Day mutation payload');
   final snapshot = _decodeSnapshot(
     _asMap(json['snapshot'], 'Day mutation snapshot'),
     expectedPersonId: query.personId,
@@ -410,11 +417,8 @@ DayRefreshSnapshot _refreshSnapshot(Map<String, dynamic> result) {
   };
 }
 
-DayRefreshFailure _refreshFailure(Object? raw) => _enumValue(
-  raw,
-  DayRefreshFailure.values,
-  'Day refresh failure',
-);
+DayRefreshFailure _refreshFailure(Object? raw) =>
+    _enumValue(raw, DayRefreshFailure.values, 'Day refresh failure');
 
 Map<String, dynamic> _classification(ClassificationDraft value) =>
     switch (value) {
@@ -442,23 +446,19 @@ DaySnapshot _decodeSnapshot(
   String? expectedPersonId,
   DayQuery? expectedQuery,
 }) {
-  _requireKeys(
-    json,
-    const {
-      'schema_version',
-      'person_id',
-      'date',
-      'generated_at',
-      'timezone_offset_seconds',
-      'now_event_id',
-      'next_event_id',
-      'overdue_task_count',
-      'items',
-      'calendar',
-      'calendar_mirror_revision',
-    },
-    'Day snapshot',
-  );
+  _requireKeys(json, const {
+    'schema_version',
+    'person_id',
+    'date',
+    'generated_at',
+    'timezone_offset_seconds',
+    'now_event_id',
+    'next_event_id',
+    'overdue_task_count',
+    'items',
+    'calendar',
+    'calendar_mirror_revision',
+  }, 'Day snapshot');
   if (json['schema_version'] != 1) {
     throw const FormatException('Unsupported Day snapshot version.');
   }
@@ -509,7 +509,9 @@ DaySnapshot _decodeSnapshot(
   final nextEventId = _optionalUuid(json['next_event_id'], 'next_event_id');
   if ((nowEventId != null && !eventIds.contains(nowEventId)) ||
       (nextEventId != null && !eventIds.contains(nextEventId))) {
-    throw const FormatException('Day snapshot contains an invalid event reference.');
+    throw const FormatException(
+      'Day snapshot contains an invalid event reference.',
+    );
   }
   final mirrorRevision = json['calendar_mirror_revision'];
   if (mirrorRevision != null &&
@@ -542,23 +544,19 @@ DayItem _decodeItem(
   final kind = json['kind'];
   switch (kind) {
     case 'event':
-      _requireKeys(
-        json,
-        const {
-          'kind',
-          'id',
-          'person_id',
-          'title',
-          'schedule',
-          'source',
-          'created_at',
-          'updated_at',
-          'revision',
-          'deleted_at',
-          'action_target',
-        },
-        'Day event',
-      );
+      _requireKeys(json, const {
+        'kind',
+        'id',
+        'person_id',
+        'title',
+        'schedule',
+        'source',
+        'created_at',
+        'updated_at',
+        'revision',
+        'deleted_at',
+        'action_target',
+      }, 'Day event');
       final id = _requiredUuid(json['id'], 'event.id');
       final personId = _requiredUuid(json['person_id'], 'event.person_id');
       if (personId != expectedPersonId) {
@@ -580,7 +578,9 @@ DayItem _decodeItem(
           throw const FormatException('Invalid safe Day event target.');
         }
       } else if (actionTarget != null) {
-        throw const FormatException('Non-Calendar Day event has an action target.');
+        throw const FormatException(
+          'Non-Calendar Day event has an action target.',
+        );
       }
       return EventItem(
         id: id,
@@ -595,24 +595,20 @@ DayItem _decodeItem(
         actionTarget: actionTarget,
       );
     case 'task':
-      _requireKeys(
-        json,
-        const {
-          'kind',
-          'id',
-          'person_id',
-          'title',
-          'deadline',
-          'priority',
-          'completed_at',
-          'source',
-          'created_at',
-          'updated_at',
-          'revision',
-          'deleted_at',
-        },
-        'Day task',
-      );
+      _requireKeys(json, const {
+        'kind',
+        'id',
+        'person_id',
+        'title',
+        'deadline',
+        'priority',
+        'completed_at',
+        'source',
+        'created_at',
+        'updated_at',
+        'revision',
+        'deleted_at',
+      }, 'Day task');
       final id = _requiredUuid(json['id'], 'task.id');
       final personId = _requiredUuid(json['person_id'], 'task.person_id');
       if (personId != expectedPersonId) {
@@ -641,21 +637,17 @@ DayItem _decodeItem(
         priority: priority,
       );
     case 'note':
-      _requireKeys(
-        json,
-        const {
-          'kind',
-          'id',
-          'person_id',
-          'content',
-          'source',
-          'created_at',
-          'updated_at',
-          'revision',
-          'deleted_at',
-        },
-        'Day note',
-      );
+      _requireKeys(json, const {
+        'kind',
+        'id',
+        'person_id',
+        'content',
+        'source',
+        'created_at',
+        'updated_at',
+        'revision',
+        'deleted_at',
+      }, 'Day note');
       final id = _requiredUuid(json['id'], 'note.id');
       final personId = _requiredUuid(json['person_id'], 'note.person_id');
       if (personId != expectedPersonId) {
@@ -693,11 +685,12 @@ _DecodedEventSchedule _decodeEventSchedule(Object? raw) {
   final json = _asMap(raw, 'Day event schedule');
   switch (json['kind']) {
     case 'timed':
-      _requireKeys(
-        json,
-        const {'kind', 'starts_at', 'ends_at', 'timezone'},
-        'Timed Day schedule',
-      );
+      _requireKeys(json, const {
+        'kind',
+        'starts_at',
+        'ends_at',
+        'timezone',
+      }, 'Timed Day schedule');
       final startsAt = _utcTimestamp(json['starts_at'], 'schedule.starts_at');
       final endsAt = _utcTimestamp(json['ends_at'], 'schedule.ends_at');
       if (!endsAt.isAfter(startsAt)) {
@@ -714,11 +707,11 @@ _DecodedEventSchedule _decodeEventSchedule(Object? raw) {
         timezone: timezone,
       );
     case 'all_day':
-      _requireKeys(
-        json,
-        const {'kind', 'start_date', 'end_date_exclusive'},
-        'All-day Day schedule',
-      );
+      _requireKeys(json, const {
+        'kind',
+        'start_date',
+        'end_date_exclusive',
+      }, 'All-day Day schedule');
       final startsAt = _civilDate(json['start_date'], 'schedule.start_date');
       final endsAt = _civilDate(
         json['end_date_exclusive'],
@@ -739,7 +732,10 @@ _DecodedEventSchedule _decodeEventSchedule(Object? raw) {
 
 DayEventTarget _decodeEventTarget(Object? raw) {
   final json = _asMap(raw, 'Day event action target');
-  _requireKeys(json, const {'event_id', 'expected_revision'}, 'Day action target');
+  _requireKeys(json, const {
+    'event_id',
+    'expected_revision',
+  }, 'Day action target');
   return DayEventTarget(
     eventId: _requiredUuid(json['event_id'], 'action_target.event_id'),
     expectedRevision: _requiredRevision(
@@ -761,11 +757,12 @@ DayItemSource _decodeSource(Object? raw) {
         captureId: _requiredUuid(json['capture_id'], 'source.capture_id'),
       );
     case 'calendar':
-      _requireKeys(
-        json,
-        const {'kind', 'source_ref', 'calendar_ref', 'calendar_label'},
-        'Calendar Day source',
-      );
+      _requireKeys(json, const {
+        'kind',
+        'source_ref',
+        'calendar_ref',
+        'calendar_label',
+      }, 'Calendar Day source');
       return CalendarDayItemSource(
         sourceRef: _requiredUuid(json['source_ref'], 'source.source_ref'),
         calendarRef: _requiredUuid(json['calendar_ref'], 'source.calendar_ref'),
@@ -799,7 +796,9 @@ DayCalendarCoverage _decodeCoverage(Map<String, dynamic> json) {
     }
     for (final resource in source.resources) {
       if (!resourceRefs.add(resource.resourceRef)) {
-        throw const FormatException('Duplicate Day calendar resource reference.');
+        throw const FormatException(
+          'Duplicate Day calendar resource reference.',
+        );
       }
     }
     sources.add(source);
@@ -808,20 +807,16 @@ DayCalendarCoverage _decodeCoverage(Map<String, dynamic> json) {
 }
 
 DayCalendarSourceCoverage _decodeSourceCoverage(Map<String, dynamic> json) {
-  _requireKeys(
-    json,
-    const {
-      'source_ref',
-      'label',
-      'state',
-      'last_success_at',
-      'last_range',
-      'failure',
-      'failure_at',
-      'resources',
-    },
-    'Day calendar source coverage',
-  );
+  _requireKeys(json, const {
+    'source_ref',
+    'label',
+    'state',
+    'last_success_at',
+    'last_range',
+    'failure',
+    'failure_at',
+    'resources',
+  }, 'Day calendar source coverage');
   final rawResources = json['resources'];
   if (rawResources is! List) {
     throw const FormatException('Invalid Day calendar resource coverage.');
@@ -840,10 +835,7 @@ DayCalendarSourceCoverage _decodeSourceCoverage(Map<String, dynamic> json) {
       DayCalendarFailure.values,
       'coverage.failure',
     ),
-    failureAt: _optionalUtcTimestamp(
-      json['failure_at'],
-      'coverage.failure_at',
-    ),
+    failureAt: _optionalUtcTimestamp(json['failure_at'], 'coverage.failure_at'),
     resources: List.unmodifiable(
       rawResources.map(
         (resource) => _decodeResourceCoverage(
@@ -854,22 +846,16 @@ DayCalendarSourceCoverage _decodeSourceCoverage(Map<String, dynamic> json) {
   );
 }
 
-DayCalendarResourceCoverage _decodeResourceCoverage(
-  Map<String, dynamic> json,
-) {
-  _requireKeys(
-    json,
-    const {
-      'resource_ref',
-      'label',
-      'state',
-      'last_success_at',
-      'last_range',
-      'failure',
-      'failure_at',
-    },
-    'Day calendar resource coverage',
-  );
+DayCalendarResourceCoverage _decodeResourceCoverage(Map<String, dynamic> json) {
+  _requireKeys(json, const {
+    'resource_ref',
+    'label',
+    'state',
+    'last_success_at',
+    'last_range',
+    'failure',
+    'failure_at',
+  }, 'Day calendar resource coverage');
   return DayCalendarResourceCoverage(
     resourceRef: _requiredUuid(json['resource_ref'], 'coverage.resource_ref'),
     label: _calendarLabel(json['label']),
@@ -884,10 +870,7 @@ DayCalendarResourceCoverage _decodeResourceCoverage(
       DayCalendarFailure.values,
       'coverage.failure',
     ),
-    failureAt: _optionalUtcTimestamp(
-      json['failure_at'],
-      'coverage.failure_at',
-    ),
+    failureAt: _optionalUtcTimestamp(json['failure_at'], 'coverage.failure_at'),
   );
 }
 
@@ -895,16 +878,12 @@ DayCalendarRange? _optionalCalendarRange(Object? raw) =>
     raw == null ? null : _decodeCalendarRange(_asMap(raw, 'Calendar range'));
 
 DayCalendarRange _decodeCalendarRange(Map<String, dynamic> json) {
-  _requireKeys(
-    json,
-    const {
-      'start_date',
-      'end_date_exclusive',
-      'timezone_offset_seconds',
-      'end_timezone_offset_seconds',
-    },
-    'Calendar range',
-  );
+  _requireKeys(json, const {
+    'start_date',
+    'end_date_exclusive',
+    'timezone_offset_seconds',
+    'end_timezone_offset_seconds',
+  }, 'Calendar range');
   final startDate = _civilDate(json['start_date'], 'range.start_date');
   final endDate = _civilDate(
     json['end_date_exclusive'],
@@ -922,9 +901,7 @@ DayCalendarRange _decodeCalendarRange(Map<String, dynamic> json) {
         );
   final days = endDate.difference(startDate).inDays;
   final elapsedSeconds =
-      days * 86400 +
-      startOffset -
-      (endOffset ?? startOffset);
+      days * 86400 + startOffset - (endOffset ?? startOffset);
   if (days < 1 || days > 31 || elapsedSeconds <= 0) {
     throw const FormatException('Invalid Calendar coverage range.');
   }
@@ -940,19 +917,15 @@ CaptureReceipt _decodeCapture(
   Map<String, dynamic> json, {
   required String expectedPersonId,
 }) {
-  _requireKeys(
-    json,
-    const {
-      'id',
-      'person_id',
-      'original_input',
-      'captured_at',
-      'source',
-      'processing',
-      'revision',
-    },
-    'Day capture receipt',
-  );
+  _requireKeys(json, const {
+    'id',
+    'person_id',
+    'original_input',
+    'captured_at',
+    'source',
+    'processing',
+    'revision',
+  }, 'Day capture receipt');
   final id = _requiredUuid(json['id'], 'capture.id');
   if (_requiredUuid(json['person_id'], 'capture.person_id') !=
       expectedPersonId) {
@@ -981,20 +954,19 @@ void _decodeCaptureProcessing(Object? raw) {
       _requireKeys(json, const {'status'}, 'Pending capture processing');
       return;
     case 'classified':
-      _requireKeys(
-        json,
-        const {'status', 'target', 'classified_at'},
-        'Classified capture processing',
-      );
+      _requireKeys(json, const {
+        'status',
+        'target',
+        'classified_at',
+      }, 'Classified capture processing');
       _decodeDomainRef(json['target']);
       _utcTimestamp(json['classified_at'], 'capture.classified_at');
       return;
     case 'dismissed':
-      _requireKeys(
-        json,
-        const {'status', 'dismissed_at'},
-        'Dismissed capture processing',
-      );
+      _requireKeys(json, const {
+        'status',
+        'dismissed_at',
+      }, 'Dismissed capture processing');
       _utcTimestamp(json['dismissed_at'], 'capture.dismissed_at');
       return;
     default:
@@ -1075,9 +1047,7 @@ String _displayText(Object? value, String field) {
 }
 
 String _calendarLabel(Object? value) {
-  if (value is! String ||
-      value.isEmpty ||
-      utf8.encode(value).length > 256) {
+  if (value is! String || value.isEmpty || utf8.encode(value).length > 256) {
     throw const FormatException('Invalid Day Calendar label.');
   }
   return value;
@@ -1095,8 +1065,7 @@ T? _optionalEnumValue<T extends Enum>(
   Object? raw,
   List<T> values,
   String field,
-) =>
-    raw == null ? null : _enumValue(raw, values, field);
+) => raw == null ? null : _enumValue(raw, values, field);
 
 Map<String, dynamic> _asMap(Object? value, String field) {
   if (value is! Map) throw FormatException('Invalid $field.');

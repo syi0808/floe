@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"errors"
-	"floe/server/internal/integrations"
 	githubconnector "floe/server/internal/connectors/github"
 	"floe/server/internal/connectors/gmail"
 	googleauth "floe/server/internal/connectors/googleauth"
@@ -18,14 +17,15 @@ import (
 	slackconnector "floe/server/internal/connectors/slack"
 	workoauth "floe/server/internal/connectors/workoauth"
 	"floe/server/internal/credentials"
-    "floe/server/internal/views"
+	"floe/server/internal/integrations"
+	"floe/server/internal/views"
 	"path/filepath"
 )
 
 type sourceOAuth interface {
-    lifecycle.OAuth
-    Token(context.Context) (string,error)
-    Close()
+	lifecycle.OAuth
+	Token(context.Context) (string, error)
+	Close()
 }
 
 func integrationFactories(directory string, vault credentials.Store, env func(string) string) map[string]integrations.RuntimeFactory {
@@ -58,38 +58,38 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 	r := c.Record
 	scope := r.Scope
 	var auth sourceOAuth
-    var identity lifecycle.IdentityDriver
-    var reader views.Reader
-    var mirror views.Reader
+	var identity lifecycle.IdentityDriver
+	var reader views.Reader
+	var mirror views.Reader
 	switch r.ConnectorID {
 	case "gmail", "google_drive.files", "calendar.google":
 		cfg := googleauth.Config{ClientID: env("FLOE_GOOGLE_OAUTH_CLIENT_ID"), ClientSecret: env("FLOE_GOOGLE_OAUTH_CLIENT_SECRET")}
 		switch r.ConnectorID {
 		case "gmail":
-			auth, err = googleauth.New(ctx,vault, cfg, c.Binding.Slot)
+			auth, err = googleauth.New(ctx, vault, cfg, c.Binding.Slot)
 		case "google_drive.files":
-			auth, err = googleauth.NewDrive(ctx,vault, cfg, c.Binding.Slot)
+			auth, err = googleauth.NewDrive(ctx, vault, cfg, c.Binding.Slot)
 		case "calendar.google":
 			var concrete *googleauth.Runtime
-            concrete,err=googleauth.NewCalendar(ctx,vault,cfg,c.Binding.Slot)
-            auth,identity=concrete,concrete
+			concrete, err = googleauth.NewCalendar(ctx, vault, cfg, c.Binding.Slot)
+			auth, identity = concrete, concrete
 		}
 	case "microsoft.mail", "calendar.microsoft", "microsoft.teams":
 		cfg := microsoftauth.Config{ClientID: env("FLOE_MICROSOFT_OAUTH_CLIENT_ID"), ClientSecret: env("FLOE_MICROSOFT_OAUTH_CLIENT_SECRET")}
 		switch r.ConnectorID {
 		case "microsoft.mail":
-			auth, err = microsoftauth.New(ctx,vault, cfg, c.Binding.Slot)
+			auth, err = microsoftauth.New(ctx, vault, cfg, c.Binding.Slot)
 		case "calendar.microsoft":
 			var concrete *microsoftauth.Runtime
-            concrete,err=microsoftauth.NewCalendar(ctx,vault,cfg,c.Binding.Slot)
-            auth,identity=concrete,concrete
+			concrete, err = microsoftauth.NewCalendar(ctx, vault, cfg, c.Binding.Slot)
+			auth, identity = concrete, concrete
 		case "microsoft.teams":
-			auth, err = microsoftauth.NewTeams(ctx,vault, cfg, c.Binding.Slot)
+			auth, err = microsoftauth.NewTeams(ctx, vault, cfg, c.Binding.Slot)
 		}
 	case "github.issues":
-		auth, err = workoauth.NewGitHub(ctx,vault, workoauth.Config{ClientID: env("FLOE_GITHUB_OAUTH_CLIENT_ID")}, c.Binding.Slot)
+		auth, err = workoauth.NewGitHub(ctx, vault, workoauth.Config{ClientID: env("FLOE_GITHUB_OAUTH_CLIENT_ID")}, c.Binding.Slot)
 	case "slack.conversations":
-		auth, err = workoauth.NewSlack(ctx,vault, workoauth.Config{ClientID: env("FLOE_SLACK_OAUTH_CLIENT_ID"), ClientSecret: env("FLOE_SLACK_OAUTH_CLIENT_SECRET")}, c.Binding.Slot)
+		auth, err = workoauth.NewSlack(ctx, vault, workoauth.Config{ClientID: env("FLOE_SLACK_OAUTH_CLIENT_ID"), ClientSecret: env("FLOE_SLACK_OAUTH_CLIENT_SECRET")}, c.Binding.Slot)
 	case "home_assistant.states":
 		client, e := homeconnector.New(vaultTokenSource{vault, c.Binding.Slot}, scope["base_url"].(string), r.ConnectionID)
 		if e != nil {
@@ -114,7 +114,10 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 	}
 	out.Close = auth.Close
 	out.Setup = lifecycle.NewOAuth(auth, c.Binding)
-    if identity!=nil {out.Identity=lifecycle.NewIdentity(identity,c.Binding,r.ConnectorID);out.IdentitySupported=true}
+	if identity != nil {
+		out.Identity = lifecycle.NewIdentity(identity, c.Binding, r.ConnectorID)
+		out.IdentitySupported = true
+	}
 	defer func() {
 		if err != nil && out.Close != nil {
 			out.Close()
@@ -130,8 +133,8 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 		service, err = gmail.NewService(filepath.Join(directory, "connectors", r.ConnectionID), r.ConnectionID, query, auth)
 		if err == nil {
 			out.Snapshot = service
-            reader = service
-            out.Cleanup = service.Cleanup
+			reader = service
+			out.Cleanup = service.Cleanup
 		}
 	case "microsoft.mail":
 		var client *microsoftmail.Client
@@ -192,7 +195,9 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 		}
 		var service *calendarconnector.Service
 		service, err = calendarconnector.NewService(clients...)
-        if err==nil {mirror,err=calendarconnector.NewMirrorReader(clients...)}
+		if err == nil {
+			mirror, err = calendarconnector.NewMirrorReader(clients...)
+		}
 		out.Snapshot = service
 		reader = service
 	case "calendar.microsoft":
@@ -209,7 +214,9 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 		}
 		var service *microsoftcalendarconnector.Service
 		service, err = microsoftcalendarconnector.NewService(clients...)
-        if err==nil {mirror,err=microsoftcalendarconnector.NewMirrorReader(clients...)}
+		if err == nil {
+			mirror, err = microsoftcalendarconnector.NewMirrorReader(clients...)
+		}
 		out.Snapshot = service
 		reader = service
 	}
@@ -234,7 +241,9 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 			descriptor = microsoftcalendarconnector.ConnectorDescriptor()
 		}
 		out = registeredRuntime(out, descriptor, reader)
-        if mirror!=nil {out.Readers[views.CalendarMirror]=integrations.ReaderRegistration{Reader:mirror,Descriptor:views.CalendarMirrorDescriptor()}}
+		if mirror != nil {
+			out.Readers[views.CalendarMirror] = integrations.ReaderRegistration{Reader: mirror, Descriptor: views.CalendarMirrorDescriptor()}
+		}
 	}
 	return out, err
 }
@@ -245,9 +254,13 @@ type vaultTokenSource struct {
 }
 
 func (v vaultTokenSource) Token(ctx context.Context) (string, error) {
-    if err:=ctx.Err();err!=nil{return "",err}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	token, err := v.vault.Get(ctx, v.name)
-    if ctxErr:=ctx.Err();ctxErr!=nil{return "",ctxErr}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 	if err != nil || token == "" {
 		return "", errors.New("credential unavailable")
 	}
@@ -255,8 +268,12 @@ func (v vaultTokenSource) Token(ctx context.Context) (string, error) {
 }
 
 func registeredRuntime(runtime integrations.Runtime, descriptor integrations.Descriptor, reader views.Reader) integrations.Runtime {
-    runtime.Descriptor=descriptor
-    runtime.Readers=map[views.ID]integrations.ReaderRegistration{}
-    if reader!=nil {for _,view:=range descriptor.Views {runtime.Readers[views.ID(view.ID)]=integrations.ReaderRegistration{Reader:reader,Descriptor:view}}}
-    return runtime
+	runtime.Descriptor = descriptor
+	runtime.Readers = map[views.ID]integrations.ReaderRegistration{}
+	if reader != nil {
+		for _, view := range descriptor.Views {
+			runtime.Readers[views.ID(view.ID)] = integrations.ReaderRegistration{Reader: reader, Descriptor: view}
+		}
+	}
+	return runtime
 }

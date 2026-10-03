@@ -71,8 +71,12 @@ func nativeKeychain(name, value string, operation int) (string, error) {
 	defer C.free(unsafe.Pointer(secret))
 	var output *C.char
 	status := C.floe_keychain(account, secret, C.int(operation), &output)
-    if status == C.errSecInteractionNotAllowed || status == C.errSecAuthFailed {return "",ErrLocked}
-    if status != 0 {return "",ErrUnavailable}
+	if status == C.errSecInteractionNotAllowed || status == C.errSecAuthFailed {
+		return "", ErrLocked
+	}
+	if status != 0 {
+		return "", ErrUnavailable
+	}
 	if output == nil {
 		return "", nil
 	}

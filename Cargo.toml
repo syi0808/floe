@@ -48,6 +48,7 @@ license = "MIT"
 rust-version = "1.93"
 
 [workspace.dependencies]
+jsonschema = { version = "0.55.1", default-features = false }
 chrono = { version = "0.4.45", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["raw_value"] }

@@ -10,7 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-    "floe/server/internal/inference"
+	"floe/server/internal/inference"
 	"html"
 	"io"
 	"net"
@@ -60,9 +60,9 @@ type loginFlow struct {
 }
 
 type Runtime struct {
-    credentialReadError error
-    credentialGeneration uint64
-    credentialMutation bool
+	credentialReadError          error
+	credentialGeneration         uint64
+	credentialMutation           bool
 	operation                    sync.Mutex
 	mu                           sync.RWMutex
 	store                        Store
@@ -104,29 +104,42 @@ func randomValue() (string, error) {
 func (runtime *Runtime) load(ctx context.Context) *tokenBundle {
 	runtime.mu.RLock()
 	current := runtime.tokens
-    generation:=runtime.credentialGeneration
-    mutating:=runtime.credentialMutation
+	generation := runtime.credentialGeneration
+	mutating := runtime.credentialMutation
 	runtime.mu.RUnlock()
-    if mutating{return nil}
+	if mutating {
+		return nil
+	}
 	if current != nil {
 		copy := *current
 		return &copy
 	}
 	if runtime.store == nil {
-        runtime.noteCredentialRead(unavailable)
+		runtime.noteCredentialRead(unavailable)
 		return nil
 	}
 	encoded, err := runtime.store.Get(ctx, credentialName)
 	runtime.noteCredentialRead(err)
-    if err!=nil{return nil}
-    if encoded==""{return nil}
-    if len(encoded)>32768{runtime.noteCredentialRead(unavailable);return nil}
+	if err != nil {
+		return nil
+	}
+	if encoded == "" {
+		return nil
+	}
+	if len(encoded) > 32768 {
+		runtime.noteCredentialRead(unavailable)
+		return nil
+	}
 	var value tokenBundle
 	if json.Unmarshal([]byte(encoded), &value) != nil || value.AccessToken == "" || value.RefreshToken == "" || value.AccountID == "" || value.ExpiresAt.IsZero() {
-		runtime.noteCredentialRead(unavailable);return nil
+		runtime.noteCredentialRead(unavailable)
+		return nil
 	}
 	runtime.mu.Lock()
-    if runtime.credentialGeneration!=generation{runtime.mu.Unlock();return nil}
+	if runtime.credentialGeneration != generation {
+		runtime.mu.Unlock()
+		return nil
+	}
 	runtime.tokens = &value
 	runtime.mu.Unlock()
 	return &value
@@ -137,17 +150,19 @@ func (runtime *Runtime) save(ctx context.Context, value *tokenBundle) error {
 		return unavailable
 	}
 	encoded, err := json.Marshal(value)
-    if err!=nil{return unavailable}
-    runtime.beginCredentialMutation()
+	if err != nil {
+		return unavailable
+	}
+	runtime.beginCredentialMutation()
 	if runtime.store.Put(ctx, credentialName, string(encoded)) != nil {
-        runtime.endCredentialMutation()
+		runtime.endCredentialMutation()
 		return unavailable
 	}
 	copy := *value
 	runtime.mu.Lock()
 	runtime.tokens = &copy
-    runtime.credentialReadError=nil
-    runtime.credentialMutation=false
+	runtime.credentialReadError = nil
+	runtime.credentialMutation = false
 	runtime.mu.Unlock()
 	return nil
 }
@@ -155,8 +170,9 @@ func (runtime *Runtime) save(ctx context.Context, value *tokenBundle) error {
 func (runtime *Runtime) Ready(ctx context.Context) bool { return runtime.load(ctx) != nil }
 
 func (runtime *Runtime) ReplayIdentity() string {
-    runtime.mu.RLock(); defer runtime.mu.RUnlock()
-    tokens := runtime.tokens
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	tokens := runtime.tokens
 	if tokens == nil {
 		return ""
 	}
@@ -176,23 +192,25 @@ func (runtime *Runtime) Authorize(ctx context.Context, action inference.AccountC
 	}
 	if action == inference.AccountLogout {
 		runtime.cancelLogin()
-        runtime.beginCredentialMutation()
+		runtime.beginCredentialMutation()
 		if runtime.store == nil || runtime.store.Delete(ctx, credentialName) != nil {
-            runtime.endCredentialMutation()
+			runtime.endCredentialMutation()
 			return inference.AccountProgress{}, unavailable
 		}
 		runtime.mu.Lock()
 		runtime.tokens = nil
-        runtime.credentialMutation=false
-        runtime.credentialReadError=nil
+		runtime.credentialMutation = false
+		runtime.credentialReadError = nil
 		runtime.mu.Unlock()
 	}
 	if action == inference.AccountCancel {
 		runtime.cancelLogin()
 	}
-	current:=runtime.load(ctx)
-    if err:=runtime.credentialReadFailure();err!=nil{return inference.AccountProgress{},err}
-    if action == inference.AccountLogin && current == nil {
+	current := runtime.load(ctx)
+	if err := runtime.credentialReadFailure(); err != nil {
+		return inference.AccountProgress{}, err
+	}
+	if action == inference.AccountLogin && current == nil {
 		runtime.mu.RLock()
 		pending := runtime.flow != nil && runtime.flow.expires.After(time.Now())
 		runtime.mu.RUnlock()
@@ -206,14 +224,16 @@ func (runtime *Runtime) Authorize(ctx context.Context, action inference.AccountC
 	flow := runtime.flow
 	runtime.mu.RUnlock()
 	status, authURL := "disconnected", ""
-	current=runtime.load(ctx)
-    if err:=runtime.credentialReadFailure();err!=nil{return inference.AccountProgress{},err}
-    if current != nil {
+	current = runtime.load(ctx)
+	if err := runtime.credentialReadFailure(); err != nil {
+		return inference.AccountProgress{}, err
+	}
+	if current != nil {
 		status = "connected"
 	} else if flow != nil && flow.expires.After(time.Now()) {
 		status, authURL = "pending", flow.authURL
 	}
-    return inference.AccountProgress{Status:status,AuthorizationURL:authURL,InferenceEnabled:status=="connected"},nil
+	return inference.AccountProgress{Status: status, AuthorizationURL: authURL, InferenceEnabled: status == "connected"}, nil
 }
 func (runtime *Runtime) startLogin() error {
 	runtime.cancelLogin()
@@ -396,7 +416,9 @@ func (runtime *Runtime) access(ctx context.Context) (*tokenBundle, error) {
 	runtime.operation.Lock()
 	defer runtime.operation.Unlock()
 	current := runtime.load(ctx)
-    if err:=runtime.credentialReadFailure();err!=nil{return nil,err}
+	if err := runtime.credentialReadFailure(); err != nil {
+		return nil, err
+	}
 	if current == nil {
 		return nil, unavailable
 	}
@@ -544,9 +566,33 @@ func (runtime *Runtime) Close() {
 	runtime.cancelLogin()
 }
 
-func (runtime *Runtime) noteCredentialRead(err error){runtime.mu.Lock();runtime.credentialReadError=err;runtime.mu.Unlock()}
-func (runtime *Runtime) credentialReadFailure()error{runtime.mu.RLock();defer runtime.mu.RUnlock();if runtime.credentialMutation{return unavailable};return runtime.credentialReadError}
+func (runtime *Runtime) noteCredentialRead(err error) {
+	runtime.mu.Lock()
+	runtime.credentialReadError = err
+	runtime.mu.Unlock()
+}
+func (runtime *Runtime) credentialReadFailure() error {
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	if runtime.credentialMutation {
+		return unavailable
+	}
+	return runtime.credentialReadError
+}
 
-func (runtime *Runtime) beginCredentialMutation(){runtime.mu.Lock();runtime.credentialGeneration++;runtime.credentialMutation=true;runtime.tokens=nil;runtime.credentialReadError=unavailable;runtime.mu.Unlock()}
+func (runtime *Runtime) beginCredentialMutation() {
+	runtime.mu.Lock()
+	runtime.credentialGeneration++
+	runtime.credentialMutation = true
+	runtime.tokens = nil
+	runtime.credentialReadError = unavailable
+	runtime.mu.Unlock()
+}
 
-func (runtime *Runtime) endCredentialMutation(){runtime.mu.Lock();runtime.credentialMutation=false;runtime.tokens=nil;runtime.credentialReadError=unavailable;runtime.mu.Unlock()}
+func (runtime *Runtime) endCredentialMutation() {
+	runtime.mu.Lock()
+	runtime.credentialMutation = false
+	runtime.tokens = nil
+	runtime.credentialReadError = unavailable
+	runtime.mu.Unlock()
+}

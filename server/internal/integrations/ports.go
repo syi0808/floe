@@ -72,21 +72,21 @@ func (f FactoryFunc) Open(c context.Context, r RuntimeConfig) (Runtime, error) {
 
 // SnapshotSource exposes cached normalized metadata only. It performs no provider I/O.
 type SnapshotSource interface {
-    Snapshot(context.Context) (Snapshot, error)
+	Snapshot(context.Context) (Snapshot, error)
 }
 
 // Runtime is scoped to one immutable credential binding and selected resource set.
 type ReaderRegistration struct {
-    Reader views.Reader
-    Descriptor views.ViewDescriptor
+	Reader     views.Reader
+	Descriptor views.ViewDescriptor
 }
 type Runtime struct {
-    Descriptor Descriptor
-    Readers map[views.ID]ReaderRegistration
-    Setup Setup
-    Identity IdentityVerifier
-    IdentitySupported bool
-    Snapshot SnapshotSource
-    Cleanup func(context.Context) error
-    Close func()
+	Descriptor        Descriptor
+	Readers           map[views.ID]ReaderRegistration
+	Setup             Setup
+	Identity          IdentityVerifier
+	IdentitySupported bool
+	Snapshot          SnapshotSource
+	Cleanup           func(context.Context) error
+	Close             func()
 }

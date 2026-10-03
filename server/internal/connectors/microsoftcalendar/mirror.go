@@ -13,8 +13,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"floe/server/internal/trust"
 	"floe/server/internal/views"
-    "floe/server/internal/trust"
 )
 
 const mirrorMaxResponse = 1 << 20
@@ -35,16 +35,16 @@ type mirrorPage struct {
 }
 
 type mirrorEvent struct {
-	ID                     string          `json:"id"`
-	ETag                   string          `json:"@odata.etag"`
-	ChangeKey              string          `json:"changeKey"`
-	Subject                string          `json:"subject"`
-	Start                  mirrorDateTime  `json:"start"`
-	End                    mirrorDateTime  `json:"end"`
-	IsAllDay               bool            `json:"isAllDay"`
-	IsCancelled            bool            `json:"isCancelled"`
-	OriginalStartTimeZone  string          `json:"originalStartTimeZone"`
-	OriginalEndTimeZone    string          `json:"originalEndTimeZone"`
+	ID                    string         `json:"id"`
+	ETag                  string         `json:"@odata.etag"`
+	ChangeKey             string         `json:"changeKey"`
+	Subject               string         `json:"subject"`
+	Start                 mirrorDateTime `json:"start"`
+	End                   mirrorDateTime `json:"end"`
+	IsAllDay              bool           `json:"isAllDay"`
+	IsCancelled           bool           `json:"isCancelled"`
+	OriginalStartTimeZone string         `json:"originalStartTimeZone"`
+	OriginalEndTimeZone   string         `json:"originalEndTimeZone"`
 }
 
 type mirrorDateTime struct {
@@ -131,11 +131,11 @@ func (reader *mirrorReader) Read(ctx context.Context, request views.ReadRequest)
 			return classifyMirrorError(ctx, err)
 		}
 		record := views.CalendarRecord{
-			CanModify: false,
+			CanModify:  false,
 			CalendarID: query.CalendarID,
 			ExternalID: event.ID,
-			Title:     event.Subject,
-			Schedule:  schedule,
+			Title:      event.Subject,
+			Schedule:   schedule,
 		}
 		record.ExternalRevision, err = microsoftMirrorRevision(record, event)
 		if err != nil {
@@ -184,7 +184,7 @@ func (client *Client) readMirrorPage(ctx context.Context, query views.CalendarMi
 	if err := client.getMirror(ctx, path, "UTC", &page); err != nil {
 		return mirrorPage{}, err
 	}
-	if page.Value==nil || len(page.Value) > int(query.Limit) {
+	if page.Value == nil || len(page.Value) > int(query.Limit) {
 		return mirrorPage{}, ErrInvalidResponse
 	}
 	nextCursor, err := client.mirrorNextCursor(page.NextLink)
@@ -244,14 +244,18 @@ func (client *Client) getMirror(ctx context.Context, path, timeZone string, outp
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Prefer", `outlook.timezone="`+timeZone+`"`)
 	response, err := client.http.Do(request)
-    if response!=nil && response.Body!=nil {defer response.Body.Close()}
+	if response != nil && response.Body != nil {
+		defer response.Body.Close()
+	}
 	if contextErr := mirrorContextFailure(ctx, err); contextErr != nil {
 		return contextErr
 	}
 	if err != nil {
 		return ErrUnavailable
 	}
-    if response==nil || response.Body==nil{return ErrInvalidResponse}
+	if response == nil || response.Body == nil {
+		return ErrInvalidResponse
+	}
 	if contextErr := mirrorContextFailure(ctx, nil); contextErr != nil {
 		return contextErr
 	}
@@ -270,7 +274,7 @@ func (client *Client) getMirror(ctx context.Context, path, timeZone string, outp
 	if contextErr := mirrorContextFailure(ctx, err); contextErr != nil {
 		return contextErr
 	}
-	if err != nil || len(data) > mirrorMaxResponse || !utf8.Valid(data) || trust.StrictJSON(data,mirrorMaxResponse,32)!=nil || json.Unmarshal(data, output) != nil {
+	if err != nil || len(data) > mirrorMaxResponse || !utf8.Valid(data) || trust.StrictJSON(data, mirrorMaxResponse, 32) != nil || json.Unmarshal(data, output) != nil {
 		return ErrInvalidResponse
 	}
 	return nil
@@ -327,7 +331,7 @@ func (client *Client) mirrorCalendarViewEscapedPath() string {
 
 func microsoftTimedMirrorSchedule(event mirrorEvent) (views.CalendarSchedule, error) {
 	timeZone := event.OriginalStartTimeZone
-	if !validMicrosoftTimeZone(timeZone) || event.OriginalEndTimeZone!="" && !validMicrosoftTimeZone(event.OriginalEndTimeZone) ||
+	if !validMicrosoftTimeZone(timeZone) || event.OriginalEndTimeZone != "" && !validMicrosoftTimeZone(event.OriginalEndTimeZone) ||
 		!strings.EqualFold(event.Start.TimeZone, "UTC") || !strings.EqualFold(event.End.TimeZone, "UTC") {
 		return views.CalendarSchedule{}, ErrInvalidResponse
 	}

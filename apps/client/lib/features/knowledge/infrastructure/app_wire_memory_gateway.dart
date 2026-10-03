@@ -102,17 +102,23 @@ final class AppWireMemoryGateway
       if (acknowledgement.commandId != pending.commandId ||
           acknowledgement.candidateId != pending.candidateId ||
           acknowledgement.decision != pending.decision) {
-        throw const FormatException('Memory decision acknowledgement mismatch.');
+        throw const FormatException(
+          'Memory decision acknowledgement mismatch.',
+        );
       }
       if (identical(_pending, pending)) _pending = null;
       return acknowledgement;
     } on NativeTransportException catch (error) {
       // Only these correlated owner rejections are proven precommit. A
       // transport/decode/storage failure retains the immutable retry request.
-      if ((error.code == 'conflict' && error.metadata['reason_code'] == 'conflict') ||
-          (error.code == 'not_found' && error.metadata['reason_code'] == 'not_found') ||
-          (error.code == 'validation' && error.metadata['reason_code'] == 'invalid_input') ||
-          (error.code == 'unavailable' && error.metadata['reason_code'] == 'stale_context')) {
+      if ((error.code == 'conflict' &&
+              error.metadata['reason_code'] == 'conflict') ||
+          (error.code == 'not_found' &&
+              error.metadata['reason_code'] == 'not_found') ||
+          (error.code == 'validation' &&
+              error.metadata['reason_code'] == 'invalid_input') ||
+          (error.code == 'unavailable' &&
+              error.metadata['reason_code'] == 'stale_context')) {
         if (identical(_pending, pending)) _pending = null;
       }
       throw _fromTransport(error, pending.commandId, 'knowledge_decide');

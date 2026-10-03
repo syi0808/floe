@@ -8,7 +8,7 @@ rust-version.workspace = true
 [dependencies]
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-execution = { path = "../execution" }
-jsonschema = { version = "0.55.1", default-features = false }
+jsonschema.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 serde_json.workspace = true

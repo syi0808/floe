@@ -4,23 +4,23 @@ package lifecycle
 import (
 	"context"
 	"errors"
-	"floe/server/internal/integrations"
 	"floe/server/internal/credentials"
+	"floe/server/internal/integrations"
 	"net/url"
 	"strings"
 	"sync"
 )
 
 type OAuth interface {
-    BeginAuthorization(context.Context) (integrations.AuthorizationProgress,error)
-    PollAuthorization(context.Context) (integrations.AuthorizationProgress,error)
-    CancelAuthorization(context.Context) error
-    DisconnectAuthorization(context.Context) error
-    Ready() bool
+	BeginAuthorization(context.Context) (integrations.AuthorizationProgress, error)
+	PollAuthorization(context.Context) (integrations.AuthorizationProgress, error)
+	CancelAuthorization(context.Context) error
+	DisconnectAuthorization(context.Context) error
+	Ready() bool
 }
 type IdentityDriver interface {
-    ProviderIdentity(context.Context) (string,error)
-    WithVerifiedProviderIdentity(string,string,func()error) error
+	ProviderIdentity(context.Context) (string, error)
+	WithVerifiedProviderIdentity(string, string, func() error) error
 }
 type oauthSetup struct {
 	mu        sync.Mutex
@@ -45,8 +45,8 @@ func (s *oauthSetup) Begin(ctx context.Context, b integrations.CredentialBinding
 	if err := s.check(b); err != nil {
 		return integrations.AuthorizationProgress{}, err
 	}
-	progress,err:=s.driver.BeginAuthorization(ctx)
-    return s.progress(progress,err,integrations.AttemptRef{ConnectionID:b.ConnectionID,BindingGeneration:b.Generation})
+	progress, err := s.driver.BeginAuthorization(ctx)
+	return s.progress(progress, err, integrations.AttemptRef{ConnectionID: b.ConnectionID, BindingGeneration: b.Generation})
 }
 func (s *oauthSetup) Poll(ctx context.Context, a integrations.AttemptRef) (integrations.AuthorizationProgress, error) {
 	s.mu.Lock()
@@ -54,18 +54,29 @@ func (s *oauthSetup) Poll(ctx context.Context, a integrations.AttemptRef) (integ
 	if s.cancelled || a.ConnectionID != s.binding.ConnectionID || a.BindingGeneration != s.binding.Generation {
 		return integrations.AuthorizationProgress{}, errors.New("attempt changed")
 	}
-	progress,err:=s.driver.PollAuthorization(ctx)
-    return s.progress(progress,err,a)
+	progress, err := s.driver.PollAuthorization(ctx)
+	return s.progress(progress, err, a)
 }
-func (s *oauthSetup) progress(progress integrations.AuthorizationProgress, err error, a integrations.AttemptRef) (integrations.AuthorizationProgress,error) {
-    if err!=nil{return integrations.AuthorizationProgress{},err}
-    link,code:=progress.AuthorizationURL,progress.UserCode
-    if progress.State!=integrations.Pending && progress.State!=integrations.Connected && progress.State!=integrations.Disconnected || len(link)>4096 || len(code)>128 || strings.ContainsAny(code,"\r\n\x00") {return integrations.AuthorizationProgress{},errors.New("invalid setup response")}
-    if progress.State==integrations.Pending && link=="" {return integrations.AuthorizationProgress{},errors.New("invalid setup response")}
-    if link!="" {u,err:=url.Parse(link);if err!=nil || u.Scheme!="https" || u.Host=="" || u.User!=nil{return integrations.AuthorizationProgress{},errors.New("invalid authorization URL")}}
-    s.cached.Ready=progress.State==integrations.Connected
-    progress.Attempt=a
-    return progress,nil
+func (s *oauthSetup) progress(progress integrations.AuthorizationProgress, err error, a integrations.AttemptRef) (integrations.AuthorizationProgress, error) {
+	if err != nil {
+		return integrations.AuthorizationProgress{}, err
+	}
+	link, code := progress.AuthorizationURL, progress.UserCode
+	if progress.State != integrations.Pending && progress.State != integrations.Connected && progress.State != integrations.Disconnected || len(link) > 4096 || len(code) > 128 || strings.ContainsAny(code, "\r\n\x00") {
+		return integrations.AuthorizationProgress{}, errors.New("invalid setup response")
+	}
+	if progress.State == integrations.Pending && link == "" {
+		return integrations.AuthorizationProgress{}, errors.New("invalid setup response")
+	}
+	if link != "" {
+		u, err := url.Parse(link)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+			return integrations.AuthorizationProgress{}, errors.New("invalid authorization URL")
+		}
+	}
+	s.cached.Ready = progress.State == integrations.Connected
+	progress.Attempt = a
+	return progress, nil
 }
 func (s *oauthSetup) Cancel(ctx context.Context, a integrations.AttemptRef) error {
 	if a.ConnectionID != s.binding.ConnectionID || a.BindingGeneration != s.binding.Generation {

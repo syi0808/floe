@@ -15,7 +15,8 @@ import (
 )
 
 func (o *Operations) Execute(ctx context.Context, action string, in Request) operation.Result {
-    ctx,cancel:=context.WithTimeout(ctx,10*time.Second);defer cancel()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return trust.Result(err)
 	}
@@ -23,11 +24,13 @@ func (o *Operations) Execute(ctx context.Context, action string, in Request) ope
 		return operation.Reject(operation.Invalid, "validation")
 	}
 	if action == "start" {
-		return o.start(ctx,in)
+		return o.start(ctx, in)
 	}
-	if err:=o.lock(ctx);err!=nil{return trust.Result(err)}
-    defer o.unlock()
-	p, loadErr := o.find(ctx,in.PairingID)
+	if err := o.lock(ctx); err != nil {
+		return trust.Result(err)
+	}
+	defer o.unlock()
+	p, loadErr := o.find(ctx, in.PairingID)
 	if loadErr != nil {
 		return trust.Result(loadErr)
 	}
@@ -35,9 +38,13 @@ func (o *Operations) Execute(ctx context.Context, action string, in Request) ope
 		return operation.Reject(operation.Unauthenticated, "pairing_expired")
 	}
 	if action == "poll" {
-		_,committed,err:=o.trust.InspectPairing(ctx,p.ID,in.Proof)
-        if err!=nil{return trust.Result(err)}
-        if committed{return o.readCommitted(ctx,p.ID,in.Proof)}
+		_, committed, err := o.trust.InspectPairing(ctx, p.ID, in.Proof)
+		if err != nil {
+			return trust.Result(err)
+		}
+		if committed {
+			return o.readCommitted(ctx, p.ID, in.Proof)
+		}
 		if p.AdminApproved || p.status == "activating" {
 			return operation.Reject(operation.Conflict, "pairing_repair_required")
 		}
@@ -48,9 +55,9 @@ func (o *Operations) Execute(ctx context.Context, action string, in Request) ope
 	if action == "cancel" && (p.status == "cancelled" || p.status == "aborted") {
 		return operation.Accept(map[string]bool{"ok": true})
 	}
-	if !p.Expires.After(o.clock()) && p.status!="aborted" && p.status!="cancelled" && p.status!="rejected" {
-        copy:=*p
-        p=&copy
+	if !p.Expires.After(o.clock()) && p.status != "aborted" && p.status != "cancelled" && p.status != "rejected" {
+		copy := *p
+		p = &copy
 		p.status = "expired"
 		if action == "poll" {
 			return operation.Accept(status(p))
@@ -59,10 +66,12 @@ func (o *Operations) Execute(ctx context.Context, action string, in Request) ope
 	}
 	switch action {
 	case "cancel":
-        if p.status=="rejected"{return operation.Reject(operation.Conflict,"pairing_denied")}
+		if p.status == "rejected" {
+			return operation.Reject(operation.Conflict, "pairing_denied")
+		}
 		copy := *p
 		copy.status = "cancelled"
-		if err := o.save(ctx,&copy); err != nil {
+		if err := o.save(ctx, &copy); err != nil {
 			return trust.Result(err)
 		}
 		o.pending = &copy
@@ -85,7 +94,7 @@ func (o *Operations) Execute(ctx context.Context, action string, in Request) ope
 			copy.LocalConfirmed = true
 			copy.localProof = proof
 			copy.status = "local_confirmed"
-			if err := o.save(ctx,&copy); err != nil {
+			if err := o.save(ctx, &copy); err != nil {
 				return trust.Result(err)
 			}
 			p = &copy
@@ -98,7 +107,7 @@ func (o *Operations) Execute(ctx context.Context, action string, in Request) ope
 		return operation.Reject(operation.Missing, "not_found")
 	}
 }
-func (o *Operations) start(ctx context.Context,in Request) operation.Result {
+func (o *Operations) start(ctx context.Context, in Request) operation.Result {
 	if !trust.ValidID(in.OperationID) || !trust.ValidID(in.PersonID) || !trust.ValidDevice(in.DeviceID) || !trust.ValidID(in.IssuerKeyID) {
 		return operation.Reject(operation.Invalid, "identity_required")
 	}
@@ -109,15 +118,17 @@ func (o *Operations) start(ctx context.Context,in Request) operation.Result {
 	if err != nil {
 		return operation.Reject(operation.Invalid, "validation")
 	}
-	if err:=o.lock(ctx);err!=nil{return trust.Result(err)}
-    defer o.unlock()
+	if err := o.lock(ctx); err != nil {
+		return trust.Result(err)
+	}
+	defer o.unlock()
 	index, err := o.index(ctx)
 	if err != nil {
 		return trust.Result(err)
 	}
 	for _, entry := range index.Entries {
 		if entry.OperationID == in.OperationID {
-			p, loadErr := o.load(ctx,entry)
+			p, loadErr := o.load(ctx, entry)
 			if loadErr != nil {
 				return trust.Result(loadErr)
 			}
@@ -143,7 +154,7 @@ func (o *Operations) start(ctx context.Context,in Request) operation.Result {
 		return operation.Reject(operation.Limited, "pairing_in_progress")
 	}
 	for _, entry := range index.Entries {
-		p, loadErr := o.load(ctx,entry)
+		p, loadErr := o.load(ctx, entry)
 		if loadErr != nil {
 			return trust.Result(loadErr)
 		}
@@ -152,7 +163,7 @@ func (o *Operations) start(ctx context.Context,in Request) operation.Result {
 		}
 	}
 	id, challengeID := trust.NewID(), trust.NewID()
-	if err := o.reserve(ctx,index, in.OperationID, id); err != nil {
+	if err := o.reserve(ctx, index, in.OperationID, id); err != nil {
 		return trust.Result(err)
 	}
 	nonce := make([]byte, 32)
@@ -184,7 +195,7 @@ func (o *Operations) start(ctx context.Context,in Request) operation.Result {
 		return trust.Result(err)
 	}
 	p := &Pending{operationID: in.OperationID, ID: id, Code: strings.ToUpper(trust.Token()[:8]), Expires: expires, PersonID: in.PersonID, DeviceID: in.DeviceID, IssuerKeyID: in.IssuerKeyID, IssuerPublicKey: in.IssuerPublicKey, IssuerFingerprint: trust.Digest(string(publicKey)), ProducerFingerprint: producer.Fingerprint, ProducerAudience: producer.Audience, challengeID: challengeID, challengeBytes: encoded, challengeB64: base64.RawURLEncoding.EncodeToString(encoded), producerSignature: signature, proof: in.Proof, producer: producer, expectedRevision: revision, status: "pending"}
-	if err := o.save(ctx,p); err != nil {
+	if err := o.save(ctx, p); err != nil {
 		return trust.Result(err)
 	}
 	o.pending = p
@@ -195,9 +206,11 @@ func issuer(p *Pending) map[string]string {
 	return map[string]string{"key_id": p.IssuerKeyID, "public_key": p.IssuerPublicKey, "fingerprint": p.IssuerFingerprint}
 }
 func status(p *Pending) map[string]any {
-	phase:=p.status
-    if phase=="aborted"{phase="cancelled"}
-    out := map[string]any{"schema_version": 1, "pairing_id": p.ID, "status": phase, "person_id": p.PersonID, "device_id": p.DeviceID}
+	phase := p.status
+	if phase == "aborted" {
+		phase = "cancelled"
+	}
+	out := map[string]any{"schema_version": 1, "pairing_id": p.ID, "status": phase, "person_id": p.PersonID, "device_id": p.DeviceID}
 	if p.token != "" && p.AdminApproved {
 		out["issuer"] = issuer(p)
 		out["issuer_fingerprint"] = p.IssuerFingerprint
@@ -208,7 +221,8 @@ func status(p *Pending) map[string]any {
 	return out
 }
 func (o *Operations) Approve(ctx context.Context, operator trust.OperatorPrincipal, in ApprovalRequest) operation.Result {
-    ctx,cancel:=context.WithTimeout(ctx,10*time.Second);defer cancel()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	if in.SchemaVersion != 1 || !trust.ValidID(in.PairingID) || len(in.Fingerprint) != 64 {
 		return operation.Reject(operation.Invalid, "validation")
 	}
@@ -216,9 +230,11 @@ func (o *Operations) Approve(ctx context.Context, operator trust.OperatorPrincip
 	if err := o.trust.WithCurrentOperator(operator, func() error { return nil }); err != nil {
 		return trust.Result(err)
 	}
-	if err:=o.lock(ctx);err!=nil{return trust.Result(err)}
-    defer o.unlock()
-	p, loadErr := o.find(ctx,in.PairingID)
+	if err := o.lock(ctx); err != nil {
+		return trust.Result(err)
+	}
+	defer o.unlock()
+	p, loadErr := o.find(ctx, in.PairingID)
 	if loadErr != nil {
 		return trust.Result(loadErr)
 	}
@@ -236,49 +252,60 @@ func (o *Operations) Approve(ctx context.Context, operator trust.OperatorPrincip
 	activation := trust.PairingActivation{PairingID: p.ID, PersonID: p.PersonID, DeviceID: p.DeviceID, Producer: p.producer, IssuerKeyID: p.IssuerKeyID, IssuerFingerprint: p.IssuerFingerprint, IssuerPublicKey: key, ChallengeID: p.challengeID, ChallengeBytes: append([]byte(nil), p.challengeBytes...), LocalProof: p.localProof, AdminFingerprint: in.Fingerprint, ExpectedRevision: p.expectedRevision, TokenHash: trust.Digest(token), PollProofHash: trust.Digest(p.proof), Operator: operator}
 	staged := *p
 	staged.status = "activating"
-    staged.activationTokenHash = trust.Digest(token)
-	if err := o.save(ctx,&staged); err != nil {
+	staged.activationTokenHash = trust.Digest(token)
+	if err := o.save(ctx, &staged); err != nil {
 		return trust.Result(err)
 	}
 	o.pending = &staged
 	p = &staged
-	if o.credentials == nil || o.credentials.Put(ctx,"FLOE_PAIRING_"+p.ID, token) != nil {
+	if o.credentials == nil || o.credentials.Put(ctx, "FLOE_PAIRING_"+p.ID, token) != nil {
 		return operation.Reject(operation.Unavailable, "pairing_credential_unavailable")
 	}
-	readback,readErr:=o.credentials.Get(ctx,"FLOE_PAIRING_"+p.ID)
-    if readErr!=nil || trust.Digest(readback)!=p.activationTokenHash{return operation.Reject(operation.Unavailable,"pairing_credential_unavailable")}
-    if _, err = o.trust.ActivatePairing(ctx, activation); err != nil {
+	readback, readErr := o.credentials.Get(ctx, "FLOE_PAIRING_"+p.ID)
+	if readErr != nil || trust.Digest(readback) != p.activationTokenHash {
+		return operation.Reject(operation.Unavailable, "pairing_credential_unavailable")
+	}
+	if _, err = o.trust.ActivatePairing(ctx, activation); err != nil {
 		return trust.Result(err)
 	}
 	p.AdminApproved = true
 	p.status = "approved"
 	p.token = token
-	if err := o.save(ctx,p); err != nil {
+	if err := o.save(ctx, p); err != nil {
 		return trust.Result(err)
 	}
 	return operation.Accept(map[string]any{"schema_version": 1, "pairing_id": p.ID, "status": "approved"})
 }
 func (o *Operations) Reject(ctx context.Context, operator trust.OperatorPrincipal, in RejectionRequest) operation.Result {
-    ctx,cancel:=context.WithTimeout(ctx,10*time.Second);defer cancel()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	if in.SchemaVersion != 1 || !trust.ValidID(in.PairingID) {
 		return operation.Reject(operation.Invalid, "validation")
 	}
 	if err := o.trust.WithCurrentOperator(operator, func() error { return nil }); err != nil {
 		return trust.Result(err)
 	}
-	if err:=o.lock(ctx);err!=nil{return trust.Result(err)}
-    defer o.unlock()
-	p, err := o.find(ctx,in.PairingID)
+	if err := o.lock(ctx); err != nil {
+		return trust.Result(err)
+	}
+	defer o.unlock()
+	p, err := o.find(ctx, in.PairingID)
 	if err != nil {
 		return trust.Result(err)
 	}
-	if p==nil || p.AdminApproved{return operation.Reject(operation.Conflict,"pairing_expired")}
-    if p.status=="rejected"{return operation.Accept(map[string]any{"schema_version":1,"pairing_id":in.PairingID,"status":"rejected"})}
-    if p.status!="pending" && p.status!="local_confirmed"{return operation.Reject(operation.Conflict,"pairing_denied")}
+	if p == nil || p.AdminApproved {
+		return operation.Reject(operation.Conflict, "pairing_expired")
+	}
+	if p.status == "rejected" {
+		return operation.Accept(map[string]any{"schema_version": 1, "pairing_id": in.PairingID, "status": "rejected"})
+	}
+	if p.status != "pending" && p.status != "local_confirmed" {
+		return operation.Reject(operation.Conflict, "pairing_denied")
+	}
 	p.status = "rejected"
 	p.LocalConfirmed = false
 	p.token = ""
-	if err := o.save(ctx,p); err != nil {
+	if err := o.save(ctx, p); err != nil {
 		return trust.Result(err)
 	}
 	o.pending = p
@@ -293,7 +320,7 @@ func (o *Operations) readCommitted(ctx context.Context, id, proof string) operat
 	if err != nil {
 		return trust.Result(err)
 	}
-	token, err := o.credentials.Get(ctx,"FLOE_PAIRING_" + id)
+	token, err := o.credentials.Get(ctx, "FLOE_PAIRING_"+id)
 	if err != nil || trust.Digest(token) != receipt.TokenHash {
 		return operation.Reject(operation.Conflict, "pairing_repair_required")
 	}

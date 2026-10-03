@@ -60,7 +60,9 @@ func newProvider(ctx context.Context, target inference.ProviderTarget, lookup fu
 			return nil, errors.New("invalid credential reference")
 		}
 		p.credential, p.credentialError = lookup(ctx, target.APIKeyEnv)
-        if errors.Is(p.credentialError,context.DeadlineExceeded) || errors.Is(p.credentialError,context.Canceled){return nil,p.credentialError}
+		if errors.Is(p.credentialError, context.DeadlineExceeded) || errors.Is(p.credentialError, context.Canceled) {
+			return nil, p.credentialError
+		}
 		if p.credential == "" || len(p.credential) > 8192 || strings.ContainsAny(p.credential, "\r\n") {
 			p.credentialError = errors.New("credential unavailable")
 		}

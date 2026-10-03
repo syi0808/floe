@@ -60,8 +60,10 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
 
   bool get calendarChangesAvailable =>
       widget.controller.owners.actions != null &&
-      pendingCommands != null && destinationsLoaded &&
-      !loadingDestinations && destinations.isNotEmpty;
+      pendingCommands != null &&
+      destinationsLoaded &&
+      !loadingDestinations &&
+      destinations.isNotEmpty;
 
   CalendarAction? get selectedAction {
     final receipt = widget.message.executionReceipt;
@@ -77,7 +79,9 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
   void initState() {
     super.initState();
     final gateway = widget.controller.owners.actions;
-    pendingCommands = gateway == null ? null : ActionCommandReplay.forGateway(gateway);
+    pendingCommands = gateway == null
+        ? null
+        : ActionCommandReplay.forGateway(gateway);
     final proposals = this.proposals;
     artifactId = proposals.length == 1 ? proposals.single.id : null;
     if (receiptMatches && gateway != null) unawaited(_loadDestinations());
@@ -86,13 +90,17 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
   @override
   void didUpdateWidget(AgentProposalCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final gatewayChanged = oldWidget.controller.owners.actions != widget.controller.owners.actions;
+    final gatewayChanged =
+        oldWidget.controller.owners.actions != widget.controller.owners.actions;
     if (gatewayChanged) {
       final gateway = widget.controller.owners.actions;
-      pendingCommands = gateway == null ? null : ActionCommandReplay.forGateway(gateway);
+      pendingCommands = gateway == null
+          ? null
+          : ActionCommandReplay.forGateway(gateway);
       actionsByIntent.clear();
     }
-    if (gatewayChanged || oldWidget.message.callId != widget.message.callId ||
+    if (gatewayChanged ||
+        oldWidget.message.callId != widget.message.callId ||
         oldWidget.message.executionReceipt != widget.message.executionReceipt) {
       _messageEpoch++;
       final proposals = this.proposals;
@@ -104,7 +112,8 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       submitting = false;
       loadingDestinations = false;
       destinationsLoaded = false;
-      if (receiptMatches && widget.controller.owners.actions != null) unawaited(_loadDestinations());
+      if (receiptMatches && widget.controller.owners.actions != null)
+        unawaited(_loadDestinations());
     }
   }
 
@@ -130,7 +139,9 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       if (!mounted || messageEpoch != _messageEpoch) return;
       setState(() {
         destinations = List.unmodifiable(values);
-        destinationRef = values.length == 1 ? values.single.destinationRef : null;
+        destinationRef = values.length == 1
+            ? values.single.destinationRef
+            : null;
         loadingDestinations = false;
         destinationsLoaded = true;
       });
@@ -156,7 +167,9 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
     final commands = pendingCommands;
     final receipt = widget.message.executionReceipt;
     final destination = destinationRef;
-    if (gateway == null || commands == null || !calendarChangesAvailable ||
+    if (gateway == null ||
+        commands == null ||
+        !calendarChangesAvailable ||
         receipt == null ||
         receipt.execution.taskId != widget.message.callId ||
         destination == null ||
@@ -183,10 +196,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
     });
     try {
       final commandId = commands.retain(payloadKey);
-      final result = await gateway.submit(
-        commandId: commandId,
-        intent: intent,
-      );
+      final result = await gateway.submit(commandId: commandId, intent: intent);
       if (result.origin != CalendarActionOrigin.expert) {
         throw StateError('Actions returned a non-Expert snapshot.');
       }
@@ -210,24 +220,38 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
     final gateway = widget.controller.owners.actions;
     final receipt = widget.message.executionReceipt;
     final selectedArtifact = artifactId;
-    if (gateway == null || submitting || receipt == null || selectedArtifact == null) return;
+    if (gateway == null ||
+        submitting ||
+        receipt == null ||
+        selectedArtifact == null)
+      return;
     final key = _actionKey(receipt, selectedArtifact);
     final epoch = _messageEpoch;
-    setState(() { submitting = true; error = null; });
+    setState(() {
+      submitting = true;
+      error = null;
+    });
     try {
       final observed = await gateway.inspect(action.actionRef);
       if (!mounted || epoch != _messageEpoch) return;
       final current = actionsByIntent[key] ?? action;
-      if (!observed.isOlderObservationThan(current) && !observed.follows(current)) {
-        throw StateError('The Action observation changed identity or regressed.');
+      if (!observed.isOlderObservationThan(current) &&
+          !observed.follows(current)) {
+        throw StateError(
+          'The Action observation changed identity or regressed.',
+        );
       }
       setState(() {
-        if (!observed.isOlderObservationThan(current)) actionsByIntent[key] = observed;
+        if (!observed.isOlderObservationThan(current))
+          actionsByIntent[key] = observed;
         submitting = false;
       });
     } on Object catch (failure) {
       if (!mounted || epoch != _messageEpoch) return;
-      setState(() { error = CalendarActionError.from(failure); submitting = false; });
+      setState(() {
+        error = CalendarActionError.from(failure);
+        submitting = false;
+      });
     }
   }
 
@@ -253,8 +277,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       CalendarActionState.executing => strings.actionExecuting,
       CalendarActionState.blocked => strings.actionBlocked,
       CalendarActionState.failed => switch (action.status.failedReason) {
-        ActionNotAppliedReason.sourceChanged =>
-          'The Calendar source changed before this action. No change was applied.',
+        ActionNotAppliedReason.sourceChanged => 'The Calendar source changed before this action. No change was applied.',
         ActionNotAppliedReason.cancelled =>
           'Cancelled before any Calendar change was made.',
         ActionNotAppliedReason.timeout =>
@@ -262,24 +285,23 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
         _ => 'The owner confirmed this change was not applied.',
       },
       CalendarActionState.unknown => strings.actionUnknown,
-      CalendarActionState.succeeded => action.status.collection ==
-              ActionCollectionStatus.pending
-          ? 'Calendar change succeeded; Day collection is pending.'
-          : strings.actionSucceeded,
+      CalendarActionState.succeeded =>
+        action.status.collection == ActionCollectionStatus.pending
+            ? 'Calendar change succeeded; Day collection is pending.'
+            : strings.actionSucceeded,
     };
   }
 
-  FloeBadgeTone _statusTone(CalendarAction? action) => switch (
-    action?.status.state
-  ) {
-    CalendarActionState.succeeded => FloeBadgeTone.success,
-    CalendarActionState.blocked ||
-    CalendarActionState.failed ||
-    CalendarActionState.rejected ||
-    CalendarActionState.cancelled ||
-    CalendarActionState.expired => FloeBadgeTone.danger,
-    _ => FloeBadgeTone.info,
-  };
+  FloeBadgeTone _statusTone(CalendarAction? action) =>
+      switch (action?.status.state) {
+        CalendarActionState.succeeded => FloeBadgeTone.success,
+        CalendarActionState.blocked ||
+        CalendarActionState.failed ||
+        CalendarActionState.rejected ||
+        CalendarActionState.cancelled ||
+        CalendarActionState.expired => FloeBadgeTone.danger,
+        _ => FloeBadgeTone.info,
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -353,10 +375,11 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
               if (currentAction == null) ...[
                 FloeSelect<String>(
                   label: strings.actionDestination,
-                  value: destinations.any(
-                    (destination) =>
-                        destination.destinationRef == destinationRef,
-                  )
+                  value:
+                      destinations.any(
+                        (destination) =>
+                            destination.destinationRef == destinationRef,
+                      )
                       ? destinationRef
                       : null,
                   options: destinations
@@ -377,9 +400,8 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                   label: 'Timezone',
                   controller: timezone,
                   enabled: !submitting,
-                  validator: (value) => _validTimezone(value)
-                      ? null
-                      : strings.actionFormInvalid,
+                  validator: (value) =>
+                      _validTimezone(value) ? null : strings.actionFormInvalid,
                 ),
                 if (destinations.isEmpty &&
                     !loadingDestinations &&
@@ -404,7 +426,8 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                   ),
                 ],
                 FloeButton.filled(
-                  onPressed: selectedArtifact == null ||
+                  onPressed:
+                      selectedArtifact == null ||
                           !calendarChangesAvailable ||
                           submitting ||
                           destinationRef == null
@@ -417,8 +440,10 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                 Text(currentAction.title),
                 if (error case final actionError?) Text(actionError.message),
                 FloeButton.text(
-                  onPressed: submitting || widget.controller.owners.actions == null
-                      ? null : () => _refreshAction(currentAction),
+                  onPressed:
+                      submitting || widget.controller.owners.actions == null
+                      ? null
+                      : () => _refreshAction(currentAction),
                   child: const Text('Refresh Action'),
                 ),
                 if (currentAction.status.state ==

@@ -45,9 +45,9 @@ type OperatorProviderProfile struct {
 }
 
 type OperatorSnapshot struct {
-    InventoryAvailable bool `json:"-"`
-	Profiles   map[string]OperatorProviderProfile `json:"providers"`
-	Inventory PurposeInventory                    `json:"inventory"`
+	InventoryAvailable bool                               `json:"-"`
+	Profiles           map[string]OperatorProviderProfile `json:"providers"`
+	Inventory          PurposeInventory                   `json:"inventory"`
 }
 
 // UpdateRoute replaces or removes one purpose route after revalidating the
@@ -79,7 +79,7 @@ func (c *Configuration) UpdateRoute(ctx context.Context, operator trust.Operator
 
 func (c *Configuration) UpdateTarget(ctx context.Context, operator trust.OperatorPrincipal, input TargetUpdate) operation.Result {
 	return c.withCurrentOperator(operator, func() operation.Result {
-		if !ValidAlias(input.ID) || strings.HasPrefix(input.ID,"managed_") || len(input.APIKey) > 8192 || strings.ContainsAny(input.APIKey, "\r\n\x00") {
+		if !ValidAlias(input.ID) || strings.HasPrefix(input.ID, "managed_") || len(input.APIKey) > 8192 || strings.ContainsAny(input.APIKey, "\r\n\x00") {
 			return operation.Reject(operation.Invalid, "validation")
 		}
 		c.mu.Lock()
@@ -206,7 +206,7 @@ func (c *Configuration) Snapshot(ctx context.Context, operator trust.OperatorPri
 			}
 			profiles[provider] = OperatorProviderProfile{BaseURL: configured.BaseURL, HasCredential: configured.APIKeyEnv != "", Purposes: purposes}
 		}
-		snapshot = OperatorSnapshot{Profiles: profiles, Inventory: inventory, InventoryAvailable: inventoryErr==nil}
+		snapshot = OperatorSnapshot{Profiles: profiles, Inventory: inventory, InventoryAvailable: inventoryErr == nil}
 		return nil
 	})
 	if err != nil {
@@ -231,12 +231,14 @@ func (c *Configuration) withCurrentOperator(operator trust.OperatorPrincipal, ap
 }
 
 func (c *Configuration) commitConfiguration(ctx context.Context, state configurationState) operation.Result {
-    if ctx.Err()!=nil{return operation.Reject(operation.Unavailable,"configuration_unavailable")}
+	if ctx.Err() != nil {
+		return operation.Reject(operation.Unavailable, "configuration_unavailable")
+	}
 	if c.configUnavailable {
 		return operation.Reject(operation.Unavailable, "configuration_unavailable")
 	}
 	config, accounts, executor, err := c.prepare(ctx, state)
-	if err != nil || ctx.Err()!=nil {
+	if err != nil || ctx.Err() != nil {
 		return operation.Reject(operation.Unavailable, "configuration_unavailable")
 	}
 	if c.save(state) != nil {

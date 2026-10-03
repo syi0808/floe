@@ -8,7 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-    "floe/server/internal/integrations"
+	"floe/server/internal/integrations"
 	"html"
 	"io"
 	"net"
@@ -78,18 +78,18 @@ type loginFlow struct {
 }
 
 type Runtime struct {
-    credentialReadError error
-	operation       sync.Mutex
-	mu              sync.RWMutex
-	store           Store
-	config          Config
-	profile         providerProfile
-	client          *http.Client
-	tokens          *tokenBundle
-	flow            *loginFlow
-	credentialName  string
-    credentialGeneration uint64
-	callbackAddress string
+	credentialReadError  error
+	operation            sync.Mutex
+	mu                   sync.RWMutex
+	store                Store
+	config               Config
+	profile              providerProfile
+	client               *http.Client
+	tokens               *tokenBundle
+	flow                 *loginFlow
+	credentialName       string
+	credentialGeneration uint64
+	callbackAddress      string
 }
 
 func NewGitHub(ctx context.Context, store Store, config Config, boundCredential string) (*Runtime, error) {
@@ -119,18 +119,26 @@ func newRuntime(ctx context.Context, store Store, config Config, profile provide
 		client:         &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		credentialName: boundCredential, callbackAddress: profile.callbackAddress,
 	}
-    runtime.load(ctx)
-    if err:=runtime.credentialReadFailure();err!=nil{return nil,err}
-    return runtime, nil
+	runtime.load(ctx)
+	if err := runtime.credentialReadFailure(); err != nil {
+		return nil, err
+	}
+	return runtime, nil
 }
 
-func (runtime *Runtime) Ready() bool { runtime.mu.RLock(); defer runtime.mu.RUnlock(); return runtime.tokens != nil }
+func (runtime *Runtime) Ready() bool {
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	return runtime.tokens != nil
+}
 
 func (runtime *Runtime) Token(ctx context.Context) (string, error) {
 	runtime.operation.Lock()
 	defer runtime.operation.Unlock()
 	current := runtime.load(ctx)
-    if err:=runtime.credentialReadFailure();err!=nil{return "",err}
+	if err := runtime.credentialReadFailure(); err != nil {
+		return "", err
+	}
 	if current == nil {
 		return "", ErrCredentialExpired
 	}
@@ -148,11 +156,28 @@ func (runtime *Runtime) Token(ctx context.Context) (string, error) {
 }
 
 type authorizationCommand uint8
-const ( authorizationStatus authorizationCommand = iota; authorizationBegin; authorizationCancel; authorizationDisconnect )
-func (runtime *Runtime) BeginAuthorization(ctx context.Context) (integrations.AuthorizationProgress,error) {return runtime.authorization(ctx,authorizationBegin)}
-func (runtime *Runtime) PollAuthorization(ctx context.Context) (integrations.AuthorizationProgress,error) {return runtime.authorization(ctx,authorizationStatus)}
-func (runtime *Runtime) CancelAuthorization(ctx context.Context) error {_,err:=runtime.authorization(ctx,authorizationCancel);return err}
-func (runtime *Runtime) DisconnectAuthorization(ctx context.Context) error {_,err:=runtime.authorization(ctx,authorizationDisconnect);return err}
+
+const (
+	authorizationStatus authorizationCommand = iota
+	authorizationBegin
+	authorizationCancel
+	authorizationDisconnect
+)
+
+func (runtime *Runtime) BeginAuthorization(ctx context.Context) (integrations.AuthorizationProgress, error) {
+	return runtime.authorization(ctx, authorizationBegin)
+}
+func (runtime *Runtime) PollAuthorization(ctx context.Context) (integrations.AuthorizationProgress, error) {
+	return runtime.authorization(ctx, authorizationStatus)
+}
+func (runtime *Runtime) CancelAuthorization(ctx context.Context) error {
+	_, err := runtime.authorization(ctx, authorizationCancel)
+	return err
+}
+func (runtime *Runtime) DisconnectAuthorization(ctx context.Context) error {
+	_, err := runtime.authorization(ctx, authorizationDisconnect)
+	return err
+}
 
 func (runtime *Runtime) authorization(ctx context.Context, action authorizationCommand) (integrations.AuthorizationProgress, error) {
 	if action != authorizationStatus && action != authorizationBegin && action != authorizationCancel && action != authorizationDisconnect {
@@ -173,9 +198,11 @@ func (runtime *Runtime) authorization(ctx context.Context, action authorizationC
 	if action == authorizationCancel {
 		runtime.cancelLogin()
 	}
-	current:=runtime.load(ctx)
-    if err:=runtime.credentialReadFailure();err!=nil{return integrations.AuthorizationProgress{},err}
-    if action == authorizationBegin && current == nil {
+	current := runtime.load(ctx)
+	if err := runtime.credentialReadFailure(); err != nil {
+		return integrations.AuthorizationProgress{}, err
+	}
+	if action == authorizationBegin && current == nil {
 		runtime.mu.RLock()
 		pending := runtime.flow != nil && runtime.flow.expires.After(time.Now())
 		runtime.mu.RUnlock()
@@ -198,14 +225,16 @@ func (runtime *Runtime) authorization(ctx context.Context, action authorizationC
 	}
 	status, authURL := "disconnected", ""
 	userCode := ""
-	current=runtime.load(ctx)
-    if err:=runtime.credentialReadFailure();err!=nil{return integrations.AuthorizationProgress{},err}
-    if current != nil {
+	current = runtime.load(ctx)
+	if err := runtime.credentialReadFailure(); err != nil {
+		return integrations.AuthorizationProgress{}, err
+	}
+	if current != nil {
 		status = "connected"
 	} else if flow != nil && flow.expires.After(time.Now()) {
 		status, authURL, userCode = "pending", flow.authURL, flow.userCode
 	}
-return integrations.AuthorizationProgress{State:integrations.AuthorizationState(status),AuthorizationURL:authURL,UserCode:userCode}, nil
+	return integrations.AuthorizationProgress{State: integrations.AuthorizationState(status), AuthorizationURL: authURL, UserCode: userCode}, nil
 }
 func (runtime *Runtime) startLogin(ctx context.Context) error {
 	runtime.cancelLogin()
@@ -508,25 +537,50 @@ func (runtime *Runtime) logout(ctx context.Context) error {
 	}
 	runtime.mu.Lock()
 	runtime.tokens = nil
-    runtime.credentialGeneration++
+	runtime.credentialGeneration++
 	runtime.mu.Unlock()
 	return nil
 }
 
 func (runtime *Runtime) load(ctx context.Context) *tokenBundle {
-    runtime.mu.RLock(); current:=runtime.tokens; generation:=runtime.credentialGeneration; key:=runtime.credentialName; runtime.mu.RUnlock()
-    if current!=nil {copy:=*current;return &copy}
-    encoded,err:=runtime.store.Get(ctx, key)
-    runtime.noteCredentialRead(err)
-    if err!=nil{return nil}
-    if encoded==""{return nil}
-    if len(encoded)>32768{runtime.noteCredentialRead(ErrUnavailable);return nil}
-    var value tokenBundle
-    if json.Unmarshal([]byte(encoded),&value)!=nil || value.ClientID!=runtime.config.ClientID || !validCredential(value.AccessToken,16384){runtime.noteCredentialRead(ErrUnavailable);return nil}
-    runtime.mu.Lock();defer runtime.mu.Unlock()
-    if runtime.credentialGeneration!=generation || runtime.credentialName!=key {return nil}
-    if runtime.tokens!=nil {copy:=*runtime.tokens;return &copy}
-    runtime.tokens=&value;copy:=value;return &copy
+	runtime.mu.RLock()
+	current := runtime.tokens
+	generation := runtime.credentialGeneration
+	key := runtime.credentialName
+	runtime.mu.RUnlock()
+	if current != nil {
+		copy := *current
+		return &copy
+	}
+	encoded, err := runtime.store.Get(ctx, key)
+	runtime.noteCredentialRead(err)
+	if err != nil {
+		return nil
+	}
+	if encoded == "" {
+		return nil
+	}
+	if len(encoded) > 32768 {
+		runtime.noteCredentialRead(ErrUnavailable)
+		return nil
+	}
+	var value tokenBundle
+	if json.Unmarshal([]byte(encoded), &value) != nil || value.ClientID != runtime.config.ClientID || !validCredential(value.AccessToken, 16384) {
+		runtime.noteCredentialRead(ErrUnavailable)
+		return nil
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.credentialGeneration != generation || runtime.credentialName != key {
+		return nil
+	}
+	if runtime.tokens != nil {
+		copy := *runtime.tokens
+		return &copy
+	}
+	runtime.tokens = &value
+	copy := value
+	return &copy
 }
 
 func (runtime *Runtime) save(ctx context.Context, value *tokenBundle) error {
@@ -537,7 +591,7 @@ func (runtime *Runtime) save(ctx context.Context, value *tokenBundle) error {
 	copy := *value
 	runtime.mu.Lock()
 	runtime.tokens = &copy
-    runtime.credentialReadError=nil
+	runtime.credentialReadError = nil
 	runtime.mu.Unlock()
 	return nil
 }
@@ -624,5 +678,13 @@ func callbackPage(title, message string) string {
 	return "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>" + html.EscapeString(title) + "</title><body style='font:16px system-ui;padding:48px'><h1>" + html.EscapeString(title) + "</h1><p>" + html.EscapeString(message) + "</p></body>"
 }
 
-func (runtime *Runtime) noteCredentialRead(err error){runtime.mu.Lock();runtime.credentialReadError=err;runtime.mu.Unlock()}
-func (runtime *Runtime) credentialReadFailure()error{runtime.mu.RLock();defer runtime.mu.RUnlock();return runtime.credentialReadError}
+func (runtime *Runtime) noteCredentialRead(err error) {
+	runtime.mu.Lock()
+	runtime.credentialReadError = err
+	runtime.mu.Unlock()
+}
+func (runtime *Runtime) credentialReadFailure() error {
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	return runtime.credentialReadError
+}

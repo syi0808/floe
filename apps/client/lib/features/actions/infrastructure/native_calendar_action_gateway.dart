@@ -81,9 +81,7 @@ final class NativeCalendarActionGateway implements CalendarActionGateway {
       'intent': intent.toJson(),
     });
     _expectResult(result, 'actions.action', const {'action'});
-    return CalendarAction.fromJson(
-      _object(result['action'], 'Actions action'),
-    );
+    return CalendarAction.fromJson(_object(result['action'], 'Actions action'));
   }
 
   @override
@@ -104,7 +102,9 @@ final class NativeCalendarActionGateway implements CalendarActionGateway {
       _object(result['action'], 'Actions action'),
     );
     if (observed.actionRef != action.actionRef || !observed.follows(action)) {
-      throw const FormatException('Actions response identity or revision mismatch.');
+      throw const FormatException(
+        'Actions response identity or revision mismatch.',
+      );
     }
     return observed;
   }
@@ -124,7 +124,9 @@ final class NativeCalendarActionGateway implements CalendarActionGateway {
       _object(result['action'], 'Actions action'),
     );
     if (observed.actionRef != action.actionRef || !observed.follows(action)) {
-      throw const FormatException('Actions response identity or revision mismatch.');
+      throw const FormatException(
+        'Actions response identity or revision mismatch.',
+      );
     }
     return observed;
   }
@@ -157,8 +159,11 @@ final class NativeCalendarActionGateway implements CalendarActionGateway {
     });
     _expectResult(result, 'actions.page', const {'page'});
     final page = ActionsPage.fromJson(_object(result['page'], 'Actions page'));
-    if (page.actions.length > limit || (cursor != null && page.nextCursor == cursor)) {
-      throw const FormatException('Actions page exceeded its bound or did not advance.');
+    if (page.actions.length > limit ||
+        (cursor != null && page.nextCursor == cursor)) {
+      throw const FormatException(
+        'Actions page exceeded its bound or did not advance.',
+      );
     }
     return page;
   }
@@ -167,9 +172,7 @@ final class NativeCalendarActionGateway implements CalendarActionGateway {
     String commandId,
     Map<String, Object?> command,
   ) async {
-    return _withOwnerErrors(
-      () => ownerCommand(_transport, commandId, command),
-    );
+    return _withOwnerErrors(() => ownerCommand(_transport, commandId, command));
   }
 
   Future<Map<String, dynamic>> _query(Map<String, Object?> query) async {

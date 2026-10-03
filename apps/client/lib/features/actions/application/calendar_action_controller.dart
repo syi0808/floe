@@ -23,11 +23,12 @@ final class CalendarActionError {
     final code = error is AppRuntimeException ? error.code : 'internal';
     final kind = switch (code) {
       'vault_locked' => CalendarActionErrorKind.vaultLocked,
-      'vault_unavailable' || 'storage_unavailable' =>
-        CalendarActionErrorKind.vaultUnavailable,
+      'vault_unavailable' ||
+      'storage_unavailable' => CalendarActionErrorKind.vaultUnavailable,
       'conflict' => CalendarActionErrorKind.conflict,
-      'unavailable' || 'deadline_exceeded' || 'timeout' =>
-        CalendarActionErrorKind.unavailable,
+      'unavailable' ||
+      'deadline_exceeded' ||
+      'timeout' => CalendarActionErrorKind.unavailable,
       _ => CalendarActionErrorKind.other,
     };
     return CalendarActionError(kind: kind, code: code);
@@ -45,8 +46,7 @@ final class CalendarActionError {
       'Actions are unavailable while the Floe vault is unavailable.',
     CalendarActionErrorKind.conflict =>
       'The Action changed. Refresh it before making another decision.',
-    CalendarActionErrorKind.unavailable =>
-      'The Action result could not be confirmed. Refresh or reconcile the same Action.',
+    CalendarActionErrorKind.unavailable => 'The Action result could not be confirmed. Refresh or reconcile the same Action.',
     CalendarActionErrorKind.other =>
       'The Action could not be confirmed. Refresh before trying again.',
   };
@@ -56,7 +56,7 @@ final class CalendarActionError {
 /// its scheduled observations; it never cancels work owned by Rust.
 final class CalendarActionController extends ChangeNotifier {
   CalendarActionController({required this.gateway})
-      : _commands = ActionCommandReplay.forGateway(gateway);
+    : _commands = ActionCommandReplay.forGateway(gateway);
 
   final CalendarActionGateway gateway;
   List<CalendarAction> _actions = const [];
@@ -79,10 +79,13 @@ final class CalendarActionController extends ChangeNotifier {
   CalendarActionError? get error => _error;
   CalendarActionError? get destinationsError => _destinationsError;
   bool get destinationsLoaded => _destinationsLoaded;
+
   /// Display availability observed from the owner. Every submitted command
   /// still needs the owner's current target and permission admission.
-  bool get calendarChangesAvailable => _destinationsLoaded &&
-      _destinationsError == null && _destinations.isNotEmpty;
+  bool get calendarChangesAvailable =>
+      _destinationsLoaded &&
+      _destinationsError == null &&
+      _destinations.isNotEmpty;
   bool get busy => _busy;
   bool get loaded => _loaded;
 
@@ -197,7 +200,10 @@ final class CalendarActionController extends ChangeNotifier {
       CalendarActionDecision.cancel => ActionAllowedAction.cancel,
     };
     if (!current.allowedActions.contains(allowed)) {
-      _error = const CalendarActionError(kind: CalendarActionErrorKind.conflict, code: 'conflict');
+      _error = const CalendarActionError(
+        kind: CalendarActionErrorKind.conflict,
+        code: 'conflict',
+      );
       if (!_disposed) notifyListeners();
       throw StateError('The owner does not allow this Action decision.');
     }
@@ -222,7 +228,10 @@ final class CalendarActionController extends ChangeNotifier {
   Future<CalendarAction> reconcile(CalendarAction action) async {
     final current = _requireCurrent(action);
     if (!current.allowedActions.contains(ActionAllowedAction.reconcile)) {
-      _error = const CalendarActionError(kind: CalendarActionErrorKind.conflict, code: 'conflict');
+      _error = const CalendarActionError(
+        kind: CalendarActionErrorKind.conflict,
+        code: 'conflict',
+      );
       if (!_disposed) notifyListeners();
       throw StateError('The owner does not allow Action reconciliation.');
     }
@@ -261,7 +270,9 @@ final class CalendarActionController extends ChangeNotifier {
             result.revision < current.revision ||
             (mode != current.calendarCreate &&
                 result.revision == current.revision)) {
-          throw StateError('Actions authority snapshot did not match the request.');
+          throw StateError(
+            'Actions authority snapshot did not match the request.',
+          );
         }
         _authority = result;
       },
@@ -314,9 +325,13 @@ final class CalendarActionController extends ChangeNotifier {
 
   CalendarAction _requireCurrent(CalendarAction action) {
     final current = find(action.actionRef);
-    if (current == null || current.revision != action.revision ||
+    if (current == null ||
+        current.revision != action.revision ||
         !current.hasSameImmutableIdentity(action)) {
-      _error = const CalendarActionError(kind: CalendarActionErrorKind.conflict, code: 'conflict');
+      _error = const CalendarActionError(
+        kind: CalendarActionErrorKind.conflict,
+        code: 'conflict',
+      );
       if (!_disposed) notifyListeners();
       throw StateError('Refresh the Action before making a decision.');
     }
@@ -326,18 +341,24 @@ final class CalendarActionController extends ChangeNotifier {
   void _validateSubmittedAction(CalendarAction result, ActionIntent intent) {
     final matchesIntent = switch (intent) {
       DirectCreate(:final title, :final schedule) =>
-            result.origin == CalendarActionOrigin.direct &&
+        result.origin == CalendarActionOrigin.direct &&
             result.effect is CreateActionEffect &&
             (result.effect as CreateActionEffect).title == title &&
             _sameSchedule(
               (result.effect as CreateActionEffect).schedule,
               schedule,
             ),
-      DirectUpdate(:final eventRef, :final expectedRevision, :final title, :final schedule) =>
+      DirectUpdate(
+        :final eventRef,
+        :final expectedRevision,
+        :final title,
+        :final schedule,
+      ) =>
         result.origin == CalendarActionOrigin.direct &&
             result.effect is UpdateActionEffect &&
             (result.effect as UpdateActionEffect).eventRef == eventRef &&
-            (result.effect as UpdateActionEffect).expectedRevision == expectedRevision &&
+            (result.effect as UpdateActionEffect).expectedRevision ==
+                expectedRevision &&
             (result.effect as UpdateActionEffect).title == title &&
             _sameSchedule(
               (result.effect as UpdateActionEffect).schedule,
@@ -347,7 +368,8 @@ final class CalendarActionController extends ChangeNotifier {
         result.origin == CalendarActionOrigin.direct &&
             result.effect is DeleteActionEffect &&
             (result.effect as DeleteActionEffect).eventRef == eventRef &&
-            (result.effect as DeleteActionEffect).expectedRevision == expectedRevision,
+            (result.effect as DeleteActionEffect).expectedRevision ==
+                expectedRevision,
       ExpertProposal() => result.origin == CalendarActionOrigin.expert,
     };
     if (!matchesIntent) {
@@ -416,7 +438,8 @@ final class CalendarActionController extends ChangeNotifier {
     if (replace) {
       final pageRefs = page.actions.map((action) => action.actionRef).toSet();
       for (final action in previous.values) {
-        if (!pageRefs.contains(action.actionRef)) _cancelObservation(action.actionRef);
+        if (!pageRefs.contains(action.actionRef))
+          _cancelObservation(action.actionRef);
       }
     }
   }
@@ -425,13 +448,10 @@ final class CalendarActionController extends ChangeNotifier {
     _cancelObservation(action.actionRef);
     final delay = action.nextObservationAfterMs;
     if (_disposed || delay == null || delay <= 0 || delay > 60000) return;
-    _observations[action.actionRef] = Timer(
-      Duration(milliseconds: delay),
-      () {
-        _observations.remove(action.actionRef);
-        unawaited(_observeAfterDelay(action.actionRef));
-      },
-    );
+    _observations[action.actionRef] = Timer(Duration(milliseconds: delay), () {
+      _observations.remove(action.actionRef);
+      unawaited(_observeAfterDelay(action.actionRef));
+    });
   }
 
   Future<void> _observeAfterDelay(String actionRef) async {

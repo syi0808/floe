@@ -45,7 +45,9 @@ func (f *Factory) Open(ctx context.Context, targets map[string]inference.Provide
 	r := &registry{targets: make(map[string]*provider, len(targets))}
 	accounts := make(map[string]inference.ModelAccount, len(targets))
 	for id, target := range targets {
-        if err:=ctx.Err();err!=nil{return nil,nil,err}
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		if !inference.ValidAlias(id) {
 			return nil, nil, errors.New("invalid target")
 		}
@@ -68,17 +70,25 @@ func (p *provider) Ready(ctx context.Context) error {
 	}
 	if p.target.APIKeyEnv != "" {
 		current, err := p.lookup(ctx, p.target.APIKeyEnv)
-        if errors.Is(err,context.DeadlineExceeded) || errors.Is(err,context.Canceled){return err}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return err
+		}
 		if err != nil || current != p.credential {
 			return inference.Failure{Code: inference.ProviderCredentialsUnavailable}
 		}
 	}
 	if p.target.Provider == "codex_oauth" {
-        if p.codex==nil{return inference.Failure{Code:inference.ProviderCredentialsUnavailable}}
-        ready:=p.codex.Ready(ctx)
-        if err:=ctx.Err();err!=nil{return err}
-        if !ready || p.codex.ReplayIdentity()==""{return inference.Failure{Code:inference.ProviderCredentialsUnavailable}}
-    }
+		if p.codex == nil {
+			return inference.Failure{Code: inference.ProviderCredentialsUnavailable}
+		}
+		ready := p.codex.Ready(ctx)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !ready || p.codex.ReplayIdentity() == "" {
+			return inference.Failure{Code: inference.ProviderCredentialsUnavailable}
+		}
+	}
 	return nil
 }
 

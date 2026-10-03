@@ -207,13 +207,7 @@ final class AgentCapabilityMessage extends AgentMessage {
     final task = _object(json['task']);
     _keys(
       task,
-      {
-        'execution_receipt',
-        'task_id',
-        'agent_id',
-        'state',
-        'artifacts',
-      },
+      {'execution_receipt', 'task_id', 'agent_id', 'state', 'artifacts'},
       {'result', 'issue'},
     );
     final state = task['state'];

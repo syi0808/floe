@@ -1,3 +1,5 @@
+import 'package:floe_client/app/floe_primitives.dart';
+import 'package:floe_client/features/day/presentation/calendar_layout.dart';
 import 'package:intl/intl.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
@@ -292,5 +294,8 @@ String _stateLabel(DayCoverageState state, bool covers) {
 
 String _humanize(String value) => value
     .split('_')
-    .map((part) => part.isEmpty ? part : '${part[0].toUpperCase()}${part.substring(1)}')
+    .map(
+      (part) =>
+          part.isEmpty ? part : '${part[0].toUpperCase()}${part.substring(1)}',
+    )
     .join(' ');

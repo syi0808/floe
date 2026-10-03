@@ -17,7 +17,9 @@ final class ActionCommandReplay {
     final previous = _pending[exactPayload];
     if (previous != null) return previous;
     if (_pending.length >= _maximumPending) {
-      throw StateError('Too many unresolved Actions commands. Refresh existing Actions.');
+      throw StateError(
+        'Too many unresolved Actions commands. Refresh existing Actions.',
+      );
     }
     return _pending[exactPayload] = newAgentRequestId();
   }

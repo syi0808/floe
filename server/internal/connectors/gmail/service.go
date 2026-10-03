@@ -153,7 +153,9 @@ func (service *Service) Read(ctx context.Context, request views.ReadRequest) (vi
 	if err := ctx.Err(); err != nil {
 		return service.readFailure(ctx, err)
 	}
-	if err:=service.recordSuccess(ctx,readID,metadata,observed);err!=nil{return service.readFailure(ctx,err)}
+	if err := service.recordSuccess(ctx, readID, metadata, observed); err != nil {
+		return service.readFailure(ctx, err)
+	}
 	return result, nil
 }
 
@@ -197,8 +199,8 @@ func (service *Service) Snapshot(ctx context.Context) (integrations.Snapshot, er
 		failure = &integrations.Failure{Kind: "stale", ObservedAtUnixMS: nowUnixMS}
 	}
 	if observed == 0 {
-        observed = nowUnixMS
-    }
+		observed = nowUnixMS
+	}
 
 	state, failureKind := "pending", ""
 	if failure != nil {
@@ -257,15 +259,17 @@ func (service *Service) readFailure(ctx context.Context, err error) (views.Resul
 	return views.Result{}, normalized
 }
 
-func (service *Service) recordSuccess(ctx context.Context,id string, view views.ViewSnapshot, observed int64) error {
+func (service *Service) recordSuccess(ctx context.Context, id string, view views.ViewSnapshot, observed int64) error {
 	service.statusMu.Lock()
 	defer service.statusMu.Unlock()
-	if err:=ctx.Err();err!=nil{return err}
-    service.observedAtUnixMS = observed
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	service.observedAtUnixMS = observed
 	service.lastSuccessAtUnixMS = &observed
 	service.lastFailure = nil
 	service.readViews[id] = view
-    return nil
+	return nil
 }
 
 func (service *Service) recordFailure(kind string, observed int64) {

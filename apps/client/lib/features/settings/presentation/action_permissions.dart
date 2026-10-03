@@ -29,12 +29,11 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
     }
   }
 
-  _ActionPermissionPreset? _presetFor(ActionAuthorityMode? mode) =>
-      mode == null
-          ? null
-          : mode == ActionAuthorityMode.allow
-          ? _ActionPermissionPreset.all
-          : _ActionPermissionPreset.customize;
+  _ActionPermissionPreset? _presetFor(ActionAuthorityMode? mode) => mode == null
+      ? null
+      : mode == ActionAuthorityMode.allow
+      ? _ActionPermissionPreset.all
+      : _ActionPermissionPreset.customize;
 
   _ActionPermissionPreset? get preset =>
       _selectedPreset ?? _presetFor(controller.authority?.calendarCreate);
@@ -97,14 +96,16 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
                 children: [
                   FloeRadioTile<_ActionPermissionPreset>(
                     value: _ActionPermissionPreset.all,
-                    enabled: !controller.busy &&
+                    enabled:
+                        !controller.busy &&
                         controller.authority != null &&
                         controller.error == null,
                     title: const Text('Allow Calendar event creation'),
                   ),
                   FloeRadioTile<_ActionPermissionPreset>(
                     value: _ActionPermissionPreset.customize,
-                    enabled: !controller.busy &&
+                    enabled:
+                        !controller.busy &&
                         controller.authority != null &&
                         controller.error == null,
                     title: const Text('Customize permissions'),

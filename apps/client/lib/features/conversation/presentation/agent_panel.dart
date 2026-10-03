@@ -35,7 +35,11 @@ class AgentPanel extends StatefulWidget {
   final Future<void> Function(String actionId)? onOpenAction;
   final VoidCallback? onOpenSourceReview;
   final VoidCallback? onOpenConnections;
-  final void Function(AgentExpertBindingTarget target, Future<void> Function() onBindingReplaced)? onOpenExpertSettings;
+  final void Function(
+    AgentExpertBindingTarget target,
+    Future<void> Function() onBindingReplaced,
+  )?
+  onOpenExpertSettings;
 
   @override
   State<AgentPanel> createState() => _AgentPanelState();
@@ -219,73 +223,73 @@ class _AgentPanelState extends State<AgentPanel> {
     ),
   );
 
-  Widget _message(AppLocalizations strings, AgentMessage message) =>
-      switch (message) {
-        AgentTextMessage(:final kind, :final text) => FloeSquircle(
-          size: FloeSquircleSize.md,
-          fill: kind != AgentMessageKind.user
-              ? FloePalette.primary50
-              : FloePalette.neutral50,
-          borderWidth: 0,
-          padding: const EdgeInsets.all(FloeSpace.md),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                kind != AgentMessageKind.user ? 'Floe' : strings.agentYou,
-                style: FloeType.label,
-              ),
-              const SizedBox(height: FloeSpace.sm),
-              if (kind != AgentMessageKind.user)
-                _AgentMarkdown(data: text)
-              else
-                SelectableText(text, style: FloeType.body),
-            ],
+  Widget _message(
+    AppLocalizations strings,
+    AgentMessage message,
+  ) => switch (message) {
+    AgentTextMessage(:final kind, :final text) => FloeSquircle(
+      size: FloeSquircleSize.md,
+      fill: kind != AgentMessageKind.user
+          ? FloePalette.primary50
+          : FloePalette.neutral50,
+      borderWidth: 0,
+      padding: const EdgeInsets.all(FloeSpace.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            kind != AgentMessageKind.user ? 'Floe' : strings.agentYou,
+            style: FloeType.label,
+          ),
+          const SizedBox(height: FloeSpace.sm),
+          if (kind != AgentMessageKind.user)
+            _AgentMarkdown(data: text)
+          else
+            SelectableText(text, style: FloeType.body),
+        ],
+      ),
+    ),
+    AgentInteractionMessage(:final interactionId) => AgentInteractionCard(
+      key: ValueKey(interactionId),
+      controller: widget.controller,
+      message: message,
+      onOpenSourceReview: widget.onOpenSourceReview,
+      onOpenConnections: widget.onOpenConnections,
+      onOpenExpertSettings: widget.onOpenExpertSettings,
+    ),
+    AgentCapabilityMessage() => ExpansionTile(
+      tilePadding: EdgeInsets.zero,
+      childrenPadding: const EdgeInsets.only(bottom: FloeSpace.sm),
+      title: Text(
+        strings.agentConversationSource,
+        style: FloeType.controlLabel,
+      ),
+      subtitle: Text(
+        strings.agentConversationSourceDetails,
+        style: FloeType.bodySmall.copyWith(fontSize: 12),
+      ),
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: SelectableText(
+            _sourceText(strings, message),
+            style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
           ),
         ),
-        AgentInteractionMessage(:final interactionId) => AgentInteractionCard(
-          key: ValueKey(interactionId),
-          controller: widget.controller,
-          message: message,
-          onOpenSourceReview: widget.onOpenSourceReview,
-          onOpenConnections: widget.onOpenConnections,
-          onOpenExpertSettings: widget.onOpenExpertSettings,
-        ),
-        AgentCapabilityMessage() => ExpansionTile(
-          tilePadding: EdgeInsets.zero,
-          childrenPadding: const EdgeInsets.only(bottom: FloeSpace.sm),
-          title: Text(
-            strings.agentConversationSource,
-            style: FloeType.controlLabel,
+        if (message.hasArtifactMediaType(
+              'application/vnd.floe.actions.calendar-proposal+json;version=1',
+            ) &&
+            message.executionReceipt != null) ...[
+          const SizedBox(height: FloeSpace.md),
+          AgentProposalCard(
+            controller: widget.controller,
+            message: message,
+            onOpenAction: widget.onOpenAction,
           ),
-          subtitle: Text(
-            strings.agentConversationSourceDetails,
-            style: FloeType.bodySmall.copyWith(fontSize: 12),
-          ),
-          children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: SelectableText(
-                _sourceText(strings, message),
-                style: FloeType.bodySmall.copyWith(
-                  color: FloePalette.neutral600,
-                ),
-              ),
-            ),
-            if (message.hasArtifactMediaType(
-                  'application/vnd.floe.actions.calendar-proposal+json;version=1',
-                ) &&
-                message.executionReceipt != null) ...[
-              const SizedBox(height: FloeSpace.md),
-              AgentProposalCard(
-                controller: widget.controller,
-                message: message,
-                onOpenAction: widget.onOpenAction,
-              ),
-            ],
-          ],
-        ),
-      };
+        ],
+      ],
+    ),
+  };
 
   String _sourceText(AppLocalizations strings, AgentCapabilityMessage message) {
     final output = message.output;

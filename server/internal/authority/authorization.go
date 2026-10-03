@@ -3,6 +3,7 @@ package authority
 
 import (
 	"bytes"
+	"context"
 	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -12,8 +13,7 @@ import (
 	"floe/server/internal/trust"
 	"floe/server/internal/views"
 	"fmt"
-    "context"
-    "reflect"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -82,23 +82,34 @@ type GrantReference struct {
 
 // Request retains exactly one closed authority policy and a full source fence.
 type Request struct {
-    Source views.SourceSnapshot
-    policy requestPolicy
+	Source views.SourceSnapshot
+	policy requestPolicy
 }
 type requestPolicy interface {
-    requestBounds() views.Bounds
-    clonePolicy() requestPolicy
+	requestBounds() views.Bounds
+	clonePolicy() requestPolicy
 }
 type assistantPolicy struct {
-    Audience, Purpose, Consumer string
-    Grant GrantReference
-    Resources []string
-    QueryDigest [32]byte
-    MaxItems,MaxBytes uint32
+	Audience, Purpose, Consumer string
+	Grant                       GrantReference
+	Resources                   []string
+	QueryDigest                 [32]byte
+	MaxItems, MaxBytes          uint32
 }
-func (p assistantPolicy) requestBounds()views.Bounds{return views.Bounds{MaxItems:p.MaxItems,MaxBytes:p.MaxBytes}}
-func (p assistantPolicy) clonePolicy()requestPolicy{p.Resources=append([]string(nil),p.Resources...);return p}
-func (r Request) bounds()views.Bounds{if r.policy==nil{return views.Bounds{}};return r.policy.requestBounds()}
+
+func (p assistantPolicy) requestBounds() views.Bounds {
+	return views.Bounds{MaxItems: p.MaxItems, MaxBytes: p.MaxBytes}
+}
+func (p assistantPolicy) clonePolicy() requestPolicy {
+	p.Resources = append([]string(nil), p.Resources...)
+	return p
+}
+func (r Request) bounds() views.Bounds {
+	if r.policy == nil {
+		return views.Bounds{}
+	}
+	return r.policy.requestBounds()
+}
 
 type Challenge struct {
 	ID        string
@@ -235,7 +246,7 @@ func (e *Engine) ClaimAdmission(p trust.Principal, viewID views.ID, proof trust.
 	e.mu.Lock()
 	e.sweepExpiredLocked()
 	c, ok := e.pending[proof.ChallengeID]
-	if !ok || c.state != challengePending || !p.Same(c.principal) || c.request.Source.Descriptor.ID!=string(viewID) {
+	if !ok || c.state != challengePending || !p.Same(c.principal) || c.request.Source.Descriptor.ID != string(viewID) {
 		e.mu.Unlock()
 		return "", Request{}, ErrReplay
 	}
@@ -285,13 +296,17 @@ func (e *Engine) StageResult(id string, p trust.Principal, r Request, result []b
 	if err != nil {
 		return Release{}, ErrDenied
 	}
-    hash:=sha256.Sum256(result)
-    resultDigest:=hex.EncodeToString(hash[:])
-    challenge,encoded,err:=e.makeChallenge(OperationRelease,p,issuer.KeyID,r,id,resultDigest)
-    if err!=nil{return Release{},err}
+	hash := sha256.Sum256(result)
+	resultDigest := hex.EncodeToString(hash[:])
+	challenge, encoded, err := e.makeChallenge(OperationRelease, p, issuer.KeyID, r, id, resultDigest)
+	if err != nil {
+		return Release{}, err
+	}
 	var out Release
 	err = source.WithCurrentSource(p, r.Source, func(current views.SourceSnapshot) error {
-        if !sourceMatches(p, r.Source, current) { return ErrDenied }
+		if !sourceMatches(p, r.Source, current) {
+			return ErrDenied
+		}
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		e.sweepExpiredLocked()
@@ -335,10 +350,10 @@ func (e *Engine) ClaimRelease(ctx context.Context, p trust.Principal, viewID vie
 		return nil, ErrDenied
 	}
 	if copy.request.Source.Descriptor.ID != string(viewID) || resolver.PreflightSource(ctx, p, copy.request.Source) != nil {
-        e.CancelRelease(proof.ChallengeID)
-        return nil, ErrDenied
-    }
-    var out []byte
+		e.CancelRelease(proof.ChallengeID)
+		return nil, ErrDenied
+	}
+	var out []byte
 	consumed := false
 	err = source.WithCurrentSource(p, copy.request.Source, func(current views.SourceSnapshot) error {
 		consumed = true
@@ -396,27 +411,51 @@ func (e *Engine) sweepExpiredLocked() {
 		}
 	}
 }
-func (engine *Engine) makeChallenge(operation Operation, principal trust.Principal, keyID string, request Request, admissionID,resultDigest string) (Challenge, []byte, error) {
-    if validatePrincipal(principal)!=nil || validateRequest(request)!=nil || operation!=OperationAdmission && operation!=OperationRelease{return Challenge{},nil,ErrInvalid}
-    id,err:=engine.randomUUID();if err!=nil{return Challenge{},nil,err}
-    nonce:=make([]byte,32);if err=engine.random(nonce);err!=nil{return Challenge{},nil,err}
-    now:=engine.clock.Now();expires:=now.Add(ChallengeTTL)
-    var payload any
-    switch policy:=request.policy.(type){
-    case assistantPolicy:
-        source:=request.Source
-        wire:=challengeWire{SchemaVersion:SchemaVersion,Operation:string(operation),ChallengeID:id,Nonce:encodeB64(nonce),KeyID:keyID,PersonID:principal.PersonID(),ClientID:principal.ClientID(),DeviceID:principal.DeviceID(),Audience:policy.Audience,Purpose:policy.Purpose,Consumer:policy.Consumer,IssuedAtUnixMS:now.UnixMilli(),ExpiresAtUnixMS:expires.UnixMilli(),Source:&sourceWire{source.ConnectorID,source.ConnectionID,source.ExecutionOwner,source.Incarnation,source.Epoch},Grant:&grantWire{policy.Grant.ID,policy.Grant.Incarnation,policy.Grant.Epoch},Resources:append([]string(nil),policy.Resources...),QueryDigest:hex.EncodeToString(policy.QueryDigest[:]),MaxItems:policy.MaxItems,MaxBytes:policy.MaxBytes,AdmissionID:admissionID,ResultDigest:resultDigest}
-        if validateWire(wire)!=nil{return Challenge{},nil,ErrInvalid};payload=wire
-    case productCalendarPolicy:
-        if policy.expires.Before(expires){expires=policy.expires}
-        if !expires.After(now){return Challenge{},nil,ErrExpired}
-        wire:=ProductCalendarChallenge{Version:1,Operation:"day_calendar_admission",ChallengeID:id,Nonce:encodeB64(nonce),KeyID:keyID,Claims:policy.claims,IssuedAtUnixMS:now.UnixMilli(),ExpiresAtUnixMS:expires.UnixMilli()}
-        if operation==OperationRelease{wire.Operation="day_calendar_release";wire.AdmissionID=admissionID;wire.ResultSHA256=resultDigest}
-        payload=wire
-    default:return Challenge{},nil,ErrInvalid
-    }
-    data,err:=json.Marshal(payload);if err!=nil || len(data)>MaxChallengeBytes{return Challenge{},nil,ErrInvalid}
-    return Challenge{ID:id,Operation:operation,Bytes:data,BytesB64:encodeB64(data),ExpiresAt:expires},data,nil
+func (engine *Engine) makeChallenge(operation Operation, principal trust.Principal, keyID string, request Request, admissionID, resultDigest string) (Challenge, []byte, error) {
+	if validatePrincipal(principal) != nil || validateRequest(request) != nil || operation != OperationAdmission && operation != OperationRelease {
+		return Challenge{}, nil, ErrInvalid
+	}
+	id, err := engine.randomUUID()
+	if err != nil {
+		return Challenge{}, nil, err
+	}
+	nonce := make([]byte, 32)
+	if err = engine.random(nonce); err != nil {
+		return Challenge{}, nil, err
+	}
+	now := engine.clock.Now()
+	expires := now.Add(ChallengeTTL)
+	var payload any
+	switch policy := request.policy.(type) {
+	case assistantPolicy:
+		source := request.Source
+		wire := challengeWire{SchemaVersion: SchemaVersion, Operation: string(operation), ChallengeID: id, Nonce: encodeB64(nonce), KeyID: keyID, PersonID: principal.PersonID(), ClientID: principal.ClientID(), DeviceID: principal.DeviceID(), Audience: policy.Audience, Purpose: policy.Purpose, Consumer: policy.Consumer, IssuedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: expires.UnixMilli(), Source: &sourceWire{source.ConnectorID, source.ConnectionID, source.ExecutionOwner, source.Incarnation, source.Epoch}, Grant: &grantWire{policy.Grant.ID, policy.Grant.Incarnation, policy.Grant.Epoch}, Resources: append([]string(nil), policy.Resources...), QueryDigest: hex.EncodeToString(policy.QueryDigest[:]), MaxItems: policy.MaxItems, MaxBytes: policy.MaxBytes, AdmissionID: admissionID, ResultDigest: resultDigest}
+		if validateWire(wire) != nil {
+			return Challenge{}, nil, ErrInvalid
+		}
+		payload = wire
+	case productCalendarPolicy:
+		if policy.expires.Before(expires) {
+			expires = policy.expires
+		}
+		if !expires.After(now) {
+			return Challenge{}, nil, ErrExpired
+		}
+		wire := ProductCalendarChallenge{Version: 1, Operation: "day_calendar_admission", ChallengeID: id, Nonce: encodeB64(nonce), KeyID: keyID, Claims: policy.claims, IssuedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: expires.UnixMilli()}
+		if operation == OperationRelease {
+			wire.Operation = "day_calendar_release"
+			wire.AdmissionID = admissionID
+			wire.ResultSHA256 = resultDigest
+		}
+		payload = wire
+	default:
+		return Challenge{}, nil, ErrInvalid
+	}
+	data, err := json.Marshal(payload)
+	if err != nil || len(data) > MaxChallengeBytes {
+		return Challenge{}, nil, ErrInvalid
+	}
+	return Challenge{ID: id, Operation: operation, Bytes: data, BytesB64: encodeB64(data), ExpiresAt: expires}, data, nil
 }
 
 func (engine *Engine) randomUUID() (string, error) {
@@ -582,22 +621,45 @@ func validateWire(wire challengeWire) error {
 	return nil
 }
 
-func requestsEqual(a,b Request)bool{return reflect.DeepEqual(a,b)}
-func cloneRequest(r Request)Request{r.Source=views.CloneSource(r.Source);if r.policy!=nil{r.policy=r.policy.clonePolicy()};return r}
-func validateRequest(r Request)error{
-    if !r.Source.Active || r.Source.ConnectionRevision==0 || r.Source.PersonID=="" || r.Source.ProviderIdentity=="" || r.Source.IdentityGeneration==0 || r.Source.Descriptor.ID=="" {return ErrInvalid}
-    if err:=validateSource(sourceWire{r.Source.ConnectorID,r.Source.ConnectionID,r.Source.ExecutionOwner,r.Source.Incarnation,r.Source.Epoch});err!=nil{return err}
-    switch policy:=r.policy.(type){
-    case assistantPolicy:
-        if r.Source.Descriptor.ID==string(views.CalendarMirror) || validateBoundString(policy.Audience,MaxAudienceBytes)!=nil || !validPurpose(policy.Purpose) || validateBoundString(policy.Consumer,MaxConsumerBytes)!=nil || validateGrant(grantWire{policy.Grant.ID,policy.Grant.Incarnation,policy.Grant.Epoch})!=nil || len(policy.Resources)==0 || len(policy.Resources)>MaxResources{return ErrInvalid}
-        previous:=""
-        for _,resource:=range policy.Resources{if validateBoundString(resource,MaxResourceBytes)!=nil || previous!="" && resource<=previous{return ErrInvalid};previous=resource}
-    case productCalendarPolicy:
-        if r.Source.Descriptor.ID!=string(views.CalendarMirror) || policy.validateSource(r.Source)!=nil{return ErrInvalid}
-    default:return ErrInvalid
-    }
-    bounds:=r.bounds();if bounds.MaxItems==0 || bounds.MaxItems>128 || bounds.MaxBytes==0 || bounds.MaxBytes>MaxStageBytesPerResult{return ErrInvalid}
-    return nil
+func requestsEqual(a, b Request) bool { return reflect.DeepEqual(a, b) }
+func cloneRequest(r Request) Request {
+	r.Source = views.CloneSource(r.Source)
+	if r.policy != nil {
+		r.policy = r.policy.clonePolicy()
+	}
+	return r
+}
+func validateRequest(r Request) error {
+	if !r.Source.Active || r.Source.ConnectionRevision == 0 || r.Source.PersonID == "" || r.Source.ProviderIdentity == "" || r.Source.IdentityGeneration == 0 || r.Source.Descriptor.ID == "" {
+		return ErrInvalid
+	}
+	if err := validateSource(sourceWire{r.Source.ConnectorID, r.Source.ConnectionID, r.Source.ExecutionOwner, r.Source.Incarnation, r.Source.Epoch}); err != nil {
+		return err
+	}
+	switch policy := r.policy.(type) {
+	case assistantPolicy:
+		if r.Source.Descriptor.ID == string(views.CalendarMirror) || validateBoundString(policy.Audience, MaxAudienceBytes) != nil || !validPurpose(policy.Purpose) || validateBoundString(policy.Consumer, MaxConsumerBytes) != nil || validateGrant(grantWire{policy.Grant.ID, policy.Grant.Incarnation, policy.Grant.Epoch}) != nil || len(policy.Resources) == 0 || len(policy.Resources) > MaxResources {
+			return ErrInvalid
+		}
+		previous := ""
+		for _, resource := range policy.Resources {
+			if validateBoundString(resource, MaxResourceBytes) != nil || previous != "" && resource <= previous {
+				return ErrInvalid
+			}
+			previous = resource
+		}
+	case productCalendarPolicy:
+		if r.Source.Descriptor.ID != string(views.CalendarMirror) || policy.validateSource(r.Source) != nil {
+			return ErrInvalid
+		}
+	default:
+		return ErrInvalid
+	}
+	bounds := r.bounds()
+	if bounds.MaxItems == 0 || bounds.MaxItems > 128 || bounds.MaxBytes == 0 || bounds.MaxBytes > MaxStageBytesPerResult {
+		return ErrInvalid
+	}
+	return nil
 }
 
 func validPurpose(purpose string) bool {
@@ -638,7 +700,7 @@ func validateGrant(g grantWire) error {
 	return nil
 }
 func sourceMatches(p trust.Principal, want, got views.SourceSnapshot) bool {
-    return got.Active && got.PersonID == p.PersonID() && (got.DeviceID == "" || got.DeviceID == p.DeviceID()) && got.ConnectionRevision > 0 && got.ProviderIdentity != "" && got.IdentityGeneration > 0 && reflect.DeepEqual(want, got)
+	return got.Active && got.PersonID == p.PersonID() && (got.DeviceID == "" || got.DeviceID == p.DeviceID()) && got.ConnectionRevision > 0 && got.ProviderIdentity != "" && got.IdentityGeneration > 0 && reflect.DeepEqual(want, got)
 }
 func validatePrincipal(p trust.Principal) error {
 	if !p.Valid() {

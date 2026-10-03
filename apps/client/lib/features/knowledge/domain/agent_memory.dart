@@ -37,31 +37,36 @@ final class AgentMemory {
   };
 
   factory AgentMemory.fromJson(Map<String, dynamic> json) {
-    _exactKeys(json, const {
-      'target_id',
-      'revision',
-      'statement',
-      'memory_kind',
-      'epistemic_status',
-      'confidence_millis',
-      'source_count',
-      'origin',
-      'created_at',
-    }, optional: const {'valid_from', 'valid_until'});
+    _exactKeys(
+      json,
+      const {
+        'target_id',
+        'revision',
+        'statement',
+        'memory_kind',
+        'epistemic_status',
+        'confidence_millis',
+        'source_count',
+        'origin',
+        'created_at',
+      },
+      optional: const {'valid_from', 'valid_until'},
+    );
     final memory = AgentMemory(
       targetId: _uuid(json['target_id'], 'memory.target_id'),
       revision: _positiveInteger(json['revision'], 'memory.revision'),
       statement: _statement(json['statement'], 'memory.statement'),
-      memoryKind: _choice(
-        json['memory_kind'],
-        const {'fact', 'observation', 'inference', 'preference', 'commitment'},
-        'memory.memory_kind',
-      ),
-      epistemicStatus: _choice(
-        json['epistemic_status'],
-        const {'fact', 'inference'},
-        'memory.epistemic_status',
-      ),
+      memoryKind: _choice(json['memory_kind'], const {
+        'fact',
+        'observation',
+        'inference',
+        'preference',
+        'commitment',
+      }, 'memory.memory_kind'),
+      epistemicStatus: _choice(json['epistemic_status'], const {
+        'fact',
+        'inference',
+      }, 'memory.epistemic_status'),
       confidenceMillis: _boundedInteger(
         json['confidence_millis'],
         1000,
@@ -82,8 +87,8 @@ final class AgentMemory {
       validUntil: _optionalTimestamp(json, 'valid_until'),
     );
     if (memory.validFrom != null &&
-            memory.validUntil != null &&
-            !memory.validFrom!.isBefore(memory.validUntil!)) {
+        memory.validUntil != null &&
+        !memory.validFrom!.isBefore(memory.validUntil!)) {
       throw const FormatException('Invalid saved memory.');
     }
     return memory;
@@ -114,9 +119,11 @@ final class AgentMemoryOverview {
     if (json['schema_version'] != 1) {
       throw const FormatException('Unsupported memory overview version.');
     }
-    final rows = _objects(json['memories'], 100, 'overview.memories')
-        .map(AgentMemory.fromJson)
-        .toList(growable: false);
+    final rows = _objects(
+      json['memories'],
+      100,
+      'overview.memories',
+    ).map(AgentMemory.fromJson).toList(growable: false);
     final overview = AgentMemoryOverview(
       personId: _uuid(json['person_id'], 'overview.person_id'),
       savedCount: _boundedInteger(
@@ -147,9 +154,8 @@ abstract interface class AgentMemoryGateway {
 String _uuid(Object? value, String field) {
   if (value is! String ||
       value == '00000000-0000-0000-0000-000000000000' ||
-      !RegExp(
-        r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-      ).hasMatch(value)) {
+      !RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+          .hasMatch(value)) {
     throw FormatException('Invalid $field.');
   }
   return value;
@@ -228,20 +234,18 @@ DateTime _timestamp(Object? value, String field) {
   return parsed.toUtc();
 }
 
-List<Map<String, dynamic>> _objects(
-  Object? value,
-  int maximum,
-  String field,
-) {
+List<Map<String, dynamic>> _objects(Object? value, int maximum, String field) {
   if (value is! List || value.length > maximum) {
     throw FormatException('Invalid $field.');
   }
-  return value.map((entry) {
-    if (entry is! Map || entry.keys.any((key) => key is! String)) {
-      throw FormatException('Invalid $field.');
-    }
-    return Map<String, dynamic>.from(entry);
-  }).toList(growable: false);
+  return value
+      .map((entry) {
+        if (entry is! Map || entry.keys.any((key) => key is! String)) {
+          throw FormatException('Invalid $field.');
+        }
+        return Map<String, dynamic>.from(entry);
+      })
+      .toList(growable: false);
 }
 
 void _exactKeys(

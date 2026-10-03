@@ -14,10 +14,9 @@ final class PersonalDayController extends ChangeNotifier {
     required DayQuery query,
   }) => PersonalDayController._(gateway, query);
 
-  PersonalDayController._(this._gateway, this._query)
-    : _refreshGateway = gateway is DayRefreshGateway
-          ? gateway as DayRefreshGateway
-          : null;
+  PersonalDayController._(DayGateway gateway, this._query)
+    : _gateway = gateway,
+      _refreshGateway = gateway is DayRefreshGateway ? gateway : null;
 
   final DayGateway _gateway;
   final DayRefreshGateway? _refreshGateway;
@@ -129,7 +128,9 @@ final class PersonalDayController extends ChangeNotifier {
       }
       final completed = _refreshOperation;
       if (completed is! CompletedDayRefresh) {
-        throw const FormatException('Day refresh completion was not acknowledged.');
+        throw const FormatException(
+          'Day refresh completion was not acknowledged.',
+        );
       }
       lastRefreshAcknowledgement = completed;
       _refreshCommandId = null;
@@ -175,7 +176,8 @@ final class PersonalDayController extends ChangeNotifier {
     final generation = _loadGeneration;
     return _run(() async {
       final result = await _gateway.classifyCapture(capture, draft, query);
-      if (!_disposed && identical(pendingCapture, capture)) pendingCapture = null;
+      if (!_disposed && identical(pendingCapture, capture))
+        pendingCapture = null;
       await _displayAfterMutation(result, query, generation);
     });
   }
@@ -224,14 +226,19 @@ final class PersonalDayController extends ChangeNotifier {
     if (!_matchesQuery(acknowledged, query)) {
       throw const FormatException('Day mutation returned a different query.');
     }
-    if (_disposed || generation != _loadGeneration ||
-        !_sameQueryIntent(query, _query)) return;
+    if (_disposed ||
+        generation != _loadGeneration ||
+        !_sameQueryIntent(query, _query))
+      return;
     // The receipt is an immutable historical acknowledgement. Read the current
     // display independently, without replaying a successful command on failure.
     final displayGeneration = ++_loadGeneration;
     loadState = DayLoadState.loading;
     try {
-      final current = await _currentDayAfterAcknowledgement(query, 'Change saved');
+      final current = await _currentDayAfterAcknowledgement(
+        query,
+        'Change saved',
+      );
       if (_disposed || displayGeneration != _loadGeneration) return;
       snapshot = current;
       loadState = DayLoadState.ready;

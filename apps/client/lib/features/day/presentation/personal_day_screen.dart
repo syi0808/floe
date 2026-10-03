@@ -1,3 +1,4 @@
+import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/connections/presentation/connections_controller.dart';
 import 'package:intl/intl.dart';
 
@@ -100,9 +101,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     );
     unawaited(controller.load());
     if (widget.calendarActions case final gateway?) {
-      actionController = CalendarActionController(
-        gateway: gateway,
-      )..load();
+      actionController = CalendarActionController(gateway: gateway)..load();
     }
     screenState = Listenable.merge([controller, ?actionController]);
     final agentGateway = widget.agentGateway;
@@ -234,7 +233,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                   _DayToolbar(
                     controller,
                     narrow: narrow,
-                    onCreateEvent: actionController?.calendarChangesAvailable == true &&
+                    onCreateEvent:
+                        actionController?.calendarChangesAvailable == true &&
                             actionController?.busy == false
                         ? () => _openCalendarEditor()
                         : null,
@@ -267,13 +267,16 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
 
   Widget _content(bool narrow, DaySnapshot snapshot) {
     final actions = actionController;
-    final calendarChangesAvailable = actions != null &&
-        actions.calendarChangesAvailable && !actions.busy;
+    final calendarChangesAvailable =
+        actions != null && actions.calendarChangesAvailable && !actions.busy;
     final showReviews =
-        actions != null && actions.actions.any((action) =>
-          action.allowedActions.contains(ActionAllowedAction.approve) ||
-          action.allowedActions.contains(ActionAllowedAction.reject) ||
-          action.allowedActions.contains(ActionAllowedAction.cancel));
+        actions != null &&
+        actions.actions.any(
+          (action) =>
+              action.allowedActions.contains(ActionAllowedAction.approve) ||
+              action.allowedActions.contains(ActionAllowedAction.reject) ||
+              action.allowedActions.contains(ActionAllowedAction.cancel),
+        );
     final primary = CalendarAgenda(
       key: PageStorageKey('calendar-agenda'),
       snapshot: snapshot,
@@ -293,9 +296,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (showReviews) ...[
-          ReviewRequestPanel(
-            controller: actions,
-          ),
+          ReviewRequestPanel(controller: actions),
           SizedBox(height: FloeSpace.lg),
         ],
         CalendarContextRail(
@@ -439,10 +440,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     unawaited(actions.load());
     await showFloeDialog<void>(
       context,
-      (_) => ActionReviewDialog(
-        controller: actions,
-        actionRef: actionRef,
-      ),
+      (_) => ActionReviewDialog(controller: actions, actionRef: actionRef),
     );
   }
 
@@ -486,7 +484,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     EventItem? event,
   }) async {
     final actions = actionController;
-    if (actions == null || actions.busy || !actions.calendarChangesAvailable) return;
+    if (actions == null || actions.busy || !actions.calendarChangesAvailable)
+      return;
     final date = controller.query.date;
     final now = DateTime.now();
     final createStart =
@@ -518,8 +517,11 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
 
   Future<void> _deleteCalendarEvent(EventItem event) async {
     final actions = actionController;
-    if (actions == null || actions.busy || !actions.calendarChangesAvailable ||
-        event.actionTarget == null) return;
+    if (actions == null ||
+        actions.busy ||
+        !actions.calendarChangesAvailable ||
+        event.actionTarget == null)
+      return;
     final confirmed = await showFloeDialog<bool>(
       context,
       (dialogContext) => AnimatedBuilder(
@@ -531,7 +533,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
               '“${event.title}” will be removed from ${event.calendarLabel ?? 'its Calendar source'}.',
             ),
             if (!actions.calendarChangesAvailable)
-              const Text('Calendar changes are unavailable. No writable Calendar destination could be confirmed.'),
+              const Text(
+                'Calendar changes are unavailable. No writable Calendar destination could be confirmed.',
+              ),
             const SizedBox(height: FloeSpace.base),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
@@ -543,7 +547,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                 const SizedBox(width: FloeSpace.md),
                 FloeButton.filled(
                   onPressed: actions.busy || !actions.calendarChangesAvailable
-                      ? null : () => Navigator.of(dialogContext).pop(true),
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(true),
                   child: const Text('Delete event'),
                 ),
               ],
@@ -560,8 +565,11 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   Future<void> _deleteCalendarEventAtOwner(EventItem event) async {
     final actions = actionController;
     final target = event.actionTarget;
-    if (actions == null || actions.busy || !actions.calendarChangesAvailable ||
-        target == null) return;
+    if (actions == null ||
+        actions.busy ||
+        !actions.calendarChangesAvailable ||
+        target == null)
+      return;
     try {
       final result = await actions.submit(
         DirectDelete(
@@ -592,13 +600,12 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         'Unknown outcome: ${action?.status.unknownReason?.name ?? 'Reconcile this action in Activity.'}',
       CalendarActionState.failed =>
         'Not applied: ${action?.status.failedReason?.name ?? 'Check Activity.'}',
-      null => controller?.error?.message ??
-          'The action outcome was not confirmed. Check Activity.',
+      null =>
+        controller?.error?.message ??
+            'The action outcome was not confirmed. Check Activity.',
       final status => 'Action status: ${status.name}. Check Activity.',
     };
-    FloeToastHost.of(context).show(
-      title: title,
-    );
+    FloeToastHost.of(context).show(title: title);
   }
 
   Future<void> _setTaskCompleted(TaskItem task, bool completed) async {
@@ -609,10 +616,14 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       title: completed
           ? AppLocalizations.of(context).taskCompleted
           : AppLocalizations.of(context).taskMarkedIncomplete,
-      actionLabel: changedTask == null ? null : AppLocalizations.of(context).undo,
-      onAction: changedTask == null ? null : () {
-        if (mounted) controller.setTaskCompleted(changedTask, !completed);
-      },
+      actionLabel: changedTask == null
+          ? null
+          : AppLocalizations.of(context).undo,
+      onAction: changedTask == null
+          ? null
+          : () {
+              if (mounted) controller.setTaskCompleted(changedTask, !completed);
+            },
     );
   }
 
@@ -621,7 +632,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     // Retain an acknowledged capture when classification acknowledgement is
     // lost, so Save retries classification instead of creating another capture.
     if (controller.pendingCapture?.originalInput != content &&
-        !await controller.submitCapture(content)) return false;
+        !await controller.submitCapture(content))
+      return false;
     final saved = await controller.classify(NoteDraft(content: content));
     if (saved && mounted) {
       FloeToastHost.of(context)

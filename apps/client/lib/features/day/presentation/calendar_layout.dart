@@ -5,14 +5,11 @@ import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 
 class CalendarDayAxis {
-  CalendarDayAxis(
-    DateTime date,
-    int offsetSeconds, {
-    int? endOffsetSeconds,
-  }) {
+  CalendarDayAxis(DateTime date, int offsetSeconds, {int? endOffsetSeconds}) {
     final local = DateTime(date.year, date.month, date.day);
     final localEnd = DateTime(date.year, date.month, date.day + 1);
-    usesLocalZone = local.timeZoneOffset.inSeconds == offsetSeconds &&
+    usesLocalZone =
+        local.timeZoneOffset.inSeconds == offsetSeconds &&
         (endOffsetSeconds == null ||
             localEnd.timeZoneOffset.inSeconds == endOffsetSeconds);
     start = usesLocalZone
@@ -23,8 +20,11 @@ class CalendarDayAxis {
             date.day,
           ).subtract(Duration(seconds: offsetSeconds));
     end = endOffsetSeconds != null
-        ? DateTime.utc(date.year, date.month, date.day + 1)
-            .subtract(Duration(seconds: endOffsetSeconds))
+        ? DateTime.utc(
+            date.year,
+            date.month,
+            date.day + 1,
+          ).subtract(Duration(seconds: endOffsetSeconds))
         : usesLocalZone
         ? localEnd.toUtc()
         : start.add(Duration(days: 1));

@@ -1,3 +1,4 @@
+import 'package:floe_client/app/floe_feedback.dart';
 import 'package:intl/intl.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';

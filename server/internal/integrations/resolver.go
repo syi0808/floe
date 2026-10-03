@@ -36,9 +36,11 @@ func (s *Service) sourceSnapshotLocked(r Record, id views.ID, owner string) (vie
 	if !ok || runtime.Identity == nil || !runtime.IdentitySupported || r.IdentityUnverified || r.ProviderIdentity == "" {
 		return views.SourceSnapshot{}, nil, errors.New("source identity unavailable")
 	}
-    registered,ok:=runtime.Readers[id]
-    if !ok || registered.Reader==nil{return views.SourceSnapshot{},nil,errors.New("view unavailable")}
-    reader,descriptor:=registered.Reader,registered.Descriptor
+	registered, ok := runtime.Readers[id]
+	if !ok || registered.Reader == nil {
+		return views.SourceSnapshot{}, nil, errors.New("view unavailable")
+	}
+	reader, descriptor := registered.Reader, registered.Descriptor
 	if descriptor.SchemaVersion != 1 || descriptor.MaxItems < 1 || descriptor.MaxItems > 128 || descriptor.MaxBytes < 1 || descriptor.MaxBytes > 1<<20 {
 		return views.SourceSnapshot{}, nil, errors.New("view descriptor unavailable")
 	}
@@ -82,13 +84,17 @@ func (s *Service) PreflightSource(ctx context.Context, p trust.Principal, expect
 	if err := s.check(p); err != nil {
 		return err
 	}
-    metadata,err:=s.trust.ProducerMetadata()
-    if err!=nil{return err}
-    s.mu.RLock()
-    r,ok:=s.state.Connections[expected.ConnectionID]
-    current,_,snapshotErr:=s.sourceSnapshotLocked(r,views.ID(expected.Descriptor.ID),metadata.ExecutionOwner)
-    s.mu.RUnlock()
-    if !ok || snapshotErr!=nil || !reflect.DeepEqual(current,expected){return errors.New("source changed")}
+	metadata, err := s.trust.ProducerMetadata()
+	if err != nil {
+		return err
+	}
+	s.mu.RLock()
+	r, ok := s.state.Connections[expected.ConnectionID]
+	current, _, snapshotErr := s.sourceSnapshotLocked(r, views.ID(expected.Descriptor.ID), metadata.ExecutionOwner)
+	s.mu.RUnlock()
+	if !ok || snapshotErr != nil || !reflect.DeepEqual(current, expected) {
+		return errors.New("source changed")
+	}
 	if err := s.preflight(ctx, r); err != nil {
 		return err
 	}

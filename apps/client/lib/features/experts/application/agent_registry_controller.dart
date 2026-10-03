@@ -74,7 +74,9 @@ final class AgentRegistryController extends ChangeNotifier {
       );
       if (!_isCurrent(operationGeneration)) return;
       final updated = result.installations
-          .where((entry) => entry.installationRef == installation.installationRef)
+          .where(
+            (entry) => entry.installationRef == installation.installationRef,
+          )
           .singleOrNull;
       if (updated == null || updated.enabled != enabled) {
         throw const FormatException('Installation result scope mismatch.');

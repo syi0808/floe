@@ -30,35 +30,40 @@ final class AgentMemoryCandidate {
   final List<AgentMemoryDecision> allowedActions;
 
   factory AgentMemoryCandidate.fromJson(Map<String, dynamic> json) {
-    _exactKeys(json, const {
-      'candidate_id',
-      'operation',
-      'statement',
-      'memory_kind',
-      'epistemic_status',
-      'confidence_millis',
-      'source_count',
-      'created_at',
-      'allowed_actions',
-    }, optional: const {'valid_from', 'valid_until'});
+    _exactKeys(
+      json,
+      const {
+        'candidate_id',
+        'operation',
+        'statement',
+        'memory_kind',
+        'epistemic_status',
+        'confidence_millis',
+        'source_count',
+        'created_at',
+        'allowed_actions',
+      },
+      optional: const {'valid_from', 'valid_until'},
+    );
     final candidate = AgentMemoryCandidate(
       id: _uuid(json['candidate_id'], 'candidate.candidate_id'),
-      operation: _choice(
-        json['operation'],
-        const {'create', 'revise', 'retire'},
-        'candidate.operation',
-      ),
+      operation: _choice(json['operation'], const {
+        'create',
+        'revise',
+        'retire',
+      }, 'candidate.operation'),
       statement: _statement(json['statement'], 'candidate.statement'),
-      memoryKind: _choice(
-        json['memory_kind'],
-        const {'fact', 'observation', 'inference', 'preference', 'commitment'},
-        'candidate.memory_kind',
-      ),
-      epistemicStatus: _choice(
-        json['epistemic_status'],
-        const {'fact', 'inference'},
-        'candidate.epistemic_status',
-      ),
+      memoryKind: _choice(json['memory_kind'], const {
+        'fact',
+        'observation',
+        'inference',
+        'preference',
+        'commitment',
+      }, 'candidate.memory_kind'),
+      epistemicStatus: _choice(json['epistemic_status'], const {
+        'fact',
+        'inference',
+      }, 'candidate.epistemic_status'),
       confidenceMillis: _integer(
         json['confidence_millis'],
         1000,
@@ -96,9 +101,11 @@ final class AgentMemoryReviewOverview {
 
   factory AgentMemoryReviewOverview.fromJson(Map<String, dynamic> json) {
     _exactKeys(json, const {'person_id', 'candidates'});
-    final candidates = _objects(json['candidates'], 100, 'review.candidates')
-        .map(AgentMemoryCandidate.fromJson)
-        .toList(growable: false);
+    final candidates = _objects(
+      json['candidates'],
+      100,
+      'review.candidates',
+    ).map(AgentMemoryCandidate.fromJson).toList(growable: false);
     if (candidates.map((candidate) => candidate.id).toSet().length !=
         candidates.length) {
       throw const FormatException('Duplicate memory candidate.');
@@ -169,9 +176,8 @@ final class AgentMemoryDecisionAcknowledgement {
 String _uuid(Object? value, String field) {
   if (value is! String ||
       value == '00000000-0000-0000-0000-000000000000' ||
-      !RegExp(
-        r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-      ).hasMatch(value)) {
+      !RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+          .hasMatch(value)) {
     throw FormatException('Invalid $field.');
   }
   return value;
@@ -267,20 +273,18 @@ DateTime _timestamp(Object? value, String field) {
   return parsed.toUtc();
 }
 
-List<Map<String, dynamic>> _objects(
-  Object? value,
-  int maximum,
-  String field,
-) {
+List<Map<String, dynamic>> _objects(Object? value, int maximum, String field) {
   if (value is! List || value.length > maximum) {
     throw FormatException('Invalid $field.');
   }
-  return value.map((entry) {
-    if (entry is! Map || entry.keys.any((key) => key is! String)) {
-      throw FormatException('Invalid $field.');
-    }
-    return Map<String, dynamic>.from(entry);
-  }).toList(growable: false);
+  return value
+      .map((entry) {
+        if (entry is! Map || entry.keys.any((key) => key is! String)) {
+          throw FormatException('Invalid $field.');
+        }
+        return Map<String, dynamic>.from(entry);
+      })
+      .toList(growable: false);
 }
 
 void _exactKeys(

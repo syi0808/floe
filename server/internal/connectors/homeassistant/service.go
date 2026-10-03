@@ -10,17 +10,17 @@ import (
 )
 
 type Service struct {
-	client    *Client
-	entities  []string
-	clock     func() time.Time
-	readGate   chan struct{}
-	cacheMu    sync.Mutex
-	hasRead    bool
-	lastState  string
-	lastReadAt int64
+	client        *Client
+	entities      []string
+	clock         func() time.Time
+	readGate      chan struct{}
+	cacheMu       sync.Mutex
+	hasRead       bool
+	lastState     string
+	lastReadAt    int64
 	lastSuccessAt *int64
-	lastView   *views.ViewSnapshot
-	lastFailure *integrations.Failure
+	lastView      *views.ViewSnapshot
+	lastFailure   *integrations.Failure
 }
 
 func NewService(client *Client, entities []string) (*Service, error) {
@@ -196,7 +196,6 @@ func normalizeReadError(ctx context.Context, err error) error {
 		return views.ReadError{Kind: views.Unavailable}
 	}
 }
-
 
 func (service *Service) finishSuccess(ctx context.Context, observedAt time.Time, snapshot integrations.Snapshot) error {
 	service.cacheMu.Lock()

@@ -103,11 +103,16 @@ final class AgentMemoryController extends ChangeNotifier {
       _notifyIfCurrent(generation);
       return;
     }
-    await _resolveDecision(generation, () => reviewGateway!.decideMemoryCandidate(
-      personId: personId,
-      candidateId: candidateId,
-      decision: decision,
-    ), expectedCandidateId: candidateId, expectedDecision: decision);
+    await _resolveDecision(
+      generation,
+      () => reviewGateway!.decideMemoryCandidate(
+        personId: personId,
+        candidateId: candidateId,
+        decision: decision,
+      ),
+      expectedCandidateId: candidateId,
+      expectedDecision: decision,
+    );
   }
 
   Future<void> retryPendingDecision() async {
@@ -187,7 +192,9 @@ final class AgentMemoryController extends ChangeNotifier {
           confirmed.decision != expectedDecision ||
           expectedCommandId != null &&
               confirmed.commandId != expectedCommandId) {
-        throw const FormatException('Memory decision acknowledgement mismatch.');
+        throw const FormatException(
+          'Memory decision acknowledgement mismatch.',
+        );
       }
       acknowledgement = confirmed;
       await _reloadAfterDecision(generation);

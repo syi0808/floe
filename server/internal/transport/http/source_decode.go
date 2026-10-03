@@ -16,11 +16,19 @@ type sourceProofWire struct {
 
 func decodeSourceEnvelope(writer http.ResponseWriter, request *http.Request, allowed map[string]struct{}, output any) bool {
 	data, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, authority.MaxChallengeBytes))
-    if err != nil || trust.DecodeStrict(data, output, authority.MaxChallengeBytes, authority.MaxJSONDepth) != nil { return false }
-    var fields map[string]json.RawMessage
-    if json.Unmarshal(data, &fields) != nil || len(fields) != len(allowed) { return false }
-    for key, value := range fields { if _,ok:=allowed[key]; !ok || string(value)=="null" { return false } }
-    return true
+	if err != nil || trust.DecodeStrict(data, output, authority.MaxChallengeBytes, authority.MaxJSONDepth) != nil {
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(data, &fields) != nil || len(fields) != len(allowed) {
+		return false
+	}
+	for key, value := range fields {
+		if _, ok := allowed[key]; !ok || string(value) == "null" {
+			return false
+		}
+	}
+	return true
 }
 func decodeSourceProof(writer http.ResponseWriter, request *http.Request) (trust.Proof, bool) {
 	var envelope sourceProofWire

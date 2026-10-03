@@ -557,9 +557,12 @@ func (s *Service) cleanup(ctx context.Context, id string) error {
 				unlock()
 				return err
 			}
-            if runtime.Cleanup != nil {
-                if err := runtime.Cleanup(ctx); err != nil { unlock(); return err }
-            }
+			if runtime.Cleanup != nil {
+				if err := runtime.Cleanup(ctx); err != nil {
+					unlock()
+					return err
+				}
+			}
 			if err := s.cleanupProgress(id, r.ConnectionID, true, false); err != nil {
 				unlock()
 				return err

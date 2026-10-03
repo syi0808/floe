@@ -194,7 +194,6 @@ Future<void> _start() async {
       FloeApp(
         personId: runtime.personId,
         gateway: gateway,
-        dayRefreshGateway: gateway,
         calendarActions: runtime.actions,
         agentGateway: runtime.conversation,
         ownerGateways: runtime.owners,

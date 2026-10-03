@@ -43,7 +43,8 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
     super.initState();
     final now = DateTime.now();
     final next =
-        widget.initialStart ?? DateTime(now.year, now.month, now.day, now.hour + 1);
+        widget.initialStart ??
+        DateTime(now.year, now.month, now.day, now.hour + 1);
     final event = widget.event;
     start = widget.initialStart ?? event?.startsAt.toLocal() ?? next;
     end = event == null
@@ -74,15 +75,19 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
   }
 
   Future<void> save() async {
-    if (saving || widget.controller.busy ||
+    if (saving ||
+        widget.controller.busy ||
         !widget.controller.calendarChangesAvailable ||
-        submittedAction != null || !form.currentState!.validate()) {
+        submittedAction != null ||
+        !form.currentState!.validate()) {
       return;
     }
     final event = widget.event;
     final target = event?.actionTarget;
-    if (event == null && !widget.controller.destinations.any(
-          (choice) => choice.destinationRef == destinationRef) ||
+    if (event == null &&
+            !widget.controller.destinations.any(
+              (choice) => choice.destinationRef == destinationRef,
+            ) ||
         event != null && target == null) {
       return;
     }
@@ -90,7 +95,8 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
     final schedule = ActionSchedule(
       startsAt: start.toUtc(),
       endsAt: end.toUtc(),
-      timezone: event?.timezone ?? calendarStorageTimezone(start.timeZoneOffset),
+      timezone:
+          event?.timezone ?? calendarStorageTimezone(start.timeZoneOffset),
     );
     final ActionIntent intent = event == null
         ? DirectCreate(
@@ -129,15 +135,17 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
 
   String _statusText(CalendarAction action) => switch (action.status.state) {
     CalendarActionState.pendingReview => 'Action submitted for review.',
-    CalendarActionState.approved => 'Action approved; the owner is processing it.',
-    CalendarActionState.rejected => 'Action rejected. No Calendar change was made.',
+    CalendarActionState.approved =>
+      'Action approved; the owner is processing it.',
+    CalendarActionState.rejected =>
+      'Action rejected. No Calendar change was made.',
     CalendarActionState.cancelled => 'Action cancelled.',
     CalendarActionState.expired => 'Action expired.',
     CalendarActionState.executing => 'Action is in progress.',
-    CalendarActionState.blocked => 'Action blocked: ${action.status.blockedReason!.name}.',
+    CalendarActionState.blocked =>
+      'Action blocked: ${action.status.blockedReason!.name}.',
     CalendarActionState.failed => switch (action.status.failedReason) {
-      ActionNotAppliedReason.sourceChanged =>
-        'The Calendar source changed before this action. No change was applied.',
+      ActionNotAppliedReason.sourceChanged => 'The Calendar source changed before this action. No change was applied.',
       ActionNotAppliedReason.cancelled =>
         'Cancelled before any Calendar change was made.',
       ActionNotAppliedReason.timeout =>
@@ -145,10 +153,10 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
       _ => 'The owner confirmed the change was not applied.',
     },
     CalendarActionState.unknown => 'Action result is unconfirmed. Reconcile this Action before creating another.',
-    CalendarActionState.succeeded => action.status.collection ==
-            ActionCollectionStatus.pending
-        ? 'Calendar change succeeded; Day collection is pending.'
-        : 'Calendar change succeeded and was collected.',
+    CalendarActionState.succeeded =>
+      action.status.collection == ActionCollectionStatus.pending
+          ? 'Calendar change succeeded; Day collection is pending.'
+          : 'Calendar change succeeded and was collected.',
   };
 
   @override
@@ -160,8 +168,10 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
         final destinations = widget.controller.destinations;
         final event = widget.event;
         final target = event?.actionTarget;
-        final submitted = submittedAction == null ? null
-            : widget.controller.find(submittedAction!.actionRef) ?? submittedAction;
+        final submitted = submittedAction == null
+            ? null
+            : widget.controller.find(submittedAction!.actionRef) ??
+                  submittedAction;
         final destinationError = widget.controller.destinationsError;
         final canSubmit =
             !saving &&
@@ -170,7 +180,9 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
             widget.controller.calendarChangesAvailable &&
             submittedAction == null &&
             (event == null
-                ? destinations.any((choice) => choice.destinationRef == destinationRef)
+                ? destinations.any(
+                    (choice) => choice.destinationRef == destinationRef,
+                  )
                 : target != null);
         return FloeDetailDialog(
           title: event == null ? 'New event' : 'Edit event',
@@ -189,9 +201,10 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
                   if (event == null)
                     FloeSelect<String>(
                       label: strings.actionDestination,
-                      value: destinations.any(
-                        (choice) => choice.destinationRef == destinationRef,
-                      )
+                      value:
+                          destinations.any(
+                            (choice) => choice.destinationRef == destinationRef,
+                          )
                           ? destinationRef
                           : null,
                       options: destinations
@@ -202,10 +215,12 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
                             ),
                           )
                           .toList(growable: false),
-                      enabled: !saving &&
+                      enabled:
+                          !saving &&
                           !widget.controller.busy &&
                           submittedAction == null,
-                      onChanged: (value) => setState(() => destinationRef = value),
+                      onChanged: (value) =>
+                          setState(() => destinationRef = value),
                       validator: (value) =>
                           value == null ? strings.actionFormInvalid : null,
                     )
@@ -219,18 +234,19 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
                   FloeInput(
                     label: strings.actionTitle,
                     controller: title,
-                    enabled: !saving &&
+                    enabled:
+                        !saving &&
                         !widget.controller.busy &&
                         submittedAction == null,
-                    validator: (value) => _validTitle(value)
-                        ? null
-                        : strings.actionFormInvalid,
+                    validator: (value) =>
+                        _validTitle(value) ? null : strings.actionFormInvalid,
                   ),
                   const SizedBox(height: 12),
                   CalendarDateTimeField(
                     label: strings.actionStart,
                     value: start,
-                    enabled: !saving &&
+                    enabled:
+                        !saving &&
                         !widget.controller.busy &&
                         submittedAction == null,
                     onChanged: (value) => setState(() {
@@ -241,23 +257,30 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
                   CalendarDateTimeField(
                     label: strings.actionEnd,
                     value: end,
-                    enabled: !saving &&
+                    enabled:
+                        !saving &&
                         !widget.controller.busy &&
                         submittedAction == null,
                     onChanged: (value) => setState(() => end = value),
-                    validator: (value) => end.isAfter(start) &&
+                    validator: (value) =>
+                        end.isAfter(start) &&
                             end.difference(start) <= const Duration(hours: 24)
                         ? null
                         : strings.actionFormInvalid,
                   ),
                   if (!widget.controller.calendarChangesAvailable) ...[
                     const SizedBox(height: 16),
-                    Text(widget.controller.busy
-                        ? 'Checking whether Calendar changes are available…'
-                        : 'Calendar changes are unavailable. No writable Calendar destination could be confirmed.'),
-                    if (destinationError != null) Text(destinationError.message),
+                    Text(
+                      widget.controller.busy
+                          ? 'Checking whether Calendar changes are available…'
+                          : 'Calendar changes are unavailable. No writable Calendar destination could be confirmed.',
+                    ),
+                    if (destinationError != null)
+                      Text(destinationError.message),
                     FloeButton.text(
-                      onPressed: widget.controller.busy ? null : widget.controller.load,
+                      onPressed: widget.controller.busy
+                          ? null
+                          : widget.controller.load,
                       child: Text(strings.actionReload),
                     ),
                   ],
@@ -283,7 +306,7 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
                     ))
                       FloeButton.outlined(
                         onPressed: saving || widget.controller.busy
-                          ? null
+                            ? null
                             : () => reconcile(action),
                         child: Text(strings.actionCheckCalendar),
                       ),

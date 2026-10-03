@@ -39,11 +39,8 @@ final class CalendarActionFacade implements CalendarActionGateway {
     required String commandId,
     required CalendarAction action,
     required CalendarActionDecision decision,
-  }) => _gateway.decide(
-    commandId: commandId,
-    action: action,
-    decision: decision,
-  );
+  }) =>
+      _gateway.decide(commandId: commandId, action: action, decision: decision);
 
   @override
   Future<CalendarAction> reconcile({

@@ -17,8 +17,8 @@ type ProbeResult struct {
 // including one with no purpose route. Its input is fixed synthetic Agent data.
 // Product inference still requires the exact observed purpose capability.
 func (s *Service) ProbeTarget(ctx context.Context, operator trust.OperatorPrincipal, targetID string) (ProbeResult, error) {
-    ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
-    defer cancel()
+	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
+	defer cancel()
 	if !ValidAlias(targetID) {
 		return ProbeResult{}, Failure{Code: Validation}
 	}

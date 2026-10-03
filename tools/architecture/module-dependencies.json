@@ -114,7 +114,8 @@
         "kernel",
         "agent_contract",
         "context_contract",
-        "execution"
+        "execution",
+        "agent_runtime"
       ]
     },
     {
@@ -143,7 +144,8 @@
         "connections",
         "knowledge",
         "day",
-        "kernel"
+        "kernel",
+        "experts"
       ]
     },
     {
@@ -171,7 +173,9 @@
       "allowed_internal_dependencies": [
         "agent_contract",
         "context_contract",
-        "execution"
+        "execution",
+        "agent_runtime",
+        "kernel"
       ]
     },
     {

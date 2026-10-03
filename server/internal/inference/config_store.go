@@ -19,9 +19,9 @@ type providerProfile struct {
 }
 
 type configurationState struct {
-	SchemaVersion int                       `json:"schema_version"`
-	Targets       map[string]ProviderTarget `json:"targets"`
-	Routes        map[Purpose]PurposeRoute  `json:"routes"`
+	SchemaVersion int                        `json:"schema_version"`
+	Targets       map[string]ProviderTarget  `json:"targets"`
+	Routes        map[Purpose]PurposeRoute   `json:"routes"`
 	Providers     map[string]providerProfile `json:"providers"`
 }
 
