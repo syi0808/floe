@@ -38,3 +38,9 @@ Input `cd309cf4d977caaf50e7d09c4a6f6efec99489fa`. Provider and Vault compilation
 The unused App Calendar import/failure facade still referenced the removed connection service. Repository-wide caller search confirmed no consumers after the S1 public Day injection-route removal, so the facade and its module registration are deleted instead of reviving the obsolete route. Day-owned internal storage operations remain for planned S2 acquisition closure. Other fixes import CalendarRange, use Conversation's existing exported CONVERSATION_PURPOSE, and borrow the concrete Day repository behind Arc. Compiler-reported unused imports are removed. No authority or domain policy is moved into App.
 
 Affected Rust compilation remains pending; Dart, Go, and Apple source remain unchanged from their passing inputs.
+
+## Fourth Rust pass and FFI correction
+
+Input `58f9c321ba92f0d70dc9ad12e1a8cae7bd5555a5`. All three App example compiler checks passed. Workspace compilation reached FFI and reported one query-wrapper type mismatch: the product query had already been unwrapped, but the Knowledge inspection branch compared the old envelope. The branch now binds its matched product query, preserving distinct Memory/Review owner intent. Two unused FFI imports are removed. Formatting and lockfiles produced no changes in this pass.
+
+Only the affected workspace Rust check remains pending for G1; unchanged example, Dart, Go and Apple passes are retained. No behavioral test or full application build has run.

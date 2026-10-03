@@ -297,10 +297,10 @@ pub(crate) fn query(
                 })?,
             })
         }
-        AppProductQueryDto::KnowledgeMemoryOverview {}
-        | AppProductQueryDto::KnowledgeMemoryReview {} => {
+        knowledge_query @ (AppProductQueryDto::KnowledgeMemoryOverview {}
+        | AppProductQueryDto::KnowledgeMemoryReview {}) => {
             let inspection = if matches!(
-                request.query,
+                knowledge_query,
                 AppProductQueryDto::KnowledgeMemoryOverview {}
             ) {
                 floe_app::KnowledgeInspection::Memory

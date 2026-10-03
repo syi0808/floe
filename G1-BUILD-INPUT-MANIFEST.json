@@ -5894,12 +5894,12 @@
       "sha": "2d87b39806a3c1246e9025e6c8b985b2f07b8fb5"
     }
   ],
-  "verification": "G1:Go internal and15Apple compiler phases PASS on3a17;Dart analysis PASS on3a698;Rust cd309 cleared provider/Vault blockers but FAIL8App diagnostics. Third coherent App corrections integrated; rerun pending. No tests/full app builds.",
+  "verification": "G1:Go internal,15Apple compiler phases,Dart analysis,and3App examples PASS in recorded scopes. Workspace58f9 failed1FFI query-wrapper mismatch; corrected, workspace-only recheck pending. No tests/full app builds.",
   "original_input_provenance": {
     "source_commit": "69e6c427aab0b3dbcbe194281536d05abf1bd6cf",
     "source_tree": "b9e875b8fc7b2abe3502f5049ce5d2ad661db912",
     "files_field_scope": "The files array records original3a17 compiler input, not current corrected HEAD."
   },
-  "current_correction_source_commit": "3a5abbd6be83ad4ba5f5d4d4e241c84c0a6ce8f5",
+  "current_correction_source_commit": "841e0c24dc7b6c41675c8ea7cbf4b9635a59a778",
   "current_status_document": "docs/plans/2026-10-03-g1-first-pass.md"
 }

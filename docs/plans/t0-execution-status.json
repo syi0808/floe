@@ -1,7 +1,7 @@
 {
   "baseline": "3f4b407f8079d611224cd7adbef121f9e7e75e8e",
   "branch": "refactor/architecture-20261002",
-  "stage": "G1 third Rust pass oncd309cf4 cleared providers/Vault and exposed8App diagnostics from4causes. Third coherent App correction batch prepared; S2 remains gated.",
+  "stage": "G1 fourth Rust pass on58f9: all3App examples PASS; workspace reached FFI and failed1query-wrapper mismatch. Final bounded FFI correction prepared; workspace recheck pending.",
   "registration_counts": {
     "rust": 1298,
     "rust_retained_owners": 751,
@@ -36,7 +36,7 @@
   "count_caveat": "Source registrations and explicit expansion only, never execution or passing test counts. Table/assertion variants are recorded within each source-linked behavior ledger.",
   "checks": {
     "formatters": "PASS on Mac3a17; returned patch integrated",
-    "compilers": "Go internal and15Apple phases PASS on first input; Dart analysis PASS on3a698d76; Rust keep-going FAIL, second corrections pending",
+    "compilers": "Go internal,15Apple phases,Dart analysis,and3App examples PASS in recorded scopes. Workspace Rust has1FFI correction pending recheck.",
     "builds": "Full builds NOT RUN; G1 Go internal packages only passed",
     "tests": "NOT RUN",
     "architecture_checker": "NOT RUN",
@@ -105,7 +105,7 @@
     "protocol": "Cloud two-file followup applied; current native caller corrections active. No cloud worker editing now.",
     "events": "Owner event buffer applied; actual blocked interaction references added; current native ownership."
   },
-  "last_update": "2026-10-03 04:34 UTC",
+  "last_update": "2026-10-03 04:40 UTC",
   "implementation_ownership": {
     "implement_shared_model_runtime": "shared contracts/runtime/inference, Experts/builtin model call seams, Knowledge Learner journal/model seams, App Expert/Learner adapters and examples; now Conversation owner code and pure projections",
     "implement_go_gateway_slice": "Go/Vault Conversation and native callback lane completed/checkpointed; current static race/transaction audit",
@@ -126,7 +126,7 @@
     "base_commit": "3f4b407f8079d611224cd7adbef121f9e7e75e8e",
     "publication": "Published main source3a17f45abe1c73d87a67933fd8d6df023a84e033; docs76ebaa271966e32c343b51ac85b981b6e0c91d21",
     "mac_thread": "01a0fdd1-926d-7722-a4ea-d88ebb39509c",
-    "result": "Rust reached App and failed8diagnostics; provider/Vault blockers cleared. Dart/Go/Apple prior passes retained."
+    "result": "G1 fourth Rust pass on58f9: all3App examples PASS; workspace reached FFI and failed1query-wrapper mismatch. Final bounded FFI correction prepared; workspace recheck pending."
   },
   "s2_preparation": [
     "s2-day-product-read-contract-proposal.md",

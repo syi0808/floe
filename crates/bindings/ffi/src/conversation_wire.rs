@@ -1,6 +1,6 @@
 //! Mechanical Conversation owner request/result translation.
 use crate::app_wire::{AppWireResult, agent_failure, internal_error, validation};
-use floe_conversation::{ConversationOwner, EventPayload, EventRead};
+use floe_conversation::{EventPayload, EventRead};
 use floe_execution::ExecutionScope;
 use floe_kernel::{AgentFailure, CommandId, OwnerActor, RunId};
 use floe_protocol::*;
