@@ -59,7 +59,12 @@ type AgentInvocation struct {
 	DataClasses                   []string
 	Instructions                  string
 	Input                         AgentInput
+	OutputFormat                  OutputFormat
 	MaxOutputBytes                uint64
+}
+type OutputFormat struct {
+	Kind string `json:"kind"`
+	Schema json.RawMessage `json:"schema,omitempty"`
 }
 type StructuredInvocation struct {
 	Purpose                       Purpose
@@ -148,6 +153,9 @@ const (
 type Failure struct {
 	Code       FailureCode
 	TraceID    string
+	AttemptID string
+	Purpose Purpose
+	CapabilityRevision string
 	Usage      UsageObservation
 	Dispatched bool
 }

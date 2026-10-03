@@ -10,6 +10,9 @@ import (
 )
 
 func (p *provider) agent(ctx context.Context, in inference.AgentInvocation, effort string) (out inference.AgentResult, err error) {
+	if !inference.SupportsAgent(p.target.Capabilities, in) {
+		return out, inference.Failure{Code: inference.RequestRejected}
+	}
 	input, err := json.Marshal(in.Input)
 	if err != nil {
 		return out, inference.Failure{Code: inference.Validation}
@@ -21,20 +24,14 @@ func (p *provider) agent(ctx context.Context, in inference.AgentInvocation, effo
 			return out, inference.Failure{Code: inference.ProviderCredentialsUnavailable}
 		}
 		ctx = codexauth.WithAccountIdentity(ctx, identity)
-		raw, e := p.codex.Generate(ctx, p.target.Model, effort, in.Instructions, input, nil)
+		raw, usage, e := p.codex.GenerateAgent(ctx, p.target.Model, effort, in.Instructions, input, in.OutputFormat.Schema)
+		if inference.ValidateUsage(usage) != nil { return out, inference.Failure{Code: inference.InvalidOutput} }
+		out.Usage = usage
 		if e != nil {
 			return out, classifyCodexError(e)
 		}
 		if trust.StrictJSON([]byte(raw), 1<<20, 32) != nil || json.Unmarshal([]byte(raw), &message) != nil {
 			return out, inference.Failure{Code: inference.InvalidOutput}
-		}
-		if rawTokens, exists := message["used_tokens"]; exists && rawTokens != nil {
-			data, _ := json.Marshal(rawTokens)
-			var tokens uint64
-			if json.Unmarshal(data, &tokens) != nil || tokens > trust.MaxJSONInteger {
-				return out, inference.Failure{Code: inference.InvalidOutput}
-			}
-			out.Usage.Tokens = &tokens
 		}
 	} else {
 		if err = p.checkLocal(ctx); err != nil {
@@ -50,6 +47,10 @@ func (p *provider) agent(ctx context.Context, in inference.AgentInvocation, effo
 		messages := append([]map[string]any{{"role": "system", "content": in.Instructions}}, plain.Messages...)
 		payload := map[string]any{"model": p.target.Model, "messages": messages, "tools": plain.Tools, "stream": false}
 		if p.target.Provider == "ollama" {
+			if in.OutputFormat.Kind == "json" {
+				payload["format"] = in.OutputFormat.Schema
+				delete(payload, "tools")
+			}
 			for _, m := range messages {
 				if calls, ok := m["tool_calls"].([]any); ok {
 					for _, raw := range calls {
@@ -66,19 +67,26 @@ func (p *provider) agent(ctx context.Context, in inference.AgentInvocation, effo
 			var response struct {
 				Done    bool           `json:"done"`
 				Message map[string]any `json:"message"`
-				Prompt  *uint64        `json:"prompt_eval_count"`
-				Output  *uint64        `json:"eval_count"`
 			}
-			if err = p.post(ctx, "/api/chat", payload, &response); err != nil {
+			data, e := p.postJSON(ctx, "/api/chat", payload)
+			if e != nil { return out, e }
+			out.Usage, err = agentUsage(data, true)
+			if err != nil {
 				return out, err
 			}
-			out.Usage.Tokens = sumUsage(response.Prompt, response.Output)
-			if !response.Done {
+			if json.Unmarshal(data, &response) != nil || !response.Done {
 				return out, inference.Failure{Code: inference.InvalidOutput}
 			}
 			message = response.Message
 		} else {
 			payload["parallel_tool_calls"] = true
+			if in.OutputFormat.Kind == "json" {
+				// Optional properties retain their meaning. Exact portable schema
+				// validation still gates release after provider generation.
+				payload["response_format"] = map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": "floe_result", "strict": false, "schema": in.OutputFormat.Schema}}
+				delete(payload, "tools")
+				delete(payload, "parallel_tool_calls")
+			}
 			if effort != "" {
 				payload["reasoning_effort"] = effort
 			}
@@ -87,15 +95,14 @@ func (p *provider) agent(ctx context.Context, in inference.AgentInvocation, effo
 					Finish  string         `json:"finish_reason"`
 					Message map[string]any `json:"message"`
 				} `json:"choices"`
-				Usage struct {
-					Total *uint64 `json:"total_tokens"`
-				} `json:"usage"`
 			}
-			if err = p.post(ctx, "/chat/completions", payload, &response); err != nil {
+			data, e := p.postJSON(ctx, "/chat/completions", payload)
+			if e != nil { return out, e }
+			out.Usage, err = agentUsage(data, false)
+			if err != nil {
 				return out, err
 			}
-			out.Usage.Tokens = response.Usage.Total
-			if len(response.Choices) != 1 || response.Choices[0].Finish != "stop" && response.Choices[0].Finish != "tool_calls" {
+			if json.Unmarshal(data, &response) != nil || len(response.Choices) != 1 || response.Choices[0].Finish != "stop" && response.Choices[0].Finish != "tool_calls" {
 				return out, inference.Failure{Code: inference.InvalidOutput}
 			}
 			message = response.Choices[0].Message
@@ -111,6 +118,38 @@ func (p *provider) agent(ctx context.Context, in inference.AgentInvocation, effo
 	}
 	return out, nil
 }
+
+// The HTTP status and bounded JSON framing have been validated by postJSON.
+// Decode observations independently so content type errors cannot erase usage.
+func agentUsage(data []byte, ollama bool) (inference.UsageObservation, error) {
+	unknown := inference.UsageObservation{}
+	bad := inference.Failure{Code: inference.InvalidOutput}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(data, &fields) != nil || fields == nil { return unknown, bad }
+	if ollama {
+		prompt, err := usageCount(fields["prompt_eval_count"])
+		if err != nil { return unknown, err }
+		output, err := usageCount(fields["eval_count"])
+		if err != nil { return unknown, err }
+		if prompt != nil && output != nil && *output > trust.MaxJSONInteger-*prompt { return unknown, bad }
+		return inference.UsageObservation{Tokens: sumUsage(prompt, output)}, nil
+	}
+	raw := fields["usage"]
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" { return unknown, nil }
+	var usage map[string]json.RawMessage
+	if json.Unmarshal(raw, &usage) != nil || usage == nil { return unknown, bad }
+	tokens, err := usageCount(usage["total_tokens"])
+	if err != nil { return unknown, err }
+	return inference.UsageObservation{Tokens: tokens}, nil
+}
+
+func usageCount(raw json.RawMessage) (*uint64, error) {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" { return nil, nil }
+	var value uint64
+	if json.Unmarshal(raw, &value) != nil || value > trust.MaxJSONInteger { return nil, inference.Failure{Code: inference.InvalidOutput} }
+	return &value, nil
+}
+
 func normalizeMessage(message map[string]any) ([]inference.Step, []string, error) {
 	bad := func() ([]inference.Step, []string, error) {
 		return nil, nil, inference.Failure{Code: inference.InvalidOutput}

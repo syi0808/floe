@@ -67,6 +67,9 @@ function renderProvider() {
     model.value = configured.model || '';
     if (isCodex) model.setAttribute('list', 'codex-models'); else model.removeAttribute('list');
     form.elements[`${purpose}_effort`].value = configured.reasoning_effort || '';
+    const capabilities = configured.capabilities || ['chat'];
+    form.elements[`${purpose}_structured_output`].checked = capabilities.includes('structured_output');
+    form.elements[`${purpose}_tool_proposals`].checked = capabilities.includes('tool_proposals');
     const row = form.querySelector(`[data-class="${purpose}"]`);
     row.classList.toggle('active-route', configured.active === true);
     row.querySelector('.test-class').disabled = !configured.model || configured.available === false;
@@ -117,7 +120,10 @@ element('provider-form').addEventListener('submit', (event) => {
     const form = event.target; const configured = {};
     for (const purpose of purposes) {
       const model = form.elements[`${purpose}_model`].value.trim();
-      if (model) configured[purpose] = {model, reasoning_effort: form.elements[`${purpose}_effort`].value};
+      const capabilities = ['chat'];
+      if (form.elements[`${purpose}_structured_output`].checked) capabilities.push('structured_output');
+      if (form.elements[`${purpose}_tool_proposals`].checked) capabilities.push('tool_proposals');
+      if (model) configured[purpose] = {model, reasoning_effort: form.elements[`${purpose}_effort`].value, capabilities};
     }
     const input = {provider: selectedProvider, base_url: form.elements.base_url.value, api_key: form.elements.api_key.value, purposes: configured};
     form.elements.api_key.value = '';

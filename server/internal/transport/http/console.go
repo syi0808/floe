@@ -26,6 +26,7 @@ type TargetRequest struct {
 	BaseURL  string `json:"base_url"`
 	Model    string `json:"model"`
 	APIKey   string `json:"api_key"`
+	Capabilities []string `json:"capabilities"`
 }
 type ProviderRequest struct {
 	Provider string                            `json:"provider"`
@@ -218,7 +219,7 @@ func (handler *Handler) manage(writer http.ResponseWriter, request *http.Request
 		})
 	case "/manage/api/target":
 		dispatch(writer, request, func(in TargetRequest) operation.Result {
-			return handler.Configuration.UpdateTarget(request.Context(), operator, inference.TargetUpdate{ID: in.ID, Provider: in.Provider, BaseURL: in.BaseURL, Model: in.Model, APIKey: in.APIKey})
+			return handler.Configuration.UpdateTarget(request.Context(), operator, inference.TargetUpdate{ID: in.ID, Provider: in.Provider, BaseURL: in.BaseURL, Model: in.Model, APIKey: in.APIKey, Capabilities: in.Capabilities})
 		})
 	case "/manage/api/provider":
 		dispatch(writer, request, func(in ProviderRequest) operation.Result {

@@ -449,12 +449,21 @@ func WithAccountIdentity(ctx context.Context, identity string) context.Context {
 }
 
 func (runtime *Runtime) Generate(ctx context.Context, model, reasoningEffort, instructions string, input, schema json.RawMessage) (string, error) {
+	text, _, err := runtime.generate(ctx, model, reasoningEffort, instructions, input, schema, false)
+	return text, err
+}
+
+func (runtime *Runtime) GenerateAgent(ctx context.Context, model, reasoningEffort, instructions string, input, schema json.RawMessage) (string, inference.UsageObservation, error) {
+	return runtime.generate(ctx, model, reasoningEffort, instructions, input, schema, true)
+}
+
+func (runtime *Runtime) generate(ctx context.Context, model, reasoningEffort, instructions string, input, schema json.RawMessage, agent bool) (string, inference.UsageObservation, error) {
 	credential, err := runtime.access(ctx)
 	if err != nil {
-		return "", err
+		return "", inference.UsageObservation{}, err
 	}
 	if identity, supplied := ctx.Value(accountIdentityKey{}).(string); supplied && identity != accountIdentity(credential) {
-		return "", unavailable
+		return "", inference.UsageObservation{}, unavailable
 	}
 	requestBody := map[string]any{
 		"model": model, "instructions": instructions,
@@ -466,24 +475,29 @@ func (runtime *Runtime) Generate(ctx context.Context, model, reasoningEffort, in
 	if reasoningEffort != "" {
 		requestBody["reasoning"] = map[string]string{"effort": reasoningEffort, "summary": "auto"}
 	}
-	if len(schema) == 0 {
+	if agent {
 		native, tools, err := nativeInput(input)
 		if err != nil {
-			return "", err
+			return "", inference.UsageObservation{}, err
 		}
 		requestBody["input"] = native
 		requestBody["tools"] = tools
-		requestBody["tool_choice"] = "auto"
-		requestBody["parallel_tool_calls"] = true
-		delete(requestBody, "text")
+		if len(schema) == 0 {
+			requestBody["tool_choice"] = "auto"
+			delete(requestBody, "text")
+		} else {
+			if len(tools) != 0 { return "", inference.UsageObservation{}, invalidOutput }
+			requestBody["parallel_tool_calls"] = false
+			requestBody["text"] = map[string]any{"format": map[string]any{"type": "json_schema", "name": "floe_result", "strict": false, "schema": schema}}
+		}
 	}
 	payload, err := json.Marshal(requestBody)
 	if err != nil {
-		return "", invalidOutput
+		return "", inference.UsageObservation{}, invalidOutput
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, runtime.endpoint, bytes.NewReader(payload))
 	if err != nil {
-		return "", unavailable
+		return "", inference.UsageObservation{}, unavailable
 	}
 	request.Header.Set("Authorization", "Bearer "+credential.AccessToken)
 	request.Header.Set("ChatGPT-Account-Id", credential.AccountID)
@@ -494,27 +508,28 @@ func (runtime *Runtime) Generate(ctx context.Context, model, reasoningEffort, in
 	response, err := runtime.client.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
-			return "", ctx.Err()
+			return "", inference.UsageObservation{}, ctx.Err()
 		}
-		return "", unavailable
+		return "", inference.UsageObservation{}, unavailable
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		switch response.StatusCode {
 		case http.StatusUnauthorized, http.StatusForbidden:
-			return "", ErrCredentialExpired
+			return "", inference.UsageObservation{}, ErrCredentialExpired
 		case http.StatusTooManyRequests:
-			return "", ErrQuotaExceeded
+			return "", inference.UsageObservation{}, ErrQuotaExceeded
 		case http.StatusBadRequest, http.StatusNotFound, http.StatusUnprocessableEntity:
-			return "", ErrRequestRejected
+			return "", inference.UsageObservation{}, ErrRequestRejected
 		default:
-			return "", unavailable
+			return "", inference.UsageObservation{}, unavailable
 		}
 	}
-	if len(schema) == 0 {
+	if agent {
 		return readNativeResponse(response.Body)
 	}
-	return readResponse(response.Body)
+	text, err := readResponse(response.Body)
+	return text, inference.UsageObservation{}, err
 }
 
 func readResponse(reader io.Reader) (string, error) {

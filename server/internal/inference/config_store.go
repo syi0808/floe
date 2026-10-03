@@ -71,6 +71,7 @@ func cloneConfigurationState(state configurationState) configurationState {
 		Providers:     make(map[string]providerProfile, len(state.Providers)),
 	}
 	for id, target := range state.Targets {
+		target.Capabilities = append([]string(nil), target.Capabilities...)
 		out.Targets[id] = target
 	}
 	for purpose, route := range state.Routes {
@@ -80,6 +81,7 @@ func cloneConfigurationState(state configurationState) configurationState {
 		copy := profile
 		copy.Purposes = make(map[string]PurposeModel, len(profile.Purposes))
 		for purpose, configured := range profile.Purposes {
+			configured.Capabilities = append([]string(nil), configured.Capabilities...)
 			copy.Purposes[purpose] = configured
 		}
 		out.Providers[name] = copy

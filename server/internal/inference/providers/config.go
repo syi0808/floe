@@ -14,6 +14,7 @@ type CodexClient interface {
 	Ready(context.Context) bool
 	ReplayIdentity() string
 	Generate(context.Context, string, string, string, json.RawMessage, json.RawMessage) (string, error)
+	GenerateAgent(context.Context, string, string, string, json.RawMessage, json.RawMessage) (string, inference.UsageObservation, error)
 }
 
 type Factory struct {
@@ -28,7 +29,7 @@ func NewFactory(lookup func(context.Context, string) (string, error), codex Code
 type registry struct{ targets map[string]*provider }
 
 func (f *Factory) ValidateTarget(target inference.ProviderTarget) error {
-	if strings.TrimSpace(target.Model) == "" || len(target.Model) > 128 {
+	if strings.TrimSpace(target.Model) == "" || len(target.Model) > 128 || !inference.ValidCapabilities(target.Capabilities) {
 		return errors.New("invalid model")
 	}
 	_, err := newProvider(context.Background(), target, func(context.Context, string) (string, error) { return "validation-placeholder", nil }, nil)
@@ -106,6 +107,10 @@ func (p *provider) ReplayIdentity() string {
 	}{p.target, p.credential, identity})
 	h := sha256.Sum256(raw)
 	return hex.EncodeToString(h[:])
+}
+
+func (p *provider) Capabilities() []string {
+	return append([]string(nil), p.target.Capabilities...)
 }
 
 func (r *registry) InvokeAgent(ctx context.Context, target inference.ResolvedModelTarget, in inference.AgentInvocation) (inference.AgentResult, error) {

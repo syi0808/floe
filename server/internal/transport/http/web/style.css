@@ -67,6 +67,10 @@ legend { font-size: 16px; font-weight: 650; padding: 0; margin-bottom: 8px; }
 .class-grid span { color: var(--secondary); font-size: 11px; margin-top: 5px; }
 .class-grid label { margin: 0; }
 .class-grid button { margin-bottom: 0; }
+.class-grid .model-capabilities { grid-column: 1 / -1; margin: 0; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.model-capabilities legend { font-size: 12px; margin-bottom: 6px; }
+.model-capabilities label { display: flex; gap: 6px; align-items: center; }
+.model-capabilities input { width: auto; min-height: 0; margin: 0; }
 @supports (corner-shape: squircle) {
   button, input, select, .card, .warning, #notice { corner-shape: squircle; }
 }

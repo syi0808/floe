@@ -179,8 +179,14 @@ func writeInferenceError(w http.ResponseWriter, err error) {
 	status := inferenceStatus(f.Code)
 	out := InferenceErrorDTO{SchemaVersion: 2}
 	out.Error.Code = f.Code
-	if f.TraceID != "" {
+	// Only the execution service may attach the admitted correlation. Request
+	// decoding and other pre-admission failures expose no caller-supplied echo.
+	if f.Dispatched && f.TraceID != "" && trust.ValidID(f.AttemptID) && inference.ValidPurpose(string(f.Purpose)) && inference.ValidHex(f.CapabilityRevision, 32) {
 		out.TraceID = &f.TraceID
+		out.AttemptID = &f.AttemptID
+		out.Purpose = &f.Purpose
+		out.CapabilityRevision = &f.CapabilityRevision
+		if inference.ValidateUsage(f.Usage) == nil { out.Usage = f.Usage }
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

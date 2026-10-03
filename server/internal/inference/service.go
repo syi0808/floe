@@ -42,7 +42,7 @@ func (s *Service) Configure(config InferenceConfig, accounts map[string]ModelAcc
 	}
 	routes := map[Purpose]PurposeRoute{}
 	for p, r := range config.Routes {
-		if accounts[r.TargetID] == nil {
+		if accounts[r.TargetID] == nil || !ValidCapabilities(accounts[r.TargetID].Capabilities()) {
 			return errors.New("configured target missing")
 		}
 		routes[p] = r
@@ -89,12 +89,17 @@ func (s *Service) current(ctx context.Context, p Purpose) (ResolvedModelTarget, 
 	if identity == "" {
 		return ResolvedModelTarget{}, "", nil, Failure{Code: ProviderCredentialsUnavailable}
 	}
-	target := ResolvedModelTarget{r.TargetID, r.ReasoningEffort, identity, generation}
+	capabilities := account.Capabilities()
+	if !ValidCapabilities(capabilities) {
+		return ResolvedModelTarget{}, "", nil, Failure{Code: ModelUnavailable}
+	}
+	target := ResolvedModelTarget{targetID: r.TargetID, effort: r.ReasoningEffort, accountIdentity: identity, generation: generation, capabilities: append([]string(nil), capabilities...)}
 	material, _ := json.Marshal(struct {
 		Purpose                    Purpose
 		TargetID, Effort, Identity string
 		Generation                 uint64
-	}{p, r.TargetID, r.ReasoningEffort, identity, generation})
+		Capabilities               []string
+	}{p, r.TargetID, r.ReasoningEffort, identity, generation, capabilities})
 	mac := hmac.New(sha256.New, s.secret[:])
 	mac.Write(material)
 	revision := hex.EncodeToString(mac.Sum(nil))
@@ -109,7 +114,7 @@ func (s *Service) current(ctx context.Context, p Purpose) (ResolvedModelTarget, 
 func (s *Service) Snapshot(ctx context.Context) (PurposeInventory, error) {
 	var out PurposeInventory
 	for _, p := range Purposes {
-		_, revision, _, err := s.current(ctx, p)
+		target, revision, _, err := s.current(ctx, p)
 		if err != nil {
 			var f Failure
 			if errors.As(err, &f) {
@@ -124,7 +129,7 @@ func (s *Service) Snapshot(ctx context.Context) (PurposeInventory, error) {
 			}
 			return PurposeInventory{}, err
 		}
-		out.set(p, PurposeCapability{Available, revision, []string{"chat"}})
+		out.set(p, PurposeCapability{Available, revision, append([]string(nil), target.capabilities...)})
 	}
 	return out, nil
 }
@@ -155,6 +160,9 @@ func (s *Service) InvokeAgent(ctx context.Context, p trust.Principal, in AgentIn
 	if revision != in.CapabilityRevision {
 		return out, Failure{Code: CapabilityChanged}
 	}
+	if !SupportsAgent(target.capabilities, in) {
+		return out, Failure{Code: RequestRejected}
+	}
 	select {
 	case s.active <- struct{}{}:
 		defer func() { <-s.active }()
@@ -181,6 +189,7 @@ func (s *Service) InvokeAgent(ctx context.Context, p trust.Principal, in AgentIn
 		f := normalizeFailure(err)
 		f.TraceID = trace
 		f.Dispatched = true
+		f.AttemptID, f.Purpose, f.CapabilityRevision = in.AttemptID, in.Purpose, revision
 		if ValidateUsage(usage) == nil {
 			f.Usage = usage
 		}
@@ -200,6 +209,7 @@ func (s *Service) InvokeAgent(ctx context.Context, p trust.Principal, in AgentIn
 		f := normalizeFailure(err)
 		f.TraceID = trace
 		f.Dispatched = true
+		f.AttemptID, f.Purpose, f.CapabilityRevision = in.AttemptID, in.Purpose, revision
 		f.Usage = usage
 		s.audit.add(newAuditRecord(trace, string(in.Purpose), in.DataClasses, in, target.accountIdentity, string(f.Code), nil, usage, start))
 		return AgentResult{}, f
@@ -261,6 +271,7 @@ func (s *Service) InvokeStructured(ctx context.Context, p trust.OperatorPrincipa
 		f := normalizeFailure(err)
 		f.TraceID = trace
 		f.Dispatched = true
+		f.AttemptID, f.Purpose, f.CapabilityRevision = in.AttemptID, in.Purpose, revision
 		f.Usage = usage
 		s.audit.add(newAuditRecord(trace, string(in.Purpose), in.DataClasses, in, target.accountIdentity, string(f.Code), nil, usage, start))
 		return StructuredResult{}, f

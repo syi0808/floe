@@ -29,6 +29,7 @@ type AgentRequestDTO struct {
 	DataClasses        []string          `json:"data_classes"`
 	Instructions       string            `json:"instructions"`
 	Input              json.RawMessage   `json:"input"`
+	OutputFormat       json.RawMessage   `json:"output_format"`
 	MaxOutputBytes     uint64            `json:"max_output_bytes"`
 }
 type StructuredRequestDTO struct {
@@ -67,6 +68,10 @@ type InferenceErrorDTO struct {
 		Code inference.FailureCode `json:"code"`
 	} `json:"error"`
 	TraceID *string `json:"trace_id"`
+	AttemptID *string `json:"attempt_id"`
+	Purpose *inference.Purpose `json:"purpose"`
+	CapabilityRevision *string `json:"capability_revision"`
+	Usage inference.UsageObservation `json:"usage"`
 }
 
 func exactObject(data []byte, required []string, optional ...string) (map[string]json.RawMessage, bool) {
@@ -99,10 +104,10 @@ func decodeDTO(data []byte, out any) bool {
 	return d.Decode(out) == nil && d.Decode(new(any)) == io.EOF
 }
 func decodeAgentRequest(data []byte) (inference.AgentInvocation, error) {
-	if trust.StrictJSON(data, 98304, 32) != nil {
+	if trust.StrictJSON(data, 98304, 32) != nil || !inference.ValidJSONTextEncoding(data) {
 		return inference.AgentInvocation{}, inference.Failure{Code: inference.Validation}
 	}
-	if _, ok := exactObject(bytes.TrimSpace(data), []string{"schema_version", "purpose", "capability_revision", "attempt_id", "data_classes", "instructions", "input", "max_output_bytes"}); !ok {
+	if _, ok := exactObject(bytes.TrimSpace(data), []string{"schema_version", "purpose", "capability_revision", "attempt_id", "data_classes", "instructions", "input", "output_format", "max_output_bytes"}); !ok {
 		return inference.AgentInvocation{}, inference.Failure{Code: inference.Validation}
 	}
 	var dto AgentRequestDTO
@@ -116,7 +121,9 @@ func decodeAgentRequest(data []byte) (inference.AgentInvocation, error) {
 	if !ok {
 		return inference.AgentInvocation{}, inference.Failure{Code: inference.Validation}
 	}
-	out := inference.AgentInvocation{Purpose: dto.Purpose, CapabilityRevision: dto.CapabilityRevision, AttemptID: dto.AttemptID, DataClasses: dto.DataClasses, Instructions: dto.Instructions, Input: input, MaxOutputBytes: dto.MaxOutputBytes}
+	format, err := inference.DecodeOutputFormat(dto.OutputFormat)
+	if err != nil { return inference.AgentInvocation{}, err }
+	out := inference.AgentInvocation{Purpose: dto.Purpose, CapabilityRevision: dto.CapabilityRevision, AttemptID: dto.AttemptID, DataClasses: dto.DataClasses, Instructions: dto.Instructions, Input: input, OutputFormat: format, MaxOutputBytes: dto.MaxOutputBytes}
 	if err := inference.ValidateAgentInvocation(out); err != nil {
 		return inference.AgentInvocation{}, err
 	}

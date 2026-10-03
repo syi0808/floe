@@ -22,6 +22,7 @@ type TargetUpdate struct {
 	BaseURL  string
 	Model    string
 	APIKey   string
+	Capabilities []string
 }
 
 type ProviderUpdate struct {
@@ -36,6 +37,7 @@ type OperatorPurposeProfile struct {
 	ReasoningEffort string `json:"reasoning_effort"`
 	Active          bool   `json:"active"`
 	Available       bool   `json:"available"`
+	Capabilities []string `json:"capabilities"`
 }
 
 type OperatorProviderProfile struct {
@@ -93,7 +95,7 @@ func (c *Configuration) UpdateTarget(ctx context.Context, operator trust.Operato
 			baseURL = "https://chatgpt.com/backend-api/codex"
 			apiKey = ""
 		}
-		target := ProviderTarget{Provider: providerName, BaseURL: baseURL, Model: input.Model}
+		target := ProviderTarget{Provider: providerName, BaseURL: baseURL, Model: input.Model, Capabilities: append([]string(nil), input.Capabilities...)}
 		if apiKey != "" {
 			target.APIKeyEnv = "FLOE_KEY_" + strings.ToUpper(trust.Token())
 		} else if old.Provider == target.Provider && old.BaseURL == target.BaseURL {
@@ -202,6 +204,7 @@ func (c *Configuration) Snapshot(ctx context.Context, operator trust.OperatorPri
 					ReasoningEffort: model.ReasoningEffort,
 					Active:          route.TargetID == targetID && route.Enabled,
 					Available:       available,
+					Capabilities: append([]string(nil), model.Capabilities...),
 				}
 			}
 			profiles[provider] = OperatorProviderProfile{BaseURL: configured.BaseURL, HasCredential: configured.APIKeyEnv != "", Purposes: purposes}
@@ -270,6 +273,7 @@ func configuredTarget(state configurationState, id string) (ProviderTarget, bool
 func clonePurposeModels(purposes map[string]PurposeModel) map[string]PurposeModel {
 	out := make(map[string]PurposeModel, len(purposes))
 	for purpose, configured := range purposes {
+		configured.Capabilities = append([]string(nil), configured.Capabilities...)
 		out[purpose] = configured
 	}
 	return out

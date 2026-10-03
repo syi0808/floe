@@ -3,9 +3,12 @@ package codexauth
 import (
 	"bufio"
 	"encoding/json"
+	"floe/server/internal/inference"
+	"floe/server/internal/trust"
 	"io"
 	"reflect"
 	"strings"
+	"unicode"
 )
 
 func nativeInput(raw json.RawMessage) ([]any, []any, error) {
@@ -61,10 +64,13 @@ type nativeOutputItem struct {
 	} `json:"content"`
 }
 
-func readNativeResponse(reader io.Reader) (string, error) {
+func readNativeResponse(reader io.Reader) (string, inference.UsageObservation, error) {
+	usage := inference.UsageObservation{}
 	scanner := bufio.NewScanner(io.LimitReader(reader, 1048577))
 	scanner.Buffer(make([]byte, 4096), 1048576)
 	streamed := []json.RawMessage{}
+	responseID := ""
+	invalidContent := false
 	for scanner.Scan() {
 		if !strings.HasPrefix(scanner.Text(), "data:") {
 			continue
@@ -77,38 +83,70 @@ func readNativeResponse(reader io.Reader) (string, error) {
 			Type     string          `json:"type"`
 			Item     json.RawMessage `json:"item"`
 			Response struct {
-				Status string            `json:"status"`
-				Output []json.RawMessage `json:"output"`
-				Usage  struct {
-					Total *uint64 `json:"total_tokens"`
-				} `json:"usage"`
+				ID string `json:"id"`
+				Status string `json:"status"`
+				Output json.RawMessage `json:"output"`
+				Usage json.RawMessage `json:"usage"`
 			} `json:"response"`
 		}
-		if json.Unmarshal([]byte(data), &event) != nil {
-			return "", invalidOutput
+		if trust.StrictJSON([]byte(data), 1048576, 32) != nil || !inference.ValidJSONTextEncoding([]byte(data)) || json.Unmarshal([]byte(data), &event) != nil {
+			return "", usage, invalidOutput
 		}
 		switch event.Type {
 		case "response.failed", "response.incomplete", "error":
-			return "", unavailable
+			return "", usage, unavailable
+		case "response.created", "response.in_progress":
+			if !validNativeResponseID(event.Response.ID) || responseID != "" && responseID != event.Response.ID {
+				return "", usage, invalidOutput
+			}
+			responseID = event.Response.ID
 		case "response.output_item.done":
 			if len(event.Item) == 0 || len(streamed) >= 32 {
-				return "", invalidOutput
+				invalidContent = true
+				continue
 			}
 			streamed = append(streamed, append(json.RawMessage(nil), event.Item...))
 		case "response.completed":
-			if event.Response.Status != "completed" {
-				return "", invalidOutput
+			if event.Response.Status != "completed" || !validNativeResponseID(event.Response.ID) || responseID != "" && responseID != event.Response.ID {
+				return "", usage, invalidOutput
 			}
-			output := event.Response.Output
+			var err error
+			usage, err = completedNativeUsage(event.Response.Usage)
+			if err != nil { return "", inference.UsageObservation{}, err }
+			// Usage belongs to this completed response, independently of whether
+			// its content can be normalized into the requested Agent contract.
+			var output []json.RawMessage
+			if invalidContent || len(event.Response.Output) != 0 && json.Unmarshal(event.Response.Output, &output) != nil {
+				return "", usage, invalidOutput
+			}
 			if len(output) == 0 {
 				output = streamed
 			} else if len(streamed) != 0 && !sameNativeOutput(streamed, output) {
-				return "", invalidOutput
+				return "", usage, invalidOutput
 			}
-			return normalizeNativeOutput(output, event.Response.Usage.Total)
+			text, err := normalizeNativeOutput(output)
+			return text, usage, err
 		}
 	}
-	return "", invalidOutput
+	return "", usage, invalidOutput
+}
+
+func validNativeResponseID(value string) bool {
+	if value == "" || len(value) > 256 { return false }
+	for _, char := range value { if unicode.IsControl(char) { return false } }
+	return true
+}
+
+func completedNativeUsage(raw json.RawMessage) (inference.UsageObservation, error) {
+	unknown := inference.UsageObservation{}
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" { return unknown, nil }
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || fields == nil { return unknown, invalidOutput }
+	value, present := fields["total_tokens"]
+	if !present || strings.TrimSpace(string(value)) == "null" { return unknown, nil }
+	var tokens uint64
+	if json.Unmarshal(value, &tokens) != nil || tokens > trust.MaxJSONInteger { return unknown, invalidOutput }
+	return inference.UsageObservation{Tokens: &tokens}, nil
 }
 
 func sameNativeOutput(left, right []json.RawMessage) bool {
@@ -123,7 +161,7 @@ func sameNativeOutput(left, right []json.RawMessage) bool {
 		reflect.DeepEqual(leftValue, rightValue)
 }
 
-func normalizeNativeOutput(output []json.RawMessage, usedTokens *uint64) (string, error) {
+func normalizeNativeOutput(output []json.RawMessage) (string, error) {
 	if len(output) == 0 || len(output) > 32 {
 		return "", invalidOutput
 	}
@@ -159,7 +197,7 @@ func normalizeNativeOutput(output []json.RawMessage, usedTokens *uint64) (string
 	if len(calls) == 0 && strings.TrimSpace(text) == "" {
 		return "", invalidOutput
 	}
-	encoded, err := json.Marshal(map[string]any{"content": text, "tool_calls": calls, "provider_items": output, "used_tokens": usedTokens})
+	encoded, err := json.Marshal(map[string]any{"content": text, "tool_calls": calls, "provider_items": output})
 	if err != nil || len(encoded) > 32768 {
 		return "", invalidOutput
 	}

@@ -14,6 +14,7 @@ type ProviderTarget struct {
 	BaseURL   string `json:"base_url"`
 	Model     string `json:"model"`
 	APIKeyEnv string `json:"api_key_env,omitempty"`
+	Capabilities []string `json:"capabilities"`
 }
 
 // ProviderFactory opens local provider accounts and supplies the executor used by
@@ -74,7 +75,7 @@ func validatePreparedConfiguration(config InferenceConfig, accounts map[string]M
 		return errors.New("invalid inference configuration")
 	}
 	for _, route := range config.Routes {
-		if accounts[route.TargetID] == nil {
+		if accounts[route.TargetID] == nil || !ValidCapabilities(accounts[route.TargetID].Capabilities()) {
 			return errors.New("configured target missing")
 		}
 	}
@@ -112,7 +113,7 @@ func profileTargetID(provider, purpose string) string {
 
 func profileTarget(provider, purpose string, profile providerProfile) ProviderTarget {
 	configured := profile.Purposes[purpose]
-	return ProviderTarget{Provider: provider, BaseURL: profile.BaseURL, Model: configured.Model, APIKeyEnv: profile.APIKeyEnv}
+	return ProviderTarget{Provider: provider, BaseURL: profile.BaseURL, Model: configured.Model, APIKeyEnv: profile.APIKeyEnv, Capabilities: append([]string(nil), configured.Capabilities...)}
 }
 
 func (c *Configuration) RequiredError() error {

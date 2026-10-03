@@ -30,6 +30,10 @@ type provider struct {
 }
 
 func newProvider(ctx context.Context, target inference.ProviderTarget, lookup func(context.Context, string) (string, error), codex CodexClient) (*provider, error) {
+	if !inference.ValidCapabilities(target.Capabilities) {
+		return nil, errors.New("invalid model capabilities")
+	}
+	target.Capabilities = append([]string(nil), target.Capabilities...)
 	if strings.TrimSpace(target.Model) == "" || len(target.Model) > 128 || strings.ContainsAny(target.Model, "\r\n") {
 		return nil, errors.New("invalid model")
 	}
@@ -72,13 +76,19 @@ func newProvider(ctx context.Context, target inference.ProviderTarget, lookup fu
 	return p, nil
 }
 func (p *provider) post(ctx context.Context, path string, payload, output any) error {
+	data, err := p.postJSON(ctx, path, payload)
+	if err != nil { return err }
+	if json.Unmarshal(data, output) != nil { return inference.Failure{Code: inference.InvalidOutput} }
+	return nil
+}
+func (p *provider) postJSON(ctx context.Context, path string, payload any) ([]byte, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return inference.Failure{Code: inference.RequestRejected}
+		return nil, inference.Failure{Code: inference.RequestRejected}
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, p.target.BaseURL+path, bytes.NewReader(encoded))
 	if err != nil {
-		return inference.Failure{Code: inference.RequestRejected}
+		return nil, inference.Failure{Code: inference.RequestRejected}
 	}
 	request.Header.Set("Content-Type", "application/json")
 	if p.credential != "" {
@@ -87,9 +97,9 @@ func (p *provider) post(ctx context.Context, path string, payload, output any) e
 	response, err := p.client.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
-		return inference.Failure{Code: inference.ModelUnavailable}
+		return nil, inference.Failure{Code: inference.ModelUnavailable}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -102,19 +112,19 @@ func (p *provider) post(ctx context.Context, path string, payload, output any) e
 		case 400, 404, 422:
 			code = inference.RequestRejected
 		}
-		return inference.Failure{Code: code}
+		return nil, inference.Failure{Code: code}
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, 1048577))
 	if err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
-		return inference.Failure{Code: inference.ModelUnavailable}
+		return nil, inference.Failure{Code: inference.ModelUnavailable}
 	}
-	if trust.StrictJSON(data, 1048576, 32) != nil || json.Unmarshal(data, output) != nil {
-		return inference.Failure{Code: inference.InvalidOutput}
+	if trust.StrictJSON(data, 1048576, 32) != nil || !inference.ValidJSONTextEncoding(data) {
+		return nil, inference.Failure{Code: inference.InvalidOutput}
 	}
-	return nil
+	return data, nil
 }
 func (p *provider) checkLocal(ctx context.Context) error {
 	if p.target.Provider != "ollama" {

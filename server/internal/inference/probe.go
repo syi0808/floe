@@ -66,7 +66,7 @@ func (s *Service) ProbeTarget(ctx context.Context, operator trust.OperatorPrinci
 		return ProbeResult{}, normalizeFailure(err)
 	}
 	text := "Confirm that this synthetic Agent connectivity check succeeded."
-	request := AgentInvocation{Purpose: QuickResponse, AttemptID: trust.NewID(), DataClasses: []string{"synthetic"}, Instructions: "Reply with one brief plain-text confirmation. This is a Gateway operator diagnostic with no personal data or tools.", Input: AgentInput{Messages: []Message{{Role: "user", Content: &text}}, Tools: []Tool{}}, MaxOutputBytes: 1024}
+	request := AgentInvocation{Purpose: QuickResponse, AttemptID: trust.NewID(), DataClasses: []string{"synthetic"}, Instructions: "Reply with one brief plain-text confirmation. This is a Gateway operator diagnostic with no personal data or tools.", Input: AgentInput{Messages: []Message{{Role: "user", Content: &text}}, Tools: []Tool{}}, OutputFormat: OutputFormat{Kind: "text"}, MaxOutputBytes: 1024}
 	target := ResolvedModelTarget{targetID: targetID, accountIdentity: identity, generation: generation}
 	trace := newTraceID()
 	started := time.Now()

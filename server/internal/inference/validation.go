@@ -170,6 +170,9 @@ func validSchemaValue(s map[string]any, depth int) bool {
 	return true
 }
 func ValidateAgentInvocation(in AgentInvocation) error {
+	if !validOutputFormat(in.OutputFormat) || in.OutputFormat.Kind == "json" && len(in.Input.Tools) != 0 {
+		return Failure{Code: Validation}
+	}
 	if !ValidPurpose(string(in.Purpose)) || !ValidHex(in.CapabilityRevision, 32) || !trust.ValidID(in.AttemptID) || !validClasses(in.DataClasses) || strings.TrimSpace(in.Instructions) == "" || len(in.Instructions) > 9216 || !utf8.ValidString(in.Instructions) || in.MaxOutputBytes < 1 || in.MaxOutputBytes > 16384 {
 		return Failure{Code: Validation}
 	}
@@ -177,6 +180,7 @@ func ValidateAgentInvocation(in AgentInvocation) error {
 	if err != nil || len(encoded) > 32768 || len(in.Input.Messages) < 1 || len(in.Input.Messages) > 256 || in.Input.Tools == nil || len(in.Input.Tools) > 64 {
 		return Failure{Code: Validation}
 	}
+	if err := ValidateAgentOutputFrame(in); err != nil { return err }
 	names := map[string]bool{}
 	for _, t := range in.Input.Tools {
 		f := t.Function
@@ -226,6 +230,15 @@ func ValidateStructuredInvocation(in StructuredInvocation) error {
 	return nil
 }
 func ValidateAgentResult(in AgentInvocation, out AgentResult) error {
+	if !validOutputFormat(in.OutputFormat) {
+		return Failure{Code: InvalidOutput}
+	}
+	if in.OutputFormat.Kind == "json" {
+		if len(in.Input.Tools) != 0 || len(out.Output) != 1 || out.Output[0].Kind != "answer" || len(out.CallIDs) != 0 {
+			return Failure{Code: InvalidOutput}
+		}
+		if err := ValidateJSONAnswer(in.OutputFormat, []byte(out.Output[0].Text), in.MaxOutputBytes); err != nil { return err }
+	}
 	if len(out.Output) < 1 || len(out.Output) > 16 || out.CallIDs == nil {
 		return Failure{Code: InvalidOutput}
 	}

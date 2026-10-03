@@ -20,12 +20,14 @@ type ModelExecutor interface {
 type ModelAccount interface {
 	Ready(context.Context) error
 	ReplayIdentity() string
+	Capabilities() []string
 }
 
 // ResolvedModelTarget is a private selection value. It never contains provider credentials.
 type ResolvedModelTarget struct {
 	targetID, effort, accountIdentity string
 	generation                        uint64
+	capabilities                      []string
 }
 
 func (t ResolvedModelTarget) TargetID() string        { return t.targetID }
