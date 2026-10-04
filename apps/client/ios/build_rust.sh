@@ -3,6 +3,10 @@ set -euo pipefail
 
 REPOSITORY_ROOT="${SRCROOT}/../../.."
 source "${SRCROOT}/../apple/native_build.sh"
+if [[ "${CONFIGURATION:-Debug}" == "Debug" && " ${SWIFT_ACTIVE_COMPILATION_CONDITIONS:-} " != *" FLOE_DEVELOPMENT_STORAGE "* ]]; then
+  print -u2 "Debug Swift must use the same development custody profile as Rust."
+  exit 1
+fi
 if [[ "${CONFIGURATION:-Debug}" != "Debug" && " ${SWIFT_ACTIVE_COMPILATION_CONDITIONS:-} " == *" FLOE_DEVELOPMENT_STORAGE "* ]]; then
   print -u2 "Development native key custody is forbidden in Release/Profile."
   exit 1

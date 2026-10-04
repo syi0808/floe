@@ -12,6 +12,7 @@ STORAGE_PROFILE="development"
 DEBUG_REQUESTED=false
 for argument in "$@"; do
   case "$argument" in
+    --) break ;;
     --release|--profile) STORAGE_PROFILE="production" ;;
     --debug) DEBUG_REQUESTED=true ;;
   esac

@@ -9,6 +9,10 @@ import Foundation
 import Security
 import Darwin
 
+#if DEBUG && !FLOE_DEVELOPMENT_STORAGE
+#error("Debug native context must use isolated development custody")
+#endif
+
 @MainActor
 final class AppleContextChannel {
   private static let channelName = "floe/apple_context"

@@ -8,7 +8,8 @@ LOG_FILE="$LOG_DIRECTORY/agent-$(date -u +%Y%m%dT%H%M%SZ).log"
 
 mkdir -p "$LOG_DIRECTORY"
 cd "$ROOT"
-cargo build -p floe-ffi
+
+# Xcode embeds the matching Debug development profile; no duplicate Cargo build.
 
 printf 'Writing combined Flutter and Rust logs to %s\n' "$LOG_FILE"
 cd "$ROOT/apps/client"

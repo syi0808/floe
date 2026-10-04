@@ -13,8 +13,9 @@ Access owns source-grant DeviceOnly/GatewayAllowed processing permission and liv
 Composition selects one custody profile at build time. Rust's default `os-keyring`
 feature retains OS key storage; `development-storage` excludes that adapter and is
 forbidden in a non-debug-assertion build. Both implement the same VaultKeyProvider and
-use the same encrypted Vault engine. Preflight and ordinary Vault activation use the
-same provider; missing/malformed development keys do not trigger replacement or reset.
+use the same encrypted Vault engine. Vault activation uses the selected provider;
+missing/malformed development keys expose a Vault failure without blocking the
+independent product host, replacing keys or resetting data.
 Development installation admission is marker-bound and separate from normal app data.
 Explicit-path diagnostics enforce the same profile boundary. Flutter checks the FFI
 storage-profile code before opening or preflighting data.
@@ -24,7 +25,10 @@ private development file Store. There is no error-triggered selection. Debug cli
 and `run-local.sh` use an isolated Gateway root and port 18431; Release/Profile use the
 ordinary root and port 8431. iOS Debug's native Contacts handle key has separate private
 file custody; Release/Profile retains its Keychain item. OS source permissions and
-owner authority/recovery checks are unchanged.
+owner authority/recovery checks are unchanged. This is local storage isolation,
+not a network pairing policy: an explicitly selected Gateway still requires its
+ordinary verified identity and administrator approval. Cross-profile pairing is
+not currently prohibited by a signed profile claim.
 
 This selection does not make every persisted payload encrypted. The host product
 store remains distinct from EncryptedAgentVault and is currently plaintext; Gateway
@@ -208,7 +212,7 @@ See [Authority and recovery](authority-recovery.md).
 ## Product boundary
 
 The macOS debug CLI is another caller of the same admitted `AppHost` services.
-It reuses an explicitly selected client profile, existing identity, Keychain
+It reuses an explicitly selected client profile, existing identity, build-selected key custody,
 credentials and Expert/source configuration, and never owns model/source policy.
 It bundles the existing Apple model and EventKit drivers without launching Flutter.
 It does not supply Flutter-only live personal/Attention host publication or execute

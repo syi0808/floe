@@ -378,3 +378,37 @@ Qualification completed on the root's isolated execution environment:
 Disposable probe sources/logs are retained outside the repository; permanent S3 reconstruction remains deferred. macOS/iOS compilation, source-only adversarial review of the new custody implementation, live Apple startup and full production encryption coverage are still distinct pending gates. Earlier architecture review did not cover this code. Existing user's app/server/data/logs were not touched by these probes.
 
 Root's post-checkpoint coexistence probe found that a development-only auxiliary directory made the unchanged production fresh-root validator reject a first production installation. The correction reserves only the known development auxiliary directory names alongside diagnostics/recovery; it does not read/adopt their contents, follow symlinks or move them during recovery. The same-base development-first/production-first sequences are now explicit qualification cases, separate from rejecting a production binary pointed directly at a marked development root.
+
+### Development custody review closure (2026-10-04)
+
+The a08919b Opus review confirmed no runtime fallback into development custody.
+Root reproduced and fixed development-first/production-first coexistence (d601b5c).
+The next correction removes development-only whole-host Vault preflight: the
+canonical VaultBridge owns typed presence/open failures while Day remains usable.
+Explicit-path hosts pass the canonical database path to that same VaultBridge.
+Both directions of Swift/Rust iOS Debug profile selection are now guarded.
+CLI default custody matches Flutter Debug, with an explicit Release/OS-keyring
+`--production` mode. The reset helper defaults to development only, refuses running
+hosts and symlink paths, moves known artifacts to Trash, and never deletes Keychain
+entries or diagnostics. Partial marker/key initialization remains fail-closed;
+inspect retained evidence before explicitly moving the isolated development
+profile aside. Do not infer that missing or invalid keys authorize regeneration.
+
+Remaining qualification/design limits: storage namespaces do not forbid explicit
+cross-profile Gateway pairing; the existing signed identity and human approval
+remain required, but a signed build-profile admission policy is not yet present.
+Custom server address settings can differ from the client default and must be
+configured explicitly. Private file custody does not protect against a malicious
+same-user process or all ancestor-directory races. Production Day/Gateway payload
+encryption remains a separate open implementation requirement. No live user data
+or Keychain reset was performed to qualify these changes.
+
+Qualification for this closure: real development FFI accepted an existing relative
+path and unlocked its Vault; after moving a synthetic key aside, the independent
+host reopened and Vault unlock returned typed `vault_unavailable`, without a new
+key. Both profile creation orders passed. Synthetic reset fixtures passed both
+profile scopes plus busy/unknown process and symlink refusal, preserving diagnostics.
+Default Rust workspace/doctests and both Go race/vet modes passed. The separate
+exact-a08919b Mac Debug arm64 build, strict signature check, bundled profile getter
+(2), iOS arm64 Debug simulator build and both Go builds passed; no app was launched.
+The later correction still requires its own Apple build qualification.

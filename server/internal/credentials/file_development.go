@@ -126,7 +126,7 @@ func (s *DevelopmentFileStore) Put(ctx context.Context, name, value string) erro
 		return err
 	}
 	if err := storage.WritePrivate(path, []byte(value)); err != nil {
-		return err
+		return ErrUnavailable
 	}
 	observed, err := readDevelopmentSecret(path)
 	if err != nil || observed != value {
@@ -149,7 +149,7 @@ func (s *DevelopmentFileStore) Delete(ctx context.Context, name string) error {
 		return err
 	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
+		return ErrUnavailable
 	}
 	directory, err := os.Open(s.root)
 	if err != nil {
@@ -157,7 +157,7 @@ func (s *DevelopmentFileStore) Delete(ctx context.Context, name string) error {
 	}
 	defer directory.Close()
 	if err := directory.Sync(); err != nil {
-		return storage.IndeterminateWrite{Cause: err}
+		return ErrUnavailable
 	}
 	return ctx.Err()
 }

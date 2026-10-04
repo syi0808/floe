@@ -10,16 +10,19 @@ Quit the client before opening that profile from the CLI.
 From the repository root:
 
 ```sh
-database="$HOME/Library/Containers/app.floe.floeClient/Data/Library/Application Support/app.floe.floeClient/people/00000000-0000-4000-8000-000000000001/floe.db"
+database="$HOME/Library/Containers/app.floe.floeClient/Data/Library/Application Support/app.floe.floeClient/development-storage/client/people/00000000-0000-4000-8000-000000000001/floe.db"
 ./scripts/floe-cli.sh --database "$database" --prompt '오늘 일정 요약해줘'
 ./scripts/floe-cli.sh --database "$database"
 ```
 
 Select the actual profile explicitly; the CLI does not discover, create, reset or
 copy profiles. It reads the existing device identity and unlocks the existing
-Vault through its exact Keychain slot. The normal single-host Vault lock remains
+Vault through the build-selected custody provider. The default script uses the
+isolated development profile and private file keys. For an existing production
+profile, pass `--production` before the CLI arguments; this builds Release with
+OS keyring custody. A profile mismatch fails closed. The normal single-host Vault lock remains
 authoritative. Do not run the client and CLI concurrently against one profile.
-macOS may ask you to authorize this executable's access to the existing Keychain
+In production mode, macOS may ask you to authorize this executable's access to the existing Keychain
 items, including again after a rebuild changes its ad-hoc code identity. Handle
 that prompt locally; never paste a password into the conversation or CLI input.
 
@@ -29,7 +32,7 @@ and native artifact cache helper; Flutter is not built or launched. After buildi
 the executable can be called directly:
 
 ```sh
-target/cli/FloeDebugCLI.app/Contents/MacOS/floe_cli --database "$database" --prompt '안녕'
+target/cli/development/FloeDebugCLI.app/Contents/MacOS/floe_cli --database "$database" --prompt '안녕'
 ```
 
 Every launch creates a separate conversation session unless `--session UUID` is
@@ -93,7 +96,9 @@ intrinsic local Tasks/Memory do not need native acquisition registration.
 
 The [active refactor gates](../plans/2026-10-02-architecture-refactor.md#8-verification-policy-and-final-evidence)
 control compilation, build and behavioral exercises. At the authorized build gate,
-compile this retained example with `cargo build -p floe-app --example floe_cli`.
+compile the development example with
+`cargo build -p floe-app --example floe_cli --no-default-features --features development-storage`.
+The production variant uses `cargo build -p floe-app --example floe_cli --release`.
 `./scripts/floe-cli.sh --help` also builds and signs its native bundle before
 printing help; it is not a read-only source check. The removed example test suite
 is reconstructed only in S3.

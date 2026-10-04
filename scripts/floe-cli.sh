@@ -8,16 +8,27 @@ if [[ "$(uname -s)" != Darwin ]]; then
   exit 1
 fi
 
-cargo build -p floe-app --example floe_cli >&2
-BUNDLE="${ROOT}/target/cli/FloeDebugCLI.app"
+STORAGE_PROFILE="development"
+BUILD_PROFILE="debug"
+CARGO_FLAGS=(--no-default-features --features development-storage)
+if [[ "${1:-}" == "--production" ]]; then
+  STORAGE_PROFILE="production"
+  BUILD_PROFILE="release"
+  CARGO_FLAGS=(--release)
+  shift
+fi
+cargo build -p floe-app --example floe_cli "${CARGO_FLAGS[@]}" >&2
+BUNDLE="${ROOT}/target/cli/${STORAGE_PROFILE}/FloeDebugCLI.app"
 mkdir -p "${BUNDLE}/Contents/MacOS" "${BUNDLE}/Contents/Frameworks"
-if ! cmp -s target/debug/examples/floe_cli "${BUNDLE}/Contents/MacOS/floe_cli"; then
-  cp target/debug/examples/floe_cli "${BUNDLE}/Contents/MacOS/floe_cli"
+if ! cmp -s target/${BUILD_PROFILE}/examples/floe_cli "${BUNDLE}/Contents/MacOS/floe_cli"; then
+  cp target/${BUILD_PROFILE}/examples/floe_cli "${BUNDLE}/Contents/MacOS/floe_cli"
 fi
 cp tools/cli/Info.plist "${BUNDLE}/Contents/Info.plist"
 
+export CONFIGURATION="Debug"
+[[ "$STORAGE_PROFILE" == "production" ]] && export CONFIGURATION="Release"
 export SRCROOT="${ROOT}/apps/client/macos"
-export DERIVED_FILE_DIR="${ROOT}/target/cli/native-cache"
+export DERIVED_FILE_DIR="${ROOT}/target/cli/${STORAGE_PROFILE}/native-cache"
 export TARGET_BUILD_DIR="${BUNDLE}/Contents"
 export FRAMEWORKS_FOLDER_PATH=Frameworks
 zsh "${SRCROOT}/build_native.sh" >&2

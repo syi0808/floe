@@ -155,29 +155,9 @@ pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, 
                 }
             }
         }
-        #[cfg(feature = "development-storage")]
-        {
-            let root = std::path::PathBuf::from(format!(
-                "{}.agent-vaults",
-                installation.database_path().display()
-            ));
-            let person = floe_kernel::PersonId(installation.identity().person_id());
-            let inspection = execute_on_runtime(&runtime, async move {
-                match crate::storage_profile::vault_keys(&root) {
-                    Ok(keys) => floe_vault::inspect_existing_vault(&root, person, &keys).await,
-                    Err(failure) => floe_vault::VaultOpenInspection::Unavailable(failure),
-                }
-            });
-            if !matches!(
-                inspection,
-                floe_vault::VaultOpenInspection::Absent
-                    | floe_vault::VaultOpenInspection::Compatible
-            ) {
-                return Err(AppOpenError::Runtime(
-                    "development Vault could not open; its data and key were preserved".into(),
-                ));
-            }
-        }
+        // Development mirrors Release: a bad encrypted Vault must not block
+        // the independent product host. VaultBridge owns presence/open checks
+        // and exposes typed failures without reset or replacement keys.
         break store;
     };
     installation.complete().map_err(installation_error)?;
@@ -263,7 +243,13 @@ fn compose(
         core: core.clone(),
         local_context: local_context.clone(),
         #[cfg(unix)]
-        agent_vault: vault_lifecycle::VaultBridge::new(path, core, local_context),
+        agent_vault: vault_lifecycle::VaultBridge::new(
+            database
+                .to_str()
+                .ok_or(AppOpenError::Host(HostError::IdentityUnavailable))?,
+            core,
+            local_context,
+        ),
     };
     AppHost::with_caller(services, caller).map_err(AppOpenError::Host)
 }
