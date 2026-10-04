@@ -369,6 +369,7 @@ impl ConnectionsService {
             if self
                 .access
                 .review_inapplicability(&review)
+                .await
                 .map_err(ConnectionsCommandFailure::NotAdmitted)?
                 .is_some()
             {
@@ -968,7 +969,7 @@ impl ConnectionsService {
                         .access
                         .inspect_review(actor, reference.clone(), scope)
                         .await?;
-                    if let Some(reason) = self.access.review_inapplicability(&review)? {
+                    if let Some(reason) = self.access.review_inapplicability(&review).await? {
                         return self
                             .abort_inapplicable_review(actor, operation, reason, scope)
                             .await;
@@ -1060,7 +1061,7 @@ impl ConnectionsService {
             None => {
                 let reference = operation.review.clone().ok_or(AgentFailure::Conflict)?;
                 let review = self.access.inspect_review(actor, reference, scope).await?;
-                if let Some(reason) = self.access.review_inapplicability(&review)? {
+                if let Some(reason) = self.access.review_inapplicability(&review).await? {
                     self.abort_inapplicable_review(actor, operation, reason, scope)
                         .await
                 } else {
@@ -1078,7 +1079,8 @@ impl ConnectionsService {
     ) -> Result<SourceOperationRecord, AgentFailure> {
         let reason = match reason {
             floe_access::ReviewInapplicability::Expired => SourceAbortReason::ReviewExpired,
-            floe_access::ReviewInapplicability::PolicyChanged => SourceAbortReason::ReviewChanged,
+            floe_access::ReviewInapplicability::PolicyChanged
+            | floe_access::ReviewInapplicability::GrantChanged => SourceAbortReason::ReviewChanged,
         };
         match self
             .access

@@ -665,7 +665,7 @@ impl AccessService {
             Ok(review)
         })
     }
-    pub fn review_inapplicability(
+    pub async fn review_inapplicability(
         &self,
         review: &ConnectionReview,
     ) -> Result<Option<crate::ReviewInapplicability>, AgentFailure> {
@@ -676,9 +676,16 @@ impl AccessService {
         if review.policy_digest != consumer_policy_digest(self.consumers.as_ref())? {
             return Ok(Some(crate::ReviewInapplicability::PolicyChanged));
         }
+        let snapshot = self
+            .repository
+            .snapshot(review.source.source.clone())
+            .await?;
+        if !crate::review_grants_current(review, &snapshot) {
+            return Ok(Some(crate::ReviewInapplicability::GrantChanged));
+        }
         Ok(None)
     }
-    fn validate_review_actor(
+    async fn validate_review_actor(
         &self,
         actor: &OwnerActor,
         review: &ConnectionReview,
@@ -686,7 +693,7 @@ impl AccessService {
         review.validate()?;
         if review.person_id != actor.person_id
             || review.device_id != actor.device_id
-            || self.review_inapplicability(review)?.is_some()
+            || self.review_inapplicability(review).await?.is_some()
         {
             return Err(AgentFailure::PolicyDenied);
         }
@@ -740,7 +747,7 @@ impl AccessService {
                 };
             }
             let review = self.inspect_review(actor, reference.clone(), scope).await?;
-            self.validate_review_actor(actor, &review)?;
+            self.validate_review_actor(actor, &review).await?;
             if review.source != reservation.source {
                 return Err(AgentFailure::Conflict);
             }

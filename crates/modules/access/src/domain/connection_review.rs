@@ -442,6 +442,43 @@ pub struct GrantSnapshot {
     pub grants: Vec<DataAccessGrant>,
 }
 
+/// Shared expectation predicate for fresh review admission and transactional commit.
+pub fn review_grants_current(review: &ConnectionReview, snapshot: &GrantSnapshot) -> bool {
+    review.source.source == snapshot.source
+        && review.views.iter().all(|view| {
+            if view.successor.authority_owner() != snapshot.authority_owner {
+                return false;
+            }
+            let matching = snapshot
+                .grants
+                .iter()
+                .filter(|grant| {
+                    grant.state() != GrantState::Revoked
+                        && grant.scope().resources().contains(view.expected.resource())
+                })
+                .collect::<Vec<_>>();
+            match (&view.expected, matching.as_slice()) {
+                (ExpectedGrant::Absent { .. }, []) => !snapshot
+                    .grants
+                    .iter()
+                    .any(|grant| grant.id() == view.successor.id()),
+                (
+                    ExpectedGrant::Present {
+                        grant_id,
+                        authority,
+                        ..
+                    },
+                    [current],
+                ) => {
+                    current.id() == *grant_id
+                        && current.authority() == *authority
+                        && view.current_processing.as_ref() == Some(current.scope().processing())
+                }
+                _ => false,
+            }
+        })
+}
+
 pub fn validate_commit(
     command: &GrantCommit,
     review: Option<&ConnectionReview>,
@@ -470,22 +507,8 @@ pub fn validate_commit(
             {
                 return Err(AgentFailure::Conflict);
             }
-            for view in &review.views {
-                if let ExpectedGrant::Present {
-                    grant_id,
-                    authority,
-                    ..
-                } = &view.expected
-                {
-                    let current = snapshot
-                        .grants
-                        .iter()
-                        .find(|grant| grant.id() == *grant_id && grant.authority() == *authority)
-                        .ok_or(AgentFailure::Conflict)?;
-                    if view.current_processing.as_ref() != Some(current.scope().processing()) {
-                        return Err(AgentFailure::Conflict);
-                    }
-                }
+            if !review_grants_current(review, snapshot) {
+                return Err(AgentFailure::Conflict);
             }
         }
         (GrantCommitKind::PauseObserve, None) => {
@@ -777,4 +800,5 @@ impl ProjectionReviewOrigin {
 pub enum ReviewInapplicability {
     Expired,
     PolicyChanged,
+    GrantChanged,
 }

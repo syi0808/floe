@@ -940,8 +940,13 @@ impl ConnectionsService {
         }
         operation.remote = observed.reference;
         operation.connection_id = Some(observed.connection_id.clone());
+        let management_launch = retain_valid_launch(
+            operation.snapshot.launch_action.as_ref(),
+            observed.management_launch,
+            Utc::now(),
+        );
         operation.snapshot.launch_action = if operation.cancellation_command.is_none() {
-            observed.management_launch
+            management_launch
         } else {
             None
         };
@@ -2052,19 +2057,21 @@ impl ConnectionsService {
                 );
                 match service.refresh_integrations(&actor, &round).await {
                     Ok(()) => {
-                        if lease
-                            .finish_if_current(&service.catalog_dirty, observed_dirty)
-                            .unwrap_or(false)
-                        {
-                            break;
+                        match lease.finish_if_current(&service.catalog_dirty, observed_dirty) {
+                            Ok(true) => break,
+                            Ok(false) => continue,
+                            Err(_) => {}
                         }
-                        continue;
                     }
                     Err(
                         AgentFailure::VaultUnavailable
                         | AgentFailure::VaultLocked
                         | AgentFailure::PolicyDenied,
-                    ) => break,
+                    ) => match lease.finish_if_current(&service.catalog_dirty, observed_dirty) {
+                        Ok(true) => break,
+                        Ok(false) => continue,
+                        Err(_) => {}
+                    },
                     Err(_) => {}
                 }
                 tokio::select! {_=scope.cancellation().cancelled()=>break,_=tokio::time::sleep(std::time::Duration::from_secs(10))=>{}}
@@ -3170,5 +3177,23 @@ impl Drop for JobLease {
         if let Ok(mut jobs) = self.cancellations.lock() {
             jobs.remove(&self.id);
         }
+    }
+}
+
+fn retain_valid_launch(
+    previous: Option<&ValidatedManagementLaunch>,
+    next: Option<ValidatedManagementLaunch>,
+    now: chrono::DateTime<Utc>,
+) -> Option<ValidatedManagementLaunch> {
+    match (previous, next) {
+        (Some(previous), Some(next))
+            if previous.action_ref == next.action_ref
+                && previous.purpose == next.purpose
+                && previous.validated_url == next.validated_url
+                && previous.expires_at > now =>
+        {
+            Some(previous.clone())
+        }
+        (_, next) => next,
     }
 }

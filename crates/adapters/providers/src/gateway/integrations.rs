@@ -73,7 +73,27 @@ impl GatewayIntegrationAdapter {
             .store
             .load(&expected.person_id, &expected.device_id)
             .await
-            .map_err(|_| IntegrationError::ForeignIdentity)?
+            .map_err(|error| match error {
+                super::credentials::GatewayCredentialError::Conflict => IntegrationError::Conflict,
+                super::credentials::GatewayCredentialError::Locked
+                | super::credentials::GatewayCredentialError::Unavailable => {
+                    IntegrationError::Unavailable
+                }
+                super::credentials::GatewayCredentialError::Timeout => {
+                    IntegrationError::DeadlineExceeded
+                }
+                super::credentials::GatewayCredentialError::Cancelled => {
+                    IntegrationError::Cancelled
+                }
+                super::credentials::GatewayCredentialError::Indeterminate => {
+                    IntegrationError::Unavailable
+                }
+                super::credentials::GatewayCredentialError::Malformed
+                | super::credentials::GatewayCredentialError::Unverified
+                | super::credentials::GatewayCredentialError::ForeignIdentity => {
+                    IntegrationError::ForeignIdentity
+                }
+            })?
             .ok_or(IntegrationError::Unavailable)?;
         if &connection.binding != expected {
             return Err(IntegrationError::ForeignIdentity);
