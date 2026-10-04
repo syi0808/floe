@@ -517,7 +517,10 @@ fn require_fresh_root(root: &Path) -> Result<(), NativeInstallationError> {
         match entry.file_name().to_str() {
             Some(LOCK) => {}
             Some(".DS_Store") if regular_file(&entry.path())?.is_some() => {}
-            Some("diagnostics" | "recovery") if directory_exists(&entry.path())? => {}
+            // Reserved auxiliary namespaces are not production installations.
+            // Their files are never read, adopted, reset or moved by this path.
+            Some("diagnostics" | "recovery" | "development-storage" | "FloeDevelopmentNative")
+                if directory_exists(&entry.path())? => {}
             Some("people") if directory_exists(&entry.path())? => {
                 if !directory_empty(&entry.path())? {
                     return Err(NativeInstallationError::Incomplete);

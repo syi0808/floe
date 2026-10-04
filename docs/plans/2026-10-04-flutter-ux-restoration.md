@@ -376,3 +376,5 @@ Qualification completed on the root's isolated execution environment:
 - Real Release and mixed-feature compile attempts rejected development custody with their intended guards.
 
 Disposable probe sources/logs are retained outside the repository; permanent S3 reconstruction remains deferred. macOS/iOS compilation, source-only adversarial review of the new custody implementation, live Apple startup and full production encryption coverage are still distinct pending gates. Earlier architecture review did not cover this code. Existing user's app/server/data/logs were not touched by these probes.
+
+Root's post-checkpoint coexistence probe found that a development-only auxiliary directory made the unchanged production fresh-root validator reject a first production installation. The correction reserves only the known development auxiliary directory names alongside diagnostics/recovery; it does not read/adopt their contents, follow symlinks or move them during recovery. The same-base development-first/production-first sequences are now explicit qualification cases, separate from rejecting a production binary pointed directly at a marked development root.

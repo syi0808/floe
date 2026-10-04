@@ -8,6 +8,7 @@ import (
 	"floe/server/internal/storage"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 func DefaultDataDirectory(base string) string { return filepath.Join(base, "FloeServerDevelopment") }
@@ -26,6 +27,10 @@ func profileStore(directory string) (credentials.Store, error) {
 	}
 	info, err := os.Lstat(directory)
 	if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
+		return nil, invalid
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Geteuid() {
 		return nil, invalid
 	}
 	marker := filepath.Join(directory, "floe-development-profile")
