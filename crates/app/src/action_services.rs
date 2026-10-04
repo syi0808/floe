@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::{AgentFailure, AppComposition, CallerContext};
 pub use floe_actions::{
     ActionAuthorityMode, ActionDecisionKind, ActionDestinationChoice, ActionIntent,
-    ActionReviewRef, ActionSnapshot, ActionsAuthority, ActionsPage,
+    ActionProposalPreview, ActionReviewRef, ActionSnapshot, ActionsAuthority, ActionsPage,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -34,7 +34,7 @@ pub enum ActionsCommand {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ActionsQuery {
     Destinations,
-    ProposalDestinations {
+    ProposalPreview {
         receipt: floe_agent_contract::TaskExecutionReceiptRef,
         artifact_id: Uuid,
     },
@@ -57,6 +57,7 @@ pub enum ActionsCommandResult {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ActionsQueryResult {
     Destinations(Vec<ActionDestinationChoice>),
+    ProposalPreview(ActionProposalPreview),
     Authority(ActionsAuthority),
     Action(ActionSnapshot),
     Page(ActionsPage),
@@ -159,14 +160,14 @@ impl ActionsQueries for AppComposition {
                     .destinations(&actor, &scope)
                     .await
                     .map(ActionsQueryResult::Destinations),
-                ActionsQuery::ProposalDestinations {
+                ActionsQuery::ProposalPreview {
                     receipt,
                     artifact_id,
                 } => owners
                     .actions
-                    .proposal_destinations(&actor, receipt, artifact_id, &scope)
+                    .proposal_preview(&actor, receipt, artifact_id, &scope)
                     .await
-                    .map(ActionsQueryResult::Destinations),
+                    .map(ActionsQueryResult::ProposalPreview),
                 ActionsQuery::Authority => owners
                     .actions
                     .inspect_authority(&actor, &scope)

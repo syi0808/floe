@@ -15,10 +15,10 @@ final class CalendarActionFacade implements CalendarActionGateway {
       _gateway.loadDestinations();
 
   @override
-  Future<List<ActionDestinationChoice>> loadProposalDestinations(
+  Future<ActionProposalPreview> loadProposalPreview(
     TaskExecutionReceiptReference receipt,
     String artifactId,
-  ) => _gateway.loadProposalDestinations(receipt, artifactId);
+  ) => _gateway.loadProposalPreview(receipt, artifactId);
 
   @override
   Future<ActionAuthority> loadAuthority() => _gateway.loadAuthority();

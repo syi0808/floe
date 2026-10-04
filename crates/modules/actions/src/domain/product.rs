@@ -98,6 +98,18 @@ pub struct ActionDestinationChoice {
     pub label: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ActionProposalPreview {
+    Ready {
+        title: String,
+        schedule: floe_day::TimedSchedule,
+        destinations: Vec<ActionDestinationChoice>,
+    },
+    Existing {
+        action: ActionSnapshot,
+    },
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ActionEffectSummary {

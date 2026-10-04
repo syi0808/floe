@@ -26,23 +26,36 @@ impl ActionsService {
     }
     /// A proposal can select only current writable destinations represented by
     /// its authenticated Calendar contributor. Listing never admits an Action.
-    pub async fn proposal_destinations(
+    pub async fn proposal_preview(
         &self,
         actor: &OwnerActor,
         receipt: floe_agent_contract::TaskExecutionReceiptRef,
         artifact_id: Uuid,
         scope: &ExecutionScope,
-    ) -> Result<Vec<ActionDestinationChoice>, AgentFailure> {
+    ) -> Result<ActionProposalPreview, AgentFailure> {
         self.admit_actor(actor, scope)?;
         self.repository.read_authority(actor.person_id).await?;
+        let seed = ActionOrigin::proposal_identity_seed(actor.person_id, &receipt, artifact_id)?;
+        let id = action_uuid(b"floe.actions.action.v1\0", actor.person_id, seed);
+        if let Some(record) = self.repository.get(actor.person_id, id).await? {
+            self.validate_record_actor(actor, &record)?;
+            if !matches!(&record.origin, ActionOrigin::Expert { evidence_ref, artifact_id: stored, .. }
+                if evidence_ref == &receipt && *stored == artifact_id)
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            return Ok(ActionProposalPreview::Existing {
+                action: self.project(&record)?,
+            });
+        }
         let evidence = self
             .proposal_evidence(actor, &receipt, artifact_id, scope)
             .await?;
-        Self::proposal_schedule(actor, &evidence, self.clock.now())?;
+        let (schedule, _) = Self::proposal_schedule(actor, &evidence, self.clock.now())?;
         self.repository
             .validate_proposal_coverage(actor.person_id, &evidence.coverage)
             .await?;
-        Ok(self
+        let destinations = self
             .destination_candidates(actor, scope)
             .await?
             .into_iter()
@@ -51,7 +64,12 @@ impl ActionsService {
                     && Self::dependency_matches_fence(&evidence.dependency, fence)
             })
             .map(|(choice, _, _)| choice)
-            .collect())
+            .collect();
+        Ok(ActionProposalPreview::Ready {
+            title: super::EXPERT_PROPOSAL_TITLE.to_owned(),
+            schedule,
+            destinations,
+        })
     }
 
     pub(super) async fn resolve_destination(

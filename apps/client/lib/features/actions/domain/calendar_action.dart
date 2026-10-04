@@ -1065,3 +1065,63 @@ void _validateDestinationLabel(String value) {
     throw const FormatException('Invalid Action destination label.');
   }
 }
+
+sealed class ActionProposalPreview {
+  const ActionProposalPreview();
+  factory ActionProposalPreview.fromJson(Map<String, dynamic> json) {
+    switch (json['kind']) {
+      case 'ready':
+        _expectKeys(json, const {'kind', 'title', 'schedule', 'destinations'});
+        final title = _string(json['title'], 'proposal.title');
+        _validateNewTitle(title);
+        final raw = json['destinations'];
+        if (raw is! List || raw.length > 256)
+          throw const FormatException('Invalid proposal choices.');
+        final choices = raw
+            .map(
+              (value) => ActionDestinationChoice.fromJson(
+                Map<String, dynamic>.from(value as Map),
+              ),
+            )
+            .toList();
+        if (choices.map((value) => value.destinationRef).toSet().length !=
+            choices.length)
+          throw const FormatException('Duplicate proposal choice.');
+        final schedule = ActionSchedule.fromJson(
+          Map<String, dynamic>.from(json['schedule'] as Map),
+        );
+        schedule.validateNewAction();
+        return ReadyActionProposal(
+          title: title,
+          schedule: schedule,
+          destinations: List.unmodifiable(choices),
+        );
+      case 'existing':
+        _expectKeys(json, const {'kind', 'action'});
+        final action = CalendarAction.fromJson(
+          Map<String, dynamic>.from(json['action'] as Map),
+        );
+        if (action.origin != CalendarActionOrigin.expert)
+          throw const FormatException('Invalid proposal action origin.');
+        return ExistingActionProposal(action);
+      default:
+        throw const FormatException('Invalid proposal preview.');
+    }
+  }
+}
+
+final class ReadyActionProposal extends ActionProposalPreview {
+  const ReadyActionProposal({
+    required this.title,
+    required this.schedule,
+    required this.destinations,
+  });
+  final String title;
+  final ActionSchedule schedule;
+  final List<ActionDestinationChoice> destinations;
+}
+
+final class ExistingActionProposal extends ActionProposalPreview {
+  const ExistingActionProposal(this.action);
+  final CalendarAction action;
+}

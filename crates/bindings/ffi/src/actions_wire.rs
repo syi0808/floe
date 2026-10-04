@@ -24,7 +24,7 @@ pub(crate) fn handles_query(query: &dto::AppProductQueryDto) -> bool {
     matches!(
         query,
         ActionsDestinations {}
-            | ActionsProposalDestinations { .. }
+            | ActionsProposalPreview { .. }
             | ActionsAuthority {}
             | ActionsInspect { .. }
             | ActionsList { .. }
@@ -121,10 +121,10 @@ pub(crate) fn query(
     use dto::AppProductQueryDto as Q;
     let request = match query {
         Q::ActionsDestinations {} => floe_app::ActionsQuery::Destinations,
-        Q::ActionsProposalDestinations {
+        Q::ActionsProposalPreview {
             receipt,
             artifact_id,
-        } => floe_app::ActionsQuery::ProposalDestinations {
+        } => floe_app::ActionsQuery::ProposalPreview {
             receipt: task_receipt_in(receipt)?,
             artifact_id: artifact_id.get(),
         },
@@ -148,8 +148,7 @@ pub(crate) fn query(
         .map_err(agent_failure)?;
     match (request, result) {
         (
-            floe_app::ActionsQuery::Destinations
-            | floe_app::ActionsQuery::ProposalDestinations { .. },
+            floe_app::ActionsQuery::Destinations,
             floe_app::ActionsQueryResult::Destinations(values),
         ) => {
             let destinations = values
@@ -164,6 +163,37 @@ pub(crate) fn query(
             dto::validate_action_destination_choices(&destinations)
                 .map_err(|_| internal_error())?;
             Ok(dto::AppQueryResultDto::ActionsDestinations { destinations })
+        }
+        (
+            floe_app::ActionsQuery::ProposalPreview { .. },
+            floe_app::ActionsQueryResult::ProposalPreview(value),
+        ) => {
+            let preview = match value {
+                owner::ActionProposalPreview::Ready {
+                    title,
+                    schedule,
+                    destinations,
+                } => dto::ActionProposalPreviewDto::Ready {
+                    title,
+                    schedule: schedule_out(schedule),
+                    destinations: destinations
+                        .into_iter()
+                        .map(|value| {
+                            Ok(dto::ActionDestinationChoiceDto {
+                                destination_ref: uuid_out(value.destination_ref)?,
+                                label: value.label,
+                            })
+                        })
+                        .collect::<AppWireResult<Vec<_>>>()?,
+                },
+                owner::ActionProposalPreview::Existing { action } => {
+                    dto::ActionProposalPreviewDto::Existing {
+                        action: snapshot_out(action)?,
+                    }
+                }
+            };
+            preview.validate().map_err(|_| internal_error())?;
+            Ok(dto::AppQueryResultDto::ActionsProposalPreview { preview })
         }
         (floe_app::ActionsQuery::Authority, floe_app::ActionsQueryResult::Authority(value)) => {
             Ok(dto::AppQueryResultDto::ActionsAuthority {

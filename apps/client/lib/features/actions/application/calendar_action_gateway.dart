@@ -2,7 +2,7 @@ import 'package:floe_client/features/actions/domain/calendar_action.dart';
 
 abstract interface class CalendarActionGateway {
   Future<List<ActionDestinationChoice>> loadDestinations();
-  Future<List<ActionDestinationChoice>> loadProposalDestinations(
+  Future<ActionProposalPreview> loadProposalPreview(
     TaskExecutionReceiptReference receipt,
     String artifactId,
   );

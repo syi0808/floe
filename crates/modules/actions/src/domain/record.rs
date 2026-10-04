@@ -208,22 +208,27 @@ impl ActionOrigin {
                 evidence_ref,
                 artifact_id,
                 ..
-            } => {
-                evidence_ref.validate()?;
-                if artifact_id.is_nil() {
-                    return Err(AgentFailure::InvalidInput);
-                }
-                let digest = action_digest(
-                    b"floe.actions.expert-proposal.v1\0",
-                    &(person_id, evidence_ref, artifact_id),
-                )?;
-                let mut bytes = [0; 16];
-                bytes.copy_from_slice(&digest[..16]);
-                bytes[6] = (bytes[6] & 15) | 0x50;
-                bytes[8] = (bytes[8] & 63) | 0x80;
-                Ok(Uuid::from_bytes(bytes))
-            }
+            } => Self::proposal_identity_seed(person_id, evidence_ref, *artifact_id),
         }
+    }
+    pub(crate) fn proposal_identity_seed(
+        person_id: PersonId,
+        evidence_ref: &TaskExecutionReceiptRef,
+        artifact_id: Uuid,
+    ) -> Result<Uuid, AgentFailure> {
+        evidence_ref.validate()?;
+        if artifact_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let digest = action_digest(
+            b"floe.actions.expert-proposal.v1\0",
+            &(person_id, evidence_ref, artifact_id),
+        )?;
+        let mut bytes = [0; 16];
+        bytes.copy_from_slice(&digest[..16]);
+        bytes[6] = (bytes[6] & 15) | 0x50;
+        bytes[8] = (bytes[8] & 63) | 0x80;
+        Ok(Uuid::from_bytes(bytes))
     }
 }
 

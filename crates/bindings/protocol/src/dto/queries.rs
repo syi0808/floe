@@ -45,8 +45,8 @@ impl AppQueryDto {
 pub enum AppProductQueryDto {
     #[serde(rename = "actions.destinations")]
     ActionsDestinations {},
-    #[serde(rename = "actions.proposal.destinations")]
-    ActionsProposalDestinations {
+    #[serde(rename = "actions.proposal.preview")]
+    ActionsProposalPreview {
         receipt: super::TaskExecutionReceiptRefDto,
         artifact_id: super::UuidRefDto,
     },
@@ -121,7 +121,7 @@ impl AppProductQueryDto {
             Self::ActionsDestinations {}
             | Self::ActionsAuthority {}
             | Self::ActionsInspect { .. } => return Ok(()),
-            Self::ActionsProposalDestinations { receipt, .. } => return receipt.validate(),
+            Self::ActionsProposalPreview { receipt, .. } => return receipt.validate(),
             Self::ActionsList { limit, .. } => {
                 return if (1..=100).contains(limit) {
                     Ok(())
@@ -188,6 +188,10 @@ pub enum AppQueryResultDto {
     #[serde(rename = "actions.destinations")]
     ActionsDestinations {
         destinations: Vec<super::ActionDestinationChoiceDto>,
+    },
+    #[serde(rename = "actions.proposal.preview")]
+    ActionsProposalPreview {
+        preview: super::ActionProposalPreviewDto,
     },
     #[serde(rename = "actions.authority")]
     ActionsAuthority {

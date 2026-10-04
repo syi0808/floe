@@ -22,14 +22,20 @@ final class NativeCalendarActionGateway implements CalendarActionGateway {
       _destinations({'kind': 'actions.destinations'});
 
   @override
-  Future<List<ActionDestinationChoice>> loadProposalDestinations(
+  Future<ActionProposalPreview> loadProposalPreview(
     TaskExecutionReceiptReference receipt,
     String artifactId,
-  ) => _destinations({
-    'kind': 'actions.proposal.destinations',
-    'receipt': receipt.toJson(),
-    'artifact_id': artifactId,
-  });
+  ) async {
+    final result = await _query({
+      'kind': 'actions.proposal.preview',
+      'receipt': receipt.toJson(),
+      'artifact_id': artifactId,
+    });
+    _expectResult(result, 'actions.proposal.preview', const {'preview'});
+    return ActionProposalPreview.fromJson(
+      _object(result['preview'], 'proposal preview'),
+    );
+  }
 
   Future<List<ActionDestinationChoice>> _destinations(
     Map<String, Object?> query,

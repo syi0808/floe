@@ -270,7 +270,7 @@ impl ActionsService {
                 let (schedule, expiry) = Self::proposal_schedule(actor, &evidence, now)?;
                 let effect = CalendarEffect::Create {
                     destination,
-                    title: "Focus time".to_owned(),
+                    title: super::EXPERT_PROPOSAL_TITLE.to_owned(),
                     // The verified proposal carries absolute instants, not a local
                     // wall-time recurrence. UTC preserves those instants without
                     // asking Flutter to invent a timezone for hidden evidence.

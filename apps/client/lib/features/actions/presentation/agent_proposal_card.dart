@@ -40,6 +40,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
   bool expanded = false;
   List<ActionDestinationChoice> destinations = const [];
   String? destinationRef;
+  ReadyActionProposal? proposalPreview;
   String? artifactId;
   ActionCommandReplay? pendingCommands;
   final Map<String, CalendarAction> actionsByIntent = {};
@@ -85,7 +86,6 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
         : ActionCommandReplay.forGateway(gateway);
     final proposals = this.proposals;
     artifactId = proposals.length == 1 ? proposals.single.id : null;
-    if (receiptMatches && gateway != null) unawaited(_loadDestinations());
   }
 
   @override
@@ -113,8 +113,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       submitting = false;
       loadingDestinations = false;
       destinationsLoaded = false;
-      if (receiptMatches && widget.controller.owners.actions != null)
-        unawaited(_loadDestinations());
+      proposalPreview = null;
     }
   }
 
@@ -128,12 +127,13 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
     setState(() {
       loadingDestinations = true;
       destinationsLoaded = false;
+      proposalPreview = null;
       destinations = const [];
       destinationRef = null;
       error = null;
     });
     try {
-      final values = await gateway.loadProposalDestinations(
+      final preview = await gateway.loadProposalPreview(
         receipt,
         selectedArtifact,
       );
@@ -143,10 +143,19 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
           artifactId != selectedArtifact)
         return;
       setState(() {
-        destinations = List.unmodifiable(values);
-        destinationRef = values.length == 1
-            ? values.single.destinationRef
-            : null;
+        switch (preview) {
+          case ReadyActionProposal():
+            proposalPreview = preview;
+            destinations = preview.destinations;
+            destinationRef = destinations.length == 1
+                ? destinations.single.destinationRef
+                : null;
+          case ExistingActionProposal():
+            actionsByIntent[_actionKey(receipt, selectedArtifact)] =
+                preview.action;
+            destinations = const [];
+            destinationRef = null;
+        }
         loadingDestinations = false;
         destinationsLoaded = true;
       });
@@ -264,8 +273,14 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
         return 'This proposal is not ready to submit yet.';
       }
       if (!receiptMatches) return 'This proposal could not be verified.';
-      if (error case final currentError?) return currentError.message;
+      if (error case final currentError?) {
+        return currentError.kind == CalendarActionErrorKind.conflict
+            ? 'Review this proposal and its source access again.'
+            : currentError.message;
+      }
       if (loadingDestinations) return strings.actionLoading;
+      if (!expanded) return 'Review before adding to your calendar.';
+      if (destinationRef != null) return 'Ready to add to your calendar.';
       return 'Choose where to add this proposal.';
     }
     return switch (action.status.state) {
@@ -356,7 +371,10 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
               FloeButton.outlined(
                 onPressed: submitting
                     ? null
-                    : () => setState(() => expanded = true),
+                    : () {
+                        setState(() => expanded = true);
+                        unawaited(_loadDestinations());
+                      },
                 child: const Text('Review proposal'),
               ),
             ] else ...[
@@ -382,6 +400,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                       destinations = const [];
                       destinationRef = null;
                       destinationsLoaded = false;
+                      proposalPreview = null;
                       loadingDestinations = false;
                     });
                     unawaited(_loadDestinations());
@@ -390,6 +409,13 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                       value == null ? strings.actionFormInvalid : null,
                 ),
               if (currentAction == null) ...[
+                if (proposalPreview case final preview?) ...[
+                  Text(preview.title, style: FloeType.title),
+                  Text(
+                    '${DateFormat.yMMMd(Localizations.localeOf(context).toLanguageTag()).add_jm().format(preview.schedule.startsAt.toLocal())} – ${DateFormat.yMMMd(Localizations.localeOf(context).toLanguageTag()).add_jm().format(preview.schedule.endsAt.toLocal())}',
+                  ),
+                  const SizedBox(height: 8),
+                ],
                 if (destinations.length == 1)
                   Text(
                     '${strings.actionDestination}: ${destinations.single.label}',
@@ -419,7 +445,8 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                         value == null ? strings.actionFormInvalid : null,
                   ),
                 const SizedBox(height: 8),
-                if (destinations.isEmpty &&
+                if (destinationsLoaded &&
+                    destinations.isEmpty &&
                     !loadingDestinations &&
                     error == null) ...[
                   const SizedBox(height: 8),
@@ -432,6 +459,8 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                   Text(
                     error!.isVaultLocked
                         ? 'Vault locked. Unlock it to submit this proposal.'
+                        : error!.kind == CalendarActionErrorKind.conflict
+                        ? 'This proposal or its source access changed. Review the source access or request a new proposal.'
                         : error!.message,
                   ),
                   FloeButton.text(
