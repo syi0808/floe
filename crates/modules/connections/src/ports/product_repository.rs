@@ -2,6 +2,13 @@ use crate::ConnectionsRecord;
 use floe_execution::BoxFuture;
 use floe_kernel::{AgentFailure, PersonId};
 use uuid::Uuid;
+/// A bounded observation page, ordered by canonical record UUID. A continuation
+/// means more records existed at this read; it is never a completeness claim.
+pub struct ConnectionsRecordPage {
+    pub records: Vec<ConnectionsRecord>,
+    pub next_after: Option<Uuid>,
+}
+
 pub trait ConnectionsProductRepository: Send + Sync {
     fn rejected_command<'a>(
         &'a self,
@@ -19,11 +26,12 @@ pub trait ConnectionsProductRepository: Send + Sync {
         person: PersonId,
         id: Uuid,
     ) -> BoxFuture<'a, Result<Option<ConnectionsRecord>, AgentFailure>>;
-    fn list<'a>(
+    fn list_page<'a>(
         &'a self,
         person: PersonId,
+        after: Option<Uuid>,
         limit: usize,
-    ) -> BoxFuture<'a, Result<Vec<ConnectionsRecord>, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<ConnectionsRecordPage, AgentFailure>>;
     /// Atomically admits the exact cancellation and fences its integration target.
     fn admit_cancellation<'a>(
         &'a self,

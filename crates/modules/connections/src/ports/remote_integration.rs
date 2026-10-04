@@ -29,8 +29,18 @@ pub struct IntegrationDescriptor {
     pub category: String,
     pub setup_kind: IntegrationSetupKind,
     pub state: crate::IntegrationState,
+    pub source_identity: Option<IntegrationSourceIdentity>,
     pub catalog_revision: u64,
     pub initial_selection: IntegrationSelection,
+}
+/// Catalog correlation only. It never grants source access or replaces signed
+/// source admission; it identifies which already-admitted local source to show.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntegrationSourceIdentity {
+    pub connection_id: ConnectionId,
+    pub execution_owner_id: floe_context_contract::ExecutionOwnerId,
+    pub source_authority: SourceAuthority,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(

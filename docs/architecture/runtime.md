@@ -283,3 +283,13 @@ provider adaptation, including Connecting and Error. Presentation service kinds
 are computed from target and connector identity, not mutable display labels;
 Flutter uses the safe kind for service-specific copy while capability decisions
 remain with Connections. A fresh setup review is admitted only from Available.
+
+Connections' product journal is observed through explicit ordered record-ID pages;
+overview and recovery consume continuation instead of treating a fixed prefix as
+complete history. Each owner scan retains a bounded page and checks its execution
+scope. This does not promise a cross-owner transaction snapshot. Integration/source
+presentation joins use catalog connection identity, execution owner and source
+incarnation/epoch, then load that exact already-admitted source. Gateway entries
+must also match the current paired credential binding. Catalog identity is display
+correlation, never source-access authority; identity-unverified remote entries do
+not attach a local source.

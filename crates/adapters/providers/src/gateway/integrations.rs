@@ -339,6 +339,7 @@ impl RemoteIntegrationPort for GatewayIntegrationAdapter {
                     category: connector_category(id).into(),
                     setup_kind,
                     state,
+                    source_identity: catalog_source_identity(&value)?,
                     catalog_revision: wire.revision,
                     initial_selection: IntegrationSelection::GatewayManaged,
                 });
@@ -513,6 +514,54 @@ fn validate_connector(id: &str) -> Result<(), IntegrationError> {
     } else {
         Ok(())
     }
+}
+fn catalog_source_identity(
+    value: &serde_json::Value,
+) -> Result<Option<IntegrationSourceIdentity>, IntegrationError> {
+    let Some(connection) = value.get("connection_id") else {
+        if ["execution_owner", "incarnation", "epoch"]
+            .iter()
+            .any(|field| value.get(field).is_some())
+        {
+            return Err(IntegrationError::InvalidResponse);
+        }
+        return Ok(None);
+    };
+    let connection_id = floe_context_contract::ConnectionId::try_new(
+        connection
+            .as_str()
+            .ok_or(IntegrationError::InvalidResponse)?,
+    )
+    .map_err(|_| IntegrationError::InvalidResponse)?;
+    let execution_owner_id = floe_context_contract::ExecutionOwnerId::try_new(
+        value["execution_owner"]
+            .as_str()
+            .ok_or(IntegrationError::InvalidResponse)?,
+    )
+    .map_err(|_| IntegrationError::InvalidResponse)?;
+    let incarnation = Uuid::parse_str(
+        value["incarnation"]
+            .as_str()
+            .ok_or(IntegrationError::InvalidResponse)?,
+    )
+    .map_err(|_| IntegrationError::InvalidResponse)?;
+    let epoch = value["epoch"]
+        .as_u64()
+        .and_then(std::num::NonZeroU64::new)
+        .ok_or(IntegrationError::InvalidResponse)?;
+    let source_authority = floe_context_contract::SourceAuthority::from_parts(incarnation, epoch)
+        .ok_or(IntegrationError::InvalidResponse)?;
+    if value["identity_unverified"]
+        .as_bool()
+        .ok_or(IntegrationError::InvalidResponse)?
+    {
+        return Ok(None);
+    }
+    Ok(Some(IntegrationSourceIdentity {
+        connection_id,
+        execution_owner_id,
+        source_authority,
+    }))
 }
 fn connector_category(id: &str) -> &'static str {
     if id.starts_with("calendar.") {

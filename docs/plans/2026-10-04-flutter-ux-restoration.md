@@ -456,3 +456,42 @@ installation files after failed admission, with no archive directory or reset.
 Missing-key typed Vault failure and both coexistence orders still pass. Default
 workspace/doctests, both FFI builds and architecture boundary checks passed. The
 removed preflight/reset API has no remaining crate caller or export.
+
+### Connections journal enumeration contract
+
+Before extracting read projections, replace the repository's silently truncated
+`list(person, 1024)` with explicit ascending record-ID pages. The storage adapter
+owns bounded decoding and continuation; a private owner-side scan checks scope,
+Person and monotonic progress while retaining only one 64-record page. Overview,
+forgotten-Gateway lookup and startup recovery consume to terminal continuation.
+This is an observation scan, not an atomic multi-owner snapshot: concurrent later
+commands remain owned by their admission/spawn path and a later overview can
+observe them. No scan may classify truncated history as complete. Cancellation or
+deadline fails explicitly, and pending recovery does not delete or duplicate
+external work. SourceRepository/pairing enumeration limits remain separate open
+contracts; do not claim this closes all recovery capacity gaps.
+
+The same Connections read-contract cutover now uses a catalog source identity
+(connection ID, execution owner and incarnation/epoch) instead of selecting the
+first local source with a matching connector name. Native entries obtain it from
+the exact native connection; the paired Gateway catalog already publishes these
+fields, which the adapter now preserves and validates. A projection attaches only
+an already-admitted matching local source. This metadata is not a grant or signed
+source-admission substitute. Cached Gateway entries also require the exact current
+paired binding, not just a cached Gateway UUID; stale entries cannot borrow a
+new enrollment's source display. No label-based or cross-Gateway join remains.
+
+Focused disposable fixtures passed: 1,030 encrypted product records survived
+checkpoint/reopen and returned in 17 ordered 64-record pages with no missing tail
+or duplicates; foreign Person, zero limit and terminal empty-page cases rejected
+or completed as specified. Pure source-correlation cases reject another device,
+another connection and another incarnation/epoch despite the same connector label.
+Gateway catalog parsing rejects partial/invalid identity and does not correlate an
+identity-unverified source. These fixtures remain external qualification evidence,
+not the deferred permanent S3 suite.
+
+The bounded enumeration/correlation checkpoint passed default workspace/doctests,
+development FFI build, actual Connections overview through that FFI and the static
+23-node/126-edge dependency check. No whole-screen or live-provider qualification
+is implied. Source/pairing operation enumeration and acquisition presentation remain
+open; this checkpoint fixes only the product-journal prefix and exact catalog join.

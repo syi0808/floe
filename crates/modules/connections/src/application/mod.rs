@@ -6,3 +6,5 @@ pub mod source_operation;
 pub mod gateway_pairing;
 
 pub mod product;
+
+mod product_records;

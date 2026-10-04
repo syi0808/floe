@@ -1248,16 +1248,17 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
             Ok(Some(record))
         })
     }
-    fn list<'a>(
+    fn list_page<'a>(
         &'a self,
         person: floe_kernel::PersonId,
+        after: Option<Uuid>,
         limit: usize,
-    ) -> BoxFuture<'a, Result<Vec<ConnectionsRecord>, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ConnectionsRecordPage, AgentFailure>> {
         Box::pin(async move {
             if person != self.person_id || limit == 0 || limit > 1024 {
                 return Err(AgentFailure::InvalidInput);
             }
-            let mut rows=self.connection()?.query("SELECT record_ref,revision,payload FROM connections_product_records WHERE person_id=? ORDER BY record_ref LIMIT ?",(person.to_string(),limit as i64)).await.map_err(storage)?;
+            let mut rows=self.connection()?.query("SELECT record_ref,revision,payload FROM connections_product_records WHERE person_id=? AND record_ref>? ORDER BY record_ref LIMIT ?",(person.to_string(),after.map(|id| id.to_string()).unwrap_or_default(),(limit + 1) as i64)).await.map_err(storage)?;
             let mut records = Vec::new();
             while let Some(row) = rows.next().await.map_err(storage)? {
                 let record: ConnectionsRecord =
@@ -1271,7 +1272,13 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
                 }
                 records.push(record)
             }
-            Ok(records)
+            let next_after = if records.len() > limit {
+                records.pop();
+                records.last().map(|record| record.record_ref)
+            } else {
+                None
+            };
+            Ok(ConnectionsRecordPage { records, next_after })
         })
     }
     fn admit_cancellation<'a>(

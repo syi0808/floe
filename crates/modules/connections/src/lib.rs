@@ -49,7 +49,7 @@ pub use ports::gateway_pairing::*;
 pub use ports::gateway_private::*;
 
 pub use domain::product::*;
-pub use ports::product_repository::ConnectionsProductRepository;
+pub use ports::product_repository::{ConnectionsProductRepository, ConnectionsRecordPage};
 pub use ports::remote_integration::*;
 
 pub use application::product::source_ref;

@@ -1,5 +1,6 @@
 //! Product projections and commands live with Connections. App supplies admitted
 //! actors and wires ports; it never reconstructs reviewed source authority.
+use super::product_records::ProductRecordScan;
 use crate::*;
 use chrono::{Duration, Utc};
 use floe_access::{ReviewRef, SourceObserveStatus, SourceProcessingChoice};
@@ -101,7 +102,8 @@ impl ConnectionsService {
                 return Ok(self.project_gateway(observed.summary().clone())?);
             }
         }
-        for record in self.products.list(actor.person_id, 1024).await? {
+        let mut records = ProductRecordScan::new(self.products.as_ref(), actor, scope);
+        while let Some(record) = records.next().await? {
             if let ConnectionsPayload::GatewayForgotten(summary) = record.payload {
                 if summary.gateway_ref == gateway_ref {
                     return Ok(summary);
@@ -211,7 +213,7 @@ impl ConnectionsService {
     ) -> Result<ConnectionsOverview, AgentFailure> {
         self.ensure_open()?;
         check(actor, scope)?;
-        let records = self.products.list(actor.person_id, 1024).await?;
+        let mut records = ProductRecordScan::new(self.products.as_ref(), actor, scope);
         let mut gateways = Vec::new();
         if let Some(observed) = self
             .gateways
@@ -223,7 +225,7 @@ impl ConnectionsService {
         }
         let mut integrations = Vec::new();
         let mut revision = 1u64;
-        for record in records {
+        while let Some(record) = records.next().await? {
             revision = revision.max(record.revision);
             match record.payload {
                 ConnectionsPayload::Integration(integration) => {
@@ -2119,7 +2121,8 @@ impl ConnectionsService {
     ) -> Result<(), AgentFailure> {
         self.ensure_open()?;
         check(actor, scope)?;
-        for record in self.products.list(actor.person_id, 1024).await? {
+        let mut records = ProductRecordScan::new(self.products.as_ref(), actor, scope);
+        while let Some(record) = records.next().await? {
             if record.device_id != actor.device_id {
                 continue;
             }
@@ -2264,6 +2267,11 @@ impl ConnectionsService {
                     } else {
                         IntegrationState::Unavailable
                     },
+                    source_identity: current.as_ref().map(|source| IntegrationSourceIdentity {
+                        connection_id: source.connection_id().clone(),
+                        execution_owner_id: source.execution_owner_id().clone(),
+                        source_authority: source.source_authority(),
+                    }),
                     catalog_revision: 1,
                     initial_selection: IntegrationSelection::GatewayManaged,
                 },
@@ -2721,33 +2729,38 @@ impl ConnectionsService {
         integration: &IntegrationRecord,
         scope: &ExecutionScope,
     ) -> Result<IntegrationSummary, AgentFailure> {
-        let mut source = None;
-        for candidate in self
-            .sources
-            .list_sources(actor.person_id, 512)
-            .await
-            .map_err(source_error)?
-        {
-            if candidate.connector_id() == &integration.descriptor.connector_id
-                && candidate.state() != SourceState::Disconnected
-            {
-                source = Some(self.source_summary(actor, &candidate, scope).await?);
-                break;
-            }
-        }
         let catalog_ready = match &integration.target {
-            IntegrationBinding::Device { .. } => true,
-            IntegrationBinding::Gateway { gateway_ref, .. } => {
-                *self
+            IntegrationBinding::Device { device_id } => device_id == &actor.device_id,
+            IntegrationBinding::Gateway {
+                gateway_ref,
+                binding,
+            } => {
+                let catalog_current = *self
                     .catalog_gateway
                     .lock()
                     .map_err(|_| AgentFailure::StorageUnavailable)?
-                    == Some(*gateway_ref)
+                    == Some(*gateway_ref);
+                catalog_current
+                    && matches!(self.gateways.current(actor.person_id, &actor.device_id).await.map_err(pairing_error)?,
+                    Some(GatewayObservation::Paired { summary, binding: current }) if summary.gateway_ref == *gateway_ref && current == *binding)
             }
         };
-        let state = if matches!(&integration.target, IntegrationBinding::Gateway { .. })
-            && !catalog_ready
-        {
+        let mut source = None;
+        if catalog_ready {
+            if let Some(identity) = &integration.descriptor.source_identity {
+                if let Some(candidate) = self
+                    .sources
+                    .load(actor.person_id, &identity.connection_id)
+                    .await
+                    .map_err(source_error)?
+                {
+                    if integration_source_matches(integration, &candidate) {
+                        source = Some(self.source_summary(actor, &candidate, scope).await?);
+                    }
+                }
+            }
+        }
+        let state = if !catalog_ready {
             IntegrationState::Unavailable
         } else {
             integration.descriptor.state
@@ -3184,4 +3197,23 @@ fn retain_valid_launch(
         }
         (_, next) => next,
     }
+}
+
+/// Display correlation only; source authority admission remains with Access.
+fn integration_source_matches(integration: &IntegrationRecord, source: &SourceConnection) -> bool {
+    let Some(identity) = &integration.descriptor.source_identity else {
+        return false;
+    };
+    let owner_matches = match &integration.target {
+        IntegrationBinding::Device { device_id } => {
+            identity.execution_owner_id.as_str() == floe_access::apple_execution_owner(device_id)
+        }
+        IntegrationBinding::Gateway { .. } => true,
+    };
+    owner_matches
+        && source.connection_id() == &identity.connection_id
+        && source.connector_id() == &integration.descriptor.connector_id
+        && source.execution_owner_id() == &identity.execution_owner_id
+        && source.source_authority() == identity.source_authority
+        && source.state() != SourceState::Disconnected
 }
