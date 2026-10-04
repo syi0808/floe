@@ -91,8 +91,8 @@ fn insert_key(entry: &Entry, key: &RootKey) -> Result<(), AgentFailure> {
     }
 }
 
-pub(crate) fn load_key(service: &str, account: &str) -> Result<RootKey, AgentFailure> {
-    read_key(&entry(service, account)?)
+pub(crate) fn load_key(service: &str, account: &str) -> Result<RootKey, VaultKeyReadFailure> {
+    read_key_classified(&entry(service, account).map_err(VaultKeyReadFailure::Unavailable)?)
 }
 pub(crate) fn create_key(service: &str, account: &str, key: &RootKey) -> Result<(), AgentFailure> {
     let slot = entry(service, account)?;

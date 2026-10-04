@@ -57,8 +57,16 @@ pub fn core_error(value: CoreError) -> ErrorDto {
 pub fn open_error(value: AppOpenError) -> ErrorDto {
     match value {
         AppOpenError::Host(host) => host_error(host),
-        AppOpenError::Runtime(message) | AppOpenError::Store(message) => {
-            error(ErrorCodeDto::Internal, message)
+        AppOpenError::Runtime(message) => error(ErrorCodeDto::Internal, message),
+        AppOpenError::Store { failure, message } => {
+            let mut value = error(ErrorCodeDto::Storage, message);
+            value
+                .metadata
+                .insert("reason_code".into(), failure.reason_code().into());
+            value
+                .metadata
+                .insert("stage".into(), "product_store_open".into());
+            value
         }
     }
 }

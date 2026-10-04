@@ -1,4 +1,4 @@
-use std::{fs::OpenOptions, path::Path, sync::Arc};
+use std::{fs::OpenOptions, io::Read, path::Path, sync::Arc};
 use turso::core::{Clock, IO};
 
 use turso::{Builder, Connection};
@@ -147,12 +147,20 @@ impl TursoStore {
                 storage_error(error)
             }
         })?;
-        let probe = std::fs::File::open(&path).map_err(storage_error)?;
+        let mut probe = std::fs::File::open(&path).map_err(storage_error)?;
         if !probe.metadata().map_err(storage_error)?.is_file() {
             return Err(unsupported_profile());
         }
         if probe.metadata().map_err(storage_error)?.len() < 16 {
             return Err(unsupported_profile());
+        }
+        let mut header = [0u8; 16];
+        probe.read_exact(&mut header).map_err(storage_error)?;
+        if &header == b"SQLite format 3\0" {
+            return Err(StoreError::new(
+                StoreErrorCode::UnsupportedSchema,
+                "previous plaintext product format is unsupported; existing data was preserved",
+            ));
         }
         let key = crate::product_keys::load(&path, &identity)?;
         let path = path

@@ -30,22 +30,36 @@ impl ProductStoreIdentity {
 }
 fn unavailable() -> StoreError {
     StoreError::new(
-        StoreErrorCode::Storage,
+        StoreErrorCode::ProductKeyUnavailable,
         "product store key unavailable; existing data was preserved",
     )
 }
 
+fn read_failure(error: crate::VaultKeyReadFailure) -> StoreError {
+    let (code, message) = match error {
+        crate::VaultKeyReadFailure::Missing => (
+            StoreErrorCode::ProductKeyMissing,
+            "product store key is missing; existing data was preserved",
+        ),
+        crate::VaultKeyReadFailure::Malformed => (
+            StoreErrorCode::ProductKeyMalformed,
+            "product store key is malformed; existing data was preserved",
+        ),
+        crate::VaultKeyReadFailure::Unavailable(_) => return unavailable(),
+    };
+    StoreError::new(code, message)
+}
 pub(crate) fn load(path: &Path, identity: &ProductStoreIdentity) -> Result<RootKey, StoreError> {
     #[cfg(feature = "development-storage")]
     {
         crate::vault::development_keys::read_file_key(parent(path)?, &file_name(identity))
-            .map_err(|_| unavailable())
+            .map_err(read_failure)
     }
     #[cfg(feature = "os-keyring")]
     {
         let _ = path;
         crate::vault::keyring::load_key("com.floe.product-store.v1", &identity.account())
-            .map_err(|_| unavailable())
+            .map_err(read_failure)
     }
 }
 pub(crate) fn create(path: &Path, identity: &ProductStoreIdentity) -> Result<RootKey, StoreError> {

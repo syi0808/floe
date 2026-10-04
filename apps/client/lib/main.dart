@@ -2,15 +2,12 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
 
-import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:floe_client/app/floe_app.dart';
-import 'package:floe_client/app/design_tokens.dart';
-import 'package:floe_client/app/floe_primitives.dart';
-import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/app/startup_view.dart';
 import 'package:floe_client/app/runtime/app_runtime.dart';
 import 'package:floe_client/features/day/infrastructure/app_wire_day_gateway.dart';
 import 'package:floe_client/infrastructure/native/eventkit_calendar_host.dart';
@@ -60,6 +57,7 @@ void main() {
 }
 
 Future<void> _start() async {
+  runApp(const FloeStartupApp.waiting());
   try {
     // App-lifetime objects are created once here; no feature owns them.
     final runtime = await AppRuntime.openDefault();
@@ -207,9 +205,7 @@ Future<void> _start() async {
       error: error,
       stackTrace: stackTrace,
     );
-    runApp(
-      _StartupErrorApp(message: '${error.toString()}\nError ID: $errorId'),
-    );
+    runApp(FloeStartupApp.failed('${error.toString()}\nError ID: $errorId'));
   }
 }
 
@@ -396,47 +392,3 @@ Map<String, dynamic> _personalPeopleResult(
   'resources': resources,
   'catalog_complete': catalogComplete,
 };
-
-class _StartupErrorApp extends StatelessWidget {
-  const _StartupErrorApp({required this.message});
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) => MaterialApp(
-    debugShowCheckedModeBanner: false,
-    theme: FloeTheme.light,
-    locale: const Locale('en'),
-    supportedLocales: AppLocalizations.supportedLocales,
-    localizationsDelegates: AppLocalizations.localizationsDelegates,
-    home: Builder(
-      builder: (context) => FloeScaffold(
-        body: Center(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: 480),
-            child: Padding(
-              padding: EdgeInsets.all(32),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.error_outline, size: 32),
-                  SizedBox(height: 16),
-                  Text(
-                    AppLocalizations.of(context).couldNotStartFloeCore,
-                    style: FloeType.title,
-                  ),
-                  SizedBox(height: 8),
-                  SelectableText(
-                    message,
-                    textAlign: TextAlign.center,
-                    style: FloeType.body,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
-}

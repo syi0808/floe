@@ -55,11 +55,11 @@ pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
         floe_kernel::PersonId(identity.person_id),
         identity.device_id.clone(),
     )
-    .map_err(|error| AppOpenError::Store(error.to_string()))?;
+    .map_err(storage_error)?;
     let store = execute_on_runtime(&runtime, async move {
         floe_vault::TursoStore::open_existing(&database_path, storage_identity).await
     })
-    .map_err(|error| AppOpenError::Store(error.to_string()))?;
+    .map_err(storage_error)?;
     compose(
         path,
         identity,
@@ -82,10 +82,11 @@ pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, 
         floe_kernel::PersonId(installation.identity().person_id()),
         installation.identity().device_id().to_owned(),
     )
-    .map_err(|error| AppOpenError::Store(error.to_string()))?;
+    .map_err(storage_error)?;
     let store = execute_on_runtime(&runtime, async move {
         match admission {
-            floe_provider_adapters::LocalDatabaseAdmission::Existing => {
+            floe_provider_adapters::LocalDatabaseAdmission::Existing
+            | floe_provider_adapters::LocalDatabaseAdmission::InspectUnfinishedCreation => {
                 floe_vault::TursoStore::open_existing(&database_path, storage_identity).await
             }
             floe_provider_adapters::LocalDatabaseAdmission::CreateNew => {
@@ -93,7 +94,24 @@ pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, 
             }
         }
     })
-    .map_err(|error| AppOpenError::Store(error.to_string()))?;
+    .map_err(|error| {
+        if admission == floe_provider_adapters::LocalDatabaseAdmission::InspectUnfinishedCreation
+            && matches!(
+                error.code,
+                floe_vault::StoreErrorCode::UnsupportedSchema
+                    | floe_vault::StoreErrorCode::StoredDataCorrupt
+            )
+        {
+            AppOpenError::Store {
+                failure: AppStorageFailure::IncompleteCreation,
+                message:
+                    "product store creation is incomplete; existing files and keys were preserved"
+                        .into(),
+            }
+        } else {
+            storage_error(error)
+        }
+    })?;
     // Every build preserves failed admissions. VaultBridge alone owns typed
     // Vault lifecycle failures; a build profile is never reset authority.
     installation.complete().map_err(installation_error)?;
@@ -166,7 +184,7 @@ fn compose(
     execute_on_runtime(&runtime, async move {
         activating_day.activate(&actor, &scope).await
     })
-    .map_err(|error| AppOpenError::Store(error.to_string()))?;
+    .map_err(|error| AppOpenError::Runtime(error.to_string()))?;
     let core = Arc::new(crate::FloeCore {
         store,
         installation_root,
@@ -194,5 +212,50 @@ fn compose(
 pub enum AppOpenError {
     Host(HostError),
     Runtime(String),
-    Store(String),
+    Store {
+        failure: AppStorageFailure,
+        message: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum AppStorageFailure {
+    KeyMissing,
+    KeyMalformed,
+    KeyUnavailable,
+    IncompleteCreation,
+    UnsupportedFormat,
+    StoredDataInvalid,
+    Conflict,
+    Unavailable,
+}
+impl AppStorageFailure {
+    pub fn reason_code(self) -> &'static str {
+        match self {
+            Self::KeyMissing => "product_key_missing",
+            Self::KeyMalformed => "product_key_malformed",
+            Self::KeyUnavailable => "product_key_unavailable",
+            Self::IncompleteCreation => "product_creation_incomplete",
+            Self::UnsupportedFormat => "product_format_unsupported",
+            Self::StoredDataInvalid => "product_data_invalid",
+            Self::Conflict => "product_store_conflict",
+            Self::Unavailable => "product_store_unavailable",
+        }
+    }
+}
+fn storage_error(error: floe_vault::StoreError) -> AppOpenError {
+    use floe_vault::StoreErrorCode as C;
+    let failure = match error.code {
+        C::ProductKeyMissing => AppStorageFailure::KeyMissing,
+        C::ProductKeyMalformed => AppStorageFailure::KeyMalformed,
+        C::ProductKeyUnavailable => AppStorageFailure::KeyUnavailable,
+        C::UnsupportedSchema => AppStorageFailure::UnsupportedFormat,
+        C::StoredDataCorrupt | C::Validation => AppStorageFailure::StoredDataInvalid,
+        C::Conflict => AppStorageFailure::Conflict,
+        _ => AppStorageFailure::Unavailable,
+    };
+    AppOpenError::Store {
+        failure,
+        message: error.to_string(),
+    }
 }

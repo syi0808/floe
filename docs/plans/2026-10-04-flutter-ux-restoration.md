@@ -587,7 +587,7 @@ overview no longer accumulates every historical Forgotten summary or old Gateway
 integration. Exact historical command/Gateway lookup remains available for replay.
 
 The suggestion to run all recovery branches after corruption is not applied
-blindly: ReadyGeneration aborts and drains the entire generation on activation
+blindly: ReadyGeneration fences and seals the failed generation on activation
 failure, so spawning more independent branches before returning the same error
 would not establish recovery. Preserve fail-closed corruption semantics; a bounded
 independent recovery/availability design belongs to the explicit command-lifecycle
@@ -636,3 +636,41 @@ Go ActivatePairing rejects any issuer key already enrolled or revoked. This is a
 existing lifecycle contract mismatch, not a reason to weaken revocation, erase state
 or silently generate replacement keys. It is a next correctness design/qualification
 blocker. The full two-cycle test is FAILED; only its first cycle and restart passed.
+
+
+### Product encryption review closure and remaining bootstrap boundary
+
+Exact e084 Apple Debug/Release builds, signature checks and custody getters passed;
+iOS arm64 Debug and dev CLI compiled, without launching a host or accessing Keychain.
+Opus found no authority/fallback/reset defect. Root accepts classification gaps:
+carry exact Missing/Malformed/Unavailable product-key outcomes through an App-owned
+storage failure enum and existing FFI error metadata; distinguish unsupported prior
+plaintext format before requesting a key. An identity-bound unfinished creation
+admission can classify schema/partial-data failure as IncompleteCreation without
+creating or replacing any key. Unknown I/O remains unavailable, never reset evidence.
+
+Product encryption necessarily makes its key a host-admission dependency. Release
+waiting/Keychain prompting still needs the planned visible bootstrap lifecycle;
+there is no unencrypted Day fallback. iOS product custody retains the existing
+WhenUnlockedThisDeviceOnly policy, rather than silently broadening background key
+access. Turso requires an owned hex String for encryption options; Floe hands that
+buffer directly to the API and cannot guarantee zeroization of its internal copies.
+Adding a transient Zeroizing copy would not erase the API-owned copy; no complete
+memory-erasure claim is made. Failed generation activation fences/seals but does not
+synchronously drain already-spawned work; that distinction is retained in lifecycle
+follow-up rather than claiming stronger shutdown semantics.
+
+
+Bootstrap's first visible surface is now installed before awaiting native admission,
+so a pending Release key operation need not leave an unpainted window. The shared
+waiting/error view is passive and cannot create a second open or reset data. It is
+not a complete cancellable/retryable bootstrap redesign, nor proof of live Keychain
+prompt presentation. Existing ready-shell UI and the no-profile-picker policy stay
+unchanged. Typed FFI probes distinguish all five new failure cases and preserve
+files/keys; the old plaintext format is identified without asking for a product key.
+
+This diagnostics/startup checkpoint passed default Rust workspace/doctests, both FFI
+feature builds, all five typed-error probes, the encrypted Day restart/absence probes,
+and 37 Flutter behavior/boundary fixtures including passive waiting→failure rendering.
+Flutter analysis retained its informational baseline with no new errors/warnings.
+The new waiting surface has not been observed against a live Apple Keychain prompt.

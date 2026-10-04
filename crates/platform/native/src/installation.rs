@@ -45,6 +45,7 @@ impl std::fmt::Display for NativeInstallationError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalDatabaseAdmission {
     Existing,
+    InspectUnfinishedCreation,
     CreateNew,
 }
 
@@ -385,7 +386,7 @@ fn reserve_database_creation(
             return Err(NativeInstallationError::Invalid);
         }
         regular_file(&database)?.ok_or(NativeInstallationError::Incomplete)?;
-        return Ok(LocalDatabaseAdmission::Existing);
+        return Ok(LocalDatabaseAdmission::InspectUnfinishedCreation);
     }
     let directory = database.parent().ok_or(NativeInstallationError::Invalid)?;
     if !directory_empty(directory)? {

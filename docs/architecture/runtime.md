@@ -298,3 +298,12 @@ incarnation/epoch, then load that exact already-admitted source. Gateway entries
 must also match the current paired credential binding. Catalog identity is display
 correlation, never source-access authority; identity-unverified remote entries do
 not attach a local source.
+
+
+App bootstrap installs a passive startup surface before awaiting host admission.
+It shows waiting while the native worker opens encrypted storage, and failure only
+after that attempt returns an error. The surface owns no open/retry/reset command;
+there remains one startup attempt and the existing ready app composition. App-owned
+storage failure codes survive FFI metadata, separating key absence/malformation/
+unavailability, incomplete creation, unsupported format and other store failure.
+A locked production key remains a blocked encrypted host, never plaintext fallback.
