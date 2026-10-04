@@ -170,7 +170,7 @@ func (o *Operations) start(ctx context.Context, in Request) operation.Result {
 	if _, err = rand.Read(nonce); err != nil {
 		return operation.Reject(operation.Unavailable, "pairing_unavailable")
 	}
-	expires := now.Add(30 * time.Second)
+	expires := now.Add(trust.EnrollmentLifetime)
 	challenge := struct {
 		Version     int    `json:"v"`
 		Operation   string `json:"operation"`

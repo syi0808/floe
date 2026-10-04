@@ -426,7 +426,7 @@ func (s *Service) ActivatePairing(ctx context.Context, a PairingActivation) (Pai
 		Issued      int64  `json:"issued_at_unix_ms"`
 		Expires     int64  `json:"expires_at_unix_ms"`
 	}
-	if DecodeStrict(a.ChallengeBytes, &challenge, 65536, 16) != nil || challenge.Version != 1 || challenge.Operation != "enrollment" || challenge.ChallengeID != a.ChallengeID || challenge.KeyID != a.IssuerKeyID || challenge.PersonID != a.PersonID || challenge.ClientID != a.PairingID || challenge.DeviceID != a.DeviceID || challenge.Audience != a.Producer.Audience || challenge.Purpose != "owner_enrollment" || challenge.Consumer != "owner" || challenge.Issued > time.Now().UnixMilli() || challenge.Expires <= time.Now().UnixMilli() || challenge.Expires-challenge.Issued > 30000 {
+	if DecodeStrict(a.ChallengeBytes, &challenge, 65536, 16) != nil || challenge.Version != 1 || challenge.Operation != "enrollment" || challenge.ChallengeID != a.ChallengeID || challenge.KeyID != a.IssuerKeyID || challenge.PersonID != a.PersonID || challenge.ClientID != a.PairingID || challenge.DeviceID != a.DeviceID || challenge.Audience != a.Producer.Audience || challenge.Purpose != "owner_enrollment" || challenge.Consumer != "owner" || !validEnrollmentWindow(challenge.Issued, challenge.Expires, time.Now().UnixMilli()) {
 		return PairingCommit{}, fail(operation.Denied, "pairing_denied")
 	}
 	if _, err = DecodeBase64(challenge.Nonce, 32); err != nil {

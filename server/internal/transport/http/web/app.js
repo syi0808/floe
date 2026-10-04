@@ -130,6 +130,28 @@ async function loadState(generation) {
     throw error;
   }
 }
+function renderPairingGuidance() {
+  const target = element('pair-phase');
+  if (!pairing) { target.textContent = ''; return; }
+  if (pairing.phase === 'activating') {
+    target.textContent = 'Activation needs an operator decision. Resume uses only the original retained credential and unexpired proof. Abort succeeds only if Trust confirms activation did not commit. An active client must be explicitly revoked below.';
+    return;
+  }
+  const expires = Date.parse(pairing.expires);
+  const remaining = Number.isFinite(expires) ? Math.max(0, Math.ceil((expires - Date.now()) / 1000)) : null;
+  if (remaining === 0) {
+    target.textContent = 'This request has expired. Return to Floe and start a new pairing request.';
+    return;
+  }
+  const next = pairing.phase === 'pending'
+    ? 'First compare both codes, then choose “Codes match” in Floe. Approval becomes available here after the app confirms.'
+    : pairing.phase === 'local_confirmed'
+      ? 'Floe confirmed the matching code. Choose “Approve connection” here to finish pairing.'
+      : 'Waiting for the current pairing state. Refresh to check again.';
+  target.textContent = next + (remaining === null ? '' : ` Time remaining: ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}.`);
+}
+setInterval(renderPairingGuidance, 1000);
+
 function renderState() {
   element('address').textContent = state.address; pairing = state.pairing;
   element('pair-panel').hidden = !pairing; element('pair-code').textContent = pairing?.code || '';
@@ -138,8 +160,7 @@ function renderState() {
     element(name).hidden = !pairingActions.includes(name);
     element(name).disabled = !pairingActions.includes(name);
   }
-  element('pair-phase').textContent = pairing?.phase === 'activating'
-    ? 'Activation needs an operator decision. Resume uses only the original retained credential and unexpired proof. Abort succeeds only if Trust confirms activation did not commit. An active client must be explicitly revoked below.' : '';
+  renderPairingGuidance();
   element('pair-identity').textContent = pairing
     ? `${pairing.person_id} · ${pairing.device_id}` : '';
   element('pair-fingerprint').textContent = pairing

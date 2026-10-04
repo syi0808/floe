@@ -181,3 +181,7 @@ Product-record Connections commands resolve uncertainty by checking their exact 
 
 
 Source-operation command rejection is resolved inside the plain source journal, against the exact source reservation identity. It never uses absence from the encrypted product store as evidence. The source reservation transaction checks the journal's immutable rejection fence before its first write. Existing Reserved/Committed/RepairRequired source operations remain admitted and fenced, even if a separate grant receipt is unreadable. Thus rejection can settle a genuinely unadmitted source request without treating a missing cross-store receipt as an abort.
+
+### Human enrollment deadline
+
+Gateway Trust defines a five-minute maximum for the human enrollment ceremony, shared by Pairing challenge issuance and the final Trust activation check. This deadline covers code comparison in Floe and explicit administrator approval in the dashboard. The original signed deadline never renews on confirmation, refresh or same-operation replay. Expired requests cannot activate; a new request requires an explicit user intent. Source admission/release proof lifetimes are separate and unchanged. Dashboard phase guidance and remaining time are presentation only; server and Vault checks remain authoritative.
