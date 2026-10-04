@@ -11,25 +11,11 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 impl ConnectionsService {
-    pub async fn prepare_gateway_setup(
-        &self,
-        actor: &OwnerActor,
-        command_id: Uuid,
-        address: &str,
-        scope: &ExecutionScope,
-    ) -> Result<GatewaySetup, ConnectionsCommandFailure> {
-        self.ensure_open()
-            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
-        check(actor, scope).map_err(ConnectionsCommandFailure::NotAdmitted)?;
-        self.pairing
-            .prepare_gateway_setup(actor, command_id, address, scope)
-            .await
-    }
     pub async fn start_pairing(
         &self,
         actor: &OwnerActor,
         command_id: Uuid,
-        target_ref: Uuid,
+        address: &str,
         scope: &ExecutionScope,
     ) -> Result<PairingSnapshot, ConnectionsCommandFailure> {
         self.ensure_open()
@@ -37,7 +23,7 @@ impl ConnectionsService {
         check(actor, scope).map_err(ConnectionsCommandFailure::NotAdmitted)?;
         let result = self
             .pairing
-            .start_pairing(actor, command_id, target_ref, scope)
+            .start_pairing(actor, command_id, address, scope)
             .await?;
         let id = super::source_operation::derived_id(
             b"floe.pairing.operation.v1",

@@ -18,8 +18,13 @@ import 'package:floe_client/features/connections/presentation/gateway_connection
 import 'package:floe_client/features/connections/presentation/integration_detail_panel.dart';
 
 final class ConnectorScreen extends StatefulWidget {
-  const ConnectorScreen({super.key, required this.controller});
+  const ConnectorScreen({
+    super.key,
+    required this.controller,
+    this.showServices = true,
+  });
   final ConnectionsController? controller;
+  final bool showServices;
   @override
   State<ConnectorScreen> createState() => _ConnectorScreenState();
 }
@@ -65,17 +70,18 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            const Expanded(
-              child: Text('Connections', style: FloeType.headline),
-            ),
-            FloeButton.text(
-              onPressed: current.ready ? current.load : null,
-              child: const Text('Refresh'),
-            ),
-          ],
-        ),
+        if (widget.showServices)
+          Row(
+            children: [
+              const Expanded(
+                child: Text('Connections', style: FloeType.headline),
+              ),
+              FloeButton.text(
+                onPressed: current.ready ? current.load : null,
+                child: const Text('Refresh'),
+              ),
+            ],
+          ),
         const SizedBox(height: FloeSpace.base),
         if (!current.ready) ...[
           Text(current.storageMessage),
@@ -105,10 +111,14 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
           for (final request in current.pendingRequests)
             FloeButton.outlined(
               onPressed: () => current.retryPendingCommand(request.commandId),
-              child: Text('Recover ${request.label}'),
+              child: Text(
+                !widget.showServices && request.label == 'pairing'
+                    ? 'Retry pairing result'
+                    : 'Recover ${request.label}',
+              ),
             ),
         GatewayConnectionPanel(controller: current),
-        if ((current.ready ? current.operation : null)
+        if ((widget.showServices && current.ready ? current.operation : null)
             case final operation?) ...[
           const SizedBox(height: FloeSpace.base),
           Text(
@@ -133,7 +143,7 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
             ),
         ],
         const SizedBox(height: FloeSpace.lg),
-        _connections(context, current),
+        if (widget.showServices) _connections(context, current),
       ],
     );
   }

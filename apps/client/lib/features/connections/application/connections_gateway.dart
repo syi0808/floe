@@ -3,15 +3,11 @@ import 'package:floe_client/app/runtime/owner_failure.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
 
 abstract interface class ConnectionsGateway {
-  Future<GatewaySetup> prepareGatewaySetup({
-    required String commandId,
-    required String addressText,
-  });
   Future<ConnectionsOverview> overview();
   Future<GatewaySummary> getGateway({required GatewayRef gatewayRef});
   Future<PairingSnapshot> startPairing({
     required String commandId,
-    required GatewayTargetRef gatewayTargetRef,
+    required String addressText,
   });
   Future<PairingSnapshot> confirmPairing({
     required String commandId,

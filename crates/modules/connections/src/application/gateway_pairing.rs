@@ -587,7 +587,7 @@ impl GatewayPairingService {
     ) -> Result<Vec<PairingRecord>, PairingError> {
         self.repository.pending(person, 64).await
     }
-    pub async fn prepare_gateway_setup(
+    async fn prepare_gateway_setup(
         &self,
         actor: &OwnerActor,
         command: Uuid,
@@ -636,7 +636,7 @@ impl GatewayPairingService {
         &self,
         actor: &OwnerActor,
         command: Uuid,
-        target: Uuid,
+        address: &str,
         scope: &OperationScope,
     ) -> Result<PairingSnapshot, ConnectionsCommandFailure> {
         check(actor, scope).map_err(not_admitted)?;
@@ -648,21 +648,22 @@ impl GatewayPairingService {
             actor.person_id,
             command,
         );
+        // Preparation is an internal replayable prerequisite of this one
+        // user intent. Its identity is stable across lost replies and retries.
+        let preparation = super::source_operation::derived_id(
+            b"floe.pairing.prepare.v1",
+            actor.person_id,
+            command,
+        );
         let setup = self
-            .repository
-            .setup(target)
-            .await
-            .map_err(indeterminate)?
-            .ok_or_else(|| not_admitted(PairingError::InvalidInput))?;
-        if setup.person_id != actor.person_id || setup.device_id != actor.device_id {
-            return Err(not_admitted(PairingError::ForeignIdentity));
-        }
+            .prepare_gateway_setup(actor, preparation, address, scope)
+            .await?;
         self.execute_command(
             actor,
             command,
             PairingMutationAction::Start {
                 operation_id: operation,
-                setup: setup.setup,
+                setup,
             },
         )
         .await

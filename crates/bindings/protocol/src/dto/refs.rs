@@ -68,7 +68,6 @@ typed_uuid_ref!(AssignmentRefDto);
 typed_uuid_ref!(TaskRefDto);
 typed_uuid_ref!(AttemptRefDto);
 typed_uuid_ref!(ActionRefDto);
-typed_uuid_ref!(GatewaySetupRefDto);
 typed_uuid_ref!(GatewayRefDto);
 typed_uuid_ref!(OperationRefDto);
 typed_uuid_ref!(IntegrationRefDto);

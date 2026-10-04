@@ -25,10 +25,6 @@ final class GatewayRef extends ConnectionRef {
   GatewayRef(super.value);
 }
 
-final class GatewayTargetRef extends ConnectionRef {
-  GatewayTargetRef(super.value);
-}
-
 final class ConnectionOperationRef extends ConnectionRef {
   ConnectionOperationRef(super.value);
 }
@@ -194,29 +190,6 @@ Uri _launchUrl(Object? value) {
     throw const FormatException('Invalid management launch.');
   }
   return uri;
-}
-
-final class GatewaySetup {
-  const GatewaySetup({
-    required this.targetRef,
-    required this.displayAddress,
-    required this.expiresAt,
-  });
-  factory GatewaySetup.fromJson(Object? value) {
-    final j = connectionObject(value, {
-      'target_ref',
-      'display_address',
-      'expires_at',
-    }, {});
-    return GatewaySetup(
-      targetRef: GatewayTargetRef(_uuid(j['target_ref'])),
-      displayAddress: _text(j['display_address'], 2048),
-      expiresAt: _time(j['expires_at']),
-    );
-  }
-  final GatewayTargetRef targetRef;
-  final String displayAddress;
-  final DateTime expiresAt;
 }
 
 final class GatewaySummary {

@@ -113,6 +113,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ),
     _SettingsPage.remoteServer => ConnectorScreen(
       controller: widget.connectionsController,
+      showServices: false,
     ),
   };
 

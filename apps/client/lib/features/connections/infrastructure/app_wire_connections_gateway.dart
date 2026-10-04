@@ -10,19 +10,6 @@ final class AppWireConnectionsGateway implements ConnectionsGateway {
   final AppWireTransport _transport;
 
   @override
-  Future<GatewaySetup> prepareGatewaySetup({
-    required String commandId,
-    required String addressText,
-  }) => _invoke(
-    commandId,
-    'connections.gateway.prepare_setup',
-    {'address_text': addressText},
-    'connections.gateway_setup',
-    'setup',
-    GatewaySetup.fromJson,
-  );
-
-  @override
   Future<ConnectionsOverview> overview() => _invoke(
     null,
     'connections.overview',
@@ -46,11 +33,11 @@ final class AppWireConnectionsGateway implements ConnectionsGateway {
   @override
   Future<PairingSnapshot> startPairing({
     required String commandId,
-    required GatewayTargetRef gatewayTargetRef,
+    required String addressText,
   }) => _invoke(
     commandId,
     'connections.pairing.start',
-    {'target_ref': gatewayTargetRef.value},
+    {'address_text': addressText},
     'connections.pairing',
     'pairing',
     PairingSnapshot.fromJson,

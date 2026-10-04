@@ -46,12 +46,8 @@ impl AppCommandDto {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum AppProductCommandDto {
-    #[serde(rename = "connections.gateway.prepare_setup")]
-    ConnectionsGatewayPrepareSetup { address_text: String },
     #[serde(rename = "connections.pairing.start")]
-    ConnectionsPairingStart {
-        target_ref: super::GatewaySetupRefDto,
-    },
+    ConnectionsPairingStart { address_text: String },
     #[serde(rename = "connections.pairing.confirm")]
     ConnectionsPairingConfirm {
         operation_ref: super::OperationRefDto,
@@ -208,14 +204,13 @@ pub enum AppProductCommandDto {
 impl AppProductCommandDto {
     fn validate(&self) -> Result<(), &'static str> {
         match self {
-            Self::ConnectionsGatewayPrepareSetup { address_text } => {
+            Self::ConnectionsPairingStart { address_text } => {
                 if !valid_text(address_text, 2048) || !valid_gateway_setup_address(address_text) {
                     Err("command.address_text")
                 } else {
                     Ok(())
                 }
             }
-            Self::ConnectionsPairingStart { .. } => Ok(()),
             Self::ConnectionsPairingConfirm {
                 expected_revision, ..
             }
@@ -416,8 +411,6 @@ pub enum AppCommandResultDto {
     },
     #[serde(rename = "acknowledged")]
     NativeHostAcknowledged {},
-    #[serde(rename = "connections.gateway_setup")]
-    ConnectionsGatewaySetup { setup: super::GatewaySetupDto },
     #[serde(rename = "connections.gateway")]
     ConnectionsGateway { gateway: super::GatewaySummaryDto },
     #[serde(rename = "connections.pairing")]

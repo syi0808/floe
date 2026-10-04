@@ -12,8 +12,7 @@ pub(crate) fn handles_command(command: &dto::AppProductCommandDto) -> bool {
     use dto::AppProductCommandDto::*;
     matches!(
         command,
-        ConnectionsGatewayPrepareSetup { .. }
-            | ConnectionsPairingStart { .. }
+        ConnectionsPairingStart { .. }
             | ConnectionsPairingConfirm { .. }
             | ConnectionsPairingCancel { .. }
             | ConnectionsGatewayForget { .. }
@@ -69,18 +68,10 @@ pub(crate) async fn command(
     use dto::{AppCommandResultDto as R, AppProductCommandDto as C};
     let service = &owners.connections;
     Ok(match command {
-        C::ConnectionsGatewayPrepareSetup { address_text } => R::ConnectionsGatewaySetup {
-            setup: gateway_setup(
-                service
-                    .prepare_gateway_setup(actor, command_id, &address_text, scope)
-                    .await
-                    .map_err(command_failure)?,
-            )?,
-        },
-        C::ConnectionsPairingStart { target_ref } => R::ConnectionsPairing {
+        C::ConnectionsPairingStart { address_text } => R::ConnectionsPairing {
             pairing: pairing(
                 service
-                    .start_pairing(actor, command_id, target_ref.get(), scope)
+                    .start_pairing(actor, command_id, &address_text, scope)
                     .await
                     .map_err(command_failure)?,
             )?,
@@ -518,13 +509,6 @@ fn failure(value: owner::ConnectionFailure) -> dto::ConnectionsFailureDto {
         },
         safe_actions: actions(value.safe_actions),
     }
-}
-fn gateway_setup(value: owner::GatewaySetup) -> AppWireResult<dto::GatewaySetupDto> {
-    Ok(dto::GatewaySetupDto {
-        target_ref: dto::GatewaySetupRefDto::new(value.target_ref).ok_or_else(internal_error)?,
-        display_address: value.display_address,
-        expires_at: value.expires_at.to_rfc3339(),
-    })
 }
 fn gateway(value: owner::GatewaySummary) -> AppWireResult<dto::GatewaySummaryDto> {
     Ok(dto::GatewaySummaryDto {

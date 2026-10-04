@@ -58,24 +58,6 @@ fn validate_revision(value: u64) -> Result<(), &'static str> {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct GatewaySetupDto {
-    pub target_ref: super::GatewaySetupRefDto,
-    pub display_address: String,
-    pub expires_at: String,
-}
-
-impl GatewaySetupDto {
-    pub(crate) fn validate(&self) -> Result<(), &'static str> {
-        if !valid_source_text(&self.display_address, 2048) || !valid_utc_timestamp(&self.expires_at)
-        {
-            return Err("connections.gateway_setup");
-        }
-        Ok(())
-    }
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GatewayStateDto {

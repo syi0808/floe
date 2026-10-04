@@ -207,10 +207,6 @@ pub enum AppQueryResultDto {
     KnowledgeReview {
         review: super::MemoryReviewDisplayDto,
     },
-    #[serde(rename = "connections.gateway_setup")]
-    ConnectionsGatewaySetup {
-        setup: super::GatewaySetupDto,
-    },
     #[serde(rename = "connections.gateway")]
     ConnectionsGateway {
         gateway: super::GatewaySummaryDto,

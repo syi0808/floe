@@ -17,7 +17,7 @@ final class ConnectionsController extends ChangeNotifier {
   final VaultController vault;
   final ConnectionsGateway gateway;
   ConnectionsOverview? overview;
-  GatewaySetup? setup;
+  String? pairingAddress;
   PairingSnapshot? pairing;
   ConnectionOperationSnapshot? operation;
   String? operationLabel;
@@ -37,6 +37,9 @@ final class ConnectionsController extends ChangeNotifier {
 
   bool get ready => vault.ready;
   bool get busy => _commandBusy || !ready;
+  bool get commandBusy => _commandBusy;
+  bool get hasPendingPairingRequest =>
+      _pendingCommands.containsKey('startPairing');
   bool get _acceptCommandResult =>
       !_disposed && ready && _activeCommandGeneration == _readinessGeneration;
 
@@ -77,7 +80,6 @@ final class ConnectionsController extends ChangeNotifier {
       _operationObservation?.cancel();
       if (!ready) {
         overview = null;
-        setup = null;
         sourceReview = null;
         observeReview = null;
         integrationReview = null;
@@ -199,29 +201,20 @@ final class ConnectionsController extends ChangeNotifier {
     }
   }
 
-  Future<void> prepareGateway(String address) =>
-      _command('prepareGateway:$address', 'Gateway setup', (id) async {
-        final value = await gateway.prepareGatewaySetup(
+  /// The owner retains preparation, Start and replay behind one user command.
+  Future<void> pairGateway(String address) =>
+      _command('startPairing', 'pairing', (id) async {
+        // Display text belongs to the retained user intent, not authority.
+        if (_acceptCommandResult) pairingAddress = address;
+        final value = await gateway.startPairing(
           commandId: id,
           addressText: address,
         );
-        if (_acceptCommandResult) setup = value;
+        if (_acceptCommandResult) {
+          pairingAddress = address;
+          _setPairing(value);
+        }
       });
-
-  Future<void> startPairing() async {
-    final target = setup;
-    if (target == null) return;
-    await _command(
-      'startPairing',
-      'pairing',
-      (id) async => _setPairing(
-        await gateway.startPairing(
-          commandId: id,
-          gatewayTargetRef: target.targetRef,
-        ),
-      ),
-    );
-  }
 
   Future<void> confirmPairing() async {
     final current = pairing;
@@ -316,18 +309,25 @@ final class ConnectionsController extends ChangeNotifier {
     },
   );
 
-  Future<void> prepareManagement(GatewaySummary value) => _command(
-    'management:${value.gatewayRef.value}',
-    'Gateway management',
-    (id) async {
-      final launch = await gateway.requestManagementLaunch(
-        commandId: id,
-        gatewayRef: value.gatewayRef,
-        expectedRevision: value.revision,
-      );
-      if (_acceptCommandResult) launchAction = launch;
-    },
-  );
+  Future<LaunchAction?> prepareManagement(GatewaySummary value) async {
+    LaunchAction? prepared;
+    await _command(
+      'management:${value.gatewayRef.value}',
+      'Gateway management',
+      (id) async {
+        final launch = await gateway.requestManagementLaunch(
+          commandId: id,
+          gatewayRef: value.gatewayRef,
+          expectedRevision: value.revision,
+        );
+        if (_acceptCommandResult) {
+          launchAction = launch;
+          prepared = launch;
+        }
+      },
+    );
+    return prepared;
+  }
 
   Future<void> prepareIntegration(IntegrationSummary value) => _command(
     'prepareIntegration:${value.integrationRef.value}',
