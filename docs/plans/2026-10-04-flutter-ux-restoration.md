@@ -258,3 +258,55 @@ Target: an app-owned bootstrap state with a visible, safe phase indication and a
 7. **Qualification:** one coherent slice before formatting/compile gates; no repeated broad checks during edits. Use disposable synthetic behavior/contract fixtures for changed boundaries, source/visual parity checks, and the affected final Rust/Go/Flutter/Apple gates. Permanent S3 test reconstruction remains later. Live native permission/provider behavior is reported separately and never inferred from builds.
 
 This is a source-grounded architecture assessment and ordered proposal, not a claim that all findings are fixed or that every repository file has received a complete semantic audit.
+
+### Screen-by-screen residual matrix (source comparison, not rendered acceptance)
+
+| Surface / entry | Baseline behavior or presentation | Current source evidence | Next correction / gate |
+|---|---|---|---|
+| Connections catalog — `connector_screen.dart` | Service-specific card identity, description, grouped availability | Grid/count restored; generic category fallback and display-name-based macOS Calendar recognition remain | Stable service presentation kind from Connections, exact service card fixtures; no identity decisions from names |
+| Native Calendar detail — old `calendar_panel.dart`, current `source_connection_panel.dart` | Account-grouped calendars, selected scope, system permission and acquisition information | Flat selected-resource list, generic availability badge, no account structure in DTO | Calendar-specific detail composed from safe observed metadata; permission vs Observe vs freshness remain distinct |
+| Calendar resource picker | Account/calendar choices plus explicit all-current-and-future policy | Flat reviewed checkboxes, nonempty explicit selection only | Restore hierarchy/layout first; implement future-resource policy only after authority semantics are specified |
+| Contacts detail/picker | Native Contacts-specific access and resource controls | Shares generic resource panel with Calendar | Keep reviewed opaque resources; restore Contacts-specific wording/empty/denied states, never expose raw contacts unnecessarily |
+| Health/Attention detail | Source-specific privacy/system-access explanation | Generic selected-resource presentation can describe a singleton as a resource list | Separate singleton source presentation using actual capabilities; preserve local Health transform and unsupported Attention state |
+| Hosted-service detail | Provider-specific authorization steps, source scope fields and Update scope | Generic Connect/Use with Floe; product source review/configuration currently rejects non-native sources | Specify owner-mediated scope configuration; do not restore direct Flutter HTTP or credential handling as a visual shortcut |
+| Remote server settings | Address, pairing/status, dashboard, cancel/check/forget | Core composition largely restored; raw failure words and recovery controls still need normal/error-state comparison | Keep no extra client confirmation; compare paired, waiting, uncertain, repair and forgotten fixtures |
+| Source-processing review | Source permission action, understandable disclosure | Prints raw View IDs/categories for non-Health sources | Localized presentation mapping over unchanged reviewed scope; no per-model approval |
+| Calendar Day/agenda | Existing timeline, navigation, drag, edit/create dialog and concise feedback | Direct drag and acknowledged composer close restored; new coverage/freshness states added | Desktop/narrow layout plus stale/partial/empty/error states; retain accepted event-detail simplification |
+| Experts | Description and source-binding editor | Description and on-expansion preparation restored; changed installation/review containers and pending-state controls | Compare disabled/loading/stale review/reopen; preserve exact binding review and current-source checks |
+| Conversation | Existing bubbles/composer/history and interaction navigation | Startup contract fixed; earlier-message pagination added; compaction-invalid cursor rebase remains open | Pure reads, explicit recovery, stable viewport and ordinary/interrupted fixtures |
+| Proposal/Action cards | Compact proposal, inspect details and explicit calendar effect | Scoped preview/reopen restored; substantial widget-local loading/cache/replay state remains | Feature-owned proposal state, explicit admitted-action progress, no hidden submission on inspection |
+| Memory/Privacy | Existing list/review cards and navigation | Core structure similar; new command acknowledgement, retry and raw operation label | Keep uncertainty recoverable but present it progressively and consistently; do not blindly revert receipt handling |
+| Action permissions | Ask/allow/deny Calendar creation control | Labels narrowed to actual Expert Calendar-create policy | Keep truthful scope; compare loading/error/control layout without restoring misleading “all supported actions” wording |
+| App shell/bootstrap | Existing shell/navigation; no profile-selection product step | Shell injection changed, no profile chooser; first frame waits for native initialization | Preserve shell design; explicit safe loading/blocked bootstrap phase in a separate lifecycle slice |
+
+Two additional Connections contract gaps were found while tracing the matrix:
+
+- `integration_summary` selects the first non-disconnected SourceConnection matching only connector ID. Integration records distinguish target device/Gateway but the source join does not use that relation. This is a confirmed under-specified association; a wrong-source display in a multi-instance history remains a conditional risk, not a demonstrated authorization bypass. The read model must derive an exact current source relation before adding account/service metadata.
+- `RemoteIntegrationPort::configure` and `ConfigureIntegration` exist in the provider boundary, but no current Connections application/FFI caller uses them. `prepare_source_review` and `configure_source` reject non-native sources. Old hosted-service Update scope therefore needs a real admitted owner workflow, not just a restored button. Credential entry remains a separately scoped Gateway management concern.
+
+### Connections cutover map
+
+Implement within the existing module; do not introduce extra crates, parallel routes or forwarding wrappers merely to reduce file size.
+
+| Existing responsibilities | Final private unit / state owner | Required capabilities | Removal and invariant gate |
+|---|---|---|---|
+| `product.rs` overview/get/review inspection/source/integration projections | `application/queries.rs` (`ConnectionsQueries`) | Read-only product/source/Gateway/Access projections plus runtime observation | No persistence, spawn or permission prompt on inspection; exact integration-source association |
+| Catalog refresh and native integration metadata | `application/catalog.rs` (`IntegrationCatalogWorkflow`) | Current verified Gateway, catalog adapter, product CAS, source read capability | One catalog publisher; invalidation on producer/credential change; labels never identify authority |
+| Integration review/start/cancel/drive/native setup | `application/integration_setup.rs` (`IntegrationSetupWorkflow`) | Product command journal, remote integration/native setup, source admission coordinator | Preserve persisted intent before external dispatch, same operation identity, cancellation precedence and uncertain recovery |
+| Source review/configuration and resource policy | `application/source_configuration.rs` (`SourceConfigurationWorkflow`) | Catalog/evidence, source read capability, product journal, existing source mutation coordinator | Keep exact reviewed resources/catalog digest and source reservation → Access invalidation → source successor sequence |
+| Observe prepare/apply/pause | `application/source_observe.rs` (`SourceObserveWorkflow`) | Access, source/evidence readers, source mutation coordinator | Source-scoped authority only; no model recipient approval; no implicit grant expansion |
+| Source reservation/receipt/commit/reconciliation currently in `source_operation.rs` | Retained, narrowed `SourceMutationCoordinator` | Source operation repository, Access and cleanup ports | One source transition/recovery authority; configuration and Observe workflows must use it rather than duplicate transitions |
+| Spawn registration, cancellation, drain, activation dispatch | `application/runtime.rs` (`ConnectionsRuntime`) | Typed workflow handles and job state | Own job lifetime only; no copied domain policy; preserve exact operation replay and pending recovery |
+| Public `ConnectionsService` entry point | Admission/lifecycle composition of the above | Narrow handles, not the old entire dependency bag | Migrate FFI/App callers together where necessary; remove old monolithic method bodies after cutover |
+
+The names specify the target roles; stateless projection helpers should remain functions rather than acquire invented mutable objects. Shared runtime state is limited to liveness/observation. Durable aggregate state, reviews and command outcomes remain in their existing semantic owners/repositories.
+
+Ordered implementation inside this slice:
+
+1. Pin exact integration/source identity and display-read contracts. Read all affected record/projection/adapter/DTO/widget callers before editing; distinguish physical resource identity from display metadata. Include reopened existing connections, not only fresh setup.
+2. Move pure projections and narrow read capabilities first, with no command behavior change. Migrate wire/Dart models and baseline card/detail presentation in the same cutover; remove display-name heuristics and generic-only rendering.
+3. Separate catalog/setup/configuration/Observe workflows around the existing source mutation coordinator. Move dependency/state ownership with methods. Preserve disposition classification (`NotAdmitted`, `NotApplied`, `Admitted`, `Indeterminate`) and exact pending command identity.
+4. Consolidate owner-local job registration/drain and catalog invalidation only after workflows have narrow entry points. Qualify registration vs shutdown and restart recovery; no screen may become responsible for starting forgotten durable work.
+5. Restore hosted scope editing through an owner command if selected for this slice; otherwise keep the missing capability explicitly open. Do not expose a UI control whose underlying owner path does not exist.
+6. Delete replaced method bodies/facades/dead exports and search for old names, broad dependency fields, direct Flutter HTTP, display-name identity tests and implicit query-command replay. The unused `FloeCore::source_service`/forwarding `SourceConnectionService` is a separate small removal candidate after verifying all callers again; it is not a second active write path.
+7. Run one slice-level contract/behavior gate and the required final platform checks. Record screenshot fixtures separately from actual Keychain/native/provider qualification. Do not call this slice complete while its screen matrix still contains unqualified changed states.
