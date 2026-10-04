@@ -56,6 +56,78 @@ impl ActionsService {
                 .any(|resource| resource.as_str() == destination.calendar_id)
     }
 
+    pub(super) fn proposal_schedule(
+        actor: &OwnerActor,
+        evidence: &ExpertProposalEvidence,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<(floe_day::TimedSchedule, chrono::DateTime<Utc>), AgentFailure> {
+        let proposal = &evidence.proposal;
+        let dependency = &evidence.dependency;
+        let starts_at = chrono::DateTime::<Utc>::from_timestamp_millis(
+            i64::try_from(proposal.draft.starts_at_unix_ms)
+                .map_err(|_| AgentFailure::InvalidInput)?,
+        )
+        .ok_or(AgentFailure::InvalidInput)?;
+        let ends_at = chrono::DateTime::<Utc>::from_timestamp_millis(
+            i64::try_from(proposal.draft.ends_at_unix_ms)
+                .map_err(|_| AgentFailure::InvalidInput)?,
+        )
+        .ok_or(AgentFailure::InvalidInput)?;
+        let proposal_expiry = chrono::DateTime::<Utc>::from_timestamp_millis(
+            i64::try_from(proposal.expires_at_unix_ms).map_err(|_| AgentFailure::InvalidInput)?,
+        )
+        .ok_or(AgentFailure::InvalidInput)?;
+        if starts_at <= now {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        evidence
+            .coverage
+            .validate()
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let floe_agent_contract::DependencyCoverage::Dependent { dependencies } =
+            &evidence.coverage
+        else {
+            return Err(AgentFailure::PolicyDenied);
+        };
+        if !dependencies.contains(dependency)
+            || dependencies
+                .iter()
+                .any(|entry| entry.person_id() != actor.person_id || entry.observed_at() > now)
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let coverage_expiry = dependencies
+            .iter()
+            .map(|entry| entry.expires_at())
+            .min()
+            .ok_or(AgentFailure::PolicyDenied)?;
+        let expiry = (now + chrono::Duration::minutes(15))
+            .min(proposal_expiry)
+            .min(coverage_expiry)
+            .min(starts_at);
+        if expiry <= now {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let schedule = floe_day::TimedSchedule::new(starts_at, ends_at, "UTC".to_owned())
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        Ok((schedule, expiry))
+    }
+
+    pub(super) fn dependency_matches_fence(
+        dependency: &floe_context_contract::ContextDependency,
+        source: &ActionSourceFence,
+    ) -> bool {
+        let mut resources: Vec<_> = dependency
+            .source_resources()
+            .iter()
+            .map(|r| r.as_str().to_owned())
+            .collect();
+        resources.sort();
+        dependency.source_authority() == source.authority
+            && dependency.source().execution_owner().as_str() == source.execution_owner
+            && resources == source.resources
+    }
+
     pub async fn submit(
         &self,
         actor: &OwnerActor,
@@ -195,33 +267,14 @@ impl ActionsService {
                     return Err(AgentFailure::PolicyDenied);
                 }
                 let proposal = &evidence.proposal;
-                let dependency = &evidence.dependency;
-                let starts_at = chrono::DateTime::<Utc>::from_timestamp_millis(
-                    i64::try_from(proposal.draft.starts_at_unix_ms)
-                        .map_err(|_| AgentFailure::InvalidInput)?,
-                )
-                .ok_or(AgentFailure::InvalidInput)?;
-                let ends_at = chrono::DateTime::<Utc>::from_timestamp_millis(
-                    i64::try_from(proposal.draft.ends_at_unix_ms)
-                        .map_err(|_| AgentFailure::InvalidInput)?,
-                )
-                .ok_or(AgentFailure::InvalidInput)?;
-                let proposal_expiry = chrono::DateTime::<Utc>::from_timestamp_millis(
-                    i64::try_from(proposal.expires_at_unix_ms)
-                        .map_err(|_| AgentFailure::InvalidInput)?,
-                )
-                .ok_or(AgentFailure::InvalidInput)?;
-                if starts_at <= now {
-                    return Err(AgentFailure::PolicyDenied);
-                }
+                let (schedule, expiry) = Self::proposal_schedule(actor, &evidence, now)?;
                 let effect = CalendarEffect::Create {
                     destination,
                     title: "Focus time".to_owned(),
                     // The verified proposal carries absolute instants, not a local
                     // wall-time recurrence. UTC preserves those instants without
                     // asking Flutter to invent a timezone for hidden evidence.
-                    schedule: floe_day::TimedSchedule::new(starts_at, ends_at, "UTC".to_owned())
-                        .map_err(|_| AgentFailure::InvalidInput)?,
+                    schedule,
                 };
                 let origin = ActionOrigin::Expert {
                     task_id: proposal.task_id,
@@ -233,31 +286,6 @@ impl ActionsService {
                     evidence_ref: receipt,
                     artifact_id,
                 };
-                evidence
-                    .coverage
-                    .validate()
-                    .map_err(|_| AgentFailure::PolicyDenied)?;
-                let floe_agent_contract::DependencyCoverage::Dependent { dependencies } =
-                    &evidence.coverage
-                else {
-                    return Err(AgentFailure::PolicyDenied);
-                };
-                if !dependencies.contains(dependency)
-                    || dependencies.iter().any(|entry| {
-                        entry.person_id() != actor.person_id || entry.observed_at() > now
-                    })
-                {
-                    return Err(AgentFailure::PolicyDenied);
-                }
-                let coverage_expiry = dependencies
-                    .iter()
-                    .map(|entry| entry.expires_at())
-                    .min()
-                    .ok_or(AgentFailure::PolicyDenied)?;
-                let expiry = (now + chrono::Duration::minutes(15))
-                    .min(proposal_expiry)
-                    .min(coverage_expiry)
-                    .min(starts_at);
                 (effect, origin, Some(evidence.dependency), expiry)
             }
         };
@@ -268,16 +296,7 @@ impl ActionsService {
         let source = self.observe_source(actor, &effect).await?;
         self.current_events(actor, &effect, scope).await?;
         if let Some(dependency) = &dependency {
-            let mut resources: Vec<_> = dependency
-                .source_resources()
-                .iter()
-                .map(|r| r.as_str().to_owned())
-                .collect();
-            resources.sort();
-            if dependency.source_authority() != source.authority
-                || dependency.source().execution_owner().as_str() != source.execution_owner
-                || resources != source.resources
-            {
+            if !Self::dependency_matches_fence(dependency, &source) {
                 return Err(AgentFailure::PolicyDenied);
             }
         }

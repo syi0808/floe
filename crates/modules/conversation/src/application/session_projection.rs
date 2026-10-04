@@ -82,20 +82,43 @@ pub(super) fn project_session_snapshot(
     continuation_ref: Option<ContinuationToken>,
     before_message_id: Option<Uuid>,
 ) -> Result<SessionSnapshot, AgentFailure> {
+    // Synthetic message kinds can occur more than once within a turn. Derive
+    // their IDs over the full retained session, not the selected page.
+    let mut occurrences = std::collections::HashMap::new();
+    let ids: Vec<_> = session
+        .messages
+        .iter()
+        .map(|message| {
+            let kind = match message {
+                AgentMessage::Preamble { .. } => 0u8,
+                AgentMessage::Compaction { .. } => 1u8,
+                _ => 2u8,
+            };
+            let ordinal = occurrences
+                .entry((message.turn_id(), kind))
+                .or_insert(0usize);
+            let id = projected_message_id(message, *ordinal);
+            *ordinal += 1;
+            id
+        })
+        .collect();
     let end = match before_message_id {
-        Some(cursor) => session
-            .messages
-            .iter()
-            .position(|message| projected_message_id(message) == cursor)
-            .ok_or(AgentFailure::Conflict)?,
+        Some(cursor) => {
+            let mut matches = ids.iter().enumerate().filter(|(_, id)| **id == cursor);
+            let index = matches.next().ok_or(AgentFailure::Conflict)?.0;
+            if matches.next().is_some() {
+                return Err(AgentFailure::Conflict);
+            }
+            index
+        }
         None => session.messages.len(),
     };
     let start = end.saturating_sub(MAX_SESSION_MESSAGES);
     let mut bytes = 0usize;
     let mut messages = Vec::new();
-    for message in &session.messages[start..end] {
+    for (message, projected_id) in session.messages[start..end].iter().zip(&ids[start..end]) {
         let turn_id = message.turn_id();
-        let projected_id = projected_message_id(message);
+        let projected_id = *projected_id;
         if turn_id.is_nil() {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -250,15 +273,17 @@ fn bounded(text: &str, limit: usize, total: &mut usize) -> Result<(), AgentFailu
     Ok(())
 }
 
-fn projected_message_id(message: &AgentMessage) -> Uuid {
+fn projected_message_id(message: &AgentMessage, ordinal: usize) -> Uuid {
     let turn = message.turn_id();
     match message {
         AgentMessage::User { message_id, .. } => *message_id,
         AgentMessage::Assistant { .. } => turn,
         AgentMessage::Preamble { text, .. } => {
-            Uuid::new_v5(&turn, format!("preamble:{text}").as_bytes())
+            Uuid::new_v5(&turn, format!("preamble:{ordinal}:{text}").as_bytes())
         }
-        AgentMessage::Compaction { .. } => Uuid::new_v5(&turn, b"compaction"),
+        AgentMessage::Compaction { .. } => {
+            Uuid::new_v5(&turn, format!("compaction:{ordinal}").as_bytes())
+        }
         AgentMessage::Capability { call_id, .. } => *call_id,
         AgentMessage::Delegation { task, .. } => task.task_id.as_uuid(),
         AgentMessage::Interaction { interaction_id, .. } => *interaction_id,

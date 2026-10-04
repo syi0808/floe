@@ -95,6 +95,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   bool appActive = true;
   String? connectionSelection;
   final Set<String> collectedActions = {};
+  bool actionBaselineLoaded = false;
 
   @override
   void initState() {
@@ -186,6 +187,13 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
 
   void _actionsChanged() {
     if (!mounted) return;
+    if (actionController?.loaded != true) {
+      actionBaselineLoaded = false;
+      collectedActions.clear();
+      return;
+    }
+    final hadBaseline = actionBaselineLoaded;
+    actionBaselineLoaded = true;
     var changed = false;
     for (final action
         in actionController?.actions ?? const <CalendarAction>[]) {
@@ -194,7 +202,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           collectedActions.add(action.actionRef))
         changed = true;
     }
-    if (changed) unawaited(controller.load());
+    if (hadBaseline && changed) unawaited(controller.load());
   }
 
   @override

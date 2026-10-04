@@ -57,8 +57,8 @@ final class AppWireConversationGateway implements AgentConversationGateway {
     String sessionId,
     String beforeMessageId,
   ) async {
-    if (_busy || _pending != null) throw const AgentVaultException('conflict');
-    _busy = true;
+    // History is an independent pure read. It neither replays a retained
+    // session command nor blocks live session progression.
     try {
       final result = await ownerQuery(_transport, newAgentRequestId(), {
         'kind': 'conversation.session.get',
@@ -73,8 +73,6 @@ final class AppWireConversationGateway implements AgentConversationGateway {
         metadata: error.metadata,
         ownerFailure: error.ownerFailure,
       );
-    } finally {
-      _busy = false;
     }
   }
 

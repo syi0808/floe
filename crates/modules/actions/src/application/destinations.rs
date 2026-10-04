@@ -21,7 +21,7 @@ impl ActionsService {
             .destination_candidates(actor, scope)
             .await?
             .into_iter()
-            .map(|(choice, _)| choice)
+            .map(|(choice, _, _)| choice)
             .collect())
     }
     /// A proposal can select only current writable destinations represented by
@@ -38,12 +38,16 @@ impl ActionsService {
         let evidence = self
             .proposal_evidence(actor, &receipt, artifact_id, scope)
             .await?;
+        Self::proposal_schedule(actor, &evidence, self.clock.now())?;
         Ok(self
             .destination_candidates(actor, scope)
             .await?
             .into_iter()
-            .filter(|(_, destination)| Self::proposal_matches_destination(&evidence, destination))
-            .map(|(choice, _)| choice)
+            .filter(|(_, destination, fence)| {
+                Self::proposal_matches_destination(&evidence, destination)
+                    && Self::dependency_matches_fence(&evidence.dependency, fence)
+            })
+            .map(|(choice, _, _)| choice)
             .collect())
     }
 
@@ -60,8 +64,8 @@ impl ActionsService {
             .destination_candidates(actor, scope)
             .await?
             .into_iter()
-            .filter(|(choice, _)| choice.destination_ref == destination_ref);
-        let (_, destination) = matches.next().ok_or(AgentFailure::Conflict)?;
+            .filter(|(choice, _, _)| choice.destination_ref == destination_ref);
+        let (_, destination, _) = matches.next().ok_or(AgentFailure::Conflict)?;
         if matches.next().is_some() {
             return Err(AgentFailure::Conflict);
         }
@@ -78,7 +82,7 @@ impl ActionsService {
             .destination_candidates(actor, scope)
             .await?
             .into_iter()
-            .map(|(_, destination)| destination)
+            .map(|(_, destination, _)| destination)
             .filter(|destination| {
                 &destination.connection_id == connection_id
                     && destination.calendar_id == calendar_id
@@ -93,7 +97,14 @@ impl ActionsService {
         &self,
         actor: &OwnerActor,
         scope: &ExecutionScope,
-    ) -> Result<Vec<(ActionDestinationChoice, CalendarDestination)>, AgentFailure> {
+    ) -> Result<
+        Vec<(
+            ActionDestinationChoice,
+            CalendarDestination,
+            ActionSourceFence,
+        )>,
+        AgentFailure,
+    > {
         self.admit_actor(actor, scope)?;
         let sources = self.sources.list_calendar_sources(actor.person_id).await?;
         if sources.len() > 64 {
@@ -192,13 +203,13 @@ impl ActionsService {
                     calendar_id: observation.calendar_id,
                     calendar_name: observation.calendar_name,
                 };
-                choices.push((choice, destination));
+                choices.push((choice, destination, fence.clone()));
                 if choices.len() > 256 {
                     return Err(AgentFailure::BudgetExceeded);
                 }
             }
         }
-        choices.sort_by(|(left, _), (right, _)| {
+        choices.sort_by(|(left, _, _), (right, _, _)| {
             left.label
                 .cmp(&right.label)
                 .then(left.destination_ref.cmp(&right.destination_ref))
