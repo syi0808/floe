@@ -57,6 +57,13 @@ final class ConversationController extends ChangeNotifier {
   final Duration loadTimeout;
   AgentSession? session;
   List<AgentMessage> messages = [];
+  bool loadingEarlier = false;
+  String? earlierFailure;
+  bool? _historyHasEarlier;
+  int _historyGeneration = 0;
+  bool get hasEarlierMessages =>
+      _historyHasEarlier ?? session?.hasEarlierMessages ?? false;
+
   AgentProgress progress = AgentProgress.idle;
   String? failure;
   String? recoveryAction;
@@ -600,14 +607,89 @@ final class ConversationController extends ChangeNotifier {
     }
   }
 
+  Future<void> loadEarlierMessages() async {
+    final current = session;
+    if (_disposed ||
+        _sealed ||
+        !vaultController.ready ||
+        busy ||
+        loadingEarlier ||
+        current == null ||
+        messages.isEmpty ||
+        !hasEarlierMessages)
+      return;
+    final before = messages.first.messageId;
+    final generation = _historyGeneration;
+    loadingEarlier = true;
+    earlierFailure = null;
+    _notify();
+    try {
+      final page = await gateway.loadEarlierConversation(
+        personId,
+        current.id,
+        before,
+      );
+      if (_disposed ||
+          _sealed ||
+          !vaultController.ready ||
+          generation != _historyGeneration ||
+          session?.id != current.id ||
+          messages.isEmpty ||
+          messages.first.messageId != before)
+        return;
+      if (page.id != current.id ||
+          page.personId != personId ||
+          page.revision < current.revision ||
+          page.messages.any((message) => message.messageId == before) ||
+          (page.messages.isEmpty && page.hasEarlierMessages)) {
+        throw const FormatException('Invalid Conversation history page.');
+      }
+      final existing = messages.map((message) => message.messageId).toSet();
+      final earlier = page.messages
+          .where((message) => !existing.contains(message.messageId))
+          .toList();
+      if (earlier.isEmpty && page.hasEarlierMessages)
+        throw const FormatException('History cursor did not advance.');
+      messages = [...earlier, ...messages];
+      _historyHasEarlier = page.hasEarlierMessages;
+    } on Object catch (error) {
+      if (!_disposed && generation == _historyGeneration) {
+        earlierFailure = 'Earlier messages could not be loaded. Try again.';
+        final owner = _ownerFailure(error);
+        if (owner != null && (owner.reloadRequired || owner.sealSession))
+          _applyOwnerFailure(owner);
+      }
+    } finally {
+      if (!_disposed && generation == _historyGeneration) {
+        loadingEarlier = false;
+        _notify();
+      }
+    }
+  }
+
+  void _resetHistory() {
+    _historyGeneration++;
+    _historyHasEarlier = null;
+    loadingEarlier = false;
+    earlierFailure = null;
+  }
+
   void _acceptSession(AgentSession saved) {
     if (_sealed) return;
     if (saved.personId != personId) {
       throw const FormatException('Agent Person mismatch.');
     }
     _clearInteractions();
+    final first = saved.messages.firstOrNull?.messageId;
+    final prefixEnd = session?.id == saved.id && first != null
+        ? messages.indexWhere((message) => message.messageId == first)
+        : -1;
+    final earlier = prefixEnd >= 0
+        ? messages.take(prefixEnd).toList()
+        : <AgentMessage>[];
+    if (prefixEnd < 0) _resetHistory();
     session = saved;
-    messages = List.of(saved.messages);
+    messages = [...earlier, ...saved.messages];
     _clearFailure();
     failure = saved.lastOutcome?.failure;
     if (saved.lastOutcome?.issue?.ownerFailure case final ownerFailure?) {
@@ -642,6 +724,7 @@ final class ConversationController extends ChangeNotifier {
       _clearInteractions();
       session = null;
       messages = [];
+      _resetHistory();
     }
     _notify();
   }
@@ -759,6 +842,7 @@ final class ConversationController extends ChangeNotifier {
       _sealed = true;
       session = null;
       messages = [];
+      _resetHistory();
     }
   }
 

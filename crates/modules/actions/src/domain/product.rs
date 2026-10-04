@@ -28,7 +28,6 @@ pub enum ActionIntent {
         receipt: TaskExecutionReceiptRef,
         artifact_id: Uuid,
         destination_ref: Uuid,
-        timezone: String,
     },
 }
 
@@ -81,13 +80,9 @@ impl ActionIntent {
                 receipt,
                 artifact_id,
                 destination_ref,
-                timezone,
             } => {
                 receipt.validate()?;
-                if artifact_id.is_nil()
-                    || destination_ref.is_nil()
-                    || !super::record::bounded(timezone, 128)
-                {
+                if artifact_id.is_nil() || destination_ref.is_nil() {
                     return Err(AgentFailure::InvalidInput);
                 }
                 Ok(())

@@ -45,6 +45,11 @@ impl AppQueryDto {
 pub enum AppProductQueryDto {
     #[serde(rename = "actions.destinations")]
     ActionsDestinations {},
+    #[serde(rename = "actions.proposal.destinations")]
+    ActionsProposalDestinations {
+        receipt: super::TaskExecutionReceiptRefDto,
+        artifact_id: super::UuidRefDto,
+    },
     #[serde(rename = "actions.authority.get")]
     ActionsAuthority {},
     #[serde(rename = "actions.list")]
@@ -88,7 +93,10 @@ pub enum AppProductQueryDto {
         review_ref: super::BindingReviewRefDto,
     },
     #[serde(rename = "conversation.session.get")]
-    ConversationSessionGet { session_id: SessionRefDto },
+    ConversationSessionGet {
+        session_id: SessionRefDto,
+        before_message_id: Option<super::UuidRefDto>,
+    },
     #[serde(rename = "conversation.session.resume")]
     ConversationSessionResume {},
     #[serde(rename = "vault.status")]
@@ -113,6 +121,7 @@ impl AppProductQueryDto {
             Self::ActionsDestinations {}
             | Self::ActionsAuthority {}
             | Self::ActionsInspect { .. } => return Ok(()),
+            Self::ActionsProposalDestinations { receipt, .. } => return receipt.validate(),
             Self::ActionsList { limit, .. } => {
                 return if (1..=100).contains(limit) {
                     Ok(())

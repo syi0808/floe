@@ -37,8 +37,11 @@ final class AppWireConversationGateway implements AgentConversationGateway {
   bool _busy = false;
 
   @override
-  Future<AgentSession> startConversation(String personId) =>
-      _requiredSession(personId, {'kind': 'conversation.session.start'}, command: true);
+  Future<AgentSession> startConversation(String personId) => _requiredSession(
+    personId,
+    {'kind': 'conversation.session.start'},
+    command: true,
+  );
   @override
   Future<AgentSession?> resumeConversation(String personId) =>
       _session(personId, {'kind': 'conversation.session.resume'});
@@ -48,6 +51,33 @@ final class AppWireConversationGateway implements AgentConversationGateway {
         'kind': 'conversation.session.get',
         'session_id': sessionId,
       });
+  @override
+  Future<AgentSession> loadEarlierConversation(
+    String personId,
+    String sessionId,
+    String beforeMessageId,
+  ) async {
+    if (_busy || _pending != null) throw const AgentVaultException('conflict');
+    _busy = true;
+    try {
+      final result = await ownerQuery(_transport, newAgentRequestId(), {
+        'kind': 'conversation.session.get',
+        'session_id': sessionId,
+        'before_message_id': beforeMessageId,
+      });
+      return _decode(result, personId, sessionId);
+    } on NativeTransportException catch (error) {
+      throw AgentVaultException.fromAppWire(
+        error.metadata['agent_failure'] ?? error.code,
+        stage: 'conversation_history',
+        metadata: error.metadata,
+        ownerFailure: error.ownerFailure,
+      );
+    } finally {
+      _busy = false;
+    }
+  }
+
   @override
   Future<AgentSession> recoverConversation(AgentSession session) =>
       _requiredSession(session.personId, {

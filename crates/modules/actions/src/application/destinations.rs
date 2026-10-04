@@ -24,6 +24,29 @@ impl ActionsService {
             .map(|(choice, _)| choice)
             .collect())
     }
+    /// A proposal can select only current writable destinations represented by
+    /// its authenticated Calendar contributor. Listing never admits an Action.
+    pub async fn proposal_destinations(
+        &self,
+        actor: &OwnerActor,
+        receipt: floe_agent_contract::TaskExecutionReceiptRef,
+        artifact_id: Uuid,
+        scope: &ExecutionScope,
+    ) -> Result<Vec<ActionDestinationChoice>, AgentFailure> {
+        self.admit_actor(actor, scope)?;
+        self.repository.read_authority(actor.person_id).await?;
+        let evidence = self
+            .proposal_evidence(actor, &receipt, artifact_id, scope)
+            .await?;
+        Ok(self
+            .destination_candidates(actor, scope)
+            .await?
+            .into_iter()
+            .filter(|(_, destination)| Self::proposal_matches_destination(&evidence, destination))
+            .map(|(choice, _)| choice)
+            .collect())
+    }
+
     pub(super) async fn resolve_destination(
         &self,
         actor: &OwnerActor,

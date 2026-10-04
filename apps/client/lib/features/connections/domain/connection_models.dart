@@ -197,6 +197,7 @@ final class GatewaySummary {
     required this.gatewayRef,
     required this.revision,
     required this.displayName,
+    this.displayAddress,
     required this.state,
     required this.allowedActions,
     required this.remoteRevocationPending,
@@ -209,6 +210,7 @@ final class GatewaySummary {
         'gateway_ref',
         'revision',
         'display_name',
+        'display_address',
         'state',
         'allowed_actions',
         'remote_revocation_pending',
@@ -219,6 +221,9 @@ final class GatewaySummary {
       gatewayRef: GatewayRef(_uuid(j['gateway_ref'])),
       revision: _revision(j['revision']),
       displayName: _text(j['display_name']),
+      displayAddress: j['display_address'] == null
+          ? null
+          : _text(j['display_address'], 2048),
       state: _choice(j['state'], {
         'unpaired',
         'paired',
@@ -239,6 +244,7 @@ final class GatewaySummary {
   final GatewayRef gatewayRef;
   final int revision;
   final String displayName;
+  final String? displayAddress;
   final String state;
   final Set<String> allowedActions;
   final bool remoteRevocationPending;

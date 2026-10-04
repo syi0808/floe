@@ -92,6 +92,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   _DestinationView destination = _DestinationView.today;
   String? selectedTaskId;
   DateTime? draftEventStart;
+  bool appActive = true;
+  String? connectionSelection;
+  final Set<String> collectedActions = {};
 
   @override
   void initState() {
@@ -100,7 +103,12 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       gateway: widget.gateway,
       query: widget.query,
     );
-    unawaited(controller.load());
+    WidgetsBinding.instance.addObserver(this);
+    appActive =
+        WidgetsBinding.instance.lifecycleState == null ||
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    widget.connectionsController?.addListener(_connectionsChanged);
+    unawaited(_loadInitialDay());
     final vault = widget.ownerGateways.vault;
     final actionGateway = widget.calendarActions;
     if (actionGateway != null && vault != null) {
@@ -108,6 +116,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         gateway: actionGateway,
         vault: vault,
       );
+      actionController!.addListener(_actionsChanged);
     }
     screenState = Listenable.merge([
       controller,
@@ -127,11 +136,65 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    widget.connectionsController?.removeListener(_connectionsChanged);
+    actionController?.removeListener(_actionsChanged);
     controller.dispose();
     actionController?.dispose();
     agentController?.dispose();
     assistantEntryFocus.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadInitialDay() async {
+    await controller.load();
+    if (mounted) _updateRefreshVisibility();
+  }
+
+  void _updateRefreshVisibility() => controller.setAutomaticRefreshActive(
+    mounted &&
+        appActive &&
+        destination == _DestinationView.today &&
+        selectedTaskId == null,
+  );
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    appActive = state == AppLifecycleState.resumed;
+    _updateRefreshVisibility();
+  }
+
+  void _connectionsChanged() {
+    final connections = widget.connectionsController;
+    if (!mounted ||
+        connections == null ||
+        !connections.ready ||
+        connections.overview == null)
+      return;
+    final sources =
+        connections.overview!.sources
+            .map(
+              (source) =>
+                  '${source.sourceRef.value}:${source.revision}:${source.availability}:${source.selectedResources.map((resource) => resource.resourceRef.value).join(',')}',
+            )
+            .toList()
+          ..sort();
+    final selection = sources.join('|');
+    if (connectionSelection == selection) return;
+    connectionSelection = selection;
+    unawaited(controller.refreshIfStale(force: true));
+  }
+
+  void _actionsChanged() {
+    if (!mounted) return;
+    var changed = false;
+    for (final action
+        in actionController?.actions ?? const <CalendarAction>[]) {
+      if (action.status.state == CalendarActionState.succeeded &&
+          action.status.collection == ActionCollectionStatus.collected &&
+          collectedActions.add(action.actionRef))
+        changed = true;
+    }
+    if (changed) unawaited(controller.load());
   }
 
   @override
@@ -260,7 +323,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                 snapshot: snapshot,
                 disabled: controller.commandPending,
                 onComplete: _setTaskCompleted,
-                onOpen: (task) => setState(() => selectedTaskId = task.id),
+                onOpen: _openTask,
                 onDelete: controller.deleteItem,
               ),
               _DestinationView.connections => SizedBox.shrink(),
@@ -319,7 +382,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           disabled: controller.commandPending,
           complete: _setTaskCompleted,
           onTasks: () => _selectDestination(_DestinationView.tasks),
-          onOpenTask: (task) => setState(() => selectedTaskId = task.id),
+          onOpenTask: _openTask,
         ),
         if (agentController != null) ...[
           const SizedBox(height: FloeSpace.lg),
@@ -387,6 +450,11 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     );
   }
 
+  void _openTask(TaskItem task) {
+    setState(() => selectedTaskId = task.id);
+    _updateRefreshVisibility();
+  }
+
   void _selectDestination(_DestinationView value, {SourceRef? sourceRef}) {
     setState(() {
       assistantOpen = false;
@@ -394,6 +462,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       destination = value;
       selectedTaskId = null;
     });
+    _updateRefreshVisibility();
   }
 
   Future<void> _openAssistant() async {
@@ -491,7 +560,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
             ? DateTime(now.year, now.month, now.day, now.hour + 1)
             : DateTime(date.year, date.month, date.day, 9));
     if (event == null) setState(() => draftEventStart = createStart);
-    await showFloeDialog<void>(
+    final saved = await showFloeDialog<CalendarAction>(
       context,
       (_) => CalendarEventComposer(
         controller: actions,
@@ -499,6 +568,13 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         event: event,
       ),
     );
+    if (mounted && saved != null) {
+      _showCalendarActionOutcome(
+        saved,
+        success: event == null ? 'Event created' : 'Event saved',
+      );
+      await controller.load();
+    }
     if (event == null && mounted && draftEventStart == createStart) {
       setState(() => draftEventStart = null);
     }
@@ -509,8 +585,35 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     await _showCalendarComposer(event: event);
   }
 
-  Future<void> _moveCalendarEvent(EventItem event, DateTime start) =>
-      _showCalendarComposer(initialStart: start, event: event);
+  Future<void> _moveCalendarEvent(EventItem event, DateTime start) async {
+    final actions = actionController;
+    final target = event.actionTarget;
+    if (actions == null ||
+        actions.busy ||
+        !actions.calendarChangesAvailable ||
+        target == null)
+      return;
+    try {
+      final result = await actions.submit(
+        DirectUpdate(
+          eventRef: target.eventId,
+          expectedRevision: target.expectedRevision,
+          title: event.title,
+          schedule: ActionSchedule(
+            startsAt: start.toUtc(),
+            endsAt: start.toUtc().add(event.endsAt.difference(event.startsAt)),
+            timezone:
+                event.timezone ?? calendarStorageTimezone(start.timeZoneOffset),
+          ),
+        ),
+      );
+      _showCalendarActionOutcome(result, success: 'Event moved');
+      if (mounted && result.status.state == CalendarActionState.succeeded)
+        await controller.load();
+    } on Object {
+      _showCalendarActionOutcome(null, success: 'Event moved');
+    }
+  }
 
   Future<void> _deleteCalendarEvent(EventItem event) async {
     final actions = actionController;

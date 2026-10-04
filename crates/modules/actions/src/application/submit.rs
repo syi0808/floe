@@ -6,6 +6,56 @@ use floe_kernel::{AgentFailure, OwnerActor};
 use uuid::Uuid;
 
 impl ActionsService {
+    pub(super) async fn proposal_evidence(
+        &self,
+        actor: &OwnerActor,
+        receipt: &floe_agent_contract::TaskExecutionReceiptRef,
+        artifact_id: Uuid,
+        scope: &ExecutionScope,
+    ) -> Result<ExpertProposalEvidence, AgentFailure> {
+        receipt.validate()?;
+        if artifact_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let evidence = self
+            .proposals
+            .read(actor, receipt, artifact_id, scope)
+            .await?;
+        evidence.proposal.validate()?;
+        let proposal = &evidence.proposal;
+        let dependency = &evidence.dependency;
+        if evidence.receipt != *receipt
+            || evidence.artifact_id != artifact_id
+            || proposal.person_id != actor.person_id
+            || proposal.task_id != receipt.execution.task_id.as_uuid()
+            || proposal.invocation_id != evidence.invocation_id
+            || proposal.assignment_id != evidence.assignment_id
+            || dependency.person_id() != actor.person_id
+            || dependency.observation_id() != proposal.evidence_id
+            || dependency.consumer().identifier() != proposal.package.id
+            || dependency.operation() != GrantOperation::Read
+            || dependency.purpose() != GrantPurpose::Assistant
+            || dependency.source().connector().as_str() != "calendar.event_kit"
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        self.capture_dependency_sources(actor, &evidence.coverage, scope)
+            .await?;
+        Ok(evidence)
+    }
+
+    pub(super) fn proposal_matches_destination(
+        evidence: &ExpertProposalEvidence,
+        destination: &CalendarDestination,
+    ) -> bool {
+        evidence.dependency.source().connection_id() == destination.connection_id
+            && evidence
+                .dependency
+                .source_resources()
+                .iter()
+                .any(|resource| resource.as_str() == destination.calendar_id)
+    }
+
     pub async fn submit(
         &self,
         actor: &OwnerActor,
@@ -134,44 +184,18 @@ impl ActionsService {
                 receipt,
                 artifact_id,
                 destination_ref,
-                timezone,
             } => {
-                receipt.validate()?;
-                if artifact_id.is_nil() || !crate::domain::record::bounded(&timezone, 128) {
-                    return Err(AgentFailure::InvalidInput);
-                }
                 let evidence = self
-                    .proposals
-                    .read(actor, &receipt, artifact_id, scope)
-                    .await?;
-                evidence.proposal.validate()?;
-                self.capture_dependency_sources(actor, &evidence.coverage, scope)
+                    .proposal_evidence(actor, &receipt, artifact_id, scope)
                     .await?;
                 let destination = self
                     .resolve_destination(actor, destination_ref, scope)
                     .await?;
-                let proposal = &evidence.proposal;
-                let dependency = &evidence.dependency;
-                if evidence.receipt != receipt
-                    || evidence.artifact_id != artifact_id
-                    || proposal.person_id != actor.person_id
-                    || proposal.task_id != receipt.execution.task_id.as_uuid()
-                    || proposal.invocation_id != evidence.invocation_id
-                    || proposal.assignment_id != evidence.assignment_id
-                    || dependency.person_id() != actor.person_id
-                    || dependency.observation_id() != proposal.evidence_id
-                    || dependency.consumer().identifier() != proposal.package.id
-                    || dependency.operation() != GrantOperation::Read
-                    || dependency.purpose() != GrantPurpose::Assistant
-                    || dependency.source().connection_id() != destination.connection_id
-                    || dependency.source().connector().as_str() != "calendar.event_kit"
-                    || !dependency
-                        .source_resources()
-                        .iter()
-                        .any(|resource| resource.as_str() == destination.calendar_id)
-                {
+                if !Self::proposal_matches_destination(&evidence, &destination) {
                     return Err(AgentFailure::PolicyDenied);
                 }
+                let proposal = &evidence.proposal;
+                let dependency = &evidence.dependency;
                 let starts_at = chrono::DateTime::<Utc>::from_timestamp_millis(
                     i64::try_from(proposal.draft.starts_at_unix_ms)
                         .map_err(|_| AgentFailure::InvalidInput)?,
@@ -193,7 +217,10 @@ impl ActionsService {
                 let effect = CalendarEffect::Create {
                     destination,
                     title: "Focus time".to_owned(),
-                    schedule: floe_day::TimedSchedule::new(starts_at, ends_at, timezone)
+                    // The verified proposal carries absolute instants, not a local
+                    // wall-time recurrence. UTC preserves those instants without
+                    // asking Flutter to invent a timezone for hidden evidence.
+                    schedule: floe_day::TimedSchedule::new(starts_at, ends_at, "UTC".to_owned())
                         .map_err(|_| AgentFailure::InvalidInput)?,
                 };
                 let origin = ActionOrigin::Expert {

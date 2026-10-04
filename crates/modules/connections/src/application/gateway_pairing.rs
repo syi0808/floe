@@ -339,6 +339,7 @@ impl PairingRecord {
             pin_revision,
         });
         next.gateway = Some(GatewaySummary {
+            display_address: Some(self.setup.display_address.clone()),
             gateway_ref: self.operation_id,
             revision: self.generation,
             display_name: "Gateway".into(),
@@ -408,7 +409,10 @@ impl PairingRecord {
             expires_at: self
                 .expires_at_unix_ms
                 .and_then(chrono::DateTime::from_timestamp_millis),
-            gateway: self.gateway.clone(),
+            gateway: self.gateway.clone().map(|mut gateway| {
+                gateway.display_address = Some(self.setup.display_address.clone());
+                gateway
+            }),
             failure: pairing_failure_projection(self),
             allowed_actions: actions,
             next_observation_after_ms: ((!self.state.terminal() || self.can_reconcile_repair())

@@ -34,9 +34,18 @@ pub enum ActionsCommand {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ActionsQuery {
     Destinations,
+    ProposalDestinations {
+        receipt: floe_agent_contract::TaskExecutionReceiptRef,
+        artifact_id: Uuid,
+    },
     Authority,
-    Inspect { action_ref: Uuid },
-    List { cursor: Option<Uuid>, limit: u16 },
+    Inspect {
+        action_ref: Uuid,
+    },
+    List {
+        cursor: Option<Uuid>,
+        limit: u16,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -148,6 +157,14 @@ impl ActionsQueries for AppComposition {
                 ActionsQuery::Destinations => owners
                     .actions
                     .destinations(&actor, &scope)
+                    .await
+                    .map(ActionsQueryResult::Destinations),
+                ActionsQuery::ProposalDestinations {
+                    receipt,
+                    artifact_id,
+                } => owners
+                    .actions
+                    .proposal_destinations(&actor, receipt, artifact_id, &scope)
                     .await
                     .map(ActionsQueryResult::Destinations),
                 ActionsQuery::Authority => owners

@@ -203,28 +203,22 @@ final class ExpertProposal extends ActionIntent {
     required this.receipt,
     required this.artifactId,
     required this.destinationRef,
-    required this.timezone,
   });
 
   final TaskExecutionReceiptReference receipt;
   final String artifactId;
   final String destinationRef;
-  final String timezone;
 
   @override
   Map<String, Object?> toJson() {
     receipt.validate();
     _validateUuid(artifactId, 'artifact_id');
     _validateUuid(destinationRef, 'destination_ref');
-    if (!_trimmedText(timezone, 128)) {
-      throw const FormatException('Invalid Expert proposal timezone.');
-    }
     return {
       'kind': 'expert_proposal',
       'receipt': receipt.toJson(),
       'artifact_id': artifactId,
       'destination_ref': destinationRef,
-      'timezone': timezone,
     };
   }
 }

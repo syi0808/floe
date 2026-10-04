@@ -147,6 +147,10 @@ pub enum ConnectionAction {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GatewaySummary {
+    /// Read projection reconstructed from the owning pairing's canonical setup.
+    /// Never a second persisted address or an authority input.
+    #[serde(skip)]
+    pub display_address: Option<String>,
     pub gateway_ref: Uuid,
     pub revision: u64,
     pub display_name: String,

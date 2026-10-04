@@ -491,7 +491,7 @@ fn valid_text(value: &str, maximum: usize) -> bool {
         && !value.chars().any(char::is_control)
 }
 
-fn valid_gateway_setup_address(value: &str) -> bool {
+pub(super) fn valid_gateway_setup_address(value: &str) -> bool {
     let Some((scheme, authority)) = value.split_once("://") else {
         return false;
     };

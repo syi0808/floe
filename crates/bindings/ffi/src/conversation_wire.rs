@@ -45,7 +45,7 @@ pub(crate) async fn command(
                 .await
                 .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?;
             let snapshot = service
-                .get_session(actor, receipt.session_id, scope)
+                .get_session(actor, receipt.session_id, None, scope)
                 .await
                 .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?;
             Ok(AppCommandResultDto::ConversationSession {
@@ -189,18 +189,22 @@ pub(crate) async fn query(
                 None => AppQueryResultDto::ConversationSessionAbsent {},
             })
         }
-        AppProductQueryDto::ConversationSessionGet { session_id } => {
-            Ok(AppQueryResultDto::ConversationSession {
-                session: session_snapshot(
-                    service
-                        .get_session(actor, session_id.get(), scope)
-                        .await
-                        .map_err(|failure| {
-                            failure_dto(failure, scope.trace_context().request_id())
-                        })?,
-                )?,
-            })
-        }
+        AppProductQueryDto::ConversationSessionGet {
+            session_id,
+            before_message_id,
+        } => Ok(AppQueryResultDto::ConversationSession {
+            session: session_snapshot(
+                service
+                    .get_session(
+                        actor,
+                        session_id.get(),
+                        before_message_id.map(|id| id.get()),
+                        scope,
+                    )
+                    .await
+                    .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?,
+            )?,
+        }),
         AppProductQueryDto::ConversationGetCommand { command_id } => {
             let id = CommandId::from_uuid(command_id.get()).ok_or_else(internal_error)?;
             Ok(

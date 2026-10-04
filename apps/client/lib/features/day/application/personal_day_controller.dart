@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import 'package:floe_client/app/floe_loading.dart';
@@ -38,6 +40,72 @@ final class PersonalDayController extends ChangeNotifier {
   CompletedDayRefresh? lastRefreshAcknowledgement;
 
   DayQuery get query => _query;
+
+  bool _automaticActive = false;
+  Timer? _automaticTimer;
+  Future<void>? _automaticRefresh;
+  bool _automaticRefreshAgain = false;
+  DayQuery? _lastAutomaticQuery;
+  final Stopwatch _automaticAge = Stopwatch();
+
+  /// Presentation freshness policy. Reads remain explicit Day commands; merely
+  /// querying the owner never starts acquisition or resumes an interrupted job.
+  void setAutomaticRefreshActive(bool active) {
+    if (_disposed || _automaticActive == active) return;
+    _automaticActive = active;
+    _automaticTimer?.cancel();
+    if (!active) return;
+    _automaticTimer = Timer.periodic(const Duration(minutes: 3), (_) {
+      unawaited(refreshIfStale());
+    });
+    unawaited(refreshIfStale());
+  }
+
+  Future<void> refreshIfStale({bool force = false}) async {
+    if (_disposed || !canRefresh) return;
+    if (force) {
+      // Remember invalidation while hidden; returning to Day must not reuse
+      // the previous source selection's freshness interval.
+      _lastAutomaticQuery = null;
+      _automaticAge.stop();
+    }
+    if (!_automaticActive) return;
+    final active = _automaticRefresh;
+    if (active != null) {
+      if (force ||
+          _lastAutomaticQuery == null ||
+          !_sameQueryIntent(_lastAutomaticQuery!, _query)) {
+        _automaticRefreshAgain = true;
+      }
+      await active;
+      return;
+    }
+    if (!force &&
+        _lastAutomaticQuery != null &&
+        _sameQueryIntent(_lastAutomaticQuery!, _query) &&
+        _automaticAge.isRunning &&
+        _automaticAge.elapsed < const Duration(minutes: 3))
+      return;
+    _automaticRefresh = _runAutomaticRefresh();
+    try {
+      await _automaticRefresh;
+    } finally {
+      _automaticRefresh = null;
+    }
+  }
+
+  Future<void> _runAutomaticRefresh() async {
+    do {
+      _automaticRefreshAgain = false;
+      _lastAutomaticQuery = _query;
+      _automaticAge
+        ..reset()
+        ..start();
+      await refresh();
+      // Source/date changes while observing coalesce into one subsequent read.
+      // An unresolved request still rejoins its original command in _refresh.
+    } while (!_disposed && _automaticActive && _automaticRefreshAgain);
+  }
 
   Future<void> load() => _load(false);
 
@@ -160,6 +228,7 @@ final class PersonalDayController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _loadGeneration++;
+    _automaticTimer?.cancel();
     super.dispose();
   }
 
@@ -254,7 +323,7 @@ final class PersonalDayController extends ChangeNotifier {
     }
   }
 
-  Future<void> moveDay(int offset) {
+  Future<void> moveDay(int offset) async {
     _query = DayQuery.local(
       personId: _query.personId,
       date: DateTime(
@@ -264,17 +333,19 @@ final class PersonalDayController extends ChangeNotifier {
       ),
       now: DateTime.now(),
     );
-    return load();
+    await load();
+    await refreshIfStale();
   }
 
-  Future<void> goToday() {
+  Future<void> goToday() async {
     final now = DateTime.now();
     _query = DayQuery.local(
       personId: _query.personId,
       date: DateTime(now.year, now.month, now.day),
       now: now,
     );
-    return load();
+    await load();
+    await refreshIfStale();
   }
 
   void clearError() {

@@ -53,6 +53,8 @@ class _AgentPanelState extends State<AgentPanel> {
   bool _wasBusy = false;
   bool _wasReady = false;
   bool _sessionRequested = false;
+  bool _loadingHistory = false;
+  int _historyLoadGeneration = 0;
 
   @override
   void initState() {
@@ -66,6 +68,8 @@ class _AgentPanelState extends State<AgentPanel> {
   void didUpdateWidget(AgentPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
+      _historyLoadGeneration++;
+      _loadingHistory = false;
       oldWidget.controller.removeListener(_changed);
       widget.controller.addListener(_changed);
       _wasBusy = widget.controller.busy;
@@ -101,10 +105,12 @@ class _AgentPanelState extends State<AgentPanel> {
     _ensureConversationWhenReady();
     final restoreFocus = _wasBusy && !widget.controller.busy;
     _wasBusy = widget.controller.busy;
-    final follow = !_scroll.hasClients || _scroll.position.extentAfter < 64;
+    final follow =
+        !_loadingHistory &&
+        (!_scroll.hasClients || _scroll.position.extentAfter < 64);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (follow && _scroll.hasClients) {
+      if (follow && !_loadingHistory && _scroll.hasClients) {
         _scroll.jumpTo(_scroll.position.maxScrollExtent);
       }
       if (restoreFocus) {
@@ -115,6 +121,39 @@ class _AgentPanelState extends State<AgentPanel> {
         }
       }
     });
+  }
+
+  Future<void> _loadEarlier() async {
+    if (_loadingHistory) return;
+    _loadingHistory = true;
+    final generation = ++_historyLoadGeneration;
+    final position = _scroll.hasClients ? _scroll.position.pixels : null;
+    final extent = _scroll.hasClients ? _scroll.position.maxScrollExtent : null;
+    final controller = widget.controller;
+    await controller.loadEarlierMessages();
+    if (!mounted) return;
+    if (generation != _historyLoadGeneration ||
+        !identical(controller, widget.controller))
+      return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (generation != _historyLoadGeneration) return;
+      if (position != null &&
+          extent != null &&
+          _scroll.hasClients &&
+          identical(controller, widget.controller) &&
+          (_scroll.position.pixels - position).abs() < 1) {
+        final next = position + _scroll.position.maxScrollExtent - extent;
+        _scroll.jumpTo(
+          next.clamp(
+            _scroll.position.minScrollExtent,
+            _scroll.position.maxScrollExtent,
+          ),
+        );
+      }
+      _loadingHistory = false;
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   Future<void> _exportDiagnostics() async {
@@ -209,19 +248,31 @@ class _AgentPanelState extends State<AgentPanel> {
                         padding: const EdgeInsets.all(FloeSpace.base),
                         itemCount:
                             messages.length +
-                            (controller.session?.hasEarlierMessages == true
-                                ? 1
-                                : 0),
+                            (controller.hasEarlierMessages ? 1 : 0),
                         separatorBuilder: (_, _) =>
                             const SizedBox(height: FloeSpace.base),
                         itemBuilder: (context, index) {
-                          final offset =
-                              controller.session?.hasEarlierMessages == true
-                              ? 1
-                              : 0;
+                          final offset = controller.hasEarlierMessages ? 1 : 0;
                           if (offset == 1 && index == 0)
-                            return const Text(
-                              'Earlier messages are retained by Conversation.',
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                FloeButton.text(
+                                  onPressed:
+                                      controller.loadingEarlier ||
+                                          controller.busy
+                                      ? null
+                                      : _loadEarlier,
+                                  child: Text(
+                                    controller.loadingEarlier
+                                        ? 'Loading earlier messages…'
+                                        : 'Load earlier messages',
+                                  ),
+                                ),
+                                if (controller.earlierFailure
+                                    case final failure?)
+                                  Text(failure),
+                              ],
                             );
                           return _message(strings, messages[index - offset]);
                         },

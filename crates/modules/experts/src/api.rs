@@ -74,6 +74,7 @@ pub struct ExpertAssignmentSummary {
 pub struct ExpertInstallationSummary {
     pub installation_ref: Uuid,
     pub display_name: String,
+    pub description: String,
     pub version: String,
     pub enabled: bool,
 }

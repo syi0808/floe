@@ -154,6 +154,7 @@ impl ConnectionsService {
             }
             let observed_summary = observed.summary();
             let summary = GatewaySummary {
+                display_address: None,
                 gateway_ref,
                 revision: expected_revision
                     .checked_add(1)

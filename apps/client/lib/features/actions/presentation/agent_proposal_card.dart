@@ -2,11 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_badge.dart';
 import 'package:floe_client/app/floe_button.dart';
-import 'package:floe_client/app/floe_input.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
@@ -37,7 +37,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       'application/vnd.floe.actions.calendar-proposal+json;version=1';
 
   final form = GlobalKey<FormState>();
-  final timezone = TextEditingController();
+  bool expanded = false;
   List<ActionDestinationChoice> destinations = const [];
   String? destinationRef;
   String? artifactId;
@@ -48,6 +48,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
   bool destinationsLoaded = false;
   bool submitting = false;
   int _messageEpoch = 0;
+  int _destinationEpoch = 0;
 
   List<AgentArtifact> get proposals => widget.message.artifacts
       .where((artifact) => artifact.mediaTypes.contains(proposalMediaType))
@@ -107,7 +108,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       artifactId = proposals.length == 1 ? proposals.single.id : null;
       destinations = const [];
       destinationRef = null;
-      timezone.clear();
+      expanded = false;
       error = null;
       submitting = false;
       loadingDestinations = false;
@@ -117,16 +118,13 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
     }
   }
 
-  @override
-  void dispose() {
-    timezone.dispose();
-    super.dispose();
-  }
-
   Future<void> _loadDestinations() async {
     final messageEpoch = _messageEpoch;
+    final destinationEpoch = ++_destinationEpoch;
+    final receipt = widget.message.executionReceipt;
+    final selectedArtifact = artifactId;
     final gateway = widget.controller.owners.actions;
-    if (gateway == null) return;
+    if (gateway == null || receipt == null || selectedArtifact == null) return;
     setState(() {
       loadingDestinations = true;
       destinationsLoaded = false;
@@ -135,8 +133,15 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       error = null;
     });
     try {
-      final values = await gateway.loadDestinations();
-      if (!mounted || messageEpoch != _messageEpoch) return;
+      final values = await gateway.loadProposalDestinations(
+        receipt,
+        selectedArtifact,
+      );
+      if (!mounted ||
+          messageEpoch != _messageEpoch ||
+          destinationEpoch != _destinationEpoch ||
+          artifactId != selectedArtifact)
+        return;
       setState(() {
         destinations = List.unmodifiable(values);
         destinationRef = values.length == 1
@@ -146,20 +151,16 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
         destinationsLoaded = true;
       });
     } on Object catch (failure) {
-      if (!mounted || messageEpoch != _messageEpoch) return;
+      if (!mounted ||
+          messageEpoch != _messageEpoch ||
+          destinationEpoch != _destinationEpoch ||
+          artifactId != selectedArtifact)
+        return;
       setState(() {
         error = CalendarActionError.from(failure);
         loadingDestinations = false;
       });
     }
-  }
-
-  bool _validTimezone(String? value) {
-    if (value == null || value.trim().isEmpty) return false;
-    return utf8.encode(value.trim()).length <= 128 &&
-        !value.trim().runes.any(
-          (rune) => rune < 32 || (rune >= 127 && rune <= 159),
-        );
   }
 
   Future<void> _submit(AgentArtifact artifact) async {
@@ -182,7 +183,6 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       receipt: receipt,
       artifactId: artifact.id,
       destinationRef: destination,
-      timezone: timezone.text.trim(),
     );
     final payload = <String, Object?>{
       'kind': 'actions.submit',
@@ -325,7 +325,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
             Text(strings.agentProposalTitle, style: FloeType.controlLabel),
             const SizedBox(height: 8),
             Text(
-              'Choose a Calendar destination and timezone for this proposal. Your Action permissions determine whether approval is needed.',
+              'Review this proposal before adding it to your calendar. Your Calendar permissions still apply.',
               style: FloeType.bodySmall.copyWith(fontSize: 12),
             ),
             const SizedBox(height: 8),
@@ -351,6 +351,14 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
             ] else if (widget.controller.owners.actions == null) ...[
               const SizedBox(height: 8),
               const Text('Calendar Actions are unavailable in this view.'),
+            ] else if (!expanded && currentAction == null) ...[
+              const SizedBox(height: 8),
+              FloeButton.outlined(
+                onPressed: submitting
+                    ? null
+                    : () => setState(() => expanded = true),
+                child: const Text('Review proposal'),
+              ),
             ] else ...[
               const SizedBox(height: 12),
               if (artifacts.length > 1)
@@ -368,41 +376,49 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                       )
                       .toList(growable: false),
                   enabled: !submitting,
-                  onChanged: (value) => setState(() => artifactId = value),
+                  onChanged: (value) {
+                    setState(() {
+                      artifactId = value;
+                      destinations = const [];
+                      destinationRef = null;
+                      destinationsLoaded = false;
+                      loadingDestinations = false;
+                    });
+                    unawaited(_loadDestinations());
+                  },
                   validator: (value) =>
                       value == null ? strings.actionFormInvalid : null,
                 ),
               if (currentAction == null) ...[
-                FloeSelect<String>(
-                  label: strings.actionDestination,
-                  value:
-                      destinations.any(
-                        (destination) =>
-                            destination.destinationRef == destinationRef,
-                      )
-                      ? destinationRef
-                      : null,
-                  options: destinations
-                      .map(
-                        (destination) => FloeSelectOption(
-                          value: destination.destinationRef,
-                          label: destination.label,
-                        ),
-                      )
-                      .toList(growable: false),
-                  enabled: !loadingDestinations && !submitting,
-                  onChanged: (value) => setState(() => destinationRef = value),
-                  validator: (value) =>
-                      value == null ? strings.actionFormInvalid : null,
-                ),
+                if (destinations.length == 1)
+                  Text(
+                    '${strings.actionDestination}: ${destinations.single.label}',
+                  )
+                else
+                  FloeSelect<String>(
+                    label: strings.actionDestination,
+                    value:
+                        destinations.any(
+                          (destination) =>
+                              destination.destinationRef == destinationRef,
+                        )
+                        ? destinationRef
+                        : null,
+                    options: destinations
+                        .map(
+                          (destination) => FloeSelectOption(
+                            value: destination.destinationRef,
+                            label: destination.label,
+                          ),
+                        )
+                        .toList(growable: false),
+                    enabled: !loadingDestinations && !submitting,
+                    onChanged: (value) =>
+                        setState(() => destinationRef = value),
+                    validator: (value) =>
+                        value == null ? strings.actionFormInvalid : null,
+                  ),
                 const SizedBox(height: 8),
-                FloeInput(
-                  label: 'Timezone',
-                  controller: timezone,
-                  enabled: !submitting,
-                  validator: (value) =>
-                      _validTimezone(value) ? null : strings.actionFormInvalid,
-                ),
                 if (destinations.isEmpty &&
                     !loadingDestinations &&
                     error == null) ...[
@@ -434,10 +450,15 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                       ? null
                       : () => _submit(selectedArtifact!),
                   loading: submitting,
-                  child: Text('Submit proposal'),
+                  child: const Text('Add to calendar'),
                 ),
               ] else ...[
                 Text(currentAction.title),
+                Text(
+                  DateFormat.yMMMd(
+                    Localizations.localeOf(context).toLanguageTag(),
+                  ).add_jm().format(currentAction.schedule.startsAt.toLocal()),
+                ),
                 if (error case final actionError?) Text(actionError.message),
                 FloeButton.text(
                   onPressed:

@@ -80,12 +80,22 @@ pub struct ArtifactSummary {
 pub(super) fn project_session_snapshot(
     session: AgentSession,
     continuation_ref: Option<ContinuationToken>,
+    before_message_id: Option<Uuid>,
 ) -> Result<SessionSnapshot, AgentFailure> {
-    let start = session.messages.len().saturating_sub(MAX_SESSION_MESSAGES);
+    let end = match before_message_id {
+        Some(cursor) => session
+            .messages
+            .iter()
+            .position(|message| projected_message_id(message) == cursor)
+            .ok_or(AgentFailure::Conflict)?,
+        None => session.messages.len(),
+    };
+    let start = end.saturating_sub(MAX_SESSION_MESSAGES);
     let mut bytes = 0usize;
     let mut messages = Vec::new();
-    for message in &session.messages[start..] {
+    for message in &session.messages[start..end] {
         let turn_id = message.turn_id();
+        let projected_id = projected_message_id(message);
         if turn_id.is_nil() {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -98,7 +108,7 @@ pub(super) fn project_session_snapshot(
                     return Err(AgentFailure::StorageUnavailable);
                 }
                 SessionMessage::User {
-                    message_id: *message_id,
+                    message_id: projected_id,
                     turn_id,
                     text: text.clone(),
                 }
@@ -106,7 +116,7 @@ pub(super) fn project_session_snapshot(
             AgentMessage::Assistant { text, .. } => {
                 bounded(text, floe_agent_contract::MAX_OUTPUT_BYTES, &mut bytes)?;
                 SessionMessage::Assistant {
-                    message_id: turn_id,
+                    message_id: projected_id,
                     turn_id,
                     text: text.clone(),
                 }
@@ -114,7 +124,7 @@ pub(super) fn project_session_snapshot(
             AgentMessage::Preamble { text, .. } => {
                 bounded(text, floe_agent_contract::MAX_OUTPUT_BYTES, &mut bytes)?;
                 SessionMessage::Preamble {
-                    message_id: Uuid::new_v5(&turn_id, format!("preamble:{text}").as_bytes()),
+                    message_id: projected_id,
                     turn_id,
                     text: text.clone(),
                 }
@@ -122,7 +132,7 @@ pub(super) fn project_session_snapshot(
             AgentMessage::Compaction { summary, .. } => {
                 bounded(summary, crate::MAX_COMPACTION_SUMMARY_BYTES, &mut bytes)?;
                 SessionMessage::Compaction {
-                    message_id: Uuid::new_v5(&turn_id, b"compaction"),
+                    message_id: projected_id,
                     turn_id,
                     summary: summary.clone(),
                 }
@@ -138,7 +148,7 @@ pub(super) fn project_session_snapshot(
                     bounded(text, floe_agent_contract::MAX_OUTPUT_BYTES, &mut bytes)?;
                 }
                 SessionMessage::Capability {
-                    message_id: *call_id,
+                    message_id: projected_id,
                     turn_id,
                     call_id: *call_id,
                     capability_id: capability_id.clone(),
@@ -191,7 +201,7 @@ pub(super) fn project_session_snapshot(
                     })
                     .collect();
                 SessionMessage::Delegation {
-                    message_id: task.task_id.as_uuid(),
+                    message_id: projected_id,
                     turn_id,
                     task: TaskSummary {
                         execution_receipt: execution_receipt.clone(),
@@ -209,7 +219,7 @@ pub(super) fn project_session_snapshot(
                 interaction_kind,
                 ..
             } => SessionMessage::Interaction {
-                message_id: *interaction_id,
+                message_id: projected_id,
                 turn_id,
                 interaction_id: *interaction_id,
                 interaction_kind: *interaction_kind,
@@ -238,4 +248,19 @@ fn bounded(text: &str, limit: usize, total: &mut usize) -> Result<(), AgentFailu
         return Err(AgentFailure::StorageUnavailable);
     }
     Ok(())
+}
+
+fn projected_message_id(message: &AgentMessage) -> Uuid {
+    let turn = message.turn_id();
+    match message {
+        AgentMessage::User { message_id, .. } => *message_id,
+        AgentMessage::Assistant { .. } => turn,
+        AgentMessage::Preamble { text, .. } => {
+            Uuid::new_v5(&turn, format!("preamble:{text}").as_bytes())
+        }
+        AgentMessage::Compaction { .. } => Uuid::new_v5(&turn, b"compaction"),
+        AgentMessage::Capability { call_id, .. } => *call_id,
+        AgentMessage::Delegation { task, .. } => task.task_id.as_uuid(),
+        AgentMessage::Interaction { interaction_id, .. } => *interaction_id,
+    }
 }

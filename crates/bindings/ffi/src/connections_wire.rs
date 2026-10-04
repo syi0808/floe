@@ -489,6 +489,7 @@ fn failure(value: owner::ConnectionFailure) -> dto::ConnectionsFailureDto {
 }
 fn gateway(value: owner::GatewaySummary) -> AppWireResult<dto::GatewaySummaryDto> {
     Ok(dto::GatewaySummaryDto {
+        display_address: value.display_address,
         gateway_ref: dto::GatewayRefDto::new(value.gateway_ref).ok_or_else(internal_error)?,
         revision: value.revision,
         display_name: value.display_name,

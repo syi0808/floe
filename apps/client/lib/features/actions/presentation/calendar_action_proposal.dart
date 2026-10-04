@@ -37,10 +37,12 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
   String? destinationRef;
   CalendarAction? submittedAction;
   bool saving = false;
+  bool closingAfterSuccess = false;
 
   @override
   void initState() {
     super.initState();
+    widget.controller.addListener(_closeWhenSucceeded);
     final now = DateTime.now();
     final next =
         widget.initialStart ??
@@ -62,6 +64,7 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
 
   @override
   void dispose() {
+    widget.controller.removeListener(_closeWhenSucceeded);
     title.dispose();
     super.dispose();
   }
@@ -117,17 +120,32 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
         submittedAction = action;
         saving = false;
       });
+      _closeWhenSucceeded();
     } on Object {
       if (!mounted) return;
       setState(() => saving = false);
     }
   }
 
+  void _closeWhenSucceeded() {
+    final submitted = submittedAction;
+    if (!mounted || closingAfterSuccess || submitted == null) return;
+    final action = widget.controller.find(submitted.actionRef) ?? submitted;
+    if (action.status.state != CalendarActionState.succeeded) return;
+    closingAfterSuccess = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Navigator.of(context).pop(action);
+    });
+  }
+
   Future<void> reconcile(CalendarAction action) async {
     try {
       final latest = widget.controller.find(action.actionRef) ?? action;
       final result = await widget.controller.reconcile(latest);
-      if (mounted) setState(() => submittedAction = result);
+      if (mounted) {
+        setState(() => submittedAction = result);
+        _closeWhenSucceeded();
+      }
     } on Object {
       // The controller retains the owner result state for this view.
     }
@@ -190,7 +208,7 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
           loadingLabel: strings.actionLoading,
           children: [
             const Text(
-              'Changes are submitted to Actions, which applies its current review and safety policy. Existing alerts are preserved. Recurring events and invitations are managed in the source calendar.',
+              'Existing alerts are preserved. Manage recurring events and invitations in the original calendar.',
             ),
             const SizedBox(height: 16),
             Form(

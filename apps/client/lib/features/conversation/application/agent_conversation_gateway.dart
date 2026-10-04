@@ -22,5 +22,10 @@ abstract interface class AgentConversationGateway {
   Future<AgentSession> startConversation(String personId);
   Future<AgentSession?> resumeConversation(String personId);
   Future<AgentSession> loadConversation(String personId, String sessionId);
+  Future<AgentSession> loadEarlierConversation(
+    String personId,
+    String sessionId,
+    String beforeMessageId,
+  );
   Future<AgentSession> recoverConversation(AgentSession session);
 }

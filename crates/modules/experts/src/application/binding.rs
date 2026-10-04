@@ -930,6 +930,7 @@ pub fn project_expert_directory(
         installations.push(ExpertInstallationSummary {
             installation_ref: installation.id,
             display_name: definition.name.clone(),
+            description: definition.description.clone(),
             version: installation.package.version.clone(),
             enabled: installation.enabled,
         });

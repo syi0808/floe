@@ -137,8 +137,13 @@ final class _GatewayConnectionPanelState extends State<GatewayConnectionPanel> {
                     autocorrect: false,
                     enableSuggestions: false,
                   )
-                else
-                  const Text('Using the saved server connection.'),
+                else ...[
+                  const Text('Server address', style: FloeType.controlLabel),
+                  const SizedBox(height: FloeSpace.xs),
+                  SelectableText(
+                    connected.displayAddress ?? 'Server address unavailable',
+                  ),
+                ],
                 const SizedBox(height: 16),
                 Semantics(
                   liveRegion: true,
@@ -307,7 +312,8 @@ final class ManagementLaunchButton extends StatelessWidget {
 
 String _pairingLabel(String state) => switch (state) {
   'starting' => 'Starting pairing…',
-  'awaiting_gateway_approval' => 'Compare this code with the server dashboard and approve there.',
+  'awaiting_gateway_approval' =>
+    'Compare this code with the server dashboard and approve there.',
   'cancelling' => 'Cancelling pairing on the Gateway…',
   'connected' => 'Gateway connected.',
   'rejected' => 'Pairing was rejected.',

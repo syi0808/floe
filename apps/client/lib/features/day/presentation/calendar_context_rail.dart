@@ -146,56 +146,77 @@ class _CalendarCoverageCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final coverage = snapshot.calendarCoverage;
-    return FloeCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Calendar coverage', style: FloeType.title),
-          SizedBox(height: FloeSpace.base),
-          if (coverage == null)
-            Text(
-              'No Calendar coverage was returned for this date.',
-              style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
-            )
-          else if (coverage.sources.isEmpty)
-            Text(
-              'No Calendar sources were returned for this date.',
-              style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
-            )
-          else
-            for (final (index, source) in coverage.sources.indexed) ...[
-              _CoverageEntry(
-                kind: 'Source',
-                label: source.label,
-                state: source.state,
-                query: query,
-                lastSuccessAt: source.lastSuccessAt,
-                lastRange: source.lastRange,
-                failure: source.failure?.name,
-                failureAt: source.failureAt,
-              ),
-              for (final resource in source.resources)
-                Padding(
-                  padding: EdgeInsets.only(left: FloeSpace.md),
-                  child: _CoverageEntry(
-                    kind: 'Resource',
-                    label: resource.label,
-                    state: resource.state,
-                    query: query,
-                    lastSuccessAt: resource.lastSuccessAt,
-                    lastRange: resource.lastRange,
-                    failure: resource.failure?.name,
-                    failureAt: resource.failureAt,
-                  ),
-                ),
-              if (index < coverage.sources.length - 1)
-                Padding(
-                  padding: EdgeInsets.symmetric(vertical: FloeSpace.sm),
-                  child: FloeDivider(height: 1),
-                ),
-            ],
-        ],
+    final complete = hasCompleteCalendarCoverage(snapshot, query);
+    return ExpansionTile(
+      tilePadding: const EdgeInsets.symmetric(horizontal: FloeSpace.md),
+      childrenPadding: const EdgeInsets.all(FloeSpace.md),
+      shape: const Border(),
+      collapsedShape: const Border(),
+      title: Text(
+        complete
+            ? 'Calendars synced for this date'
+            : coverage == null
+            ? 'Calendar status unavailable'
+            : coverage.sources.isEmpty
+            ? 'No calendar data loaded'
+            : 'Some calendar data may be missing or out of date',
+        style: FloeType.bodySmall.copyWith(
+          color: complete ? FloePalette.neutral600 : FloePalette.warning600,
+        ),
       ),
+      children: [
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (coverage == null)
+              Text(
+                'No Calendar coverage was returned for this date.',
+                style: FloeType.bodySmall.copyWith(
+                  color: FloePalette.neutral600,
+                ),
+              )
+            else if (coverage.sources.isEmpty)
+              Text(
+                'No Calendar sources were returned for this date.',
+                style: FloeType.bodySmall.copyWith(
+                  color: FloePalette.neutral600,
+                ),
+              )
+            else
+              for (final (index, source) in coverage.sources.indexed) ...[
+                _CoverageEntry(
+                  kind: 'Source',
+                  label: source.label,
+                  state: source.state,
+                  query: query,
+                  lastSuccessAt: source.lastSuccessAt,
+                  lastRange: source.lastRange,
+                  failure: source.failure?.name,
+                  failureAt: source.failureAt,
+                ),
+                for (final resource in source.resources)
+                  Padding(
+                    padding: EdgeInsets.only(left: FloeSpace.md),
+                    child: _CoverageEntry(
+                      kind: 'Resource',
+                      label: resource.label,
+                      state: resource.state,
+                      query: query,
+                      lastSuccessAt: resource.lastSuccessAt,
+                      lastRange: resource.lastRange,
+                      failure: resource.failure?.name,
+                      failureAt: resource.failureAt,
+                    ),
+                  ),
+                if (index < coverage.sources.length - 1)
+                  Padding(
+                    padding: EdgeInsets.symmetric(vertical: FloeSpace.sm),
+                    child: FloeDivider(height: 1),
+                  ),
+              ],
+          ],
+        ),
+      ],
     );
   }
 }

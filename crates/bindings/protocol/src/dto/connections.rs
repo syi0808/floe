@@ -124,6 +124,7 @@ impl ConnectionsFailureDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GatewaySummaryDto {
+    pub display_address: Option<String>,
     pub gateway_ref: super::GatewayRefDto,
     pub revision: u64,
     pub display_name: String,
@@ -141,6 +142,16 @@ impl GatewaySummaryDto {
             || !unique_values(&self.allowed_actions)
         {
             return Err("connections.gateway");
+        }
+        if self.state == GatewayStateDto::Paired && self.display_address.is_none() {
+            return Err("connections.gateway.display_address");
+        }
+        if self
+            .display_address
+            .as_ref()
+            .is_some_and(|address| !super::commands::valid_gateway_setup_address(address))
+        {
+            return Err("connections.gateway.display_address");
         }
         if let Some(failure) = &self.failure {
             failure.validate()?;

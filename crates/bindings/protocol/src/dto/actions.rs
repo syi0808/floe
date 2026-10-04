@@ -66,7 +66,6 @@ pub enum ActionIntentDto {
         receipt: TaskExecutionReceiptRefDto,
         artifact_id: UuidRefDto,
         destination_ref: UuidRefDto,
-        timezone: String,
     },
 }
 
@@ -92,13 +91,8 @@ impl ActionIntentDto {
             Self::DirectDelete {
                 expected_revision, ..
             } => positive_revision(*expected_revision, "actions.expected_revision"),
-            Self::ExpertProposal {
-                receipt, timezone, ..
-            } => {
+            Self::ExpertProposal { receipt, .. } => {
                 receipt.validate()?;
-                if !bounded_trimmed_text(timezone, 128) {
-                    return Err("actions.timezone");
-                }
                 Ok(())
             }
         }

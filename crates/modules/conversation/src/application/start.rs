@@ -113,6 +113,7 @@ pub async fn read_session_snapshot<R: ConversationRepository + ?Sized, S: Sessio
     sessions: &S,
     actor: &OwnerActor,
     session_id: Uuid,
+    before_message_id: Option<Uuid>,
     scope: &ExecutionScope,
 ) -> Result<SessionSnapshot, AgentFailure> {
     actor.validate()?;
@@ -136,7 +137,7 @@ pub async fn read_session_snapshot<R: ConversationRepository + ?Sized, S: Sessio
         }
         None => None,
     };
-    project_session_snapshot(session, continuation_ref)
+    project_session_snapshot(session, continuation_ref, before_message_id)
 }
 
 fn validate_session(

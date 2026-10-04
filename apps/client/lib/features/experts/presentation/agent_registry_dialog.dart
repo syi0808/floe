@@ -207,7 +207,7 @@ class _InstallationCard extends StatelessWidget {
                 Text(installation.displayName, style: FloeType.controlLabel),
                 const SizedBox(height: FloeSpace.xxs),
                 Text(
-                  installation.version,
+                  installation.description,
                   style: FloeType.bodySmall.copyWith(
                     color: FloePalette.neutral600,
                     fontSize: 12,
@@ -269,6 +269,7 @@ class _RequirementSection extends StatefulWidget {
 
 class _RequirementSectionState extends State<_RequirementSection> {
   bool expanded = false;
+  final expansion = ExpansibleController();
   String? loadedReviewRef;
   Set<String> draft = {};
 
@@ -289,6 +290,12 @@ class _RequirementSectionState extends State<_RequirementSection> {
       expanded = true;
       _resetDraft(focus);
     }
+  }
+
+  @override
+  void dispose() {
+    expansion.dispose();
+    super.dispose();
   }
 
   void _resetDraft(AgentBindingReview review) {
@@ -320,14 +327,15 @@ class _RequirementSectionState extends State<_RequirementSection> {
       _resetDraft(review);
     }
     return ExpansionTile(
+      controller: expansion,
       key: ValueKey(
         'requirement-${widget.assignment.assignmentRef}-${widget.requirement.requirementRef}',
       ),
       initiallyExpanded: expanded,
       onExpansionChanged: (value) {
         setState(() => expanded = value);
-        if (value && inspection == null && review == null) {
-          widget.controller.inspectBinding(
+        if (value && review == null) {
+          widget.controller.prepareReview(
             widget.assignment,
             widget.requirement,
           );
@@ -341,7 +349,7 @@ class _RequirementSectionState extends State<_RequirementSection> {
         Text(strings.expertSourceSelectionBoundary),
         if (widget.controller.busy && inspection == null && review == null)
           const CircularProgressIndicator(),
-        if (inspection != null)
+        if (inspection != null && review == null)
           for (final candidate in inspection.candidates)
             _InspectionRow(candidate: candidate),
         if (inspection == null &&
@@ -396,7 +404,7 @@ class _RequirementSectionState extends State<_RequirementSection> {
                     widget.requirement,
                   )
                 : null,
-            child: const Text('Review sources'),
+            child: const Text('Retry loading sources'),
           ),
       ],
     );
@@ -430,7 +438,10 @@ class _RequirementSectionState extends State<_RequirementSection> {
 
   Future<void> _replace(Set<String> refs) async {
     final replaced = await widget.controller.replaceBinding(refs);
-    if (replaced && mounted) await widget.onBindingReplaced?.call();
+    if (replaced && mounted) {
+      expansion.collapse();
+      await widget.onBindingReplaced?.call();
+    }
   }
 }
 

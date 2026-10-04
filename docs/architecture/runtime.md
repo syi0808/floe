@@ -245,3 +245,8 @@ Feature requests that encounter an intrinsic VaultUnavailable/VaultLocked failur
 
 
 Vault status is a pure query and never occupies a command-receipt observer slot. Recovery first rejoins any pending immutable lifecycle command, then reads current status. A sealed published generation is reported as Locked; Unlock retires and drains it on the sole lifecycle queue before reopening. Released lifecycle results are archived as exact physical receipts in the plain store before they leave the bounded memory cache. Replaying an archived ID only returns its original outcome and never executes or retires the current generation. Unreleased/in-flight work remains bounded; an archival failure retains the in-memory receipt.
+
+
+### Conversation history windows
+
+The existing session-read query accepts an optional `before_message_id` cursor. Conversation authorizes the Person/session first and locates that stable message identity inside the same stored session; a missing cursor is Conflict, never a different latest page. Both the default latest window and earlier windows retain the 256-message and existing payload bounds. History reads are pure: they do not start a continuation, rerun a model or recover a pending product command. Flutter keeps earlier text separate from current session authority, deduplicates by message identity, and discards stale page responses on session replacement or Vault sealing.

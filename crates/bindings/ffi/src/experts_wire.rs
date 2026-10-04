@@ -242,6 +242,7 @@ fn directory_to_dto(
             Ok(ExpertInstallationSummaryDto {
                 installation_ref: uuid_ref(installation.installation_ref)?,
                 display_name: installation.display_name,
+                description: installation.description,
                 version: installation.version,
                 enabled: installation.enabled,
             })

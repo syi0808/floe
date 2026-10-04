@@ -85,6 +85,7 @@ pub trait ConversationOwner: Send + Sync {
         &'a self,
         actor: &'a OwnerActor,
         session_id: Uuid,
+        before_message_id: Option<Uuid>,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<SessionSnapshot, AgentFailure>>;
     fn recover_session<'a>(
@@ -518,7 +519,7 @@ where
             self.inner.check(actor)?;
             match receipt {
                 Some(receipt) => self
-                    .get_session(actor, receipt.session_id, scope)
+                    .get_session(actor, receipt.session_id, None, scope)
                     .await
                     .map(Some),
                 None => Ok(None),
@@ -529,6 +530,7 @@ where
         &'a self,
         actor: &'a OwnerActor,
         session_id: Uuid,
+        before_message_id: Option<Uuid>,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<SessionSnapshot, AgentFailure>> {
         Box::pin(async move {
@@ -538,6 +540,7 @@ where
                 self.inner.dependencies.sessions.as_ref(),
                 actor,
                 session_id,
+                before_message_id,
                 scope,
             )
             .await
@@ -565,7 +568,7 @@ where
                     },
                 ))
                 .await?;
-            self.get_session(actor, session_id, scope).await
+            self.get_session(actor, session_id, None, scope).await
         })
     }
     fn start_turn<'a>(

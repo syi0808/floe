@@ -27,6 +27,41 @@ final class SourceConnectionPanel extends StatefulWidget {
 
 final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
   bool opening = false;
+  bool offeredInitialSelection = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _offerInitialSelection();
+  }
+
+  @override
+  void didUpdateWidget(SourceConnectionPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _offerInitialSelection();
+  }
+
+  void _offerInitialSelection() {
+    if (offeredInitialSelection ||
+        widget.source.selectedResources.isNotEmpty ||
+        !(widget.source.availability == 'available' ||
+            (widget.controller.operation?.state == 'completed' &&
+                widget.controller.operation?.source?.sourceRef ==
+                    widget.source.sourceRef)) ||
+        !{'calendar', 'contacts'}.contains(widget.integration?.category) ||
+        !widget.source.allowedActions.contains('configure'))
+      return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          offeredInitialSelection ||
+          busy ||
+          widget.source.selectedResources.isNotEmpty)
+        return;
+      offeredInitialSelection = true;
+      _chooseResources();
+    });
+  }
+
   String get name =>
       widget.integration?.displayName ??
       widget.source.displayLabels.join(' · ');
@@ -114,7 +149,7 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
               FloeBadge(
                 label: switch (source.availability) {
                   'available' => 'Connected',
-                  'permission_required' => 'Permission needed',
+                  'permission_required' => 'Finish setup',
                   'identity_changed' => 'Reconnect needed',
                   'disconnected' => 'Disconnected',
                   _ => 'Unavailable',
@@ -230,6 +265,10 @@ final class _ResourceDialogState extends State<_ResourceDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (widget.review.permittedChoices.isEmpty)
+                  const Text(
+                    'No resources are available yet. Add one in the original service, then reopen this selection.',
+                  ),
                 for (final choice in widget.review.permittedChoices)
                   FloeCheckboxTile(
                     title: Text(choice.label),
@@ -267,6 +306,7 @@ final class _ResourceDialogState extends State<_ResourceDialog> {
             onPressed:
                 widget.controller.busy ||
                     expired ||
+                    selected.isEmpty ||
                     !widget.review.allowedActions.contains('configure')
                 ? null
                 : () async {

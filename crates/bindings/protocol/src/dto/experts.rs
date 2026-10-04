@@ -211,6 +211,7 @@ impl ExpertAssignmentSummaryDto {
 pub struct ExpertInstallationSummaryDto {
     pub installation_ref: UuidRefDto,
     pub display_name: String,
+    pub description: String,
     pub version: String,
     pub enabled: bool,
 }
@@ -218,6 +219,9 @@ pub struct ExpertInstallationSummaryDto {
 impl ExpertInstallationSummaryDto {
     pub fn validate(&self) -> Result<(), &'static str> {
         validate_display_name(&self.display_name)?;
+        if !bounded_owner_text(&self.description, 512) {
+            return Err("experts.installation.description");
+        }
         if !bounded_owner_text(&self.version, 64) {
             return Err("experts.installation.version");
         }

@@ -3,13 +3,13 @@
 use super::gateway_authority::{
     bounded_decode, bounded_encode, pairing_storage, validate_producer,
 };
-use super::{storage, EncryptedAgentVault, VaultKeyProvider};
+use super::{EncryptedAgentVault, VaultKeyProvider, storage};
 use floe_access::GatewayCredentialExpectation;
 use floe_connections::*;
 use floe_execution::BoxFuture;
 use floe_kernel::{AgentFailure, PersonId};
 use sha2::Digest;
-use turso::{transaction::TransactionBehavior, Connection};
+use turso::{Connection, transaction::TransactionBehavior};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -900,12 +900,16 @@ impl<K: VaultKeyProvider> GatewayRegistry for EncryptedAgentVault<K> {
                         return Err(AgentFailure::PolicyDenied);
                     }
                     return Ok(Some(GatewayObservation::Paired {
-                        summary: operation.gateway.ok_or(AgentFailure::VaultUnavailable)?,
+                        summary: operation
+                            .snapshot()
+                            .gateway
+                            .ok_or(AgentFailure::VaultUnavailable)?,
                         binding: enrolled.binding.clone(),
                     }));
                 }
                 Ok(Some(GatewayObservation::RepairRequired {
                     summary: GatewaySummary {
+                        display_address: Some(operation.setup.display_address.clone()),
                         gateway_ref: operation_id,
                         revision: operation.revision,
                         display_name: "Gateway".into(),

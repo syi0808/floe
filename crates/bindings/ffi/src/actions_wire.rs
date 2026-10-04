@@ -23,7 +23,11 @@ pub(crate) fn handles_query(query: &dto::AppProductQueryDto) -> bool {
     use dto::AppProductQueryDto::*;
     matches!(
         query,
-        ActionsDestinations {} | ActionsAuthority {} | ActionsInspect { .. } | ActionsList { .. }
+        ActionsDestinations {}
+            | ActionsProposalDestinations { .. }
+            | ActionsAuthority {}
+            | ActionsInspect { .. }
+            | ActionsList { .. }
     )
 }
 
@@ -117,6 +121,13 @@ pub(crate) fn query(
     use dto::AppProductQueryDto as Q;
     let request = match query {
         Q::ActionsDestinations {} => floe_app::ActionsQuery::Destinations,
+        Q::ActionsProposalDestinations {
+            receipt,
+            artifact_id,
+        } => floe_app::ActionsQuery::ProposalDestinations {
+            receipt: task_receipt_in(receipt)?,
+            artifact_id: artifact_id.get(),
+        },
         Q::ActionsAuthority {} => floe_app::ActionsQuery::Authority,
         Q::ActionsInspect { action_ref } => floe_app::ActionsQuery::Inspect {
             action_ref: action_ref.get(),
@@ -137,7 +148,8 @@ pub(crate) fn query(
         .map_err(agent_failure)?;
     match (request, result) {
         (
-            floe_app::ActionsQuery::Destinations,
+            floe_app::ActionsQuery::Destinations
+            | floe_app::ActionsQuery::ProposalDestinations { .. },
             floe_app::ActionsQueryResult::Destinations(values),
         ) => {
             let destinations = values
@@ -229,12 +241,10 @@ fn intent_in(value: dto::ActionIntentDto) -> AppWireResult<owner::ActionIntent> 
             receipt,
             artifact_id,
             destination_ref,
-            timezone,
         } => owner::ActionIntent::ExpertProposal {
             receipt: task_receipt_in(receipt)?,
             artifact_id: artifact_id.get(),
             destination_ref: destination_ref.get(),
-            timezone,
         },
     };
     Ok(intent)

@@ -105,11 +105,17 @@ final class AgentInstallation {
         128,
         'installation.display_name',
       ),
+      description = _boundedOwnerText(
+        json['description'],
+        512,
+        'installation.description',
+      ),
       version = _boundedOwnerText(json['version'], 64, 'installation.version'),
       enabled = _boolean(json['enabled'], 'installation.enabled') {
     _exactKeys(json, const {
       'installation_ref',
       'display_name',
+      'description',
       'version',
       'enabled',
     });
@@ -117,6 +123,7 @@ final class AgentInstallation {
 
   final String installationRef;
   final String displayName;
+  final String description;
   final String version;
   final bool enabled;
 }

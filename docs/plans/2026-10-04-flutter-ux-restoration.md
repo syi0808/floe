@@ -112,3 +112,16 @@ Search removed public confirmation routes, `Codes match` instructions, unused na
 - R2 initial presentation cutover restores list/count, removes the duplicate Remote card, combines Connect preparation/start, moves resource/permission decisions into shared dialogs and carries exact source references through conversation navigation. Seven initial Flutter behavior/widget probes passed. A failed preparation cannot reuse an older review; success closes a dialog only from its own acknowledged command.
 - R2 owner projection gaps (saved address, service identity/detail metadata and future-resource selection policy), further visual comparisons, R3 and R4 remain open. Full restoration is not complete.
 - R2–R4 detailed call-site investigation remains part of their pre-edit gates; this plan does not claim every remaining contract decision is resolved.
+
+
+### Subsequent implementation checkpoint
+
+- `ac686050` is published to main after macOS Debug arm64 and strict codesign passed; Opus closed the scoped pairing receipt/copy findings. This is the initial Connections restoration, not full UI acceptance.
+- R3 restores direct drag submission and closes the composer only on its own confirmed success. Current Day is read separately; uncertain results keep their original Actions identity. Five isolated freshness-controller probes and two composer outcome probes passed.
+- Automatic Day freshness is presentation-driven on visible/resumed Day, with a three-minute interval and source/date invalidation. Hidden invalidation is retained, concurrent requests coalesce, and disposal stops observation/timers without cancelling owner work.
+- R4 adds safe registry descriptions and prepares binding reviews on expansion. Session history uses the existing pure session query with a bounded stable-message cursor; three owner projection probes cover complete non-overlapping pages, append stability and missing cursors.
+- Saved Gateway address is reconstructed from the canonical pairing setup at projection time, excluded from persisted summary serialization. Existing paired storage does not require resetting or adding a second address authority.
+- Final combined compilation, cross-language qualification, rendered screens and macOS build for this subsequent checkpoint remain pending. Future-calendar selection policy, service-specific remaining metadata and proposal simplification still require completion; do not report the entire restoration complete.
+
+- Proposal cards are compact until the user chooses Review. The explicit Add to calendar action remains; it is not disguised as a read-only inspection. The Actions owner supplies proposal-scoped destinations using the same authenticated receipt/contributor validation as submission. One eligible destination is selected; genuine ambiguity remains a choice.
+- Proposal timezone input is removed end-to-end. The current verified draft contains absolute UTC millisecond instants and no recurrence; Actions preserves those instants with canonical UTC metadata. Existing stored effects retain their own schedules. This changes the local product request contract, not stored effects or unknown-write recovery evidence.

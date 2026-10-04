@@ -212,7 +212,7 @@ fn session(host: &Host, session_id: Option<Uuid>) -> Result<SessionSnapshot> {
                         .session_id
                 }
             };
-            owner.get_session(actor, id, scope).await
+            owner.get_session(actor, id, None, scope).await
         })
     })
     .map_err(|failure| format!("Session: {failure:?}"))
