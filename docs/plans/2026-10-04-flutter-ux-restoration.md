@@ -674,3 +674,58 @@ feature builds, all five typed-error probes, the encrypted Day restart/absence p
 and 37 Flutter behavior/boundary fixtures including passive waiting→failure rendering.
 Flutter analysis retained its informational baseline with no new errors/warnings.
 The new waiting surface has not been observed against a live Apple Keychain prompt.
+
+## Re-pairing issuer lifecycle — corrective design
+
+The reproduced conflict must not be fixed by allowing a revoked issuer, clearing
+Trust state or resetting the user's Vault. Server enrollment binds an issuer key
+to one client and retains revocation fences. The client currently supplies one
+Vault-wide key to every pairing, contradicting that lifecycle. The target is a
+fresh enrollment-scoped signing key for each newly admitted pairing operation,
+while an exact retry/restart of that operation retains the same key.
+
+### Final ownership and cutover
+
+- Connections owns the pairing operation and exact Start command. Its atomic first
+  admission stores the operation, polling proof, a fresh wrapped Ed25519 enrollment
+  key, credential expectation and command receipt together. Generating a key is not
+  a side effect of a public-key query or transport call.
+- The encrypted Vault adapter owns private key generation/wrapping/readback. Bind
+  wrapping AAD to Person/device and operation identity. Keep historical operation
+  keys/receipts; Forget invalidates live signing authority, not recovery evidence.
+- EnrollmentSigner.public_key takes the exact operation ID and reads that operation's
+  already-admitted key. Enrollment signatures validate the command against that key.
+  Ordinary authorization reads only the currently committed enrollment key and
+  retains all existing credential, pin, runtime-generation and source-grant fences.
+- Producer pin lookup remains its own read boundary. It must not depend on a global
+  owner key existing before a new pairing; the pin remains validated and preserved.
+- Remove the Vault-wide remote_authority_owner table/seed and singleton validation.
+  The existing encrypted physical schema is replaced directly under the pre-stable
+  policy, without a legacy decoder or automatic profile reset. Unpaired fresh Vaults
+  remain valid for local features, without pre-generating a remote signing identity.
+- Server unique/revoked issuer rules and human approval stay intact. No server
+  credential is silently revived and no old pending external request gets a new key.
+
+Files/callers to migrate together: schema/gateway.rs, vault/schema_lifecycle.rs,
+vault/authority_keys.rs, gateway_pairing_store.rs Start admission/private-row reads,
+gateway_authority.rs enrollment and ordinary signing, Connections EnrollmentSigner
+port and GatewayPairingAdapter.begin, and Vault startup validation. Audit every
+remote_owner_public_key/load_owner_key/validate_owner_key caller by phase; pre-pair
+pin reads, exact enrollment and committed authorization cannot share an implicit
+current-key lookup.
+
+### Required qualification
+
+- Two actual isolated pairing/approval/Forget/restart cycles succeed with different
+  issuer keys; same Start command retry and pending restart preserve one exact key.
+- Cancel/reject/expiry followed by a newly admitted Start uses a new key while old
+  receipts stay readable. Wrong operation/device/AAD or revoked/current-generation
+  mismatch cannot sign or publish credentials.
+- Simulate lost acknowledgement and stale response without duplicate admission,
+  replaced key or pin. Preserve atomic Start and Paired commits.
+- Verify an unpaired fresh Vault opens for local work. Run coherent Rust/FFI/Go/
+  Flutter gates and Apple build qualification after the cutover. The current two-
+  cycle test remains failed until this implementation is actually qualified.
+
+This observed user-flow correctness issue is addressed before extending Gateway
+file encryption; the latter remains a required unfinished production gate.
