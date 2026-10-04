@@ -4,6 +4,13 @@
 //! Business policy belongs to the owning module. This crate only implements the
 //! owner-defined repository ports and the physical storage guarantees.
 
+#[cfg(all(feature = "os-keyring", feature = "development-storage"))]
+compile_error!("Choose exactly one storage profile; development requires --no-default-features.");
+#[cfg(not(any(feature = "os-keyring", feature = "development-storage")))]
+compile_error!("A storage profile is required.");
+#[cfg(all(feature = "development-storage", not(debug_assertions)))]
+compile_error!("Development file-key custody cannot be compiled into a release/profile build.");
+
 mod engine;
 mod error;
 mod repositories;

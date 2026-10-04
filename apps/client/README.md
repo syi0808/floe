@@ -20,7 +20,8 @@ planner owns Gateway-primary/local-fallback selection; a denied or failed call c
 trigger a client-selected fallback. Health additionally requires its independent
 source-local privacy transform before any reasoning.
 
-The opt-in `tool/mobile_vault_smoke.dart` diagnostic requires explicit Dart defines:
+The opt-in `tool/mobile_vault_smoke.dart` OS-keyring diagnostic uses a Release/Profile
+client/native build (not the isolated Debug file-key profile) and requires explicit Dart defines:
 `FLOE_VAULT_SMOKE_EXERCISE=true`, `FLOE_VAULT_SMOKE_DATABASE`,
 `FLOE_VAULT_SMOKE_PERSON_ID` and `FLOE_VAULT_SMOKE_DEVICE_ID`. The database must
 already exist at `<application support>/mobile-vault-smoke/people/<Person UUID>/floe.db`,
@@ -31,7 +32,7 @@ The exercise retains exclusive-owner rejection, lock and reopen validation, and 
 requests Contacts, Health or external-provider access. Run it only at an authorized
 Apple validation gate; it has not been executed during S1 caller migration.
 
-iOS uses device-only Keychain items available while unlocked and does not regenerate
+iOS Release/Profile uses device-only Keychain items available while unlocked and does not regenerate
 a missing key while opening an existing Vault.
 
 Flutter client for Floe's Personal Day experience.
@@ -72,11 +73,40 @@ Gateway credentials, enrollment challenges and HTTP calls stay inside Rust owner
 and adapters. A connected pairing is shown only after owner commit and readback.
 The former Flutter HTTP client, credential channel and special remote ABIs are gone.
 
-Startup opens only an explicitly selected existing `people/<Person UUID>/floe.db`
-profile and existing `local_device_id`. A missing selection presents available profiles,
-even when there is only one; no profile/device identity is silently created or replaced.
-Malformed or unreadable selection/identity fails startup. A device with no existing
-profile remains in the setup-required state until the explicit profile-creation flow lands.
+Startup admits one internal installation without a profile-selection screen. Debug builds
+use isolated development custody; Release/Profile builds require OS keyring. Rust and
+Flutter verify the selected custody profile before any installation is opened.
+
+### Development storage
+
+`./scripts/run-local.sh` from the repository root builds the Debug client and a Gateway
+with the explicit `floe_dev` Go tag. The client keeps its own data under
+`<application support>/development-storage/client`; the Gateway uses
+`<user config>/FloeServerDevelopment` and loopback port `18431`. The default Debug
+pairing address matches that port. Existing normal client/Gateway data, identities,
+Keychain items and pairings are neither imported nor reset. The new profile initially
+needs its own explicit setup/pairing. Calendar/Contacts/Health permissions still apply.
+
+The Agent Vault stays AES-256-GCM encrypted in development; only key custody changes
+to private development files. Gateway development credentials likewise use private files,
+not OS protection. iOS Debug Contacts handle keys use a separate `FloeDevelopmentNative`
+application-support directory. The visible `DEV DATA` banner identifies the Debug profile.
+Use synthetic data; file keys and development credentials are not protected like Keychain.
+No OS-store error, environment variable or missing key activates a weaker fallback.
+
+Rust development builds select `--no-default-features --features development-storage`.
+The default `os-keyring` feature and development feature are mutually exclusive; the
+development feature rejects non-debug-assertion compilation. Apple embedding scripts
+choose the profile from the Xcode configuration and reject development native custody
+in Release/Profile. A `FLOE_CORE_LIBRARY_PATH` override must still match the Flutter build.
+The Gateway's ordinary build excludes its development file-store implementation entirely.
+`run-local.sh --release` or `--profile` selects ordinary Gateway custody and port `8431`.
+
+Production encryption coverage is an open gate: the Agent Vault is encrypted, but the
+host Day/source store and some Gateway private files are not currently covered by that
+Vault encryption. OS file permissions are not encryption. See the development-profile
+and encryption-coverage section of the [restoration plan](../../docs/plans/2026-10-04-flutter-ux-restoration.md)
+before treating a production build as qualified for personal data.
 
 Native Calendar, Attention and Personal pumps keep host-issued registration refs
 inside native infrastructure. A separate callback isolate owns one independently acquired

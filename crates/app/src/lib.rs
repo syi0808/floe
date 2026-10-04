@@ -31,7 +31,11 @@ mod prompts;
 #[cfg(unix)]
 mod ready_generation;
 #[cfg(unix)]
+mod storage_profile;
+#[cfg(unix)]
 mod vault_lifecycle;
+#[cfg(unix)]
+pub use storage_profile::storage_profile_code;
 #[cfg(unix)]
 mod vault_services;
 

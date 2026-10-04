@@ -3,11 +3,17 @@ set -euo pipefail
 
 REPOSITORY_ROOT="${SRCROOT}/../../.."
 source "${SRCROOT}/../apple/native_build.sh"
+if [[ "${CONFIGURATION:-Debug}" != "Debug" && " ${SWIFT_ACTIVE_COMPILATION_CONDITIONS:-} " == *" FLOE_DEVELOPMENT_STORAGE "* ]]; then
+  print -u2 "Development native key custody is forbidden in Release/Profile."
+  exit 1
+fi
 PROFILE="debug"
 CARGO_FLAGS=()
 if [[ "${CONFIGURATION:-Debug}" != "Debug" ]]; then
   PROFILE="release"
   CARGO_FLAGS+=(--release)
+else
+  CARGO_FLAGS+=(--no-default-features --features development-storage)
 fi
 
 case "${PLATFORM_NAME:-}" in

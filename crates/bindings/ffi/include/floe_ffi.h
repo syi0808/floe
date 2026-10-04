@@ -29,6 +29,8 @@ char *floe_native_host_command_v2(FloeNativeHostLane *lane, const char *request_
 char *floe_native_host_query_v2(FloeNativeHostLane *lane, const char *request_json);
 void floe_native_host_free(FloeNativeHostLane *lane);
 uint32_t floe_protocol_version(void);
+/* Must match the client build before opening data: 1 OS keyring, 2 development. */
+uint32_t floe_storage_profile(void);
 void floe_string_free(char *value);
 void floe_core_free(FloeHandle *handle);
 

@@ -205,8 +205,18 @@ impl LocalInstallation {
     }
 }
 
+/// Installation recovery is selected by composition, never inferred from a
+/// custody failure. Isolated development profiles use Preserve as well.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InstallationRecovery {
+    Preserve,
+    #[cfg(debug_assertions)]
+    ArchiveInvalidDevelopment,
+}
+
 pub fn prepare_local_installation(
     support_directory: &Path,
+    recovery: InstallationRecovery,
 ) -> Result<LocalInstallation, NativeInstallationError> {
     if !support_directory.is_absolute()
         || support_directory
@@ -221,10 +231,18 @@ pub fn prepare_local_installation(
     let lock = acquire_installation_lock(&root)?;
 
     #[cfg(debug_assertions)]
-    resume_archive(&root, None)?;
+    let allow_archive = recovery == InstallationRecovery::ArchiveInvalidDevelopment;
     #[cfg(not(debug_assertions))]
-    if regular_file(&root.join(RESET))?.is_some() {
+    let allow_archive = {
+        let _ = recovery;
+        false
+    };
+    if !allow_archive && regular_file(&root.join(RESET))?.is_some() {
         return Err(NativeInstallationError::Incomplete);
+    }
+    #[cfg(debug_assertions)]
+    if allow_archive {
+        resume_archive(&root, None)?;
     }
     let prepared = prepare_identity(&root);
     #[cfg(debug_assertions)]
@@ -233,7 +251,7 @@ pub fn prepare_local_installation(
             failure @ (NativeInstallationError::Invalid
             | NativeInstallationError::Ambiguous
             | NativeInstallationError::Incomplete),
-        ) => {
+        ) if allow_archive => {
             let reason = match failure {
                 NativeInstallationError::Invalid => DevelopmentResetReason::InvalidInstallation,
                 NativeInstallationError::Ambiguous => DevelopmentResetReason::AmbiguousInstallation,

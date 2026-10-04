@@ -29,8 +29,8 @@ pub use host::{NativeIdentityError, NativeLocalIdentity, local_identity_for_data
 #[cfg(debug_assertions)]
 pub use installation::DevelopmentResetReason;
 pub use installation::{
-    LocalDatabaseAdmission, LocalInstallation, LocalInstallationLease, NativeInstallationError,
-    lock_existing_local_installation, prepare_local_installation,
+    InstallationRecovery, LocalDatabaseAdmission, LocalInstallation, LocalInstallationLease,
+    NativeInstallationError, lock_existing_local_installation, prepare_local_installation,
 };
 
 mod health_privacy;

@@ -38,6 +38,7 @@ impl HostServices for AppComposition {
 /// Open an explicit existing installation database. Owner tasks run after an FFI
 /// admission returns, on this host's bounded execution runtime.
 pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
+    crate::storage_profile::validate_database(std::path::Path::new(path))?;
     let lease =
         floe_provider_adapters::lock_existing_local_installation(std::path::Path::new(path))
             .map_err(installation_error)?;
@@ -63,10 +64,17 @@ pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
 #[cfg_attr(not(debug_assertions), allow(clippy::never_loop))]
 pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
     let runtime = runtime()?;
+    let support_directory =
+        crate::storage_profile::support_directory(std::path::Path::new(support_directory))?;
+    #[cfg(all(debug_assertions, not(feature = "development-storage")))]
+    let recovery = floe_provider_adapters::InstallationRecovery::ArchiveInvalidDevelopment;
+    #[cfg(any(not(debug_assertions), feature = "development-storage"))]
+    let recovery = floe_provider_adapters::InstallationRecovery::Preserve;
+    #[allow(unused_mut)]
     let mut installation =
-        floe_provider_adapters::prepare_local_installation(std::path::Path::new(support_directory))
+        floe_provider_adapters::prepare_local_installation(&support_directory, recovery)
             .map_err(installation_error)?;
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, not(feature = "development-storage")))]
     let mut reset_attempted = false;
     let store = loop {
         let database_path = installation.database_path().to_path_buf();
@@ -83,7 +91,7 @@ pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, 
         });
         let store = match opened {
             Ok(store) => store,
-            #[cfg(debug_assertions)]
+            #[cfg(all(debug_assertions, not(feature = "development-storage")))]
             Err(error)
                 if matches!(
                     error.code,
@@ -102,7 +110,7 @@ pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, 
             }
             Err(error) => return Err(AppOpenError::Store(error.to_string())),
         };
-        #[cfg(debug_assertions)]
+        #[cfg(all(debug_assertions, not(feature = "development-storage")))]
         {
             let root = std::path::PathBuf::from(format!(
                 "{}.agent-vaults",
@@ -110,8 +118,10 @@ pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, 
             ));
             let person = floe_kernel::PersonId(installation.identity().person_id());
             match execute_on_runtime(&runtime, async move {
-                floe_vault::inspect_existing_vault(&root, person, &floe_vault::KeyringVaultKeys)
-                    .await
+                match crate::storage_profile::vault_keys(&root) {
+                    Ok(keys) => floe_vault::inspect_existing_vault(&root, person, &keys).await,
+                    Err(failure) => floe_vault::VaultOpenInspection::Unavailable(failure),
+                }
             }) {
                 floe_vault::VaultOpenInspection::Absent
                 | floe_vault::VaultOpenInspection::Compatible => {}
@@ -143,6 +153,29 @@ pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, 
                     reset_attempted = true;
                     continue;
                 }
+            }
+        }
+        #[cfg(feature = "development-storage")]
+        {
+            let root = std::path::PathBuf::from(format!(
+                "{}.agent-vaults",
+                installation.database_path().display()
+            ));
+            let person = floe_kernel::PersonId(installation.identity().person_id());
+            let inspection = execute_on_runtime(&runtime, async move {
+                match crate::storage_profile::vault_keys(&root) {
+                    Ok(keys) => floe_vault::inspect_existing_vault(&root, person, &keys).await,
+                    Err(failure) => floe_vault::VaultOpenInspection::Unavailable(failure),
+                }
+            });
+            if !matches!(
+                inspection,
+                floe_vault::VaultOpenInspection::Absent
+                    | floe_vault::VaultOpenInspection::Compatible
+            ) {
+                return Err(AppOpenError::Runtime(
+                    "development Vault could not open; its data and key were preserved".into(),
+                ));
             }
         }
         break store;

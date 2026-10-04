@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_button.dart';
@@ -19,7 +20,9 @@ final class GatewayConnectionPanel extends StatefulWidget {
 
 final class _GatewayConnectionPanelState extends State<GatewayConnectionPanel> {
   late final address = TextEditingController(
-    text: widget.controller.pairingAddress ?? 'http://127.0.0.1:8431',
+    text:
+        widget.controller.pairingAddress ??
+        (kDebugMode ? 'http://127.0.0.1:18431' : 'http://127.0.0.1:8431'),
   );
   @override
   void dispose() {

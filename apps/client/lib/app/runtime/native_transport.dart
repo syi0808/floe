@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 
 import 'package:floe_client/infrastructure/native/floe_native_bindings.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
@@ -545,6 +546,13 @@ Future<void> _nativeWorkerMain(Map<String, Object?> configuration) async {
     bindings = FloeNativeBindings(configuration['library_path']! as String);
     if (bindings.protocolVersion() != nativeProtocolVersion) {
       throw StateError('Rust protocol version does not match Flutter.');
+    }
+    // Check before opening/preflighting data, not after a production library
+    // has already touched Keychain or adopted the wrong installation.
+    if (bindings.storageProfile() != (kDebugMode ? 2 : 1)) {
+      throw StateError(
+        'Flutter and native storage profiles do not match. Rebuild the app.',
+      );
     }
     final path = (configuration['path']! as String).toNativeUtf8();
     final error = calloc<Pointer<Utf8>>();

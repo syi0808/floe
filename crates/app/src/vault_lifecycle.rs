@@ -1,11 +1,10 @@
 //! The bounded host queue for encrypted Vault lifecycle only. Domain work runs
 //! through ready owner handles on the retained generation runtime.
 
-#[cfg(target_os = "android")]
-use crate::android_vault_keys::AndroidVaultKeys as PlatformVaultKeys;
 use crate::local_context::LocalContextHost;
 use crate::owner_handles::ReadyOwners;
 use crate::ready_generation::ReadyGeneration;
+use crate::storage_profile::{ProfileVaultKeys as PlatformVaultKeys, vault_keys};
 use crate::{
     CallerContext, FloeCore, VaultLifecycleCommandFailure, VaultLifecycleFailureProjection,
     VaultLifecycleRecovery, VaultLifecycleResult, VaultState,
@@ -16,8 +15,7 @@ use floe_kernel::{
     AgentRetryPolicy, PersonId,
 };
 use floe_vault::EncryptedAgentVault;
-#[cfg(not(target_os = "android"))]
-use floe_vault::KeyringVaultKeys as PlatformVaultKeys;
+
 use std::{
     collections::HashMap,
     fs,
@@ -657,9 +655,9 @@ async fn execute(
                     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                     Err(_) => return Err(AgentFailure::VaultUnavailable),
                 }
-                EncryptedAgentVault::create(root, person, PlatformVaultKeys).await?
+                EncryptedAgentVault::create(root, person, vault_keys(root)?).await?
             } else {
-                EncryptedAgentVault::open(root, person, PlatformVaultKeys).await?
+                EncryptedAgentVault::open(root, person, vault_keys(root)?).await?
             };
             let generation = Arc::new(
                 ReadyGeneration::activate(

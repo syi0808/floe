@@ -1,15 +1,12 @@
+//go:build !floe_dev
+
 package credentials
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"time"
 )
-
-var ErrUnavailable = errors.New("credential store unavailable")
-var ErrLocked = errors.New("credential store locked")
-var ErrBusy = errors.New("credential store busy")
 
 // A process-wide native lane admits one OS call and at most eight observers
 // waiting for it. The worker owns the lane until write plus exact readback has

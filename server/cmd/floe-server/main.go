@@ -25,11 +25,11 @@ func main() {
 		if err != nil {
 			log.Fatal("Cannot locate server data directory")
 		}
-		directory = filepath.Join(base, "FloeServer")
+		directory = node.DefaultDataDirectory(base)
 	}
 	address := os.Getenv("FLOE_SERVER_ADDRESS")
 	if address == "" {
-		address = "127.0.0.1:8431"
+		address = node.DefaultAddress()
 	}
 	server, err := node.New(node.Config{Directory: directory, Address: address})
 	if err != nil {

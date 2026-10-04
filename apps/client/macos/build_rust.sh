@@ -8,6 +8,8 @@ CARGO_FLAGS=()
 if [[ "${CONFIGURATION}" != "Debug" ]]; then
   PROFILE="release"
   CARGO_FLAGS+=(--release)
+else
+  CARGO_FLAGS+=(--no-default-features --features development-storage)
 fi
 
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"

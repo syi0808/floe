@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+default = ["os-keyring"]
+os-keyring = ["floe-vault/os-keyring"]
+development-storage = ["floe-vault/development-storage"]
+
 [dependencies]
 chrono.workspace = true
 floe-access = { path = "../modules/access" }
@@ -23,7 +28,7 @@ floe-inference = { path = "../modules/inference" }
 floe-kernel = { path = "../contracts/kernel" }
 floe-knowledge = { path = "../modules/knowledge" }
 floe-provider-adapters = { path = "../adapters/providers" }
-floe-vault = { path = "../adapters/vault" }
+floe-vault = { path = "../adapters/vault", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -31,6 +36,9 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.177"
 
 [dev-dependencies]
 tempfile = "3.23.0"
@@ -45,3 +53,11 @@ libc = "0.2.177"
 apple-native-keyring-store = { version = "1.0.2", default-features = false, features = [
     "keychain",
 ] }
+
+[[example]]
+name = "vault_keyring_smoke"
+required-features = ["os-keyring"]
+
+[[example]]
+name = "local_model_smoke"
+required-features = ["os-keyring"]

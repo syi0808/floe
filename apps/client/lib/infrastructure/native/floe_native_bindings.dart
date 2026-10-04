@@ -62,7 +62,9 @@ final class FloeNativeBindings {
   late final FloeOpenDart openDefault = _library
       .lookupFunction<FloeOpenNative, FloeOpenDart>('floe_core_open_default');
   late final FloeIdentityDart identity = _library
-      .lookupFunction<FloeIdentityNative, FloeIdentityDart>('floe_core_identity');
+      .lookupFunction<FloeIdentityNative, FloeIdentityDart>(
+        'floe_core_identity',
+      );
   late final FloeCallDart commandV2 = _library
       .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_command_v2');
   late final FloeCallDart queryV2 = _library
@@ -72,6 +74,10 @@ final class FloeNativeBindings {
   late final FloeFreeStringDart freeString;
   late final FloeFreeCoreDart freeCore;
   late final FloeProtocolVersionDart protocolVersion;
+  late final FloeProtocolVersionDart storageProfile = _library
+      .lookupFunction<FloeProtocolVersionNative, FloeProtocolVersionDart>(
+        'floe_storage_profile',
+      );
   late final FloeAcquireNativeHostDart acquireNativeHost = _library
       .lookupFunction<FloeAcquireNativeHostNative, FloeAcquireNativeHostDart>(
         'floe_native_host_acquire',

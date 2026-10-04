@@ -8,7 +8,7 @@ use std::{
     path::Path,
 };
 
-use super::keyring::VaultKeyReadFailure;
+use super::VaultKeyReadFailure;
 use super::{AgentFailure, PersonId, Uuid, VaultKeyProvider};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

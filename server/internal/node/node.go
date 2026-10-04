@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"floe/server/internal/authority"
-	"floe/server/internal/credentials"
 	"floe/server/internal/inference"
 	codexauth "floe/server/internal/inference/codex"
 	"floe/server/internal/inference/providers"
@@ -38,7 +37,10 @@ func New(config Config) (*Node, error) {
 	if err != nil || host != "127.0.0.1" || port == "" {
 		return nil, errors.New("node requires 127.0.0.1:port")
 	}
-	vault := credentials.Keychain{}
+	vault, err := profileStore(config.Directory)
+	if err != nil {
+		return nil, err
+	}
 	t, err := trust.Open(config.Directory)
 	if err != nil {
 		return nil, err

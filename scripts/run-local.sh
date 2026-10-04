@@ -6,6 +6,28 @@ SERVER_PID=""
 CLIENT_PID=""
 SERVER_BUILD_DIR=""
 
+# Flutter Debug and the Gateway must select the same isolated storage profile.
+# Release/Profile always retain OS keyring; no runtime fallback is available.
+STORAGE_PROFILE="development"
+DEBUG_REQUESTED=false
+for argument in "$@"; do
+  case "$argument" in
+    --release|--profile) STORAGE_PROFILE="production" ;;
+    --debug) DEBUG_REQUESTED=true ;;
+  esac
+done
+if [[ "$STORAGE_PROFILE" == "production" && "$DEBUG_REQUESTED" == true ]]; then
+  printf 'Choose one Flutter build mode.\n' >&2
+  exit 2
+fi
+GO_BUILD_TAGS=""
+if [[ "$STORAGE_PROFILE" == "development" ]]; then
+  GO_BUILD_TAGS="floe_dev"
+  printf 'Floe DEVELOPMENT storage: isolated data and private file keys; not OS-keyring protection.\n'
+else
+  printf 'Floe production storage: OS keyring required.\n'
+fi
+
 for command_name in go flutter; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     printf 'Required command not found: %s\n' "$command_name" >&2
@@ -41,7 +63,7 @@ SERVER_BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/floe-server.XXXXXX")"
 SERVER_BINARY="$SERVER_BUILD_DIR/floe-server"
 (
   cd "$ROOT/server"
-  go build -o "$SERVER_BINARY" ./cmd/floe-server
+  go build -tags "$GO_BUILD_TAGS" -o "$SERVER_BINARY" ./cmd/floe-server
 )
 
 (

@@ -8,6 +8,29 @@ Manager, delegated Experts and Learner use the same role-neutral Engine and purp
 
 Access owns source-grant DeviceOnly/GatewayAllowed processing permission and live dispatch fences. Health has a separate mandatory local privacy transformation before either reasoning placement; its output retains HighlySensitive classification and transform provenance. Model selection, pairing and transformation confer no source or Action permission.
 
+## Build-selected storage custody
+
+Composition selects one custody profile at build time. Rust's default `os-keyring`
+feature retains OS key storage; `development-storage` excludes that adapter and is
+forbidden in a non-debug-assertion build. Both implement the same VaultKeyProvider and
+use the same encrypted Vault engine. Preflight and ordinary Vault activation use the
+same provider; missing/malformed development keys do not trigger replacement or reset.
+Development installation admission is marker-bound and separate from normal app data.
+Explicit-path diagnostics enforce the same profile boundary. Flutter checks the FFI
+storage-profile code before opening or preflighting data.
+
+Go composition similarly chooses the ordinary Keychain Store or a build-tagged
+private development file Store. There is no error-triggered selection. Debug client
+and `run-local.sh` use an isolated Gateway root and port 18431; Release/Profile use the
+ordinary root and port 8431. iOS Debug's native Contacts handle key has separate private
+file custody; Release/Profile retains its Keychain item. OS source permissions and
+owner authority/recovery checks are unchanged.
+
+This selection does not make every persisted payload encrypted. The host product
+store remains distinct from EncryptedAgentVault and is currently plaintext; Gateway
+private-file permissions are likewise not a blanket encryption guarantee. Production
+encryption coverage is a separate open design/qualification gate in the active plan.
+
 ## General Conversation
 
 Conversation owns the durable Session/root-Run lifecycle and projects the state required by the role-neutral Agent Runtime. A newly persisted Session has revision zero before its first turn; product snapshots preserve that valid CAS revision. Session absence is explicit and must not be inferred from revision zero or from a failed read.

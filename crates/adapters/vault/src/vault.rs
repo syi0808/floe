@@ -33,8 +33,11 @@ mod conversations;
 mod expert_actions;
 pub(crate) mod expert_binding_reviews;
 pub use expert_actions::VaultExpertProposalReader;
+#[cfg(feature = "development-storage")]
+mod development_keys;
 mod gateway_authority;
 mod gateway_pairing_store;
+#[cfg(feature = "os-keyring")]
 mod keyring;
 mod learning;
 mod preflight;
@@ -48,7 +51,17 @@ pub use conversations::{
     VaultConversationActivation, VaultConversationAdmission, VaultConversationCancelAdmission,
     VaultConversationCancelReceipt, VaultConversationCancelRequest, VaultConversationJournalEntry,
 };
-pub use keyring::{KeyringVaultKeys, VaultKeyReadFailure};
+#[cfg(feature = "development-storage")]
+pub use development_keys::DevelopmentVaultKeys;
+#[cfg(feature = "os-keyring")]
+pub use keyring::KeyringVaultKeys;
+
+/// Exact key-read classification shared by custody adapters.
+pub enum VaultKeyReadFailure {
+    Missing,
+    Malformed,
+    Unavailable(AgentFailure),
+}
 pub use preflight::{
     VaultOpenInspection, VaultResetEvidence, VaultResetReason, inspect_existing_vault,
 };

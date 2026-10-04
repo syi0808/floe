@@ -1,18 +1,12 @@
 use keyring_core::{Entry, Error};
 use zeroize::Zeroizing;
 
-use super::{AgentFailure, PersonId, Uuid, VaultKey, VaultKeyProvider};
+use super::{AgentFailure, PersonId, Uuid, VaultKey, VaultKeyProvider, VaultKeyReadFailure};
 
 const SERVICE: &str = "com.floe.agent-vault.v1";
 
 #[derive(Clone, Copy)]
 pub struct KeyringVaultKeys;
-
-pub enum VaultKeyReadFailure {
-    Missing,
-    Malformed,
-    Unavailable(AgentFailure),
-}
 
 impl VaultKeyProvider for KeyringVaultKeys {
     fn inspect_existing(

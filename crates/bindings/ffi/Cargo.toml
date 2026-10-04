@@ -8,9 +8,14 @@ rust-version.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["os-keyring"]
+os-keyring = ["floe-app/os-keyring"]
+development-storage = ["floe-app/development-storage"]
+
 [dependencies]
 chrono.workspace = true
-floe-app = { path = "../../app" }
+floe-app = { path = "../../app", default-features = false }
 floe-protocol = { path = "../protocol" }
 floe-conversation = { path = "../../modules/conversation" }
 floe-connections = { path = "../../modules/connections" }

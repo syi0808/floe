@@ -383,3 +383,17 @@ fn report_free_panic(payload: Box<dyn std::any::Any + Send>) {
         std::mem::forget(secondary);
     }
 }
+
+/// Build-selected key custody. Checked before opening any installation.
+/// 1 = production OS keyring; 2 = isolated development file keys.
+#[unsafe(no_mangle)]
+pub extern "C" fn floe_storage_profile() -> u32 {
+    #[cfg(unix)]
+    {
+        floe_app::storage_profile_code()
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
+}

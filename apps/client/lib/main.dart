@@ -192,7 +192,11 @@ Future<void> _start() async {
           }
         },
         builder: kDebugMode
-            ? (context, child) => DesignFeedbackOverlay(child: child!)
+            ? (context, child) => Banner(
+                message: 'DEV DATA',
+                location: BannerLocation.topEnd,
+                child: DesignFeedbackOverlay(child: child!),
+              )
             : null,
       ),
     );

@@ -7,6 +7,7 @@ import FloeScreenTimeGate
 import Flutter
 import Foundation
 import Security
+import Darwin
 
 @MainActor
 final class AppleContextChannel {
@@ -377,6 +378,9 @@ final class AppleContextChannel {
   }
 
   private static func contactsHandleSecret() throws -> Data {
+    #if FLOE_DEVELOPMENT_STORAGE
+    return try developmentContactsHandleSecret()
+    #else
     let service = "app.floe.contacts-handles"
     let account = "local-device"
     let query: [String: Any] = [
@@ -404,7 +408,55 @@ final class AppleContextChannel {
       throw ChannelFailure.unavailable
     }
     return data
+    #endif
   }
+
+  #if FLOE_DEVELOPMENT_STORAGE
+  /// Debug-only custody for stable synthetic Contacts handles. This namespace
+  /// never reads, copies or replaces the production Keychain item.
+  private static func developmentContactsHandleSecret() throws -> Data {
+    let manager = FileManager.default
+    let support = try manager.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                  appropriateFor: nil, create: true)
+    let directory = support.appendingPathComponent("FloeDevelopmentNative", isDirectory: true)
+    if !manager.fileExists(atPath: directory.path) {
+      try manager.createDirectory(at: directory, withIntermediateDirectories: false,
+                                  attributes: [.posixPermissions: 0o700])
+    }
+    var directoryInfo = stat()
+    guard directory.path.withCString({ lstat($0, &directoryInfo) }) == 0,
+          directoryInfo.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+          directoryInfo.st_mode & 0o077 == 0, directoryInfo.st_uid == geteuid()
+    else { throw ChannelFailure.unavailable }
+    let path = directory.appendingPathComponent("contacts-handle-key").path
+    var descriptor = path.withCString { Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC) }
+    if descriptor < 0 {
+      guard errno == ENOENT else { throw ChannelFailure.unavailable }
+      var bytes = [UInt8](repeating: 0, count: 32)
+      guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess
+      else { throw ChannelFailure.unavailable }
+      descriptor = path.withCString { Darwin.open($0, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600) }
+      guard descriptor >= 0 else { throw ChannelFailure.unavailable }
+      defer { Darwin.close(descriptor) }
+      let written = bytes.withUnsafeBytes { Darwin.write(descriptor, $0.baseAddress!, $0.count) }
+      guard written == bytes.count, fsync(descriptor) == 0 else { throw ChannelFailure.unavailable }
+      let parent = directory.path.withCString { Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC) }
+      guard parent >= 0 else { throw ChannelFailure.unavailable }
+      defer { Darwin.close(parent) }
+      guard fsync(parent) == 0 else { throw ChannelFailure.unavailable }
+      return Data(bytes)
+    }
+    defer { Darwin.close(descriptor) }
+    var info = stat()
+    guard fstat(descriptor, &info) == 0,
+          info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), info.st_mode & 0o077 == 0,
+          info.st_uid == geteuid(), info.st_nlink == 1, info.st_size == 32
+    else { throw ChannelFailure.unavailable }
+    let data = try FileHandle(fileDescriptor: descriptor, closeOnDealloc: false).read(upToCount: 33)
+    guard let data, data.count == 32 else { throw ChannelFailure.unavailable }
+    return data
+  }
+  #endif
 }
 
 private struct ChannelFailure: Error {
