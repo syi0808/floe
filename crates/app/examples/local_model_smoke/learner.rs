@@ -61,11 +61,10 @@ fn unlock(host: &Host) -> Result<(), AgentFailure> {
     let request = host
         .request(operation)
         .map_err(|_| AgentFailure::PolicyDenied)?;
-    let mut result = request.services().vault_command(
-        request.caller(),
-        operation,
-        VaultLifecycleCommand::Unlock,
-    ).map_err(floe_app::VaultLifecycleCommandFailure::into_failure)?;
+    let mut result = request
+        .services()
+        .vault_command(request.caller(), operation, VaultLifecycleCommand::Unlock)
+        .map_err(floe_app::VaultLifecycleCommandFailure::into_failure)?;
     let deadline = Instant::now() + Duration::from_secs(30);
     while !result.done {
         if Instant::now() >= deadline {
@@ -88,13 +87,15 @@ fn unlock(host: &Host) -> Result<(), AgentFailure> {
     Ok(())
 }
 
-fn owner_call<T>(
+fn owner_call<T: Send + 'static>(
     host: &Host,
     operation: impl for<'a> FnOnce(
         &'a ReadyOwners,
         &'a OwnerActor,
         &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<T, AgentFailure>>,
+    ) -> BoxFuture<'a, Result<T, AgentFailure>>
+    + Send
+    + 'static,
 ) -> Result<T, AgentFailure> {
     let request_id = Uuid::new_v4();
     let request = host
@@ -105,7 +106,7 @@ fn owner_call<T>(
     let scope = floe_app::host_scope(request_id, Cancellation::new(), Duration::from_secs(35));
     request
         .services()
-        .execute_owner(operation(&owners, &actor, &scope))
+        .execute_owner(async move { operation(&owners, &actor, &scope).await })
 }
 
 fn exercise(host: &Host, with_expiry: bool) -> Result<Value, AgentFailure> {

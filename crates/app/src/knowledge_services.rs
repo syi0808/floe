@@ -44,13 +44,12 @@ impl KnowledgeCommands for AppComposition {
             floe_execution::Cancellation::new(),
             std::time::Duration::from_secs(35),
         );
-        self.execute_owner(owners.knowledge.decide(
-            &actor,
-            command_id,
-            candidate_id,
-            decision,
-            &scope,
-        ))
+        self.execute_owner(async move {
+            owners
+                .knowledge
+                .decide(&actor, command_id, candidate_id, decision, &scope)
+                .await
+        })
     }
 }
 impl KnowledgeQueries for AppComposition {
@@ -70,7 +69,7 @@ impl KnowledgeQueries for AppComposition {
             floe_execution::Cancellation::new(),
             std::time::Duration::from_secs(35),
         );
-        self.execute_owner(async {
+        self.execute_owner(async move {
             match query {
                 KnowledgeQuery::Overview { limit } => owners
                     .knowledge

@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use crate::owner_handles::{EXECUTOR_STACK_BYTES, execute_on_runtime};
 use tokio::runtime::{Builder, Runtime};
 
 use crate::{AppHost, FloeCore, HostError, HostServices, local_context, vault_lifecycle};
@@ -26,7 +27,8 @@ impl HostServices for AppComposition {
             floe_execution::Cancellation::new(),
             std::time::Duration::from_secs(35),
         );
-        let day = self.runtime.block_on(self.core.day.shutdown(&scope));
+        let day_owner = self.core.day.clone();
+        let day = self.execute_owner(async move { day_owner.shutdown(&scope).await });
         vault.map_err(|_| crate::HostError::Shutdown)?;
         gateway.map_err(|_| crate::HostError::Shutdown)?;
         day.map_err(|_| crate::HostError::Shutdown)
@@ -43,9 +45,11 @@ pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
         .map_err(AppOpenError::Host)?
         .ok_or(AppOpenError::Host(HostError::IdentityUnavailable))?;
     let runtime = runtime()?;
-    let store = runtime
-        .block_on(floe_vault::TursoStore::open_existing(path))
-        .map_err(|error| AppOpenError::Store(error.to_string()))?;
+    let database_path = std::path::PathBuf::from(path);
+    let store = execute_on_runtime(&runtime, async move {
+        floe_vault::TursoStore::open_existing(&database_path).await
+    })
+    .map_err(|error| AppOpenError::Store(error.to_string()))?;
     compose(
         path,
         identity,
@@ -65,14 +69,18 @@ pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, 
     #[cfg(debug_assertions)]
     let mut reset_attempted = false;
     let store = loop {
-        let opened = match installation.database_admission() {
-            floe_provider_adapters::LocalDatabaseAdmission::Existing => runtime.block_on(
-                floe_vault::TursoStore::open_existing(installation.database_path()),
-            ),
-            floe_provider_adapters::LocalDatabaseAdmission::CreateNew => runtime.block_on(
-                floe_vault::TursoStore::create_new(installation.database_path()),
-            ),
-        };
+        let database_path = installation.database_path().to_path_buf();
+        let admission = installation.database_admission();
+        let opened = execute_on_runtime(&runtime, async move {
+            match admission {
+                floe_provider_adapters::LocalDatabaseAdmission::Existing => {
+                    floe_vault::TursoStore::open_existing(&database_path).await
+                }
+                floe_provider_adapters::LocalDatabaseAdmission::CreateNew => {
+                    floe_vault::TursoStore::create_new(&database_path).await
+                }
+            }
+        });
         let store = match opened {
             Ok(store) => store,
             #[cfg(debug_assertions)]
@@ -100,11 +108,11 @@ pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, 
                 "{}.agent-vaults",
                 installation.database_path().display(),
             ));
-            match runtime.block_on(floe_vault::inspect_existing_vault(
-                &root,
-                floe_kernel::PersonId(installation.identity().person_id()),
-                &floe_vault::KeyringVaultKeys,
-            )) {
+            let person = floe_kernel::PersonId(installation.identity().person_id());
+            match execute_on_runtime(&runtime, async move {
+                floe_vault::inspect_existing_vault(&root, person, &floe_vault::KeyringVaultKeys)
+                    .await
+            }) {
                 floe_vault::VaultOpenInspection::Absent
                 | floe_vault::VaultOpenInspection::Compatible => {}
                 floe_vault::VaultOpenInspection::Unavailable(failure) => {
@@ -157,6 +165,7 @@ fn installation_error(error: floe_provider_adapters::NativeInstallationError) ->
 fn runtime() -> Result<Runtime, AppOpenError> {
     Builder::new_multi_thread()
         .worker_threads(2)
+        .thread_stack_size(EXECUTOR_STACK_BYTES)
         .enable_all()
         .build()
         .map_err(|error| AppOpenError::Runtime(error.to_string()))
@@ -203,9 +212,12 @@ fn compose(
         floe_execution::Cancellation::new(),
         std::time::Duration::from_secs(35),
     );
-    runtime
-        .block_on(day.activate(&caller.owner_actor(), &scope))
-        .map_err(|error| AppOpenError::Store(error.to_string()))?;
+    let activating_day = day.clone();
+    let actor = caller.owner_actor();
+    execute_on_runtime(&runtime, async move {
+        activating_day.activate(&actor, &scope).await
+    })
+    .map_err(|error| AppOpenError::Store(error.to_string()))?;
     let core = Arc::new(crate::FloeCore {
         store,
         installation_root,

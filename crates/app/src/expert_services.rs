@@ -70,7 +70,7 @@ impl ExpertCommands for AppComposition {
             floe_execution::Cancellation::new(),
             std::time::Duration::from_secs(35),
         );
-        self.execute_owner(async {
+        self.execute_owner(async move {
             match command {
                 ExpertCommand::SetInstallationEnabled {
                     installation_ref,
@@ -141,7 +141,7 @@ impl ExpertQueries for AppComposition {
             floe_execution::Cancellation::new(),
             std::time::Duration::from_secs(35),
         );
-        self.execute_owner(async {
+        self.execute_owner(async move {
             match query {
                 ExpertQuery::Directory => owners
                     .experts

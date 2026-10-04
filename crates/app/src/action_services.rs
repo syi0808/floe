@@ -81,7 +81,7 @@ impl ActionsCommands for AppComposition {
         let owners = self.ready_owners(caller)?;
         let actor = caller.owner_actor();
         let scope = crate::host_scope(command_id, Cancellation::new(), Duration::from_secs(35));
-        self.execute_owner(async {
+        self.execute_owner(async move {
             match command {
                 ActionsCommand::Submit { intent } => owners
                     .actions
@@ -143,7 +143,7 @@ impl ActionsQueries for AppComposition {
         let owners = self.ready_owners(caller)?;
         let actor = caller.owner_actor();
         let scope = crate::host_scope(request_id, Cancellation::new(), Duration::from_secs(35));
-        self.execute_owner(async {
+        self.execute_owner(async move {
             match query {
                 ActionsQuery::Destinations => owners
                     .actions

@@ -37,12 +37,9 @@ impl DayQueries for AppComposition {
             Cancellation::new(),
             std::time::Duration::from_secs(30),
         );
-        self.runtime
-            .block_on(
-                self.core
-                    .day
-                    .snapshot(&caller.owner_actor(), request, &scope),
-            )
+        let day = self.core.day.clone();
+        let actor = caller.owner_actor();
+        self.execute_owner(async move { day.snapshot(&actor, request, &scope).await })
             .map_err(crate::core::day_error)
     }
     fn get_day_refresh(
@@ -55,12 +52,9 @@ impl DayQueries for AppComposition {
             Cancellation::new(),
             std::time::Duration::from_secs(30),
         );
-        self.runtime
-            .block_on(
-                self.core
-                    .day
-                    .get_refresh(&caller.owner_actor(), operation_ref, &scope),
-            )
+        let day = self.core.day.clone();
+        let actor = caller.owner_actor();
+        self.execute_owner(async move { day.get_refresh(&actor, operation_ref, &scope).await })
             .map_err(crate::core::day_error)
     }
 }
@@ -75,8 +69,9 @@ impl DayCommands for AppComposition {
             Cancellation::new(),
             std::time::Duration::from_secs(30),
         );
-        self.runtime
-            .block_on(self.core.day.mutate(&caller.owner_actor(), request, &scope))
+        let day = self.core.day.clone();
+        let actor = caller.owner_actor();
+        self.execute_owner(async move { day.mutate(&actor, request, &scope).await })
             .map_err(crate::core::day_error)
     }
     fn refresh_day(
@@ -90,12 +85,9 @@ impl DayCommands for AppComposition {
             Cancellation::new(),
             std::time::Duration::from_secs(30),
         );
-        self.runtime
-            .block_on(
-                self.core
-                    .day
-                    .refresh_day(&caller.owner_actor(), command_id, query, &scope),
-            )
+        let day = self.core.day.clone();
+        let actor = caller.owner_actor();
+        self.execute_owner(async move { day.refresh_day(&actor, command_id, query, &scope).await })
             .map_err(crate::core::day_error)
     }
 }

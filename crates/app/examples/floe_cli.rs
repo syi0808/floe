@@ -178,13 +178,15 @@ fn unlock(host: &Host) -> Result<()> {
     Ok(())
 }
 
-fn owner_call<T>(
+fn owner_call<T: Send + 'static>(
     host: &Host,
     operation: impl for<'a> FnOnce(
         &'a dyn ConversationOwner,
         &'a OwnerActor,
         &'a ExecutionScope,
-    ) -> BoxFuture<'a, std::result::Result<T, AgentFailure>>,
+    ) -> BoxFuture<'a, std::result::Result<T, AgentFailure>>
+    + Send
+    + 'static,
 ) -> std::result::Result<T, AgentFailure> {
     let request_id = Uuid::new_v4();
     let request = host
@@ -195,7 +197,7 @@ fn owner_call<T>(
     let scope = floe_app::host_scope(request_id, Cancellation::new(), Duration::from_secs(30));
     request
         .services()
-        .execute_owner(operation(owners.conversation.as_ref(), &actor, &scope))
+        .execute_owner(async move { operation(owners.conversation.as_ref(), &actor, &scope).await })
 }
 
 fn session(host: &Host, session_id: Option<Uuid>) -> Result<SessionSnapshot> {

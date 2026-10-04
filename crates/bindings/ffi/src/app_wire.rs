@@ -78,7 +78,7 @@ pub(crate) fn command(
             floe_execution::Cancellation::default(),
             Duration::from_secs(35),
         );
-        return services.execute_owner(async {
+        return services.execute_owner(async move {
             if crate::connections_wire::handles_command(&command) {
                 crate::connections_wire::command(&owners, &actor, command_id, command, &scope).await
             } else {
@@ -219,7 +219,7 @@ pub(crate) fn query(
             floe_execution::Cancellation::default(),
             Duration::from_secs(35),
         );
-        return services.execute_owner(async {
+        return services.execute_owner(async move {
             if crate::connections_wire::handles_query(&query) {
                 crate::connections_wire::query(&owners, &actor, query, &scope).await
             } else {
@@ -306,9 +306,9 @@ pub(crate) fn events(
         floe_execution::Cancellation::default(),
         Duration::from_secs(5),
     );
-    services.execute_owner(crate::conversation_wire::events(
-        &owners, &actor, request, &scope,
-    ))
+    services.execute_owner(async move {
+        crate::conversation_wire::events(&owners, &actor, request, &scope).await
+    })
 }
 
 fn vault_result(result: floe_app::VaultLifecycleResult) -> floe_protocol::VaultLifecycleResultDto {

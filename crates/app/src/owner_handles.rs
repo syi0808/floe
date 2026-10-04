@@ -100,7 +100,30 @@ impl crate::AppComposition {
     ) -> Result<Arc<ReadyOwners>, AgentFailure> {
         self.agent_vault.ready(caller)
     }
-    pub fn execute_owner<F: std::future::Future>(&self, future: F) -> F::Output {
-        self.runtime.block_on(future)
+    pub fn execute_owner<F>(&self, future: F) -> F::Output
+    where
+        F: std::future::Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        execute_on_runtime(&self.runtime, future)
+    }
+}
+
+/// Domain/storage polling belongs on Rust-owned stacks, never the foreign FFI
+/// caller's stack. Keep the same budget as the physical Vault queue.
+pub(crate) const EXECUTOR_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+pub(crate) fn execute_on_runtime<F>(runtime: &tokio::runtime::Runtime, future: F) -> F::Output
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let task = runtime.spawn(Box::pin(future));
+    // Only the lightweight JoinHandle is polled by the synchronous caller.
+    // Preserve panic propagation to the existing host/FFI uncertainty boundary.
+    match runtime.block_on(task) {
+        Ok(output) => output,
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(_) => panic!("owner executor stopped before returning its result"),
     }
 }

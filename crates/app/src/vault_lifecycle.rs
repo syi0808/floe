@@ -22,11 +22,12 @@ use std::{
     collections::HashMap,
     fs,
     os::unix::fs::DirBuilderExt,
-    panic::{catch_unwind, AssertUnwindSafe},
+    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     sync::{
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Condvar, Mutex,
+        mpsc,
     },
     time::Duration,
 };
@@ -333,6 +334,7 @@ impl Worker {
     ) -> Result<Self, AgentFailure> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
+            .thread_stack_size(crate::owner_handles::EXECUTOR_STACK_BYTES)
             .enable_all()
             .build()
             .map_err(|_| AgentFailure::VaultUnavailable)?;
@@ -342,7 +344,7 @@ impl Worker {
         let jobs = Arc::new(Mutex::new(HashMap::<Uuid, Arc<Job>>::new()));
         let thread = std::thread::Builder::new()
             .name("floe-vault-lifecycle".into())
-            .stack_size(8 * 1024 * 1024)
+            .stack_size(crate::owner_handles::EXECUTOR_STACK_BYTES)
             .spawn(move || {
                 let mut current = None;
                 let mut fatal = None;
