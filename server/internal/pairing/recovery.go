@@ -151,7 +151,7 @@ func (o *Operations) validateRecoveryReceipt(p *Pending) error {
 		Issued      int64  `json:"issued_at_unix_ms"`
 		Expires     int64  `json:"expires_at_unix_ms"`
 	}
-	if trust.DecodeStrict(p.challengeBytes, &challenge, 65536, 16) != nil || challenge.Version != 1 || challenge.Operation != "enrollment" || challenge.ChallengeID != p.challengeID || challenge.KeyID != p.IssuerKeyID || challenge.PersonID != p.PersonID || challenge.ClientID != p.ID || challenge.DeviceID != p.DeviceID || challenge.Audience != producer.Audience || challenge.Purpose != "owner_enrollment" || challenge.Consumer != "owner" || challenge.Expires != p.Expires.UnixMilli() || challenge.Issued <= 0 || challenge.Expires <= challenge.Issued || challenge.Expires-challenge.Issued > 30000 {
+	if trust.DecodeStrict(p.challengeBytes, &challenge, 65536, 16) != nil || challenge.Version != 1 || challenge.Operation != "enrollment" || challenge.ChallengeID != p.challengeID || challenge.KeyID != p.IssuerKeyID || challenge.PersonID != p.PersonID || challenge.ClientID != p.ID || challenge.DeviceID != p.DeviceID || challenge.Audience != producer.Audience || challenge.Purpose != "owner_enrollment" || challenge.Consumer != "owner" || challenge.Expires != p.Expires.UnixMilli() || !trust.ValidEnrollmentSpan(challenge.Issued, challenge.Expires) {
 		return repair()
 	}
 	if _, err = trust.DecodeBase64(challenge.Nonce, 32); err != nil {

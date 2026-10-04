@@ -137,16 +137,18 @@ function renderPairingGuidance() {
     target.textContent = 'Activation needs an operator decision. Resume uses only the original retained credential and unexpired proof. Abort succeeds only if Trust confirms activation did not commit. An active client must be explicitly revoked below.';
     return;
   }
-  const expires = Date.parse(pairing.expires);
+  // Go emits RFC3339Nano; normalize fractional precision for browser Date.parse.
+  const expires = Date.parse(String(pairing.expires).replace(/(\.\d{3})\d+(?=Z$|[+-]\d{2}:\d{2}$)/, '$1'));
   const remaining = Number.isFinite(expires) ? Math.max(0, Math.ceil((expires - Date.now()) / 1000)) : null;
   if (remaining === 0) {
     target.textContent = 'This request has expired. Return to Floe and start a new pairing request.';
+    for (const name of ['approve', 'reject']) { element(name).hidden = true; element(name).disabled = true; }
     return;
   }
   const next = pairing.phase === 'pending'
     ? 'First compare both codes, then choose “Codes match” in Floe. Approval becomes available here after the app confirms.'
     : pairing.phase === 'local_confirmed'
-      ? 'Floe confirmed the matching code. Choose “Approve connection” here to finish pairing.'
+      ? 'The requesting app reports the codes match. Choose “Approve connection” only if the code above is shown in your Floe app now.'
       : 'Waiting for the current pairing state. Refresh to check again.';
   target.textContent = next + (remaining === null ? '' : ` Time remaining: ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}.`);
 }
