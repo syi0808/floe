@@ -158,3 +158,103 @@ Replace the destinations-only proposal query with one canonical pure proposal pr
 User-reported Calendar/Gateway connections work, but opening Conversation failed. Filtered AppDiagnostics records at 16:19–16:20 UTC identify `conversation_session` / `internal`, before model execution. Root reproduced a concrete boundary error: Vault creates and persists a valid empty Session at revision 0, while ConversationSessionSnapshotDto rejected 0 and FFI mapped the rejection to Internal. The real Rust wire fixture also exposed the same wrong positive-only assumption in Dart AgentSession. Preserve the owner/storage revision contract and allow 0 consistently in the Rust snapshot validator and Dart decoder; keep the i64 upper bound, usage/message validation, actor checks and command CAS unchanged. Existing valid empty sessions need no reset or migration. A disposable actual-FFI probe failed before the fix with the same Internal error and passes afterward; overflow and invalid usage still fail. The resulting real Rust wire fixture is qualified through Flutter's gateway/controller start/resume flow. Actual model/provider execution remains a separate unverified stage.
 
 - The focused startup review found the same incorrect positive-only restriction on `ConversationStartTurn.expected_revision`. The fix is scoped to this command's upper-bound check; recovery and every other owner's positive revision validator remain unchanged. An actual Flutter-generated first-turn request failed Rust request validation before the correction and passes afterward. Separate owner preparation probes accept initial 0, reject stale 0 after Session revision advances, and reject a foreign Person. This qualifies the initial wire and CAS path, not a real model response or full live admission/provider execution.
+
+## Architecture and UX convergence audit — source snapshot `c19e9d7`
+
+The user redirected work from live startup diagnosis to root-owned UI restoration and architecture assessment. Leave the running local development processes and diagnostics untouched; a Keychain prompt is a user hypothesis, not a verified cause. This section extends the existing restoration plan rather than creating a second migration plan.
+
+### Scope and evidence limits
+
+- Baseline presentation: `3f4b407f8079d611224cd7adbef121f9e7e75e8e`; assessed implementation: `c19e9d7a79e3ac85658653a6e67b9886f2f54d72`.
+- Inventory covers 730 tracked Rust/Dart/Go/Swift/shell files, 184,980 physical lines, including generated localizations and examples. These are inventory counts, not a claim of exhaustive semantic review of every line.
+- Baseline-to-current Flutter `lib` diff spans 108 files, including ownership moves, removed adapters and generated localization changes. It is not 108 changed screens or a percentage of visual completion.
+- Direct source review follows Connections, Day, Conversation, Actions, Experts, Knowledge, Inference, their relevant Vault/provider/native adapters and Flutter call chains. Large files were assessed for responsibilities and shared mutable state, not condemned by line count alone. Go provider-auth implementations were compared for repeated lifecycle mechanics and provider-specific differences.
+- The static Rust boundary checker passes for 23 nodes and 126 allowed dependency edges. It explicitly excludes source-level semantics; passing it does not prove CQRS purity, UI parity or interface segregation.
+- No compilation, app restart, live provider effects or permanent test-suite reconstruction is part of this audit. Full visual comparison and interrupted-flow qualification remain open.
+
+### Assessment of the agreed architecture
+
+1. **Modular monolith is present.** Business crates, contracts, generic runtime, adapters, composition and bindings are physically separated. Preserve this topology; another whole-system rewrite or microservice split is not justified by the findings.
+2. **Ports/adapters are materially implemented.** Examples include ActionsRepository/ActionCalendarExecutor, KnowledgeRead/KnowledgeOwner, ModelPort and the provider/Vault implementations. However, several consumers depend on capabilities wider than they need, and the Flutter layers do not consistently follow the same dependency direction.
+3. **Command/query separation exists at the Rust wire/owner boundary but is not consistent end-to-end.** Keep queries observational, command recovery explicit and durable work owned independently of whether a screen happens to be visible. CQRS does not require a second database or an event-sourcing conversion here.
+4. **Model abstractions are present.** Swift Transform has generic Input/Output; HealthTransform consumes DeviceModel; FoundationModelsDeviceModel implements DeviceModel. Shared Inference selects Gateway first and permits Device fallback only after verified Primary absence. Do not replace these already-correct boundaries with new pattern scaffolding.
+
+### Findings and target corrections
+
+#### A. UI read models lost presentation information (confirmed, restore first)
+
+- Old `calendar_panel.dart` grouped connected calendars by account and showed per-calendar last-success/failure details. The current `SourceConnectionPanel` renders a flat `ResourceSummary` list; `ResourceSummary` and `PermittedResource` carry only opaque identity, label and selection. The missing metadata cannot be accurately reconstructed by widgets.
+- `ConnectorScreen._integrationCard` recognizes macOS Calendar using `category == calendar`, display name `Calendar` and target platform. This is a presentation workaround, not a stable service identity contract. Other services still receive generic category descriptions/icons.
+- `IntegrationDetailPanel` is a generic Connect card. `SourceConnectionPanel` combines resource selection, processing disclosure and every source category in one presentation. This erases service-specific explanatory states, not merely obsolete internal APIs.
+- Access disclosure still prints raw `viewId`/category identifiers, and operational failure strings are exposed by replacing underscores. These need typed, localized presentation mapping; do not remove the underlying error/recovery distinctions.
+
+Target: Connections owns truthful service/source/readiness projections. Add bounded display metadata from the real catalog/adapter where evidence exists, separately from opaque permission references and authority digests. Flutter maps stable service kinds and projected states into the baseline card/detail/picker compositions. Labels must never determine source identity or authorization. Do not fabricate missing accounts or silently widen resources.
+
+#### B. Connections is a concentration of unrelated workflows (confirmed)
+
+`ConnectionsService` holds sources, Access, evidence, cleanup, pairing, gateway registry, remote integration, product repository, source catalog and native setup, plus native/job sets, cancellation maps and catalog state. `application/product.rs` is 3,167 lines and handles pairing, catalog reconciliation, native/OAuth setup, source configuration, Observe review/application, query projection, job spawning and activation recovery. `source_operation.rs` adds another 1,193 lines of operations to the same shared service.
+
+Target: keep one Connections module and authoritative aggregates, but separate private workflow components for gateway pairing orchestration, integration setup, source configuration/Observe coordination and read projections. Give each only its required ports. A bounded owner-local job supervisor may own registration/drain mechanics; it must not become another authority or a generic workflow-policy engine. Move methods and dependencies together, not just `impl ConnectionsService` blocks into more files. Preserve durable intent, CAS, cancellation, reservation and pending recovery semantics at each cutover.
+
+#### C. Query paths can still recover commands implicitly (confirmed)
+
+`AppWireConversationGateway._session` is used by `resumeConversation` and `loadConversation`, yet first calls `_submit(pending)` whenever a retained session command exists. The recently separated `loadEarlierConversation` avoids that path, but ordinary session reads still replay a command and share its busy lock. Replaying the same command is idempotent; it is nevertheless a hidden write/recovery dependency of a query.
+
+Target: a pure session query path and an explicit pending-session-command recovery operation, coordinated by the application controller before a user action that actually requires recovery. Reads must remain available independently when safe; an unresolved command must not be forgotten or assigned a new ID. Do not conflate technical transport receipt acknowledgement with a business command.
+
+#### D. Accepted Action work and runtime jobs have a lifecycle gap (confirmed conditional path)
+
+`ActionsService::submit`/`decide` durably admit an Approved record and then call `spawn`. `execution.rs::spawn` can fail on shutdown or the 64-job limit. `activate` explicitly does not dispatch Approved work; the recovery query selects Executing/Unknown/pending collection. A proposal preview correctly returns an existing Action without mutation, but the UI then hides Add. Thus durable acceptance is not itself a guarantee that the executor will pick up this work.
+
+Target: define an Actions-owned durable runnable-work contract and its bounded scheduling/activation policy before changing code. New scheduling must revalidate expiry, current authority/source and the existing pre-dispatch CAS; Executing/Unknown work follows receipt reconciliation, never blind redispatch. Decide the explicit resume presentation for admitted-but-not-running work. Do not repair this by making preview queries spawn jobs or adding another Submit button with a new command identity.
+
+`ActionCommandReplay` additionally keeps up to 128 pending identities in a static Expando keyed by gateway. Existing-action observation currently does not settle those correlations. Move lifecycle ownership to an explicitly injected app/feature command tracker and settle only against matching authoritative acknowledgement. Do not discard uncertainty on widget disposal or clear the whole map on refresh.
+
+#### E. Flutter dependency direction and state ownership need convergence (confirmed)
+
+- `CalendarActionFacade` merely constructs and forwards to `NativeCalendarActionGateway`, while depending on `AppRuntime`. It provides no independent policy or real external boundary.
+- `AppWireDayGateway` accepts the whole AppRuntime although its wire operations need a narrow transport capability.
+- Conversation application interfaces/controllers import concrete `AppWireConversationClient` and `NativeTransportException`; `NativeConversationRuntimeGateway` is implemented in the same application file as its interface.
+- Actions controller imports AppRuntime for its error type. Connections command/review/pairing observation state lives together in a presentation-directory controller. Similar Vault generation, busy, pending identity and response validation mechanics recur in multiple features with different rules.
+
+Target: composition constructs actual adapters and injects narrow feature ports. Remove the forwarding-only Actions facade. Put transport implementations/decoders in infrastructure, stable feature snapshots/errors at the port/domain boundary, and view/navigation state in controllers. Extract only proven common correlation/disposition mechanics; retain domain-specific admission/retry policy in each owner. Do not build a universal controller or error-swallowing retry wrapper.
+
+#### F. Cross-module capabilities are broader than use (confirmed coupling, not a demonstrated permission bypass)
+
+Context's `ExpertContextDependencies` receives the entire `DayRepository`, which includes mutation, Action collection and refresh repository capabilities. `task_context_view`/related projections need bounded reads. Writes still require DayWriteFence, so this observation alone is not an authority bypass.
+
+Target: expose a Day-owned read port with the exact bounded selections Context needs; implement it in the same repository adapter. Keep storage transactions and write fences private to the write path. Apply this assessment to other broad dependencies case by case instead of introducing interfaces around every class.
+
+#### G. Large storage/runtime files require selective decomposition, not blanket splitting
+
+Vault `learning.rs` (2,113 lines), `agent_actions.rs` (1,942) and `conversations.rs` (1,747) combine SQL/row codecs/transaction orchestration and calls to owner-defined pure policy functions. The latter is often correct: decisions must be validated inside the same transaction. Split row codecs, bounded readers and transaction entry points by owner operation while retaining atomicity; do not move transaction invariants into asynchronous UI/application prechecks.
+
+Agent `engine.rs` (1,621 lines) and wire/native validators are also large, but a shared role-neutral execution loop and independent validation at a real external boundary are legitimate responsibilities. Generated localization files are not god-object evidence. Preserve one Engine and one canonical DeviceModel contract; prioritize the demonstrably mixed Connections and Flutter state first.
+
+Google/Microsoft/work OAuth runtimes repeat callback-server, credential lifecycle, locking and error mechanics. Provider identity verification, nonce, scopes, endpoints and revocation differences are real. A later extraction should share proven transport/lifecycle primitives only, with provider-specific policies retained and security review before cutover.
+
+#### H. Bootstrap and diagnostics do not clearly separate waiting from failure (confirmed design limitation; live cause unverified)
+
+Flutter `main.dart` awaits diagnostics initialization, runtime open and native acquisition registration before the first `runApp`. A delayed OS/native dependency can therefore leave no product loading/blocked state. `NativeTransport._open` waits on the worker ready port. Go startup maps different Node construction errors to one generic fatal message.
+
+Target: an app-owned bootstrap state with a visible, safe phase indication and a single retained initialization attempt; attach the ready runtime only when admitted. Add privacy-safe stage/reason diagnostics. An observer deadline must not kill an in-progress Keychain/native operation, duplicate initialization, reset state or misreport a pending operation as denied. This is a lifecycle design task, not a conclusion that the current black window is caused by Keychain.
+
+### Residual UX classification
+
+- **Restore without changing product intent:** service-specific card/detail structure and display copy, account grouping where actual metadata exists, selection dialog layout, friendly state/error labels, stable navigation and progressive disclosure. Keep current owner commands and recovery facts.
+- **Already restored in source, still needs visual/runtime qualification:** direct drag, composer close after acknowledged success, automatic Day freshness, Experts descriptions and expansion review, bounded earlier messages, proposal effect preview and existing Action reopen. Do not call these fully accepted based on source/build alone.
+- **Requires explicit domain semantics before UI restoration:** all calendars including future calendars; the old global “Calendar used by Floe” choice in a multi-source Day/per-Expert world. The former is a dynamic resource policy, the latter is an assistant source preference, not an external-write default. Neither may be faked with labels or today's resource list.
+- **Keep accepted differences:** removed read-only/source diagnostic details; no per-model Gateway approval; source-processing review remains; no extra client code-match confirmation; truthful uncertainty/recovery when commands may already have committed.
+- **Additional interrupted-flow work:** compaction-invalidated history cursor must reset/rebase the historical window explicitly; initial resource selection must not reopen every time a zero-selection detail widget is recreated. Neither should be hidden by repeated generic Retry.
+
+### Recommended execution order and completion gates
+
+1. **Freeze screen intent and contracts before more implementation.** Compare every changed presentation entry against the baseline at desktop/narrow widths using synthetic fixtures. Record missing visual information and normal/empty/loading/permission/error states in this same plan. Separate accepted changes from regressions.
+2. **Complete the Connections vertical slice first.** Define service/display/resource query metadata and private workflow responsibilities, then migrate its Rust projection → DTO → Dart port/controller → baseline widgets together. Retire display-name heuristics, generic-only detail and raw-enum presentation. Resolve future-resource/global-selection semantics separately before adding those controls.
+3. **Converge command observation/recovery.** Fix the explicit session-query boundary and Actions durable runnable-work contract, then settle matching Flutter pending identities. Qualify lost acknowledgement, reopen/disposal, capacity, shutdown and cancellation without duplicate external effects.
+4. **Narrow interfaces and remove redundant layers.** Cut Flutter AppRuntime dependencies/facade, Context's Day read capability and mixed controller state. Each change has one owner/path, migration list and residual search; do not create parallel old/new adapters.
+5. **Finish screen families against the matrix.** Calendar, Experts, Conversation/proposals, Memory/Settings, then bootstrap waiting/recovery presentation. Keep owner semantics fixed except where the previous stages explicitly correct them.
+6. **Selective internal cleanup after contracts stabilize.** Decompose storage readers/codecs/transaction implementations and proven OAuth mechanics. Preserve atomicity and provider-specific identity semantics. Use Opus for adversarial review only; root owns investigation, design and implementation.
+7. **Qualification:** one coherent slice before formatting/compile gates; no repeated broad checks during edits. Use disposable synthetic behavior/contract fixtures for changed boundaries, source/visual parity checks, and the affected final Rust/Go/Flutter/Apple gates. Permanent S3 test reconstruction remains later. Live native permission/provider behavior is reported separately and never inferred from builds.
+
+This is a source-grounded architecture assessment and ordered proposal, not a claim that all findings are fixed or that every repository file has received a complete semantic audit.
