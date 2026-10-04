@@ -1,4 +1,5 @@
 //! Operation-scoped wrapped signing keys. Retention is not live authority.
+use super::gateway_authority::gateway_database;
 use super::gateway_pairing_store::{expectation_on, pairing_on};
 use super::{EncryptedAgentVault, VaultKeyProvider, storage};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -44,11 +45,11 @@ pub(super) async fn enrollment_issuer_on(
     let mut rows = connection.query(
         "SELECT issuer_key_id,issuer_public_key FROM gateway_pairing_private WHERE operation_id=?",
         (operation.to_string(),),
-    ).await.map_err(storage)?;
+    ).await.map_err(gateway_database)?;
     let row = rows
         .next()
         .await
-        .map_err(storage)?
+        .map_err(gateway_database)?
         .ok_or(AgentFailure::VaultUnavailable)?;
     let issuer = RemoteOwnerPublicKey {
         key_id: row.get(0).map_err(storage)?,
@@ -57,7 +58,7 @@ pub(super) async fn enrollment_issuer_on(
     let key_id = Uuid::parse_str(&issuer.key_id).map_err(|_| AgentFailure::VaultUnavailable)?;
     if key_id.is_nil()
         || key_id.to_string() != issuer.key_id
-        || rows.next().await.map_err(storage)?.is_some()
+        || rows.next().await.map_err(gateway_database)?.is_some()
     {
         return Err(AgentFailure::VaultUnavailable);
     }
@@ -135,11 +136,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let mut rows = connection.query(
             "SELECT issuer_nonce,issuer_ciphertext FROM gateway_pairing_private WHERE operation_id=?",
             (operation_id.to_string(),),
-        ).await.map_err(storage)?;
+        ).await.map_err(gateway_database)?;
         let row = rows
             .next()
             .await
-            .map_err(storage)?
+            .map_err(gateway_database)?
             .ok_or(AgentFailure::VaultUnavailable)?;
         let nonce = decode_exact(&row.get::<String>(0).map_err(storage)?, 12)
             .map_err(|_| AgentFailure::VaultUnavailable)?;
@@ -176,7 +177,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let tx = connection
             .transaction_with_behavior(turso::transaction::TransactionBehavior::Deferred)
             .await
-            .map_err(storage)?;
+            .map_err(gateway_database)?;
         let result = async {
             match expectation_on(&tx).await? {
                 GatewayCredentialExpectation::Pending { operation_id }

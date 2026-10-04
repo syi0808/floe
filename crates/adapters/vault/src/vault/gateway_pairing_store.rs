@@ -579,7 +579,7 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
             let result = async {
                 let current = pairing_on(&tx, self.person_id, started.challenge.handle.operation_id).await?.ok_or(AgentFailure::Conflict)?;
                 let private = private_on(&tx, &current).await?;
-                let (_, issuer) = self.enrollment_key_on(&tx, current.operation_id).await?;
+                let issuer = enrollment_issuer_on(&tx, current.operation_id).await?;
                 if started.challenge.reviewed.issuer != issuer || started.enrollment.issuer != issuer {
                     return Err(AgentFailure::PolicyDenied);
                 }
@@ -634,7 +634,7 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                 let private = private_on(&tx, &current).await?;
                 let enrolled = private.enrollment.as_ref().ok_or(AgentFailure::PolicyDenied)?;
                 current.validate_approval(&approval, enrolled).map_err(|_| AgentFailure::PolicyDenied)?;
-                let (_, issuer) = self.enrollment_key_on(&tx, current.operation_id).await?;
+                let issuer = enrollment_issuer_on(&tx, current.operation_id).await?;
                 if enrolled.issuer != issuer { return Err(AgentFailure::PolicyDenied); }
                 let mut rows = tx.query("SELECT command_json FROM gateway_enrollment_receipts WHERE operation_id=?",
                     (current.operation_id.to_string(),)).await.map_err(storage)?;
@@ -770,7 +770,7 @@ impl<K: VaultKeyProvider> GatewayPrivateReader for EncryptedAgentVault<K> {
                     return Err(AgentFailure::PolicyDenied);
                 }
                 let private = private_on(&tx, &record).await?;
-                let (_, issuer) = self.enrollment_key_on(&tx, operation).await?;
+                let issuer = enrollment_issuer_on(&tx, operation).await?;
                 Ok(PairingPrivateSnapshot {
                     operation: record,
                     issuer,
