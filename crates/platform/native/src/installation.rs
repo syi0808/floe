@@ -48,21 +48,6 @@ pub enum LocalDatabaseAdmission {
     CreateNew,
 }
 
-#[cfg(debug_assertions)]
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DevelopmentResetReason {
-    InvalidInstallation,
-    AmbiguousInstallation,
-    IncompleteInstallation,
-    UnsupportedDatabase,
-    VerifiedVaultIdentityMismatch,
-    MissingVaultKey,
-    MalformedVaultKey,
-    UnsupportedVaultSchema,
-    StoredVaultDataCorrupt,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Phase {
@@ -116,7 +101,7 @@ pub struct LocalInstallation {
 }
 
 /// Retained until App's owners and runtimes physically retire. Diagnostics
-/// participate in the same exclusion, so development reset cannot move a live DB.
+/// participate in the same exclusion, so explicit hosts cannot bypass an existing installation lease.
 pub struct LocalInstallationLease {
     _lock: File,
 }
@@ -141,26 +126,6 @@ impl LocalInstallation {
 
     pub fn database_admission(&self) -> LocalDatabaseAdmission {
         self.admission
-    }
-
-    /// App calls this only before publishing a host and after a typed storage
-    /// or Vault probe establishes the reason. No live owner may retain this DB.
-    #[cfg(debug_assertions)]
-    pub fn reset_before_open(
-        self,
-        reason: DevelopmentResetReason,
-        retained_vault_lock: Option<&File>,
-    ) -> Result<Self, NativeInstallationError> {
-        archive_installation(&self.root, reason, retained_vault_lock)?;
-        let prepared = prepare_identity(&self.root)?;
-        Ok(Self {
-            root: self.root,
-            database_path: prepared.database_path,
-            identity: prepared.identity,
-            record: prepared.record,
-            admission: prepared.admission,
-            _lock: self._lock,
-        })
     }
 
     /// Publish ready after App has opened and validated the plain database.
@@ -205,18 +170,8 @@ impl LocalInstallation {
     }
 }
 
-/// Installation recovery is selected by composition, never inferred from a
-/// custody failure. Isolated development profiles use Preserve as well.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InstallationRecovery {
-    Preserve,
-    #[cfg(debug_assertions)]
-    ArchiveInvalidDevelopment,
-}
-
 pub fn prepare_local_installation(
     support_directory: &Path,
-    recovery: InstallationRecovery,
 ) -> Result<LocalInstallation, NativeInstallationError> {
     if !support_directory.is_absolute()
         || support_directory
@@ -230,39 +185,10 @@ pub fn prepare_local_installation(
         fs::canonicalize(support_directory).map_err(|_| NativeInstallationError::Unavailable)?;
     let lock = acquire_installation_lock(&root)?;
 
-    #[cfg(debug_assertions)]
-    let allow_archive = recovery == InstallationRecovery::ArchiveInvalidDevelopment;
-    #[cfg(not(debug_assertions))]
-    let allow_archive = {
-        let _ = recovery;
-        false
-    };
-    if !allow_archive && regular_file(&root.join(RESET))?.is_some() {
+    if regular_file(&root.join(RESET))?.is_some() {
         return Err(NativeInstallationError::Incomplete);
     }
-    #[cfg(debug_assertions)]
-    if allow_archive {
-        resume_archive(&root, None)?;
-    }
-    let prepared = prepare_identity(&root);
-    #[cfg(debug_assertions)]
-    let prepared = match prepared {
-        Err(
-            failure @ (NativeInstallationError::Invalid
-            | NativeInstallationError::Ambiguous
-            | NativeInstallationError::Incomplete),
-        ) if allow_archive => {
-            let reason = match failure {
-                NativeInstallationError::Invalid => DevelopmentResetReason::InvalidInstallation,
-                NativeInstallationError::Ambiguous => DevelopmentResetReason::AmbiguousInstallation,
-                _ => DevelopmentResetReason::IncompleteInstallation,
-            };
-            archive_installation(&root, reason, None)?;
-            prepare_identity(&root)
-        }
-        result => result,
-    };
-    let prepared = prepared?;
+    let prepared = prepare_identity(&root)?;
     Ok(LocalInstallation {
         root,
         database_path: prepared.database_path,
@@ -706,272 +632,8 @@ fn ensure_directory(path: &Path) -> Result<(), NativeInstallationError> {
     }
 }
 
-#[cfg(debug_assertions)]
-fn ensure_existing_ancestors(mut path: &Path) -> Result<(), NativeInstallationError> {
-    loop {
-        if !directory_exists(path)? {
-            return Err(NativeInstallationError::Invalid);
-        }
-        let Some(parent) = path.parent() else {
-            return Ok(());
-        };
-        path = parent;
-    }
-}
-
 fn sync_directory(path: &Path) -> Result<(), NativeInstallationError> {
     File::open(path)
         .and_then(|directory| directory.sync_all())
         .map_err(|_| NativeInstallationError::Unavailable)
-}
-
-#[cfg(debug_assertions)]
-const ARCHIVE_ENTRIES: &[&str] = &[
-    RECORD,
-    ATTEMPT,
-    READY,
-    DEVICE,
-    SELECTION,
-    "selected_profile.json.tmp",
-    "people",
-    "floe.db",
-    "floe.db-wal",
-    "floe.db-shm",
-    "floe.db.agent-vaults",
-];
-
-#[cfg(debug_assertions)]
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ResetManifest {
-    schema_version: u32,
-    recovery_id: Uuid,
-    started_at_millis: u64,
-    reason: DevelopmentResetReason,
-    entries: Vec<String>,
-}
-
-#[cfg(debug_assertions)]
-fn archive_installation(
-    root: &Path,
-    reason: DevelopmentResetReason,
-    retained_vault_lock: Option<&File>,
-) -> Result<(), NativeInstallationError> {
-    if regular_file(&root.join(RESET))?.is_some() {
-        return Err(NativeInstallationError::Incomplete);
-    }
-    let mut entries = Vec::new();
-    for name in ARCHIVE_ENTRIES {
-        match fs::symlink_metadata(root.join(name)) {
-            Ok(_) => entries.push((*name).to_owned()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return Err(NativeInstallationError::Unavailable),
-        }
-    }
-    if entries.is_empty() {
-        return Err(NativeInstallationError::Incomplete);
-    }
-    let manifest = ResetManifest {
-        schema_version: 1,
-        recovery_id: Uuid::new_v4(),
-        started_at_millis: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| NativeInstallationError::Unavailable)?
-            .as_millis()
-            .try_into()
-            .map_err(|_| NativeInstallationError::Unavailable)?,
-        reason,
-        entries,
-    };
-    let recovery = recovery_path(root, &manifest);
-    let _vault_locks = archive_vault_locks(root, &recovery, retained_vault_lock)?;
-    ensure_directory(&root.join("recovery"))?;
-    // A new UUID directory must not adopt or overwrite any older recovery.
-    let mut builder = fs::DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder
-        .create(&recovery)
-        .map_err(|_| NativeInstallationError::Unavailable)?;
-    sync_directory(&root.join("recovery"))?;
-    let bytes = serde_json::to_vec(&manifest).map_err(|_| NativeInstallationError::Invalid)?;
-    write_new(&recovery.join("manifest.json"), &bytes)?;
-    write_new(&root.join(RESET), &bytes)?;
-    complete_archive(root, &recovery, &manifest)
-}
-
-#[cfg(debug_assertions)]
-fn recovery_path(root: &Path, manifest: &ResetManifest) -> PathBuf {
-    root.join("recovery").join(format!(
-        "{}-{}",
-        manifest.started_at_millis, manifest.recovery_id,
-    ))
-}
-
-#[cfg(debug_assertions)]
-fn resume_archive(
-    root: &Path,
-    retained_vault_lock: Option<&File>,
-) -> Result<(), NativeInstallationError> {
-    let Some(bytes) = read_bytes(&root.join(RESET), MAX_RECORD_BYTES)? else {
-        return Ok(());
-    };
-    let manifest: ResetManifest =
-        serde_json::from_slice(&bytes).map_err(|_| NativeInstallationError::Invalid)?;
-    let unique: std::collections::HashSet<_> = manifest.entries.iter().collect();
-    if manifest.schema_version != 1
-        || manifest.recovery_id.is_nil()
-        || manifest.entries.is_empty()
-        || unique.len() != manifest.entries.len()
-        || manifest
-            .entries
-            .iter()
-            .any(|name| !ARCHIVE_ENTRIES.contains(&name.as_str()))
-    {
-        return Err(NativeInstallationError::Invalid);
-    }
-    let recovery = recovery_path(root, &manifest);
-    ensure_existing_ancestors(&recovery)?;
-    if read_bytes(&recovery.join("manifest.json"), MAX_RECORD_BYTES)?.as_deref()
-        != Some(bytes.as_slice())
-    {
-        return Err(NativeInstallationError::Invalid);
-    }
-    // Keep every affected encrypted host excluded across all renames, including
-    // restart after part of the data tree has already moved.
-    let _vault_locks = archive_vault_locks(root, &recovery, retained_vault_lock)?;
-    complete_archive(root, &recovery, &manifest)
-}
-
-#[cfg(debug_assertions)]
-fn complete_archive(
-    root: &Path,
-    recovery: &Path,
-    manifest: &ResetManifest,
-) -> Result<(), NativeInstallationError> {
-    for name in &manifest.entries {
-        let source = root.join(name);
-        let destination = recovery.join(name);
-        let present = |path: &Path| match fs::symlink_metadata(path) {
-            Ok(_) => Ok(true),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(_) => Err(NativeInstallationError::Unavailable),
-        };
-        match (present(&source)?, present(&destination)?) {
-            (true, false) => {
-                // Rename the directory entry itself, never follow a symlink.
-                fs::rename(&source, &destination)
-                    .map_err(|_| NativeInstallationError::Unavailable)?;
-                sync_directory(&recovery)?;
-                sync_directory(root)?;
-            }
-            (false, true) => {}
-            _ => return Err(NativeInstallationError::Incomplete),
-        }
-    }
-    let completed = recovery.join("completed.json");
-    if regular_file(&completed)?.is_some() {
-        return Err(NativeInstallationError::Invalid);
-    }
-    fs::rename(root.join(RESET), &completed).map_err(|_| NativeInstallationError::Unavailable)?;
-    sync_directory(&recovery)?;
-    sync_directory(root)
-}
-
-#[cfg(all(debug_assertions, unix))]
-fn archive_vault_locks(
-    source: &Path,
-    recovery: &Path,
-    retained: Option<&File>,
-) -> Result<Vec<File>, NativeInstallationError> {
-    use std::os::unix::fs::MetadataExt;
-
-    const MAX_DIRECTORIES: usize = 256;
-    fn real_directories(path: &Path) -> Result<Vec<PathBuf>, NativeInstallationError> {
-        match fs::symlink_metadata(path) {
-            Ok(metadata) if metadata.file_type().is_dir() => {}
-            Ok(_) => return Ok(Vec::new()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(_) => return Err(NativeInstallationError::Unavailable),
-        }
-        let mut result = Vec::new();
-        let mut count = 0usize;
-        for entry in fs::read_dir(path).map_err(|_| NativeInstallationError::Unavailable)? {
-            let entry = entry.map_err(|_| NativeInstallationError::Unavailable)?;
-            count += 1;
-            if count > MAX_DIRECTORIES {
-                return Err(NativeInstallationError::Unavailable);
-            }
-            let metadata = fs::symlink_metadata(entry.path())
-                .map_err(|_| NativeInstallationError::Unavailable)?;
-            if metadata.file_type().is_dir() {
-                result.push(entry.path());
-            }
-        }
-        Ok(result)
-    }
-
-    let mut directories = Vec::new();
-    for root in [source, recovery] {
-        directories.extend(real_directories(&root.join("floe.db.agent-vaults"))?);
-        if directories.len() > MAX_DIRECTORIES {
-            return Err(NativeInstallationError::Unavailable);
-        }
-        for person in real_directories(&root.join("people"))? {
-            directories.extend(real_directories(&person.join("floe.db.agent-vaults"))?);
-            if directories.len() > MAX_DIRECTORIES {
-                return Err(NativeInstallationError::Unavailable);
-            }
-        }
-    }
-    let retained_identity = retained
-        .map(|file| {
-            let metadata = file
-                .metadata()
-                .map_err(|_| NativeInstallationError::Unavailable)?;
-            if !metadata.file_type().is_file() {
-                return Err(NativeInstallationError::Invalid);
-            }
-            Ok((metadata.dev(), metadata.ino()))
-        })
-        .transpose()?;
-    let mut identities = std::collections::HashSet::new();
-    let mut locks = Vec::new();
-    for directory in directories {
-        let path = directory.join("host.lock");
-        let before = regular_file(&path)?.ok_or(NativeInstallationError::Incomplete)?;
-        let identity = (before.dev(), before.ino());
-        if !identities.insert(identity) || retained_identity == Some(identity) {
-            continue;
-        }
-        let lock = private_options()
-            .read(true)
-            .write(true)
-            .open(&path)
-            .map_err(|_| NativeInstallationError::Unavailable)?;
-        let actual = lock
-            .metadata()
-            .map_err(|_| NativeInstallationError::Unavailable)?;
-        if !actual.file_type().is_file() || (actual.dev(), actual.ino()) != identity {
-            return Err(NativeInstallationError::Invalid);
-        }
-        lock.try_lock().map_err(|error| match error {
-            fs::TryLockError::WouldBlock => NativeInstallationError::Busy,
-            fs::TryLockError::Error(_) => NativeInstallationError::Unavailable,
-        })?;
-        locks.push(lock);
-    }
-    Ok(locks)
-}
-
-#[cfg(all(debug_assertions, not(unix)))]
-fn archive_vault_locks(
-    _: &Path,
-    _: &Path,
-    _: Option<&File>,
-) -> Result<Vec<File>, NativeInstallationError> {
-    Err(NativeInstallationError::Unavailable)
 }

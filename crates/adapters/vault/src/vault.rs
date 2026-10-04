@@ -40,7 +40,6 @@ mod gateway_pairing_store;
 #[cfg(feature = "os-keyring")]
 mod keyring;
 mod learning;
-mod preflight;
 mod registry;
 pub use gateway_authority::{VaultAuthorizationSigner, VaultEnrollmentSigner};
 mod schema_lifecycle;
@@ -62,9 +61,6 @@ pub enum VaultKeyReadFailure {
     Malformed,
     Unavailable(AgentFailure),
 }
-pub use preflight::{
-    VaultOpenInspection, VaultResetEvidence, VaultResetReason, inspect_existing_vault,
-};
 pub use session_archive::*;
 
 pub struct VaultKey(Zeroizing<[u8; 32]>);

@@ -38,12 +38,16 @@ impl HostServices for AppComposition {
 /// Open an explicit existing installation database. Owner tasks run after an FFI
 /// admission returns, on this host's bounded execution runtime.
 pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
-    crate::storage_profile::validate_database(std::path::Path::new(path))?;
-    let lease =
-        floe_provider_adapters::lock_existing_local_installation(std::path::Path::new(path))
-            .map_err(installation_error)?;
-    let identity = crate::bootstrap::local_identity_for_database(std::path::Path::new(path))
+    let database = std::fs::canonicalize(path)
+        .map_err(|_| AppOpenError::Host(HostError::IdentityUnavailable))?;
+    crate::storage_profile::validate_database(&database)?;
+    let lease = floe_provider_adapters::lock_existing_local_installation(&database)
+        .map_err(installation_error)?;
+    let identity = crate::bootstrap::local_identity_for_database(&database)
         .map_err(AppOpenError::Host)?
+        .ok_or(AppOpenError::Host(HostError::IdentityUnavailable))?;
+    let path = database
+        .to_str()
         .ok_or(AppOpenError::Host(HostError::IdentityUnavailable))?;
     let runtime = runtime()?;
     let database_path = std::path::PathBuf::from(path);
@@ -61,105 +65,27 @@ pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
 
 /// Open the one internal installation. Fresh identity and plain-store creation
 /// do not create/unlock an encrypted Vault or any provider credential.
-#[cfg_attr(not(debug_assertions), allow(clippy::never_loop))]
 pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
     let runtime = runtime()?;
     let support_directory =
         crate::storage_profile::support_directory(std::path::Path::new(support_directory))?;
-    #[cfg(all(debug_assertions, not(feature = "development-storage")))]
-    let recovery = floe_provider_adapters::InstallationRecovery::ArchiveInvalidDevelopment;
-    #[cfg(any(not(debug_assertions), feature = "development-storage"))]
-    let recovery = floe_provider_adapters::InstallationRecovery::Preserve;
-    #[allow(unused_mut)]
-    let mut installation =
-        floe_provider_adapters::prepare_local_installation(&support_directory, recovery)
-            .map_err(installation_error)?;
-    #[cfg(all(debug_assertions, not(feature = "development-storage")))]
-    let mut reset_attempted = false;
-    let store = loop {
-        let database_path = installation.database_path().to_path_buf();
-        let admission = installation.database_admission();
-        let opened = execute_on_runtime(&runtime, async move {
-            match admission {
-                floe_provider_adapters::LocalDatabaseAdmission::Existing => {
-                    floe_vault::TursoStore::open_existing(&database_path).await
-                }
-                floe_provider_adapters::LocalDatabaseAdmission::CreateNew => {
-                    floe_vault::TursoStore::create_new(&database_path).await
-                }
+    let mut installation = floe_provider_adapters::prepare_local_installation(&support_directory)
+        .map_err(installation_error)?;
+    let database_path = installation.database_path().to_path_buf();
+    let admission = installation.database_admission();
+    let store = execute_on_runtime(&runtime, async move {
+        match admission {
+            floe_provider_adapters::LocalDatabaseAdmission::Existing => {
+                floe_vault::TursoStore::open_existing(&database_path).await
             }
-        });
-        let store = match opened {
-            Ok(store) => store,
-            #[cfg(all(debug_assertions, not(feature = "development-storage")))]
-            Err(error)
-                if matches!(
-                    error.code,
-                    floe_vault::StoreErrorCode::UnsupportedSchema
-                        | floe_vault::StoreErrorCode::StoredDataCorrupt
-                ) && !reset_attempted =>
-            {
-                installation = installation
-                    .reset_before_open(
-                        floe_provider_adapters::DevelopmentResetReason::UnsupportedDatabase,
-                        None,
-                    )
-                    .map_err(installation_error)?;
-                reset_attempted = true;
-                continue;
-            }
-            Err(error) => return Err(AppOpenError::Store(error.to_string())),
-        };
-        #[cfg(all(debug_assertions, not(feature = "development-storage")))]
-        {
-            let root = std::path::PathBuf::from(format!(
-                "{}.agent-vaults",
-                installation.database_path().display(),
-            ));
-            let person = floe_kernel::PersonId(installation.identity().person_id());
-            match execute_on_runtime(&runtime, async move {
-                match crate::storage_profile::vault_keys(&root) {
-                    Ok(keys) => floe_vault::inspect_existing_vault(&root, person, &keys).await,
-                    Err(failure) => floe_vault::VaultOpenInspection::Unavailable(failure),
-                }
-            }) {
-                floe_vault::VaultOpenInspection::Absent
-                | floe_vault::VaultOpenInspection::Compatible => {}
-                floe_vault::VaultOpenInspection::Unavailable(failure) => {
-                    return Err(AppOpenError::Runtime(format!(
-                        "existing Vault preflight failed: {failure:?}"
-                    )));
-                }
-                floe_vault::VaultOpenInspection::Resettable(evidence) => {
-                    if reset_attempted {
-                        return Err(AppOpenError::Runtime(
-                            "fresh installation failed Vault validation".into(),
-                        ));
-                    }
-                    let reason = match evidence.reason() {
-                        floe_vault::VaultResetReason::MissingKey => floe_provider_adapters::DevelopmentResetReason::MissingVaultKey,
-                        floe_vault::VaultResetReason::MalformedKey => floe_provider_adapters::DevelopmentResetReason::MalformedVaultKey,
-                        floe_vault::VaultResetReason::UnsupportedSchema => floe_provider_adapters::DevelopmentResetReason::UnsupportedVaultSchema,
-                        floe_vault::VaultResetReason::IdentityMismatch => floe_provider_adapters::DevelopmentResetReason::VerifiedVaultIdentityMismatch,
-                        floe_vault::VaultResetReason::StoredDataCorrupt => floe_provider_adapters::DevelopmentResetReason::StoredVaultDataCorrupt,
-                    };
-                    // Neither database nor any domain owner is live during the
-                    // move. The encrypted preflight lock survives the rename.
-                    drop(store);
-                    installation = installation
-                        .reset_before_open(reason, Some(evidence.lock_file()))
-                        .map_err(installation_error)?;
-                    drop(evidence);
-                    reset_attempted = true;
-                    continue;
-                }
+            floe_provider_adapters::LocalDatabaseAdmission::CreateNew => {
+                floe_vault::TursoStore::create_new(&database_path).await
             }
         }
-        // Development mirrors Release: a bad encrypted Vault must not block
-        // the independent product host. VaultBridge owns presence/open checks
-        // and exposes typed failures without reset or replacement keys.
-        break store;
-    };
+    })
+    .map_err(|error| AppOpenError::Store(error.to_string()))?;
+    // Every build preserves failed admissions. VaultBridge alone owns typed
+    // Vault lifecycle failures; a build profile is never reset authority.
     installation.complete().map_err(installation_error)?;
     let identity = crate::bootstrap::installation_identity(&installation);
     let path = installation

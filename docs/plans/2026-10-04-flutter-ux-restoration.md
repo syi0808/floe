@@ -432,3 +432,27 @@ and Flutter analysis with the same 157 informational baseline findings (no error
 or warnings). It does not yet qualify remote-provider live states or full rendered
 parity. Exact f95ad601 Apple/CLI/Go build qualification also passed separately;
 no runtime launch or Keychain access occurred.
+
+### Custody closure follow-through
+
+The focused f95ad601 Opus review verified that removing development preflight
+cannot recreate a partial Vault or replace keys. Root accepts the remaining
+explicit-open path mismatch: canonicalize once before validation, installation
+lock, identity lookup, store open and Vault construction, including the short
+`people/<person>/floe.db` form. Instead of adding a third debug-custody ABI mode,
+remove automatic archive/reset from every build. This eliminates the unshipped
+OS-keyring-debug path that could archive production data while reporting the same
+custody code. Remove its recovery enum, reset method, archive/resume code and
+unused reset-evidence preflight module. Existing incomplete reset markers remain
+fail-closed and preserved. The explicit operator reset script remains separate;
+it is not invoked by startup. This is a lifecycle simplification, not a weaker
+schema/key/identity check. Exact f95ad601 Apple builds passed before this follow-up.
+
+Root qualification for canonical admission: actual FFI opens/unlocks the short
+relative path from the installation root; an alias to a database already held by
+another host fails on the same installation lease. Both default OS-keyring-debug
+and development profiles preserve byte-identical synthetic damaged databases and
+installation files after failed admission, with no archive directory or reset.
+Missing-key typed Vault failure and both coexistence orders still pass. Default
+workspace/doctests, both FFI builds and architecture boundary checks passed. The
+removed preflight/reset API has no remaining crate caller or export.

@@ -26,11 +26,9 @@ pub use dylib::{
     BUNDLE_SIBLING, ByteCall, GatedStringCall, MACOS_BUNDLE_ROOT, NativeCallError, NativeLibrary,
 };
 pub use host::{NativeIdentityError, NativeLocalIdentity, local_identity_for_database};
-#[cfg(debug_assertions)]
-pub use installation::DevelopmentResetReason;
 pub use installation::{
-    InstallationRecovery, LocalDatabaseAdmission, LocalInstallation, LocalInstallationLease,
-    NativeInstallationError, lock_existing_local_installation, prepare_local_installation,
+    LocalDatabaseAdmission, LocalInstallation, LocalInstallationLease, NativeInstallationError,
+    lock_existing_local_installation, prepare_local_installation,
 };
 
 mod health_privacy;
