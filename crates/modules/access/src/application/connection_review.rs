@@ -665,6 +665,19 @@ impl AccessService {
             Ok(review)
         })
     }
+    pub fn review_inapplicability(
+        &self,
+        review: &ConnectionReview,
+    ) -> Result<Option<crate::ReviewInapplicability>, AgentFailure> {
+        review.validate()?;
+        if review.expires_at <= self.clock.now() {
+            return Ok(Some(crate::ReviewInapplicability::Expired));
+        }
+        if review.policy_digest != consumer_policy_digest(self.consumers.as_ref())? {
+            return Ok(Some(crate::ReviewInapplicability::PolicyChanged));
+        }
+        Ok(None)
+    }
     fn validate_review_actor(
         &self,
         actor: &OwnerActor,
@@ -673,8 +686,7 @@ impl AccessService {
         review.validate()?;
         if review.person_id != actor.person_id
             || review.device_id != actor.device_id
-            || review.expires_at <= self.clock.now()
-            || review.policy_digest != consumer_policy_digest(self.consumers.as_ref())?
+            || self.review_inapplicability(review)?.is_some()
         {
             return Err(AgentFailure::PolicyDenied);
         }

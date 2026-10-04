@@ -665,3 +665,15 @@ The 45ca86d2 Opus source review accepted the prior sealed-generation/status, lat
 - Gateway summaries project Gateway-domain actions; catalog failures do not advertise a fictitious Reopen recovery.
 
 The coherent Rust production build passed. The expanded fake-key probe passed atomic cancellation admission/target readback, exact replay, rejection fencing and stale-driver CAS. The actual AppHost 80-command Lock-only/archive replay probe passed again under the new acknowledgement order. Nine disposable Flutter probes passed, including canonical typed-reference isolation and Lock → status timeout → Retry with no Unlock. No real Apple key/provider, HTTP, or permanent S3 suite execution is claimed. The conditional Access expiry-before-replay concern was checked in current inspect_review/read_review: they validate the stored identity and actor without expiry, so that claimed persistent expiry blocker was not reproduced in source. Same-snapshot review and Apple qualification remain pending.
+
+
+### Review applicability and observation convergence (2026-10-04)
+
+The 0fb39f57 review confirmed atomic integration cancellation, no cancellation-driven Begin, archive-before-completion, distinct command journals and canonical typed-reference scoping. Root directly addressed its remaining concrete source findings:
+
+- Fresh Observe rejects expired or policy-changed Access reviews before source reservation. A review becoming inapplicable after reservation is settled by Access abort/AlreadyCommitted, never by error-name inference. A durable abort releases the source fence and resolves the Allow command as NotApplied. Committed replay remains valid after expiry.
+- Successful integration observations clear stale transient failures, do not advertise another Cancel after cancellation, and skip unchanged CAS writes. A terminal PolicyDenied is persisted as RepairRequired rather than leaving a frozen Running polling projection. Pending cancellation removes authorization launch/code.
+- Catalog wake generations and atomic lease release preserve concurrent completion-triggered refreshes.
+- Explicit Reopen/Unlock changes the shared controller's desired state; a plain status Retry still preserves a prior Lock. The obsolete failed-closure replay field was removed.
+
+The final coherent Rust production build, DAG and diff check passed. Flutter analysis remains zero errors/warnings, 138 informational findings and default exit 1. Eleven disposable gateway/controller probes passed, including both Lock failure with explicit Reopen and successful Lock with explicit Unlock, while preserving zero Unlock on status Retry. Fake-key Access/storage probes passed expiry and policy-change detection, no grant commit from an expired review, durable abort and actual plain-source fence release, immutable committed replay after expiry, and commit-winning abort. Existing atomic cancellation/pairing/source-journal probes also passed. These are focused owner/storage probes, not full remote integration or clock-controlled Connections-worker qualification. Same-snapshot adversarial review and separately authorized Apple qualification remain pending.

@@ -1,3 +1,5 @@
+import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -90,6 +92,9 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
                           ) ==
                           true
                     ? 'Reopen local storage'
+                    : current.vault.state == AgentVaultState.locked &&
+                          current.vault.failure == null
+                    ? 'Unlock local storage'
                     : 'Retry local storage',
               ),
             ),

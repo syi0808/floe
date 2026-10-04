@@ -771,3 +771,10 @@ impl ProjectionReviewOrigin {
         digest(&(actor.person_id, &actor.device_id, self))
     }
 }
+
+/// Applicability of a fresh decision, distinct from immutable receipt replay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReviewInapplicability {
+    Expired,
+    PolicyChanged,
+}

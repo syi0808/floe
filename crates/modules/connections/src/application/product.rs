@@ -940,7 +940,14 @@ impl ConnectionsService {
         }
         operation.remote = observed.reference;
         operation.connection_id = Some(observed.connection_id.clone());
-        operation.snapshot.launch_action = observed.management_launch;
+        operation.snapshot.launch_action = if operation.cancellation_command.is_none() {
+            observed.management_launch
+        } else {
+            None
+        };
+        if operation.cancellation_command.is_some() {
+            operation.snapshot.display_code = None;
+        }
         operation.snapshot.state = match observed.state {
             RemoteIntegrationState::AwaitingUser => ConnectionOperationState::AwaitingUser,
             RemoteIntegrationState::Pending => ConnectionOperationState::Running,
@@ -979,6 +986,7 @@ impl ConnectionsService {
             };
             operation.snapshot.source = Some(self.source_summary(actor, &source, scope).await?);
         }
+        operation.snapshot.failure = None;
         if observed.state == RemoteIntegrationState::Failed {
             operation.snapshot.failure = Some(failure(
                 operation.remote.operation_id,
@@ -992,12 +1000,18 @@ impl ConnectionsService {
                 | ConnectionOperationState::Running
                 | ConnectionOperationState::AwaitingUser
         );
-        operation.snapshot.allowed_actions = if active {
+        operation.snapshot.allowed_actions = if active && operation.cancellation_command.is_none() {
             vec![ConnectionAction::Cancel, ConnectionAction::Reobserve]
+        } else if active {
+            vec![ConnectionAction::Reobserve]
         } else {
             vec![]
         };
         operation.snapshot.next_observation_after_ms = active.then_some(2000);
+        if matches!(&record.payload,ConnectionsPayload::IntegrationOperation(previous) if previous == &operation)
+        {
+            return Ok(operation.snapshot);
+        }
         let previous = record.revision;
         record.revision = record
             .revision
@@ -1617,6 +1631,13 @@ impl ConnectionsService {
         let operation = self
             .apply_source_review(actor, command_id, reference, scope)
             .await?;
+        if matches!(operation.phase, SourceOperationPhase::Aborted { .. }) {
+            // The Access abort receipt proves that no grant commit for this
+            // exact operation can appear later; all deliveries are settled.
+            return Err(ConnectionsCommandFailure::NotApplied(
+                AgentFailure::AccessReviewRequired,
+            ));
+        }
         let result: Result<SourceSummary, AgentFailure> = async {
             if !matches!(operation.phase, SourceOperationPhase::Completed { .. }) {
                 return Err(AgentFailure::AccessReviewRequired);
@@ -1780,6 +1801,47 @@ impl ConnectionsService {
             scope.trace_context(),
         )
     }
+    async fn record_integration_repair(
+        &self,
+        actor: &OwnerActor,
+        id: Uuid,
+    ) -> Result<(), AgentFailure> {
+        let mut record = self
+            .products
+            .load(actor.person_id, id)
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        if record.device_id != actor.device_id {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let ConnectionsPayload::IntegrationOperation(ref mut operation) = record.payload else {
+            return Err(AgentFailure::InvalidInput);
+        };
+        if matches!(
+            operation.snapshot.state,
+            ConnectionOperationState::Completed
+                | ConnectionOperationState::Cancelled
+                | ConnectionOperationState::Failed
+                | ConnectionOperationState::RepairRequired
+        ) {
+            return Ok(());
+        }
+        let previous = record.revision;
+        record.revision = previous.checked_add(1).ok_or(AgentFailure::Conflict)?;
+        operation.snapshot.revision = record.revision;
+        operation.snapshot.state = ConnectionOperationState::RepairRequired;
+        operation.snapshot.failure = Some(failure(
+            id,
+            ConnectionFailureReason::OperationUncertain,
+            ConnectionRecovery::None,
+        ));
+        operation.snapshot.allowed_actions.clear();
+        operation.snapshot.next_observation_after_ms = None;
+        operation.snapshot.launch_action = None;
+        operation.snapshot.display_code = None;
+        self.products.compare_and_swap(previous, record).await?;
+        Ok(())
+    }
     fn spawn_integration(
         &self,
         actor: OwnerActor,
@@ -1852,11 +1914,14 @@ impl ConnectionsService {
                 }) {
                     break;
                 }
+                if matches!(result, Err(AgentFailure::PolicyDenied)) {
+                    if service.record_integration_repair(&actor, id).await.is_ok() {
+                        break;
+                    }
+                }
                 if matches!(
                     result,
-                    Err(AgentFailure::PolicyDenied
-                        | AgentFailure::VaultUnavailable
-                        | AgentFailure::VaultLocked)
+                    Err(AgentFailure::VaultUnavailable | AgentFailure::VaultLocked)
                 ) {
                     break;
                 }
@@ -1957,6 +2022,8 @@ impl ConnectionsService {
             actor.person_id,
             &actor.device_id,
         )?;
+        self.catalog_dirty
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         let Some(lease) = NativeDriveLease::acquire(self.jobs_active.clone(), id)? else {
             return Ok(());
         };
@@ -1965,7 +2032,7 @@ impl ConnectionsService {
         self.register_job(id, &scope)?;
         let cancellations = self.jobs_cancel.clone();
         tokio::spawn(async move {
-            let _lease = JobLease {
+            let mut lease = JobLease {
                 _active: lease,
                 cancellations,
                 id,
@@ -1974,6 +2041,9 @@ impl ConnectionsService {
                 if service.ensure_open().is_err() || scope.cancellation().is_cancelled() {
                     break;
                 }
+                let observed_dirty = service
+                    .catalog_dirty
+                    .load(std::sync::atomic::Ordering::Acquire);
                 let round = ExecutionScope::root(
                     scope.cancellation().clone(),
                     tokio::time::Instant::now() + std::time::Duration::from_secs(30),
@@ -1981,7 +2051,15 @@ impl ConnectionsService {
                     scope.trace_context(),
                 );
                 match service.refresh_integrations(&actor, &round).await {
-                    Ok(()) => break,
+                    Ok(()) => {
+                        if lease
+                            .finish_if_current(&service.catalog_dirty, observed_dirty)
+                            .unwrap_or(false)
+                        {
+                            break;
+                        }
+                        continue;
+                    }
                     Err(
                         AgentFailure::VaultUnavailable
                         | AgentFailure::VaultLocked
@@ -2011,6 +2089,7 @@ impl ConnectionsService {
                 };
                 let mut notice = failure(summary.gateway_ref, reason, ConnectionRecovery::None);
                 notice.category = floe_kernel::AgentFailureCategory::Transient;
+                notice.reload_required = false;
                 notice.safe_actions = summary.allowed_actions.clone();
                 summary.failure = Some(notice);
             }
@@ -3018,6 +3097,7 @@ fn configuration_expectation(
 }
 
 struct NativeDriveLease {
+    released: bool,
     active: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<Uuid>>>,
     id: Uuid,
 }
@@ -3030,11 +3110,18 @@ impl NativeDriveLease {
             .lock()
             .map_err(|_| AgentFailure::StorageUnavailable)?
             .insert(id);
-        Ok(inserted.then_some(Self { active, id }))
+        Ok(inserted.then_some(Self {
+            active,
+            id,
+            released: false,
+        }))
     }
 }
 impl Drop for NativeDriveLease {
     fn drop(&mut self) {
+        if self.released {
+            return;
+        }
         if let Ok(mut active) = self.active.lock() {
             active.remove(&self.id);
         }
@@ -3048,8 +3135,38 @@ struct JobLease {
     >,
     id: Uuid,
 }
+impl JobLease {
+    /// Compare the wake generation and release ownership under the same active
+    /// lock used by admission. A concurrent wake either keeps this driver alive
+    /// or acquires a new lease after release; it cannot fall between them.
+    fn finish_if_current(
+        &mut self,
+        dirty: &std::sync::atomic::AtomicU64,
+        observed: u64,
+    ) -> Result<bool, AgentFailure> {
+        let mut active = self
+            ._active
+            .active
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        if dirty.load(std::sync::atomic::Ordering::Acquire) != observed {
+            return Ok(false);
+        }
+        let mut jobs = self
+            .cancellations
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        jobs.remove(&self.id);
+        active.remove(&self.id);
+        self._active.released = true;
+        Ok(true)
+    }
+}
 impl Drop for JobLease {
     fn drop(&mut self) {
+        if self._active.released {
+            return;
+        }
         if let Ok(mut jobs) = self.cancellations.lock() {
             jobs.remove(&self.id);
         }

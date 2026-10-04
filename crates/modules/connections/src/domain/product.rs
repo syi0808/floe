@@ -553,6 +553,8 @@ impl ConnectionsRecord {
         operation.cancellation_command = Some(receipt.command_id);
         operation.snapshot.revision = next.revision;
         operation.snapshot.allowed_actions = vec![ConnectionAction::Reobserve];
+        operation.snapshot.launch_action = None;
+        operation.snapshot.display_code = None;
         self.validate_successor(&next)?;
         Ok(next)
     }

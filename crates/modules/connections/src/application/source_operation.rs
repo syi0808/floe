@@ -98,6 +98,7 @@ pub struct ConnectionsService {
     pub(super) jobs_cancel:
         Arc<std::sync::Mutex<std::collections::HashMap<Uuid, floe_execution::Cancellation>>>,
     pub(super) closed: Arc<std::sync::atomic::AtomicBool>,
+    pub(super) catalog_dirty: Arc<std::sync::atomic::AtomicU64>,
     pub(super) catalog_status: Arc<std::sync::Mutex<Option<Result<(), AgentFailure>>>>,
     pub(super) catalog_gateway: Arc<std::sync::Mutex<Option<Uuid>>>,
 }
@@ -118,6 +119,7 @@ impl ConnectionsService {
             jobs_active: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             jobs_cancel: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            catalog_dirty: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             catalog_status: Arc::new(std::sync::Mutex::new(None)),
             catalog_gateway: Arc::new(std::sync::Mutex::new(None)),
         }
@@ -364,6 +366,16 @@ impl ConnectionsService {
                 .inspect_review(actor, reference.clone(), scope)
                 .await
                 .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+            if self
+                .access
+                .review_inapplicability(&review)
+                .map_err(ConnectionsCommandFailure::NotAdmitted)?
+                .is_some()
+            {
+                return Err(ConnectionsCommandFailure::NotAdmitted(
+                    AgentFailure::PolicyDenied,
+                ));
+            }
             let current = self
                 .sources
                 .load(actor.person_id, &review.source.source.connection_id())
@@ -402,24 +414,8 @@ impl ConnectionsService {
                     .access
                     .apply_review(actor, reference, reservation.clone(), scope)
                     .await;
-                match self
-                    .access
-                    .receipt(
-                        actor,
-                        GrantReceiptQuery {
-                            identity: reservation.identity(),
-                        },
-                        scope,
-                    )
-                    .await?
-                {
-                    Some(GrantOperationReceipt::Committed(receipt)) => {
-                        self.complete_committed(actor, admission.record, receipt, None, scope)
-                            .await
-                    }
-                    Some(GrantOperationReceipt::Aborted(_)) => Err(AgentFailure::Conflict),
-                    None => Err(applied.err().unwrap_or(AgentFailure::StorageUnavailable)),
-                }
+                self.settle_review_attempt(actor, admission.record, applied.err(), scope)
+                    .await
             }
             .await;
             result.map_err(ConnectionsCommandFailure::Admitted)
@@ -968,10 +964,16 @@ impl ConnectionsService {
                         return Ok(operation);
                     }
                     let reference = operation.review.clone().ok_or(AgentFailure::Conflict)?;
-                    let expected = self
+                    let review = self
                         .access
-                        .replay_review_source(actor, reference.clone(), scope)
+                        .inspect_review(actor, reference.clone(), scope)
                         .await?;
+                    if let Some(reason) = self.access.review_inapplicability(&review)? {
+                        return self
+                            .abort_inapplicable_review(actor, operation, reason, scope)
+                            .await;
+                    }
+                    let expected = review.source;
                     let current = self
                         .sources
                         .load(actor.person_id, &operation.expected.source.connection_id())
@@ -996,17 +998,9 @@ impl ConnectionsService {
                         .access
                         .apply_review(actor, reference, reservation, scope)
                         .await;
-                    return match self
-                        .access
-                        .receipt(actor, GrantReceiptQuery { identity }, scope)
-                        .await?
-                    {
-                        Some(GrantOperationReceipt::Committed(receipt)) => {
-                            self.reconcile_committed(actor, operation, receipt, scope)
-                                .await
-                        }
-                        _ => Err(attempted.err().unwrap_or(AgentFailure::StorageUnavailable)),
-                    };
+                    return self
+                        .settle_review_attempt(actor, operation, attempted.err(), scope)
+                        .await;
                 };
                 match self
                     .access
@@ -1027,6 +1021,88 @@ impl ConnectionsService {
                             .await
                     }
                 }
+            }
+        }
+    }
+    async fn settle_review_attempt(
+        &self,
+        actor: &OwnerActor,
+        operation: SourceOperationRecord,
+        attempt_failure: Option<AgentFailure>,
+        scope: &ExecutionScope,
+    ) -> Result<SourceOperationRecord, AgentFailure> {
+        match self
+            .access
+            .receipt(
+                actor,
+                GrantReceiptQuery {
+                    identity: operation.identity(),
+                },
+                scope,
+            )
+            .await?
+        {
+            Some(GrantOperationReceipt::Committed(receipt)) => {
+                self.reconcile_committed(actor, operation, receipt, scope)
+                    .await
+            }
+            Some(GrantOperationReceipt::Aborted(receipt)) => {
+                self.advance(
+                    &operation,
+                    SourceOperationPhase::Aborted {
+                        reason: SourceAbortReason::ReviewChanged,
+                    },
+                    SourceOperationProof::Aborted(receipt),
+                    None,
+                )
+                .await
+            }
+            None => {
+                let reference = operation.review.clone().ok_or(AgentFailure::Conflict)?;
+                let review = self.access.inspect_review(actor, reference, scope).await?;
+                if let Some(reason) = self.access.review_inapplicability(&review)? {
+                    self.abort_inapplicable_review(actor, operation, reason, scope)
+                        .await
+                } else {
+                    Err(attempt_failure.unwrap_or(AgentFailure::StorageUnavailable))
+                }
+            }
+        }
+    }
+    async fn abort_inapplicable_review(
+        &self,
+        actor: &OwnerActor,
+        operation: SourceOperationRecord,
+        reason: floe_access::ReviewInapplicability,
+        scope: &ExecutionScope,
+    ) -> Result<SourceOperationRecord, AgentFailure> {
+        let reason = match reason {
+            floe_access::ReviewInapplicability::Expired => SourceAbortReason::ReviewExpired,
+            floe_access::ReviewInapplicability::PolicyChanged => SourceAbortReason::ReviewChanged,
+        };
+        match self
+            .access
+            .abort(
+                actor,
+                GrantAbort {
+                    identity: operation.identity(),
+                },
+                scope,
+            )
+            .await?
+        {
+            GrantAbortOutcome::Aborted(receipt) => {
+                self.advance(
+                    &operation,
+                    SourceOperationPhase::Aborted { reason },
+                    SourceOperationProof::Aborted(receipt),
+                    None,
+                )
+                .await
+            }
+            GrantAbortOutcome::AlreadyCommitted(receipt) => {
+                self.reconcile_committed(actor, operation, receipt, scope)
+                    .await
             }
         }
     }

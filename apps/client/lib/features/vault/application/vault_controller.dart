@@ -19,14 +19,14 @@ final class VaultController extends ChangeNotifier {
   bool _desiredReady = true;
   int _failureRevision = 0;
   Future<void>? _opening;
-  Future<AgentVaultState> Function()? _failedOperation;
   bool get ready =>
       !_disposed && !_closing && !busy && state == AgentVaultState.ready;
   bool get canRecover =>
       !_disposed &&
       !_closing &&
       !busy &&
-      (gateway.hasPendingOperation ||
+      (state == AgentVaultState.locked ||
+          gateway.hasPendingOperation ||
           failure?.safeActions.contains('reopen_vault') == true ||
           (failure?.retryPolicy != 'never' &&
               failure?.safeActions.contains('retry') == true));
@@ -54,7 +54,11 @@ final class VaultController extends ChangeNotifier {
   /// A new lifecycle attempt requires an explicit owner-projected safe action.
   Future<void> recover() async {
     if (!canRecover) return;
-    await _run(gateway.hasPendingOperation ? _failedOperation ?? _open : _open);
+    if (failure?.safeActions.contains('reopen_vault') == true ||
+        (failure == null && state == AgentVaultState.locked)) {
+      _desiredReady = true;
+    }
+    await _run(_open);
   }
 
   Future<void> lock() async {
@@ -91,7 +95,6 @@ final class VaultController extends ChangeNotifier {
       final value = await operation();
       if (!_disposed && !_closing && failureRevision == _failureRevision) {
         _state = value;
-        _failedOperation = null;
       }
     } on Object catch (error, stackTrace) {
       final typed = error is AgentVaultException
@@ -100,7 +103,6 @@ final class VaultController extends ChangeNotifier {
       if (!_disposed && !_closing && failureRevision == _failureRevision) {
         _failure = typed;
         _state = AgentVaultState.unavailable;
-        _failedOperation = operation;
       }
       AppDiagnostics.error(
         component: 'vault',
