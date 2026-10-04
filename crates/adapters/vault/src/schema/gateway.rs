@@ -20,10 +20,6 @@ pub(super) const GATEWAY_OBJECTS: &[SchemaObject] = &[
         "CREATE TABLE remote_authority_schema(id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER NOT NULL)",
     ),
     SchemaObject::table(
-        "remote_authority_owner",
-        "CREATE TABLE remote_authority_owner(id INTEGER PRIMARY KEY CHECK(id=1),key_id TEXT NOT NULL,public_key TEXT NOT NULL,nonce TEXT NOT NULL,ciphertext TEXT NOT NULL)",
-    ),
-    SchemaObject::table(
         "remote_authority_producer",
         "CREATE TABLE remote_authority_producer(id INTEGER PRIMARY KEY CHECK(id=1),identity_json TEXT NOT NULL,revision INTEGER NOT NULL CHECK(revision>0))",
     ),
@@ -69,6 +65,6 @@ pub(super) const GATEWAY_OBJECTS: &[SchemaObject] = &[
     ),
     SchemaObject::table(
         "gateway_pairing_private",
-        "CREATE TABLE gateway_pairing_private(operation_id TEXT PRIMARY KEY REFERENCES gateway_pairing_operations(operation_id),proof BLOB NOT NULL CHECK(length(proof)=32),enrollment_json TEXT,credential BLOB CHECK(credential IS NULL OR (length(credential)>=32 AND length(credential)<=256)))",
+        "CREATE TABLE gateway_pairing_private(operation_id TEXT PRIMARY KEY REFERENCES gateway_pairing_operations(operation_id),proof BLOB NOT NULL CHECK(length(proof)=32),issuer_key_id TEXT UNIQUE NOT NULL,issuer_public_key TEXT UNIQUE NOT NULL,issuer_nonce TEXT NOT NULL,issuer_ciphertext TEXT NOT NULL,enrollment_json TEXT,credential BLOB CHECK(credential IS NULL OR (length(credential)>=32 AND length(credential)<=256)))",
     ),
 ];

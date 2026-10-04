@@ -1,5 +1,6 @@
 //! Atomic storage of Connections-owned pairing state and its private material.
 //! Only the root encryption key lives in the platform Keychain.
+use super::authority_keys::enrollment_issuer_on;
 use super::gateway_authority::{
     bounded_decode, bounded_encode, pairing_storage, validate_producer,
 };
@@ -35,7 +36,7 @@ pub(super) fn pairing_state(state: PairingState) -> &'static str {
     }
 }
 
-async fn expectation_on(
+pub(super) async fn expectation_on(
     connection: &Connection,
 ) -> Result<GatewayCredentialExpectation, AgentFailure> {
     let mut rows = connection
@@ -72,7 +73,7 @@ async fn set_expectation_on(
     }
     Ok(())
 }
-async fn pairing_on(
+pub(super) async fn pairing_on(
     connection: &Connection,
     person: PersonId,
     id: Uuid,
@@ -143,6 +144,7 @@ async fn private_on(
         .map_err(storage)?
         .map(|json| bounded_decode(&json))
         .transpose()?;
+    let issuer = enrollment_issuer_on(connection, operation.operation_id).await?;
     let credential = row
         .get::<Option<Vec<u8>>>(2)
         .map_err(storage)?
@@ -151,10 +153,19 @@ async fn private_on(
         .map_err(|_| AgentFailure::VaultUnavailable)?;
     if rows.next().await.map_err(storage)?.is_some()
         || enrollment.as_ref().is_some_and(|command| {
-            command.operation_id != operation.operation_id
+            command.issuer != issuer
+                || command.operation_id != operation.operation_id
                 || command.person_id != operation.person_id
                 || command.device_id != operation.device_id
         })
+        || operation
+            .reviewed
+            .as_ref()
+            .is_some_and(|reviewed| reviewed.issuer != issuer)
+        || operation
+            .enrollment
+            .as_ref()
+            .is_some_and(|enrolled| enrolled.issuer != issuer)
         || (operation.handle.is_some() != enrollment.is_some())
     {
         return Err(AgentFailure::VaultUnavailable);
@@ -243,7 +254,8 @@ fn pending_for(expectation: &GatewayCredentialExpectation, operation: Uuid) -> b
         }
 }
 
-async fn execute_pairing_command_on(
+async fn execute_pairing_command_on<K: VaultKeyProvider>(
+    vault: &EncryptedAgentVault<K>,
     tx: &Connection,
     command: &PairingMutation,
 ) -> Result<Result<PairingSnapshot, PairingError>, AgentFailure> {
@@ -317,6 +329,7 @@ async fn execute_pairing_command_on(
                 Ok(record) => record,
                 Err(error) => return Ok(Err(error)),
             };
+            let key = vault.generate_enrollment_key(&record)?;
             let mut proof = Zeroizing::new([0u8; 32]);
             getrandom::fill(proof.as_mut()).map_err(|_| AgentFailure::StorageUnavailable)?;
             tx.execute(
@@ -339,8 +352,9 @@ async fn execute_pairing_command_on(
             .await
             .map_err(storage)?;
             tx.execute(
-                "INSERT INTO gateway_pairing_private(operation_id,proof) VALUES(?,?)",
-                (record.operation_id.to_string(), proof.as_slice()),
+                "INSERT INTO gateway_pairing_private(operation_id,proof,issuer_key_id,issuer_public_key,issuer_nonce,issuer_ciphertext) VALUES(?,?,?,?,?,?)",
+                (record.operation_id.to_string(), proof.as_slice(), key.issuer.key_id,
+                    key.issuer.public_key, key.nonce, key.ciphertext),
             )
             .await
             .map_err(storage)?;
@@ -479,7 +493,7 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                     return Ok(receipt);
                 }
                 drop(rows);
-                let outcome = execute_pairing_command_on(&tx, &command).await?;
+                let outcome = execute_pairing_command_on(self, &tx, &command).await?;
                 let receipt = PairingMutationReceipt { command, outcome };
                 tx.execute("INSERT INTO gateway_pairing_command_receipts VALUES(?,?,?)", (
                     receipt.command.person_id.to_string(), receipt.command.command_id.to_string(), bounded_encode(&receipt)?,
@@ -565,6 +579,10 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
             let result = async {
                 let current = pairing_on(&tx, self.person_id, started.challenge.handle.operation_id).await?.ok_or(AgentFailure::Conflict)?;
                 let private = private_on(&tx, &current).await?;
+                let (_, issuer) = self.enrollment_key_on(&tx, current.operation_id).await?;
+                if started.challenge.reviewed.issuer != issuer || started.enrollment.issuer != issuer {
+                    return Err(AgentFailure::PolicyDenied);
+                }
                 if current.handle.as_ref() == Some(&started.challenge.handle)
                     && current.reviewed.as_ref() == Some(&started.challenge.reviewed)
                     && current.display_code.as_ref() == Some(&started.challenge.display_code)
@@ -606,10 +624,6 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
         approval: PairingApproval,
     ) -> BoxFuture<'a, Result<PairingActivationResult, PairingError>> {
         Box::pin(async move {
-            let owner = self
-                .remote_owner_public_key()
-                .await
-                .map_err(pairing_storage)?;
             let mut connection = self.connection().map_err(pairing_storage)?;
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -620,7 +634,8 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                 let private = private_on(&tx, &current).await?;
                 let enrolled = private.enrollment.as_ref().ok_or(AgentFailure::PolicyDenied)?;
                 current.validate_approval(&approval, enrolled).map_err(|_| AgentFailure::PolicyDenied)?;
-                if enrolled.issuer != owner { return Err(AgentFailure::PolicyDenied); }
+                let (_, issuer) = self.enrollment_key_on(&tx, current.operation_id).await?;
+                if enrolled.issuer != issuer { return Err(AgentFailure::PolicyDenied); }
                 let mut rows = tx.query("SELECT command_json FROM gateway_enrollment_receipts WHERE operation_id=?",
                     (current.operation_id.to_string(),)).await.map_err(storage)?;
                 let signed: EnrollmentSigningCommand = bounded_decode(&rows.next().await.map_err(storage)?
@@ -755,8 +770,10 @@ impl<K: VaultKeyProvider> GatewayPrivateReader for EncryptedAgentVault<K> {
                     return Err(AgentFailure::PolicyDenied);
                 }
                 let private = private_on(&tx, &record).await?;
+                let (_, issuer) = self.enrollment_key_on(&tx, operation).await?;
                 Ok(PairingPrivateSnapshot {
                     operation: record,
+                    issuer,
                     proof: private.proof,
                     enrollment: private.enrollment,
                 })
@@ -871,7 +888,9 @@ impl<K: VaultKeyProvider> GatewayRegistry for EncryptedAgentVault<K> {
                         operation_id,
                         generation,
                     } => {
-                        let summary = validate_forgotten_on(&tx, person, device, operation_id, generation).await?;
+                        let summary =
+                            validate_forgotten_on(&tx, person, device, operation_id, generation)
+                                .await?;
                         return Ok(Some(GatewayObservation::Forgotten { summary }));
                     }
                     GatewayCredentialExpectation::Pending { operation_id }

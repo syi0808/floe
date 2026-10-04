@@ -245,7 +245,6 @@ pub struct EnrollmentReceipt {
     pub key_id: String,
 }
 pub trait EnrollmentSigner: Send + Sync {
-    fn public_key<'a>(&'a self) -> BoxFuture<'a, Result<RemoteOwnerPublicKey, PairingError>>;
     fn sign_enrollment<'a>(
         &'a self,
         command: EnrollmentSigningCommand,

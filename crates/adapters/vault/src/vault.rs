@@ -307,7 +307,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         conversations::validate_schema(&connection).await?;
         tasks::validate_schema(&connection).await?;
         self.validate_context_cleanup().await?;
-        self.validate_owner_key().await?;
+        self.validate_current_enrollment_key().await?;
         self.expert_registry().await?;
         self.check_access()
     }

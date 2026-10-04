@@ -1,4 +1,4 @@
-use crate::{RemoteOwnerPublicKey, RemoteProducerIdentity, RemoteViewAuthorizationExpectation};
+use crate::{RemoteProducerIdentity, RemoteViewAuthorizationExpectation};
 use floe_context_contract::{GrantConsumer, GrantPurpose};
 use floe_execution::BoxFuture;
 use floe_kernel::AgentFailure;
@@ -48,7 +48,6 @@ pub struct AuthorizationSignature {
 }
 
 pub trait AuthorizationSigner: Send + Sync {
-    fn public_key<'a>(&'a self) -> BoxFuture<'a, Result<RemoteOwnerPublicKey, AgentFailure>>;
     fn sign_authorization<'a>(
         &'a self,
         command: AuthorizationSigningCommand<'a>,

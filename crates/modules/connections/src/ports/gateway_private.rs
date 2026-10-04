@@ -44,6 +44,7 @@ impl GatewayCredentialMaterial {
 }
 pub struct PairingPrivateSnapshot {
     pub operation: PairingRecord,
+    pub issuer: floe_access::RemoteOwnerPublicKey,
     pub proof: PairingProof,
     pub enrollment: Option<EnrollmentSigningCommand>,
 }

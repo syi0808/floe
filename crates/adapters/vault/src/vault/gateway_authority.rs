@@ -1,9 +1,9 @@
 //! Bounded encrypted identity/operation/receipt storage. Pairing lifecycle and
 //! source policy belong to Connections and Access, respectively.
-use super::authority_keys::{decode_canonical, decode_exact};
+use super::authority_keys::{decode_canonical, decode_exact, enrollment_issuer_on};
 use super::gateway_pairing_store::pairing_state;
-use super::{storage, EncryptedAgentVault, VaultKeyProvider};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use super::{EncryptedAgentVault, VaultKeyProvider, storage};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use floe_access::{
     AssistantAuthorizationSigningCommand, AuthorizationSignature, AuthorizationSigner,
     AuthorizationSigningCommand, GatewayTrustReader, ProductCalendarChallenge,
@@ -50,22 +50,20 @@ impl<K: VaultKeyProvider> EncryptedAgentVault<K> {
     pub(super) async fn remote_pinned_producer(
         &self,
     ) -> Result<RemoteProducerIdentity, AgentFailure> {
-        let owner = self.remote_owner_public_key().await?;
         let mut connection = self.connection()?;
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .await
             .map_err(storage)?;
         let result = async {
-            let (_, pin) = current_credential_in_transaction(&tx, self.person_id, &owner).await?;
+            let authority = current_credential_in_transaction(&tx, self.person_id).await?;
             self.check_access()?;
-            Ok(pin.producer)
+            Ok(authority.pin.producer)
         }
         .await;
         self.finish_access_grant_transaction(tx, result).await
     }
     async fn current_pin_record(&self) -> Result<Option<GatewayPin>, AgentFailure> {
-        self.validate_owner_key().await?;
         let mut rows = self
             .connection()?
             .query(
@@ -81,9 +79,10 @@ impl<K: VaultKeyProvider> EncryptedAgentVault<K> {
             bounded_decode(&row.get::<String>(0).map_err(storage)?)?;
         validate_producer(&producer)?;
         let revision = row.get::<i64>(1).map_err(storage)?;
-        if revision <= 0 {
+        if revision <= 0 || rows.next().await.map_err(storage)?.is_some() {
             return Err(AgentFailure::PolicyDenied);
         }
+        self.check_access()?;
         Ok(Some(GatewayPin {
             producer,
             revision: revision as u64,
@@ -107,27 +106,22 @@ impl<K: VaultKeyProvider> EncryptedAgentVault<K> {
             .map(|row| bounded_decode(&row.get::<String>(0).map_err(storage)?))
             .transpose()
     }
-    async fn sign_enrollment_receipt(
-        &self,
-        command: &EnrollmentSigningCommand,
-    ) -> Result<EnrollmentSignature, AgentFailure> {
-        self.validate_owner_key().await?;
-        let (key, key_id) = self.load_owner_key().await?;
-        if key_id != command.issuer.key_id || self.person_id != command.person_id {
-            return Err(AgentFailure::PolicyDenied);
+    async fn committed_issuer(&self) -> Result<floe_access::RemoteOwnerPublicKey, AgentFailure> {
+        let mut connection = self.connection()?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await
+            .map_err(storage)?;
+        let result = async {
+            let authority = current_credential_in_transaction(&tx, self.person_id).await?;
+            let (_, issuer) = self.enrollment_key_on(&tx, authority.operation_id).await?;
+            if issuer != authority.issuer {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            Ok(issuer)
         }
-        let mut bytes =
-            Vec::with_capacity(OWNER_SIGNATURE_DOMAIN.len() + command.canonical_bytes.len());
-        bytes.extend_from_slice(OWNER_SIGNATURE_DOMAIN);
-        bytes.extend_from_slice(&command.canonical_bytes);
-        let proof = key.sign(&bytes);
-        self.validate_owner_key().await?;
-        Ok(EnrollmentSignature {
-            operation_id: command.operation_id,
-            request_digest: command.request_digest,
-            key_id,
-            signature: URL_SAFE_NO_PAD.encode(proof.as_ref()),
-        })
+        .await;
+        self.finish_access_grant_transaction(tx, result).await
     }
     pub(super) async fn advance_clock(
         &self,
@@ -166,24 +160,10 @@ impl<K: VaultKeyProvider> GatewayTrustReader for EncryptedAgentVault<K> {
         &'a self,
     ) -> BoxFuture<'a, Result<floe_access::GatewayCredentialExpectation, AgentFailure>> {
         Box::pin(async move {
-            self.validate_owner_key().await?;
-            let mut rows = self
-                .connection()?
-                .query(
-                    "SELECT payload FROM gateway_credential_expectation WHERE id=1",
-                    (),
-                )
-                .await
-                .map_err(storage)?;
-            bounded_decode(
-                &rows
-                    .next()
-                    .await
-                    .map_err(storage)?
-                    .ok_or(AgentFailure::PolicyDenied)?
-                    .get::<String>(0)
-                    .map_err(storage)?,
-            )
+            let expectation =
+                super::gateway_pairing_store::expectation_on(&self.connection()?).await?;
+            self.check_access()?;
+            Ok(expectation)
         })
     }
     fn pinned_producer<'a>(
@@ -205,16 +185,6 @@ impl<K: VaultKeyProvider> VaultEnrollmentSigner<K> {
     }
 }
 impl<K: VaultKeyProvider> EnrollmentSigner for VaultEnrollmentSigner<K> {
-    fn public_key<'a>(
-        &'a self,
-    ) -> BoxFuture<'a, Result<floe_access::RemoteOwnerPublicKey, PairingError>> {
-        Box::pin(async move {
-            self.vault
-                .remote_owner_public_key()
-                .await
-                .map_err(pairing_storage)
-        })
-    }
     fn sign_enrollment<'a>(
         &'a self,
         command: EnrollmentSigningCommand,
@@ -222,15 +192,6 @@ impl<K: VaultKeyProvider> EnrollmentSigner for VaultEnrollmentSigner<K> {
         Box::pin(async move {
             self.verifier.verify(&command)?;
             validate_enrollment(&command, self.vault.person_id)?;
-            if command.issuer
-                != self
-                    .vault
-                    .remote_owner_public_key()
-                    .await
-                    .map_err(pairing_storage)?
-            {
-                return Err(PairingError::ForeignIdentity);
-            }
             let mut connection = self.vault.connection().map_err(pairing_storage)?;
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -281,14 +242,19 @@ impl<K: VaultKeyProvider> EnrollmentSigner for VaultEnrollmentSigner<K> {
                         command.operation_id.to_string(), command.challenge_id.to_string(), bounded_encode(&command)?,
                     )).await.map_err(storage)?;
                 }
-                self.vault.check_access()
+                let (key, issuer) = self.vault.enrollment_key_on(&tx, command.operation_id).await?;
+                if issuer != command.issuer { return Err(AgentFailure::PolicyDenied); }
+                let mut bytes = OWNER_SIGNATURE_DOMAIN.to_vec();
+                bytes.extend_from_slice(&command.canonical_bytes);
+                let signature = URL_SAFE_NO_PAD.encode(key.sign(&bytes).as_ref());
+                self.vault.check_access()?;
+                Ok(EnrollmentSignature {
+                    operation_id: command.operation_id, request_digest: command.request_digest,
+                    key_id: issuer.key_id, signature,
+                })
             }.await;
             self.vault
                 .finish_access_grant_transaction(tx, result)
-                .await
-                .map_err(pairing_storage)?;
-            self.vault
-                .sign_enrollment_receipt(&command)
                 .await
                 .map_err(pairing_storage)
         })
@@ -419,7 +385,7 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
         &self,
         command: AssistantAuthorizationSigningCommand,
     ) -> Result<AuthorizationSignature, AgentFailure> {
-        let owner = self.vault.remote_owner_public_key().await?;
+        let owner = self.vault.committed_issuer().await?;
         let claims = self.verifier.verify(&command)?;
         command.validate_claims(
             &claims,
@@ -432,7 +398,6 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
             &command.canonical_bytes,
             &command.producer_signature,
         )?;
-        self.vault.validate_owner_key().await?;
         let grant_id = floe_access::GrantId::from_uuid(
             Uuid::parse_str(&command.expected.grant_id).map_err(|_| AgentFailure::PolicyDenied)?,
         )
@@ -448,10 +413,10 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
             if command.expires_at_unix_ms <= now {
                 return Err(AgentFailure::PolicyDenied);
             }
-            let (binding, pin) = current_credential_in_transaction(&tx, self.vault.person_id, &owner).await?;
-            if pin.producer != command.producer
-                || binding.client_id != command.expected.client_id
-                || binding.device_id != command.expected.device_id {
+            let authority = current_credential_in_transaction(&tx, self.vault.person_id).await?;
+            if authority.issuer != owner || authority.pin.producer != command.producer
+                || authority.binding.client_id != command.expected.client_id
+                || authority.binding.device_id != command.expected.device_id {
                 return Err(AgentFailure::PolicyDenied);
             }
             let grant = self
@@ -508,27 +473,23 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
             )
             .await
             .map_err(storage)?;
-            Ok(())
-        }
-        .await;
-        self.vault
+            let (key, issuer) = self.vault.enrollment_key_on(&tx, authority.operation_id).await?;
+            if issuer != owner { return Err(AgentFailure::PolicyDenied); }
+            let mut bytes = OWNER_SIGNATURE_DOMAIN.to_vec();
+            bytes.extend_from_slice(&command.canonical_bytes);
+            Ok(AuthorizationSignature {
+                key_id: issuer.key_id,
+                signature: URL_SAFE_NO_PAD.encode(key.sign(&bytes).as_ref()),
+            })
+        }.await;
+        let signature = self
+            .vault
             .finish_access_grant_transaction(tx, result)
             .await?;
-        self.vault.validate_owner_key().await?;
-        let (key, key_id) = self.vault.load_owner_key().await?;
-        if key_id != owner.key_id {
+        if self.vault.committed_issuer().await? != owner {
             return Err(AgentFailure::PolicyDenied);
         }
-        let mut bytes =
-            Vec::with_capacity(OWNER_SIGNATURE_DOMAIN.len() + command.canonical_bytes.len());
-        bytes.extend_from_slice(OWNER_SIGNATURE_DOMAIN);
-        bytes.extend_from_slice(&command.canonical_bytes);
-        let signature = key.sign(&bytes);
-        self.vault.validate_owner_key().await?;
-        Ok(AuthorizationSignature {
-            key_id,
-            signature: URL_SAFE_NO_PAD.encode(signature.as_ref()),
-        })
+        Ok(signature)
     }
 
     async fn sign_product_authorization(
@@ -536,7 +497,7 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
         command: ProductCalendarSigningCommand<'_>,
         supplied_producer: RemoteProducerIdentity,
     ) -> Result<AuthorizationSignature, AgentFailure> {
-        let owner = self.vault.remote_owner_public_key().await?;
+        let owner = self.vault.committed_issuer().await?;
         let pin = self
             .vault
             .current_pin_record()
@@ -574,15 +535,6 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
             .gateway_runtime_generation()
             .filter(|generation| *generation > 0 && *generation <= i64::MAX as u64)
             .ok_or(AgentFailure::PolicyDenied)?;
-        let owner_key = {
-            self.vault.validate_owner_key().await?;
-            let (key, key_id) = self.vault.load_owner_key().await?;
-            if key_id != owner.key_id {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            self.vault.validate_owner_key().await?;
-            key
-        };
 
         let challenge_id = verified.challenge_id();
         let operation = product_operation(&verified);
@@ -618,22 +570,6 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
                 return Err(AgentFailure::PolicyDenied);
             }
 
-            let mut owner_rows = tx
-                .query("SELECT key_id,public_key FROM remote_authority_owner WHERE id=1", ())
-                .await
-                .map_err(storage)?;
-            let owner_row = owner_rows
-                .next()
-                .await
-                .map_err(storage)?
-                .ok_or(AgentFailure::VaultUnavailable)?;
-            if owner_row.get::<String>(0).map_err(storage)? != owner.key_id
-                || owner_row.get::<String>(1).map_err(storage)? != owner.public_key
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            drop(owner_rows);
-
             let mut pin_rows = tx
                 .query(
                     "SELECT identity_json,revision FROM remote_authority_producer WHERE id=1",
@@ -658,10 +594,13 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
             }
             validate_producer(&current_producer)?;
             drop(pin_rows);
-            let (current_binding, current_pin) = current_credential_in_transaction(&tx, self.vault.person_id, &owner).await?;
-            if current_binding != binding || current_pin.producer != supplied_producer || current_pin.revision != pin.revision {
+            let authority = current_credential_in_transaction(&tx, self.vault.person_id).await?;
+            if authority.binding != binding || authority.pin.producer != supplied_producer
+                || authority.pin.revision != pin.revision || authority.issuer != owner {
                 return Err(AgentFailure::PolicyDenied);
             }
+            let (owner_key, issuer) = self.vault.enrollment_key_on(&tx, authority.operation_id).await?;
+            if issuer != owner { return Err(AgentFailure::PolicyDenied); }
 
             let mut existing_rows = tx
                 .query(
@@ -823,20 +762,14 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
             .vault
             .finish_access_grant_transaction(tx, result)
             .await?;
-        let current_owner = self.vault.remote_owner_public_key().await?;
+        let current_owner = self.vault.committed_issuer().await?;
         if current_owner != owner {
             return Err(AgentFailure::PolicyDenied);
         }
-        self.vault.validate_owner_key().await?;
         Ok(signature)
     }
 }
 impl<K: VaultKeyProvider> AuthorizationSigner for VaultAuthorizationSigner<K> {
-    fn public_key<'a>(
-        &'a self,
-    ) -> BoxFuture<'a, Result<floe_access::RemoteOwnerPublicKey, AgentFailure>> {
-        Box::pin(self.vault.remote_owner_public_key())
-    }
     fn sign_authorization<'a>(
         &'a self,
         command: AuthorizationSigningCommand<'a>,
@@ -957,11 +890,16 @@ fn verify_owner_receipt_signature(
         .map_err(|_| AgentFailure::VaultUnavailable)
 }
 
+struct CommittedAuthority {
+    operation_id: Uuid,
+    issuer: floe_access::RemoteOwnerPublicKey,
+    binding: VerifiedGatewayBinding,
+    pin: GatewayPin,
+}
 async fn current_credential_in_transaction(
     tx: &Transaction<'_>,
     person: floe_kernel::PersonId,
-    owner: &floe_access::RemoteOwnerPublicKey,
-) -> Result<(VerifiedGatewayBinding, GatewayPin), AgentFailure> {
+) -> Result<CommittedAuthority, AgentFailure> {
     let mut pins = tx
         .query(
             "SELECT identity_json,revision FROM remote_authority_producer WHERE id=1",
@@ -1005,6 +943,7 @@ async fn current_credential_in_transaction(
         _ => return Err(AgentFailure::PolicyDenied),
     };
     drop(expectation_rows);
+    let owner = enrollment_issuer_on(tx, operation_id).await?;
 
     let mut pairing_rows = tx
         .query(
@@ -1117,13 +1056,15 @@ async fn current_credential_in_transaction(
     if admitted != enrollment_command || !(32..=256).contains(&length) {
         return Err(AgentFailure::PolicyDenied);
     }
-    Ok((
-        expected.clone(),
-        GatewayPin {
+    Ok(CommittedAuthority {
+        operation_id,
+        issuer: owner,
+        binding: expected.clone(),
+        pin: GatewayPin {
             producer,
             revision: pin_revision as u64,
         },
-    ))
+    })
 }
 
 pub(super) async fn command_rejection_on(
@@ -1278,7 +1219,10 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
             } else {
                 None
             };
-            Ok(ConnectionsRecordPage { records, next_after })
+            Ok(ConnectionsRecordPage {
+                records,
+                next_after,
+            })
         })
     }
     fn admit_cancellation<'a>(

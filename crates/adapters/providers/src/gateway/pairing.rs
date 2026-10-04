@@ -334,7 +334,7 @@ impl GatewayPairingPort for GatewayPairingAdapter {
             {
                 return Err(PairingError::Conflict);
             }
-            let issuer = self.signer.public_key().await?;
+            let issuer = snapshot.issuer;
             let pin = self.authority.current_pin().await?;
             check_scope(scope)?;
             Ok(PreparedPairingStart {

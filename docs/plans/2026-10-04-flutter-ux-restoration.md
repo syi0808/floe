@@ -693,8 +693,10 @@ while an exact retry/restart of that operation retains the same key.
 - The encrypted Vault adapter owns private key generation/wrapping/readback. Bind
   wrapping AAD to Person/device and operation identity. Keep historical operation
   keys/receipts; Forget invalidates live signing authority, not recovery evidence.
-- EnrollmentSigner.public_key takes the exact operation ID and reads that operation's
-  already-admitted key. Enrollment signatures validate the command against that key.
+- PairingPrivateSnapshot projects the exact operation's admitted issuer alongside
+  its existing private transport material. Remove EnrollmentSigner.public_key;
+  public-key lookup cannot independently select another operation. Enrollment
+  signatures validate the command against that key.
   Ordinary authorization reads only the currently committed enrollment key and
   retains all existing credential, pin, runtime-generation and source-grant fences.
 - Producer pin lookup remains its own read boundary. It must not depend on a global
@@ -729,3 +731,81 @@ current-key lookup.
 
 This observed user-flow correctness issue is addressed before extending Gateway
 file encryption; the latter remains a required unfinished production gate.
+
+### Corrective design review decisions
+
+The single Opus review of 7c3c88fe supports operation-scoped keys. Accepted
+corrections: sign enrollment and AssistantView inside the same Immediate transaction
+that checks live authority and writes the receipt, as product signing already does.
+No transaction spans provider/model I/O. Keep a post-commit expected-issuer check
+for ordinary authorization as an additional release fence; it is not a replacement
+for atomic signing admission. Bind accepted Start responses, activation, credential
+readback and signing to the exact operation's admitted public key.
+
+Unpaired means no live signing authority, not an empty key table. Cancel/reject/expiry
+can restore Unpaired or an earlier Forgotten expectation while historical keys
+remain. Startup validates only the current referenced Pending/Committed key;
+Forgotten receipt validation does not decrypt retired keys. A corrupted historical
+key fails closed if that operation is later inspected for recovery, not unrelated
+local-only work. AAD uses a fresh context and length-prefixed Person/device/op/issuer
+fields. Private-key ID and public-key columns are unique. Generate only after valid
+fresh Start admission inside its transaction; no key is generated on receipt replay
+or a rejected command. Generation/wrapping are local CPU/random operations.
+
+The old physical Vault schema is incompatible. Existing files and keys stay
+untouched and old Vaults return UnsupportedSchema; they are not silently adopted,
+reset or migrated. The earlier R1 preservation promise covered that checkpoint's
+ceremony-only change, not this later stored-key meaning change. Continuing against
+the new schema requires an explicitly selected fresh local test profile. Preserve
+old profiles and unresolved external-operation evidence before any user-selected
+reset. No real Mac profile reset is part of qualification.
+
+Local Forget does not revoke the remote client. Two-cycle success is not unbounded
+re-pairing: Trust retains client/issuer and receipt caps. Operator revocation also
+creates person-wide cleanup and advances Trust revision; do not automatically revoke
+an old client while new enrollment is pending. Remote cleanup UX remains separate.
+
+The Access AuthorizationSigner.public_key method has no runtime callers (repository
+residual search); remove it instead of introducing a second public phase lookup.
+Internal committed-issuer resolution returns PolicyDenied for Pending/Unpaired/
+Forgotten, never absence or a pending key. Keep provider/liveness fallback semantics.
+
+Qualification additionally covers staged Cancel then reopen, Cancel B restoring
+Forgotten A then reopen, rejected concurrent Start with no extra key, wrong issuer
+at response/activation, and preservation of old-format profiles.
+
+### Enrollment-scoped cutover implementation evidence
+
+The singleton table, seed, loader/validator and both unused public-key port methods
+are removed. Pairing private readback projects the admitted issuer; new Start
+stores unique key/public identity and authenticated wrapped bytes atomically.
+Accepted responses, activation, private enrollment reads and committed authority
+verify the same operation-scoped issuer. Enrollment and AssistantView signatures
+now execute inside their receipt/authority transaction. Product signing resolves
+its key inside that transaction as well; ordinary signatures additionally compare
+the exact expected committed issuer after commit.
+
+Disposable owner probes passed exact Start replay, pending restart, rejection with
+no extra key row, staged Cancel/reopen, cancellation restoring an earlier Forgotten
+expectation/reopen, fresh issuer per Start, wrong Person/device and cross-operation
+ciphertext rejection, wrong admitted issuer rejection, pre-confirm denial, exact
+signature replay, denial after Forget with historical receipt retained, and late
+old approval preserving a newer Pending operation. A prior singleton-shaped schema
+returns UnsupportedVersion with identical database bytes and key files. The synthetic
+proof verifier in the owner probe does not qualify strict wire decoding; that is
+covered separately by the actual Go/Rust flow.
+
+Two real isolated Go development server plus Rust FFI cycles now pass pairing,
+explicit administrator approval, catalog observation, Forget and encrypted-client
+restart. The second server issuer is genuinely new rather than a relaxed Trust
+check. The first trial reached second approval but encountered a contended Forget
+acknowledgement; the fixture was corrected to retain and replay an identical command
+envelope on an indeterminate/admitted response. A complete subsequent run passed.
+No real user profile, Keychain or live Mac runtime was touched. Full workspace and
+Apple qualification of this cutover are pending at this checkpoint.
+
+The completed enrollment cutover also passed the default Rust workspace final gate
+(including doctests), default OS-keyring FFI build, development FFI build and the
+architecture policy check (23 nodes, 126 allowed edges). Native same-snapshot
+builds and independent implementation review are the remaining qualification for
+this checkpoint; no production-wide storage completion is claimed.
