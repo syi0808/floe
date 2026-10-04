@@ -81,16 +81,12 @@ final class _GatewayConnectionPanelState extends State<GatewayConnectionPanel> {
         pairing != null &&
         {
           'starting',
-          'awaiting_local_confirmation',
           'awaiting_gateway_approval',
           'cancelling',
         }.contains(pairing.state);
     final approvablePairing =
         pairing != null &&
-        {
-          'awaiting_local_confirmation',
-          'awaiting_gateway_approval',
-        }.contains(pairing.state);
+        {'awaiting_gateway_approval'}.contains(pairing.state);
     bool showGatewayRepair(GatewaySummary gateway) =>
         !activePairing ||
         gateway.gatewayRef.value != pairing.operationRef.value ||
@@ -192,13 +188,6 @@ final class _GatewayConnectionPanelState extends State<GatewayConnectionPanel> {
                           : () => _openDashboard(connected),
                       child: const Text('Open dashboard'),
                     ),
-                    if (pairing?.allowedActions.contains('confirm') == true)
-                      FloeButton.outlined(
-                        onPressed: controller.busy
-                            ? null
-                            : controller.confirmPairing,
-                        child: const Text('Codes match'),
-                      ),
                     if (pairing?.allowedActions.contains('cancel') == true)
                       FloeButton.text(
                         onPressed: controller.busy
@@ -318,8 +307,6 @@ final class ManagementLaunchButton extends StatelessWidget {
 
 String _pairingLabel(String state) => switch (state) {
   'starting' => 'Starting pairing…',
-  'awaiting_local_confirmation' =>
-    'Compare the displayed code with your Gateway.',
   'awaiting_gateway_approval' => 'Waiting for confirmation on the Gateway.',
   'cancelling' => 'Cancelling pairing on the Gateway…',
   'connected' => 'Gateway connected.',

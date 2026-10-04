@@ -34,25 +34,6 @@ impl ConnectionsService {
             .map_err(ConnectionsCommandFailure::Admitted)?;
         Ok(result)
     }
-    pub async fn confirm_pairing(
-        &self,
-        actor: &OwnerActor,
-        command_id: Uuid,
-        operation_ref: Uuid,
-        expected_revision: u64,
-        scope: &ExecutionScope,
-    ) -> Result<PairingSnapshot, ConnectionsCommandFailure> {
-        self.ensure_open()
-            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
-        check(actor, scope).map_err(ConnectionsCommandFailure::NotAdmitted)?;
-        let result = self
-            .pairing
-            .confirm_pairing(actor, command_id, operation_ref, expected_revision, scope)
-            .await?;
-        self.spawn_pairing(actor.clone(), operation_ref, scope)
-            .map_err(ConnectionsCommandFailure::Admitted)?;
-        Ok(result)
-    }
     pub async fn get_pairing(
         &self,
         actor: &OwnerActor,

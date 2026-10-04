@@ -13,7 +13,6 @@ pub(crate) fn handles_command(command: &dto::AppProductCommandDto) -> bool {
     matches!(
         command,
         ConnectionsPairingStart { .. }
-            | ConnectionsPairingConfirm { .. }
             | ConnectionsPairingCancel { .. }
             | ConnectionsGatewayForget { .. }
             | ConnectionsIntegrationPrepareReview { .. }
@@ -72,23 +71,6 @@ pub(crate) async fn command(
             pairing: pairing(
                 service
                     .start_pairing(actor, command_id, &address_text, scope)
-                    .await
-                    .map_err(command_failure)?,
-            )?,
-        },
-        C::ConnectionsPairingConfirm {
-            operation_ref,
-            expected_revision,
-        } => R::ConnectionsPairing {
-            pairing: pairing(
-                service
-                    .confirm_pairing(
-                        actor,
-                        command_id,
-                        operation_ref.get(),
-                        expected_revision,
-                        scope,
-                    )
                     .await
                     .map_err(command_failure)?,
             )?,
@@ -426,7 +408,6 @@ fn actions(values: Vec<owner::ConnectionAction>) -> Vec<String> {
                 owner::ConnectionAction::Pair => "pair",
                 owner::ConnectionAction::Forget => "forget",
                 owner::ConnectionAction::Manage => "manage",
-                owner::ConnectionAction::Confirm => "confirm",
                 owner::ConnectionAction::Cancel => "cancel",
                 owner::ConnectionAction::Reobserve => "reobserve",
                 owner::ConnectionAction::Configure => "configure",
@@ -452,11 +433,7 @@ macro_rules! action_conversion {
     };
 }
 action_conversion!(gateway_actions, GatewayActionDto, [Pair, Forget, Manage]);
-action_conversion!(
-    pairing_actions,
-    PairingActionDto,
-    [Confirm, Cancel, Reobserve]
-);
+action_conversion!(pairing_actions, PairingActionDto, [Cancel, Reobserve]);
 action_conversion!(
     source_actions,
     SourceActionDto,
@@ -532,9 +509,7 @@ fn pairing(value: owner::PairingSnapshot) -> AppWireResult<dto::PairingSnapshotD
         revision: value.revision,
         state: match value.state {
             owner::PairingState::Pending => dto::PairingStateDto::Starting,
-            owner::PairingState::AwaitingLocalConfirmation => {
-                dto::PairingStateDto::AwaitingLocalConfirmation
-            }
+            owner::PairingState::AwaitingLocalConfirmation => dto::PairingStateDto::Starting,
             owner::PairingState::AwaitingApproval => dto::PairingStateDto::AwaitingGatewayApproval,
             owner::PairingState::Cancelling => dto::PairingStateDto::Cancelling,
             owner::PairingState::Paired => dto::PairingStateDto::Connected,

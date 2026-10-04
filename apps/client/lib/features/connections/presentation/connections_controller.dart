@@ -216,22 +216,6 @@ final class ConnectionsController extends ChangeNotifier {
         }
       });
 
-  Future<void> confirmPairing() async {
-    final current = pairing;
-    if (current == null) return;
-    await _command(
-      'confirmPairing:${current.operationRef.value}',
-      'pairing confirmation',
-      (id) async => _setPairing(
-        await gateway.confirmPairing(
-          commandId: id,
-          operationRef: current.operationRef,
-          expectedRevision: current.revision,
-        ),
-      ),
-    );
-  }
-
   Future<void> cancelPairing() async {
     final current = pairing;
     if (current == null) return;
@@ -261,7 +245,7 @@ final class ConnectionsController extends ChangeNotifier {
           generation != _readinessGeneration ||
           pairing?.operationRef != current.operationRef)
         return;
-      // This snapshot identifies the operation, not a pending Confirm/Cancel
+      // This snapshot identifies the operation, not a pending Start/Cancel
       // command. Only exact command replay may acknowledge that mutation.
       _setPairing(value);
       await load();

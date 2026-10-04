@@ -63,6 +63,8 @@ pub struct PairingRecord {
     pub reviewed: Option<ReviewedGatewayIdentity>,
     pub enrollment: Option<VerifiedEnrollment>,
     pub gateway: Option<GatewaySummary>,
+    /// Durable authorization for the client key-possession step, derived from Start.
+    /// This is not evidence that a human compared the displayed codes.
     pub confirmation_command: Option<Uuid>,
     pub cancellation_command: Option<Uuid>,
     pub forgotten_command: Option<Uuid>,
@@ -379,7 +381,7 @@ impl PairingRecord {
         } else {
             match self.state {
                 PairingState::AwaitingLocalConfirmation => {
-                    vec![ConnectionAction::Confirm, ConnectionAction::Cancel]
+                    vec![ConnectionAction::Cancel, ConnectionAction::Reobserve]
                 }
                 PairingState::Pending | PairingState::AwaitingApproval => {
                     if self.cancellation_command.is_some() {
@@ -692,28 +694,6 @@ impl GatewayPairingService {
             ConnectionsCommandFailure::NotApplied(super::product::pairing_error(error))
         })
     }
-    pub async fn confirm_pairing(
-        &self,
-        actor: &OwnerActor,
-        command: Uuid,
-        id: Uuid,
-        expected: u64,
-        scope: &OperationScope,
-    ) -> Result<PairingSnapshot, ConnectionsCommandFailure> {
-        check(actor, scope).map_err(not_admitted)?;
-        if command.is_nil() {
-            return Err(not_admitted(PairingError::InvalidInput));
-        }
-        self.execute_command(
-            actor,
-            command,
-            PairingMutationAction::Confirm {
-                operation_id: id,
-                expected_revision: expected,
-            },
-        )
-        .await
-    }
     pub async fn cancel_pairing(
         &self,
         actor: &OwnerActor,
@@ -794,6 +774,47 @@ impl GatewayPairingService {
                 return Ok(r.snapshot());
             }
         }
+        // Start is the explicit user intent. Once its exact signed challenge
+        // is accepted, key-possession proof is a machine step, not another
+        // human permission. Journal that step before signing or sending it.
+        if r.state == PairingState::AwaitingLocalConfirmation
+            && r.confirmation_command.is_none()
+            && r.cancellation_command.is_none()
+            && r.forgotten_command.is_none()
+        {
+            check(actor, scope)?;
+            let domain = format!("floe.pairing.proof.v1:{}", r.revision);
+            let command = PairingMutation {
+                command_id: super::source_operation::derived_id(
+                    domain.as_bytes(),
+                    actor.person_id,
+                    r.operation_id,
+                ),
+                person_id: actor.person_id,
+                device_id: actor.device_id.clone(),
+                action: PairingMutationAction::Confirm {
+                    operation_id: r.operation_id,
+                    expected_revision: r.revision,
+                },
+            };
+            let receipt = self.repository.execute_command(command.clone()).await?;
+            if receipt.command != command {
+                return Err(PairingError::Conflict);
+            }
+            match receipt.outcome {
+                Ok(_) => {}
+                // A concurrent cancellation or observation won. Reload on the
+                // next round; never borrow the losing step's authorization.
+                Err(PairingError::Conflict) => {
+                    return Ok(self.current(actor, id).await?.snapshot());
+                }
+                Err(error) => return Err(error),
+            }
+            r = self.current(actor, id).await?;
+            if r.forgotten_command.is_some() || (r.state.terminal() && !r.can_reconcile_repair()) {
+                return Ok(r.snapshot());
+            }
+        }
         let handle = r.handle.clone().ok_or(PairingError::RepairRequired)?;
         let observed = if r.cancellation_command.is_some() {
             self.transport.cancel(&handle, scope).await
@@ -804,6 +825,11 @@ impl GatewayPairingService {
             Ok(v) => v,
             Err(e) => return self.record_failure(r, e).await,
         };
+        if r.handle.as_ref() != Some(&observed.handle)
+            || r.reviewed.as_ref() != Some(&observed.reviewed)
+        {
+            return Err(PairingError::ChangedProducer);
+        }
         if r.confirmation_command.is_some()
             && r.cancellation_command.is_none()
             && matches!(observed.outcome, PairingOutcome::AwaitingLocalConfirmation)

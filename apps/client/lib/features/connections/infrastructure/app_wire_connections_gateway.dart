@@ -44,23 +44,6 @@ final class AppWireConnectionsGateway implements ConnectionsGateway {
   );
 
   @override
-  Future<PairingSnapshot> confirmPairing({
-    required String commandId,
-    required ConnectionOperationRef operationRef,
-    required int expectedRevision,
-  }) => _invoke(
-    commandId,
-    'connections.pairing.confirm',
-    {
-      'operation_ref': operationRef.value,
-      'expected_revision': expectedRevision,
-    },
-    'connections.pairing',
-    'pairing',
-    PairingSnapshot.fromJson,
-  );
-
-  @override
   Future<PairingSnapshot> observePairing({
     required ConnectionOperationRef operationRef,
   }) => _invoke(

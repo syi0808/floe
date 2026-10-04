@@ -9,11 +9,6 @@ abstract interface class ConnectionsGateway {
     required String commandId,
     required String addressText,
   });
-  Future<PairingSnapshot> confirmPairing({
-    required String commandId,
-    required ConnectionOperationRef operationRef,
-    required int expectedRevision,
-  });
   Future<PairingSnapshot> observePairing({
     required ConnectionOperationRef operationRef,
   });

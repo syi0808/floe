@@ -464,7 +464,6 @@ final class PairingSnapshot {
       revision: _revision(j['revision']),
       state: _choice(j['state'], {
         'starting',
-        'awaiting_local_confirmation',
         'awaiting_gateway_approval',
         'cancelling',
         'connected',
@@ -482,11 +481,7 @@ final class PairingSnapshot {
       gateway: j['gateway'] == null
           ? null
           : GatewaySummary.fromJson(j['gateway']),
-      allowedActions: _actions(j['allowed_actions'], {
-        'confirm',
-        'cancel',
-        'reobserve',
-      }),
+      allowedActions: _actions(j['allowed_actions'], {'cancel', 'reobserve'}),
       failure: j['failure'] == null
           ? null
           : OwnerFailure.fromJson(j['failure']),

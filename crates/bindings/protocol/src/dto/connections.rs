@@ -183,7 +183,6 @@ impl ConnectionsOverviewDto {
 #[serde(rename_all = "snake_case")]
 pub enum PairingStateDto {
     Starting,
-    AwaitingLocalConfirmation,
     AwaitingGatewayApproval,
     Cancelling,
     Connected,
@@ -198,7 +197,6 @@ pub enum PairingStateDto {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PairingActionDto {
-    Confirm,
     Cancel,
     Reobserve,
 }

@@ -146,9 +146,9 @@ function renderPairingGuidance() {
     return;
   }
   const next = pairing.phase === 'pending'
-    ? 'First compare both codes, then choose “Codes match” in Floe. Approval becomes available here after the app confirms.'
+    ? 'Floe is verifying this connection. Keep the app open; approval becomes available when verification finishes.'
     : pairing.phase === 'local_confirmed'
-      ? 'The requesting app reports the codes match. Choose “Approve connection” only if the code above is shown in your Floe app now.'
+      ? 'Compare this code with your Floe app. Choose “Approve connection” only when both codes match and you started this request.'
       : 'Waiting for the current pairing state. Refresh to check again.';
   target.textContent = next + (remaining === null ? '' : ` Time remaining: ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}.`);
 }

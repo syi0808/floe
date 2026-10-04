@@ -48,11 +48,6 @@ impl AppCommandDto {
 pub enum AppProductCommandDto {
     #[serde(rename = "connections.pairing.start")]
     ConnectionsPairingStart { address_text: String },
-    #[serde(rename = "connections.pairing.confirm")]
-    ConnectionsPairingConfirm {
-        operation_ref: super::OperationRefDto,
-        expected_revision: u64,
-    },
     #[serde(rename = "connections.pairing.cancel")]
     ConnectionsPairingCancel {
         operation_ref: super::OperationRefDto,
@@ -211,10 +206,7 @@ impl AppProductCommandDto {
                     Ok(())
                 }
             }
-            Self::ConnectionsPairingConfirm {
-                expected_revision, ..
-            }
-            | Self::ConnectionsPairingCancel {
+            Self::ConnectionsPairingCancel {
                 expected_revision, ..
             }
             | Self::ConnectionsGatewayForget {

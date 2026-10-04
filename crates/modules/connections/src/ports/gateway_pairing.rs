@@ -133,7 +133,6 @@ pub enum ConnectionAction {
     Pair,
     Forget,
     Manage,
-    Confirm,
     Cancel,
     Reobserve,
     Configure,
