@@ -121,7 +121,8 @@ where
     // Enter the synchronous runtime boundary before spawning. A reentrant
     // caller must fail before work is detached from its host admission guard.
     // The caller polls only this dispatch envelope and the JoinHandle.
-    match runtime.block_on(async move { tokio::spawn(Box::pin(future)).await }) {
+    let future = Box::pin(future);
+    match runtime.block_on(async move { tokio::spawn(future).await }) {
         Ok(output) => output,
         Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
         Err(_) => panic!("owner executor stopped before returning its result"),

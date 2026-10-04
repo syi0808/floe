@@ -85,6 +85,16 @@ final class _GatewayConnectionPanelState extends State<GatewayConnectionPanel> {
           'awaiting_gateway_approval',
           'cancelling',
         }.contains(pairing.state);
+    final approvablePairing =
+        pairing != null &&
+        {
+          'awaiting_local_confirmation',
+          'awaiting_gateway_approval',
+        }.contains(pairing.state);
+    bool showGatewayRepair(GatewaySummary gateway) =>
+        !activePairing ||
+        gateway.gatewayRef.value != pairing.operationRef.value ||
+        pairing.failure != null;
     final canPair =
         connected == null &&
         !needsRepair &&
@@ -147,7 +157,8 @@ final class _GatewayConnectionPanelState extends State<GatewayConnectionPanel> {
                         : FloeBadgeTone.warning,
                   ),
                 ),
-                if (pairing?.displayCode case final code?) ...[
+                if ((approvablePairing ? pairing.displayCode : null)
+                    case final code?) ...[
                   const SizedBox(height: 16),
                   SelectableText(
                     code,
@@ -206,7 +217,8 @@ final class _GatewayConnectionPanelState extends State<GatewayConnectionPanel> {
                         child: const Text('Check connection'),
                       ),
                     for (final gateway in gateways)
-                      if (gateway.allowedActions.contains('forget'))
+                      if (gateway.allowedActions.contains('forget') &&
+                          showGatewayRepair(gateway))
                         FloeButton.text(
                           onPressed: controller.busy
                               ? null
@@ -215,7 +227,7 @@ final class _GatewayConnectionPanelState extends State<GatewayConnectionPanel> {
                         ),
                   ],
                 ),
-                for (final gateway in gateways) ...[
+                for (final gateway in gateways.where(showGatewayRepair)) ...[
                   if (gateway.failure case final failure?)
                     Text(failure.reason.replaceAll('_', ' ')),
                   if (gateway.remoteRevocationPending)
