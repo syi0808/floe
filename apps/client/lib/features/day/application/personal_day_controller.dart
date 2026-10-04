@@ -141,7 +141,14 @@ final class PersonalDayController extends ChangeNotifier {
       snapshot = result;
       loadState = DayLoadState.ready;
     } on Object catch (error) {
-      if (_disposed || generation != _loadGeneration) return;
+      if (_disposed) return;
+      if (generation != _loadGeneration) {
+        if (sync &&
+            error is _CurrentDayUnavailable &&
+            _sameQueryIntent(query, _query))
+          await _load(false);
+        return;
+      }
       if (error is _CurrentDayUnavailable) {
         // The command completed. Its historical receipt is retained separately;
         // unavailable live metadata cannot be presented as Current coverage.
@@ -251,33 +258,30 @@ final class PersonalDayController extends ChangeNotifier {
     final capture = pendingCapture;
     if (capture == null) return false;
     final query = _query;
-    final generation = _loadGeneration;
     return _run(() async {
       final result = await _gateway.classifyCapture(capture, draft, query);
       if (!_disposed && identical(pendingCapture, capture))
         pendingCapture = null;
-      await _displayAfterMutation(result, query, generation);
+      await _displayAfterMutation(result, query);
     });
   }
 
   Future<DaySnapshot?> setTaskCompleted(TaskItem task, bool completed) async {
     final query = _query;
-    final generation = _loadGeneration;
     DaySnapshot? acknowledged;
     final succeeded = await _run(() async {
       final result = await _gateway.setTaskCompleted(task, completed, query);
       acknowledged = result;
-      await _displayAfterMutation(result, query, generation);
+      await _displayAfterMutation(result, query);
     });
     return succeeded ? acknowledged : null;
   }
 
   Future<void> deleteItem(DayItem item) async {
     final query = _query;
-    final generation = _loadGeneration;
     await _run(() async {
       final result = await _gateway.deleteItem(item, query);
-      await _displayAfterMutation(result, query, generation);
+      await _displayAfterMutation(result, query);
     });
   }
 
@@ -299,15 +303,11 @@ final class PersonalDayController extends ChangeNotifier {
   Future<void> _displayAfterMutation(
     DaySnapshot acknowledged,
     DayQuery query,
-    int generation,
   ) async {
     if (!_matchesQuery(acknowledged, query)) {
       throw const FormatException('Day mutation returned a different query.');
     }
-    if (_disposed ||
-        generation != _loadGeneration ||
-        !_sameQueryIntent(query, _query))
-      return;
+    if (_disposed || !_sameQueryIntent(query, _query)) return;
     // The receipt is an immutable historical acknowledgement. Read the current
     // display independently, without replaying a successful command on failure.
     final displayGeneration = ++_loadGeneration;

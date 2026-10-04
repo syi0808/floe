@@ -816,8 +816,9 @@ private func nativeScheduleConflict(_ store: EKEventStore, _ resources: [String]
 // GMT+0900). Compare the platform-normalized identifiers, never merely offsets
 // at one instant: different geopolitical zones must not become interchangeable.
 private func nativeTimezoneMatches(_ observed: TimeZone, _ requested: String) -> Bool {
-  guard let expected = TimeZone(identifier: requested) else { return false }
-  return observed.identifier == expected.identifier
+  guard let expected = TimeZone(identifier: requested),
+        let actual = TimeZone(identifier: observed.identifier) else { return false }
+  return actual.identifier == expected.identifier
 }
 
 private func nativeWriteResult(_ event: EKEvent,
