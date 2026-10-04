@@ -797,7 +797,16 @@ impl GatewayPairingService {
                     expected_revision: r.revision,
                 },
             };
-            let receipt = self.repository.execute_command(command.clone()).await?;
+            let receipt = self
+                .repository
+                .execute_command(command.clone())
+                .await
+                .map_err(|error| match error {
+                    // The step may have committed. Keep the owner driver alive
+                    // so exact durable readback can resolve that uncertainty.
+                    PairingError::StorageUnavailable => PairingError::Indeterminate,
+                    other => other,
+                })?;
             if receipt.command != command {
                 return Err(PairingError::Conflict);
             }

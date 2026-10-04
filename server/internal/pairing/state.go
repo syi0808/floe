@@ -119,18 +119,19 @@ func (o *Operations) Pending(ctx context.Context) (*OperatorPending, error) {
 }
 
 type Pending struct {
-	ID                                              string    `json:"id"`
-	Code                                            string    `json:"code"`
-	Expires                                         time.Time `json:"expires"`
-	PersonID                                        string    `json:"person_id"`
-	DeviceID                                        string    `json:"device_id"`
-	IssuerKeyID                                     string    `json:"issuer_key_id"`
-	IssuerPublicKey                                 string    `json:"issuer_public_key"`
-	IssuerFingerprint                               string    `json:"issuer_fingerprint"`
-	ProducerFingerprint                             string    `json:"producer_fingerprint"`
-	ProducerAudience                                string    `json:"producer_audience"`
-	LocalConfirmed                                  bool      `json:"local_confirmed"`
-	AdminApproved                                   bool      `json:"admin_approved"`
+	ID                  string    `json:"id"`
+	Code                string    `json:"code"`
+	Expires             time.Time `json:"expires"`
+	PersonID            string    `json:"person_id"`
+	DeviceID            string    `json:"device_id"`
+	IssuerKeyID         string    `json:"issuer_key_id"`
+	IssuerPublicKey     string    `json:"issuer_public_key"`
+	IssuerFingerprint   string    `json:"issuer_fingerprint"`
+	ProducerFingerprint string    `json:"producer_fingerprint"`
+	ProducerAudience    string    `json:"producer_audience"`
+	// LocalConfirmed records cryptographic key possession, not a human code comparison.
+	LocalConfirmed                                  bool `json:"local_confirmed"`
+	AdminApproved                                   bool `json:"admin_approved"`
 	status, challengeID, challengeB64, proof, token string
 	challengeBytes, producerSignature               []byte
 	localProof                                      trust.Proof

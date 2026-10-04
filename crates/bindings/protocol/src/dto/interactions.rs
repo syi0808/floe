@@ -37,6 +37,7 @@ pub enum AppInteractionTargetDto {
     NavigationOnly {
         destination: AppNavigationDestinationDto,
         source_label: String,
+        source_ref: Option<super::ConnectionsSourceRefDto>,
     },
     #[serde(rename = "source_review")]
     SourceReview { review: super::ObserveReviewDto },

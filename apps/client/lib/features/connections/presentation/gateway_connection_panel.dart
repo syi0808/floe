@@ -307,7 +307,7 @@ final class ManagementLaunchButton extends StatelessWidget {
 
 String _pairingLabel(String state) => switch (state) {
   'starting' => 'Starting pairing…',
-  'awaiting_gateway_approval' => 'Waiting for confirmation on the Gateway.',
+  'awaiting_gateway_approval' => 'Compare this code with the server dashboard and approve there.',
   'cancelling' => 'Cancelling pairing on the Gateway…',
   'connected' => 'Gateway connected.',
   'rejected' => 'Pairing was rejected.',

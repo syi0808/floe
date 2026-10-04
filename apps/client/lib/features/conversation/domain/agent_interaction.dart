@@ -73,7 +73,8 @@ sealed class AgentInteractionTarget {
           review: ObserveReview.fromJson(json['review']),
         );
       case 'navigation_only':
-        if (json.length != 3 ||
+        if (json.length != 4 ||
+            !json.containsKey('source_ref') ||
             !{
               'connection_settings',
               'system_permission',
@@ -84,6 +85,9 @@ sealed class AgentInteractionTarget {
         return AgentNavigationTarget(
           destination: field('destination'),
           sourceLabel: field('source_label'),
+          sourceRef: json['source_ref'] == null
+              ? null
+              : SourceRef(field('source_ref')),
         );
       case 'expert_binding':
         if (json.length != 2 || !json.containsKey('review'))
@@ -113,9 +117,11 @@ final class AgentNavigationTarget extends AgentInteractionTarget {
   const AgentNavigationTarget({
     required this.destination,
     required this.sourceLabel,
+    this.sourceRef,
   });
   final String destination;
   final String sourceLabel;
+  final SourceRef? sourceRef;
 }
 
 final class AgentExpertBindingTarget extends AgentInteractionTarget {

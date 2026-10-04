@@ -106,5 +106,9 @@ Search removed public confirmation routes, `Codes match` instructions, unused na
 ## Execution state
 
 - Audit delivered; full restoration authorized.
-- R1 pairing ceremony implementation in progress: owner-driven durable proof progression and obsolete product Confirm removal. Qualification and independent review pending.
+- R1 initial snapshot `cdb202c7` passed the Rust workspace gate, FFI build, boundary checker and macOS Debug arm64/strict-codesign build. Five isolated owner probes passed. Flutter analysis contained informational baseline lint diagnostics only, with no errors or warnings.
+- Independent Opus review of `cdb202c7` found no broken cryptographic/admin/CAS/cancellation invariant, but identified a new internal-receipt storage failure that could stop the pairing driver. The correction maps only that uncertain receipt storage outcome to the driver's existing retryable Indeterminate class. Before-commit rollback and after-commit response-loss probes now pass (six owner probes total). Authority failures retain their classification.
+- The app's waiting label now directs comparison and approval in the dashboard, without claiming the server has accepted proof. Forget can still leave a remotely approvable request until expiry; local authority remains fenced and remote-revocation guidance remains visible. Cancel is the normal pending abort.
+- R2 initial presentation cutover restores list/count, removes the duplicate Remote card, combines Connect preparation/start, moves resource/permission decisions into shared dialogs and carries exact source references through conversation navigation. Seven initial Flutter behavior/widget probes passed. A failed preparation cannot reuse an older review; success closes a dialog only from its own acknowledged command.
+- R2 owner projection gaps (saved address, service identity/detail metadata and future-resource selection policy), further visual comparisons, R3 and R4 remain open. Full restoration is not complete.
 - R2–R4 detailed call-site investigation remains part of their pre-edit gates; this plan does not claim every remaining contract decision is resolved.

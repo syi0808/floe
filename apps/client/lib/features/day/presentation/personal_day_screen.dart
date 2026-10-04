@@ -1,5 +1,7 @@
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/connections/presentation/connections_controller.dart';
+import 'package:floe_client/features/connections/domain/connection_models.dart'
+    show SourceRef;
 import 'package:intl/intl.dart';
 
 import 'dart:async';
@@ -82,7 +84,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   CalendarActionController? actionController;
   ConversationController? agentController;
   bool assistantOpen = false;
-  bool openDeviceCalendarDetail = false;
+  SourceRef? selectedConnectionSource;
   AgentExpertBindingTarget? expertBindingTarget;
   Future<void> Function()? onBindingReplaced;
   final assistantEntryFocus = FocusNode();
@@ -182,7 +184,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
 
   Widget _workspace(bool narrow) {
     if (destination == _DestinationView.connections) {
-      return ConnectorScreen(controller: widget.connectionsController);
+      return ConnectorScreen(
+        controller: widget.connectionsController,
+        initialSourceRef: selectedConnectionSource,
+      );
     }
     if (destination == _DestinationView.settings) {
       return SettingsScreen(
@@ -382,13 +387,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     );
   }
 
-  void _selectDestination(
-    _DestinationView value, {
-    bool openCalendarDetail = false,
-  }) {
+  void _selectDestination(_DestinationView value, {SourceRef? sourceRef}) {
     setState(() {
       assistantOpen = false;
-      openDeviceCalendarDetail = openCalendarDetail;
+      selectedConnectionSource = sourceRef;
       destination = value;
       selectedTaskId = null;
     });
@@ -432,11 +434,18 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     );
   }
 
-  void _openAgentSourceReview() {
+  void _openAgentSourceReview(AgentInteractionTarget? target) {
     if (MediaQuery.sizeOf(context).width <= 960) {
       Navigator.of(context).maybePop();
     }
-    _selectDestination(_DestinationView.connections, openCalendarDetail: true);
+    _selectDestination(
+      _DestinationView.connections,
+      sourceRef: switch (target) {
+        AgentSourceReviewTarget(:final review) => review.sourceRef,
+        AgentNavigationTarget(:final sourceRef) => sourceRef,
+        _ => null,
+      },
+    );
   }
 
   void _openExpertSettings(

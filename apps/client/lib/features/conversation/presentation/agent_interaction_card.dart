@@ -27,7 +27,7 @@ final class AgentInteractionCard extends StatefulWidget {
 
   final ConversationController controller;
   final AgentInteractionMessage message;
-  final VoidCallback? onOpenSourceReview;
+  final void Function(AgentInteractionTarget? target)? onOpenSourceReview;
   final VoidCallback? onOpenConnections;
   final void Function(
     AgentExpertBindingTarget target,
@@ -276,11 +276,11 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
               controller.refreshInteraction(snapshot);
             },
             AgentInteractionAction.reviewSource => () {
-              widget.onOpenSourceReview?.call();
+              widget.onOpenSourceReview?.call(snapshot.target);
               controller.refreshInteraction(snapshot);
             },
             AgentInteractionAction.requestPermission => () {
-              widget.onOpenSourceReview?.call();
+              widget.onOpenSourceReview?.call(snapshot.target);
             },
             AgentInteractionAction.openExpertSettings => () {
               final target = snapshot.target;

@@ -313,21 +313,42 @@ final class ConnectionsController extends ChangeNotifier {
     return prepared;
   }
 
-  Future<void> prepareIntegration(IntegrationSummary value) => _command(
-    'prepareIntegration:${value.integrationRef.value}',
-    'integration review',
-    (id) async {
-      final review = await gateway.prepareIntegrationReview(
-        commandId: id,
-        integrationRef: value.integrationRef,
-        expectedRevision: value.revision,
-      );
-      if (_acceptCommandResult) {
-        integrationReview = review;
-        _integrationRevision = value.revision;
-      }
-    },
-  );
+  Future<IntegrationReview?> prepareIntegration(
+    IntegrationSummary value,
+  ) async {
+    IntegrationReview? prepared;
+    await _command(
+      'prepareIntegration:${value.integrationRef.value}',
+      'integration review',
+      (id) async {
+        final review = await gateway.prepareIntegrationReview(
+          commandId: id,
+          integrationRef: value.integrationRef,
+          expectedRevision: value.revision,
+        );
+        if (_acceptCommandResult) {
+          integrationReview = review;
+          _integrationRevision = value.revision;
+          prepared = review;
+        }
+      },
+    );
+    return prepared;
+  }
+
+  /// One Connect gesture; preparation remains an owner-reviewed prerequisite.
+  Future<void> connectIntegration(IntegrationSummary integration) async {
+    if (busy) return;
+    final generation = _readinessGeneration;
+    final review = await prepareIntegration(integration);
+    if (_disposed || !ready || generation != _readinessGeneration) return;
+    if (review == null ||
+        review.integrationRef != integration.integrationRef ||
+        _integrationRevision != integration.revision ||
+        !review.allowedActions.contains('start'))
+      return;
+    await startIntegration(review);
+  }
 
   Future<void> startIntegration(IntegrationReview review) {
     final expectedRevision = _integrationRevision;
@@ -352,25 +373,31 @@ final class ConnectionsController extends ChangeNotifier {
     );
   }
 
-  Future<void> prepareSource(SourceSummary value) => _command(
-    'prepareSource:${value.sourceRef.value}',
-    'source review',
-    (id) async {
+  Future<SourceReview?> prepareSource(SourceSummary value) async {
+    SourceReview? prepared;
+    await _command('prepareSource:${value.sourceRef.value}', 'source review', (
+      id,
+    ) async {
       final review = await gateway.prepareSourceReview(
         commandId: id,
         sourceRef: value.sourceRef,
         expectedRevision: value.revision,
       );
-      if (_acceptCommandResult) sourceReview = review;
-    },
-  );
+      if (_acceptCommandResult) {
+        sourceReview = review;
+        prepared = review;
+      }
+    });
+    return prepared;
+  }
 
-  Future<void> configureSource(
+  Future<bool> configureSource(
     SourceReview review,
     List<ResourceRef> selected,
-  ) {
+  ) async {
     final selection = List<ResourceRef>.unmodifiable(selected);
-    return _command(
+    var confirmed = false;
+    await _command(
       'configureSource:${review.sourceRef.value}',
       'source configuration',
       (id) async {
@@ -381,42 +408,60 @@ final class ConnectionsController extends ChangeNotifier {
           selectedResourceRefs: selection,
           expectedRevision: review.sourceRevision,
         );
-        if (_acceptCommandResult) sourceReview = null;
+        if (_acceptCommandResult) {
+          sourceReview = null;
+          confirmed = true;
+        }
       },
     );
+    return confirmed;
   }
 
-  Future<void> prepareObserve(
+  Future<ObserveReview?> prepareObserve(
     SourceSummary value,
     SourceProcessing processing,
-  ) => _command(
-    'prepareObserve:${value.sourceRef.value}',
-    'processing review',
-    (id) async {
-      final review = await gateway.prepareObserveReview(
-        commandId: id,
-        sourceRef: value.sourceRef,
-        expectedRevision: value.revision,
-        requestedProcessing: processing,
-      );
-      if (_acceptCommandResult) observeReview = review;
-    },
-  );
+  ) async {
+    ObserveReview? prepared;
+    await _command(
+      'prepareObserve:${value.sourceRef.value}',
+      'processing review',
+      (id) async {
+        final review = await gateway.prepareObserveReview(
+          commandId: id,
+          sourceRef: value.sourceRef,
+          expectedRevision: value.revision,
+          requestedProcessing: processing,
+        );
+        if (_acceptCommandResult) {
+          observeReview = review;
+          prepared = review;
+        }
+      },
+    );
+    return prepared;
+  }
 
-  Future<void> allowObserve(ObserveReview review) => _command(
-    'allowObserve:${review.sourceRef.value}',
-    'processing approval',
-    (id) async {
-      await gateway.setObserve(
-        commandId: id,
-        sourceRef: review.sourceRef,
-        enabled: true,
-        reviewRef: review.reviewRef,
-        expectedRevision: review.sourceRevision,
-      );
-      if (_acceptCommandResult) observeReview = null;
-    },
-  );
+  Future<bool> allowObserve(ObserveReview review) async {
+    var confirmed = false;
+    await _command(
+      'allowObserve:${review.sourceRef.value}',
+      'processing approval',
+      (id) async {
+        await gateway.setObserve(
+          commandId: id,
+          sourceRef: review.sourceRef,
+          enabled: true,
+          reviewRef: review.reviewRef,
+          expectedRevision: review.sourceRevision,
+        );
+        if (_acceptCommandResult) {
+          observeReview = null;
+          confirmed = true;
+        }
+      },
+    );
+    return confirmed;
+  }
 
   Future<void> pauseObserve(SourceSummary value) => _command(
     'pauseObserve:${value.sourceRef.value}',

@@ -16,15 +16,18 @@ import 'package:floe_client/features/connections/domain/connection_models.dart';
 import 'package:floe_client/features/connections/presentation/connections_controller.dart';
 import 'package:floe_client/features/connections/presentation/gateway_connection_panel.dart';
 import 'package:floe_client/features/connections/presentation/integration_detail_panel.dart';
+import 'package:floe_client/features/connections/presentation/source_connection_panel.dart';
 
 final class ConnectorScreen extends StatefulWidget {
   const ConnectorScreen({
     super.key,
     required this.controller,
     this.showServices = true,
+    this.initialSourceRef,
   });
   final ConnectionsController? controller;
   final bool showServices;
+  final SourceRef? initialSourceRef;
   @override
   State<ConnectorScreen> createState() => _ConnectorScreenState();
 }
@@ -36,6 +39,7 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
   @override
   void initState() {
     super.initState();
+    selectedSource = widget.initialSourceRef;
     controller?.addListener(_changed);
     if (controller != null) unawaited(controller!.load());
   }
@@ -47,6 +51,10 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
   @override
   void didUpdateWidget(ConnectorScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialSourceRef != widget.initialSourceRef) {
+      selectedIntegration = null;
+      selectedSource = widget.initialSourceRef;
+    }
     if (oldWidget.controller != controller) {
       selectedIntegration = null;
       selectedSource = null;
@@ -74,7 +82,7 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
           Row(
             children: [
               const Expanded(
-                child: Text('Connections', style: FloeType.headline),
+                child: Text('Connections', style: FloeType.pageTitle),
               ),
               FloeButton.text(
                 onPressed: current.ready ? current.load : null,
@@ -117,7 +125,7 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
                     : 'Recover ${request.label}',
               ),
             ),
-        GatewayConnectionPanel(controller: current),
+        if (!widget.showServices) GatewayConnectionPanel(controller: current),
         if ((widget.showServices && current.ready ? current.operation : null)
             case final operation?) ...[
           const SizedBox(height: FloeSpace.base),
@@ -154,7 +162,9 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
     final sources = current.overview?.sources ?? const <SourceSummary>[];
     if (selectedIntegration != null || selectedSource != null) {
       final integration = integrations
-          .where((value) => value.integrationRef == selectedIntegration)
+          .where((value) => selectedIntegration != null
+              ? value.integrationRef == selectedIntegration
+              : value.source?.sourceRef == selectedSource)
           .firstOrNull;
       final source =
           integration?.source ??
@@ -176,17 +186,17 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
             ),
           ),
           const SizedBox(height: FloeSpace.lg),
-          if (integration != null)
+          if (integration != null && source == null)
             IntegrationDetailPanel(
               controller: current,
               integration: integration,
             ),
           if (source != null) ...[
-            if (integration != null) const SizedBox(height: FloeSpace.lg),
-            _SourceCard(
+            SourceConnectionPanel(
               key: ValueKey(source.sourceRef.value),
               controller: current,
               source: source,
+              integration: integration,
             ),
           ],
           if (integration == null && source == null)
@@ -229,6 +239,24 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
           style: FloeType.body.copyWith(color: FloePalette.neutral600),
         ),
         const SizedBox(height: FloeSpace.lg),
+        Text(
+          strings.connectedServicesCount(
+            integrations.where((value) => value.state == 'connected').length +
+                sources
+                    .where(
+                      (value) =>
+                          !linkedSources.contains(value.sourceRef) &&
+                          value.availability == 'available',
+                    )
+                    .length,
+          ),
+          style: FloeType.titleLarge,
+        ),
+        const SizedBox(height: FloeSpace.lg),
+        if (current.overview == null && current.failure == null)
+          const Text('Loading connections…')
+        else if (available.isEmpty && unavailable.isEmpty)
+          const Text('No services are available yet.'),
         if (available.isNotEmpty) ...[
           Text(strings.availableServices, style: FloeType.title),
           const SizedBox(height: FloeSpace.base),
@@ -390,206 +418,4 @@ final class _ConnectionCardGrid extends StatelessWidget {
       );
     },
   );
-}
-
-final class _SourceCard extends StatefulWidget {
-  const _SourceCard({
-    super.key,
-    required this.controller,
-    required this.source,
-  });
-  final ConnectionsController controller;
-  final SourceSummary source;
-  @override
-  State<_SourceCard> createState() => _SourceCardState();
-}
-
-final class _SourceCardState extends State<_SourceCard> {
-  // This is a requested review choice, never the source's current permission.
-  SourceProcessing processing = SourceProcessing.gatewayAllowed;
-  SourceReviewRef? selectionReview;
-  final selected = <ResourceRef>{};
-  @override
-  Widget build(BuildContext context) {
-    final controller = widget.controller;
-    final source = widget.source;
-    final review = controller.sourceReview?.sourceRef == source.sourceRef
-        ? controller.sourceReview
-        : null;
-    final observe = controller.observeReview?.sourceRef == source.sourceRef
-        ? controller.observeReview
-        : null;
-    if (review != null && selectionReview?.id != review.reviewRef.id) {
-      selectionReview = review.reviewRef;
-      selected
-        ..clear()
-        ..addAll(
-          review.permittedChoices
-              .where((choice) => choice.selected)
-              .map((choice) => choice.resourceRef),
-        );
-    }
-    return FloeSquircle(
-      padding: const EdgeInsets.all(FloeSpace.base),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(source.displayLabels.join(' · '), style: FloeType.title),
-          Text(
-            '${source.availability.replaceAll('_', ' ')} · ${source.observeState.replaceAll('_', ' ')}',
-          ),
-          for (final resource in source.selectedResources) Text(resource.label),
-          const SizedBox(height: FloeSpace.sm),
-          Wrap(
-            spacing: FloeSpace.sm,
-            children: [
-              if (source.allowedActions.contains('configure'))
-                FloeButton.outlined(
-                  onPressed: controller.busy
-                      ? null
-                      : () => controller.prepareSource(source),
-                  child: const Text('Choose resources'),
-                ),
-              if (source.allowedActions.contains('pause_observe'))
-                FloeButton.text(
-                  onPressed: controller.busy
-                      ? null
-                      : () => controller.pauseObserve(source),
-                  child: const Text('Pause Observe'),
-                ),
-              if (source.allowedActions.contains('disconnect'))
-                FloeButton.text(
-                  onPressed: controller.busy
-                      ? null
-                      : () => controller.disconnectSource(source),
-                  child: const Text('Disconnect source'),
-                ),
-            ],
-          ),
-          if (source.allowedActions.contains('prepare_observe_review')) ...[
-            const SizedBox(height: FloeSpace.base),
-            const Text('Use with Floe', style: FloeType.title),
-            const SizedBox(height: FloeSpace.sm),
-            const Text(
-              'Review access to the selected resources and where Floe may process them. Nothing changes until you allow the reviewed access.',
-            ),
-            const SizedBox(height: FloeSpace.sm),
-            const Text('Requested processing', style: FloeType.label),
-            DropdownButton<SourceProcessing>(
-              value: processing,
-              isExpanded: true,
-              items: const [
-                DropdownMenuItem(
-                  value: SourceProcessing.deviceOnly,
-                  child: Text('This device only'),
-                ),
-                DropdownMenuItem(
-                  value: SourceProcessing.gatewayAllowed,
-                  child: Text('This device and my verified Gateway'),
-                ),
-              ],
-              onChanged: controller.busy
-                  ? null
-                  : (value) {
-                      if (value != null) setState(() => processing = value);
-                    },
-            ),
-            Text(
-              processing == SourceProcessing.gatewayAllowed
-                  ? 'The request includes source access and permission to process its reviewed data on this device or your verified Gateway.'
-                  : 'The request includes source access with processing limited to this device.',
-            ),
-            const Text(
-              'For Health sources, only locally transformed derived data may reach the Gateway. Raw Health data stays on this device.',
-            ),
-            const SizedBox(height: FloeSpace.sm),
-            FloeButton.outlined(
-              onPressed: controller.busy
-                  ? null
-                  : () => controller.prepareObserve(source, processing),
-              child: const Text('Review access'),
-            ),
-          ],
-          if (review != null) ...[
-            const SizedBox(height: FloeSpace.base),
-            for (final view in review.processingDisclosure.views) ...[
-              Text(
-                '${view.viewId}: ${view.current?.label ?? 'No Observe permission'}.',
-              ),
-              Text('Sensitivity: ${view.dataClassLabel}.'),
-              if (view.dataCategories.isNotEmpty)
-                Text(
-                  'Currently permitted data: ${view.dataCategories.join(', ')}.',
-                ),
-            ],
-            const Text(
-              'Saving source resources creates no Observe permission. Review access again after changing resources.',
-            ),
-            for (final choice in review.permittedChoices)
-              CheckboxListTile(
-                title: Text(choice.label),
-                value: selected.contains(choice.resourceRef),
-                onChanged: controller.busy
-                    ? null
-                    : (value) => setState(() {
-                        if (value == true) {
-                          selected.add(choice.resourceRef);
-                        } else {
-                          selected.remove(choice.resourceRef);
-                        }
-                      }),
-              ),
-            if (review.allowedActions.contains('configure'))
-              FloeButton.outlined(
-                onPressed: controller.busy
-                    ? null
-                    : () => controller.configureSource(
-                        review,
-                        selected.toList(growable: false),
-                      ),
-                child: const Text('Save selected resources'),
-              ),
-            FloeButton.text(
-              onPressed: controller.dismissReview,
-              child: const Text('Close review'),
-            ),
-          ],
-          if (observe != null) ...[
-            const SizedBox(height: FloeSpace.base),
-            for (final member in observe.displayMembers) Text(member),
-            for (final view in observe.processingDisclosure.views) ...[
-              Text(view.viewId),
-              Text('Sensitivity: ${view.dataClassLabel}.'),
-              Text('Reviewed data: ${view.dataCategories.join(', ')}.'),
-              Text(
-                'Current reviewed scope: ${view.current?.label ?? 'No Observe permission'}.',
-              ),
-              Text('Requested processing: ${view.requested!.label}.'),
-              if (view.expandsGateway)
-                const Text(
-                  'This view gains or expands Gateway processing permission.',
-                ),
-            ],
-            if (observe.processingDisclosure.views.any(
-              (view) => view.isDerivedHealth,
-            ))
-              const Text(
-                'This includes highly sensitive data. Only locally transformed derived Health data may reach the Gateway; raw Health data stays on this device.',
-              ),
-            if (observe.allowedActions.contains('allow'))
-              FloeButton.outlined(
-                onPressed: controller.busy
-                    ? null
-                    : () => controller.allowObserve(observe),
-                child: const Text('Allow this access'),
-              ),
-            FloeButton.text(
-              onPressed: controller.dismissReview,
-              child: const Text('Close review'),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
 }

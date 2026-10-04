@@ -37,6 +37,7 @@ pub enum InteractionTarget {
     NavigationOnly {
         destination: NavigationDestination,
         source_label: String,
+        source_ref: Option<Uuid>,
     },
     ExpertBinding {
         review: floe_experts::BindingReview,
@@ -91,6 +92,15 @@ pub(super) async fn project_interaction(
         ReviewedTarget::NavigationOnly(target) => InteractionTarget::NavigationOnly {
             destination: target.destination,
             source_label: source_label(&target.source_id).into(),
+            source_ref: target
+                .connection_id
+                .as_deref()
+                .map(|id| {
+                    let connection = floe_context_contract::ConnectionId::try_new(id)
+                        .map_err(|_| AgentFailure::StorageUnavailable)?;
+                    floe_connections::source_ref(actor.person_id, &connection)
+                })
+                .transpose()?,
         },
         ReviewedTarget::ExpertBinding(reference) => InteractionTarget::ExpertBinding {
             review: experts

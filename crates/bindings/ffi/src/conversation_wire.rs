@@ -538,7 +538,14 @@ fn interaction_snapshot(
             T::NavigationOnly {
                 destination,
                 source_label,
+                source_ref,
             } => AppInteractionTargetDto::NavigationOnly {
+                source_ref: source_ref
+                    .map(|value| {
+                        floe_protocol::ConnectionsSourceRefDto::new(value)
+                            .ok_or_else(internal_error)
+                    })
+                    .transpose()?,
                 source_label,
                 destination: match destination {
                     floe_conversation::NavigationDestination::ConnectionSettings => {

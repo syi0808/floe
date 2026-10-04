@@ -33,7 +33,7 @@ class AgentPanel extends StatefulWidget {
   final ConversationController controller;
   final VoidCallback onClose;
   final Future<void> Function(String actionId)? onOpenAction;
-  final VoidCallback? onOpenSourceReview;
+  final void Function(AgentInteractionTarget? target)? onOpenSourceReview;
   final VoidCallback? onOpenConnections;
   final void Function(
     AgentExpertBindingTarget target,
@@ -397,7 +397,7 @@ class _AgentPanelState extends State<AgentPanel> {
                   controller.failureSafeActions.contains('review_source')) &&
               widget.onOpenSourceReview != null) ...[
             FloeButton.outlined(
-              onPressed: widget.onOpenSourceReview,
+              onPressed: () => widget.onOpenSourceReview?.call(null),
               size: FloeButtonSize.compact,
               child: Text(strings.agentConnectedSourceDetails),
             ),
