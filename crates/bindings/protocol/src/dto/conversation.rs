@@ -138,7 +138,9 @@ pub struct ConversationSessionSnapshotDto {
 
 impl ConversationSessionSnapshotDto {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.revision == 0 || self.revision > i64::MAX as u64 {
+        // A newly persisted Conversation session starts at revision zero.
+        // This is the owner's valid pre-turn CAS revision, not a missing value.
+        if self.revision > i64::MAX as u64 {
             return Err("conversation.session.revision");
         }
         if self.usage.unknown_token_attempts > self.usage.model_attempts

@@ -10,7 +10,7 @@ Access owns source-grant DeviceOnly/GatewayAllowed processing permission and liv
 
 ## General Conversation
 
-Conversation owns the durable Session/root-Run lifecycle and projects the state required by the role-neutral Agent Runtime.
+Conversation owns the durable Session/root-Run lifecycle and projects the state required by the role-neutral Agent Runtime. A newly persisted Session has revision zero before its first turn; product snapshots preserve that valid CAS revision. Session absence is explicit and must not be inferred from revision zero or from a failed read.
 
 ### Model path
 

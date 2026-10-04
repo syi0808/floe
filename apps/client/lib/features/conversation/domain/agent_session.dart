@@ -37,7 +37,8 @@ final class AgentSession {
       },
       {'active_turn', 'last_outcome', 'continuation_ref'},
     );
-    if (revision < 1 ||
+    // Revision zero is the valid persisted pre-turn Session revision.
+    if (revision > 0x7fffffffffffffff ||
         messages.length > 256 ||
         messages.map((message) => message.messageId).toSet().length !=
             messages.length) {
