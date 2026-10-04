@@ -37,7 +37,6 @@ final class PersonalDayController extends ChangeNotifier {
   DayQuery? _refreshQuery;
   DayRefreshSnapshot? _refreshOperation;
   Future<void>? _refreshing;
-  Future<DaySnapshot>? _refreshRead;
   CompletedDayRefresh? lastRefreshAcknowledgement;
 
   DayQuery get query => _query;
@@ -123,8 +122,17 @@ final class PersonalDayController extends ChangeNotifier {
     errorMessage = null;
     notifyListeners();
     try {
-      final result = await FloeLoading.run(() => _loadSnapshot(query, sync));
-      if (_disposed || generation != _loadGeneration) return;
+      final result = await FloeLoading.run(
+        () => sync ? _refresh(query) : _gateway.loadDay(query),
+      );
+      if (_disposed) return;
+      if (generation != _loadGeneration) {
+        // Acquisition completion invalidates an intervening mirror read for
+        // this date. Re-query after commit rather than blocking independent
+        // reads or publishing a possibly superseded snapshot.
+        if (sync && _sameQueryIntent(query, _query)) await _load(false);
+        return;
+      }
       if (!_matchesQuery(result, query)) {
         throw const FormatException(
           'Day returned a snapshot for a different query.',
@@ -145,24 +153,6 @@ final class PersonalDayController extends ChangeNotifier {
       errorMessage = error.toString();
     }
     notifyListeners();
-  }
-
-  Future<DaySnapshot> _loadSnapshot(DayQuery query, bool sync) async {
-    if (sync) {
-      final result = _refresh(query);
-      _refreshRead = result;
-      try {
-        return await result;
-      } finally {
-        if (identical(_refreshRead, result)) _refreshRead = null;
-      }
-    }
-    // Wait for the full observation, including any retained old-date command
-    // and its follow-up acquisition, before reading the current mirror.
-    final refresh = _refreshRead;
-    if (refresh != null) await refresh;
-    if (_disposed) throw StateError('Day observer detached.');
-    return _gateway.loadDay(query);
   }
 
   Future<DaySnapshot> _refresh(DayQuery query) async {

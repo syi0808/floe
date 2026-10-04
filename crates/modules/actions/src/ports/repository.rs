@@ -179,6 +179,14 @@ pub enum PreDispatchState {
 /// The single encrypted Action authority. All writes call the Actions-owned pure
 /// transition functions while the exact current record is held by one transaction.
 pub trait ActionsRepository: Send + Sync {
+    /// Pure current coverage inspection for proposal presentation. Admission and
+    /// dispatch still validate atomically in their own transactions.
+    fn validate_proposal_coverage<'a>(
+        &'a self,
+        person_id: PersonId,
+        coverage: &'a floe_agent_contract::DependencyCoverage,
+    ) -> BoxFuture<'a, Result<(), ActionStoreError>>;
+
     fn get<'a>(
         &'a self,
         person_id: PersonId,

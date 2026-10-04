@@ -85,6 +85,18 @@ impl<Keys: VaultKeyProvider> VaultActionsRepository<Keys> {
 }
 
 impl<Keys: VaultKeyProvider> ActionsRepository for VaultActionsRepository<Keys> {
+    fn validate_proposal_coverage<'a>(
+        &'a self,
+        person_id: PersonId,
+        coverage: &'a floe_agent_contract::DependencyCoverage,
+    ) -> BoxFuture<'a, Result<(), ActionStoreError>> {
+        Box::pin(async move {
+            self.vault
+                .actions_validate_proposal_coverage(person_id, coverage)
+                .await
+        })
+    }
+
     fn get<'a>(
         &'a self,
         person_id: PersonId,

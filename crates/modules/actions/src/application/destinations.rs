@@ -39,6 +39,9 @@ impl ActionsService {
             .proposal_evidence(actor, &receipt, artifact_id, scope)
             .await?;
         Self::proposal_schedule(actor, &evidence, self.clock.now())?;
+        self.repository
+            .validate_proposal_coverage(actor.person_id, &evidence.coverage)
+            .await?;
         Ok(self
             .destination_candidates(actor, scope)
             .await?

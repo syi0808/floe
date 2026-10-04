@@ -790,7 +790,7 @@ private func nativeTargetEvent(_ store: EKEventStore,
         "\(event.calendarItemIdentifier)|" == target.externalID,
         !event.isAllDay, !event.hasRecurrenceRules, !event.isDetached, !event.hasAttendees,
         (event.title ?? "") == target.title,
-        (event.timeZone ?? TimeZone.current).identifier == target.schedule.timezone,
+        nativeTimezoneMatches(event.timeZone ?? TimeZone.current, target.schedule.timezone),
         abs(event.startDate.timeIntervalSince(target.schedule.start)) < 0.001,
         abs(event.endDate.timeIntervalSince(target.schedule.end)) < 0.001,
         try nativeEventRevision(event) == target.externalRevision else {
@@ -812,19 +812,36 @@ private func nativeScheduleConflict(_ store: EKEventStore, _ resources: [String]
   }
 }
 
-private func nativeWriteResult(_ event: EKEvent) throws -> [String: Any] {
+// Foundation normalizes fixed-offset identifiers (for example UTC+09:00 to
+// GMT+0900). Compare the platform-normalized identifiers, never merely offsets
+// at one instant: different geopolitical zones must not become interchangeable.
+private func nativeTimezoneMatches(_ observed: TimeZone, _ requested: String) -> Bool {
+  guard let expected = TimeZone(identifier: requested) else { return false }
+  return observed.identifier == expected.identifier
+}
+
+private func nativeWriteResult(_ event: EKEvent,
+                               schedule: NativeTimedSchedule) throws -> [String: Any] {
   guard !event.calendarItemIdentifier.isEmpty,
         !event.isAllDay, !event.hasRecurrenceRules, !event.isDetached, !event.hasAttendees,
         event.endDate > event.startDate,
-        event.endDate.timeIntervalSince(event.startDate) <= 86_400 else {
+        event.endDate.timeIntervalSince(event.startDate) <= 86_400,
+        abs(event.startDate.timeIntervalSince(schedule.start)) < 0.001,
+        abs(event.endDate.timeIntervalSince(schedule.end)) < 0.001,
+        nativeTimezoneMatches(event.timeZone ?? TimeZone.current, schedule.timezone) else {
     throw NativeFailure("invalid_receipt")
   }
   let revision = try nativeEventRevision(event)
+  var observedSchedule = currentNativeSchedule(event)
+  // Preserve the admitted display-zone spelling in the physical receipt only
+  // after exact instants and normalized zone identity match. The external
+  // revision continues to fingerprint the actual native observation.
+  observedSchedule["timezone"] = schedule.timezone
   return [
     "external_id": "\(event.calendarItemIdentifier)|",
     "external_revision": ["kind": "observation_fingerprint", "sha256": revision],
     "title": event.title ?? "",
-    "schedule": currentNativeSchedule(event),
+    "schedule": observedSchedule,
     "can_modify": event.calendar.allowsContentModifications && !event.calendar.isSubscribed
   ]
 }
@@ -837,7 +854,7 @@ private func nativeWriteMatches(_ event: EKEvent, effect: NativeCalendarEffect,
     abs(event.startDate.timeIntervalSince(schedule.start)) < 0.001 &&
     abs(event.endDate.timeIntervalSince(schedule.end)) < 0.001 &&
     wholeSecond(event.startDate) && wholeSecond(event.endDate) &&
-    (event.timeZone ?? TimeZone.current).identifier == schedule.timezone &&
+    nativeTimezoneMatches(event.timeZone ?? TimeZone.current, schedule.timezone) &&
     !event.isAllDay && !event.hasRecurrenceRules && !event.isDetached && !event.hasAttendees &&
     (marker == nil || event.url == marker)
 }
@@ -1340,7 +1357,7 @@ private func actionDispatch(_ request: [String: Any]) throws -> [String: Any] {
               intent.effect.kind != "create" || !event.hasAlarms else {
           throw NativeFailure("invalid_receipt")
         }
-        let eventResult = try nativeWriteResult(event)
+        let eventResult = try nativeWriteResult(event, schedule: schedule)
         let physical: [String: Any]
         if intent.effect.kind == "create" {
           physical = ["kind": "created", "event": eventResult]
@@ -1421,7 +1438,7 @@ private func actionLookup(_ request: [String: Any]) throws -> [String: Any] {
       return unknownOutcome(intent.identity.raw, "inconclusive_lookup")
     }
     let observedAt = Date()
-    let eventResult = try nativeWriteResult(markerEvents[0])
+    let eventResult = try nativeWriteResult(markerEvents[0], schedule: schedule)
     let physical: [String: Any] = ["kind": "created", "event": eventResult]
     let evidence: [String: Any] = ["kind": "unique_create_marker", "observed_at": actionTimestamp(observedAt),
                                    "marker": marker.0]

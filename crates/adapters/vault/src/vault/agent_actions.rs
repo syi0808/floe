@@ -1833,6 +1833,28 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.finish_actions_transaction(transaction, result).await
     }
 
+    pub(crate) async fn actions_validate_proposal_coverage(
+        &self,
+        person_id: PersonId,
+        coverage: &DependencyCoverage,
+    ) -> Result<(), ActionStoreError> {
+        if person_id != self.person_id {
+            return Err(ActionStoreError::NotFound);
+        }
+        let DependencyCoverage::Dependent { dependencies } = coverage else {
+            return Err(ActionStoreError::InvalidRecord);
+        };
+        if dependencies.iter().any(|entry| entry.person_id() != person_id) {
+            return Err(ActionStoreError::InvalidRecord);
+        }
+        let mut connection = self.connection().map_err(access_error)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await.map_err(sql_error)?;
+        let result = self.validate_current_action_coverage(&transaction, coverage).await;
+        self.finish_actions_transaction(transaction, result).await
+    }
+
     pub(crate) async fn actions_read_authority(
         &self,
         person_id: PersonId,
