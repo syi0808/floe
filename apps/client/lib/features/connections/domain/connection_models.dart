@@ -140,8 +140,11 @@ bool _boolean(Object? value) {
 DateTime _time(Object? value) {
   final text = _text(value, 64);
   final time = DateTime.tryParse(text);
-  if (time == null || !text.endsWith('Z'))
+  // The wire contract permits RFC 3339 UTC as Z or a zero offset.
+  // Chrono emits +00:00; a nonzero or missing offset is still rejected.
+  if (time == null || !RegExp(r'(?:Z|[+-]00:00)$').hasMatch(text)) {
     throw const FormatException('Invalid owner timestamp.');
+  }
   return time.toUtc();
 }
 
