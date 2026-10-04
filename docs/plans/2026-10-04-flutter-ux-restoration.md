@@ -745,15 +745,15 @@ readback and signing to the exact operation's admitted public key.
 Unpaired means no live signing authority, not an empty key table. Cancel/reject/expiry
 can restore Unpaired or an earlier Forgotten expectation while historical keys
 remain. Startup validates only the current referenced Pending/Committed key;
-Forgotten receipt validation does not decrypt retired keys. A corrupted historical
-key fails closed if that operation is later inspected for recovery, not unrelated
-local-only work. AAD uses a fresh context and length-prefixed Person/device/op/issuer
+Forgotten receipt validation and historical recovery do not decrypt retired keys.
+Private unwrap is limited to current-key validation and live signing. Malformed
+authoritative public metadata still fails closed. AAD uses a fresh context and length-prefixed Person/device/op/issuer
 fields. Private-key ID and public-key columns are unique. Generate only after valid
 fresh Start admission inside its transaction; no key is generated on receipt replay
 or a rejected command. Generation/wrapping are local CPU/random operations.
 
 The old physical Vault schema is incompatible. Existing files and keys stay
-untouched and old Vaults return UnsupportedSchema; they are not silently adopted,
+untouched and old Vaults return UnsupportedVersion; they are not silently adopted,
 reset or migrated. The earlier R1 preservation promise covered that checkpoint's
 ceremony-only change, not this later stored-key meaning change. Continuing against
 the new schema requires an explicitly selected fresh local test profile. Preserve
@@ -809,3 +809,78 @@ The completed enrollment cutover also passed the default Rust workspace final ga
 architecture policy check (23 nodes, 126 allowed edges). Native same-snapshot
 builds and independent implementation review are the remaining qualification for
 this checkpoint; no production-wide storage completion is claimed.
+
+### Gateway payload encryption — concrete cutover
+
+Node composition owns one process-locked root admission and purpose-specific root
+key slot selected through the compiled credentials provider. A create-only public
+identity/initializing marker precedes first key creation; key readback and an
+AEAD-authenticated root seal precede Ready. Existing incomplete, unmarked populated,
+wrong-key and missing-key roots fail closed without adoption or replacement. The
+normal server owns the lease until owner shutdown; a narrow explicit local
+--print-admin-token command reads an existing Ready root without starting owners,
+creating directories/keys or acquiring the writer lease.
+
+The storage adapter exposes one scoped encrypted Files implementation (bounded
+Read/Write/Exists/Scope). AAD binds format, root ID and canonical logical file path;
+random AES-GCM nonces and existing atomic fsync/rename durability are retained.
+Owners keep their schema/validation/policy, receiving a storage capability instead
+of concatenating paths. Trust, Integrations, Inference and Gmail all migrate in one
+change. Gmail's duplicated file helpers retire; its reset writes an empty encrypted
+index durably, and uncertain writes poison subsequent reads/writes until reopen.
+History checkpoint reads propagate unavailability rather than fabricating absence.
+Raw private-file utilities remain only for public root/profile metadata and the
+explicit development credential backend. Logs and operator-provided env input are
+not silently encrypted/migrated or deleted by this change.
+
+Qualification uses fresh synthetic roots and credentials only: ciphertext absence
+of sentinel payload, restart, absent/corrupt/wrong key, wrong-purpose/root swaps,
+truncation, incomplete creation, lease exclusion, readonly token retrieval without
+initialization, and actual pairing after server/client restart. Old plaintext test
+profiles remain untouched and require an explicit fresh profile. No live provider
+credentials, mail, Mac app, or keychain prompt are part of these probes.
+
+Independent Opus implementation review of f0236f54 found no high-severity defect
+and verified the operation/issuer/transaction/revival fences. Follow-up hardening
+uses public issuer metadata (no private unwrap) for response/activation/transport
+readback, rechecks enrollment expiry inside its signing transaction, and classifies
+Turso Busy/BusySnapshot query failures as Conflict rather than a whole-Vault integrity
+latch. Commit/rollback uncertainty still latches. Malformed authoritative metadata
+remains fail-closed. Agent Vault old-format errors map through UnsupportedVersion
+at the existing FFI boundary; product-store UnsupportedSchema is a different code.
+Exact f023 Apple Debug/Release and arm64 iOS simulator builds, strict Mac signatures
+and profile getters passed; no live app was launched. Intel packaging remains
+unqualified because embedded libraries are arm64 only.
+
+Gateway encryption implementation now uses one Node root-admission lease and scoped
+Files capability throughout Trust, Integrations, Inference and Gmail. The previous
+Gmail source-handle-as-filename coupling is removed: its connection-scoped storage
+uses index.json, while public source handles keep their existing semantics. Gmail
+checkpoint/read/cleanup paths fence a failed write; Reset persists an empty encrypted
+index instead of deleting an uncertainty-bearing file. The normal server never
+prints tokens. Explicit --print-admin-token is read-only against an existing Ready
+profile, and run-local prints the matching binary invocation, not the credential.
+
+Disposable Go race probes passed encrypted payload roundtrip/absence of plaintext,
+bounds, cross-purpose/root/scope and wrong-key/truncated-file rejection, corrupt-slot
+write refusal, path/symlink/read-only guards, scoped closure, live read-only token
+retrieval, writer exclusion, restart/token stability, missing/malformed/wrong root
+key refusal with no regeneration, incomplete admission preservation, and old
+plaintext-profile refusal. Gmail roundtrip/reopen/empty reset and failure fencing
+also passed. One fixture exposed an invalid source-handle filename at the new storage
+boundary; the implementation now uses the canonical scoped index path. An actual
+isolated Go+Rust flow passed two pairing/approval/Forget cycles with both client and
+server restart, encrypted server files, stable administrator token and fresh issuer
+keys. No live credentials/provider or Mac runtime was used. Default and floe_dev Go
+race/vet gates passed with the disposable fixtures; S3 reconstruction remains deferred.
+
+Final combined source passed Rust workspace/doctests, both FFI profiles, owner review
+closure probes, encrypted product/typed-error probes, Go default/development race
+and vet, architecture boundaries and shell syntax. The latest encrypted client/server
+pairing sequence passed both cycles and server restart. A preceding trial returned a
+durable NotApplied/Conflict on Forget; the fixture checks exact negative replay and
+permits a new explicit intent only after refreshing the same still-paired target.
+Unknown/admitted responses never get a new identity. The intermittent Conflict's
+operational UX remains part of command-observation convergence, not silently counted
+as uninterrupted success. This final run completed without that conflict. Independent
+server-storage review and same-snapshot Apple/server-native builds remain pending.

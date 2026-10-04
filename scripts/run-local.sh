@@ -73,6 +73,7 @@ SERVER_BINARY="$SERVER_BUILD_DIR/floe-server"
   exec "$SERVER_BINARY"
 ) &
 SERVER_PID=$!
+printf 'Retrieve the encrypted dashboard token in another terminal (do not paste it into logs):\n  cd %q && %q --print-admin-token\n' "$ROOT/server" "$SERVER_BINARY"
 
 flutter_arguments=("$@")
 if [[ ${#flutter_arguments[@]} -eq 0 ]]; then

@@ -26,7 +26,7 @@ type ProviderFactory interface {
 
 type Configuration struct {
 	mu                sync.Mutex
-	directory         string
+	files             *storage.Files
 	engine            *Service
 	authority         Trust
 	vault             credentials.Store
@@ -35,16 +35,16 @@ type Configuration struct {
 	configUnavailable bool
 }
 
-func OpenConfiguration(ctx context.Context, directory string, engine *Service, authority Trust, vault credentials.Store, factory ProviderFactory) (*Configuration, error) {
-	if directory == "" || engine == nil || authority == nil || vault == nil || factory == nil {
+func OpenConfiguration(ctx context.Context, files *storage.Files, engine *Service, authority Trust, vault credentials.Store, factory ProviderFactory) (*Configuration, error) {
+	if files == nil || engine == nil || authority == nil || vault == nil || factory == nil {
 		return nil, errors.New("inference configuration dependencies required")
 	}
-	state, err := readConfigurationState(directory, factory)
+	state, err := readConfigurationState(files, factory)
 	if err != nil {
 		return nil, err
 	}
 	configuration := &Configuration{
-		directory: directory,
+		files:     files,
 		engine:    engine,
 		authority: authority,
 		vault:     vault,
@@ -129,7 +129,7 @@ func (c *Configuration) RequiredError() error {
 }
 
 func (c *Configuration) save(state configurationState) error {
-	err := writeConfigurationState(c.directory, state)
+	err := writeConfigurationState(c.files, state)
 	if storage.IsIndeterminate(err) {
 		c.configUnavailable = true
 		c.engine.DenyConfiguration()

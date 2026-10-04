@@ -18,8 +18,8 @@ import (
 	workoauth "floe/server/internal/connectors/workoauth"
 	"floe/server/internal/credentials"
 	"floe/server/internal/integrations"
+	"floe/server/internal/storage"
 	"floe/server/internal/views"
-	"path/filepath"
 )
 
 type sourceOAuth interface {
@@ -28,7 +28,7 @@ type sourceOAuth interface {
 	Close()
 }
 
-func integrationFactories(directory string, vault credentials.Store, env func(string) string) map[string]integrations.RuntimeFactory {
+func integrationFactories(files *storage.Files, vault credentials.Store, env func(string) string) map[string]integrations.RuntimeFactory {
 	factories := map[string]integrations.RuntimeFactory{}
 	for _, d := range integrations.Definitions() {
 		d := d
@@ -49,12 +49,12 @@ func integrationFactories(directory string, vault credentials.Store, env func(st
 			continue
 		}
 		factories[d.ID] = integrations.FactoryFunc(func(ctx context.Context, config integrations.RuntimeConfig) (integrations.Runtime, error) {
-			return openIntegration(ctx, directory, vault, env, config)
+			return openIntegration(ctx, files, vault, env, config)
 		})
 	}
 	return factories
 }
-func openIntegration(ctx context.Context, directory string, vault credentials.Store, env func(string) string, c integrations.RuntimeConfig) (out integrations.Runtime, err error) {
+func openIntegration(ctx context.Context, files *storage.Files, vault credentials.Store, env func(string) string, c integrations.RuntimeConfig) (out integrations.Runtime, err error) {
 	r := c.Record
 	scope := r.Scope
 	var auth sourceOAuth
@@ -130,7 +130,11 @@ func openIntegration(ctx context.Context, directory string, vault credentials.St
 			query = "newer_than:30d -in:spam -in:trash"
 		}
 		var service *gmail.Service
-		service, err = gmail.NewService(filepath.Join(directory, "connectors", r.ConnectionID), r.ConnectionID, query, auth)
+		scoped, e := files.Scope("connectors", r.ConnectionID)
+		if e != nil {
+			return out, e
+		}
+		service, err = gmail.NewService(scoped, r.ConnectionID, query, auth)
 		if err == nil {
 			out.Snapshot = service
 			reader = service

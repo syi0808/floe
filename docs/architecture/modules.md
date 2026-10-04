@@ -72,3 +72,22 @@ python3 tools/architecture/check_boundaries.py
 ```
 
 The checker reads the actual Cargo manifests. Do not add a second hand-maintained "current dependency graph" to documentation.
+
+## Gateway storage boundary
+
+Go Node composition admits one process-locked encrypted profile before constructing
+Trust, Integrations, Inference or connector runtimes. The compiled credentials
+provider owns the purpose-separated root-key slot: production OS keyring, explicit
+development private-file custody. A create-only identity/attempt marker and
+authenticated root seal distinguish fresh creation from an existing unavailable
+profile; missing keys and old plaintext never authorize replacement or migration.
+
+The storage adapter provides scoped authenticated file capabilities. Logical file
+purpose and root identity are AEAD-bound. Semantic owners retain their schema,
+validation, transitions and indeterminate-write fences; they no longer concatenate
+raw private payload paths. Trust state/producer identity/admin token, integration
+journals, inference configuration and Gmail index are encrypted. Node releases its
+profile lease only after shutdown drains its owners. Explicit local administrator
+token retrieval opens an existing root read-only without starting owners or creating
+credentials. Public profile/identity markers, diagnostic logs and operator-supplied
+environment input remain outside the encrypted payload store.

@@ -5,17 +5,21 @@ import (
 	"errors"
 	"floe/server/internal/envfile"
 	"floe/server/internal/node"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 )
 
 func main() {
+	printToken := len(os.Args) == 2 && os.Args[1] == "--print-admin-token"
+	if len(os.Args) > 1 && !printToken {
+		log.Fatal("Usage: floe-server [--print-admin-token]")
+	}
 	if envfile.Load() != nil {
 		log.Fatal("Cannot load environment file")
 	}
@@ -27,6 +31,14 @@ func main() {
 		}
 		directory = node.DefaultDataDirectory(base)
 	}
+	if printToken {
+		token, err := node.AdministratorToken(context.Background(), directory)
+		if err != nil {
+			log.Fatal("Cannot read administrator token from the existing encrypted profile")
+		}
+		fmt.Println(token)
+		return
+	}
 	address := os.Getenv("FLOE_SERVER_ADDRESS")
 	if address == "" {
 		address = node.DefaultAddress()
@@ -37,7 +49,7 @@ func main() {
 	}
 	defer server.Close()
 	log.Printf("Local dashboard: http://%s/manage/", address)
-	log.Printf("Administrator token file (keep private): %s", filepath.Join(directory, "admin-token"))
+	log.Print("Administrator token is encrypted. Use this binary with --print-admin-token and the same FLOE_SERVER_DATA to retrieve it privately.")
 	serve(server, address)
 }
 func serve(handler http.Handler, address string) {

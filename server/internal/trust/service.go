@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -122,7 +121,7 @@ type diskState struct {
 }
 type Service struct {
 	mu          sync.RWMutex
-	directory   string
+	files       *storage.Files
 	state       diskState
 	producer    *ProducerIdentity
 	unavailable bool
@@ -130,22 +129,17 @@ type Service struct {
 }
 
 func fail(category operation.Category, code string) error { return operation.Fail(category, code) }
-func Open(directory string) (*Service, error) {
-	if err := os.MkdirAll(directory, 0700); err != nil {
+func Open(files *storage.Files) (*Service, error) {
+	if files == nil {
 		return nil, fail(operation.Unavailable, "trust_unavailable")
 	}
-	info, err := os.Lstat(directory)
-	if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
-		return nil, fail(operation.Unavailable, "trust_unavailable")
-	}
-	s := &Service{directory: directory}
-	path := filepath.Join(directory, "trust.json")
-	data, err := storage.ReadPrivate(path, 1<<20)
+	s := &Service{files: files}
+	data, err := files.Read("trust.json", 1<<20)
 	fresh := os.IsNotExist(err)
 	if fresh {
 		// Any partial prior identity/state is a recovery error, never permission to replace it.
 		for _, name := range []string{"state.json", "producer-identity.json", "admin-token", "inference.json", "integrations.json"} {
-			if _, e := os.Lstat(filepath.Join(directory, name)); e == nil || !os.IsNotExist(e) {
+			if exists, e := files.Exists(name); e != nil || exists {
 				return nil, fail(operation.Unavailable, "trust_recovery_required")
 			}
 		}
@@ -154,11 +148,11 @@ func Open(directory string) (*Service, error) {
 		if e != nil {
 			return nil, e
 		}
-		if e = storage.WritePrivate(filepath.Join(directory, "producer-identity.json"), encoded); e != nil {
+		if e = files.Write("producer-identity.json", encoded); e != nil {
 			return nil, e
 		}
 		s.producer = identity
-		if e = storage.WritePrivate(filepath.Join(directory, "admin-token"), []byte(Token())); e != nil {
+		if e = files.Write("admin-token", []byte(Token())); e != nil {
 			return nil, e
 		}
 		if e = s.persist(s.state); e != nil {
@@ -168,7 +162,7 @@ func Open(directory string) (*Service, error) {
 		if err != nil || DecodeStrict(data, &s.state, 1<<20, 32) != nil || !validState(s.state) {
 			return nil, fail(operation.Unavailable, "trust_unavailable")
 		}
-		raw, e := storage.ReadPrivate(filepath.Join(directory, "producer-identity.json"), 4096)
+		raw, e := files.Read("producer-identity.json", 4096)
 		if e != nil {
 			return nil, fail(operation.Unavailable, "producer_unavailable")
 		}
@@ -177,7 +171,7 @@ func Open(directory string) (*Service, error) {
 			return nil, fail(operation.Unavailable, "producer_unavailable")
 		}
 	}
-	admin, err := storage.ReadPrivate(filepath.Join(directory, "admin-token"), 1024)
+	admin, err := files.Read("admin-token", 1024)
 	if err != nil || len(admin) < 32 {
 		return nil, fail(operation.Unavailable, "operator_unavailable")
 	}
@@ -244,7 +238,7 @@ func (s *Service) persist(st diskState) error {
 	if err != nil {
 		return fail(operation.Internal, "trust_unavailable")
 	}
-	err = storage.WritePrivate(filepath.Join(s.directory, "trust.json"), data)
+	err = s.files.Write("trust.json", data)
 	if storage.IsIndeterminate(err) {
 		s.unavailable = true
 	}

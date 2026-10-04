@@ -6,6 +6,7 @@ import (
 	"errors"
 	"floe/server/internal/credentials"
 	"floe/server/internal/operation"
+	"floe/server/internal/storage"
 	"floe/server/internal/trust"
 	"reflect"
 	"sort"
@@ -15,7 +16,7 @@ import (
 
 type Service struct {
 	mu          sync.RWMutex
-	directory   string
+	files       *storage.Files
 	trust       Trust
 	vault       credentials.Store
 	factories   map[string]RuntimeFactory
@@ -25,15 +26,15 @@ type Service struct {
 	lifecycles  sync.Map
 }
 
-func New(ctx context.Context, directory string, t Trust, v credentials.Store, factories map[string]RuntimeFactory) (*Service, error) {
-	if t == nil || v == nil {
+func New(ctx context.Context, files *storage.Files, t Trust, v credentials.Store, factories map[string]RuntimeFactory) (*Service, error) {
+	if files == nil || t == nil || v == nil {
 		return nil, errors.New("integration dependency unavailable")
 	}
-	state, err := readState(directory)
+	state, err := readState(files)
 	if err != nil {
 		return nil, err
 	}
-	s := &Service{directory: directory, trust: t, vault: v, factories: map[string]RuntimeFactory{}, state: state, runtimes: map[string]Runtime{}}
+	s := &Service{files: files, trust: t, vault: v, factories: map[string]RuntimeFactory{}, state: state, runtimes: map[string]Runtime{}}
 	for k, f := range factories {
 		s.factories[k] = f
 	}

@@ -11,17 +11,17 @@ go run ./cmd/floe-server
 
 The service loads `.env` without overwriting process environment. `FLOE_ENV_FILE` selects another file. `FLOE_SERVER_ADDRESS` defaults to `127.0.0.1:8431`; `FLOE_SERVER_DATA` selects a private profile directory and otherwise defaults to `~/Library/Application Support/FloeServer`. The directory must be mode 0700; private files are 0600. Never run two processes against the same profile.
 
-Open `http://127.0.0.1:8431/manage/` and use the administrator token in that profile's `admin-token` file. The token is never printed. Do not copy credentials into chat, logs or source control. The old shared-bearer/headless mode and `FLOE_INFERENCE_CONFIG`/`FLOE_INFERENCE_TOKEN` execution path have been removed.
+Open `http://127.0.0.1:8431/manage/` and retrieve the administrator token with the same server binary and profile: `FLOE_SERVER_DATA=/absolute/profile/path floe-server --print-admin-token`. This explicit local command reads the existing encrypted token; it never initializes a profile or starts the server. Normal server logs never print it. Do not copy credentials into chat, logs or source control. The old shared-bearer/headless mode and `FLOE_INFERENCE_CONFIG`/`FLOE_INFERENCE_TOKEN` execution path have been removed.
 
 ## Pairing and trust
 
-Floe generates and retains its issuer key privately, submits the public identity through `/pair/start`, verifies the signed producer challenge, and proves possession with `/pair/confirm`. All pairing operations use POST and schema 1. Start requires a stable `operation_id` and a privately staged random 32-byte base64url `proof`; subsequent requests use the exact `pairing_id`/`proof` fields. A bounded private receipt reserves each start identity before generating its challenge, so exact start replay returns the original challenge and proof after response loss. Changed identity or proof conflicts; an expired operation never creates another challenge. The operator compares the request and exact issuer fingerprint before approval. The uncommitted proof challenge expires after 30 seconds.
+Floe generates and retains one private issuer key per newly admitted pairing operation, submits the public identity through `/pair/start`, verifies the signed producer challenge, and proves possession with `/pair/confirm`. All pairing operations use POST and schema 1. Start requires a stable `operation_id` and a privately staged random 32-byte base64url `proof`; subsequent requests use the exact `pairing_id`/`proof` fields. A bounded private receipt reserves each start identity before generating its challenge, so exact start replay returns the original challenge and proof after response loss. Changed identity or proof conflicts; an expired operation never creates another challenge. The operator compares the request and exact issuer fingerprint before approval. The uncommitted human enrollment challenge expires after five minutes.
 
 Trust atomically persists the app bearer hash and active issuer binding. Only after that commit may `/pair/poll` release the app token. A private Keychain pairing receipt supports the same approved polling readback after response loss or process restart. Missing private credential data returns an explicit repair error and never regenerates a bearer or issuer. `/pair/cancel` can cancel an uncommitted attempt; a committed binding must be explicitly revoked.
 
-An interrupted `activating` receipt stays visible in the operator dashboard. Explicit Resume uses the original protected token slot, retained token digest, local proof, signed challenge and Trust revision; it never generates replacement inputs. Both Resume and Trust activation enforce the original 30-second expiry. Explicit Abort requires an authoritative Trust non-commit, retains an `aborted` receipt and leaves protected token data intact. If Trust already committed, activation wins and the active client must be explicitly revoked. Missing token/proof data, changed Trust or indeterminate persistence remain repair errors.
+An interrupted `activating` receipt stays visible in the operator dashboard. Explicit Resume uses the original protected token slot, retained token digest, local proof, signed challenge and Trust revision; it never generates replacement inputs. Both Resume and Trust activation enforce the original five-minute expiry. Explicit Abort requires an authoritative Trust non-commit, retains an `aborted` receipt and leaves protected token data intact. If Trust already committed, activation wins and the active client must be explicitly revoked. Missing token/proof data, changed Trust or indeterminate persistence remain repair errors.
 
-Rust keeps eligible RepairRequired operations observable through its bounded owner job and Ready activation. Eligibility requires the original confirmed handle/review and the exact Pending credential expectation; Forget removes that eligibility. The five-minute owner job covers every still-valid 30-second activation window. Later remote readback can rejoin an already committed operation, but cannot activate an expired challenge. Product get/Check status performs no recovery mutation.
+Rust keeps eligible RepairRequired operations observable through its bounded owner job and Ready activation. Eligibility requires the original confirmed handle/review and the exact Pending credential expectation; Forget removes that eligibility. The five-minute owner job covers the original five-minute activation window. Later remote readback can rejoin an already committed operation, but cannot activate an expired challenge. Product get/Check status performs no recovery mutation.
 
 Native credential observations honor their caller context and a three-second ceiling. One process-wide OS worker and at most eight waiting observers bound stalled Keychain work. A worker retains its lane through late mutation/readback settlement, so a timeout does not authorize deletion, absence, or an overlapping write. Security calls fail instead of displaying authentication UI and use nonsynchronizing file/login Keychain items on macOS. This backend does not provide the Data Protection Keychain ThisDeviceOnly guarantee. Pairing requests have a ten-second total observation bound; operator model probes start their 40-second bound before credential readiness.
 
@@ -85,3 +85,19 @@ go vet ./...
 ```
 
 macOS Keychain and real provider OAuth behavior require their platform/provider prerequisites. A successful Linux compile cannot establish those behaviors.
+
+## Encrypted profile storage
+
+Trust state, producer private identity, administrator token, integration journals,
+inference configuration and Gmail index payloads use authenticated AES-GCM files.
+The production build holds its root key in the OS credential store. The explicit
+`floe_dev` build uses its separate private file credential store without Keychain
+prompts; it does not weaken production on failure. Public root/profile markers and
+logs are not encrypted payloads. Operator-provided environment files remain inputs.
+
+A process lease excludes a second writer to the same profile. Existing missing or
+malformed keys, failed initial creation, old plaintext profiles and wrong ciphertext
+fail closed. Nothing is automatically deleted, re-keyed or migrated. Use an explicitly
+selected fresh test profile for this format change and preserve any older profile
+with unresolved operations. At-rest encryption is not protection against a process
+running as the same unlocked user, whole-profile rollback, or plaintext in memory.

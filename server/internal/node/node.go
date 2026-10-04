@@ -24,6 +24,7 @@ type Node struct {
 	integrations *integrations.Service
 	clients      *trust.ClientAdministration
 	runtime      *codexauth.Runtime
+	storage      *admittedStorage
 	close        sync.Once
 	mu           sync.Mutex
 	active       sync.WaitGroup
@@ -37,16 +38,25 @@ func New(config Config) (*Node, error) {
 	if err != nil || host != "127.0.0.1" || port == "" {
 		return nil, errors.New("node requires 127.0.0.1:port")
 	}
-	vault, err := profileStore(config.Directory)
+	vault, err := profileStore(config.Directory, true)
 	if err != nil {
 		return nil, err
 	}
-	t, err := trust.Open(config.Directory)
+	storageRoot, err := openStorage(context.Background(), config.Directory, vault, true)
+	if err != nil {
+		return nil, err
+	}
+	failed := true
+	defer func() {
+		if failed {
+			storageRoot.Close()
+		}
+	}()
+	t, err := trust.Open(storageRoot.files)
 	if err != nil {
 		return nil, err
 	}
 	runtime := codexauth.New(vault)
-	failed := true
 	defer func() {
 		if failed {
 			runtime.Close()
@@ -57,7 +67,7 @@ func New(config Config) (*Node, error) {
 		return nil, err
 	}
 	factory := providers.NewFactory(vault.Get, runtime)
-	configuration, err := inference.OpenConfiguration(context.Background(), config.Directory, model, t, vault, factory)
+	configuration, err := inference.OpenConfiguration(context.Background(), storageRoot.files, model, t, vault, factory)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +75,7 @@ func New(config Config) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	sources, err := integrations.New(context.Background(), config.Directory, t, vault, integrationFactories(config.Directory, vault, os.Getenv))
+	sources, err := integrations.New(context.Background(), storageRoot.files, t, vault, integrationFactories(storageRoot.files, vault, os.Getenv))
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +97,7 @@ func New(config Config) (*Node, error) {
 	handler := &httptransport.Handler{Address: config.Address, Trust: t, Pairing: pairing, Setup: sources, Integrations: sources, Sources: reader, Mirror: mirror, Configuration: configuration, Accounts: inference.NewAccountManagement(t, runtime), Clients: clients, Inference: &httptransport.InferenceHandler{Service: model, Trust: t, Address: config.Address}}
 	failed = false
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Node{handler: handler, integrations: sources, clients: clients, runtime: runtime, ctx: ctx, cancel: cancel}, nil
+	return &Node{handler: handler, integrations: sources, clients: clients, runtime: runtime, storage: storageRoot, ctx: ctx, cancel: cancel}, nil
 }
 func (n *Node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	n.mu.Lock()
@@ -116,5 +126,6 @@ func (n *Node) Close() {
 		n.clients.Close()
 		n.integrations.Close()
 		n.runtime.Close()
+		n.storage.Close()
 	})
 }

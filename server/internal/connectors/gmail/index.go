@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"floe/server/internal/integrations"
+	"floe/server/internal/storage"
 	"floe/server/internal/views"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -15,6 +15,7 @@ import (
 
 const (
 	indexVersion      = 1
+	indexFileName     = "index.json"
 	maxIndexItems     = 10_000
 	maxIndexBytes     = 8 * 1024 * 1024
 	maxLogisticsItems = 48
@@ -22,7 +23,8 @@ const (
 
 type Index struct {
 	mu           sync.Mutex
-	path         string
+	files        *storage.Files
+	unavailable  bool
 	connectionID string
 	state        indexState
 }
@@ -36,20 +38,16 @@ type indexState struct {
 	LastFailure         *integrations.Failure `json:"last_failure,omitempty"`
 }
 
-func OpenIndex(directory, connectionID string) (*Index, error) {
-	if !validID(connectionID) {
+func OpenIndex(files *storage.Files, connectionID string) (*Index, error) {
+	if files == nil || !validID(connectionID) {
 		return nil, ErrInvalidInput
 	}
-	if err := ensurePrivateDirectory(directory); err != nil {
-		return nil, err
-	}
-	name, _ := SourceHandle(connectionID, "index")
 	index := &Index{
-		path:         filepath.Join(directory, name+".json"),
+		files:        files,
 		connectionID: connectionID,
 		state:        indexState{SchemaVersion: indexVersion, ConnectionID: connectionID, Messages: map[string]Metadata{}},
 	}
-	data, err := readPrivateFile(index.path)
+	data, err := files.Read(indexFileName, maxIndexBytes)
 	if os.IsNotExist(err) {
 		return index, nil
 	}
@@ -103,10 +101,13 @@ func (index *Index) ApplyDelta(upserts []Metadata, deletedIDs []string, previous
 	return index.commit(next)
 }
 
-func (index *Index) HistoryID() string {
+func (index *Index) HistoryID() (string, error) {
 	index.mu.Lock()
 	defer index.mu.Unlock()
-	return index.state.HistoryID
+	if index.unavailable {
+		return "", storage.ErrUnavailable
+	}
+	return index.state.HistoryID, nil
 }
 
 func (index *Index) RecordSync(now time.Time, failureKind string) error {
@@ -126,30 +127,21 @@ func (index *Index) RecordSync(now time.Time, failureKind string) error {
 	return index.commit(next)
 }
 
-func (index *Index) SyncStatus() (*int64, *integrations.Failure, int) {
-	index.mu.Lock()
-	defer index.mu.Unlock()
-	var success *int64
-	if index.state.LastSuccessAtUnixMS != nil {
-		value := *index.state.LastSuccessAtUnixMS
-		success = &value
-	}
-	return success, cloneFailure(index.state.LastFailure), len(index.state.Messages)
-}
-
 func (index *Index) Reset() error {
 	index.mu.Lock()
 	defer index.mu.Unlock()
-	if err := os.Remove(index.path); err != nil && !os.IsNotExist(err) {
-		return err
+	if index.unavailable {
+		return storage.ErrUnavailable
 	}
-	index.state = indexState{SchemaVersion: indexVersion, ConnectionID: index.connectionID, Messages: map[string]Metadata{}}
-	return nil
+	return index.commit(indexState{SchemaVersion: indexVersion, ConnectionID: index.connectionID, Messages: map[string]Metadata{}})
 }
 
 func (index *Index) Communication(query string, cursor, limit int, now time.Time) (views.CommunicationView, error) {
 	index.mu.Lock()
 	defer index.mu.Unlock()
+	if index.unavailable {
+		return views.CommunicationView{}, storage.ErrUnavailable
+	}
 	if len(query) > 512 || cursor < 0 || limit < 1 || limit > MaxPageItems {
 		return views.CommunicationView{}, ErrInvalidInput
 	}
@@ -192,6 +184,9 @@ func (index *Index) Communication(query string, cursor, limit int, now time.Time
 func (index *Index) Logistics(now time.Time) (views.LogisticsView, error) {
 	index.mu.Lock()
 	defer index.mu.Unlock()
+	if index.unavailable {
+		return views.LogisticsView{}, storage.ErrUnavailable
+	}
 	matches := make([]Metadata, 0, maxLogisticsItems)
 	for _, message := range index.state.Messages {
 		if logisticsKind(message.Subject+"\n"+message.Snippet) != "" {
@@ -257,11 +252,15 @@ func boundedText(value string, maximum int) string {
 }
 
 func (index *Index) commit(next indexState) error {
+	if index.unavailable {
+		return storage.ErrUnavailable
+	}
 	data, err := json.Marshal(next)
 	if err != nil || len(data) > maxIndexBytes {
 		return ErrInvalidInput
 	}
-	if err := writePrivateFile(index.path, data); err != nil {
+	if err := index.files.Write(indexFileName, data); err != nil {
+		index.unavailable = true
 		return err
 	}
 	index.state = next
@@ -307,45 +306,11 @@ func cloneFailure(failure *integrations.Failure) *integrations.Failure {
 	return &copy
 }
 
-func ensurePrivateDirectory(directory string) error {
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		return err
-	}
-	info, err := os.Lstat(directory)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0077 != 0 {
-		return errors.New("gmail index directory must be private")
+func (index *Index) checkAvailable() error {
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	if index.unavailable {
+		return storage.ErrUnavailable
 	}
 	return nil
-}
-
-func readPrivateFile(path string) ([]byte, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
-		return nil, errors.New("gmail index file must be private")
-	}
-	return os.ReadFile(path)
-}
-
-func writePrivateFile(path string, data []byte) error {
-	file, err := os.CreateTemp(filepath.Dir(path), ".gmail-*")
-	if err != nil {
-		return err
-	}
-	temporary := file.Name()
-	defer os.Remove(temporary)
-	if _, err = file.Write(data); err != nil {
-		file.Close()
-		return err
-	}
-	if err = file.Sync(); err != nil {
-		file.Close()
-		return err
-	}
-	if err = file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporary, path)
 }

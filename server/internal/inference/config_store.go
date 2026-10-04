@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 
 	"floe/server/internal/storage"
 	"floe/server/internal/trust"
@@ -34,9 +33,9 @@ func emptyConfigurationState() configurationState {
 	}
 }
 
-func readConfigurationState(directory string, factory ProviderFactory) (configurationState, error) {
+func readConfigurationState(files *storage.Files, factory ProviderFactory) (configurationState, error) {
 	state := emptyConfigurationState()
-	data, err := storage.ReadPrivate(filepath.Join(directory, configurationFileName), 65536)
+	data, err := files.Read(configurationFileName, 65536)
 	if os.IsNotExist(err) {
 		return state, nil
 	}
@@ -89,10 +88,10 @@ func cloneConfigurationState(state configurationState) configurationState {
 	return out
 }
 
-func writeConfigurationState(directory string, state configurationState) error {
+func writeConfigurationState(files *storage.Files, state configurationState) error {
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
-	return storage.WritePrivate(filepath.Join(directory, configurationFileName), data)
+	return files.Write(configurationFileName, data)
 }

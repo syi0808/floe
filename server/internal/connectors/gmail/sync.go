@@ -55,10 +55,14 @@ func (syncer *Syncer) Bootstrap(ctx context.Context) error {
 }
 
 func (syncer *Syncer) Refresh(ctx context.Context) error {
-	if syncer.index.HistoryID() == "" {
+	checkpoint, err := syncer.index.HistoryID()
+	if err != nil {
+		return err
+	}
+	if checkpoint == "" {
 		return syncer.Bootstrap(ctx)
 	}
-	err := syncer.incremental(ctx)
+	err = syncer.incremental(ctx)
 	if errors.Is(err, ErrCheckpointExpired) {
 		return syncer.Bootstrap(ctx)
 	}
@@ -66,7 +70,10 @@ func (syncer *Syncer) Refresh(ctx context.Context) error {
 }
 
 func (syncer *Syncer) incremental(ctx context.Context) error {
-	previous := syncer.index.HistoryID()
+	previous, err := syncer.index.HistoryID()
+	if err != nil {
+		return err
+	}
 	if !validID(previous) {
 		return ErrInvalidInput
 	}

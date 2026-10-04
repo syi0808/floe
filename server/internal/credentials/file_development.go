@@ -23,7 +23,7 @@ type DevelopmentFileStore struct {
 	mu   sync.Mutex
 }
 
-func NewDevelopmentFileStore(profile string) (*DevelopmentFileStore, error) {
+func NewDevelopmentFileStore(profile string, initialize bool) (*DevelopmentFileStore, error) {
 	if err := privateDirectory(profile); err != nil {
 		return nil, err
 	}
@@ -32,8 +32,10 @@ func NewDevelopmentFileStore(profile string) (*DevelopmentFileStore, error) {
 		return nil, ErrUnavailable
 	}
 	root := filepath.Join(profile, "development-credentials")
-	if err := os.Mkdir(root, 0700); err != nil && !os.IsExist(err) {
-		return nil, ErrUnavailable
+	if initialize {
+		if err := os.Mkdir(root, 0700); err != nil && !os.IsExist(err) {
+			return nil, ErrUnavailable
+		}
 	}
 	if err := privateDirectory(root); err != nil {
 		return nil, err

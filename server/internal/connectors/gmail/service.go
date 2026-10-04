@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"floe/server/internal/integrations"
+	"floe/server/internal/storage"
 	"floe/server/internal/views"
 	"strings"
 	"sync"
@@ -29,7 +30,7 @@ type Service struct {
 	readViews           map[string]views.ViewSnapshot
 }
 
-func NewService(directory, connectionID, query string, auth AuthRuntime) (*Service, error) {
+func NewService(files *storage.Files, connectionID, query string, auth AuthRuntime) (*Service, error) {
 	if auth == nil {
 		return nil, ErrInvalidInput
 	}
@@ -37,14 +38,14 @@ func NewService(directory, connectionID, query string, auth AuthRuntime) (*Servi
 	if err != nil {
 		return nil, err
 	}
-	return newService(directory, connectionID, query, auth, client)
+	return newService(files, connectionID, query, auth, client)
 }
 
-func newService(directory, connectionID, query string, auth AuthRuntime, client *Client) (*Service, error) {
+func newService(files *storage.Files, connectionID, query string, auth AuthRuntime, client *Client) (*Service, error) {
 	if auth == nil || client == nil {
 		return nil, ErrInvalidInput
 	}
-	index, err := OpenIndex(directory, connectionID)
+	index, err := OpenIndex(files, connectionID)
 	if err != nil {
 		return nil, err
 	}
@@ -160,6 +161,9 @@ func (service *Service) Read(ctx context.Context, request views.ReadRequest) (vi
 }
 
 func (service *Service) Snapshot(ctx context.Context) (integrations.Snapshot, error) {
+	if err := service.index.checkAvailable(); err != nil {
+		return integrations.Snapshot{}, err
+	}
 	if ctx == nil {
 		return integrations.Snapshot{}, ErrInvalidInput
 	}

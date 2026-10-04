@@ -7,7 +7,6 @@ import (
 	"floe/server/internal/storage"
 	"floe/server/internal/trust"
 	"os"
-	"path/filepath"
 	"reflect"
 )
 
@@ -111,10 +110,9 @@ func validateRecord(r Record) bool {
 	slot, err := credentials.ConnectionName(namespace, r.ConnectionID, r.PersonID)
 	return err == nil && slot == r.Credential
 }
-func readState(directory string) (diskState, error) {
+func readState(files *storage.Files) (diskState, error) {
 	st := initialState()
-	path := filepath.Join(directory, "integrations.json")
-	data, err := storage.ReadPrivate(path, 2<<20)
+	data, err := files.Read("integrations.json", 2<<20)
 	if os.IsNotExist(err) {
 		return st, nil
 	}
@@ -169,7 +167,7 @@ func (s *Service) persist(st diskState) error {
 	if err != nil {
 		return err
 	}
-	err = storage.WritePrivate(filepath.Join(s.directory, "integrations.json"), data)
+	err = s.files.Write("integrations.json", data)
 	if storage.IsIndeterminate(err) {
 		s.unavailable = true
 	}
