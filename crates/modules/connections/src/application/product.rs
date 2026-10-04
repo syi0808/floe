@@ -427,8 +427,7 @@ impl ConnectionsService {
                     .ok_or(AgentFailure::NotFound)?,
             };
             if integration.revision != expected_revision
-                || !integration.descriptor.available
-                || integration.descriptor.connected
+                || integration.descriptor.state != IntegrationState::Available
             {
                 return Err(AgentFailure::Conflict);
             }
@@ -2255,10 +2254,16 @@ impl ConnectionsService {
                     }
                     .into(),
                     setup_kind: IntegrationSetupKind::NativePermission,
-                    available,
-                    connected: current
+                    state: if current
                         .as_ref()
-                        .is_some_and(|source| source.state() == SourceState::Ready),
+                        .is_some_and(|source| source.state() == SourceState::Ready)
+                    {
+                        IntegrationState::Connected
+                    } else if available {
+                        IntegrationState::Available
+                    } else {
+                        IntegrationState::Unavailable
+                    },
                     catalog_revision: 1,
                     initial_selection: IntegrationSelection::GatewayManaged,
                 },
@@ -2744,12 +2749,8 @@ impl ConnectionsService {
             && !catalog_ready
         {
             IntegrationState::Unavailable
-        } else if integration.descriptor.connected {
-            IntegrationState::Connected
-        } else if integration.descriptor.available {
-            IntegrationState::Available
         } else {
-            IntegrationState::Unavailable
+            integration.descriptor.state
         };
         let capabilities = if state == IntegrationState::Available {
             vec![IntegrationCapability::PrepareReview]
@@ -2758,7 +2759,26 @@ impl ConnectionsService {
         } else {
             vec![]
         };
+        let service_kind = match (
+            &integration.target,
+            integration.descriptor.connector_id.as_str(),
+        ) {
+            (IntegrationBinding::Device { .. }, "calendar.event_kit") => {
+                IntegrationServiceKind::AppleCalendar
+            }
+            (IntegrationBinding::Device { .. }, "contacts.apple") => {
+                IntegrationServiceKind::AppleContacts
+            }
+            (IntegrationBinding::Device { .. }, "health.apple") => {
+                IntegrationServiceKind::AppleHealth
+            }
+            (IntegrationBinding::Device { .. }, "attention.macos") => {
+                IntegrationServiceKind::AppleAttention
+            }
+            _ => IntegrationServiceKind::Hosted,
+        };
         Ok(IntegrationSummary {
+            service_kind,
             integration_ref: integration.integration_ref,
             revision: integration.revision,
             display_name: integration.descriptor.display_name.clone(),

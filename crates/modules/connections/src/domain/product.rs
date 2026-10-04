@@ -54,9 +54,20 @@ pub enum IntegrationCapability {
     Configure,
     Disconnect,
 }
+/// Stable presentation identity, never inferred from provider display labels.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationServiceKind {
+    AppleCalendar,
+    AppleContacts,
+    AppleHealth,
+    AppleAttention,
+    Hosted,
+}
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IntegrationSummary {
+    pub service_kind: IntegrationServiceKind,
     pub integration_ref: Uuid,
     pub revision: u64,
     pub display_name: String,

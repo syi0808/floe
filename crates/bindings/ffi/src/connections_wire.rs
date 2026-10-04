@@ -589,6 +589,21 @@ fn overview(value: owner::ConnectionsOverview) -> AppWireResult<dto::Connections
 }
 fn integration(value: owner::IntegrationSummary) -> AppWireResult<dto::IntegrationSummaryDto> {
     Ok(dto::IntegrationSummaryDto {
+        service_kind: match value.service_kind {
+            owner::IntegrationServiceKind::AppleCalendar => {
+                dto::IntegrationServiceKindDto::AppleCalendar
+            }
+            owner::IntegrationServiceKind::AppleContacts => {
+                dto::IntegrationServiceKindDto::AppleContacts
+            }
+            owner::IntegrationServiceKind::AppleHealth => {
+                dto::IntegrationServiceKindDto::AppleHealth
+            }
+            owner::IntegrationServiceKind::AppleAttention => {
+                dto::IntegrationServiceKindDto::AppleAttention
+            }
+            owner::IntegrationServiceKind::Hosted => dto::IntegrationServiceKindDto::Hosted,
+        },
         integration_ref: dto::IntegrationRefDto::new(value.integration_ref)
             .ok_or_else(internal_error)?,
         revision: value.revision,

@@ -28,8 +28,7 @@ pub struct IntegrationDescriptor {
     pub display_name: String,
     pub category: String,
     pub setup_kind: IntegrationSetupKind,
-    pub available: bool,
-    pub connected: bool,
+    pub state: crate::IntegrationState,
     pub catalog_revision: u64,
     pub initial_selection: IntegrationSelection,
 }

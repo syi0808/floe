@@ -264,6 +264,7 @@ impl PairingSnapshotDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct IntegrationSummaryDto {
+    pub service_kind: IntegrationServiceKindDto,
     pub integration_ref: super::IntegrationRefDto,
     pub revision: u64,
     pub display_name: String,
@@ -272,6 +273,16 @@ pub struct IntegrationSummaryDto {
     pub capabilities: Vec<IntegrationCapabilityDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceSummaryDto>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationServiceKindDto {
+    AppleCalendar,
+    AppleContacts,
+    AppleHealth,
+    AppleAttention,
+    Hosted,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

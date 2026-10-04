@@ -412,3 +412,23 @@ Default Rust workspace/doctests and both Go race/vet modes passed. The separate
 exact-a08919b Mac Debug arm64 build, strict signature check, bundled profile getter
 (2), iOS arm64 Debug simulator build and both Go builds passed; no app was launched.
 The later correction still requires its own Apple build qualification.
+
+### Connections presentation contract cutover, first bounded change
+
+Replace descriptor `available`/`connected` booleans with one canonical
+IntegrationState so Gateway Connecting/Error survive adapter → owner → Flutter.
+Only Available admits a fresh integration review; a connecting operation is not
+silently represented as available. Add a computed safe service-kind projection
+from the owner-controlled target/connector identity; Flutter must not identify
+Apple Calendar by its mutable display name. No credential or source authority is
+added to the DTO. Existing stored descriptor meaning changes directly under the
+pre-stable policy, with no legacy decoder; old development fixtures may need an
+explicit fresh profile, never automatic reset. Exact source association, bounded
+journal reads, resource grouping and the remaining screen matrix stay open.
+
+The first presentation-contract change passed the default Rust workspace/doctest
+gate, 34 Flutter behavior fixtures plus one actual Rust-FFI-to-Dart overview decode,
+and Flutter analysis with the same 157 informational baseline findings (no errors
+or warnings). It does not yet qualify remote-provider live states or full rendered
+parity. Exact f95ad601 Apple/CLI/Go build qualification also passed separately;
+no runtime launch or Keychain access occurred.

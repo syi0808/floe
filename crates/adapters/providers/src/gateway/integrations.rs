@@ -324,20 +324,21 @@ impl RemoteIntegrationPort for GatewayIntegrationAdapter {
                 let status = value["status"]
                     .as_str()
                     .ok_or(IntegrationError::InvalidResponse)?;
-                if !matches!(
-                    status,
-                    "disconnected" | "unavailable" | "error" | "connected" | "connecting"
-                ) {
-                    return Err(IntegrationError::InvalidResponse);
-                }
+                let state = match status {
+                    "connected" => IntegrationState::Connected,
+                    "connecting" => IntegrationState::Connecting,
+                    "error" => IntegrationState::Error,
+                    "disconnected" if available => IntegrationState::Available,
+                    "disconnected" | "unavailable" => IntegrationState::Unavailable,
+                    _ => return Err(IntegrationError::InvalidResponse),
+                };
                 entries.push(IntegrationDescriptor {
                     connector_id: floe_context_contract::ConnectorId::try_new(id)
                         .map_err(|_| IntegrationError::InvalidResponse)?,
                     display_name: name.to_owned(),
                     category: connector_category(id).into(),
                     setup_kind,
-                    available,
-                    connected: status == "connected",
+                    state,
                     catalog_revision: wire.revision,
                     initial_selection: IntegrationSelection::GatewayManaged,
                 });

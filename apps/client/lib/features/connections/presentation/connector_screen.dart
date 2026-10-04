@@ -162,9 +162,11 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
     final sources = current.overview?.sources ?? const <SourceSummary>[];
     if (selectedIntegration != null || selectedSource != null) {
       final integration = integrations
-          .where((value) => selectedIntegration != null
-              ? value.integrationRef == selectedIntegration
-              : value.source?.sourceRef == selectedSource)
+          .where(
+            (value) => selectedIntegration != null
+                ? value.integrationRef == selectedIntegration
+                : value.source?.sourceRef == selectedSource,
+          )
           .firstOrNull;
       final source =
           integration?.source ??
@@ -292,8 +294,7 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
     // Platform affects display copy only; existence, status and actions are
     // taken from the current owner's integration projection.
     final macCalendar =
-        integration.category == 'calendar' &&
-        integration.displayName == 'Calendar' &&
+        integration.serviceKind == 'apple_calendar' &&
         defaultTargetPlatform == TargetPlatform.macOS;
     return _ConnectionCard(
       key: ValueKey('integration-${integration.integrationRef.value}'),

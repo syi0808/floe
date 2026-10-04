@@ -356,6 +356,7 @@ final class SourceSummary {
 
 final class IntegrationSummary {
   const IntegrationSummary({
+    required this.serviceKind,
     required this.integrationRef,
     required this.revision,
     required this.displayName,
@@ -370,6 +371,7 @@ final class IntegrationSummary {
       {
         'integration_ref',
         'revision',
+        'service_kind',
         'display_name',
         'category',
         'state',
@@ -378,6 +380,13 @@ final class IntegrationSummary {
       {'source'},
     );
     return IntegrationSummary(
+      serviceKind: _choice(j['service_kind'], {
+        'apple_calendar',
+        'apple_contacts',
+        'apple_health',
+        'apple_attention',
+        'hosted',
+      }),
       integrationRef: IntegrationRef(_uuid(j['integration_ref'])),
       revision: _revision(j['revision']),
       displayName: _text(j['display_name']),
@@ -399,6 +408,7 @@ final class IntegrationSummary {
   }
   final IntegrationRef integrationRef;
   final int revision;
+  final String serviceKind;
   final String displayName;
   final String category;
   final String state;
