@@ -326,7 +326,11 @@ impl AppProductCommandDto {
                 retry_of,
                 ..
             } => {
-                validate_revision(*expected_revision)?;
+                // The first turn compares against the valid persisted revision 0.
+                // Other owners and post-admission commands retain positive revisions.
+                if *expected_revision > i64::MAX as u64 {
+                    return Err("expected_revision");
+                }
                 if retry_of.is_some() && continuation_ref.is_some() {
                     return Err("command.retry_of");
                 }
