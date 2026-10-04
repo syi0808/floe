@@ -495,3 +495,78 @@ development FFI build, actual Connections overview through that FFI and the stat
 23-node/126-edge dependency check. No whole-screen or live-provider qualification
 is implied. Source/pairing operation enumeration and acquisition presentation remain
 open; this checkpoint fixes only the product-journal prefix and exact catalog join.
+
+## Production at-rest coverage closure — design before implementation
+
+The user's production condition is not satisfied by OS custody for Agent Vault
+alone. Source inspection confirms the host product database contains Calendar,
+Day, Tasks/Notes and source/lifecycle records in plaintext; Gateway trust, producer
+private identity, integrations, inference configuration and Gmail metadata index
+also have private-file rather than encrypted-at-rest storage. Development must
+keep the same payload protection paths while substituting isolated file custody.
+
+### Client target
+
+- Keep Day/product availability independent from Agent Vault lifecycle; do not move
+  Day into the Agent Vault or make a UI query create/unlock that Vault.
+- The product database gets its own purpose-separated root key, bound to the
+  admitted Person/device installation. Production uses a distinct OS-keyring
+  service; development uses an exact private file under the isolated profile.
+  Shared OS/private-file key mechanics have one adapter implementation; Agent
+  Vault and product-store key identities stay distinct.
+- Installation admission owns Fresh versus Existing. Only Fresh may generate and
+  insert a key. Existing loads its exact key; missing, malformed, locked or changed
+  keys fail without regeneration, plaintext fallback or reset. The existing
+  installation creation marker/lease precedes key publication and remains through
+  database identity/schema creation, checkpoint and durable Ready publication.
+- TursoStore uses the same pinned AES-256-GCM engine already used by Agent Vault,
+  including WAL. Existing-only pinned-file IO remains in place; remove the
+  plaintext SQLite-header assumption. Validate an encrypted product-identity row
+  against the caller's admitted Person/device before owner activation. Rename
+  physical layout terminology from Plain to Product so encryption and semantic
+  table ownership are not conflated.
+- Product key loading occurs at host admission. It does not add repeated Keychain
+  prompts to every Day read; database/key lifetime belongs to the retained host.
+  The Agent Vault's existing key/session fences remain unchanged.
+
+### Gateway target
+
+- Node composition admits one process-locked storage root before publishing Trust
+  or provider owners. A non-secret create-only storage identity chooses an exact
+  purpose-separated root-key slot in the selected credential backend. No root key
+  is generated for a preexisting unmarked data directory or a missing existing key.
+- Introduce one authenticated bounded-file codec using standard-library AEAD and
+  the existing durable private write mechanics. Associated data binds format,
+  storage identity and logical file purpose. Owners retain schema, CAS, uncertain
+  write classification and business recovery; the codec never interprets records.
+- Inject scoped file storage into Trust, Integrations, Inference configuration and
+  Gmail index. Remove competing raw JSON/metadata writes from those paths. Existing
+  provider credentials continue through the selected credential Store.
+- Producer private keys and persistent admin bootstrap credentials are sensitive
+  storage too. Production must not leave an unencrypted admin-token alongside an
+  encrypted database. Define an explicit local operator retrieval path before
+  changing the dashboard token workflow; keep development setup convenient.
+- Non-secret identity/format markers and lock files may remain readable. Diagnostic
+  logs must not receive payloads/keys as an encryption side effect. At-rest AEAD
+  does not claim protection against an already-authorized malicious same-user
+  process or rollback of an entire valid encrypted snapshot.
+
+### Sequence and qualification
+
+1. Shared custody mechanics and encrypted client product-store admission, migrating
+   the three actual TursoStore creation/open callers in App together. No old-format
+   decoder, implicit migration or new profile-selector UI.
+2. Disposable end-to-end fixtures: fresh/reopen, wrong/missing key, altered identity,
+   partial key/schema creation, both build profiles, main-file/WAL plaintext-sentinel
+   absence, canonical lock exclusion, preserved diagnostics and no auto-reset.
+3. Gateway storage identity/lease and authenticated-file seam; migrate all listed
+   owners and Gmail cache together, including admin-token retrieval contract.
+4. Wrong-purpose/cross-root ciphertext, truncated file, uncertain rename/fsync,
+   concurrent open, missing-key and post-restart tests. No real user data reset.
+5. Build-profile exclusion and Apple Debug/Release qualification. Only then mark
+   production payload encryption covered; no completed build alone proves live
+   Keychain permission or provider behavior.
+
+This section is a target/sequence, not an implementation claim. The Connections
+screen/capability restoration continues after this newly requested storage
+prerequisite; its remaining matrix and command-lifecycle issues remain open.
