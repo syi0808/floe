@@ -94,7 +94,9 @@ impl GatewayIntegrationAdapter {
                     IntegrationError::ForeignIdentity
                 }
             })?
-            .ok_or(IntegrationError::Unavailable)?;
+            // This operation requires its pinned generation. Proven absence
+            // cannot recover that authority; transient reads were handled above.
+            .ok_or(IntegrationError::ForeignIdentity)?;
         if &connection.binding != expected {
             return Err(IntegrationError::ForeignIdentity);
         }
