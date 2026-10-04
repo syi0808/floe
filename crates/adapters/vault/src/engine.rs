@@ -1,12 +1,14 @@
-use std::{fs::OpenOptions, io::Read, path::Path, sync::Arc};
+use std::{fs::OpenOptions, path::Path, sync::Arc};
 use turso::core::{Clock, IO};
 
 use turso::{Builder, Connection};
 
-use crate::{StoreError, StoreErrorCode};
+use crate::{ProductStoreIdentity, RootKey, StoreError, StoreErrorCode};
 
 pub struct TursoStore {
     database: turso::Database,
+    identity: ProductStoreIdentity,
+    _key: RootKey,
     // Drop after the database. Every retained repository Arc keeps the same
     // installation admission alive, including background owner retirement.
     installation_lock: Option<std::fs::File>,
@@ -18,11 +20,27 @@ impl TursoStore {
         self
     }
 
-    /// Create only a provably new plain store. Existing files are never
+    /// Create only a provably new encrypted product store. Existing files are never
     /// initialized, truncated or adopted by this entry point.
-    pub async fn create_new(path: impl AsRef<Path>) -> Result<Self, StoreError> {
-        let path = path.as_ref();
-        match OpenOptions::new().write(true).create_new(true).open(path) {
+    pub async fn create_new(
+        path: impl AsRef<Path>,
+        identity: ProductStoreIdentity,
+    ) -> Result<Self, StoreError> {
+        let supplied = path.as_ref();
+        let parent = std::fs::canonicalize(supplied.parent().ok_or_else(unsupported_profile)?)
+            .map_err(storage_error)?;
+        let path = parent.join(supplied.file_name().ok_or_else(unsupported_profile)?);
+        let path = path.as_path();
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        match options.open(path) {
             Ok(file) => drop(file),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 return Err(StoreError::new(
@@ -35,12 +53,15 @@ impl TursoStore {
         let path_text = path.to_str().ok_or_else(|| {
             StoreError::new(StoreErrorCode::Validation, "local database path is invalid")
         })?;
-        let database = Builder::new_local(path_text)
+        let key = crate::product_keys::create(path, &identity)?;
+        let database = encrypted_builder(path_text, &key)
             .build()
             .await
             .map_err(storage_error)?;
         let store = Self {
             database,
+            identity,
+            _key: key,
             installation_lock: None,
         };
         let mut connection = store.connection().await?;
@@ -49,10 +70,20 @@ impl TursoStore {
             .await
             .map_err(admission_error)?;
         let initialized = async {
-            crate::schema::create(&transaction, crate::schema::Layout::Plain)
+            crate::schema::create(&transaction, crate::schema::Layout::Product)
                 .await
                 .map_err(|failure| failure.during_creation().into_store())?;
-            crate::schema::inspect(&transaction, crate::schema::Layout::Plain)
+            transaction
+                .execute(
+                    "INSERT INTO product_store_identity VALUES(1,?,?)",
+                    (
+                        store.identity.person.to_string(),
+                        store.identity.device.clone(),
+                    ),
+                )
+                .await
+                .map_err(admission_error)?;
+            crate::schema::inspect(&transaction, crate::schema::Layout::Product)
                 .await
                 .map_err(|failure| failure.during_creation().into_store())
         }
@@ -102,7 +133,10 @@ impl TursoStore {
     /// Open an explicitly selected, already supported profile. The main file
     /// is opened without Create and retained by the IO adapter through both
     /// validation and ordinary use; no missing-file race can create a profile.
-    pub async fn open_existing(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+    pub async fn open_existing(
+        path: impl AsRef<Path>,
+        identity: ProductStoreIdentity,
+    ) -> Result<Self, StoreError> {
         let path = std::fs::canonicalize(path.as_ref()).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 StoreError::new(
@@ -113,18 +147,14 @@ impl TursoStore {
                 storage_error(error)
             }
         })?;
-        let mut probe = std::fs::File::open(&path).map_err(storage_error)?;
+        let probe = std::fs::File::open(&path).map_err(storage_error)?;
         if !probe.metadata().map_err(storage_error)?.is_file() {
             return Err(unsupported_profile());
         }
         if probe.metadata().map_err(storage_error)?.len() < 16 {
             return Err(unsupported_profile());
         }
-        let mut header = [0u8; 16];
-        probe.read_exact(&mut header).map_err(storage_error)?;
-        if &header != b"SQLite format 3\0" {
-            return Err(unsupported_profile());
-        }
+        let key = crate::product_keys::load(&path, &identity)?;
         let path = path
             .to_str()
             .ok_or_else(|| {
@@ -132,23 +162,22 @@ impl TursoStore {
             })?
             .to_owned();
         let io = Arc::new(ExistingProfileIo::new(path.clone()).map_err(storage_error)?);
-        let readonly = Self {
-            database: Builder::new_local(&path)
-                .with_io_impl(io.clone())
-                .read_only(true)
-                .build()
-                .await
-                .map_err(admission_error)?,
-            installation_lock: None,
-        };
-        readonly.validate_existing().await?;
+        let readonly = encrypted_builder(&path, &key)
+            .with_io_impl(io.clone())
+            .read_only(true)
+            .build()
+            .await
+            .map_err(admission_error)?;
+        validate_existing_database(&readonly, &identity).await?;
         drop(readonly);
         let store = Self {
-            database: Builder::new_local(&path)
+            database: encrypted_builder(&path, &key)
                 .with_io_impl(io)
                 .build()
                 .await
                 .map_err(admission_error)?,
+            identity,
+            _key: key,
             installation_lock: None,
         };
         // Recheck the same pinned file after the writable engine is opened.
@@ -156,10 +185,7 @@ impl TursoStore {
         Ok(store)
     }
     async fn validate_existing(&self) -> Result<(), StoreError> {
-        let connection = self.database.connect().map_err(admission_error)?;
-        crate::schema::inspect(&connection, crate::schema::Layout::Plain)
-            .await
-            .map_err(crate::schema::SchemaFailure::into_store)
+        validate_existing_database(&self.database, &self.identity).await
     }
 
     pub(crate) async fn connection(&self) -> Result<Connection, StoreError> {
@@ -167,12 +193,51 @@ impl TursoStore {
     }
 }
 
+fn encrypted_builder(path: &str, key: &RootKey) -> Builder {
+    Builder::new_local(path)
+        .experimental_encryption(true)
+        .with_encryption(turso::EncryptionOpts {
+            cipher: "aes256gcm".into(),
+            hexkey: key.hex(),
+        })
+}
+async fn validate_existing_database(
+    database: &turso::Database,
+    identity: &ProductStoreIdentity,
+) -> Result<(), StoreError> {
+    let connection = database.connect().map_err(admission_error)?;
+    crate::schema::inspect(&connection, crate::schema::Layout::Product)
+        .await
+        .map_err(crate::schema::SchemaFailure::into_store)?;
+    let mut rows = connection
+        .query(
+            "SELECT person_id,device_id FROM product_store_identity WHERE id=1",
+            (),
+        )
+        .await
+        .map_err(admission_error)?;
+    let row = rows
+        .next()
+        .await
+        .map_err(admission_error)?
+        .ok_or_else(unsupported_profile)?;
+    if row.get::<String>(0).map_err(admission_error)? != identity.person.to_string()
+        || row.get::<String>(1).map_err(admission_error)? != identity.device
+        || rows.next().await.map_err(admission_error)?.is_some()
+    {
+        return Err(StoreError::new(
+            StoreErrorCode::Validation,
+            "product store identity does not match installation",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn storage_error(error: impl std::fmt::Display) -> StoreError {
     StoreError::new(StoreErrorCode::Storage, error.to_string())
 }
 
-/// Only admission uses typed corruption as development-reset evidence. Generic
-/// engine errors, busy, permission and I/O failures remain unavailable storage.
+/// Admission preserves typed failures; no error grants reset authority.
 pub(crate) fn admission_error(error: turso::Error) -> StoreError {
     crate::schema::SchemaFailure::from_database(error).into_store()
 }

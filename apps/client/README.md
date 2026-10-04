@@ -87,7 +87,7 @@ pairing address matches that port. Existing normal client/Gateway data, identiti
 Keychain items and pairings are neither imported nor reset. The new profile initially
 needs its own explicit setup/pairing. Calendar/Contacts/Health permissions still apply.
 
-The Agent Vault stays AES-256-GCM encrypted in development; only key custody changes
+The Agent Vault and host product database stay AES-256-GCM encrypted in development; only key custody changes
 to private development files. Gateway development credentials likewise use private files,
 not OS protection. iOS Debug Contacts handle keys use a separate `FloeDevelopmentNative`
 application-support directory. The visible `DEV DATA` banner identifies the Debug profile.
@@ -102,9 +102,9 @@ in Release/Profile. A `FLOE_CORE_LIBRARY_PATH` override must still match the Flu
 The Gateway's ordinary build excludes its development file-store implementation entirely.
 `run-local.sh --release` or `--profile` selects ordinary Gateway custody and port `8431`.
 
-Production encryption coverage is an open gate: the Agent Vault is encrypted, but the
-host Day/source store and some Gateway private files are not currently covered by that
-Vault encryption. OS file permissions are not encryption. See the development-profile
+Production encryption coverage is still an open gate: Agent Vault and the separate
+host Day/source database now have purpose-separated encrypted storage, while Gateway
+private files still need their encryption cutover. OS file permissions are not encryption. See the development-profile
 and encryption-coverage section of the [restoration plan](../../docs/plans/2026-10-04-flutter-ux-restoration.md)
 before treating a production build as qualified for personal data.
 

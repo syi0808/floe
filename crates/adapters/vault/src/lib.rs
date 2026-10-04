@@ -11,6 +11,10 @@ compile_error!("A storage profile is required.");
 #[cfg(all(feature = "development-storage", not(debug_assertions)))]
 compile_error!("Development file-key custody cannot be compiled into a release/profile build.");
 
+mod root_key;
+pub use root_key::RootKey;
+mod product_keys;
+pub use product_keys::ProductStoreIdentity;
 mod engine;
 mod error;
 mod repositories;

@@ -14,7 +14,7 @@ use floe_agent_contract::{
 use floe_execution::ExecutionScope;
 use floe_kernel::{OwnerActor, PersonId};
 use floe_provider_adapters::gateway::{CompositeModelProvider, GatewayCredentialStore};
-use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
+use floe_vault::{EncryptedAgentVault, RootKey, VaultKeyProvider};
 use uuid::Uuid;
 
 pub(super) struct SmokeResolver;
@@ -142,17 +142,17 @@ impl SyntheticProfile {
 pub(super) struct SmokeKeys(Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>);
 
 impl VaultKeyProvider for SmokeKeys {
-    fn load(&self, person: PersonId, vault: Uuid) -> Result<VaultKey, AgentFailure> {
+    fn load(&self, person: PersonId, vault: Uuid) -> Result<RootKey, AgentFailure> {
         self.0
             .lock()
             .map_err(|_| AgentFailure::VaultUnavailable)?
             .get(&(person, vault))
             .copied()
-            .map(VaultKey::from_bytes)
+            .map(RootKey::from_bytes)
             .ok_or(AgentFailure::VaultUnavailable)
     }
 
-    fn insert(&self, person: PersonId, vault: Uuid, key: &VaultKey) -> Result<(), AgentFailure> {
+    fn insert(&self, person: PersonId, vault: Uuid, key: &RootKey) -> Result<(), AgentFailure> {
         let mut keys = self.0.lock().map_err(|_| AgentFailure::VaultUnavailable)?;
         if keys.contains_key(&(person, vault)) {
             return Err(AgentFailure::VaultUnavailable);

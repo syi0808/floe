@@ -30,10 +30,15 @@ not a network pairing policy: an explicitly selected Gateway still requires its
 ordinary verified identity and administrator approval. Cross-profile pairing is
 not currently prohibited by a signed profile claim.
 
-This selection does not make every persisted payload encrypted. The host product
-store remains distinct from EncryptedAgentVault and is currently plaintext; Gateway
-private-file permissions are likewise not a blanket encryption guarantee. Production
-encryption coverage is a separate open design/qualification gate in the active plan.
+The host product store remains distinct from EncryptedAgentVault but now uses its
+own AES-256-GCM encrypted database/WAL and purpose-separated root key. Its encrypted
+identity row must match the admitted Person/device before Day activation. Only a
+fresh installation can create that key; existing open never falls back to plaintext
+or recreates missing keys. Production loads the product key from its separate OS
+keyring service; development uses an isolated private file. Shared key bytes and
+physical custody mechanics do not merge the two stores' lifecycle or semantic owners.
+Gateway private-file permissions are still not a blanket encryption guarantee;
+Gateway payload encryption remains an open gate in the active plan.
 
 ## General Conversation
 
@@ -86,7 +91,7 @@ Inference and Experts retain ownership of attempt and Task semantics.
 
 ### Host composition
 
-`floe_app::open_default` admits one internal installation from the application-support directory; ordinary startup has no user-facing profile selection or setup wizard. Rust owns the stable Person/device identity and creates the plain store on first use. `floe_app::open` remains an explicit existing-database diagnostic entry point. It constructs the host runtime, product store, Day owner, native acquisition brokers, source-lease registry and initially locked `ProductGatewayLeaseRegistry`. `CallerContext` retains the verified identity and host runtime epoch. These host-lifetime resources exist independently of an encrypted ready generation or a Conversation Session.
+`floe_app::open_default` admits one internal installation from the application-support directory; ordinary startup has no user-facing profile selection or setup wizard. Rust owns the stable Person/device identity and creates the encrypted product store on first use. `floe_app::open` remains an explicit existing-database diagnostic entry point. It constructs the host runtime, product store, Day owner, native acquisition brokers, source-lease registry and initially locked `ProductGatewayLeaseRegistry`. `CallerContext` retains the verified identity and host runtime epoch. These host-lifetime resources exist independently of an encrypted ready generation or a Conversation Session.
 
 The private Vault lifecycle queue serializes Create, Unlock and Lock, retaining receipts bound to the admitted caller and operation ID. Create/Unlock passes that identity and bounded cancellation scope to `ReadyGeneration::activate`. Activation checks the Vault Person, activates Task recovery first, advances the Conversation executor fence, constructs the source adapters and shared Inference service, and assembles the Connections, Experts, Knowledge, Actions and Conversation owners. Each owner performs its own activation before App publishes `ReadyOwners` and reports `VaultState::Ready`. Conversation starts retained paged recovery instead of draining an unbounded backlog during activation. A failed activation closes constructed owners, retires its exact Gateway generation and seals the Vault. Vault lifecycle recovery is projected by that physical owner; FFI only converts the result. Timeout, interruption, storage retirement and failed lock closure report the actual reload/seal requirement, without source/model actions or automatic retry.
 
@@ -271,7 +276,7 @@ The shared Transform protocol has associated input/output types. HealthTransform
 Feature requests that encounter an intrinsic VaultUnavailable/VaultLocked failure retain the Vault lifecycle owner's readiness/recovery projection through AppWire. Generic provider/storage errors are not relabeled as Vault failures. This lets the shared client controller retire its displayed readiness and expose the owner-approved reopen action after a sealed generation, rather than leaving each feature permanently gated behind a generic error.
 
 
-Vault status is a pure query and never occupies a command-receipt observer slot. Recovery first rejoins any pending immutable lifecycle command, then reads current status. A sealed published generation is reported as Locked; Unlock retires and drains it on the sole lifecycle queue before reopening. Released lifecycle results are archived as exact physical receipts in the plain store before they leave the bounded memory cache. Replaying an archived ID only returns its original outcome and never executes or retires the current generation. Unreleased/in-flight work remains bounded; an archival failure retains the in-memory receipt.
+Vault status is a pure query and never occupies a command-receipt observer slot. Recovery first rejoins any pending immutable lifecycle command, then reads current status. A sealed published generation is reported as Locked; Unlock retires and drains it on the sole lifecycle queue before reopening. Released lifecycle results are archived as exact physical receipts in the encrypted product store before they leave the bounded memory cache. Replaying an archived ID only returns its original outcome and never executes or retires the current generation. Unreleased/in-flight work remains bounded; an archival failure retains the in-memory receipt.
 
 
 ### Conversation history windows

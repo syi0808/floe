@@ -51,8 +51,13 @@ pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
         .ok_or(AppOpenError::Host(HostError::IdentityUnavailable))?;
     let runtime = runtime()?;
     let database_path = std::path::PathBuf::from(path);
+    let storage_identity = floe_vault::ProductStoreIdentity::new(
+        floe_kernel::PersonId(identity.person_id),
+        identity.device_id.clone(),
+    )
+    .map_err(|error| AppOpenError::Store(error.to_string()))?;
     let store = execute_on_runtime(&runtime, async move {
-        floe_vault::TursoStore::open_existing(&database_path).await
+        floe_vault::TursoStore::open_existing(&database_path, storage_identity).await
     })
     .map_err(|error| AppOpenError::Store(error.to_string()))?;
     compose(
@@ -63,8 +68,8 @@ pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
     )
 }
 
-/// Open the one internal installation. Fresh identity and plain-store creation
-/// do not create/unlock an encrypted Vault or any provider credential.
+/// Open the one internal installation and its encrypted product store. Its own
+/// root-key custody is independent of Agent Vault activation or provider credentials.
 pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
     let runtime = runtime()?;
     let support_directory =
@@ -73,13 +78,18 @@ pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, 
         .map_err(installation_error)?;
     let database_path = installation.database_path().to_path_buf();
     let admission = installation.database_admission();
+    let storage_identity = floe_vault::ProductStoreIdentity::new(
+        floe_kernel::PersonId(installation.identity().person_id()),
+        installation.identity().device_id().to_owned(),
+    )
+    .map_err(|error| AppOpenError::Store(error.to_string()))?;
     let store = execute_on_runtime(&runtime, async move {
         match admission {
             floe_provider_adapters::LocalDatabaseAdmission::Existing => {
-                floe_vault::TursoStore::open_existing(&database_path).await
+                floe_vault::TursoStore::open_existing(&database_path, storage_identity).await
             }
             floe_provider_adapters::LocalDatabaseAdmission::CreateNew => {
-                floe_vault::TursoStore::create_new(&database_path).await
+                floe_vault::TursoStore::create_new(&database_path, storage_identity).await
             }
         }
     })

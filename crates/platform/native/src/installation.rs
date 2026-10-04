@@ -1,5 +1,5 @@
 //! Internal local installation admission. No Vault key or provider credential
-//! is created here. The lock remains held while App validates the plain store.
+//! is created here. The lock remains held while App validates the encrypted product store.
 
 use std::{
     fs::{self, File, OpenOptions},
@@ -128,7 +128,7 @@ impl LocalInstallation {
         self.admission
     }
 
-    /// Publish ready after App has opened and validated the plain database.
+    /// Publish ready after App has opened and validated the encrypted product database.
     /// Re-read physical identity before changing only the installation phase.
     pub fn complete(&mut self) -> Result<(), NativeInstallationError> {
         let current = read_identity(&self.database_path)?;

@@ -3,7 +3,7 @@
 use std::sync::OnceLock;
 
 use floe_agent_contract::AgentFailure;
-use floe_vault::{VaultKey, VaultKeyProvider};
+use floe_vault::{RootKey, VaultKeyProvider};
 use floe_kernel::PersonId;
 use jni::{
     JNIEnv, JavaVM,
@@ -24,21 +24,21 @@ static STATE: OnceLock<AndroidVaultKeyState> = OnceLock::new();
 pub(crate) struct AndroidVaultKeys;
 
 impl VaultKeyProvider for AndroidVaultKeys {
-    fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<VaultKey, AgentFailure> {
+    fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<RootKey, AgentFailure> {
         let bytes = call_load(person_id, vault_id)?;
         if bytes.len() != 32 {
             return Err(AgentFailure::VaultUnavailable);
         }
         let mut key = [0; 32];
         key.copy_from_slice(&bytes);
-        Ok(VaultKey::from_bytes(key))
+        Ok(RootKey::from_bytes(key))
     }
 
     fn insert(
         &self,
         person_id: PersonId,
         vault_id: Uuid,
-        key: &VaultKey,
+        key: &RootKey,
     ) -> Result<(), AgentFailure> {
         let state = STATE.get().ok_or(AgentFailure::VaultUnavailable)?;
         let mut env = state

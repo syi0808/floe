@@ -194,7 +194,7 @@ async fn validate_forgotten_on(
     device: &str,
     operation_id: Uuid,
     generation: u64,
-) -> Result<(), AgentFailure> {
+) -> Result<GatewaySummary, AgentFailure> {
     let operation = pairing_on(connection, person, operation_id)
         .await?
         .ok_or(AgentFailure::VaultUnavailable)?;
@@ -230,7 +230,10 @@ async fn validate_forgotten_on(
     {
         return Err(AgentFailure::PolicyDenied);
     }
-    Ok(())
+    match receipt.payload {
+        ConnectionsPayload::GatewayForgotten(summary) => Ok(summary),
+        _ => Err(AgentFailure::PolicyDenied),
+    }
 }
 
 fn pending_for(expectation: &GatewayCredentialExpectation, operation: Uuid) -> bool {
@@ -868,9 +871,8 @@ impl<K: VaultKeyProvider> GatewayRegistry for EncryptedAgentVault<K> {
                         operation_id,
                         generation,
                     } => {
-                        validate_forgotten_on(&tx, person, device, operation_id, generation)
-                            .await?;
-                        return Ok(None);
+                        let summary = validate_forgotten_on(&tx, person, device, operation_id, generation).await?;
+                        return Ok(Some(GatewayObservation::Forgotten { summary }));
                     }
                     GatewayCredentialExpectation::Pending { operation_id }
                     | GatewayCredentialExpectation::Committed { operation_id, .. } => operation_id,

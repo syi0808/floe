@@ -8,7 +8,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-use super::{AgentFailure, PersonId, Uuid, VaultKey, VaultKeyProvider, VaultKeyReadFailure};
+use super::{AgentFailure, PersonId, RootKey, Uuid, VaultKeyProvider, VaultKeyReadFailure};
 
 #[derive(Clone)]
 pub struct DevelopmentVaultKeys {
@@ -29,17 +29,6 @@ impl DevelopmentVaultKeys {
         Ok(Self {
             root: vault_root.to_path_buf(),
         })
-    }
-
-    fn directory(&self) -> PathBuf {
-        self.root.join(".development-keys")
-    }
-
-    fn path(&self, person: PersonId, vault: Uuid) -> Result<PathBuf, AgentFailure> {
-        if person.0.is_nil() || vault.is_nil() {
-            return Err(AgentFailure::VaultUnavailable);
-        }
-        Ok(self.directory().join(format!("{person}-{vault}.key")))
     }
 }
 
@@ -73,90 +62,112 @@ impl VaultKeyProvider for DevelopmentVaultKeys {
         &self,
         person: PersonId,
         vault: Uuid,
-    ) -> Result<VaultKey, VaultKeyReadFailure> {
-        let path = self
-            .path(person, vault)
-            .map_err(VaultKeyReadFailure::Unavailable)?;
-        for directory in [&self.root, &self.directory()] {
-            private_directory(directory, false).map_err(|error| {
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    VaultKeyReadFailure::Missing
-                } else {
-                    VaultKeyReadFailure::Unavailable(AgentFailure::VaultUnavailable)
-                }
-            })?;
-        }
-        let mut file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    VaultKeyReadFailure::Missing
-                } else {
-                    VaultKeyReadFailure::Unavailable(AgentFailure::VaultUnavailable)
-                }
-            })?;
-        let metadata = file
-            .metadata()
-            .map_err(|_| VaultKeyReadFailure::Unavailable(AgentFailure::VaultUnavailable))?;
-        if !metadata.is_file()
-            || metadata.mode() & 0o077 != 0
-            || metadata.nlink() != 1
-            || metadata.uid() != unsafe { libc::geteuid() }
-        {
-            return Err(VaultKeyReadFailure::Unavailable(
-                AgentFailure::VaultUnavailable,
-            ));
-        }
-        if metadata.len() != 32 {
-            return Err(VaultKeyReadFailure::Malformed);
-        }
-        let mut bytes = Zeroizing::new([0u8; 32]);
-        file.read_exact(bytes.as_mut())
-            .map_err(|_| VaultKeyReadFailure::Unavailable(AgentFailure::VaultUnavailable))?;
-        let mut extra = [0u8; 1];
-        if file
-            .read(&mut extra)
-            .map_err(|_| VaultKeyReadFailure::Unavailable(AgentFailure::VaultUnavailable))?
-            != 0
-        {
-            return Err(VaultKeyReadFailure::Malformed);
-        }
-        Ok(VaultKey::from_bytes(*bytes))
+    ) -> Result<RootKey, VaultKeyReadFailure> {
+        let name = key_name(person, vault).map_err(VaultKeyReadFailure::Unavailable)?;
+        read_file_key(&self.root, &name)
     }
-
-    fn load(&self, person: PersonId, vault: Uuid) -> Result<VaultKey, AgentFailure> {
+    fn load(&self, person: PersonId, vault: Uuid) -> Result<RootKey, AgentFailure> {
         self.inspect_existing(person, vault)
             .map_err(|_| AgentFailure::VaultUnavailable)
     }
-
-    fn insert(&self, person: PersonId, vault: Uuid, key: &VaultKey) -> Result<(), AgentFailure> {
-        let path = self.path(person, vault)?;
-        private_directory(&self.root, false).map_err(unavailable)?;
-        let directory = self.directory();
-        private_directory(&directory, true).map_err(unavailable)?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)
-            .map_err(unavailable)?;
-        file.write_all(key.as_bytes()).map_err(unavailable)?;
-        file.sync_all().map_err(unavailable)?;
-        File::open(&directory)
-            .and_then(|file| file.sync_all())
-            .map_err(unavailable)?;
-        File::open(&self.root)
-            .and_then(|file| file.sync_all())
-            .map_err(unavailable)?;
-        // No overwrite or cleanup after uncertainty. The Vault creation marker
-        // and the exact key remain available for explicit recovery.
-        let observed = self.load(person, vault)?;
-        if observed.as_bytes() != key.as_bytes() {
-            return Err(AgentFailure::VaultUnavailable);
-        }
-        Ok(())
+    fn insert(&self, person: PersonId, vault: Uuid, key: &RootKey) -> Result<(), AgentFailure> {
+        create_file_key(&self.root, &key_name(person, vault)?, key)
     }
+}
+fn key_name(person: PersonId, vault: Uuid) -> Result<String, AgentFailure> {
+    if person.0.is_nil() || vault.is_nil() {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    Ok(format!("{person}-{vault}.key"))
+}
+fn key_path(root: &Path, name: &str) -> Result<PathBuf, AgentFailure> {
+    if !root.is_absolute()
+        || root
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+        || name.is_empty()
+        || Path::new(name).file_name().and_then(|name| name.to_str()) != Some(name)
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    Ok(root.join(".development-keys").join(name))
+}
+pub(crate) fn read_file_key(root: &Path, name: &str) -> Result<RootKey, VaultKeyReadFailure> {
+    let path = key_path(root, name).map_err(VaultKeyReadFailure::Unavailable)?;
+    let directory = root.join(".development-keys");
+    for directory in [root, directory.as_path()] {
+        private_directory(directory, false).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                VaultKeyReadFailure::Missing
+            } else {
+                VaultKeyReadFailure::Unavailable(AgentFailure::VaultUnavailable)
+            }
+        })?;
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                VaultKeyReadFailure::Missing
+            } else {
+                VaultKeyReadFailure::Unavailable(AgentFailure::VaultUnavailable)
+            }
+        })?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| VaultKeyReadFailure::Unavailable(AgentFailure::VaultUnavailable))?;
+    if !metadata.is_file()
+        || metadata.mode() & 0o077 != 0
+        || metadata.nlink() != 1
+        || metadata.uid() != unsafe { libc::geteuid() }
+    {
+        return Err(VaultKeyReadFailure::Unavailable(
+            AgentFailure::VaultUnavailable,
+        ));
+    }
+    if metadata.len() != 32 {
+        return Err(VaultKeyReadFailure::Malformed);
+    }
+    let mut bytes = Zeroizing::new([0u8; 32]);
+    file.read_exact(bytes.as_mut())
+        .map_err(|_| VaultKeyReadFailure::Unavailable(AgentFailure::VaultUnavailable))?;
+    let mut extra = [0u8; 1];
+    if file
+        .read(&mut extra)
+        .map_err(|_| VaultKeyReadFailure::Unavailable(AgentFailure::VaultUnavailable))?
+        != 0
+    {
+        return Err(VaultKeyReadFailure::Malformed);
+    }
+    Ok(RootKey::from_bytes(*bytes))
+}
+pub(crate) fn create_file_key(root: &Path, name: &str, key: &RootKey) -> Result<(), AgentFailure> {
+    let path = key_path(root, name)?;
+    private_directory(root, false).map_err(unavailable)?;
+    let directory = root.join(".development-keys");
+    private_directory(&directory, true).map_err(unavailable)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(unavailable)?;
+    file.write_all(key.as_bytes()).map_err(unavailable)?;
+    file.sync_all().map_err(unavailable)?;
+    File::open(&directory)
+        .and_then(|file| file.sync_all())
+        .map_err(unavailable)?;
+    File::open(root)
+        .and_then(|file| file.sync_all())
+        .map_err(unavailable)?;
+    // No overwrite or cleanup after uncertainty. The Vault creation marker
+    // and the exact key remain available for explicit recovery.
+    let observed = read_file_key(root, name).map_err(|_| AgentFailure::VaultUnavailable)?;
+    if observed.as_bytes() != key.as_bytes() {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    Ok(())
 }

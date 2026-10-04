@@ -5,7 +5,7 @@ use turso::Connection;
 use crate::{StoreError, StoreErrorCode, schema_sql};
 mod encrypted;
 mod gateway;
-mod plain;
+mod product;
 
 pub(crate) const ENCRYPTED_LAYOUT_VERSION: i64 = 3;
 const MAX_OBJECTS: usize = 512;
@@ -45,12 +45,12 @@ impl SchemaObject {
 }
 #[derive(Clone, Copy)]
 pub(crate) enum Layout {
-    Plain,
+    Product,
     Encrypted,
 }
 #[derive(Clone, Copy)]
 pub(crate) enum Family {
-    Plain,
+    Product,
     Core,
     Archive,
     Knowledge,
@@ -69,7 +69,7 @@ pub(crate) enum Family {
 impl Family {
     fn objects(self) -> &'static [SchemaObject] {
         match self {
-            Self::Plain => plain::OBJECTS,
+            Self::Product => product::OBJECTS,
             Self::Core => encrypted::CORE,
             Self::Archive => encrypted::ARCHIVE,
             Self::Knowledge => encrypted::KNOWLEDGE,
@@ -95,7 +95,7 @@ impl Family {
 impl Layout {
     fn families(self) -> &'static [Family] {
         match self {
-            Self::Plain => &[Family::Plain],
+            Self::Product => &[Family::Product],
             Self::Encrypted => &[
                 Family::Core,
                 Family::Archive,
@@ -281,8 +281,8 @@ pub(crate) async fn inspect_family(
     family: Family,
 ) -> Result<(), SchemaFailure> {
     let stored = inventory(connection).await?;
-    let layout = if matches!(family, Family::Plain) {
-        Layout::Plain
+    let layout = if matches!(family, Family::Product) {
+        Layout::Product
     } else {
         Layout::Encrypted
     };

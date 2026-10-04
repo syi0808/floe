@@ -9,6 +9,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+use crate::RootKey;
 use floe_access::{ContextDependency, DependencyCoverage};
 use floe_agent_contract::{AgentFailure, DataClass, SessionProtection};
 use floe_conversation::{AgentBudget, AgentSession, SessionStore};
@@ -17,7 +18,6 @@ use floe_kernel::PersonId;
 use subtle::ConstantTimeEq;
 use turso::{Builder, EncryptionOpts};
 use uuid::Uuid;
-use zeroize::Zeroizing;
 
 mod access_grants;
 mod agent_actions;
@@ -34,11 +34,11 @@ mod expert_actions;
 pub(crate) mod expert_binding_reviews;
 pub use expert_actions::VaultExpertProposalReader;
 #[cfg(feature = "development-storage")]
-mod development_keys;
+pub(crate) mod development_keys;
 mod gateway_authority;
 mod gateway_pairing_store;
 #[cfg(feature = "os-keyring")]
-mod keyring;
+pub(crate) mod keyring;
 mod learning;
 mod registry;
 pub use gateway_authority::{VaultAuthorizationSigner, VaultEnrollmentSigner};
@@ -63,44 +63,16 @@ pub enum VaultKeyReadFailure {
 }
 pub use session_archive::*;
 
-pub struct VaultKey(Zeroizing<[u8; 32]>);
-
-impl VaultKey {
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(Zeroizing::new(bytes))
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-
-    fn generate() -> Result<Self, AgentFailure> {
-        let mut key = Self::from_bytes([0; 32]);
-        getrandom::fill(key.0.as_mut()).map_err(|_| AgentFailure::VaultUnavailable)?;
-        Ok(key)
-    }
-
-    fn hex(&self) -> String {
-        const DIGITS: &[u8] = b"0123456789abcdef";
-        let mut output = String::with_capacity(64);
-        for byte in self.as_bytes() {
-            output.push(DIGITS[(byte >> 4) as usize] as char);
-            output.push(DIGITS[(byte & 15) as usize] as char);
-        }
-        output
-    }
-}
-
 pub trait VaultKeyProvider: Send + Sync {
-    fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<VaultKey, AgentFailure>;
+    fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<RootKey, AgentFailure>;
 
-    /// Preflight uses the same provider as ordinary open. Only a provider that
-    /// can prove exact absence or malformed material may classify it that way.
+    /// Classified exact-key reads use the same custody as ordinary open.
+    /// Only proven absence or malformed bytes receive those classifications.
     fn inspect_existing(
         &self,
         person_id: PersonId,
         vault_id: Uuid,
-    ) -> Result<VaultKey, VaultKeyReadFailure> {
+    ) -> Result<RootKey, VaultKeyReadFailure> {
         self.load(person_id, vault_id)
             .map_err(VaultKeyReadFailure::Unavailable)
     }
@@ -109,13 +81,13 @@ pub trait VaultKeyProvider: Send + Sync {
         &self,
         person_id: PersonId,
         vault_id: Uuid,
-        key: &VaultKey,
+        key: &RootKey,
     ) -> Result<(), AgentFailure>;
 }
 
 pub struct EncryptedAgentVault<Keys> {
     database: turso::Database,
-    key: VaultKey,
+    key: RootKey,
     keys: Keys,
     person_id: PersonId,
     vault_id: Uuid,
@@ -214,7 +186,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         File::open(root)
             .and_then(|root| root.sync_all())
             .map_err(unavailable)?;
-        let key = VaultKey::generate()?;
+        let key = RootKey::generate()?;
         keys.insert(person_id, vault_id, &key)
             .map_err(unavailable)?;
         let stored_key = keys.load(person_id, vault_id).map_err(unavailable)?;
@@ -667,7 +639,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 }
 
-async fn encrypted_database(path: &Path, key: &VaultKey) -> Result<turso::Database, AgentFailure> {
+async fn encrypted_database(path: &Path, key: &RootKey) -> Result<turso::Database, AgentFailure> {
     Builder::new_local(path.to_str().ok_or(AgentFailure::VaultUnavailable)?)
         .experimental_encryption(true)
         .with_encryption(EncryptionOpts {

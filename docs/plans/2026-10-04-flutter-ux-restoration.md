@@ -570,3 +570,69 @@ keep the same payload protection paths while substituting isolated file custody.
 This section is a target/sequence, not an implementation claim. The Connections
 screen/capability restoration continues after this newly requested storage
 prerequisite; its remaining matrix and command-lifecycle issues remain open.
+
+### Pagination/correlation review adjudication
+
+Opus found no pagination-core defect. Root accepts the unsigned catalog correlation
+risk: Gateway source identity must match the pinned producer's execution owner,
+instance/fingerprint/audience, and may never attach a device-native source. Native
+state/identity and setup now share the existing canonical Apple-owner derivation.
+Reject disconnected/unavailable-with-identity and connected-without-identity
+catalog combinations; allow Connecting with an existing source because the actual
+Go catalog can emit that while a new attempt is pending.
+
+Overview is a current-state projection, not an unbounded history browser. Gateway
+registry reads the exact current Forgotten receipt via its durable expectation;
+overview no longer accumulates every historical Forgotten summary or old Gateway
+integration. Exact historical command/Gateway lookup remains available for replay.
+
+The suggestion to run all recovery branches after corruption is not applied
+blindly: ReadyGeneration aborts and drains the entire generation on activation
+failure, so spawning more independent branches before returning the same error
+would not establish recovery. Preserve fail-closed corruption semantics; a bounded
+independent recovery/availability design belongs to the explicit command-lifecycle
+stage. Source epoch-change presentation remains a known missing UI state, not a
+reason to attach stale authority. Snapshot revision and the other repository
+limits are pre-existing open contracts, not claimed fixed here.
+
+### Client product encryption implementation checkpoint
+
+Implemented a distinct product-store key identity bound to Person/device, with
+shared secret-byte/private-file/OS-custody mechanics and unchanged Agent Vault key
+namespace. The three App creation/open callers pass admitted installation identity.
+Fresh product creation reserves the file, creates its exact key, and seeds encrypted
+identity/schema in one transaction before checkpoint/fsync and installation Ready.
+Existing open retains pinned-file IO, decrypts read-only first and checks the stored
+identity before writable owner activation. The former Plain layout is now named
+Product; there is no plaintext decoder or missing-key fallback. Existing older local
+profiles need an explicit fresh development profile; they are preserved, not migrated
+or reset automatically. The dormant Android source receives only the mechanical key
+type rename; no Android functionality or qualification is added.
+
+Actual development FFI qualified Day note creation/read/restart with a synthetic
+sentinel absent from the main file and WAL. Wrong/missing product key failed without
+replacement; restoring the exact original key reopened the note. Separate direct
+store fixtures verified copied key material cannot adopt another Person/device,
+preexisting/partial files cannot create another key, and the product file is0600.
+These are client storage results, not Gateway encryption completion or live Keychain
+permission qualification. Apple479b Debug/Release builds passed before this encryption
+change; newer Apple qualification is still required. The earlier Release app shell
+was universal while bundled Floe dylibs were arm64, so only arm64 bundle compatibility
+was established, not Intel support.
+
+The combined client encryption/correlation working tree passed default Rust workspace
+and doctests, both FFI feature builds, 35 Flutter behavior/boundary fixtures, actual
+Day encrypted restart and canonical path/lock probes. A real disposable Go development
+Gateway plus Rust FFI also completed initial pairing, dashboard administrator approval,
+local Forget and encrypted-client restart; overview retained the exact current Forgotten
+state and removed stale Hosted cards. No Mac user data or real provider was involved.
+
+That end-to-end exercise exposed a separate reproducible re-pairing defect: after
+Forget, the second administrator approval returns `pairing_conflict`. Metadata-only
+inspection of the synthetic state proved expected/current Trust revision both2,
+no pending cleanup and no duplicate new client, but the requested issuer key already
+exists. Agent Vault retains one `remote_authority_owner` key across pairing attempts;
+Go ActivatePairing rejects any issuer key already enrolled or revoked. This is an
+existing lifecycle contract mismatch, not a reason to weaken revocation, erase state
+or silently generate replacement keys. It is a next correctness design/qualification
+blocker. The full two-cycle test is FAILED; only its first cycle and restart passed.

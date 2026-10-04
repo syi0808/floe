@@ -169,6 +169,7 @@ impl ConnectionsService {
                 failure: None,
             };
             let expected = match observed {
+                GatewayObservation::Forgotten { .. } => return Err(AgentFailure::Conflict),
                 GatewayObservation::Paired { binding, .. } => {
                     GatewayForgetExpectation::Paired(binding)
                 }
@@ -223,20 +224,26 @@ impl ConnectionsService {
         {
             gateways.push(self.project_gateway(observed.summary().clone())?)
         }
+        let live_gateway_ref = gateways
+            .iter()
+            .find(|gateway| gateway.state != GatewayState::Forgotten)
+            .map(|gateway| gateway.gateway_ref);
         let mut integrations = Vec::new();
         let mut revision = 1u64;
         while let Some(record) = records.next().await? {
             revision = revision.max(record.revision);
             match record.payload {
                 ConnectionsPayload::Integration(integration) => {
-                    integrations.push(self.integration_summary(actor, &integration, scope).await?)
-                }
-                ConnectionsPayload::GatewayForgotten(summary)
-                    if !gateways
-                        .iter()
-                        .any(|gateway| gateway.gateway_ref == summary.gateway_ref) =>
-                {
-                    gateways.push(summary)
+                    let current_target = match &integration.target {
+                        IntegrationBinding::Device { device_id } => device_id == &actor.device_id,
+                        IntegrationBinding::Gateway { gateway_ref, .. } => {
+                            Some(*gateway_ref) == live_gateway_ref
+                        }
+                    };
+                    if current_target {
+                        integrations
+                            .push(self.integration_summary(actor, &integration, scope).await?)
+                    }
                 }
                 _ => {}
             }
@@ -2232,7 +2239,11 @@ impl ConnectionsService {
                 .sources
                 .load(actor.person_id, &connection)
                 .await
-                .map_err(source_error)?;
+                .map_err(source_error)?
+                .filter(|source| {
+                    source.execution_owner_id().as_str()
+                        == floe_access::apple_execution_owner(&actor.device_id)
+                });
             let revision = current.as_ref().map_or(1, SourceConnection::revision);
             let available = match connector {
                 "health.apple" => cfg!(target_os = "ios"),
@@ -2317,9 +2328,10 @@ impl ConnectionsService {
         } else {
             ResourceMode::Selected
         };
-        let owner =
-            floe_context_contract::ExecutionOwnerId::try_new(format!("apple:{}", actor.device_id))
-                .map_err(|_| AgentFailure::InvalidInput)?;
+        let owner = floe_context_contract::ExecutionOwnerId::try_new(
+            floe_access::apple_execution_owner(&actor.device_id),
+        )
+        .map_err(|_| AgentFailure::InvalidInput)?;
         let source = SourceConnection::establish(
             actor.person_id,
             connector,
@@ -3208,7 +3220,7 @@ fn integration_source_matches(integration: &IntegrationRecord, source: &SourceCo
         IntegrationBinding::Device { device_id } => {
             identity.execution_owner_id.as_str() == floe_access::apple_execution_owner(device_id)
         }
-        IntegrationBinding::Gateway { .. } => true,
+        IntegrationBinding::Gateway { .. } => !native_source(source),
     };
     owner_matches
         && source.connection_id() == &identity.connection_id

@@ -202,6 +202,9 @@ pub trait RemoteIntegrationPort: Send + Sync {
 }
 #[derive(Clone, Debug)]
 pub enum GatewayObservation {
+    Forgotten {
+        summary: GatewaySummary,
+    },
     Paired {
         summary: GatewaySummary,
         binding: VerifiedGatewayBinding,
@@ -214,7 +217,9 @@ pub enum GatewayObservation {
 impl GatewayObservation {
     pub fn summary(&self) -> &GatewaySummary {
         match self {
-            Self::Paired { summary, .. } | Self::RepairRequired { summary, .. } => summary,
+            Self::Paired { summary, .. }
+            | Self::RepairRequired { summary, .. }
+            | Self::Forgotten { summary } => summary,
         }
     }
 }

@@ -296,6 +296,18 @@ impl RemoteIntegrationPort for GatewayIntegrationAdapter {
             {
                 return Err(IntegrationError::InvalidResponse);
             }
+            let producer = self
+                .store
+                .trust()
+                .pinned_producer()
+                .await
+                .map_err(integration_failure)?;
+            if producer.instance_id != query.expected.producer_instance
+                || producer.fingerprint != query.expected.producer_key_fingerprint
+                || producer.audience != query.expected.producer_audience
+            {
+                return Err(IntegrationError::ForeignIdentity);
+            }
             let mut entries = Vec::new();
             let mut ids = std::collections::BTreeSet::new();
             for value in wire.connectors {
@@ -332,6 +344,12 @@ impl RemoteIntegrationPort for GatewayIntegrationAdapter {
                     "disconnected" | "unavailable" => IntegrationState::Unavailable,
                     _ => return Err(IntegrationError::InvalidResponse),
                 };
+                if (status == "connected" && value.get("connection_id").is_none())
+                    || (matches!(status, "disconnected" | "unavailable")
+                        && value.get("connection_id").is_some())
+                {
+                    return Err(IntegrationError::InvalidResponse);
+                }
                 entries.push(IntegrationDescriptor {
                     connector_id: floe_context_contract::ConnectorId::try_new(id)
                         .map_err(|_| IntegrationError::InvalidResponse)?,
@@ -339,7 +357,7 @@ impl RemoteIntegrationPort for GatewayIntegrationAdapter {
                     category: connector_category(id).into(),
                     setup_kind,
                     state,
-                    source_identity: catalog_source_identity(&value)?,
+                    source_identity: catalog_source_identity(&value, &producer.execution_owner)?,
                     catalog_revision: wire.revision,
                     initial_selection: IntegrationSelection::GatewayManaged,
                 });
@@ -517,6 +535,7 @@ fn validate_connector(id: &str) -> Result<(), IntegrationError> {
 }
 fn catalog_source_identity(
     value: &serde_json::Value,
+    expected_owner: &str,
 ) -> Result<Option<IntegrationSourceIdentity>, IntegrationError> {
     let Some(connection) = value.get("connection_id") else {
         if ["execution_owner", "incarnation", "epoch"]
@@ -539,6 +558,9 @@ fn catalog_source_identity(
             .ok_or(IntegrationError::InvalidResponse)?,
     )
     .map_err(|_| IntegrationError::InvalidResponse)?;
+    if execution_owner_id.as_str() != expected_owner {
+        return Err(IntegrationError::ForeignIdentity);
+    }
     let incarnation = Uuid::parse_str(
         value["incarnation"]
             .as_str()

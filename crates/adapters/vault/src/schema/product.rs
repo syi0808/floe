@@ -1,7 +1,11 @@
-//! Fixed plain layout. No existing-store admission creates objects.
+//! Fixed product layout, physically encrypted at rest. No existing-store admission creates objects.
 use super::SchemaObject;
 
 pub(super) const OBJECTS: &[SchemaObject] = &[
+    SchemaObject::table(
+        "product_store_identity",
+        "CREATE TABLE product_store_identity(id INTEGER PRIMARY KEY CHECK(id=1),person_id TEXT NOT NULL,device_id TEXT NOT NULL)",
+    ),
     SchemaObject::table(
         "vault_lifecycle_receipts",
         "CREATE TABLE vault_lifecycle_receipts(operation_id TEXT PRIMARY KEY,payload TEXT NOT NULL)",
