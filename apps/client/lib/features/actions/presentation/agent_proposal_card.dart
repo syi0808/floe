@@ -151,8 +151,10 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                 ? destinations.single.destinationRef
                 : null;
           case ExistingActionProposal():
-            actionsByIntent[_actionKey(receipt, selectedArtifact)] =
-                preview.action;
+            _acceptAction(
+              _actionKey(receipt, selectedArtifact),
+              preview.action,
+            );
             destinations = const [];
             destinationRef = null;
         }
@@ -225,6 +227,19 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
     }
   }
 
+  void _acceptAction(String key, CalendarAction observed) {
+    final current = actionsByIntent[key];
+    if (current != null) {
+      if (observed.isOlderObservationThan(current)) return;
+      if (!observed.follows(current)) {
+        throw StateError(
+          'The Action observation changed identity or regressed.',
+        );
+      }
+    }
+    actionsByIntent[key] = observed;
+  }
+
   Future<void> _refreshAction(CalendarAction action) async {
     final gateway = widget.controller.owners.actions;
     final receipt = widget.message.executionReceipt;
@@ -243,16 +258,8 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
     try {
       final observed = await gateway.inspect(action.actionRef);
       if (!mounted || epoch != _messageEpoch) return;
-      final current = actionsByIntent[key] ?? action;
-      if (!observed.isOlderObservationThan(current) &&
-          !observed.follows(current)) {
-        throw StateError(
-          'The Action observation changed identity or regressed.',
-        );
-      }
       setState(() {
-        if (!observed.isOlderObservationThan(current))
-          actionsByIntent[key] = observed;
+        _acceptAction(key, observed);
         submitting = false;
       });
     } on Object catch (failure) {
@@ -279,7 +286,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
             : currentError.message;
       }
       if (loadingDestinations) return strings.actionLoading;
-      if (!expanded) return 'Review before adding to your calendar.';
+      if (!expanded) return 'Review this proposal.';
       if (destinationRef != null) return 'Ready to add to your calendar.';
       return 'Choose where to add this proposal.';
     }

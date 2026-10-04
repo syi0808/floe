@@ -1080,7 +1080,7 @@ sealed class ActionProposalPreview {
         final choices = raw
             .map(
               (value) => ActionDestinationChoice.fromJson(
-                Map<String, dynamic>.from(value as Map),
+                _object(value, 'proposal.destination'),
               ),
             )
             .toList();
@@ -1088,7 +1088,7 @@ sealed class ActionProposalPreview {
             choices.length)
           throw const FormatException('Duplicate proposal choice.');
         final schedule = ActionSchedule.fromJson(
-          Map<String, dynamic>.from(json['schedule'] as Map),
+          _object(json['schedule'], 'proposal.schedule'),
         );
         schedule.validateNewAction();
         return ReadyActionProposal(
@@ -1099,7 +1099,7 @@ sealed class ActionProposalPreview {
       case 'existing':
         _expectKeys(json, const {'kind', 'action'});
         final action = CalendarAction.fromJson(
-          Map<String, dynamic>.from(json['action'] as Map),
+          _object(json['action'], 'proposal.action'),
         );
         if (action.origin != CalendarActionOrigin.expert)
           throw const FormatException('Invalid proposal action origin.');
