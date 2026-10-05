@@ -144,6 +144,7 @@ final class NativeConversationRuntimeGateway
     required ConversationObservation observation,
   }) async {
     final active = await _claim(request, observation);
+    var receiptSettled = false;
     try {
       await synchronizeConversation(request.session, observation: observation);
       observation.check();
@@ -165,7 +166,12 @@ final class NativeConversationRuntimeGateway
       final receipt = await active.receiptFuture!;
       active.receipt = receipt;
       active.receiptReady.complete();
-      if (active.cancelRequested) await _cancel(active);
+      // Explicit cancellation survives a stopped observation, but it cannot
+      // prevent a same-epoch positive receipt from settling the read model.
+      if (observation.stopped) {
+        if (active.cancelRequested) await _cancel(active);
+        observation.check();
+      }
       // Admission remains exact and bounded even after a view detaches. Only
       // observation stops; the original owner command is never cancelled here.
       observation.check();
@@ -182,6 +188,8 @@ final class NativeConversationRuntimeGateway
           observation: observation,
         );
       }
+      receiptSettled = true;
+      if (active.cancelRequested) await _cancel(active);
       return await _observeReceipt(
         receipt,
         request.session,
@@ -193,7 +201,7 @@ final class NativeConversationRuntimeGateway
       // A stopped observer cannot leave this command's old projection available
       // to the next epoch. Seal before releasing its activity slot.
       if (active.commandId != null &&
-          (active.receipt == null || observation.stopped)) {
+          (!receiptSettled || observation.stopped)) {
         readModel.sealForResync();
       }
       if (identical(_active, active)) _active = null;
