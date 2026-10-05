@@ -1,3 +1,6 @@
+import 'package:intl/intl.dart';
+import 'package:floe_client/features/day/domain/day_models.dart';
+
 import 'calendar_system_access_card.dart';
 import 'service_presentation.dart';
 
@@ -24,10 +27,12 @@ final class SourceConnectionPanel extends StatefulWidget {
     required this.controller,
     required this.source,
     this.integration,
+    this.calendarCoverage,
   });
   final ConnectionsController controller;
   final SourceSummary source;
   final IntegrationSummary? integration;
+  final DayCalendarCoverage? calendarCoverage;
   @override
   State<SourceConnectionPanel> createState() => _SourceConnectionPanelState();
 }
@@ -79,6 +84,34 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
   String get name => presentation.name;
   bool get calendar => widget.integration?.category == 'calendar';
   bool get busy => opening || widget.controller.busy;
+
+  String _resourceDescription(ResourceSummary resource) {
+    if (!calendar) return resource.label;
+    // Identity joins only. Historical read evidence never implies current access.
+    final source = widget.calendarCoverage?.sources
+        .where((value) => value.sourceRef == widget.source.sourceRef.value)
+        .singleOrNull;
+    final coverage = source?.resources
+        .where((value) => value.resourceRef == resource.resourceRef.value)
+        .singleOrNull;
+    final strings = AppLocalizations.of(context);
+    if (coverage == null) {
+      return '${resource.label}\nCollection status unavailable';
+    }
+    final lines = <String>[resource.label];
+    if (coverage.failure != null) {
+      lines.add(strings.couldNotCollectEventsShowingTheLast);
+    }
+    if (coverage.lastSuccessAt case final success?) {
+      final timestamp = DateFormat.yMMMd(strings.localeName)
+          .add_jm()
+          .format(success.toLocal());
+      lines.add('${strings.lastSuccessfulRead}: $timestamp');
+    } else {
+      lines.add(strings.notCollectedYet);
+    }
+    return lines.join('\n');
+  }
 
   Future<void> _chooseResources() async {
     if (busy) return;
@@ -204,7 +237,7 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
                         size: 15,
                         color: FloePalette.primary500,
                       ),
-                      text: resource.label,
+                      text: _resourceDescription(resource),
                       gap: 10,
                       style: FloeType.bodySmall.copyWith(height: 1.7),
                     ),

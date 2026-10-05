@@ -1,3 +1,5 @@
+import 'package:floe_client/features/day/domain/day_models.dart';
+
 import 'service_presentation.dart';
 
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
@@ -25,10 +27,12 @@ final class ConnectorScreen extends StatefulWidget {
     required this.controller,
     this.showServices = true,
     this.initialSourceRef,
+    this.calendarCoverage,
   });
   final ConnectionsController? controller;
   final bool showServices;
   final SourceRef? initialSourceRef;
+  final DayCalendarCoverage? calendarCoverage;
   @override
   State<ConnectorScreen> createState() => _ConnectorScreenState();
 }
@@ -200,6 +204,7 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
               controller: current,
               source: source,
               integration: integration,
+              calendarCoverage: widget.calendarCoverage,
             ),
           ],
           if (integration == null && source == null)

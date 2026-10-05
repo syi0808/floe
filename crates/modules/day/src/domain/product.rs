@@ -4,9 +4,9 @@ use crate::{
     SourceRef, Task,
 };
 use chrono::{DateTime, Utc};
+use floe_context_contract::{resource_display_ref, source_display_ref};
 use floe_kernel::{CaptureId, EventId, NoteId, PersonId, Revision, TaskId};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -123,10 +123,10 @@ pub fn project_item_source(person_id: PersonId, source: &SourceRef) -> DayItemSo
             capture_id: *capture_id,
         },
         SourceRef::Calendar(source) => DayItemSource::Calendar {
-            source_ref: display_reference(person_id, source.connection_id.as_str(), ""),
-            calendar_ref: display_reference(
+            source_ref: source_display_ref(person_id, &source.connection_id),
+            calendar_ref: resource_display_ref(
                 person_id,
-                source.connection_id.as_str(),
+                &source.connection_id,
                 &source.calendar_id,
             ),
             calendar_label: source.calendar_name.clone(),
@@ -195,9 +195,9 @@ pub fn project_calendar_coverage(
                 .map(|calendar| {
                     let status = source.calendar_statuses.get(&calendar.calendar_id);
                     DayCalendarResourceCoverage {
-                        resource_ref: display_reference(
+                        resource_ref: resource_display_ref(
                             person,
-                            connection.as_str(),
+                            &connection,
                             &calendar.calendar_id,
                         ),
                         label: calendar.calendar_name.clone(),
@@ -244,7 +244,7 @@ pub fn project_calendar_coverage(
             }
             .to_owned();
             DayCalendarSourceCoverage {
-                source_ref: display_reference(person, connection.as_str(), ""),
+                source_ref: source_display_ref(person, &connection),
                 label,
                 state,
                 last_success_at: source.last_success_at,
@@ -278,24 +278,6 @@ fn coverage_state(
             None => DayCoverageState::Pending,
         }
     }
-}
-fn display_reference(person: PersonId, connection: &str, resource: &str) -> Uuid {
-    let mut hash = Sha256::new();
-    for value in [
-        "floe.day.display",
-        &person.to_string(),
-        connection,
-        resource,
-    ] {
-        hash.update((value.len() as u64).to_be_bytes());
-        hash.update(value.as_bytes());
-    }
-    let digest = hash.finalize();
-    let mut bytes = [0; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    bytes[6] = (bytes[6] & 15) | 80;
-    bytes[8] = (bytes[8] & 63) | 128;
-    Uuid::from_bytes(bytes)
 }
 
 fn covers(cached: &CalendarRange, requested: &CalendarRange) -> bool {

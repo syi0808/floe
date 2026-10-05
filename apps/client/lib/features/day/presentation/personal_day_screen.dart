@@ -182,6 +182,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     final selection = sources.join('|');
     if (connectionSelection == selection) return;
     connectionSelection = selection;
+    // Reproject cached evidence after configuration changes, even off the Day tab.
+    // This is a query; only the existing active-Day policy admits acquisition.
+    unawaited(controller.load());
     unawaited(controller.refreshIfStale(force: true));
   }
 
@@ -258,6 +261,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       return ConnectorScreen(
         controller: widget.connectionsController,
         initialSourceRef: selectedConnectionSource,
+        calendarCoverage: controller.loadState == DayLoadState.ready
+            ? controller.snapshot?.calendarCoverage
+            : null,
       );
     }
     if (destination == _DestinationView.settings) {

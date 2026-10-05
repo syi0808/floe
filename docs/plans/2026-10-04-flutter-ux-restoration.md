@@ -15,8 +15,8 @@ that every earlier open item is still open or that the entire restoration is don
   is not inferred from those probes.
 - **R2:** service cards/count, stable identity/copy, account grouping, selected-resource
   and permission dialogs are implemented. The macOS OS-access card is now implemented
-  through a status-only native port; live OS verification remains separate. Day-owned
-  freshness detail, future-calendar policy/global assistant preference and full
+  through a status-only native port; live OS verification remains separate. Per-calendar last-read/failure presentation is now source-implemented; source-level
+  range/summary, future-calendar policy/global assistant preference and full
   source/workflow dependency decomposition remain open.
 - **R3:** drag-to-move, acknowledged composer close and automatic Day freshness are
   source-implemented. Full screen-state comparison and live EventKit write/recovery
@@ -1500,3 +1500,65 @@ Release Runner is universal but embedded Floe libraries are arm64 only; Intel re
 unqualified. No app/server/simulator launch or private profile/Keychain access took
 place. The earlier 033f312 Debug/Release builds passed, but its remaining checks were
 superseded by the final snapshot rather than duplicated.
+
+### R2 Calendar collection detail: contract decision
+
+Baseline CalendarPanel displayed each calendar's last successful read and failure
+copy, plus source stored range/last read. Current Day owns these facts in
+CalendarMirrorSourceState/calendar_statuses and already projects them in
+DayCalendarCoverage; Connections SourceSummary.last_observed_at is always None and
+must not become a second collection clock. Vault's calendar_source_version derives
+calendar_id directly from ConnectionResource.handle. Day currently hashes public
+references under floe.day.display while Connections hashes the same source/resource
+identities under floe.source.ref.v1/floe.resource.ref.v1. Labels cannot join them.
+
+Next bounded cutover:
+1. Put the pure, person-scoped source/resource display-reference derivation in the
+   context contract. Preserve the existing Connections hash bytes exactly, migrate
+   Connections and Conversation callers, and make Day use that derivation. Delete
+   Day's independent display_reference and the redundant Connections public helper.
+   These references correlate display rows only; source owners still resolve/validate
+   every command. Keep group identity unchanged. Add no provider IDs to Flutter.
+2. Pass the existing Day-owned calendar coverage from PersonalDayScreen composition
+   to the Connections detail presentation; no Day repository or refresh authority
+   is injected into ConnectionsController. Render per-resource last successful read
+   and failure only for exact source/resource-reference matches. Explicitly identify
+   them as prior collection evidence, never as OS permission, current authority,
+   selected-resource readiness or proof that the current range is fully synchronized.
+3. Preserve Day's source-fenced/source-changed cache inspection. Invalidate any
+   presentation correlation when the selected source/revision changes and refresh
+   the read projection through Day's existing query path; do not initiate provider
+   acquisition from rendering or invent a second collection status store. No label
+   matching, old/new reference fallback, journal rewrites or automatic data reset.
+4. Qualify byte equality of existing Connections references, person/resource
+   separation, current Day/Connections joins and rejection of wrong-source/old
+   unjoinable rows, duplicate labels, late/replaced query observations, absence of
+   coverage, per-resource failures, and narrow/wide rendering. Existing stored Day
+   command snapshots may still carry older display-only references; do not mutate
+   retained records to decorate UI. Unjoinable historical snapshots show unavailable
+   collection details until an ordinary fresh Day read provides current projection.
+
+This decision adds no persisted/wire fields and no permission contract. The full
+source range/summary and future-calendar selection policy remain separate from this
+bounded per-resource restoration. Implementation and qualification are pending.
+
+
+Per-calendar detail cutover is implemented: shared references preserve existing
+Connections bytes; Day's separate display hash and Connections' exported derivation
+were removed. Conversation navigation consumes the same pure contract. Flutter
+composition supplies immutable Day coverage and re-queries cache evidence after
+source configuration changes even off the Day tab, without admitting acquisition.
+Loading/failure hides the prior coverage; joins require a unique exact source and
+resource reference. Missing/duplicate/unjoinable evidence is explicitly unavailable.
+
+Qualification: temporary Rust reference-compatibility/person-separation probe and
+actual Day coverage projection/failure-retention probe passed and were removed from
+source (artifacts retained externally). Default Rust workspace/examples/doctests,
+both FFI profiles, architecture 23 nodes/126 edges and diff passed. All 77 disposable
+Flutter fixtures passed; analyzer remains 157 baseline infos with no errors/warnings.
+Root inspected real-font narrow390/desktop1024 renders with per-resource failure and
+last-success timestamp; no overflow. Initial external fixture errors used an invalid
+enum spelling and an old exact-label assertion; fixtures were corrected for the new
+multiline detail without changing selection/authority assertions. Native Apple
+qualification and independent review of this snapshot remain pending. Full live
+collection/reconfiguration acceptance and whole-screen restoration remain open.

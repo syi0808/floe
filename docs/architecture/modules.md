@@ -120,3 +120,13 @@ enumerates calendars, requests permission, configures a source or changes Observ
 Source setup still owns permission requests through its admitted native broker path.
 This preserves the baseline macOS card without adding it to iOS or treating stored
 source readiness as evidence of current OS permission.
+
+### Calendar collection display correlation
+
+Context contracts define person-scoped opaque source/resource display references
+shared by Connections, Day and Conversation navigation. They preserve Connections'
+existing reference bytes and carry no access or command authority. Day alone owns
+collection timestamps/failures and cache-source inspection. Flutter composition can
+pass that immutable Day coverage into Connections detail; exact identity joins show
+historical collection facts, never infer permission or current synchronization from
+labels. Connections does not acquire events or maintain a second collection clock.

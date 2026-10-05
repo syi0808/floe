@@ -6,6 +6,7 @@ use crate::*;
 use chrono::{Duration, Utc};
 use floe_access::{ReviewRef, SourceObserveStatus, SourceProcessingChoice};
 use floe_context_contract::GrantSourceBinding;
+use floe_context_contract::{resource_display_ref, source_display_ref};
 use floe_execution::ExecutionScope;
 use floe_kernel::{AgentFailure, OwnerActor, PersonId};
 use serde::Serialize;
@@ -1085,8 +1086,11 @@ impl ConnectionsService {
             let mut resources = Vec::new();
             let mut permitted = Vec::new();
             for resource in catalog.resources {
-                let reference =
-                    resource_ref(actor.person_id, source.connection_id(), resource.handle())?;
+                let reference = resource_display_ref(
+                    actor.person_id,
+                    source.connection_id(),
+                    resource.handle().as_str(),
+                );
                 permitted.push(PermittedResource {
                     resource_ref: reference,
                     label: resource.label().to_owned(),
@@ -1517,8 +1521,7 @@ impl ConnectionsService {
             .inspect_review(actor, reference.clone(), scope)
             .await
             .map_err(ConnectionsCommandFailure::NotAdmitted)?;
-        if crate::source_ref(actor.person_id, &reviewed.source.source.connection_id())
-            .map_err(ConnectionsCommandFailure::NotAdmitted)?
+        if source_display_ref(actor.person_id, &reviewed.source.source.connection_id())
             != source_ref
             || reviewed.source.revision != Some(expected_revision)
         {
@@ -2640,7 +2643,7 @@ impl ConnectionsService {
             .await
             .map_err(source_error)?
         {
-            if source_ref(actor.person_id, source.connection_id())? == id {
+            if source_display_ref(actor.person_id, source.connection_id()) == id {
                 return Ok(source);
             }
         }
@@ -2701,18 +2704,18 @@ impl ConnectionsService {
             .iter()
             .map(|resource| {
                 Ok(ResourceSummary {
-                    resource_ref: resource_ref(
+                    resource_ref: resource_display_ref(
                         actor.person_id,
                         source.connection_id(),
-                        resource.handle(),
-                    )?,
+                        resource.handle().as_str(),
+                    ),
                     label: resource.label().to_owned(),
                     group: resource_group(actor.person_id, source.connection_id(), &resource)?,
                 })
             })
             .collect::<Result<Vec<_>, AgentFailure>>()?;
         Ok(SourceSummary {
-            source_ref: source_ref(actor.person_id, source.connection_id())?,
+            source_ref: source_display_ref(actor.person_id, source.connection_id()),
             revision: source.revision(),
             display_labels: vec![source_label(source.connector_id().as_str()).into()],
             availability,
@@ -2893,7 +2896,7 @@ impl ConnectionsService {
         members.dedup();
         Ok(ObserveReview {
             review_ref: review.reference,
-            source_ref: source_ref(actor.person_id, &review.source.source.connection_id())?,
+            source_ref: source_display_ref(actor.person_id, &review.source.source.connection_id()),
             source_revision,
             display_members: members.clone(),
             processing_disclosure: ProcessingDisclosure {
@@ -2931,12 +2934,6 @@ fn command_ref(person: PersonId, command: Uuid) -> Uuid {
 fn digest(value: &impl Serialize) -> Result<[u8; 32], AgentFailure> {
     Ok(Sha256::digest(serde_json::to_vec(value).map_err(|_| AgentFailure::InvalidInput)?).into())
 }
-pub fn source_ref(
-    person: PersonId,
-    connection: &floe_context_contract::ConnectionId,
-) -> Result<Uuid, AgentFailure> {
-    opaque_ref(b"floe.source.ref.v1", person, &connection.as_str())
-}
 fn resource_group(
     person: PersonId,
     connection: &floe_context_contract::ConnectionId,
@@ -2955,17 +2952,6 @@ fn resource_group(
             })
         })
         .transpose()
-}
-fn resource_ref(
-    person: PersonId,
-    connection: &floe_context_contract::ConnectionId,
-    resource: &floe_context_contract::ResourceHandle,
-) -> Result<Uuid, AgentFailure> {
-    opaque_ref(
-        b"floe.resource.ref.v1",
-        person,
-        &(connection.as_str(), resource.as_str()),
-    )
 }
 fn opaque_ref(
     domain: &[u8],

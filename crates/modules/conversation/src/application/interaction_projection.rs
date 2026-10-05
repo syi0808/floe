@@ -98,7 +98,10 @@ pub(super) async fn project_interaction(
                 .map(|id| {
                     let connection = floe_context_contract::ConnectionId::try_new(id)
                         .map_err(|_| AgentFailure::StorageUnavailable)?;
-                    floe_connections::source_ref(actor.person_id, &connection)
+                    Ok::<_, AgentFailure>(floe_context_contract::source_display_ref(
+                        actor.person_id,
+                        &connection,
+                    ))
                 })
                 .transpose()?,
         },
