@@ -218,6 +218,15 @@ review admission, Gateway credential mutations and authorization receipt writers
 All writes that can establish the product command's durable admission share its
 negative writer's mutex through the terminal SQL/latch step. Store-specific access
 checks and finishers retain their own failure types; the shared guard owns only
-admission and uncertain-drop retirement. Source configuration background recovery
-retries only StorageBusy with bounded backoff and reloads the current durable record;
-authority, integrity and uncertain-write failures are not blindly retried.
+admission and uncertain-drop retirement. Source operation background recovery
+(configure and reconcile, including review application) retries only StorageBusy
+with bounded backoff under the existing deadline and cancellation. Configure reloads
+the current durable product record; reconciliation reuses the same reservation and
+revalidates current evidence, expiry and any existing Access receipt. Authority,
+integrity and uncertain-write failures are not blindly retried. Sustained contention
+can repeat evidence reads; this is not a provider-write retry policy.
+
+A non-Busy BEGIN failure conservatively retires the affected store until reopen,
+as does an abandoned armed BEGIN. A determinate Busy BEGIN leaves it usable.
+Read-only integrity errors retain their typed failure but do not all retire the
+entire Vault generation; callers must not infer a global latch from the error alone.

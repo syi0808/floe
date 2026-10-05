@@ -1181,3 +1181,21 @@ with an exact-command contention retry, and product encryption/key refusal/start
 classification/session reopen passed. All 61 external Flutter fixtures passed. New
 Apple Rust artifacts still require the exact-snapshot build/signature gate. No live
 Mac application/server or production Keychain runtime was exercised.
+
+Exact 478182e Apple qualification passed: macOS Debug/Release builds, strict deep
+signature verification and storage profile getters (2/1), plus unsigned arm64 iOS
+simulator build. The isolated checkout stayed clean with unchanged lockfiles.
+Release Runner is universal but its Floe libraries remain arm64-only; Intel runtime
+is not qualified. These builds do not establish actual app/provider behavior or
+production Keychain ACL behavior.
+
+The focused single Opus review found no blocking defect in the supplied shared
+journal fence, its 16 writer paths, Source guard extraction or bounded Busy retry.
+Root confirmed the documentation understated the retry scope: reconciliation,
+including ReviewApply, also retries Busy using the same reservation and live checks.
+The current architecture now states that scope and the conservative non-Busy BEGIN
+retirement behavior. Possible foreground signing contention, native permission
+outcome recovery, read-only integrity/latch differences and explicit in-process
+reopen UX remain separate availability work; this checkpoint does not claim them
+closed. No additional production code or permanent test suite was introduced by
+this qualification/documentation closure.
