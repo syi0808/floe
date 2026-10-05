@@ -436,10 +436,10 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                 return Err(PairingError::ForeignIdentity);
             }
             let mut connection = self.connection().map_err(pairing_storage)?;
-            let tx = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
+            let (mut writer, tx) = self
+                .journal_transaction(&mut connection)
                 .await
-                .map_err(|error| pairing_storage(database_failure(error)))?;
+                .map_err(pairing_storage)?;
             let result = async {
                 let mut rows = tx.query("SELECT payload FROM gateway_setup_receipts WHERE target_ref=? OR (person_id=? AND command_id=?)",
                     (record.setup.target_ref.to_string(), record.person_id.to_string(), record.command_id.to_string())).await.map_err(database_failure)?;
@@ -462,9 +462,12 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                 )).await.map_err(database_failure)?;
                 Ok(record)
             }.await;
-            self.finish_access_grant_transaction(tx, result)
-                .await
-                .map_err(pairing_storage)
+            {
+                let outcome = self.finish_access_grant_transaction(tx, result).await;
+                writer.settled();
+                outcome
+            }
+            .map_err(pairing_storage)
         })
     }
     fn execute_command<'a>(
@@ -480,10 +483,10 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                 return Err(PairingError::ForeignIdentity);
             }
             let mut connection = self.connection().map_err(pairing_storage)?;
-            let tx = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
+            let (mut writer, tx) = self
+                .journal_transaction(&mut connection)
                 .await
-                .map_err(|error| pairing_storage(database_failure(error)))?;
+                .map_err(pairing_storage)?;
             let result = async {
                 let mut rows = tx.query("SELECT payload FROM gateway_pairing_command_receipts WHERE person_id=? AND command_id=?",
                     (command.person_id.to_string(), command.command_id.to_string())).await.map_err(database_failure)?;
@@ -504,9 +507,12 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
             }.await;
             // Only a successfully committed exact receipt can resolve earlier
             // uncertainty. Rollback/commit/access errors never fabricate one.
-            self.finish_access_grant_transaction(tx, result)
-                .await
-                .map_err(pairing_storage)
+            {
+                let outcome = self.finish_access_grant_transaction(tx, result).await;
+                writer.settled();
+                outcome
+            }
+            .map_err(pairing_storage)
         })
     }
 
@@ -531,10 +537,10 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
     ) -> BoxFuture<'a, Result<PairingRecord, PairingError>> {
         Box::pin(async move {
             let mut connection = self.connection().map_err(pairing_storage)?;
-            let tx = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
+            let (mut writer, tx) = self
+                .journal_transaction(&mut connection)
                 .await
-                .map_err(|error| pairing_storage(database_failure(error)))?;
+                .map_err(pairing_storage)?;
             let result = async {
                 let current = pairing_on(&tx, self.person_id, next.operation_id)
                     .await?
@@ -560,9 +566,12 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                 Ok(next)
             }
             .await;
-            self.finish_access_grant_transaction(tx, result)
-                .await
-                .map_err(pairing_storage)
+            {
+                let outcome = self.finish_access_grant_transaction(tx, result).await;
+                writer.settled();
+                outcome
+            }
+            .map_err(pairing_storage)
         })
     }
 
@@ -573,10 +582,10 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
     ) -> BoxFuture<'a, Result<PairingRecord, PairingError>> {
         Box::pin(async move {
             let mut connection = self.connection().map_err(pairing_storage)?;
-            let tx = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
+            let (mut writer, tx) = self
+                .journal_transaction(&mut connection)
                 .await
-                .map_err(|error| pairing_storage(database_failure(error)))?;
+                .map_err(pairing_storage)?;
             let result = async {
                 let current = pairing_on(&tx, self.person_id, started.challenge.handle.operation_id).await?.ok_or(AgentFailure::Conflict)?;
                 let private = private_on(&tx, &current).await?;
@@ -614,9 +623,12 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                 self.check_access()?;
                 Ok(next)
             }.await;
-            self.finish_access_grant_transaction(tx, result)
-                .await
-                .map_err(pairing_storage)
+            {
+                let outcome = self.finish_access_grant_transaction(tx, result).await;
+                writer.settled();
+                outcome
+            }
+            .map_err(pairing_storage)
         })
     }
     fn activate<'a>(
@@ -626,10 +638,10 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
     ) -> BoxFuture<'a, Result<PairingActivationResult, PairingError>> {
         Box::pin(async move {
             let mut connection = self.connection().map_err(pairing_storage)?;
-            let tx = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
+            let (mut writer, tx) = self
+                .journal_transaction(&mut connection)
                 .await
-                .map_err(|error| pairing_storage(database_failure(error)))?;
+                .map_err(pairing_storage)?;
             let result = async {
                 let current = pairing_on(&tx, self.person_id, approval.handle.operation_id).await?.ok_or(AgentFailure::Conflict)?;
                 let private = private_on(&tx, &current).await?;
@@ -700,9 +712,12 @@ impl<K: VaultKeyProvider> PairingRepository for EncryptedAgentVault<K> {
                 self.check_access()?;
                 Ok(PairingActivationResult::Activated(next))
             }.await;
-            self.finish_access_grant_transaction(tx, result)
-                .await
-                .map_err(pairing_storage)
+            {
+                let outcome = self.finish_access_grant_transaction(tx, result).await;
+                writer.settled();
+                outcome
+            }
+            .map_err(pairing_storage)
         })
     }
 
@@ -970,10 +985,10 @@ impl<K: VaultKeyProvider> GatewayRegistry for EncryptedAgentVault<K> {
                 return Err(PairingError::InvalidInput);
             };
             let mut connection = self.connection().map_err(pairing_storage)?;
-            let tx = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
+            let (mut writer, tx) = self
+                .journal_transaction(&mut connection)
                 .await
-                .map_err(|error| pairing_storage(database_failure(error)))?;
+                .map_err(pairing_storage)?;
             let result = async {
                 if super::gateway_authority::command_rejection_on(&tx, receipt.person_id, receipt.command_id).await?.is_some() {
                     return Err(AgentFailure::Conflict);
@@ -1026,9 +1041,12 @@ impl<K: VaultKeyProvider> GatewayRegistry for EncryptedAgentVault<K> {
                 self.check_access()?;
                 Ok(summary.clone())
             }.await;
-            self.finish_access_grant_transaction(tx, result)
-                .await
-                .map_err(pairing_storage)
+            {
+                let outcome = self.finish_access_grant_transaction(tx, result).await;
+                writer.settled();
+                outcome
+            }
+            .map_err(pairing_storage)
         })
     }
 }

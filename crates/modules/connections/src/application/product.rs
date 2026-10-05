@@ -2117,6 +2117,30 @@ impl ConnectionsService {
         }
         Ok(summary)
     }
+    async fn resume_source_configuration(
+        &self,
+        actor: &OwnerActor,
+        record_ref: Uuid,
+        scope: &ExecutionScope,
+    ) -> Result<(), AgentFailure> {
+        let record = self
+            .products
+            .load(actor.person_id, record_ref)
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        if record.person_id != actor.person_id || record.device_id != actor.device_id {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        match &record.payload {
+            ConnectionsPayload::SourceConfiguration { .. } => self
+                .drive_source_configuration(actor, record, scope)
+                .await
+                .map(|_| ()),
+            ConnectionsPayload::SourceMutation { .. } => Ok(()),
+            _ => Err(AgentFailure::InvalidInput),
+        }
+    }
+
     fn spawn_source_configuration(
         &self,
         actor: OwnerActor,
@@ -2140,9 +2164,10 @@ impl ConnectionsService {
                 cancellations,
                 id,
             };
-            let _ = service
-                .drive_source_configuration(&actor, record, &scope)
-                .await;
+            let _ = super::background::retry_storage_contention(&scope, || {
+                service.resume_source_configuration(&actor, record.record_ref, &scope)
+            })
+            .await;
         });
         Ok(())
     }
@@ -2224,24 +2249,23 @@ impl ConnectionsService {
                     cancellations,
                     id,
                 };
-                if operation.kind == SourceOperationKind::ConnectionConfigure {
-                    if let Ok(Some(record)) = service
-                        .products
-                        .load(
-                            actor.person_id,
-                            command_ref(actor.person_id, operation.command_id),
-                        )
-                        .await
-                    {
-                        let _ = service
-                            .drive_source_configuration(&actor, record, &scope)
-                            .await;
+                let _ = super::background::retry_storage_contention(&scope, || async {
+                    if operation.kind == SourceOperationKind::ConnectionConfigure {
+                        service
+                            .resume_source_configuration(
+                                &actor,
+                                command_ref(actor.person_id, operation.command_id),
+                                &scope,
+                            )
+                            .await
+                    } else {
+                        service
+                            .reconcile(&actor, operation.operation_id, None, &scope)
+                            .await
+                            .map(|_| ())
                     }
-                } else {
-                    let _ = service
-                        .reconcile(&actor, operation.operation_id, None, &scope)
-                        .await;
-                }
+                })
+                .await;
             });
         }
         for operation in self

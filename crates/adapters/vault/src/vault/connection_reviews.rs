@@ -7,7 +7,7 @@ use floe_access::{
 };
 use floe_context_contract::GrantSourceBinding;
 use floe_execution::BoxFuture;
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::Transaction;
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     async fn operation_on(
@@ -106,10 +106,7 @@ impl<Keys: VaultKeyProvider> GrantRepository for EncryptedAgentVault<Keys> {
                 return Err(AgentFailure::PolicyDenied);
             }
             let mut connection = self.connection()?;
-            let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .await
-                .map_err(database_failure)?;
+            let (mut writer, transaction) = self.journal_transaction(&mut connection).await?;
             let result = async {
                 if super::gateway_authority::command_rejection_on(&transaction, self.person_id, review.command_id).await?.is_some() {
                     return Err(AgentFailure::Conflict);
@@ -125,8 +122,13 @@ impl<Keys: VaultKeyProvider> GrantRepository for EncryptedAgentVault<Keys> {
                 self.check_access()?;
                 Ok(review.reference)
             }.await;
-            self.finish_access_grant_transaction(transaction, result)
-                .await
+            {
+                let outcome = self
+                    .finish_access_grant_transaction(transaction, result)
+                    .await;
+                writer.settled();
+                outcome
+            }
         })
     }
     fn snapshot<'a>(
@@ -159,10 +161,7 @@ impl<Keys: VaultKeyProvider> GrantRepository for EncryptedAgentVault<Keys> {
     ) -> BoxFuture<'a, Result<GrantAbortOutcome, AgentFailure>> {
         Box::pin(async move {
             let mut connection = self.connection()?;
-            let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .await
-                .map_err(database_failure)?;
+            let (mut writer, transaction) = self.journal_transaction(&mut connection).await?;
             let result = async {
                 match self.operation_on(&transaction, &command.identity).await? {
                     Some(GrantOperationReceipt::Committed(receipt)) => {
@@ -187,8 +186,13 @@ impl<Keys: VaultKeyProvider> GrantRepository for EncryptedAgentVault<Keys> {
                 Ok(GrantAbortOutcome::Aborted(receipt))
             }
             .await;
-            self.finish_access_grant_transaction(transaction, result)
-                .await
+            {
+                let outcome = self
+                    .finish_access_grant_transaction(transaction, result)
+                    .await;
+                writer.settled();
+                outcome
+            }
         })
     }
     fn commit<'a>(
@@ -197,10 +201,7 @@ impl<Keys: VaultKeyProvider> GrantRepository for EncryptedAgentVault<Keys> {
     ) -> BoxFuture<'a, Result<GrantCommitReceipt, AgentFailure>> {
         Box::pin(async move {
             let mut connection = self.connection()?;
-            let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .await
-                .map_err(database_failure)?;
+            let (mut writer, transaction) = self.journal_transaction(&mut connection).await?;
             let result = async {
                 match self.operation_on(&transaction, &command.reservation.identity()).await? {
                     Some(GrantOperationReceipt::Committed(receipt)) if receipt.kind == command.kind && receipt.commit_digest == floe_access::digest(&command)? => return Ok(receipt),
@@ -224,8 +225,13 @@ impl<Keys: VaultKeyProvider> GrantRepository for EncryptedAgentVault<Keys> {
                 self.check_access()?;
                 Ok(receipt)
             }.await;
-            self.finish_access_grant_transaction(transaction, result)
-                .await
+            {
+                let outcome = self
+                    .finish_access_grant_transaction(transaction, result)
+                    .await;
+                writer.settled();
+                outcome
+            }
         })
     }
 }

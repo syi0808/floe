@@ -16,40 +16,6 @@ pub struct TursoStore {
     installation_lock: Option<std::fs::File>,
 }
 
-pub(crate) struct SourceWriteGuard<'a> {
-    store: &'a TursoStore,
-    _lock: tokio::sync::MutexGuard<'a, ()>,
-    armed: bool,
-}
-impl SourceWriteGuard<'_> {
-    pub(crate) async fn begin(&mut self, connection: &Connection) -> Result<(), StoreError> {
-        self.store.check_available()?;
-        self.armed = true;
-        match connection.execute("BEGIN IMMEDIATE", ()).await {
-            Ok(_) => Ok(()),
-            Err(error) => {
-                let failure = admission_error(error);
-                if failure.code == StoreErrorCode::StorageBusy {
-                    self.armed = false;
-                }
-                Err(failure)
-            }
-        }
-    }
-    pub(crate) fn settled(&mut self) {
-        self.armed = false;
-    }
-}
-impl Drop for SourceWriteGuard<'_> {
-    fn drop(&mut self) {
-        // Dropping a future while SQL is pending is not proof of rollback.
-        // Publish the fence before releasing the source writer lock.
-        if self.armed {
-            self.store.latch_unavailable();
-        }
-    }
-}
-
 impl TursoStore {
     pub fn with_installation_lock(mut self, lock: std::fs::File) -> Self {
         self.installation_lock = Some(lock);
@@ -252,17 +218,19 @@ impl TursoStore {
     // Serialize source journal writers through their terminal commit/latch step.
     // SQLite serializes writes too, but its lock can release before an I/O error
     // has returned to this caller. A negative journal must not enter that gap.
-    pub(crate) fn source_write_guard(&self) -> Result<SourceWriteGuard<'_>, StoreError> {
-        let guard = self
-            .source_writes
-            .try_lock()
-            .map_err(|_| StoreError::new(StoreErrorCode::StorageBusy, "source journal is busy"))?;
-        self.check_available()?;
-        Ok(SourceWriteGuard {
-            store: self,
-            _lock: guard,
-            armed: false,
-        })
+    pub(crate) fn source_write_guard(
+        &self,
+    ) -> Result<crate::write_fence::JournalWriteGuard<'_>, StoreError> {
+        crate::write_fence::JournalWriteGuard::acquire(&self.unavailable, &self.source_writes)
+            .map_err(|failure| match failure {
+                crate::write_fence::WriteAdmissionFailure::Busy => {
+                    StoreError::new(StoreErrorCode::StorageBusy, "source journal is busy")
+                }
+                crate::write_fence::WriteAdmissionFailure::Unavailable => StoreError::new(
+                    StoreErrorCode::Storage,
+                    "product store requires reopen after an uncertain transaction",
+                ),
+            })
     }
     pub(crate) async fn connection(&self) -> Result<Connection, StoreError> {
         self.check_available()?;

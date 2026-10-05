@@ -212,3 +212,12 @@ connections and negative-journal writes then fail until explicit reopen; absence
 after an uncertain commit is never used to manufacture NotApplied. Readiness does
 not automatically delete data or replace a key. Assistant admissions permit one
 release receipt; exact live replay of that receipt remains permitted.
+
+The same physical admission/drop mechanism also fences the Vault product journal,
+review admission, Gateway credential mutations and authorization receipt writers.
+All writes that can establish the product command's durable admission share its
+negative writer's mutex through the terminal SQL/latch step. Store-specific access
+checks and finishers retain their own failure types; the shared guard owns only
+admission and uncertain-drop retirement. Source configuration background recovery
+retries only StorageBusy with bounded backoff and reloads the current durable record;
+authority, integrity and uncertain-write failures are not blindly retried.

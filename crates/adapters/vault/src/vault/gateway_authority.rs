@@ -194,10 +194,11 @@ impl<K: VaultKeyProvider> EnrollmentSigner for VaultEnrollmentSigner<K> {
             self.verifier.verify(&command)?;
             validate_enrollment(&command, self.vault.person_id)?;
             let mut connection = self.vault.connection().map_err(pairing_storage)?;
-            let tx = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
+            let (mut writer, tx) = self
+                .vault
+                .journal_transaction(&mut connection)
                 .await
-                .map_err(|error| pairing_storage(database_failure(error)))?;
+                .map_err(pairing_storage)?;
             let result = async {
                 let now = chrono::Utc::now().timestamp_millis();
                 self.vault.advance_clock(&tx, now).await?;
@@ -256,10 +257,12 @@ impl<K: VaultKeyProvider> EnrollmentSigner for VaultEnrollmentSigner<K> {
                     key_id: issuer.key_id, signature,
                 })
             }.await;
-            self.vault
-                .finish_access_grant_transaction(tx, result)
-                .await
-                .map_err(pairing_storage)
+            {
+                let outcome = self.vault.finish_access_grant_transaction(tx, result).await;
+                writer.settled();
+                outcome
+            }
+            .map_err(pairing_storage)
         })
     }
     fn readback<'a>(
@@ -438,10 +441,7 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
         )
         .ok_or(AgentFailure::PolicyDenied)?;
         let mut connection = self.vault.connection()?;
-        let tx = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(database_failure)?;
+        let (mut writer, tx) = self.vault.journal_transaction(&mut connection).await?;
         let result = async {
             let now = chrono::Utc::now().timestamp_millis();
             self.vault.advance_clock(&tx, now).await?;
@@ -531,10 +531,11 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
                 signature: URL_SAFE_NO_PAD.encode(key.sign(&bytes).as_ref()),
             })
         }.await;
-        let signature = self
-            .vault
-            .finish_access_grant_transaction(tx, result)
-            .await?;
+        let signature = {
+            let outcome = self.vault.finish_access_grant_transaction(tx, result).await;
+            writer.settled();
+            outcome
+        }?;
         if self.vault.committed_issuer().await? != owner {
             return Err(AgentFailure::PolicyDenied);
         }
@@ -606,10 +607,7 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
         };
 
         let mut connection = self.vault.connection()?;
-        let tx = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(database_failure)?;
+        let (mut writer, tx) = self.vault.journal_transaction(&mut connection).await?;
         let result = async {
             self.vault.check_access()?;
             let now = chrono::Utc::now().timestamp_millis();
@@ -807,10 +805,11 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
             Ok(receipt.signature)
         }
         .await;
-        let signature = self
-            .vault
-            .finish_access_grant_transaction(tx, result)
-            .await?;
+        let signature = {
+            let outcome = self.vault.finish_access_grant_transaction(tx, result).await;
+            writer.settled();
+            outcome
+        }?;
         let current_owner = self.vault.committed_issuer().await?;
         if current_owner != owner {
             return Err(AgentFailure::PolicyDenied);
@@ -1182,10 +1181,7 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
                 return Err(AgentFailure::PolicyDenied);
             }
             let mut connection = self.connection()?;
-            let tx = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .await
-                .map_err(database_failure)?;
+            let (mut writer, tx) = self.journal_transaction(&mut connection).await?;
             let result = async {
                 let mut rows = tx.query("SELECT payload FROM connections_product_records WHERE record_ref=? OR (person_id=? AND command_id=?)",
                     (identity.record_ref.to_string(), identity.person_id.to_string(), identity.command_id.to_string())).await.map_err(database_failure)?;
@@ -1213,7 +1209,11 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
                 self.check_access()?;
                 Ok(ConnectionsCommandResolution::NotApplied(reason))
             }.await;
-            self.finish_access_grant_transaction(tx, result).await
+            {
+                let outcome = self.finish_access_grant_transaction(tx, result).await;
+                writer.settled();
+                outcome
+            }
         })
     }
     fn load<'a>(
@@ -1291,10 +1291,7 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
                 return Err(AgentFailure::InvalidInput);
             };
             let mut connection = self.connection()?;
-            let tx = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .await
-                .map_err(database_failure)?;
+            let (mut writer, tx) = self.journal_transaction(&mut connection).await?;
             let result=async {
                 if command_rejection_on(&tx,receipt.person_id,receipt.command_id).await?.is_some() { return Err(AgentFailure::Conflict); }
                 let mut rows=tx.query("SELECT payload FROM connections_product_records WHERE record_ref=? OR (person_id=? AND command_id=?)",(receipt.record_ref.to_string(),receipt.person_id.to_string(),receipt.command_id.to_string())).await.map_err(database_failure)?;
@@ -1312,7 +1309,11 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
                 tx.execute("INSERT INTO connections_product_records VALUES(?,?,?,?,?)",(receipt.record_ref.to_string(),receipt.person_id.to_string(),receipt.command_id.to_string(),receipt.revision as i64,bounded_encode(&receipt)?)).await.map_err(database_failure)?;
                 self.check_access()?;Ok(receipt)
             }.await;
-            self.finish_access_grant_transaction(tx, result).await
+            {
+                let outcome = self.finish_access_grant_transaction(tx, result).await;
+                writer.settled();
+                outcome
+            }
         })
     }
     fn insert<'a>(
@@ -1325,10 +1326,7 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
                 return Err(AgentFailure::PolicyDenied);
             }
             let mut connection = self.connection()?;
-            let tx = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .await
-                .map_err(database_failure)?;
+            let (mut writer, tx) = self.journal_transaction(&mut connection).await?;
             let result=async{
             if command_rejection_on(&tx, record.person_id, record.command_id).await?.is_some() {
                 return Err(AgentFailure::Conflict);
@@ -1341,7 +1339,11 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
             }
             tx.execute("INSERT INTO connections_product_records VALUES(?,?,?,?,?)",(record.record_ref.to_string(),record.person_id.to_string(),record.command_id.to_string(),record.revision as i64,bounded_encode(&record)?)).await.map_err(database_failure)?;Ok(record)
         }.await;
-            self.finish_access_grant_transaction(tx, result).await
+            {
+                let outcome = self.finish_access_grant_transaction(tx, result).await;
+                writer.settled();
+                outcome
+            }
         })
     }
     fn compare_and_swap<'a>(
@@ -1355,10 +1357,7 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
                 return Err(AgentFailure::PolicyDenied);
             }
             let mut connection = self.connection()?;
-            let tx = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .await
-                .map_err(database_failure)?;
+            let (mut writer, tx) = self.journal_transaction(&mut connection).await?;
             let result=async{
             let mut rows=tx.query("SELECT payload FROM connections_product_records WHERE record_ref=? AND person_id=?",(record.record_ref.to_string(),record.person_id.to_string())).await.map_err(database_failure)?;
             let current:ConnectionsRecord=bounded_decode(&rows.next().await.map_err(database_failure)?.ok_or(AgentFailure::Conflict)?.get::<String>(0).map_err(storage)?)?;drop(rows);
@@ -1366,7 +1365,11 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
             let changed=tx.execute("UPDATE connections_product_records SET revision=?,payload=? WHERE record_ref=? AND revision=?",(record.revision as i64,bounded_encode(&record)?,record.record_ref.to_string(),expected_revision as i64)).await.map_err(database_failure)?;
             if changed!=1{return Err(AgentFailure::Conflict)}Ok(record)
         }.await;
-            self.finish_access_grant_transaction(tx, result).await
+            {
+                let outcome = self.finish_access_grant_transaction(tx, result).await;
+                writer.settled();
+                outcome
+            }
         })
     }
 }

@@ -1149,3 +1149,35 @@ in each cycle, as did product encryption, key/error preservation and session reo
 All 61 external Flutter fixtures passed. Go executable inputs and Dart inputs are
 unchanged; their previously passed gates apply. Native Rust artifact requalification
 and a focused review of the cancellation/commit fence remain pending.
+
+### Product journal analogue and bounded recovery
+
+The focused review verified the Source guard, then identified the analogous product
+journal gap. Root traced its complete positive/negative write set: product records,
+Access review admission, and the pairing Forget path, plus the related Gateway
+authority/receipt writers. These 16 Immediate transaction paths now share the Vault
+journal mutex and an armed drop fence through their existing SQL finisher. Deferred
+read transactions are unchanged. The physical guard is factored once for the two
+encrypted stores; it contains no authorization or command policy. This does not
+claim every unrelated Vault mutation now uses that journal gate.
+
+Root also replaced the one-shot SourceConfiguration/recovery handling of StorageBusy
+with bounded backoff. Every retry uses the same operation and reloads the durable
+record; already-completed SourceMutation records terminate without new work. Only
+determinate Busy retries, and the existing owner deadline/cancellation remains the
+boundary. Database corruption now retains VaultUnavailable through the common typed
+mapper rather than losing its integrity category.
+
+Disposable probes passed for both stores' uncertain commit/drop fences and absence
+of a manufactured negative receipt after reopen, corruption versus Busy categories,
+three independently contended recovery jobs, no retry of semantic denial, and the
+retry deadline. The recovery-helper probe is not full live multi-source activation
+QA. Temporary probe modules were archived/removed before final gates.
+
+Shared-journal checkpoint final qualification: after removing the temporary probes,
+workspace/default examples/doctests and both FFI profiles passed; architecture and
+diff checks passed. Actual encrypted pairing/approval/Forget/restart completed twice
+with an exact-command contention retry, and product encryption/key refusal/startup
+classification/session reopen passed. All 61 external Flutter fixtures passed. New
+Apple Rust artifacts still require the exact-snapshot build/signature gate. No live
+Mac application/server or production Keychain runtime was exercised.

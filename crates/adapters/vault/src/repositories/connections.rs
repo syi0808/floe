@@ -100,10 +100,7 @@ impl SourceRepository for TursoStore {
                 return Err(SourceRepositoryError::Corrupt);
             }
             let connection = self.connection().await.map_err(source_connection_failure)?;
-            writer
-                .begin(&connection)
-                .await
-                .map_err(source_connection_failure)?;
+            begin_source_transaction(&mut writer, &connection).await?;
             let result = async {
             if fenced_on(&connection, source.person_id(), source.connection_id()).await? { return Err(SourceRepositoryError::Conflict); }
         let changed = connection.execute(
@@ -148,10 +145,7 @@ impl SourceRepository for TursoStore {
                 return Err(SourceRepositoryError::Corrupt);
             }
             let connection = self.connection().await.map_err(source_connection_failure)?;
-            writer
-                .begin(&connection)
-                .await
-                .map_err(source_connection_failure)?;
+            begin_source_transaction(&mut writer, &connection).await?;
             let result = async {
             if fenced_on(&connection, source.person_id(), source.connection_id()).await? { return Err(SourceRepositoryError::Conflict); }
             let mut rows = connection.query(
@@ -288,6 +282,25 @@ async fn source_on(
         .map(decode_source)
         .transpose()
 }
+async fn begin_source_transaction(
+    writer: &mut crate::write_fence::JournalWriteGuard<'_>,
+    connection: &turso::Connection,
+) -> Result<(), SourceRepositoryError> {
+    writer
+        .arm()
+        .map_err(|_| SourceRepositoryError::StorageUnavailable)?;
+    match connection.execute("BEGIN IMMEDIATE", ()).await {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            let failure = source_database_failure(error);
+            if failure == SourceRepositoryError::StorageBusy {
+                writer.settled();
+            }
+            Err(failure)
+        }
+    }
+}
+
 async fn finish_source_transaction<T>(
     store: &TursoStore,
     connection: &turso::Connection,
@@ -361,10 +374,7 @@ impl SourceOperationRepository for TursoStore {
                 return Err(SourceRepositoryError::Conflict);
             }
             let connection = self.connection().await.map_err(source_connection_failure)?;
-            writer
-                .begin(&connection)
-                .await
-                .map_err(source_connection_failure)?;
+            begin_source_transaction(&mut writer, &connection).await?;
             let result=async {
                 let mut rows=connection.query("SELECT operation_id,command_id,person_id,connection_id,revision,fence,payload FROM source_operations WHERE operation_id=? OR (person_id=? AND command_id=?)",
                     (identity.record_ref.to_string(),identity.person_id.to_string(),identity.command_id.to_string())).await.map_err(source_database_failure)?;
@@ -406,10 +416,7 @@ impl SourceOperationRepository for TursoStore {
                 return Err(SourceRepositoryError::Conflict);
             }
             let connection = self.connection().await.map_err(source_connection_failure)?;
-            writer
-                .begin(&connection)
-                .await
-                .map_err(source_connection_failure)?;
+            begin_source_transaction(&mut writer, &connection).await?;
             let result = async {
             if source_command_rejection_on(&connection,requested.expected.source.person_id(),requested.command_id).await?.is_some() {
                 return Err(SourceRepositoryError::Conflict);
@@ -459,10 +466,7 @@ impl SourceOperationRepository for TursoStore {
                 .source_write_guard()
                 .map_err(source_connection_failure)?;
             let connection = self.connection().await.map_err(source_connection_failure)?;
-            writer
-                .begin(&connection)
-                .await
-                .map_err(source_connection_failure)?;
+            begin_source_transaction(&mut writer, &connection).await?;
             let result = async {
             let current = operation_on(&connection, change.operation_id).await?.ok_or(SourceRepositoryError::Conflict)?;
             let source = source_on(&connection, &current.expected.source.connection_id()).await?;

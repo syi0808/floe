@@ -1,3 +1,4 @@
+mod background;
 pub mod connected_context;
 pub mod source_connections;
 

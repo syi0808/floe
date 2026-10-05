@@ -92,6 +92,7 @@ pub struct EncryptedAgentVault<Keys> {
     person_id: PersonId,
     vault_id: Uuid,
     unavailable: AtomicBool,
+    journal_writes: tokio::sync::Mutex<()>,
     conversation_executor_generation: AtomicU64,
     task_executor_generation: AtomicU64,
     _host_lock: File,
@@ -206,6 +207,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             person_id,
             vault_id,
             unavailable: AtomicBool::new(false),
+            journal_writes: tokio::sync::Mutex::new(()),
             conversation_executor_generation: AtomicU64::new(0),
             task_executor_generation: AtomicU64::new(0),
             _host_lock: host_lock,
@@ -260,6 +262,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             person_id,
             vault_id,
             unavailable: AtomicBool::new(false),
+            journal_writes: tokio::sync::Mutex::new(()),
             conversation_executor_generation: AtomicU64::new(0),
             task_executor_generation: AtomicU64::new(0),
             _host_lock: host_lock,
@@ -372,6 +375,39 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Ok(session);
         }
         self.create_session().await
+    }
+
+    pub(crate) async fn journal_transaction<'v, 'c>(
+        &'v self,
+        connection: &'c mut turso::Connection,
+    ) -> Result<
+        (
+            crate::write_fence::JournalWriteGuard<'v>,
+            turso::transaction::Transaction<'c>,
+        ),
+        AgentFailure,
+    > {
+        use crate::write_fence::{JournalWriteGuard, WriteAdmissionFailure};
+        self.check_access()?;
+        let mut writer = JournalWriteGuard::acquire(&self.unavailable, &self.journal_writes)
+            .map_err(|failure| match failure {
+                WriteAdmissionFailure::Busy => AgentFailure::StorageBusy,
+                WriteAdmissionFailure::Unavailable => AgentFailure::VaultUnavailable,
+            })?;
+        writer.arm().map_err(|_| AgentFailure::VaultUnavailable)?;
+        match connection
+            .transaction_with_behavior(turso::transaction::TransactionBehavior::Immediate)
+            .await
+        {
+            Ok(transaction) => Ok((writer, transaction)),
+            Err(error) => {
+                let failure = database_failure(error);
+                if failure == AgentFailure::StorageBusy {
+                    writer.settled();
+                }
+                Err(failure)
+            }
+        }
     }
 
     pub fn check_access(&self) -> Result<(), AgentFailure> {
@@ -698,10 +734,7 @@ fn unavailable(_: impl std::fmt::Debug) -> AgentFailure {
 // Contention is not a semantic rejection. Commit/rollback uncertainty is handled
 // by each transaction finisher and must not be reclassified as safe to retry.
 pub(crate) fn database_failure(error: turso::Error) -> AgentFailure {
-    match error {
-        turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::StorageBusy,
-        other => storage(other),
-    }
+    crate::schema::SchemaFailure::from_database(error).into_agent()
 }
 
 fn storage(_: impl std::fmt::Debug) -> AgentFailure {

@@ -22,6 +22,7 @@ mod schema;
 mod schema_sql;
 #[cfg(unix)]
 mod vault;
+mod write_fence;
 
 pub use engine::TursoStore;
 pub use error::{StoreError, StoreErrorCode};
