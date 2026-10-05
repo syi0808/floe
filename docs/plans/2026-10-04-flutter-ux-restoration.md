@@ -973,3 +973,21 @@ with actual fonts/icons; the baseline flat selection dialog still saves exact
 resource references. This is partial R2 restoration, not full UI parity. Native Apple
 builds for this corrective checkpoint and production Keychain rebuild/restart runtime
 qualification remain outstanding. No live Mac app/server or user profile was touched.
+
+### Service detail identity presentation
+
+Restore the baseline icon/name/description header in both connected and disconnected
+details from the same pure presentation mapping as the service grid. Apple Calendar
+copy uses the validated service kind and actual platform, never display-name matching;
+hosted Calendar stays hosted. This component owns no permission/readiness workflow.
+Keep connected status visible on its own wrapping-safe row at narrow widths. The
+removed read-only pill stays removed. System-access observation and Day freshness
+must not be inferred from source availability; those still need owner-qualified
+projections before their baseline sections can return.
+
+Header checkpoint: the existing 58 external fixtures and three additional Apple
+platform/hosted-identity/narrow-header probes pass. Analyzer remains at 157 existing
+informational findings, no errors/warnings. The 390/1024 screenshots were re-rendered
+and inspected with the actual fonts/icons. No Rust/Go/native inputs changed after
+the preceding full gate; Apple application rebuild remains pending for this UI-only
+checkpoint. No system permission claim or old read-only pill was reintroduced.

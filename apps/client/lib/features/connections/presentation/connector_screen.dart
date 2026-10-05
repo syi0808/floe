@@ -1,8 +1,9 @@
+import 'service_presentation.dart';
+
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:floe_client/app/design_tokens.dart';
@@ -290,31 +291,15 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
     BuildContext context,
     IntegrationSummary integration,
   ) {
-    final strings = AppLocalizations.of(context);
-    // Platform affects display copy only; existence, status and actions are
-    // taken from the current owner's integration projection.
-    final macCalendar =
-        integration.serviceKind == 'apple_calendar' &&
-        defaultTargetPlatform == TargetPlatform.macOS;
+    final presentation = ServicePresentation.forIntegration(
+      integration,
+      AppLocalizations.of(context),
+    );
     return _ConnectionCard(
       key: ValueKey('integration-${integration.integrationRef.value}'),
-      icon: switch (integration.category) {
-        'calendar' => LucideIcons.calendarDays,
-        'contacts' => LucideIcons.contact,
-        'health' => LucideIcons.heartPulse,
-        'attention' => LucideIcons.focus,
-        _ => LucideIcons.plug,
-      },
-      name: macCalendar ? strings.macosCalendar : integration.displayName,
-      description: macCalendar
-          ? strings.calendarsAlreadyOnThisMac
-          : switch (integration.category) {
-              'calendar' => 'Manage the calendars available to Floe.',
-              'contacts' => 'Choose the contacts available to Floe.',
-              'health' => 'Use a derived wellbeing summary from Apple Health.',
-              'attention' => 'Manage coarse device attention signals.',
-              _ => 'Manage this service and its reviewed access.',
-            },
+      icon: presentation.icon,
+      name: presentation.name,
+      description: presentation.description,
       status: switch (integration.state) {
         'connected' => 'Connected',
         'connecting' => 'Connecting',

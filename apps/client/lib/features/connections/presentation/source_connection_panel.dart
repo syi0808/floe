@@ -1,3 +1,5 @@
+import 'service_presentation.dart';
+
 import 'package:flutter/material.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 
@@ -67,9 +69,13 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
     });
   }
 
-  String get name =>
-      widget.integration?.displayName ??
-      widget.source.displayLabels.join(' · ');
+  ServicePresentation get presentation => widget.integration != null
+      ? ServicePresentation.forIntegration(
+          widget.integration!,
+          AppLocalizations.of(context),
+        )
+      : ServicePresentation.forSource(widget.source);
+  String get name => presentation.name;
   bool get calendar => widget.integration?.category == 'calendar';
   bool get busy => opening || widget.controller.busy;
 
@@ -149,22 +155,20 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(child: Text(name, style: FloeType.titleLarge)),
-              FloeBadge(
-                label: switch (source.availability) {
-                  'available' => 'Connected',
-                  'permission_required' => 'Finish setup',
-                  'identity_changed' => 'Reconnect needed',
-                  'disconnected' => 'Disconnected',
-                  _ => 'Unavailable',
-                },
-                tone: source.availability == 'available'
-                    ? FloeBadgeTone.success
-                    : FloeBadgeTone.warning,
-              ),
-            ],
+          ServiceDetailHeader(
+            presentation: presentation,
+            status: FloeBadge(
+              label: switch (source.availability) {
+                'available' => 'Connected',
+                'permission_required' => 'Finish setup',
+                'identity_changed' => 'Reconnect needed',
+                'disconnected' => 'Disconnected',
+                _ => 'Unavailable',
+              },
+              tone: source.availability == 'available'
+                  ? FloeBadgeTone.success
+                  : FloeBadgeTone.warning,
+            ),
           ),
           const SizedBox(height: FloeSpace.lg),
           Text(
