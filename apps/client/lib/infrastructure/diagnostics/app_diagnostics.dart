@@ -22,6 +22,8 @@ final class DiagnosticRecord {
     this.safeActions = const [],
     this.requestId,
     this.sessionId,
+    this.runId,
+    this.runState,
     this.invocationId,
     this.elapsedMilliseconds,
     this.retryable,
@@ -42,6 +44,8 @@ final class DiagnosticRecord {
   final List<String> safeActions;
   final String? requestId;
   final String? sessionId;
+  final String? runId;
+  final String? runState;
   final String? invocationId;
   final int? elapsedMilliseconds;
   final bool? retryable;
@@ -76,6 +80,8 @@ final class DiagnosticRecord {
       ),
       requestId: json['request_id'] as String?,
       sessionId: json['session_id'] as String?,
+      runId: json['run_id'] as String?,
+      runState: json['run_state'] as String?,
       invocationId: json['invocation_id'] as String?,
       elapsedMilliseconds: json['elapsed_ms'] as int?,
       retryable: json['retryable'] as bool?,
@@ -98,6 +104,8 @@ final class DiagnosticRecord {
     if (safeActions.isNotEmpty) 'safe_actions': safeActions,
     'request_id': ?requestId,
     'session_id': ?sessionId,
+    'run_id': ?runId,
+    'run_state': ?runState,
     'invocation_id': ?invocationId,
     'elapsed_ms': ?elapsedMilliseconds,
     'retryable': ?retryable,
@@ -167,6 +175,14 @@ final class AppDiagnostics {
     String? requestId,
     String? sessionId,
     String? invocationId,
+    String? failure,
+    String? failureDomain,
+    String? failureCategory,
+    String? reasonCode,
+    String? incidentId,
+    List<String> safeActions = const [],
+    String? runId,
+    String? runState,
     int? elapsedMilliseconds,
   }) {
     _append(
@@ -175,8 +191,18 @@ final class AppDiagnostics {
         level: level,
         component: component,
         operation: operation,
-        requestId: requestId,
-        sessionId: sessionId,
+        failure: _safeTokenOrNull(failure),
+        failureDomain: _safeTokenOrNull(failureDomain),
+        failureCategory: _safeTokenOrNull(failureCategory),
+        reasonCode: _safeTokenOrNull(reasonCode),
+        incidentId: _safeTokenOrNull(incidentId),
+        safeActions: List.unmodifiable(
+          safeActions.where(_safeToken).take(16),
+        ),
+        requestId: _safeTokenOrNull(requestId),
+        sessionId: _safeTokenOrNull(sessionId),
+        runId: _safeTokenOrNull(runId),
+        runState: _safeTokenOrNull(runState),
         invocationId: invocationId,
         elapsedMilliseconds: elapsedMilliseconds,
       ),
@@ -443,6 +469,9 @@ final class AppDiagnostics {
 
   static bool _safeToken(String value) =>
       RegExp(r'^[a-zA-Z0-9_.:-]{1,128}$').hasMatch(value);
+
+  static String? _safeTokenOrNull(String? value) =>
+      value != null && _safeToken(value) ? value : null;
 
   static void _ignore(Object _) {}
 

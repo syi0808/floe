@@ -416,6 +416,7 @@ final class ConversationController extends ChangeNotifier {
         },
       );
       if (_acceptsEpoch(epoch) && session?.id == original.id) {
+        _recordTerminalIssue(completion.run, original.id);
         if (_acceptSession(completion.session) == null) return;
         _lastConversationRunId = completion.run.runId;
         needsReload = false;
@@ -569,7 +570,12 @@ final class ConversationController extends ChangeNotifier {
           _notify();
         },
       );
-      if (_acceptsEpoch(epoch)) _acceptSession(completion.session);
+      if (_acceptsEpoch(epoch) &&
+          session?.id == accepted.id &&
+          completion.session.id == accepted.id) {
+        _recordTerminalIssue(completion.run, accepted.id);
+        _acceptSession(completion.session);
+      }
     }
   }
 
@@ -686,6 +692,7 @@ final class ConversationController extends ChangeNotifier {
       );
       if (_acceptsEpoch(epoch) && session?.id == original.id) {
         _clearRunUi();
+        _recordTerminalIssue(completion.run, original.id);
         if (_acceptSession(completion.session) == null) return;
         _lastConversationRunId = completion.run.runId;
         needsReload = false;
@@ -1018,6 +1025,7 @@ final class ConversationController extends ChangeNotifier {
     StackTrace stackTrace, {
     String? sessionId,
   }) {
+    if (_isSessionOutcomeBarrier(error)) return;
     final vaultError = error is AgentVaultException ? error : null;
     final owner = _ownerFailure(error);
     AppDiagnostics.error(
@@ -1039,4 +1047,72 @@ final class ConversationController extends ChangeNotifier {
       retryable: vaultError?.retryable,
     );
   }
+
+  void _recordTerminalIssue(AppRunSnapshot run, String sessionId) {
+    if (!run.state.terminal ||
+        run.sessionId != sessionId ||
+        !_diagnosticUuid(sessionId) ||
+        !_diagnosticUuid(run.runId)) {
+      return;
+    }
+    for (final issue in run.report?.issues ?? const <AppWireIssue>[]) {
+      final owner = issue.ownerFailure;
+      AppDiagnostics.event(
+        component: 'agent',
+        operation: 'conversation_terminal_issue',
+        level: DiagnosticLevel.warning,
+        failure: _diagnosticToken(owner?.reason ?? issue.code),
+        failureDomain: _diagnosticToken(owner?.domain),
+        failureCategory: _diagnosticToken(owner?.category),
+        reasonCode: _diagnosticToken(
+          issue.metadata['reason_code'] ?? owner?.reason,
+        ),
+        incidentId: _diagnosticUuid(owner?.incidentId),
+        safeActions: owner?.safeActions
+                .where((action) => RegExp(r'^[a-z_]{1,64}$').hasMatch(action))
+                .take(16)
+                .toList(growable: false) ??
+            const [],
+        sessionId: sessionId,
+        runId: run.runId,
+        runState: run.state.name,
+      );
+    }
+  }
+
+  bool _isSessionOutcomeBarrier(Object error) {
+    // Applying a stored Session outcome throws this typed barrier; it is not a
+    // fresh exception observation to append on every ordinary reload.
+    if (error is! AgentVaultException) return false;
+    final issue = session?.lastOutcome?.issue;
+    if (issue == null || error.failure != issue.reason) return false;
+    final owner = issue.ownerFailure;
+    if (owner != null) return identical(error.ownerFailure, owner);
+    return error.ownerFailure == null &&
+        error.reloadRequired == true &&
+        error.requestId == null &&
+        error.stage == null &&
+        error.metadata.isEmpty &&
+        error.domain == null &&
+        error.category == null &&
+        error.reasonCode == null &&
+        error.safeActions.isEmpty &&
+        error.incidentId == null &&
+        error.retryPolicy == null &&
+        error.correlationRequestId == null;
+  }
+
+  String? _diagnosticToken(String? value) =>
+      value != null && RegExp(r'^[a-zA-Z0-9_.:-]{1,128}$').hasMatch(value)
+      ? value
+      : null;
+
+  String? _diagnosticUuid(String? value) =>
+      value != null &&
+          value != '00000000-0000-0000-0000-000000000000' &&
+          RegExp(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+          ).hasMatch(value)
+      ? value
+      : null;
 }
