@@ -108,6 +108,7 @@ final class ConversationController extends ChangeNotifier {
     _runSession = null;
     _observedRunId = null;
     _conversationRun = null;
+    _stopRequested = false;
     progress = AgentProgress.idle;
   }
 
@@ -462,9 +463,9 @@ final class ConversationController extends ChangeNotifier {
     progress = AgentProgress.loading;
     _notify();
     try {
-      await _conversationRuntime
-          .awaitStoppedObservation(observation: observation)
-          .timeout(loadTimeout);
+      await _conversationRuntime.awaitStoppedObservation(
+        observation: observation,
+      );
       if (!_acceptsEpoch(epoch)) return;
       // Settlement is an explicit command operation. No failed/incomplete
       // settlement falls through to a query or a fresh Start.
@@ -520,6 +521,7 @@ final class ConversationController extends ChangeNotifier {
     needsReload = false;
     if (accepted.activeTurn != null) {
       _runSession = accepted;
+      _stopRequested = false;
       progress = AgentProgress.model;
       _notify();
       final completion = await _conversationRuntime.observeSessionRun(
@@ -546,9 +548,9 @@ final class ConversationController extends ChangeNotifier {
     progress = AgentProgress.loading;
     _notify();
     try {
-      await _conversationRuntime
-          .awaitStoppedObservation(observation: observation)
-          .timeout(loadTimeout);
+      await _conversationRuntime.awaitStoppedObservation(
+        observation: observation,
+      );
       if (!_acceptsEpoch(epoch)) return;
       final saved = await observation.read(
         () => gateway
@@ -686,17 +688,21 @@ final class ConversationController extends ChangeNotifier {
     final original = _runSession;
     final epoch = _adoptionEpoch;
     if (original == null || _stopRequested) return;
+    final runId = _observedRunId ?? original.activeTurn;
+    final request = _conversationRun;
+    if (runId == null && request == null) return;
     _stopRequested = true;
     progress = AgentProgress.stopping;
     _notify();
     try {
-      if (_observedRunId case final runId?) {
+      if (runId != null) {
         await _conversationRuntime.cancelObservedRun(runId);
-      } else if (_conversationRun case final request?) {
+      } else if (request != null) {
         await _conversationRuntime.cancelConversationTurn(request);
       }
     } on Object {
       if (!_acceptsEpoch(epoch)) return;
+      _stopRequested = false;
       failure = 'transport_unavailable';
       needsReload = true;
       _notify();

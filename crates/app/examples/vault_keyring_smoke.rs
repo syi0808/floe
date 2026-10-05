@@ -119,7 +119,19 @@ mod macos {
 
     async fn exercise(root: &Path, person: PersonId) -> Result<(), AgentFailure> {
         let vault = EncryptedAgentVault::create(root, person, KeyringVaultKeys).await?;
-        let initial = vault.create_session().await?;
+        use floe_conversation::{SessionStartAdmission as A, SessionStartFailure as F};
+        let receipt = match vault
+            .start_conversation_session(floe_conversation::StartSessionRequest {
+                principal: person.to_string(),
+                command_id: floe_kernel::CommandId::new(),
+            })
+            .await
+        {
+            Ok(A::Started(receipt) | A::Replayed(receipt)) => receipt,
+            Ok(A::NotApplied(reason)) => return Err(reason.reason()),
+            Err(F::NotAdmitted(reason) | F::Indeterminate(reason)) => return Err(reason),
+        };
+        let initial = vault.load(person, receipt.session_id).await?;
         let mut completed = initial.clone();
         completed.revision += 1;
         completed.messages.push(AgentMessage::User {

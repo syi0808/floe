@@ -65,15 +65,21 @@ New manual mutations and Action collection commits hold Day’s admission/drain 
 ## Conversation Session admission and observation
 
 Session Start owns creation and its positive receipt in one guarded Vault transaction.
-Exact receipt replay precedes the validated Conversation/Interactions command-kind
-occupancy check and the 4,096 retained Start-receipt capacity. The owner returns
-Started, Replayed or a typed structural NotApplied refusal. Occupant identities are
-immutable and receipts are not evicted; changing either policy requires revisiting
-that proof. An arbitrary Conflict, rollback failure or unreadable row is not proof
-of no effect. Pre-admission refusal is NotAdmitted; interrupted/post-BEGIN work is
-Indeterminate. Failure projecting a successfully admitted Session is Admitted. The
-physical writer guard stays armed until transaction completion; interruption retires
-the store's availability. This is not a claim that every Conversation write uses it.
+Before replay or refusal, it validates the Conversation and Interactions schemas and
+checks one consistent command-ID occupancy view across all command families. A
+replayed Start requires the Start receipt and sole SessionStart occupant to agree;
+inconsistent or multiply occupied IDs fail closed. Only a genuinely absent ID can
+receive a new Start, subject to the 4,096 retained Start-receipt capacity. Occupant
+identities are immutable and receipts are not evicted; changing either policy requires
+revisiting that proof. An arbitrary Conflict, rollback failure or unreadable row is
+not proof of no effect. Pre-admission refusal is NotAdmitted; interrupted/post-BEGIN
+work and integrity failure while validating a positive receipt are Indeterminate.
+After a valid Started or Replayed receipt, failure projecting its Session is Admitted.
+Only NotAdmitted(StorageBusy) permits three owner-scoped retries, sleeping 25, 50
+and 100 ms while preserving the same command ID. The physical writer guard stays
+armed until transaction completion;
+interruption retires the store's availability. This is not a claim that every
+Conversation write uses it.
 
 External Product command envelopes require UUID-v4 nonces so they cannot collide
 with internally derived command identities. NativeHost envelopes, query references
@@ -94,10 +100,13 @@ There is no separate business Session Recover command. The executor-owned recove
 driver reconciles Runs; the screen re-reads the exact Session and observes its Run.
 Client adoption epochs and monotonic Session revisions prevent obsolete responses
 from replacing current state. Stopping an observation or disposing a screen does
-not cancel a Run. Already handed-off bounded turn admission completes with its
-original identity before that observation releases its activity slot; a replacement
-load waits for this handshake before reading. Detached query completions cannot
-publish stale client state. Actual cancellation remains an explicit owner command.
+not cancel a Run. Already handed-off bounded turn admission settles with its original
+identity; a replacement load waits for this handshake before reading. If that
+observation stopped, it honors any explicit cancellation already requested, seals the
+shared read model before releasing its activity slot, and never adopts the receipt
+into a newer epoch. Re-observation can Stop the Session's activeTurn before the first
+Run event arrives. Detached query completions cannot publish stale client state.
+Actual cancellation remains an explicit owner command.
 
 ## Provenance and coverage travel with evidence
 

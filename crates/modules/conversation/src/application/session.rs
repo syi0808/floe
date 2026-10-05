@@ -15,7 +15,18 @@ pub async fn start_session<Repository: SessionRepository>(
     };
     request.validate().map_err(F::NotAdmitted)?;
     let principal = request.principal.clone();
-    let admission = repository.start_session(request).await?;
+    // Retry only a proven attempt-local Busy, preserving the exact command ID.
+    // The owning execution scope still bounds/cancels this future.
+    let mut attempt = 0u32;
+    let admission = loop {
+        match repository.start_session(request.clone()).await {
+            Err(F::NotAdmitted(AgentFailure::StorageBusy)) if attempt < 3 => {
+                tokio::time::sleep(std::time::Duration::from_millis(25 << attempt)).await;
+                attempt += 1;
+            }
+            result => break result?,
+        }
+    };
     match admission {
         A::Started(receipt) => verify_receipt(principal, None, receipt)
             .map(A::Started)

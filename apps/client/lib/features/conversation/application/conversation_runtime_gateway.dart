@@ -190,9 +190,10 @@ final class NativeConversationRuntimeGateway
       );
     } finally {
       if (!active.receiptReady.isCompleted) active.receiptReady.complete();
-      if (!observation.stopped &&
-          active.commandId != null &&
-          active.receipt == null) {
+      // A stopped observer cannot leave this command's old projection available
+      // to the next epoch. Seal before releasing its activity slot.
+      if (active.commandId != null &&
+          (active.receipt == null || observation.stopped)) {
         readModel.sealForResync();
       }
       if (identical(_active, active)) _active = null;
