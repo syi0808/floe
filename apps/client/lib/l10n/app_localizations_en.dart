@@ -837,6 +837,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get lastSuccessfulRead => 'Last successful read';
 
   @override
+  String get lastCompleteCalendarRead => 'Last complete read';
+
+  @override
+  String get lastCompleteCalendarRange => 'Last complete range';
+
+  @override
+  String get noCompleteCalendarReadYet => 'No complete read yet';
+
+  @override
   String get collectionStatusUnavailable => 'Collection status unavailable';
 
   @override

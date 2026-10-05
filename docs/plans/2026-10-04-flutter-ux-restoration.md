@@ -15,8 +15,8 @@ that every earlier open item is still open or that the entire restoration is don
   is not inferred from those probes.
 - **R2:** service cards/count, stable identity/copy, account grouping, selected-resource
   and permission dialogs are implemented. The macOS OS-access card is now implemented
-  through a status-only native port; live OS verification remains separate. Per-calendar last-read/failure presentation is now source-implemented; source-level
-  range/summary, future-calendar policy/global assistant preference and full
+  through a status-only native port; live OS verification remains separate. Per-calendar last-read/failure and source-level complete-range/read presentation
+  are source-implemented; future-calendar policy/global assistant preference and full
   source/workflow dependency decomposition remain open.
 - **R3:** drag-to-move, acknowledged composer close and automatic Day freshness are
   source-implemented. Full screen-state comparison and live EventKit write/recovery
@@ -1871,3 +1871,33 @@ The expiry follow-up passed the default Rust workspace/examples/doctests, both F
 storage builds, architecture 23 nodes/126 edges and diff checks. Flutter inputs are
 unchanged from the 84-fixture/analyzer qualification. Exact Apple follow-up remains
 pending; no live OS/provider test is inferred from build-only qualification.
+
+### R2 source-level collection summary
+
+The baseline CalendarPanel displayed Stored range and Last successful read beneath
+its grouped calendars. Day already owns both fields per source, updating the source
+summary only after a complete successful acquisition; resource-level partial success
+has separate fields. Restore those two rows using the existing read-only Day coverage
+passed to Connections. Join exactly one source reference and require its unique
+resource-reference set to equal the current selected set before displaying an
+aggregate. Missing, duplicate, mismatched or failed-to-requery coverage is unavailable,
+not Not collected. A matching source with no historical complete success says No complete read yet.
+Labels explicitly say Last complete read/range so a partial per-calendar success
+does not contradict the aggregate summary.
+Show source-changed/fenced or collection failure separately from the retained
+historical range/timestamp. Dates preserve Day's calendar-date/exclusive-end semantics;
+they are not converted through the viewer's current timezone. No acquisition,
+permission change, new storage or policy inference is allowed in this display work.
+Future-calendar policy and global assistant preference remain separate open items.
+
+
+Implemented as a small stateless CalendarCollectionSummary fed from the existing
+Day query, with no new owner state or provider call. All 88 disposable Flutter
+fixtures passed, including exact-set/duplicate/missing evidence, exclusive-end dates,
+initial failure and drift/fence history. A selection-dialog fixture now scrolls to
+its actual button before tapping; its command/uncertainty assertions remain intact.
+Analyzer remains 157 baseline infos, with no errors/warnings. Root inspected rendered
+390px and 1024px panels; no overflow was observed. Rust inputs are unchanged from the
+94eb6db final gate. Exact Apple build/signature qualification for this UI snapshot
+remains pending; full original/current screen comparison and live Calendar QA remain
+open.

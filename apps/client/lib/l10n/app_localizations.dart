@@ -1582,6 +1582,24 @@ abstract class AppLocalizations {
   /// **'Last successful read'**
   String get lastSuccessfulRead;
 
+  /// No description provided for @lastCompleteCalendarRead.
+  ///
+  /// In en, this message translates to:
+  /// **'Last complete read'**
+  String get lastCompleteCalendarRead;
+
+  /// No description provided for @lastCompleteCalendarRange.
+  ///
+  /// In en, this message translates to:
+  /// **'Last complete range'**
+  String get lastCompleteCalendarRange;
+
+  /// No description provided for @noCompleteCalendarReadYet.
+  ///
+  /// In en, this message translates to:
+  /// **'No complete read yet'**
+  String get noCompleteCalendarReadYet;
+
   /// No description provided for @collectionStatusUnavailable.
   ///
   /// In en, this message translates to:

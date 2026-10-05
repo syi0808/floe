@@ -2,6 +2,7 @@ import 'package:intl/intl.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 
 import 'calendar_system_access_card.dart';
+import 'calendar_collection_summary.dart';
 import 'service_presentation.dart';
 
 import 'package:flutter/material.dart';
@@ -85,13 +86,16 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
   bool get calendar => widget.integration?.category == 'calendar';
   bool get busy => opening || widget.controller.busy;
 
+  DayCalendarSourceCoverage? get _calendarCoverage => widget
+      .calendarCoverage
+      ?.sources
+      .where((value) => value.sourceRef == widget.source.sourceRef.value)
+      .singleOrNull;
+
   String _resourceDescription(ResourceSummary resource) {
     if (!calendar) return resource.label;
     // Identity joins only. Historical read evidence never implies current access.
-    final source = widget.calendarCoverage?.sources
-        .where((value) => value.sourceRef == widget.source.sourceRef.value)
-        .singleOrNull;
-    final coverage = source?.resources
+    final coverage = _calendarCoverage?.resources
         .where((value) => value.resourceRef == resource.resourceRef.value)
         .singleOrNull;
     final strings = AppLocalizations.of(context);
@@ -265,6 +269,17 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
           ),
           if (source.selectedResources.isEmpty)
             const Text('Choose what you want to connect.'),
+          if (calendar && source.selectedResources.isNotEmpty) ...[
+            const SizedBox(height: 28),
+            const FloeDivider(),
+            const SizedBox(height: 20),
+            CalendarCollectionSummary(
+              coverage: _calendarCoverage,
+              selectedResourceRefs: source.selectedResources
+                  .map((resource) => resource.resourceRef.value)
+                  .toList(growable: false),
+            ),
+          ],
           const SizedBox(height: FloeSpace.base),
           Wrap(
             spacing: FloeSpace.sm,
