@@ -2254,3 +2254,35 @@ application error or unsupported-format outcome was captured. Launch-command
 lifetime is still being checked; do not label this an application crash. No reset,
 provider connection, server launch or live model request occurred. Updated native
 build qualification and focused review closure are pending for the integrated code.
+
+### Stop lifecycle closure and native startup evidence (2026-10-05)
+
+Root accepted the focused Opus closure for core Session admission and adjudicated
+remaining Stop behavior as one client lifecycle issue. Luna implemented a common
+Run UI transition/clear path and a Run generation paired with the screen epoch.
+Late no-op/failure responses cannot change a different Run or epoch. An uncertain
+Cancel no longer abandons observation, and failed Cancel futures are retriable with
+the retained exact command identity. Activity-slot cleanup is unconditional even
+if a disposed read model throws during sealing. Root integrated the reviewed worker
+changes as fdd20d1 and f74b66e; Rust source is unchanged from the qualified 6958 tree.
+
+Five disposable controller checks passed (linked child targeting, no-op Stop,
+late parent/old-epoch failures, failed Stop progress), two new runtime checks passed
+(continued observation/exact-ID retry, disposed-model waiter release), and the two
+still-applicable stopped-admission checks remain passing. The old test expecting
+Cancel failure to abort observation was preserved outside the active fixture suite
+and superseded by the continued-observation assertion. No product assertions were
+weakened. Full external Flutter suite passes 110 checks; analyzer retains only the
+157 baseline infos. Prior Rust workspace/FFI gates are reused because no covered
+Rust input changed. Updated Apple builds for the final Flutter snapshot are pending.
+
+Exact6958 native qualification passed Debug/Release build/signature/getters2/1,
+arm64 iOS Simulator Debug, and macOS vault_keyring_smoke compile-only. Retained
+LaunchServices session66959/PID58813 displayed the normal Calendar shell, without
+Vault/onboarding error. Window1900 screenshot shows no coverage for the selected
+date. This confirms startup only, not Vault-ready conversation or server/model use.
+The earlier e823 nohup disappearance remains unclassified rather than an app crash.
+
+Native UI interaction is currently blocked: the task catalog has no input/AX-tree
+tool and the non-prompting AXIsProcessTrusted query returned false. No OS permission
+was changed or input workaround attempted. The captured QA app is left untouched.
