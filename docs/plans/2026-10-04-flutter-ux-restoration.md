@@ -2011,3 +2011,84 @@ Notify the user of the compatibility boundary before asking them to run that fut
 snapshot. The currently published Calendar snapshot remains unaffected while this
 proposal is reviewed. Actions Approved-work pickup and broad workflow decomposition
 remain subsequent slices, not hidden additions to this change.
+
+#### Session design adjudication (supersedes the unified-journal proposal above)
+
+The adversarial design review exposed a more fundamental issue. The existing
+business Recover command has no Session transition: it only records the current
+revision, and refuses every Session with an active turn. The shipped controller
+only offers it for an active turn. In the orphaned-run case it can even return
+VaultUnavailable and retire the Vault. Root verified the generation-owned recovery
+driver already settles orphaned Runs; user observation must not duplicate that owner.
+
+Chosen correction:
+
+- Delete the ineffective business Recover command, its owner/repository/free-function
+  path, wire variant, Dart gateway method and recovery receipt table. The existing UI
+  recovery action re-observes the exact Session and its linked Run; it neither starts
+  a new Session nor asks a query to initiate recovery. The owner recovery driver remains
+  the sole owner of orphan reconciliation. This also removes the proposed reason for
+  a second Start/Recover outcome journal. Keep the existing positive Start receipt;
+  do not implement the earlier unified journal or a negative table solely for dead
+  Recover behavior.
+- Start receives a typed owner admission result. Read its exact existing receipt
+  first inside the writer transaction. Immutable foreign-kind occupancy and an absent
+  Start ID with exhausted non-evicting Start capacity are structural no-effect proofs:
+  return typed NotApplied only after the validated transaction successfully completes.
+  No raw Conflict/Busy/storage error is such proof. These proofs rely on no receipt
+  eviction and immutable occupied IDs; changing either invariant requires changing
+  this admission contract. All uncertain commit/rollback/post-commit access failures
+  remain Indeterminate. Post-effect snapshot projection failure remains Admitted or
+  Indeterminate and keeps the ID.
+- The current Conversation Start transaction has no armed-drop guard. Use the
+  existing physical journal_transaction/JournalWriteGuard mechanism for this path,
+  covering BEGIN through final commit/rollback. Do not claim all Conversation writes
+  have already adopted it. An abandoned Start must retire its Vault generation before
+  an exact retry can assert non-admission.
+- Replace the cross-kind helper's sqlite_schema/missing-table fallback with a fixed
+  occupancy query after validation of both Conversation and Interactions families.
+  Audit the reverse checks in interaction decisions/refresh, Run and Cancel admission.
+  Missing/corrupt families fail closed, never mean an ID is unused.
+- External AppWire command identities must be UUID v4; deterministic internal owner
+  identities remain UUID v5. Enforce this at the external command-envelope boundary,
+  not in generic CommandId or query-reference decoding. Audit all public command
+  producers before applying it. This prevents clients from occupying the derived
+  resume/decision ID namespace without rejecting internal owner replays.
+- Keep the app-lifetime gateway's retained Start state: AppRuntime already creates it
+  once with a late-final field, independently of Vault ready generations and screens.
+  Do not add an unnecessary parallel tracker. Separate an explicit settle-pending-Start
+  method from creating a new Start. Delete payload-equality-as-user-intent heuristics:
+  every Start payload is identical. Default load/retry settles and adopts its retained
+  Start first. A genuinely later New gesture settles the old command without adopting
+  its result, then creates a fresh command; a possible extra empty Session is preferable
+  to silently returning a used Session as New. No query clears or replays this state.
+- Clear retained state on a decoded positive acknowledgement or typed NotApplied;
+  first-attempt NotAdmitted may clear it, later NotAdmitted cannot. Decoding/transport
+  failures and Admitted are not completion. Valid command resolution can clear an ID
+  even when its older Session snapshot is not adopted.
+- Add a controller adoption epoch, advanced on new load intent, Vault unavailability
+  and disposal. Capture/check it on asynchronous mutations, including callbacks that
+  currently depend only on the ABA-prone `_sealed` boolean. Same-session older/equal
+  snapshots are idempotent observations, not errors that invent needsReload. Check
+  revision before clearing interactions/history/failure state; later synchronization
+  must use the retained current snapshot, not the discarded older response. Different
+  Session IDs require correlation to the active explicit load/Start action.
+- Pure gateway reads need no client command lock, but the current native lane itself
+  is serialized. Do not claim parallel native reads from fake-transport concurrency
+  fixtures, and do not add another native execution lane in this slice.
+
+Stored compatibility is deliberate: removing the obsolete recovery table changes the
+Conversation family layout, so advance its marker (currently9) once. Existing profiles
+must fail closed as UnsupportedVersion, with no automatic reset or destructive recovery
+affordance. Root verified inspect_family rejects missing/extra/changed objects as
+unsupported; test the actual old-family profile as well as a fresh profile. No reset,
+credential change or migration of user data is part of implementation/qualification.
+
+Add these deletion/verification targets to the earlier file map: obsolete Recovery
+exports and DTO validation arms, all session-recovery table references, native command
+ID producers, app-runtime gateway lifetime, controller stale continuations, and the
+fixed-layout occupancy helper's reverse callers. Qualify Start drop/uncertain BEGIN,
+capacity and foreign-occupant proof, absent reads while Start remains pending, distinct
+New versus retry, lock/unlock ABA, and command settlement with stale snapshot adoption.
+This revised target must be resolved before implementation; the earlier table-replacement
+proposal is historical and must not be implemented alongside it.
