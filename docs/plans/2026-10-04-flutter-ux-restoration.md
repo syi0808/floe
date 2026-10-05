@@ -1,5 +1,38 @@
 # Restore the pre-refactor Flutter experience
 
+## Current completion overview — 2026-10-05
+
+This overview distinguishes source implementation from complete visual/runtime
+acceptance. The execution checkpoints below are chronological evidence, not a claim
+that every earlier open item is still open or that the entire restoration is done.
+
+- **Development storage prerequisite:** build-selected non-Keychain development
+  custody and isolated encrypted client/server profiles are implemented. Production
+  retains OS keyring and encryption. Synthetic refusal/restart gates pass; production
+  Keychain ACL after changed signing identity and full live startup remain separate.
+- **R1:** restored Remote server/pairing product flow is implemented and synthetic
+  encrypted client/server pairing/restart is qualified; full current app acceptance
+  is not inferred from those probes.
+- **R2:** service cards/count, stable identity/copy, account grouping, selected-resource
+  and permission dialogs are implemented. Actual OS access projection, Day-owned
+  freshness detail, future-calendar policy/global assistant preference and full
+  source/workflow dependency decomposition remain open.
+- **R3:** drag-to-move, acknowledged composer close and automatic Day freshness are
+  source-implemented. Full screen-state comparison and live EventKit write/recovery
+  acceptance remain open.
+- **R4:** Experts descriptions/expansion review, bounded older messages and safe
+  proposal preview/existing Action reopen are source-implemented. History cursor
+  recovery, retained-command lifecycle and full visual/runtime acceptance remain open.
+- **Architecture convergence:** initial modular-monolith topology is already present;
+  the newer cleanup is still in the Connections/read-contract/recovery stage.
+  Session query purity, Actions Approved-work recovery, narrower Flutter/AppRuntime
+  and Context/Day ports, real workflow dependency separation and selective storage
+  decomposition remain outstanding. Moving configuration methods to a private file
+  is not completion of the dependency split.
+- **Global gate:** Memory/Settings/detail/error-state parity, full active-Observe/live
+  Calendar flows and the whole-screen matrix are not complete. Permanent S3 suite
+  reconstruction remains deferred. There is no evidenced whole-project percentage.
+
 ## Scope and decisions
 
 Requested on 2026-10-04 after the UI audit. Implementation is performed directly by the coordinating engineer; independent Opus adversarial review may be used. This plan is the execution authority for this restoration, not a new architecture specification.
@@ -1338,3 +1371,33 @@ workspace/default examples/doctests, both FFI profiles, architecture/diff checks
 actual encrypted two-cycle pairing/Forget/restart, product encryption/key refusal
 and session reopen, and all 61 external Flutter fixtures. Exact Apple artifact
 qualification and targeted N1–N5 closure review remain pending for this snapshot.
+
+#### Narrow closure corrections
+
+The 0d97ac35 source review closed driver exclusivity, semantic-fence handling,
+completed-authority no-reinvalidation and the atomic presentation proof. Root
+confirmed its two remaining edge cases: native drift is surfaced as an error rather
+than a mismatched successful observation, and owner admission must be rechecked
+after native I/O. Treat only AccessReviewRequired as a definitive native-drift
+rejection before reservation; other failures remain pending. Re-admit before reserve
+and Access invalidation. Register the existing directional child cancellation scope
+for foreground ownership, so owner shutdown cannot cancel a caller/Run upward;
+parent cancellation still reaches the child. Observer polling becomes 100 ms.
+
+The older post-invalidation authority-repair/no-product-exit path is not fixed by
+this bounded presentation change and remains explicit follow-up in the source
+configuration/Observe workflow cutover. Do not claim all Connections recovery or
+full live active-Observe qualification is closed. Old 566-era in-flight presentation
+profiles are not migrated or reset automatically.
+
+Two disposable probes passed for definitive-versus-transient drift classification
+and actual ExecutionScope child cancellation direction. Probe modules were archived
+and removed before the final gate. These are focused primitive checks, not a full
+shutdown-mid-native-I/O or live-provider scenario.
+
+Narrow admission/cancellation local gates passed: workspace/default examples/doctests,
+both FFI profiles, architecture/diff checks, encrypted pairing/restart, product
+encryption/key refusal and session reopen. Dart/Go inputs and wire shapes did not
+change, so their previously passed gates (including 61 external Flutter fixtures)
+are reused rather than rerun. Exact new Apple artifacts and focused delta review
+remain pending.

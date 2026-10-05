@@ -2035,7 +2035,10 @@ impl ConnectionsService {
             record = current;
             if let Some(active) = NativeDriveLease::acquire(self.jobs_active.clone(), operation_id)?
             {
-                self.register_job(operation_id, scope)?;
+                // Owner shutdown cancels only this child; never mutate the
+                // caller's cancellation token or an enclosing Run's token.
+                let drive_scope = scope.child_scope(scope.deadline(), 0, 0, None);
+                self.register_job(operation_id, &drive_scope)?;
                 let mut handoff = SourceConfigurationForeground {
                     lease: Some(JobLease {
                         _active: active,
@@ -2047,7 +2050,9 @@ impl ConnectionsService {
                     pending: Some(record.clone()),
                     scope: scope.clone(),
                 };
-                let result = self.drive_source_configuration(actor, record, scope).await;
+                let result = self
+                    .drive_source_configuration(actor, record, &drive_scope)
+                    .await;
                 if result.is_ok() {
                     handoff.pending = None;
                 }
@@ -2058,7 +2063,7 @@ impl ConnectionsService {
             tokio::select! {
                 _ = scope.cancellation().cancelled() => return Err(AgentFailure::Cancelled),
                 _ = tokio::time::sleep_until(scope.deadline()) => return Err(AgentFailure::DeadlineExceeded),
-                _ = tokio::time::sleep(std::time::Duration::from_millis(25)) => {},
+                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {},
             }
         }
     }

@@ -257,3 +257,11 @@ Replays consult that receipt before re-observing mutable evidence. A Completed
 authority operation never invalidates grants again merely to render its result;
 current summary reads may still require Access availability. Owner shutdown closes
 new settlement and handoff admission.
+
+Foreground ownership registers a directional child cancellation scope: owner shutdown
+may cancel the drive without cancelling the caller or an enclosing Run, while caller
+cancellation still reaches the drive. After native observation the owner and scope
+are re-admitted before reservation or Access invalidation. Before reservation, an
+AccessReviewRequired observation is definitive subject drift and uses the guarded
+negative receipt; transport, storage, cancellation and other permission failures
+remain pending rather than becoming invented negative outcomes.

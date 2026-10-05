@@ -32,6 +32,17 @@ pub(super) fn terminal_outcome(
         _ => Err(AgentFailure::Conflict),
     }
 }
+fn reviewed_subject_continues(
+    observation: Result<floe_access::SourceExpectation, AgentFailure>,
+    expected: &floe_access::SourceExpectation,
+) -> Result<bool, AgentFailure> {
+    match observation {
+        Ok(observed) => Ok(&observed == expected),
+        Err(AgentFailure::AccessReviewRequired) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 fn source_command_identity(
     record: &ConnectionsRecord,
     operation_id: uuid::Uuid,
@@ -143,12 +154,17 @@ impl ConnectionsService {
             }
             let current = current.ok_or(AgentFailure::Conflict)?;
             if let Some(expected) = &descriptor.expected {
-                if &self.evidence.observe(actor, &current, scope).await? != expected {
+                if !reviewed_subject_continues(
+                    self.evidence.observe(actor, &current, scope).await,
+                    expected,
+                )? {
                     return self
                         .reject_unreserved_configuration(record, descriptor.source, operation_id)
                         .await;
                 }
             }
+            self.ensure_open()?;
+            check(actor, scope)?;
             self.reserve(
                 actor,
                 record.command_id,
@@ -199,6 +215,8 @@ impl ConnectionsService {
                     reservation_generation: operation.reservation_generation,
                     source: configuration_expectation(&descriptor, &successor)?,
                 };
+                self.ensure_open()?;
+                check(actor, scope)?;
                 let result = self.access.invalidate_source(actor, evidence, scope).await;
                 match self
                     .access
