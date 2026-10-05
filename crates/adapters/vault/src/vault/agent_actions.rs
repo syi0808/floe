@@ -258,7 +258,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .await
-            .map_err(|_| AgentFailure::StorageUnavailable)?;
+            .map_err(super::database_failure)?;
         let result = async {
             self.validate_actions_schema(&transaction).await?;
             Ok(())

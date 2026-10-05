@@ -1096,3 +1096,56 @@ Exact a770 native qualification separately passed macOS Debug/Release strict sig
 arm64 iOS simulator and Darwin Go production/dev compilation. Its synthetic Dart-only
 incremental builds and restored-original builds both triggered Runner CodeSign and
 passed strict whole-app verification without re-signing workarounds or cache cleanup.
+
+### Third review adjudication: uncertainty admission and display bounds
+
+Root confirmed the Source DB commit-uncertainty gap. Add a physical store unavailable
+latch and a source-journal writer guard held through commit or latch publication. A
+queued negative writer must not enter the gap between SQLite releasing its lock and
+the caller observing a failed COMMIT. Failed commit/rollback closes new product-store
+connections until an explicit reopen; all five source-journal mutation paths use the
+same guard and finisher. No negative receipt can be written through the closed store.
+A deterministic failed-COMMIT probe checks admission closure and unchanged data after
+reopen; it does not assume unverified Turso fsync or drop semantics.
+
+The combined account/title limit was a Day presentation constraint, not stored source
+integrity. Remove that constraint from ConnectionResource validation. Day's own
+bounded calendar-name allowance becomes 1024 bytes to carry both independently
+bounded 256-byte labels intact; identifiers and overall acquisition/snapshot budgets
+are unchanged. Long labels remain display metadata, never a resource identity.
+
+The remaining Registry query/next and startup SQL begin/read mappings now use the
+typed database failure mapper. AccessService's reviewed snapshot/receipt/commit paths
+were inspected and propagate repository errors; their Conflict conversions apply to
+pure grant transitions, not caught storage errors. The concrete Gateway verifier
+derives expectation, purpose and key identity from the signed canonical challenge;
+consumer kind additionally remains bound to the currently admitted grant. Server
+StageResult consumes an assistant admission once. Mirror that single-release rule in
+the client signer: exact receipt replay remains allowed, but a second release
+operation/challenge for one admission conflicts.
+
+The review's request to commit permanent regression suites and grep gates is deferred
+under the user's explicit T0/S3 sequence and repository guidance. Preserve the natural
+language cases and disposable evidence; do not override that instruction. Plaintext
+startup diagnostic wording was corrected to profile_invalid, distinct from encrypted
+old-layout unsupported_layout. Whole runtime QA, metadata-only configure separation
+and production Keychain ACL qualification remain open.
+
+The source writer guard is armed before BEGIN and settles only after the SQL finisher
+returns. Dropping an armed future latches the store before the mutex releases, closing
+the cancellation gap as well as the explicit COMMIT-error gap. A determinate Busy at
+BEGIN disarms without retiring the store. Probes passed for forced COMMIT failure,
+armed-future drop, no resulting negative receipt, exact data/key reopen, long Unicode
+account-qualified labels, the Day display limit, and single assistant release with
+exact-receipt matching. Permanent suites remain S3 work; probe code is archived
+outside the repository before final gates. Exact 378 Apple builds/signatures and
+profile getters separately passed; the new guard/label/release checkpoint needs its
+own native artifact qualification.
+
+Uncertainty checkpoint final gate: workspace/default examples/doctests, production
+and development FFI, architecture/diff checks passed after probe removal. The actual
+Go/Rust encrypted two-cycle pairing/restart flow passed with one exact Forget retry
+in each cycle, as did product encryption, key/error preservation and session reopen.
+All 61 external Flutter fixtures passed. Go executable inputs and Dart inputs are
+unchanged; their previously passed gates apply. Native Rust artifact requalification
+and a focused review of the cancellation/commit fence remain pending.

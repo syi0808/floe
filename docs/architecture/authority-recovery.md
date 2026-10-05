@@ -204,3 +204,11 @@ Assistant authorization receipts permit exact live replay after a lost acknowled
 The operation/challenge, canonical digest, full expectation and expiry must match;
 current enrollment, grant, producer proof and expiry checks run again before the
 deterministic signature is returned. A receipt is not historical authorization.
+
+The product-store source journal serializes its mutation paths through a writer
+guard held until SQL outcome and availability are settled. A failed commit/rollback
+or a dropped, armed SQL future latches the store before releasing that guard. New
+connections and negative-journal writes then fail until explicit reopen; absence
+after an uncertain commit is never used to manufacture NotApplied. Readiness does
+not automatically delete data or replace a key. Assistant admissions permit one
+release receipt; exact live replay of that receipt remains permitted.

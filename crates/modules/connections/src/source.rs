@@ -85,7 +85,6 @@ impl ConnectionResource {
             || self.handle.as_str().chars().any(char::is_control)
             || self.label.is_empty()
             || self.label.len() > MAX_RESOURCE_LABEL_BYTES
-            || self.qualified_label().len() > MAX_RESOURCE_LABEL_BYTES
             || self.label.chars().any(char::is_control)
         {
             return Err(SourceConnectionError::InvalidResource);

@@ -110,9 +110,9 @@ non-secret custody categories (locked/denied, busy, timeout, missing, malformed 
 root authentication failure). A failed read before first Put leaves no creation
 marker; an uncertain Put retains its initializing marker and key evidence.
 
-The current encrypted root layout is owner-scoped (format 2). Older encrypted or
-plaintext profiles are not migrated or reset: an older layout is refused as
-`unsupported_layout` before owner directories are created. Fresh creation keeps
+The current encrypted root layout is owner-scoped (format 2). Older profiles are not migrated or reset: encrypted format 1 is refused as
+`unsupported_layout` before owner directories are created. Old plaintext profiles
+are refused as `profile_invalid`. Fresh creation keeps
 its `initializing` marker through the first durable Trust identity/token/state write.
 Only then does composition publish Ready. An interrupted bootstrap reports
 `creation_incomplete` and preserves its key and files for deliberate local recovery.

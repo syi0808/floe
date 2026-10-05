@@ -5,6 +5,10 @@ use std::collections::BTreeMap;
 
 use super::{Event, EventSchedule};
 
+/// Display-only calendar/account text. Resource identifiers retain separate bounds.
+/// Accommodates a qualified account and title without truncating either name.
+pub const MAX_CALENDAR_NAME_BYTES: usize = 1024;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarSource {
     pub can_modify: bool,

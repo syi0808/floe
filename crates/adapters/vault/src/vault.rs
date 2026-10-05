@@ -274,11 +274,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 (),
             )
             .await
-            .map_err(unavailable)?;
+            .map_err(database_failure)?;
         let identity = rows
             .next()
             .await
-            .map_err(unavailable)?
+            .map_err(database_failure)?
             .ok_or(AgentFailure::VaultUnavailable)?;
         if identity.get::<i64>(0).map_err(unavailable)? != crate::schema::ENCRYPTED_LAYOUT_VERSION
             || identity.get::<String>(1).map_err(unavailable)? != person_id.to_string()
@@ -292,7 +292,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 (),
             )
             .await
-            .map_err(unavailable)?;
+            .map_err(database_failure)?;
         vault.validate_stored_records().await?;
         Ok(vault)
     }
@@ -643,7 +643,7 @@ async fn encrypted_database(path: &Path, key: &RootKey) -> Result<turso::Databas
         })
         .build()
         .await
-        .map_err(unavailable)
+        .map_err(database_failure)
 }
 
 fn private_directory(path: &Path) -> Result<(), AgentFailure> {

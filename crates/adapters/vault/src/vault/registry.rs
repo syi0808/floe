@@ -130,8 +130,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         crate::schema::inspect_family(connection, crate::schema::Family::Registry)
             .await
             .map_err(crate::schema::SchemaFailure::into_agent)?;
-        let mut rows = connection.query("SELECT revision, CASE WHEN length(CAST(payload AS BLOB)) <= 262144 THEN payload ELSE NULL END FROM agent_expert_registry WHERE id = 1", ()).await.map_err(unavailable)?;
-        let Some(row) = rows.next().await.map_err(unavailable)? else {
+        let mut rows = connection.query("SELECT revision, CASE WHEN length(CAST(payload AS BLOB)) <= 262144 THEN payload ELSE NULL END FROM agent_expert_registry WHERE id = 1", ()).await.map_err(database_failure)?;
+        let Some(row) = rows.next().await.map_err(database_failure)? else {
             return Ok(None);
         };
         let snapshot: RegistrySnapshot =

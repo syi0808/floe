@@ -12,7 +12,7 @@ pub use action_collection::{
 pub use calendar::{
     CalendarBatch, CalendarExternalRevision, CalendarFailure, CalendarMirror,
     CalendarMirrorSourceState, CalendarMirrorState, CalendarRange, CalendarRecord,
-    CalendarSelection, CalendarSource, CalendarSyncStatus,
+    CalendarSelection, CalendarSource, CalendarSyncStatus, MAX_CALENDAR_NAME_BYTES,
 };
 pub use capture::{Capture, CaptureProcessing, CaptureSource, DomainRef};
 pub use entity::{

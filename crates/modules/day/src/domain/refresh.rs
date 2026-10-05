@@ -145,7 +145,7 @@ impl CalendarSourceVersion {
                 calendar.calendar_id.is_empty()
                     || calendar.calendar_id.len() > 512
                     || calendar.calendar_name.is_empty()
-                    || calendar.calendar_name.len() > 256
+                    || calendar.calendar_name.len() > super::MAX_CALENDAR_NAME_BYTES
             })
         {
             return Err(DayError::validation("invalid calendar source version"));

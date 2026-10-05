@@ -85,6 +85,9 @@ impl SourceRepository for TursoStore {
         source: &'a SourceConnection,
     ) -> BoxFuture<'a, Result<(), SourceRepositoryError>> {
         Box::pin(async move {
+            let mut writer = self
+                .source_write_guard()
+                .map_err(source_connection_failure)?;
             source
                 .validate()
                 .map_err(|_| SourceRepositoryError::Corrupt)?;
@@ -97,10 +100,10 @@ impl SourceRepository for TursoStore {
                 return Err(SourceRepositoryError::Corrupt);
             }
             let connection = self.connection().await.map_err(source_connection_failure)?;
-            connection
-                .execute("BEGIN IMMEDIATE", ())
+            writer
+                .begin(&connection)
                 .await
-                .map_err(source_database_failure)?;
+                .map_err(source_connection_failure)?;
             let result = async {
             if fenced_on(&connection, source.person_id(), source.connection_id()).await? { return Err(SourceRepositoryError::Conflict); }
         let changed = connection.execute(
@@ -112,7 +115,9 @@ impl SourceRepository for TursoStore {
         }
             Ok(())
         }.await;
-            finish_source_transaction(&connection, result).await?;
+            let outcome = finish_source_transaction(self, &connection, result).await;
+            writer.settled();
+            outcome?;
 
             Ok(())
         })
@@ -124,6 +129,9 @@ impl SourceRepository for TursoStore {
         expected_revision: u64,
     ) -> BoxFuture<'a, Result<(), SourceRepositoryError>> {
         Box::pin(async move {
+            let mut writer = self
+                .source_write_guard()
+                .map_err(source_connection_failure)?;
             source
                 .validate()
                 .map_err(|_| SourceRepositoryError::Corrupt)?;
@@ -140,10 +148,10 @@ impl SourceRepository for TursoStore {
                 return Err(SourceRepositoryError::Corrupt);
             }
             let connection = self.connection().await.map_err(source_connection_failure)?;
-            connection
-                .execute("BEGIN IMMEDIATE", ())
+            writer
+                .begin(&connection)
                 .await
-                .map_err(source_database_failure)?;
+                .map_err(source_connection_failure)?;
             let result = async {
             if fenced_on(&connection, source.person_id(), source.connection_id()).await? { return Err(SourceRepositoryError::Conflict); }
             let mut rows = connection.query(
@@ -170,19 +178,9 @@ impl SourceRepository for TursoStore {
             if changed != 1 { return Err(SourceRepositoryError::Conflict); }
             Ok(())
         }.await;
-            match result {
-                Ok(()) => connection
-                    .execute("COMMIT", ())
-                    .await
-                    .map_err(storage_error)
-                    .map(|_| ()),
-                Err(error) => {
-                    if connection.execute("ROLLBACK", ()).await.is_err() {
-                        return Err(SourceRepositoryError::StorageUnavailable);
-                    }
-                    Err(error)
-                }
-            }
+            let outcome = finish_source_transaction(self, &connection, result).await;
+            writer.settled();
+            outcome
         })
     }
 }
@@ -291,25 +289,35 @@ async fn source_on(
         .transpose()
 }
 async fn finish_source_transaction<T>(
+    store: &TursoStore,
     connection: &turso::Connection,
     result: Result<T, SourceRepositoryError>,
 ) -> Result<T, SourceRepositoryError> {
+    let result = result.and_then(|value| {
+        store
+            .check_available()
+            .map_err(source_connection_failure)
+            .map(|_| value)
+    });
     match result {
         Ok(value) => {
-            connection
-                .execute("COMMIT", ())
-                .await
-                .map_err(storage_error)?;
+            if connection.execute("COMMIT", ()).await.is_err() {
+                store.latch_unavailable();
+                return Err(SourceRepositoryError::StorageUnavailable);
+            }
+            store.check_available().map_err(source_connection_failure)?;
             Ok(value)
         }
         Err(error) => {
             if connection.execute("ROLLBACK", ()).await.is_err() {
+                store.latch_unavailable();
                 return Err(SourceRepositoryError::StorageUnavailable);
             }
             Err(error)
         }
     }
 }
+
 impl SourceOperationRepository for TursoStore {
     fn rejected_operation_command<'a>(
         &'a self,
@@ -339,6 +347,9 @@ impl SourceOperationRepository for TursoStore {
     ) -> BoxFuture<'a, Result<floe_connections::ConnectionsCommandResolution, SourceRepositoryError>>
     {
         Box::pin(async move {
+            let mut writer = self
+                .source_write_guard()
+                .map_err(source_connection_failure)?;
             if reason == floe_kernel::AgentFailure::StorageBusy {
                 return Err(SourceRepositoryError::StorageBusy);
             }
@@ -350,10 +361,10 @@ impl SourceOperationRepository for TursoStore {
                 return Err(SourceRepositoryError::Conflict);
             }
             let connection = self.connection().await.map_err(source_connection_failure)?;
-            connection
-                .execute("BEGIN IMMEDIATE", ())
+            writer
+                .begin(&connection)
                 .await
-                .map_err(source_database_failure)?;
+                .map_err(source_connection_failure)?;
             let result=async {
                 let mut rows=connection.query("SELECT operation_id,command_id,person_id,connection_id,revision,fence,payload FROM source_operations WHERE operation_id=? OR (person_id=? AND command_id=?)",
                     (identity.record_ref.to_string(),identity.person_id.to_string(),identity.command_id.to_string())).await.map_err(source_database_failure)?;
@@ -375,7 +386,9 @@ impl SourceOperationRepository for TursoStore {
                 connection.execute("INSERT INTO source_command_rejections VALUES(?,?,?)",(receipt.identity.person_id.to_string(),receipt.identity.command_id.to_string(),payload)).await.map_err(source_database_failure)?;
                 Ok(ConnectionsCommandResolution::NotApplied(reason))
             }.await;
-            finish_source_transaction(&connection, result).await
+            let outcome = finish_source_transaction(self, &connection, result).await;
+            writer.settled();
+            outcome
         })
     }
 
@@ -384,16 +397,19 @@ impl SourceOperationRepository for TursoStore {
         request: SourceOperationReservation,
     ) -> BoxFuture<'a, Result<SourceOperationAdmission, SourceRepositoryError>> {
         Box::pin(async move {
+            let mut writer = self
+                .source_write_guard()
+                .map_err(source_connection_failure)?;
             let requested = request.record;
             requested.validate()?;
             if requested.revision != 1 || requested.phase != SourceOperationPhase::Reserved {
                 return Err(SourceRepositoryError::Conflict);
             }
             let connection = self.connection().await.map_err(source_connection_failure)?;
-            connection
-                .execute("BEGIN IMMEDIATE", ())
+            writer
+                .begin(&connection)
                 .await
-                .map_err(source_database_failure)?;
+                .map_err(source_connection_failure)?;
             let result = async {
             if source_command_rejection_on(&connection,requested.expected.source.person_id(),requested.command_id).await?.is_some() {
                 return Err(SourceRepositoryError::Conflict);
@@ -417,7 +433,9 @@ impl SourceOperationRepository for TursoStore {
             if changed != 1 { return Err(SourceRepositoryError::Conflict); }
             Ok(SourceOperationAdmission { record: requested, replayed: false })
         }.await;
-            finish_source_transaction(&connection, result).await
+            let outcome = finish_source_transaction(self, &connection, result).await;
+            writer.settled();
+            outcome
         })
     }
     fn load_operation<'a>(
@@ -437,11 +455,14 @@ impl SourceOperationRepository for TursoStore {
         change: SourceOperationChange,
     ) -> BoxFuture<'a, Result<SourceOperationRecord, SourceRepositoryError>> {
         Box::pin(async move {
+            let mut writer = self
+                .source_write_guard()
+                .map_err(source_connection_failure)?;
             let connection = self.connection().await.map_err(source_connection_failure)?;
-            connection
-                .execute("BEGIN IMMEDIATE", ())
+            writer
+                .begin(&connection)
                 .await
-                .map_err(source_database_failure)?;
+                .map_err(source_connection_failure)?;
             let result = async {
             let current = operation_on(&connection, change.operation_id).await?.ok_or(SourceRepositoryError::Conflict)?;
             let source = source_on(&connection, &current.expected.source.connection_id()).await?;
@@ -465,7 +486,9 @@ impl SourceOperationRepository for TursoStore {
             if changed != 1 { return Err(SourceRepositoryError::Conflict); }
             Ok(next)
         }.await;
-            finish_source_transaction(&connection, result).await
+            let outcome = finish_source_transaction(self, &connection, result).await;
+            writer.settled();
+            outcome
         })
     }
     fn list_nonterminal<'a>(
@@ -524,7 +547,7 @@ impl SourceOperationRepository for TursoStore {
                 fence.validate()?;
                 Ok(fence)
             }.await;
-            finish_source_transaction(&connection, result).await
+            finish_source_transaction(self, &connection, result).await
         })
     }
     fn source_is_fenced<'a>(

@@ -390,6 +390,20 @@ fn assistant_receipt_matches(
     )
 }
 
+async fn require_unreleased_assistant_admission(
+    tx: &Transaction<'_>,
+    admission_id: &str,
+) -> Result<(), AgentFailure> {
+    let mut released = tx.query(
+        "SELECT operation_id FROM gateway_authorization_receipts WHERE operation='release' AND admission_id=? LIMIT 1",
+        (admission_id,),
+    ).await.map_err(database_failure)?;
+    if released.next().await.map_err(database_failure)?.is_some() {
+        return Err(AgentFailure::Conflict);
+    }
+    Ok(())
+}
+
 pub struct VaultAuthorizationSigner<K: VaultKeyProvider> {
     vault: std::sync::Arc<EncryptedAgentVault<K>>,
     verifier: std::sync::Arc<dyn floe_access::AuthorizationProofVerifier>,
@@ -486,6 +500,10 @@ impl<K: VaultKeyProvider> VaultAuthorizationSigner<K> {
             }
             drop(prior);
             if existing.is_none() {
+                if command.expected.operation == "release" {
+                    require_unreleased_assistant_admission(&tx, &command.expected.admission_id).await?;
+                }
+
                 tx.execute(
                     "INSERT INTO gateway_authorization_receipts VALUES(?,?,?,?,?,?,?)",
                     (

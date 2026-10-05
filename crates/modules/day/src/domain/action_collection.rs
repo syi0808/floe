@@ -54,7 +54,7 @@ impl CalendarActionCollection {
             || !source.source_authority.is_valid()
             || source.calendar_id.is_empty()
             || source.calendar_name.is_empty()
-            || source.calendar_name.len() > 256
+            || source.calendar_name.len() > super::MAX_CALENDAR_NAME_BYTES
             || source.calendar_name.chars().any(char::is_control)
         {
             return Err(DayError::validation("invalid Calendar collection source"));

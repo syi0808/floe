@@ -6,12 +6,48 @@ use turso::{Builder, Connection};
 use crate::{ProductStoreIdentity, RootKey, StoreError, StoreErrorCode};
 
 pub struct TursoStore {
+    unavailable: std::sync::atomic::AtomicBool,
+    source_writes: tokio::sync::Mutex<()>,
     database: turso::Database,
     identity: ProductStoreIdentity,
     _key: RootKey,
     // Drop after the database. Every retained repository Arc keeps the same
     // installation admission alive, including background owner retirement.
     installation_lock: Option<std::fs::File>,
+}
+
+pub(crate) struct SourceWriteGuard<'a> {
+    store: &'a TursoStore,
+    _lock: tokio::sync::MutexGuard<'a, ()>,
+    armed: bool,
+}
+impl SourceWriteGuard<'_> {
+    pub(crate) async fn begin(&mut self, connection: &Connection) -> Result<(), StoreError> {
+        self.store.check_available()?;
+        self.armed = true;
+        match connection.execute("BEGIN IMMEDIATE", ()).await {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                let failure = admission_error(error);
+                if failure.code == StoreErrorCode::StorageBusy {
+                    self.armed = false;
+                }
+                Err(failure)
+            }
+        }
+    }
+    pub(crate) fn settled(&mut self) {
+        self.armed = false;
+    }
+}
+impl Drop for SourceWriteGuard<'_> {
+    fn drop(&mut self) {
+        // Dropping a future while SQL is pending is not proof of rollback.
+        // Publish the fence before releasing the source writer lock.
+        if self.armed {
+            self.store.latch_unavailable();
+        }
+    }
 }
 
 impl TursoStore {
@@ -59,6 +95,8 @@ impl TursoStore {
             .await
             .map_err(storage_error)?;
         let store = Self {
+            unavailable: std::sync::atomic::AtomicBool::new(false),
+            source_writes: tokio::sync::Mutex::new(()),
             database,
             identity,
             _key: key,
@@ -179,6 +217,8 @@ impl TursoStore {
         validate_existing_database(&readonly, &identity).await?;
         drop(readonly);
         let store = Self {
+            unavailable: std::sync::atomic::AtomicBool::new(false),
+            source_writes: tokio::sync::Mutex::new(()),
             database: encrypted_builder(&path, &key)
                 .with_io_impl(io)
                 .build()
@@ -196,7 +236,36 @@ impl TursoStore {
         validate_existing_database(&self.database, &self.identity).await
     }
 
+    pub(crate) fn check_available(&self) -> Result<(), StoreError> {
+        if self.unavailable.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(StoreError::new(
+                StoreErrorCode::Storage,
+                "product store requires reopen after an uncertain transaction",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn latch_unavailable(&self) {
+        self.unavailable
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+    // Serialize source journal writers through their terminal commit/latch step.
+    // SQLite serializes writes too, but its lock can release before an I/O error
+    // has returned to this caller. A negative journal must not enter that gap.
+    pub(crate) fn source_write_guard(&self) -> Result<SourceWriteGuard<'_>, StoreError> {
+        let guard = self
+            .source_writes
+            .try_lock()
+            .map_err(|_| StoreError::new(StoreErrorCode::StorageBusy, "source journal is busy"))?;
+        self.check_available()?;
+        Ok(SourceWriteGuard {
+            store: self,
+            _lock: guard,
+            armed: false,
+        })
+    }
     pub(crate) async fn connection(&self) -> Result<Connection, StoreError> {
+        self.check_available()?;
         self.database.connect().map_err(admission_error)
     }
 }
