@@ -1606,3 +1606,75 @@ should join the localization catalog. Only English is currently shipped, so the
 review's mixed non-English locale scenario is not a currently supported runtime.
 These copy nits do not reopen the observed-generation fix. No additional review or
 build is needed solely for this evidence entry; no whole/live acceptance is claimed.
+
+### Next Connections recovery investigation (not implemented)
+
+The post-invalidation configuration gap is a domain outcome problem, not a missing
+retry button. Root traced drive_source_configuration through complete_committed and
+SourceOperationChange::validate: after an InvalidateSource receipt is committed,
+native candidate drift can return AccessReviewRequired while Reserved/GrantCommitted
+still holds the source fence. RepairRequired(SourceChanged) has no terminal exit;
+only CleanupUncertain has a defined repair-to-cleanup transition. Product summary
+then removes source actions because the fence is held. An automatic retry is not a
+substitute for a terminal recovery contract.
+
+Hard constraints for the next design:
+- A committed Access invalidation cannot be recast as a pre-admission no-effect
+  rejection or undone by restoring grants. Retain its exact receipt and command ID.
+- Actual candidate drift must be distinguished from timeout, cancellation, storage
+  or unverifiable native responses. Uncertain evidence keeps the fence.
+- Any safe terminal resolution must compare the exact original source/operation
+  identity and revision inside the existing source-journal transaction; no unrelated
+  source rewrite, optimistic fence clearing, or new provider/permission effect.
+- A safe disconnected successor can retain source metadata and invalidate authority,
+  but the current source domain forbids Ready->Pending. Do not bypass that validator
+  to create an implicit re-review state. A new terminal outcome needs explicit domain
+  meaning and an honest product acknowledgement rather than pretending requested
+  selected resources were saved.
+- The product record and UI must distinguish successful configuration, pre-effect
+  rejection, and a settled invalidation requiring reconnect. A retained post-effect
+  receipt must remain reconstructible if the product journal response is lost.
+- Before choosing that terminal contract, inspect Access receipt guarantees, source
+  SQL CAS/fence release, replay/reconcile callers, product/wire dispositions and the
+  native setup path end-to-end. Root owns this design and implementation; no patch
+  has been made for this gap. Permanent tests remain deferred, but disposable owner
+  probes must cover interruption/restart/duplicate/rejection/foreign-identity paths.
+
+Access implementation detail verified: InvalidateSource advances each non-revoked
+grant authority and sets Paused + review_required; it does not revoke those grants.
+A safe exit must preserve that committed requirement and must not reactivate them.
+The source adapter already atomically CASes successor + journal phase + fence bit in
+one guarded transaction. A new outcome should use that transaction rather than a
+separate repair flag or UI-driven fence release.
+
+Proposed final topology for adversarial design review before implementation:
+- Add one configure-only terminal source-journal outcome for invalidation settled
+  but requested candidate rejected, carrying the exact InvalidateSource receipt ID.
+  It may close only Reserved/GrantCommitted or the matching SourceChanged repair of
+  that same operation. Receipt mismatch or changed stored source remains fenced.
+- For a positively established native subject/selection mismatch after committed
+  invalidation, atomically persist the canonical disconnected successor of the
+  original source, retain metadata, advance its authority exactly once, and close
+  that operation's fence. Do not accept an arbitrary caller-supplied successor or
+  use this path for remote disconnect cleanup, generic storage faults, cancellation,
+  host closure or uncertain native failure. A native AccessReviewRequired error
+  needs producer-by-producer classification before it can count as positive drift.
+- Preserve a distinct terminal product receipt, e.g. configuration requires
+  reconnect, reconstructible from the source journal and original descriptor after
+  a lost product write. Do not reuse SourceConfigurationAborted (pre-effect) or
+  SourceMutation (requested configuration succeeded). The source journal is the
+  effect authority; later source changes do not alter historical outcome.
+- Return a typed configure result (configured / reconnect-required with source
+  summary) through the existing command result path. Both are settled deliveries;
+  Flutter clears the exact pending ID, but only configured reports Save success.
+  Reconnect-required closes stale review and reloads current source/setup UI with
+  explicit explanation. Never issue a replacement Configure command automatically.
+- Native setup may then use its existing Disconnected->Pending re-establishment
+  with a new authority incarnation and a new explicit user intent. No grant is
+  restored, no provider account is deleted and no receipt/log/key is discarded.
+
+Implementation is still pending. Required proof matrix includes foreign/mismatched
+receipt/source rejection; positive drift terminalization; negative transport/cancel
+cases retaining fences; product-write response loss/restart; duplicate replay after
+later source changes; no automatic grant recovery; and typed Flutter acknowledgement
+that clears uncertainty without claiming the requested selection was saved.
