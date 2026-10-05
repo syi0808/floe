@@ -1401,3 +1401,32 @@ encryption/key refusal and session reopen. Dart/Go inputs and wire shapes did no
 change, so their previously passed gates (including 61 external Flutter fixtures)
 are reused rather than rerun. Exact new Apple artifacts and focused delta review
 remain pending.
+
+Exact 92ab5393 Apple qualification passed: Debug/Release builds, strict deep
+signatures, profile getters 2/1 and unsigned arm64 iOS simulator build; isolated
+checkout/lockfiles stayed clean. The narrow Opus delta review closed the primary
+R1–R3 findings and found no serious delta regression. Its cancellation-boundary
+recommendation is a defensive post-observation scope check; retain it for the next
+Connections change rather than treating the review as full runtime acceptance.
+
+Root inspected the omitted concrete paths: run_bounded prioritizes cancellation;
+Calendar/Attention brokers recheck after receive; Calendar metadata validates
+fingerprint syntax as PolicyDenied; Personal acquisition may classify invalid or
+changed binding as AccessReviewRequired. Thus that error means renewed source review
+is required, not proof of the physical cause being exclusively fingerprint drift.
+No finalization_scope calls exist in the inspected Access/source-evidence paths.
+These source findings do not replace live cancellation/permission tests. The older
+post-invalidation authority repair/no-exit issue remains explicitly open.
+
+### Next R2 presentation investigation
+
+The baseline System access card was a read-only OS-permission observation, distinct
+from Floe feature permission. Its old implementation inferred permission by listing
+calendars with requestAccess=false; do not revive that private-data read just to show
+an access badge. Current Apple bridges expose only readAcquisition, and the current
+SourceConnectionPanel has no truthful standalone OS access observation. Calendar
+source readiness cannot fill that gap. Investigate a narrow OS-status-only boundary,
+its macOS/iOS implementation, composition injection and baseline card/resume states;
+keep actual permission requests in the admitted native setup flow. No such new port
+or UI implementation has landed yet. Day freshness is a separate Day-owned join,
+not something to manufacture from this permission badge or source local revision.
