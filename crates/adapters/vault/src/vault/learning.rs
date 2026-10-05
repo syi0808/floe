@@ -1,3 +1,4 @@
+use super::database_failure;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 
@@ -74,14 +75,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let result = async {
             let mut rows = transaction.query(
                 "SELECT target_id, revision, person_id, kind, state, payload FROM knowledge_revisions WHERE person_id = ? AND kind = 'memory' AND state = 'active' ORDER BY target_id, revision LIMIT 4097",
                 [self.person_id.to_string()],
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             let mut facts = Vec::new();
-            while let Some(row) = rows.next().await.map_err(storage)? {
+            while let Some(row) = rows.next().await.map_err(database_failure)? {
                 if facts.len() >= 4096 { return Err(AgentFailure::BudgetExceeded); }
                 let revision = decode_revision_row(&row, self.person_id, KnowledgeRevisionState::Active)?;
                 let independent = evidence_is_independent(
@@ -113,7 +114,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let result = async {
             let saved_count = count_on(
                 &transaction,
@@ -128,9 +129,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let mut rows = transaction.query(
                 "SELECT target_id, revision, person_id, kind, state, payload FROM knowledge_revisions WHERE person_id = ? AND kind = 'memory' AND state = 'active' ORDER BY json_extract(payload, '$.created_at') DESC, target_id LIMIT ?",
                 (self.person_id.to_string(), i64::try_from(limit).map_err(|_| AgentFailure::InvalidInput)?),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             let mut memories = Vec::new();
-            while let Some(row) = rows.next().await.map_err(storage)? {
+            while let Some(row) = rows.next().await.map_err(database_failure)? {
                 let revision = decode_revision_row(&row, self.person_id, KnowledgeRevisionState::Active)?;
                 memories.push(project_memory_summary(&revision, self.person_id)?);
             }
@@ -161,14 +162,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let result = async {
             let mut rows = transaction.query(
                 "SELECT id, person_id, idempotency_key, kind, state, target_id, created_at, payload FROM knowledge_candidates WHERE person_id = ? AND kind = 'memory' AND state = 'pending' ORDER BY created_at, id LIMIT ?",
                 (self.person_id.to_string(), i64::try_from(MAX_MEMORY_REVIEW_ITEMS + 1).map_err(|_| AgentFailure::InvalidInput)?),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             let mut candidates = Vec::new();
-            while let Some(row) = rows.next().await.map_err(storage)? {
+            while let Some(row) = rows.next().await.map_err(database_failure)? {
                 if candidates.len() == MAX_MEMORY_REVIEW_ITEMS {
                     return Err(AgentFailure::BudgetExceeded);
                 }
@@ -197,7 +198,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let result = async {
             // Validate the learner claim against its canonical acknowledged Output first.
             // This is immutable journal evidence; no mutable Conversation revision is reread.
@@ -292,16 +293,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 transaction.execute(
                     "INSERT INTO learning_observations (id, person_id, content_hash, payload) VALUES (?, ?, ?, ?)",
                     (plan.observation.id.to_string(), self.person_id.to_string(), plan.observation.content_hash.clone(), payload(&plan.observation)?),
-                ).await.map_err(storage)?;
+                ).await.map_err(database_failure)?;
             }
             transaction.execute(
                 "INSERT INTO knowledge_candidates (id, person_id, idempotency_key, kind, state, target_id, created_at, payload, stage_payload) VALUES (?, ?, ?, 'memory', 'pending', ?, ?, ?, ?)",
                 (plan.candidate.id.to_string(), self.person_id.to_string(), plan.candidate.idempotency_key.clone(), plan.candidate.target_id.map(|id| id.to_string()), timestamp(plan.candidate.created_at), stage.clone(), stage),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             transaction.execute(
                 "INSERT INTO knowledge_stage_receipts (person_id, candidate_key, candidate_id, observation_id, payload) VALUES (?, ?, ?, ?, ?)",
                 (self.person_id.to_string(), identity.candidate_key, plan.candidate.id.to_string(), plan.observation.id.to_string(), encoded_receipt),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             self.check_learning_scope(scope)?;
             Ok(plan.candidate)
         }.await;
@@ -323,7 +324,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let result = async {
             if let Some(receipt) = knowledge_decision_receipt(
                 &transaction,
@@ -340,8 +341,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let mut rows = transaction.query(
                 "SELECT id, person_id, idempotency_key, kind, state, target_id, created_at, payload FROM knowledge_candidates WHERE id = ? AND person_id = ?",
                 (request.candidate_id.to_string(), self.person_id.to_string()),
-            ).await.map_err(storage)?;
-            let row = rows.next().await.map_err(storage)?.ok_or(AgentFailure::NotFound)?;
+            ).await.map_err(database_failure)?;
+            let row = rows.next().await.map_err(database_failure)?.ok_or(AgentFailure::NotFound)?;
             let candidate = decode_candidate_row(&row, self.person_id)?;
             drop(rows);
             validate_review_actor(&KnowledgeActor::User)?;
@@ -381,30 +382,30 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 let changed = transaction.execute(
                     "UPDATE knowledge_revisions SET state = 'superseded', payload = ? WHERE target_id = ? AND revision = ? AND person_id = ? AND kind = 'memory' AND state = 'active'",
                     (payload(superseded)?, superseded.target_id.to_string(), integer(superseded.revision)?, self.person_id.to_string()),
-                ).await.map_err(storage)?;
+                ).await.map_err(database_failure)?;
                 if changed != 1 { return Err(AgentFailure::Conflict); }
             }
             if let Some(revision) = &revision {
                 transaction.execute(
                     "INSERT INTO knowledge_revisions (target_id, revision, person_id, kind, state, payload) VALUES (?, ?, ?, 'memory', 'active', ?)",
                     (revision.target_id.to_string(), integer(revision.revision)?, self.person_id.to_string(), payload(revision)?),
-                ).await.map_err(storage)?;
+                ).await.map_err(database_failure)?;
             }
             if let Some(mutation) = &mutation {
                 transaction.execute(
                     "INSERT INTO knowledge_mutations (id, candidate_id, target_id, created_at, payload) VALUES (?, ?, ?, ?, ?)",
                     (mutation.id.to_string(), candidate.id.to_string(), mutation.target_id.to_string(), timestamp(mutation.created_at), payload(mutation)?),
-                ).await.map_err(storage)?;
+                ).await.map_err(database_failure)?;
             }
             let changed = transaction.execute(
                 "UPDATE knowledge_candidates SET state = ?, target_id = ?, payload = ? WHERE id = ? AND person_id = ? AND state = 'pending'",
                 (state_name(candidate.state), candidate.target_id.map(|id| id.to_string()), payload(&candidate)?, candidate.id.to_string(), self.person_id.to_string()),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             if changed != 1 { return Err(AgentFailure::Conflict); }
             transaction.execute(
                 "INSERT INTO knowledge_candidate_decisions (id, candidate_id, payload) VALUES (?, ?, ?)",
                 (decision.id.to_string(), candidate.id.to_string(), payload(&decision)?),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             if count_all_on(&transaction, "SELECT COUNT(*) FROM knowledge_command_receipts").await? >= MAX_KNOWLEDGE_COMMAND_RECEIPTS {
                 return Err(AgentFailure::BudgetExceeded);
             }
@@ -414,7 +415,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             transaction.execute(
                 "INSERT INTO knowledge_command_receipts (command_id, person_id, device_id, command_kind, candidate_id, decision_kind, payload) VALUES (?, ?, ?, 'memory_decision', ?, ?, ?)",
                 (request.command_id.as_uuid().to_string(), self.person_id.to_string(), actor.device_id.clone(), request.candidate_id.to_string(), decision_kind_name(request.kind), encoded_result),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             self.check_learning_scope(scope)?;
             Ok(decision_result)
         }.await;
@@ -436,15 +437,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let result =
             async {
                 let mut rows = transaction.query(
                 "SELECT id, revision, payload FROM agent_sessions ORDER BY rowid DESC LIMIT ?",
                 [i64::try_from(limit).map_err(|_| AgentFailure::InvalidInput)?],
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
                 let mut snapshots = Vec::new();
-                while let Some(row) = rows.next().await.map_err(storage)? {
+                while let Some(row) = rows.next().await.map_err(database_failure)? {
                     let stored_id = row.get::<String>(0).map_err(storage)?;
                     let stored_revision = row.get::<i64>(1).map_err(storage)?;
                     let session: AgentSession = decode(&row.get::<String>(2).map_err(storage)?)?;
@@ -528,7 +529,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let result = async {
             if let Some(existing) = learner_job_by_key(
                 &transaction,
@@ -552,7 +553,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             transaction.execute(
                 "INSERT INTO learner_review_jobs (id, person_id, idempotency_key, state, attempts, available_at, payload) VALUES (?, ?, ?, 'queued', 0, ?, ?)",
                 (job.id.to_string(), self.person_id.to_string(), job.idempotency_key.clone(), timestamp(job.available_at), encoded),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             self.check_learning_scope(scope)?;
             Ok(job)
         }.await;
@@ -573,13 +574,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let result = async {
             let mut rows = transaction.query(
                 "SELECT id, person_id, idempotency_key, state, attempts, available_at, payload FROM learner_review_jobs WHERE person_id = ? AND ((state IN ('queued', 'deferred') AND available_at <= ?) OR (state = 'running' AND available_at <= ?)) ORDER BY available_at, id LIMIT 1",
                 (self.person_id.to_string(), timestamp(now), timestamp(now)),
-            ).await.map_err(storage)?;
-            let Some(row) = rows.next().await.map_err(storage)? else {
+            ).await.map_err(database_failure)?;
+            let Some(row) = rows.next().await.map_err(database_failure)? else {
                 self.check_learning_scope(scope)?;
                 return Ok(None);
             };
@@ -597,7 +598,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 let changed = transaction.execute(
                     "UPDATE learner_review_jobs SET state = ?, attempts = ?, available_at = ?, payload = ? WHERE id = ? AND person_id = ? AND state = 'running' AND attempts = ? AND payload = ?",
                     (learner_job_state(job.state), i64::from(job.attempts), timestamp(job.available_at), payload(&job)?, job.id.to_string(), self.person_id.to_string(), i64::from(job.attempts), stored_payload),
-                ).await.map_err(storage)?;
+                ).await.map_err(database_failure)?;
                 if changed != 1 { return Err(AgentFailure::Conflict); }
                 self.check_learning_scope(scope)?;
                 return if job.state == LearnerJobState::Running { Ok(Some(job)) } else { Ok(None) };
@@ -640,11 +641,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             transaction.execute(
                 "INSERT INTO learner_journal_heads (job_id, person_id, claim_attempt, device_id, journal_revision, journal_digest, payload) VALUES (?, ?, ?, ?, 0, ?, ?)",
                 (job.id.to_string(), self.person_id.to_string(), i64::from(job.attempts), head.device_id.clone(), digest_hex(&head.journal_digest), payload(&head)?),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             let changed = transaction.execute(
                 "UPDATE learner_review_jobs SET state = 'running', attempts = ?, available_at = ?, payload = ? WHERE id = ? AND person_id = ? AND state = ? AND attempts = ? AND available_at = ? AND payload = ?",
                 (i64::from(job.attempts), timestamp(job.available_at), payload(&job)?, job.id.to_string(), self.person_id.to_string(), previous_state, i64::from(previous_attempts), previous_available_at, stored_payload),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             if changed != 1 { return Err(AgentFailure::Conflict); }
             self.check_learning_scope(scope)?;
             Ok(Some(job))
@@ -670,7 +671,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let result = async {
             let encoded_settlement = payload(&StoredLearnerSettlement::from(&settlement))?;
             if encoded_settlement.len() > MAX_LEARNER_EVENT_BYTES {
@@ -725,7 +726,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             transaction.execute(
                 "INSERT INTO learner_settlement_receipts (job_id, person_id, claim_attempt, device_id, settlement, result) VALUES (?, ?, ?, ?, ?, ?)",
                 (job_id.to_string(), self.person_id.to_string(), i64::from(expected_attempt), actor.device_id.clone(), encoded_settlement, encoded_job),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             self.check_access()?;
             Ok(())
         }.await;
@@ -748,7 +749,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let result = async {
             let job = learner_job_by_id(&transaction, self.person_id, claim.job_id)
                 .await?
@@ -787,7 +788,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let result = async {
             let job = learner_job_by_id(&transaction, self.person_id, claim.job_id)
                 .await?
@@ -831,7 +832,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let result = async {
             let job = learner_job_by_id(&transaction, self.person_id, claim.job_id)
                 .await?.ok_or(AgentFailure::NotFound)?;
@@ -870,12 +871,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let changed = transaction.execute(
                 "INSERT INTO learner_execution_journal (job_id, person_id, claim_attempt, sequence, event_key, payload) VALUES (?, ?, ?, ?, ?, ?)",
                 (claim.job_id.to_string(), self.person_id.to_string(), i64::from(claim.claim_attempt), integer(next_revision)?, event_key, encoded_event),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             if changed != 1 { return Err(AgentFailure::Conflict); }
             let updated = transaction.execute(
                 "UPDATE learner_journal_heads SET journal_revision = ?, journal_digest = ?, payload = ? WHERE job_id = ? AND person_id = ? AND claim_attempt = ? AND device_id = ? AND journal_revision = ? AND journal_digest = ?",
                 (integer(next_head.journal_revision)?, digest_hex(&next_head.journal_digest), payload(&next_head)?, claim.job_id.to_string(), self.person_id.to_string(), i64::from(claim.claim_attempt), actor.device_id.clone(), integer(journal.head.journal_revision)?, digest_hex(&journal.head.journal_digest)),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             if updated != 1 { return Err(AgentFailure::Conflict); }
             self.check_access()?;
             Ok(next_head.journal_revision)
@@ -1158,14 +1159,14 @@ async fn count_on(
     let mut rows = transaction
         .query(sql, [parameter.to_owned()])
         .await
-        .map_err(storage)?;
+        .map_err(database_failure)?;
     let row = rows
         .next()
         .await
-        .map_err(storage)?
+        .map_err(database_failure)?
         .ok_or(AgentFailure::StorageUnavailable)?;
     let count = row.get::<i64>(0).map_err(storage)?;
-    if rows.next().await.map_err(storage)?.is_some() || count < 0 {
+    if rows.next().await.map_err(database_failure)?.is_some() || count < 0 {
         return Err(AgentFailure::StorageUnavailable);
     }
     Ok(count)
@@ -1175,14 +1176,14 @@ async fn count_all_on(
     transaction: &turso::transaction::Transaction<'_>,
     sql: &str,
 ) -> Result<i64, AgentFailure> {
-    let mut rows = transaction.query(sql, ()).await.map_err(storage)?;
+    let mut rows = transaction.query(sql, ()).await.map_err(database_failure)?;
     let row = rows
         .next()
         .await
-        .map_err(storage)?
+        .map_err(database_failure)?
         .ok_or(AgentFailure::StorageUnavailable)?;
     let count = row.get::<i64>(0).map_err(storage)?;
-    if rows.next().await.map_err(storage)?.is_some() || count < 0 {
+    if rows.next().await.map_err(database_failure)?.is_some() || count < 0 {
         return Err(AgentFailure::StorageUnavailable);
     }
     Ok(count)
@@ -1278,8 +1279,8 @@ async fn stage_candidate_by_key(
     let mut rows = transaction.query(
         "SELECT id, person_id, idempotency_key, kind, state, target_id, created_at, payload, stage_payload FROM knowledge_candidates WHERE person_id = ? AND idempotency_key = ?",
         (person_id.to_string(), candidate_key.to_owned()),
-    ).await.map_err(storage)?;
-    let current = if let Some(row) = rows.next().await.map_err(storage)? {
+    ).await.map_err(database_failure)?;
+    let current = if let Some(row) = rows.next().await.map_err(database_failure)? {
         let current = decode_candidate_row(&row, person_id)?;
         let encoded_stage = row.get::<String>(8).map_err(storage)?;
         if encoded_stage.len() > MAX_LEARNER_JOB_BYTES {
@@ -1289,7 +1290,7 @@ async fn stage_candidate_by_key(
     } else {
         None
     };
-    if rows.next().await.map_err(storage)?.is_some() {
+    if rows.next().await.map_err(database_failure)?.is_some() {
         return Err(AgentFailure::VaultUnavailable);
     }
     drop(rows);
@@ -1345,8 +1346,8 @@ async fn memory_stage_receipt_by_key(
     let mut rows = transaction.query(
         "SELECT person_id, candidate_key, candidate_id, observation_id, payload FROM knowledge_stage_receipts WHERE person_id = ? AND candidate_key = ?",
         (person_id.to_string(), candidate_key.to_owned()),
-    ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+    ).await.map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
     let stored_person = row.get::<String>(0).map_err(storage)?;
@@ -1354,7 +1355,7 @@ async fn memory_stage_receipt_by_key(
     let stored_candidate = row.get::<String>(2).map_err(storage)?;
     let stored_observation = row.get::<String>(3).map_err(storage)?;
     let encoded = row.get::<String>(4).map_err(storage)?;
-    if rows.next().await.map_err(storage)?.is_some() {
+    if rows.next().await.map_err(database_failure)?.is_some() {
         return Err(AgentFailure::VaultUnavailable);
     }
     drop(rows);
@@ -1403,8 +1404,8 @@ async fn observation_by_hash(
     let mut rows = transaction.query(
         "SELECT id, person_id, content_hash, payload FROM learning_observations WHERE person_id = ? AND content_hash = ?",
         (person_id.to_string(), content_hash.to_owned()),
-    ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+    ).await.map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
     let stored_id =
@@ -1416,7 +1417,7 @@ async fn observation_by_hash(
         return Err(AgentFailure::StorageUnavailable);
     }
     let observation: LearningObservation = decode(&encoded)?;
-    if rows.next().await.map_err(storage)?.is_some()
+    if rows.next().await.map_err(database_failure)?.is_some()
         || stored_id != observation.id
         || stored_person != person_id.to_string()
         || stored_hash != content_hash
@@ -1436,8 +1437,8 @@ async fn observation_by_id(
     let mut rows = transaction.query(
         "SELECT id, person_id, content_hash, payload FROM learning_observations WHERE person_id = ? AND id = ?",
         (person_id.to_string(), observation_id.to_string()),
-    ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+    ).await.map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
     let stored_id =
@@ -1449,7 +1450,7 @@ async fn observation_by_id(
         return Err(AgentFailure::StorageUnavailable);
     }
     let observation: LearningObservation = decode(&encoded)?;
-    if rows.next().await.map_err(storage)?.is_some()
+    if rows.next().await.map_err(database_failure)?.is_some()
         || stored_id != observation_id
         || stored_person != person_id.to_string()
         || observation.id != observation_id
@@ -1469,12 +1470,12 @@ async fn active_revision_on(
     let mut rows = transaction.query(
         "SELECT target_id, revision, person_id, kind, state, payload FROM knowledge_revisions WHERE target_id = ? AND person_id = ? AND kind = 'memory' AND state = 'active'",
         (target_id.to_string(), person_id.to_string()),
-    ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+    ).await.map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
     let revision = decode_revision_row(&row, person_id, KnowledgeRevisionState::Active)?;
-    if rows.next().await.map_err(storage)?.is_some() {
+    if rows.next().await.map_err(database_failure)?.is_some() {
         return Err(AgentFailure::VaultUnavailable);
     }
     Ok(Some(revision))
@@ -1490,8 +1491,8 @@ async fn revision_exists_on(
             [target_id.to_string()],
         )
         .await
-        .map_err(storage)?;
-    Ok(rows.next().await.map_err(storage)?.is_some())
+        .map_err(database_failure)?;
+    Ok(rows.next().await.map_err(database_failure)?.is_some())
 }
 
 async fn evidence_is_independent(
@@ -1666,8 +1667,8 @@ async fn knowledge_decision_receipt(
     let mut rows = transaction.query(
         "SELECT person_id, device_id, command_kind, candidate_id, decision_kind, payload FROM knowledge_command_receipts WHERE command_id = ?",
         [command_id.as_uuid().to_string()],
-    ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+    ).await.map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
     let stored_person = row.get::<String>(0).map_err(storage)?;
@@ -1681,7 +1682,7 @@ async fn knowledge_decision_receipt(
         return Err(AgentFailure::StorageUnavailable);
     }
     let result: KnowledgeDecisionResult = decode(&encoded)?;
-    if rows.next().await.map_err(storage)?.is_some() {
+    if rows.next().await.map_err(database_failure)?.is_some() {
         return Err(AgentFailure::VaultUnavailable);
     }
     if command_kind != "memory_decision"
@@ -1722,14 +1723,14 @@ async fn candidate_by_id(
     let mut rows = transaction.query(
         "SELECT id, person_id, idempotency_key, kind, state, target_id, created_at, payload FROM knowledge_candidates WHERE id = ? AND person_id = ?",
         (candidate_id.to_string(), person_id.to_string()),
-    ).await.map_err(storage)?;
+    ).await.map_err(database_failure)?;
     let row = rows
         .next()
         .await
-        .map_err(storage)?
+        .map_err(database_failure)?
         .ok_or(AgentFailure::NotFound)?;
     let candidate = decode_candidate_row(&row, person_id)?;
-    if rows.next().await.map_err(storage)?.is_some() {
+    if rows.next().await.map_err(database_failure)?.is_some() {
         return Err(AgentFailure::VaultUnavailable);
     }
     if candidate.id != candidate_id {
@@ -1746,12 +1747,12 @@ async fn learner_job_by_key(
     let mut rows = transaction.query(
         "SELECT id, person_id, idempotency_key, state, attempts, available_at, payload FROM learner_review_jobs WHERE person_id = ? AND idempotency_key = ?",
         (person_id.to_string(), idempotency_key.to_owned()),
-    ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+    ).await.map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
     let job = decode_job_row(&row, person_id)?;
-    if rows.next().await.map_err(storage)?.is_some() {
+    if rows.next().await.map_err(database_failure)?.is_some() {
         return Err(AgentFailure::VaultUnavailable);
     }
     if job.idempotency_key != idempotency_key {
@@ -1768,12 +1769,12 @@ async fn learner_job_by_id(
     let mut rows = transaction.query(
         "SELECT id, person_id, idempotency_key, state, attempts, available_at, payload FROM learner_review_jobs WHERE id = ? AND person_id = ?",
         (job_id.to_string(), person_id.to_string()),
-    ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+    ).await.map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
     let job = decode_job_row(&row, person_id)?;
-    if rows.next().await.map_err(storage)?.is_some() {
+    if rows.next().await.map_err(database_failure)?.is_some() {
         return Err(AgentFailure::VaultUnavailable);
     }
     if job.id != job_id {
@@ -1837,7 +1838,7 @@ async fn update_job_cas(
     let changed = transaction.execute(
         "UPDATE learner_review_jobs SET state = ?, attempts = ?, available_at = ?, payload = ? WHERE id = ? AND person_id = ? AND payload = ?",
         (learner_job_state(job.state), i64::from(job.attempts), timestamp(job.available_at), payload(job)?, job.id.to_string(), person_id.to_string(), old_payload.to_owned()),
-    ).await.map_err(storage)?;
+    ).await.map_err(database_failure)?;
     Ok(changed == 1)
 }
 
@@ -1851,7 +1852,7 @@ async fn update_running_job_cas(
     let changed = transaction.execute(
         "UPDATE learner_review_jobs SET state = ?, attempts = ?, available_at = ?, payload = ? WHERE id = ? AND person_id = ? AND state = 'running' AND attempts = ? AND payload = ?",
         (learner_job_state(job.state), i64::from(job.attempts), timestamp(job.available_at), payload(job)?, job.id.to_string(), person_id.to_string(), i64::from(expected_attempt), old_payload.to_owned()),
-    ).await.map_err(storage)?;
+    ).await.map_err(database_failure)?;
     Ok(changed == 1)
 }
 
@@ -1864,8 +1865,8 @@ async fn settlement_receipt(
     let mut rows = transaction.query(
         "SELECT device_id, settlement, result FROM learner_settlement_receipts WHERE job_id = ? AND person_id = ? AND claim_attempt = ?",
         (job_id.to_string(), person_id.to_string(), i64::from(attempt)),
-    ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+    ).await.map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
     let receipt = (
@@ -1873,7 +1874,7 @@ async fn settlement_receipt(
         row.get::<String>(1).map_err(storage)?,
         row.get::<String>(2).map_err(storage)?,
     );
-    if rows.next().await.map_err(storage)?.is_some()
+    if rows.next().await.map_err(database_failure)?.is_some()
         || receipt.0.len() > 128
         || receipt.1.len() > MAX_LEARNER_EVENT_BYTES
         || receipt.2.len() > MAX_LEARNER_JOB_BYTES
@@ -1892,8 +1893,8 @@ async fn learner_journal_head(
     let mut rows = transaction.query(
         "SELECT job_id, person_id, claim_attempt, device_id, journal_revision, journal_digest, payload FROM learner_journal_heads WHERE job_id = ? AND person_id = ? AND claim_attempt = ?",
         (job_id.to_string(), person_id.to_string(), i64::from(attempt)),
-    ).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+    ).await.map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
     let stored_job = row.get::<String>(0).map_err(storage)?;
@@ -1907,7 +1908,7 @@ async fn learner_journal_head(
         return Err(AgentFailure::StorageUnavailable);
     }
     let head: LearnerJournalHead = decode(&encoded_head)?;
-    if rows.next().await.map_err(storage)?.is_some()
+    if rows.next().await.map_err(database_failure)?.is_some()
         || stored_job != job_id.to_string()
         || stored_person != person_id.to_string()
         || stored_attempt != i64::from(attempt)
@@ -1932,8 +1933,8 @@ async fn load_all_learner_journals(
     let mut head_rows = transaction.query(
         "SELECT job_id, person_id, claim_attempt, device_id, journal_revision, journal_digest, payload FROM learner_journal_heads WHERE job_id = ? ORDER BY claim_attempt",
         [job.id.to_string()],
-    ).await.map_err(storage)?;
-    while let Some(row) = head_rows.next().await.map_err(storage)? {
+    ).await.map_err(database_failure)?;
+    while let Some(row) = head_rows.next().await.map_err(database_failure)? {
         let stored_job = row.get::<String>(0).map_err(storage)?;
         let stored_person = row.get::<String>(1).map_err(storage)?;
         let attempt = u8::try_from(row.get::<i64>(2).map_err(storage)?)
@@ -1974,8 +1975,8 @@ async fn load_all_learner_journals(
     let mut event_rows = transaction.query(
         "SELECT person_id, claim_attempt, sequence, event_key, payload FROM learner_execution_journal WHERE job_id = ? ORDER BY claim_attempt, sequence",
         [job.id.to_string()],
-    ).await.map_err(storage)?;
-    while let Some(row) = event_rows.next().await.map_err(storage)? {
+    ).await.map_err(database_failure)?;
+    while let Some(row) = event_rows.next().await.map_err(database_failure)? {
         let stored_person = row.get::<String>(0).map_err(storage)?;
         let attempt = u8::try_from(row.get::<i64>(1).map_err(storage)?)
             .map_err(|_| AgentFailure::StorageUnavailable)?;

@@ -13,6 +13,8 @@ pub enum ActionStoreError {
     VaultLocked,
     #[error("Actions storage is unavailable")]
     Unavailable,
+    #[error("Actions storage is busy")]
+    StorageBusy,
     #[error("Action was not found")]
     NotFound,
     #[error("Action changed")]
@@ -31,6 +33,7 @@ impl From<ActionStoreError> for floe_kernel::AgentFailure {
             ActionStoreError::VaultLocked => Self::VaultLocked,
             ActionStoreError::CorruptRecord => Self::VaultUnavailable,
             ActionStoreError::Unavailable => Self::StorageUnavailable,
+            ActionStoreError::StorageBusy => Self::StorageBusy,
             ActionStoreError::NotFound => Self::NotFound,
             ActionStoreError::Conflict => Self::Conflict,
             ActionStoreError::InvalidRecord => Self::InvalidInput,

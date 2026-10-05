@@ -13,6 +13,7 @@
 //! Decision command identity is a second primary key with the same
 //! replay-or-conflict contract.
 
+use super::database_failure;
 use floe_agent_contract::{AgentFailure, JournalEvent};
 use floe_conversation::{
     ConversationInteraction, DecisionAdmission, ExpireInteraction, ExpireOutcome,
@@ -155,13 +156,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     if !matches!(commit.owner_receipt, floe_conversation::OwnerResolutionReceipt::ExpertBinding { .. }) {
                         return Err(AgentFailure::Conflict);
                     }
-                    let mut rows = transaction.query("SELECT person_id, session_id, interaction_id, expected_revision FROM agent_conversation_interaction_refreshes WHERE command_id = ?", [command_id.to_string()]).await.map_err(storage)?;
-                    let row = rows.next().await.map_err(storage)?.ok_or(AgentFailure::Conflict)?;
+                    let mut rows = transaction.query("SELECT person_id, session_id, interaction_id, expected_revision FROM agent_conversation_interaction_refreshes WHERE command_id = ?", [command_id.to_string()]).await.map_err(database_failure)?;
+                    let row = rows.next().await.map_err(database_failure)?.ok_or(AgentFailure::Conflict)?;
                     if row.get::<String>(0).map_err(storage)? != self.person_id.to_string()
                         || row.get::<String>(1).map_err(storage)? != current.session_id.to_string()
                         || row.get::<String>(2).map_err(storage)? != current.id.to_string()
                         || row.get::<i64>(3).map_err(storage)? != integer(resolution.expected_revision)?
-                        || rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::Conflict); }
+                        || rows.next().await.map_err(database_failure)?.is_some() { return Err(AgentFailure::Conflict); }
                 }
             }
             if current.target_digest != resolution.target_digest {
@@ -487,8 +488,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::Conflict);
         }
         let id = audit.operation_id.to_string();
-        let mut rows = transaction.query("SELECT run_id,person_id,payload FROM agent_conversation_review_audits WHERE operation_id=? AND run_id=?", (id.clone(), run.run_id.as_uuid().to_string())).await.map_err(storage)?;
-        if let Some(row) = rows.next().await.map_err(storage)? {
+        let mut rows = transaction.query("SELECT run_id,person_id,payload FROM agent_conversation_review_audits WHERE operation_id=? AND run_id=?", (id.clone(), run.run_id.as_uuid().to_string())).await.map_err(database_failure)?;
+        if let Some(row) = rows.next().await.map_err(database_failure)? {
             let payload = row.get::<String>(2).map_err(storage)?;
             if payload.len() > 128 * 1024 {
                 return Err(AgentFailure::StorageUnavailable);
@@ -498,7 +499,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if stored != *audit
                 || row.get::<String>(0).map_err(storage)? != run.run_id.as_uuid().to_string()
                 || row.get::<String>(1).map_err(storage)? != run.person_id.to_string()
-                || rows.next().await.map_err(storage)?.is_some()
+                || rows.next().await.map_err(database_failure)?.is_some()
             {
                 return Err(AgentFailure::Conflict);
             }
@@ -584,7 +585,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::BudgetExceeded);
         }
         transaction.execute("INSERT INTO agent_conversation_review_audits(operation_id,run_id,person_id,payload) VALUES(?,?,?,?)",
-            (id,run.run_id.as_uuid().to_string(),self.person_id.to_string(),payload)).await.map_err(storage)?;
+            (id,run.run_id.as_uuid().to_string(),self.person_id.to_string(),payload)).await.map_err(database_failure)?;
         Ok(())
     }
 
@@ -615,11 +616,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     return Err(AgentFailure::Conflict);
                 }
                 let mut rows = transaction.query("SELECT payload FROM access_grant_operations WHERE operation_id = ? AND person_id = ?",
-                    (receipt.reservation.operation_id.to_string(), self.person_id.to_string())).await.map_err(storage)?;
+                    (receipt.reservation.operation_id.to_string(), self.person_id.to_string())).await.map_err(database_failure)?;
                 let row = rows
                     .next()
                     .await
-                    .map_err(storage)?
+                    .map_err(database_failure)?
                     .ok_or(AgentFailure::Conflict)?;
                 let payload = row.get::<String>(0).map_err(storage)?;
                 if payload.len() > 256 * 1024 {
@@ -629,7 +630,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     serde_json::from_str(&payload).map_err(unavailable)?;
                 stored.validate()?;
                 if stored != floe_access::GrantOperationReceipt::Committed(receipt.clone())
-                    || rows.next().await.map_err(storage)?.is_some()
+                    || rows.next().await.map_err(database_failure)?.is_some()
                 {
                     return Err(AgentFailure::Conflict);
                 }
@@ -677,12 +678,12 @@ pub(super) async fn read_interaction(
             [interaction_id.to_string()],
         )
         .await
-        .map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+        .map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
     let record = parse_row(person_id, &row).await?;
-    if rows.next().await.map_err(storage)?.is_some() {
+    if rows.next().await.map_err(database_failure)?.is_some() {
         return Err(AgentFailure::VaultUnavailable);
     }
     Ok(Some(record))
@@ -730,11 +731,11 @@ pub(super) async fn count_interactions(
     let mut rows = transaction
         .query(sql, [origin_run_id.as_uuid().to_string()])
         .await
-        .map_err(storage)?;
+        .map_err(database_failure)?;
     let count = rows
         .next()
         .await
-        .map_err(storage)?
+        .map_err(database_failure)?
         .ok_or(AgentFailure::VaultUnavailable)?
         .get::<i64>(0)
         .map_err(storage)?;
@@ -765,7 +766,7 @@ pub(super) async fn insert_interaction(
             parameters,
         )
         .await
-        .map_err(storage)?;
+        .map_err(database_failure)?;
     Ok(())
 }
 
@@ -786,7 +787,7 @@ async fn update_interaction(
             ),
         )
         .await
-        .map_err(storage)?;
+        .map_err(database_failure)?;
     if changed != 1 {
         return Err(AgentFailure::Conflict);
     }
@@ -803,8 +804,8 @@ async fn read_decision(
             [command_id.to_string()],
         )
         .await
-        .map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+        .map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
     let decision = InteractionDecision {
@@ -827,7 +828,7 @@ async fn read_decision(
     decision
         .validate()
         .map_err(|_| AgentFailure::VaultUnavailable)?;
-    if decision.command_id != command_id || rows.next().await.map_err(storage)?.is_some() {
+    if decision.command_id != command_id || rows.next().await.map_err(database_failure)?.is_some() {
         return Err(AgentFailure::VaultUnavailable);
     }
     Ok(Some(decision))
@@ -851,7 +852,7 @@ async fn insert_decision(
             ),
         )
         .await
-        .map_err(storage)?;
+        .map_err(database_failure)?;
     Ok(())
 }
 
@@ -912,9 +913,9 @@ pub(super) async fn read_group_on(
     person_id: PersonId,
     origin_run_id: RunId,
 ) -> Result<Vec<ConversationInteraction>, AgentFailure> {
-    let mut rows = connection.query("SELECT interaction_id, session_id, person_id, origin_run_id, requirement_digest, target_digest, state, revision, created_at, expires_at, payload FROM agent_conversation_interactions WHERE origin_run_id = ? ORDER BY created_at ASC, interaction_id ASC LIMIT 65", [origin_run_id.as_uuid().to_string()]).await.map_err(storage)?;
+    let mut rows = connection.query("SELECT interaction_id, session_id, person_id, origin_run_id, requirement_digest, target_digest, state, revision, created_at, expires_at, payload FROM agent_conversation_interactions WHERE origin_run_id = ? ORDER BY created_at ASC, interaction_id ASC LIMIT 65", [origin_run_id.as_uuid().to_string()]).await.map_err(database_failure)?;
     let mut records = Vec::new();
-    while let Some(row) = rows.next().await.map_err(storage)? {
+    while let Some(row) = rows.next().await.map_err(database_failure)? {
         records.push(parse_row(person_id, &row).await?);
     }
     if records.len() > MAX_STORED_INTERACTIONS_PER_RUN {
@@ -933,11 +934,11 @@ async fn access_review_on(
             (reference.id.to_string(), person_id.to_string()),
         )
         .await
-        .map_err(storage)?;
+        .map_err(database_failure)?;
     let row = rows
         .next()
         .await
-        .map_err(storage)?
+        .map_err(database_failure)?
         .ok_or(AgentFailure::Conflict)?;
     let payload = row.get::<String>(0).map_err(storage)?;
     if payload.len() > 256 * 1024 {
@@ -948,7 +949,7 @@ async fn access_review_on(
     review.validate()?;
     if &review.reference != reference
         || review.person_id != person_id
-        || rows.next().await.map_err(storage)?.is_some()
+        || rows.next().await.map_err(database_failure)?.is_some()
     {
         return Err(AgentFailure::Conflict);
     }
@@ -971,11 +972,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
             validate_schema(&transaction).await?;
-            let mut rows = transaction.query("SELECT person_id, session_id, interaction_id, expected_revision FROM agent_conversation_interaction_refreshes WHERE command_id = ?", [request.command_id.to_string()]).await.map_err(storage)?;
-            let replay = if let Some(row) = rows.next().await.map_err(storage)? {
+            let mut rows = transaction.query("SELECT person_id, session_id, interaction_id, expected_revision FROM agent_conversation_interaction_refreshes WHERE command_id = ?", [request.command_id.to_string()]).await.map_err(database_failure)?;
+            let replay = if let Some(row) = rows.next().await.map_err(database_failure)? {
                 if row.get::<String>(0).map_err(storage)? != self.person_id.to_string() || row.get::<String>(1).map_err(storage)? != request.session_id.to_string()
                     || row.get::<String>(2).map_err(storage)? != request.interaction_id.to_string() || row.get::<i64>(3).map_err(storage)? != integer(request.expected_revision)?
-                    || rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::Conflict); }
+                    || rows.next().await.map_err(database_failure)?.is_some() { return Err(AgentFailure::Conflict); }
                 true
             } else { false };
             drop(rows);
@@ -985,11 +986,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if current.session_id != request.session_id || session.person_id != self.person_id || session.scope.is_some()
                 || session.data_classes != [DataClass::Personal] || (!replay && current.revision != request.expected_revision) { return Err(AgentFailure::Conflict); }
             if !replay {
-                let mut count = transaction.query("SELECT count(*) FROM agent_conversation_interaction_refreshes WHERE person_id = ?", [self.person_id.to_string()]).await.map_err(storage)?;
-                if count.next().await.map_err(storage)?.ok_or(AgentFailure::StorageUnavailable)?.get::<i64>(0).map_err(storage)? >= 4096 { return Err(AgentFailure::BudgetExceeded); }
+                let mut count = transaction.query("SELECT count(*) FROM agent_conversation_interaction_refreshes WHERE person_id = ?", [self.person_id.to_string()]).await.map_err(database_failure)?;
+                if count.next().await.map_err(database_failure)?.ok_or(AgentFailure::StorageUnavailable)?.get::<i64>(0).map_err(storage)? >= 4096 { return Err(AgentFailure::BudgetExceeded); }
                 drop(count);
                 transaction.execute("INSERT INTO agent_conversation_interaction_refreshes (command_id, person_id, session_id, interaction_id, expected_revision) VALUES (?, ?, ?, ?, ?)",
-                    (request.command_id.to_string(), self.person_id.to_string(), request.session_id.to_string(), request.interaction_id.to_string(), integer(request.expected_revision)?)).await.map_err(storage)?;
+                    (request.command_id.to_string(), self.person_id.to_string(), request.session_id.to_string(), request.interaction_id.to_string(), integer(request.expected_revision)?)).await.map_err(database_failure)?;
             }
             self.check_access()?;
             Ok(current)
@@ -1023,9 +1024,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let connection = self.connection()?;
         let created = after.map_or(i64::MIN, |cursor| cursor.created_at_unix_ms);
         let id = after.map_or_else(String::new, |cursor| cursor.interaction_id.to_string());
-        let mut rows = connection.query("SELECT interaction_id FROM agent_conversation_interactions WHERE person_id = ? AND json_extract(payload, '$.audit.device_id') = ? AND state = 'resolving' AND (created_at > ? OR (created_at = ? AND interaction_id > ?)) ORDER BY created_at, interaction_id LIMIT ?", (person_id.to_string(), actor.device_id.clone(), created, created, id, integer(limit as u64 + 1)?)).await.map_err(storage)?;
+        let mut rows = connection.query("SELECT interaction_id FROM agent_conversation_interactions WHERE person_id = ? AND json_extract(payload, '$.audit.device_id') = ? AND state = 'resolving' AND (created_at > ? OR (created_at = ? AND interaction_id > ?)) ORDER BY created_at, interaction_id LIMIT ?", (person_id.to_string(), actor.device_id.clone(), created, created, id, integer(limit as u64 + 1)?)).await.map_err(database_failure)?;
         let mut result = Vec::new();
-        while let Some(row) = rows.next().await.map_err(storage)? {
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
             let id =
                 Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
             let record = read_interaction(&connection, person_id, id)

@@ -1,3 +1,4 @@
+use super::database_failure;
 use chrono::Utc;
 use floe_access::{
     ConnectionId, ConnectorId, DataAccessGrant, ExecutionOwnerId, GrantAuthority, GrantId,
@@ -61,9 +62,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let mut rows = transaction
             .query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? AND connection_id = ? AND connector = ? AND execution_owner = ? ORDER BY access_epoch DESC, grant_id LIMIT ?", (self.person_id.to_string(), self.vault_id.to_string(), source.connection_id().as_str().to_owned(), source.connector().as_str().to_owned(), source.execution_owner().as_str().to_owned(), i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?))
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let mut grants = Vec::new();
-        while let Some(row) = rows.next().await.map_err(storage)? {
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
             let grant = decode_grant(&row)?;
             if grant.source() != source {
                 return Err(AgentFailure::VaultUnavailable);
@@ -118,11 +119,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     ) -> Result<DataAccessGrant, AgentFailure> {
         let connection = self.connection()?;
         self.ensure_access_grant_schema(&connection).await?;
-        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ? AND authority_owner = ?", (id.as_uuid().to_string(), self.person_id.to_string(), self.vault_id.to_string())).await.map_err(storage)?;
+        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ? AND authority_owner = ?", (id.as_uuid().to_string(), self.person_id.to_string(), self.vault_id.to_string())).await.map_err(database_failure)?;
         let row = rows
             .next()
             .await
-            .map_err(storage)?
+            .map_err(database_failure)?
             .ok_or(AgentFailure::NotFound)?;
         let grant = decode_grant(&row).map_err(|failure| self.reject_access_corruption(failure))?;
         self.check_access()?;
@@ -138,9 +139,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         let connection = self.connection()?;
         self.ensure_access_grant_schema(&connection).await?;
-        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? ORDER BY grant_id LIMIT ?", (self.person_id.to_string(), self.vault_id.to_string(), i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?)).await.map_err(storage)?;
+        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? ORDER BY grant_id LIMIT ?", (self.person_id.to_string(), self.vault_id.to_string(), i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?)).await.map_err(database_failure)?;
         let mut grants = Vec::new();
-        while let Some(row) = rows.next().await.map_err(storage)? {
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
             grants.push(
                 decode_grant(&row).map_err(|failure| self.reject_access_corruption(failure))?,
             );
@@ -164,9 +165,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         let connection = self.connection()?;
         self.ensure_access_grant_schema(&connection).await?;
-        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? AND connection_id = ? AND connector = ? AND execution_owner = ? ORDER BY access_epoch DESC, grant_id LIMIT ?", (self.person_id.to_string(), self.vault_id.to_string(), source.connection_id().as_str().to_owned(), source.connector().as_str().to_owned(), source.execution_owner().as_str().to_owned(), i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?)).await.map_err(storage)?;
+        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? AND connection_id = ? AND connector = ? AND execution_owner = ? ORDER BY access_epoch DESC, grant_id LIMIT ?", (self.person_id.to_string(), self.vault_id.to_string(), source.connection_id().as_str().to_owned(), source.connector().as_str().to_owned(), source.execution_owner().as_str().to_owned(), i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?)).await.map_err(database_failure)?;
         let mut grants = Vec::new();
-        while let Some(row) = rows.next().await.map_err(storage)? {
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
             let grant =
                 decode_grant(&row).map_err(|failure| self.reject_access_corruption(failure))?;
             if grant.source() != source {
@@ -187,17 +188,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         let connection = self.connection()?;
         self.ensure_access_grant_schema(&connection).await?;
-        let mut rows = connection.query("SELECT cleanup_id, grant_id, person_id, invalidated_incarnation, invalidated_epoch, payload FROM data_access_grant_cleanup WHERE person_id = ? ORDER BY invalidated_epoch, cleanup_id LIMIT ?", (self.person_id.to_string(), i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?)).await.map_err(storage)?;
+        let mut rows = connection.query("SELECT cleanup_id, grant_id, person_id, invalidated_incarnation, invalidated_epoch, payload FROM data_access_grant_cleanup WHERE person_id = ? ORDER BY invalidated_epoch, cleanup_id LIMIT ?", (self.person_id.to_string(), i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?)).await.map_err(database_failure)?;
         let mut items = Vec::new();
-        while let Some(row) = rows.next().await.map_err(storage)? {
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
             let item = self
                 .decode_cleanup_row(&row)
                 .map_err(|failure| self.reject_access_corruption(failure))?;
-            let mut grants = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ?", (item.grant_id.as_uuid().to_string(), self.person_id.to_string())).await.map_err(storage)?;
+            let mut grants = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ?", (item.grant_id.as_uuid().to_string(), self.person_id.to_string())).await.map_err(database_failure)?;
             let current = grants
                 .next()
                 .await
-                .map_err(storage)?
+                .map_err(database_failure)?
                 .ok_or(AgentFailure::VaultUnavailable)?;
             let current =
                 decode_grant(&current).map_err(|failure| self.reject_access_corruption(failure))?;
@@ -227,8 +228,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         {
             Ok(transaction) => transaction,
             Err(error) => {
-                let failure = access_transaction_start_error(error);
-                if failure != AgentFailure::Conflict {
+                let failure = database_failure(error);
+                if failure != AgentFailure::StorageBusy {
                     self.latch_access_unavailable();
                 }
                 return Err(failure);
@@ -236,7 +237,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         };
         let result = async {
             self.ensure_access_grant_schema_transaction(&transaction).await?;
-            let changed = transaction.execute("DELETE FROM data_access_grant_cleanup WHERE cleanup_id = ? AND grant_id = ? AND person_id = ? AND invalidated_incarnation = ? AND invalidated_epoch = ?", (cleanup_id(&item), item.grant_id.as_uuid().to_string(), self.person_id.to_string(), item.invalidated_authority.incarnation().to_string(), integer(item.invalidated_authority.access_epoch().get())?)).await.map_err(storage)?;
+            let changed = transaction.execute("DELETE FROM data_access_grant_cleanup WHERE cleanup_id = ? AND grant_id = ? AND person_id = ? AND invalidated_incarnation = ? AND invalidated_epoch = ?", (cleanup_id(&item), item.grant_id.as_uuid().to_string(), self.person_id.to_string(), item.invalidated_authority.incarnation().to_string(), integer(item.invalidated_authority.access_epoch().get())?)).await.map_err(database_failure)?;
             if changed > 1 { return Err(AgentFailure::VaultUnavailable); }
             self.check_access()?;
             Ok(())
@@ -264,9 +265,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 ),
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let mut items = Vec::new();
-        while let Some(row) = rows.next().await.map_err(storage)? {
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
             let item = self
                 .decode_cleanup_row(&row)
                 .map_err(|failure| self.reject_access_corruption(failure))?;
@@ -279,11 +280,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     ),
                 )
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             let current = grants
                 .next()
                 .await
-                .map_err(storage)?
+                .map_err(database_failure)?
                 .ok_or(AgentFailure::VaultUnavailable)?;
             let current =
                 decode_grant(&current).map_err(|failure| self.reject_access_corruption(failure))?;
@@ -317,7 +318,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 ),
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         if changed > 1 {
             return Err(AgentFailure::VaultUnavailable);
         }
@@ -339,18 +340,18 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 let mut rows = transaction
                     .query("SELECT COUNT(*) FROM data_access_grants", ())
                     .await
-                    .map_err(storage)?;
+                    .map_err(database_failure)?;
                 let count = rows
                     .next()
                     .await
-                    .map_err(storage)?
+                    .map_err(database_failure)?
                     .ok_or(AgentFailure::VaultUnavailable)?
                     .get::<i64>(0)
                     .map_err(storage)?;
                 if count < 0 || count as usize >= MAX_ACCESS_GRANTS {
                     return Err(AgentFailure::BudgetExceeded);
                 }
-                transaction.execute("INSERT INTO data_access_grants (grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", grant_values(grant, payload)?).await.map_err(storage)?;
+                transaction.execute("INSERT INTO data_access_grants (grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", grant_values(grant, payload)?).await.map_err(database_failure)?;
                 Ok(None)
             }
             floe_access::ExpectedGrant::Present {
@@ -376,11 +377,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     let mut rows = transaction
                         .query("SELECT COUNT(*) FROM data_access_grant_cleanup", ())
                         .await
-                        .map_err(storage)?;
+                        .map_err(database_failure)?;
                     let count = rows
                         .next()
                         .await
-                        .map_err(storage)?
+                        .map_err(database_failure)?
                         .ok_or(AgentFailure::VaultUnavailable)?
                         .get::<i64>(0)
                         .map_err(storage)?;
@@ -388,12 +389,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         return Err(AgentFailure::BudgetExceeded);
                     }
                     let key = cleanup_id(&cleanup);
-                    transaction.execute("INSERT INTO data_access_grant_cleanup (cleanup_id, grant_id, person_id, invalidated_incarnation, invalidated_epoch, payload) VALUES (?, ?, ?, ?, ?, ?)", (key.clone(), grant_id.as_uuid().to_string(), self.person_id.to_string(), authority.incarnation().to_string(), integer(authority.access_epoch().get())?, serde_json::to_string(&cleanup).map_err(|_| AgentFailure::StorageUnavailable)?)).await.map_err(storage)?;
+                    transaction.execute("INSERT INTO data_access_grant_cleanup (cleanup_id, grant_id, person_id, invalidated_incarnation, invalidated_epoch, payload) VALUES (?, ?, ?, ?, ?, ?)", (key.clone(), grant_id.as_uuid().to_string(), self.person_id.to_string(), authority.incarnation().to_string(), integer(authority.access_epoch().get())?, serde_json::to_string(&cleanup).map_err(|_| AgentFailure::StorageUnavailable)?)).await.map_err(database_failure)?;
                     Some(key)
                 } else {
                     None
                 };
-                let changed = transaction.execute("UPDATE data_access_grants SET grant_incarnation = ?, access_epoch = ?, state = ?, payload = ? WHERE grant_id = ? AND person_id = ? AND authority_owner = ? AND grant_incarnation = ? AND access_epoch = ?", (grant.authority().incarnation().to_string(), integer(grant.authority().access_epoch().get())?, state_name(grant.state()), payload, grant_id.as_uuid().to_string(), self.person_id.to_string(), self.vault_id.to_string(), authority.incarnation().to_string(), integer(authority.access_epoch().get())?)).await.map_err(storage)?;
+                let changed = transaction.execute("UPDATE data_access_grants SET grant_incarnation = ?, access_epoch = ?, state = ?, payload = ? WHERE grant_id = ? AND person_id = ? AND authority_owner = ? AND grant_incarnation = ? AND access_epoch = ?", (grant.authority().incarnation().to_string(), integer(grant.authority().access_epoch().get())?, state_name(grant.state()), payload, grant_id.as_uuid().to_string(), self.person_id.to_string(), self.vault_id.to_string(), authority.incarnation().to_string(), integer(authority.access_epoch().get())?)).await.map_err(database_failure)?;
                 if changed != 1 {
                     return Err(AgentFailure::Conflict);
                 }
@@ -412,11 +413,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let mut rows = transaction
             .query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ? AND authority_owner = ?", (id.as_uuid().to_string(), self.person_id.to_string(), self.vault_id.to_string()))
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let row = rows
             .next()
             .await
-            .map_err(storage)?
+            .map_err(database_failure)?
             .ok_or(AgentFailure::NotFound)?;
         decode_grant(&row)
     }
@@ -450,9 +451,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         connection: &turso::Connection,
     ) -> Result<(), AgentFailure> {
-        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants", ()).await.map_err(storage)?;
+        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants", ()).await.map_err(database_failure)?;
         let mut count = 0;
-        while let Some(row) = rows.next().await.map_err(storage)? {
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
             count += 1;
             if count > MAX_ACCESS_GRANTS {
                 return Err(AgentFailure::BudgetExceeded);
@@ -464,14 +465,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 return Err(AgentFailure::VaultUnavailable);
             }
         }
-        let mut cleanup_rows = connection.query("SELECT cleanup_id, grant_id, person_id, invalidated_incarnation, invalidated_epoch, payload FROM data_access_grant_cleanup", ()).await.map_err(storage)?;
-        while let Some(row) = cleanup_rows.next().await.map_err(storage)? {
+        let mut cleanup_rows = connection.query("SELECT cleanup_id, grant_id, person_id, invalidated_incarnation, invalidated_epoch, payload FROM data_access_grant_cleanup", ()).await.map_err(database_failure)?;
+        while let Some(row) = cleanup_rows.next().await.map_err(database_failure)? {
             let item = self.decode_cleanup_row(&row)?;
-            let mut grants = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ?", (item.grant_id.as_uuid().to_string(), self.person_id.to_string())).await.map_err(storage)?;
+            let mut grants = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ?", (item.grant_id.as_uuid().to_string(), self.person_id.to_string())).await.map_err(database_failure)?;
             let current = grants
                 .next()
                 .await
-                .map_err(storage)?
+                .map_err(database_failure)?
                 .ok_or(AgentFailure::VaultUnavailable)?;
             let current = decode_grant(&current)?;
             if current.authority_owner() != self.vault_id
@@ -579,12 +580,7 @@ fn grant_policy(error: GrantPolicyError) -> AgentFailure {
         GrantPolicyError::Transition(error) => grant_transition(error),
     }
 }
-fn access_transaction_start_error(error: turso::Error) -> AgentFailure {
-    match error {
-        turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::Conflict,
-        _ => AgentFailure::StorageUnavailable,
-    }
-}
+
 fn grant_transition(error: GrantTransitionError) -> AgentFailure {
     match error {
         GrantTransitionError::Conflict => AgentFailure::Conflict,

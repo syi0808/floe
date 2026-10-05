@@ -1,4 +1,5 @@
 //! Fresh encrypted layout admission. Optional owner state is represented by rows.
+use super::database_failure;
 use super::{EncryptedAgentVault, VaultKeyProvider, storage};
 use floe_kernel::AgentFailure;
 use turso::transaction::TransactionBehavior;
@@ -27,14 +28,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     ),
                 )
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             for statement in [
                 "INSERT INTO agent_conversation_executor(id,generation) VALUES(1,0)",
                 "INSERT INTO agent_task_executor(id,generation) VALUES(1,0)",
                 "INSERT INTO remote_authority_clock(id,last_now_unix_ms) VALUES(1,0)",
                 "INSERT INTO gateway_pairing_generation(id,generation) VALUES(1,0)",
             ] {
-                transaction.execute(statement, ()).await.map_err(storage)?;
+                transaction
+                    .execute(statement, ())
+                    .await
+                    .map_err(database_failure)?;
             }
             transaction
                 .execute(
@@ -42,7 +46,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     (expectation,),
                 )
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             self.seed_actions_authority(&transaction).await?;
             crate::schema::inspect(&transaction, crate::schema::Layout::Encrypted)
                 .await

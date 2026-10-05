@@ -197,7 +197,7 @@ impl TursoStore {
     }
 
     pub(crate) async fn connection(&self) -> Result<Connection, StoreError> {
-        self.database.connect().map_err(storage_error)
+        self.database.connect().map_err(admission_error)
     }
 }
 

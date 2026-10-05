@@ -1,6 +1,7 @@
 //! Rejoin actual Task evidence without dispatching work. Receipt attachment,
 //! deferred terminal settlement and eligible Session accounting share one transaction.
 
+use super::database_failure;
 use floe_agent_contract::{
     DelegationRequest, DependencyCoverage, JournalEntry, JournalEvent, MAX_OUTPUT_BYTES,
     MAX_TASK_RECEIPT_BYTES, ReplayReceipt, RunId, TaskExecutionEvidence, TaskReceipt, TaskState,
@@ -195,7 +196,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     session.revision = session.revision.checked_add(1).ok_or(AgentFailure::BudgetExceeded)?;
                     record.session_revision = session.revision;
                     let changed = transaction.execute("UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
-                        (integer(session.revision)?, self.payload(&session)?, session.id.to_string(), integer(old_revision)?)).await.map_err(storage)?;
+                        (integer(session.revision)?, self.payload(&session)?, session.id.to_string(), integer(old_revision)?)).await.map_err(database_failure)?;
                     if changed != 1 { return Err(AgentFailure::Conflict); }
                 }
             }
@@ -206,14 +207,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     self.person_id.to_string(), state_name(record.state),
                     integer(previous_record.aggregate_revision)?, integer(previous)?,
                     integer(record.executor_generation)?),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             if changed != 1 {
                 return Err(AgentFailure::Conflict);
             }
             transaction.execute(
                 "INSERT INTO agent_conversation_journal (run_id, revision, kind, payload) VALUES (?, ?, 'result', ?)",
                 (run_id.as_uuid().to_string(), integer(next)?, payload),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             if record.pending_terminal.is_some() {
                 self.settle_pending_conversation_terminal_on(&transaction, record).await?;
             }
@@ -244,9 +245,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await?;
         let mut rows = connection.query(
             "SELECT r.run_id FROM agent_conversation_runs r WHERE r.person_id = ? AND json_extract(r.payload, '$.device_id') = ? AND r.run_id > ? AND (r.state = 'working' OR (r.state IN ('failed','cancelled','timed_out','interrupted') AND EXISTS (SELECT 1 FROM agent_conversation_journal i WHERE i.run_id = r.run_id AND json_extract(i.payload, '$.kind') = 'delegation_intent' AND NOT EXISTS (SELECT 1 FROM agent_conversation_journal o WHERE o.run_id = r.run_id AND json_extract(o.payload, '$.kind') = 'delegation_result' AND json_extract(o.payload, '$.receipt.task_id') = json_extract(i.payload, '$.request.task_id'))))) ORDER BY r.run_id LIMIT ?",
-            (self.person_id.to_string(), actor.device_id.clone(), after.map_or_else(String::new, |id| id.as_uuid().to_string()), limit as i64 + 1)).await.map_err(storage)?;
+            (self.person_id.to_string(), actor.device_id.clone(), after.map_or_else(String::new, |id| id.as_uuid().to_string()), limit as i64 + 1)).await.map_err(database_failure)?;
         let mut ids = Vec::new();
-        while let Some(row) = rows.next().await.map_err(storage)? {
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
             let id = uuid::Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
                 .map_err(unavailable)?;
             ids.push(RunId::from_uuid(id).ok_or(AgentFailure::StorageUnavailable)?);

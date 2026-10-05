@@ -162,7 +162,17 @@ impl GatewayAdmission for GatewayCredentialStore {
             let current = self
                 .load(&expected.person_id, &expected.device_id)
                 .await
-                .map_err(|_| AgentFailure::PolicyDenied)?
+                .map_err(|error| match error {
+                    GatewayCredentialError::Locked
+                    | GatewayCredentialError::Unavailable
+                    | GatewayCredentialError::Indeterminate => AgentFailure::CapabilityUnavailable,
+                    GatewayCredentialError::Timeout => AgentFailure::DeadlineExceeded,
+                    GatewayCredentialError::Cancelled => AgentFailure::Cancelled,
+                    GatewayCredentialError::Conflict => AgentFailure::Conflict,
+                    GatewayCredentialError::Malformed
+                    | GatewayCredentialError::Unverified
+                    | GatewayCredentialError::ForeignIdentity => AgentFailure::PolicyDenied,
+                })?
                 .ok_or(AgentFailure::PolicyDenied)?;
             if &current.binding != expected {
                 return Err(AgentFailure::PolicyDenied);

@@ -1,9 +1,9 @@
+use super::database_failure;
 use super::*;
 use floe_access::{
-    validate_commit, ConnectionReview, GrantAbort, GrantAbortOutcome, GrantAbortReceipt,
-    GrantCommit, GrantCommitKind, GrantCommitReceipt, GrantOperationIdentity,
-    GrantOperationReceipt, GrantReceiptQuery, GrantRepository, GrantResult, GrantSnapshot,
-    ReviewRef,
+    ConnectionReview, GrantAbort, GrantAbortOutcome, GrantAbortReceipt, GrantCommit,
+    GrantCommitKind, GrantCommitReceipt, GrantOperationIdentity, GrantOperationReceipt,
+    GrantReceiptQuery, GrantRepository, GrantResult, GrantSnapshot, ReviewRef, validate_commit,
 };
 use floe_context_contract::GrantSourceBinding;
 use floe_execution::BoxFuture;
@@ -19,8 +19,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if expected.source.person_id() != self.person_id {
             return Err(AgentFailure::PolicyDenied);
         }
-        let mut rows = transaction.query("SELECT payload FROM access_grant_operations WHERE operation_id = ? AND person_id = ?", (expected.operation_id.to_string(), self.person_id.to_string())).await.map_err(storage)?;
-        let Some(row) = rows.next().await.map_err(storage)? else {
+        let mut rows = transaction.query("SELECT payload FROM access_grant_operations WHERE operation_id = ? AND person_id = ?", (expected.operation_id.to_string(), self.person_id.to_string())).await.map_err(database_failure)?;
+        let Some(row) = rows.next().await.map_err(database_failure)? else {
             return Ok(None);
         };
         let receipt: GrantOperationReceipt = decode(row.get::<String>(0).map_err(storage)?)?;
@@ -42,7 +42,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         identity: &GrantOperationIdentity,
         receipt: &GrantOperationReceipt,
     ) -> Result<(), AgentFailure> {
-        transaction.execute("INSERT INTO access_grant_operations (operation_id, person_id, payload) VALUES (?, ?, ?)", (identity.operation_id.to_string(), self.person_id.to_string(), encode(receipt)?)).await.map_err(storage)?;
+        transaction.execute("INSERT INTO access_grant_operations (operation_id, person_id, payload) VALUES (?, ?, ?)", (identity.operation_id.to_string(), self.person_id.to_string(), encode(receipt)?)).await.map_err(database_failure)?;
         Ok(())
     }
 }
@@ -58,8 +58,8 @@ impl<Keys: VaultKeyProvider> GrantRepository for EncryptedAgentVault<Keys> {
                 return Err(AgentFailure::PolicyDenied);
             }
             let connection = self.connection()?;
-            let mut rows = connection.query("SELECT payload FROM access_connection_reviews WHERE person_id = ? AND command_id = ?", (person_id.to_string(), command_id.to_string())).await.map_err(storage)?;
-            let Some(row) = rows.next().await.map_err(storage)? else {
+            let mut rows = connection.query("SELECT payload FROM access_connection_reviews WHERE person_id = ? AND command_id = ?", (person_id.to_string(), command_id.to_string())).await.map_err(database_failure)?;
+            let Some(row) = rows.next().await.map_err(database_failure)? else {
                 return Ok(None);
             };
             let review: ConnectionReview = decode(row.get::<String>(0).map_err(storage)?)?;
@@ -81,11 +81,11 @@ impl<Keys: VaultKeyProvider> GrantRepository for EncryptedAgentVault<Keys> {
         Box::pin(async move {
             reference.validate()?;
             let connection = self.connection()?;
-            let mut rows = connection.query("SELECT payload FROM access_connection_reviews WHERE review_id = ? AND person_id = ?", (reference.id.to_string(), self.person_id.to_string())).await.map_err(storage)?;
+            let mut rows = connection.query("SELECT payload FROM access_connection_reviews WHERE review_id = ? AND person_id = ?", (reference.id.to_string(), self.person_id.to_string())).await.map_err(database_failure)?;
             let row = rows
                 .next()
                 .await
-                .map_err(storage)?
+                .map_err(database_failure)?
                 .ok_or(AgentFailure::NotFound)?;
             let review: ConnectionReview = decode(row.get::<String>(0).map_err(storage)?)?;
             review.validate()?;
@@ -109,19 +109,19 @@ impl<Keys: VaultKeyProvider> GrantRepository for EncryptedAgentVault<Keys> {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             let result = async {
                 if super::gateway_authority::command_rejection_on(&transaction, self.person_id, review.command_id).await?.is_some() {
                     return Err(AgentFailure::Conflict);
                 }
-                let mut rows = transaction.query("SELECT payload FROM access_connection_reviews WHERE person_id = ? AND command_id = ?", (self.person_id.to_string(), review.command_id.to_string())).await.map_err(storage)?;
-                if let Some(row) = rows.next().await.map_err(storage)? {
+                let mut rows = transaction.query("SELECT payload FROM access_connection_reviews WHERE person_id = ? AND command_id = ?", (self.person_id.to_string(), review.command_id.to_string())).await.map_err(database_failure)?;
+                if let Some(row) = rows.next().await.map_err(database_failure)? {
                     let existing: ConnectionReview = decode(row.get::<String>(0).map_err(storage)?)?;
                     existing.validate()?;
                     if existing.intent_digest != review.intent_digest { return Err(AgentFailure::Conflict); }
                     return Ok(existing.reference);
                 }
-                transaction.execute("INSERT INTO access_connection_reviews (review_id, person_id, command_id, intent_digest, payload) VALUES (?, ?, ?, ?, ?)", (review.reference.id.to_string(), self.person_id.to_string(), review.command_id.to_string(), hex(&review.intent_digest), encode(&review)?)).await.map_err(storage)?;
+                transaction.execute("INSERT INTO access_connection_reviews (review_id, person_id, command_id, intent_digest, payload) VALUES (?, ?, ?, ?, ?)", (review.reference.id.to_string(), self.person_id.to_string(), review.command_id.to_string(), hex(&review.intent_digest), encode(&review)?)).await.map_err(database_failure)?;
                 self.check_access()?;
                 Ok(review.reference)
             }.await;
@@ -147,7 +147,7 @@ impl<Keys: VaultKeyProvider> GrantRepository for EncryptedAgentVault<Keys> {
     ) -> BoxFuture<'a, Result<Option<GrantOperationReceipt>, AgentFailure>> {
         Box::pin(async move {
             let mut connection = self.connection()?;
-            let transaction = connection.transaction().await.map_err(storage)?;
+            let transaction = connection.transaction().await.map_err(database_failure)?;
             let result = self.operation_on(&transaction, &query.identity).await;
             self.finish_access_grant_transaction(transaction, result)
                 .await
@@ -162,7 +162,7 @@ impl<Keys: VaultKeyProvider> GrantRepository for EncryptedAgentVault<Keys> {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             let result = async {
                 match self.operation_on(&transaction, &command.identity).await? {
                     Some(GrantOperationReceipt::Committed(receipt)) => {
@@ -200,15 +200,15 @@ impl<Keys: VaultKeyProvider> GrantRepository for EncryptedAgentVault<Keys> {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             let result = async {
                 match self.operation_on(&transaction, &command.reservation.identity()).await? {
                     Some(GrantOperationReceipt::Committed(receipt)) if receipt.kind == command.kind && receipt.commit_digest == floe_access::digest(&command)? => return Ok(receipt),
                     Some(_) => return Err(AgentFailure::Conflict), None => {},
                 }
                 let review = if let GrantCommitKind::Reviewed { review } = &command.kind {
-                    let mut rows = transaction.query("SELECT payload FROM access_connection_reviews WHERE review_id = ? AND person_id = ?", (review.id.to_string(), self.person_id.to_string())).await.map_err(storage)?;
-                    let row = rows.next().await.map_err(storage)?.ok_or(AgentFailure::NotFound)?;
+                    let mut rows = transaction.query("SELECT payload FROM access_connection_reviews WHERE review_id = ? AND person_id = ?", (review.id.to_string(), self.person_id.to_string())).await.map_err(database_failure)?;
+                    let row = rows.next().await.map_err(database_failure)?.ok_or(AgentFailure::NotFound)?;
                     Some(decode::<ConnectionReview>(row.get::<String>(0).map_err(storage)?)?)
                 } else { None };
                 let snapshot = GrantSnapshot { authority_owner: self.vault_id, source: command.reservation.source.source.clone(), grants: self.data_access_grants_for_source_in_transaction(&transaction, &command.reservation.source.source, 128).await? };

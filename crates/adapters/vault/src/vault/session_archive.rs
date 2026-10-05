@@ -1,3 +1,4 @@
+use super::database_failure;
 use std::collections::{BTreeMap, HashSet};
 
 use floe_agent_contract::AgentFailure;
@@ -48,8 +49,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             "SELECT id,payload FROM agent_sessions",
             "SELECT id,payload FROM agent_session_archives",
         ] {
-            let mut rows = connection.query(query, ()).await.map_err(storage)?;
-            while let Some(row) = rows.next().await.map_err(storage)? {
+            let mut rows = connection
+                .query(query, ())
+                .await
+                .map_err(database_failure)?;
+            while let Some(row) = rows.next().await.map_err(database_failure)? {
                 let _: String = row.get(0).map_err(storage)?;
                 let session: AgentSession =
                     serde_json::from_str(&row.get::<String>(1).map_err(storage)?)
@@ -82,9 +86,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         parameters.push(turso::Value::from(
             i64::try_from(limit).map_err(|_| AgentFailure::InvalidInput)?,
         ));
-        let mut rows = connection.query(&sql, parameters).await.map_err(storage)?;
+        let mut rows = connection
+            .query(&sql, parameters)
+            .await
+            .map_err(database_failure)?;
         let mut hits = Vec::new();
-        while let Some(row) = rows.next().await.map_err(storage)? {
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
             let session_id =
                 Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
             let archive_id = row.get::<String>(1).map_err(storage)?;
@@ -124,7 +131,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let result = async {
             let source = self.session_on(&transaction, session_id).await?;
             if source.revision != expected_revision {
@@ -190,7 +197,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     i64::try_from(split).map_err(|_| AgentFailure::BudgetExceeded)?,
                     archive_payload,
                 ),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
 
             let mut session = source.clone();
             session.revision = session.revision.checked_add(1).ok_or(AgentFailure::Conflict)?;
@@ -221,14 +228,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     session_id.to_string(),
                     integer(expected_revision)?,
                 ),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             if changed != 1 {
                 return Err(AgentFailure::Conflict);
             }
             transaction.execute(
                 "DELETE FROM agent_session_search WHERE session_id = ? AND archive_id = ''",
                 [session_id.to_string()],
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             self.index_session_on(&transaction, &session, "").await?;
             self.index_session_on(&transaction, &source, &archive_id.to_string())
                 .await?;
@@ -274,16 +281,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let result = async {
             let mut rows = transaction.query(
                 "SELECT session_id, source_revision, through_turn_id, message_count, payload FROM agent_session_archives WHERE id = ?",
                 [recovery.archive_id.to_string()],
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
             let row = rows
                 .next()
                 .await
-                .map_err(storage)?
+                .map_err(database_failure)?
                 .ok_or(AgentFailure::NotFound)?;
             let session: AgentSession = serde_json::from_str(
                 &row.get::<String>(4).map_err(storage)?,
@@ -352,11 +359,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let mut rows = connection.query(
             "SELECT source_revision, through_turn_id, message_count FROM agent_session_archives WHERE id = ?",
             [archive_id.to_string()],
-        ).await.map_err(storage)?;
+        ).await.map_err(database_failure)?;
         let row = rows
             .next()
             .await
-            .map_err(storage)?
+            .map_err(database_failure)?
             .ok_or(AgentFailure::VaultUnavailable)?;
         Ok(SessionRecoveryPointer {
             archive_id,
@@ -376,12 +383,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         connection
             .execute("DELETE FROM agent_session_search", ())
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let mut rows = connection
             .query("SELECT payload FROM agent_sessions", ())
             .await
-            .map_err(storage)?;
-        while let Some(row) = rows.next().await.map_err(storage)? {
+            .map_err(database_failure)?;
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
             let session: AgentSession =
                 serde_json::from_str(&row.get::<String>(0).map_err(storage)?)
                     .map_err(unavailable)?;
@@ -391,8 +398,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let mut rows = connection
             .query("SELECT id, payload FROM agent_session_archives", ())
             .await
-            .map_err(storage)?;
-        while let Some(row) = rows.next().await.map_err(storage)? {
+            .map_err(database_failure)?;
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
             let archive_id = row.get::<String>(0).map_err(storage)?;
             let session: AgentSession =
                 serde_json::from_str(&row.get::<String>(1).map_err(storage)?)
@@ -419,7 +426,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             connection.execute(
                 "INSERT INTO agent_session_search (session_id, archive_id, revision, body) VALUES (?, ?, ?, ?)",
                 (session.id.to_string(), archive_id.to_owned(), integer(session.revision)?, body),
-            ).await.map_err(storage)?;
+            ).await.map_err(database_failure)?;
         }
         Ok(())
     }

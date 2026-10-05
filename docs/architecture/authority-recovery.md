@@ -193,8 +193,14 @@ Proposal preview is a pure Actions read. It returns the owner-derived title/sche
 
 At the EventKit boundary, receipt and target comparison use Foundation-normalized timezone identifiers, not raw alias spelling or offsets sampled at a single instant. After exact UTC endpoints and normalized zone identity match, the physical receipt retains the admitted display-zone spelling so its immutable effect digest remains stable. External revision fingerprints retain the actual native timezone observation. Create-marker recovery uses the same translation; it never rewrites stored intent or resubmits an uncertain write.
 
-Gateway database contention has a distinct StorageBusy outcome. Connections command
+Agent Vault database statements and Connections source-operation storage expose
+contention as a distinct StorageBusy outcome. Connections command
 settlement retains the exact request and resolves its durable outcome on retry; it
 never writes a negative receipt from contention. Already-known admission remains
 admitted. A Busy observation does not retire the Vault; semantic Conflict and
 commit/rollback uncertainty retain their separate recovery behavior.
+
+Assistant authorization receipts permit exact live replay after a lost acknowledgement.
+The operation/challenge, canonical digest, full expectation and expiry must match;
+current enrollment, grant, producer proof and expiry checks run again before the
+deterministic signature is returned. A receipt is not historical authorization.

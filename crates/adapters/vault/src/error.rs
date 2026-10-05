@@ -11,6 +11,7 @@ pub enum StoreErrorCode {
     NotFound,
     Conflict,
     Storage,
+    StorageBusy,
     ProductKeyMissing,
     ProductKeyMalformed,
     ProductKeyUnavailable,

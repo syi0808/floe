@@ -11,6 +11,8 @@ pub enum SourceRepositoryError {
     Conflict,
     #[error("source connection storage unavailable")]
     StorageUnavailable,
+    #[error("source connection storage is busy")]
+    StorageBusy,
     #[error("source connection storage is corrupt")]
     Corrupt,
 }

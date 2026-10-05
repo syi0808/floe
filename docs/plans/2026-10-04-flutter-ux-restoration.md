@@ -1052,3 +1052,47 @@ diagnostics passed. Temporary probes were archived outside the repository before
 final gates. Apple source guards and the incremental signing dependency change still
 require the next native qualification; broader Busy/assistant replay and metadata-only
 configuration workflow findings remain open.
+
+### Storage contention convergence and live assistant receipt replay
+
+Move the typed Turso-to-AgentFailure mapper from the Gateway-specific adapter to
+the Agent Vault boundary. Migrate SQL begin/query/execute/next operations across
+Access, Context cleanup/dependencies, Session/Conversation, Registry/Learning/Tasks
+and pairing/authorization repositories. Keep value decoding separate and preserve
+commit/rollback uncertainty in transaction finishers. Actions' storage port and the
+Connections source-operation port gain explicit StorageBusy rather than Conflict;
+source settlement and the physical source negative journal both refuse to create
+a negative receipt from Busy. Failed source rollback is now reported as unavailable,
+not silently discarded. Startup product-store schema diagnostics retain their own
+admission contract; this is not a claim about every Day runtime error projection.
+
+Gateway credential admission preserves transient unavailability/timeouts/cancellation
+instead of converting every read failure to PolicyDenied and terminal repair.
+Assistant signing replays the same receipt only when all stored intent fields match;
+it still verifies current enrollment, grant, producer proof, release lineage and
+expiry before deterministic signing. A stored receipt never restores old authority.
+
+Disposable probes cover a held same-process writer against Pairing, Access cleanup
+and Actions authority change, followed by exact Pairing/Actions replay after release;
+source DB contention and the absence of a Busy negative receipt; and an actual SQL
+assistant receipt's exact/mismatched field matrix. The latter qualifies receipt
+matching only, not a complete live Assistant authorization workflow. Full final
+gates and independent review follow this checkpoint; metadata-only configure still
+needs a distinct display-metadata path rather than invalidating Observe.
+
+Convergence checkpoint qualification: the three temporary owner/SQL probes passed and
+were archived/removed before the final workspace/default-example/doctest gate. That
+gate and both FFI profiles passed. Actual encrypted pairing/approval/Forget/restart,
+product encryption/key refusal, typed startup failures and session reopen passed;
+one natural Forget contention retried the exact command and completed. All 61
+external Flutter fixtures passed against the current Rust pairing projection. Dart,
+Go and native source inputs are unchanged from the preceding qualified snapshot;
+required Apple rebuilds for the new Rust artifact and focused independent closure
+review remain pending. The product connection-opening path also preserves the typed
+Busy code before projecting it to the source repository, rather than laundering it
+through generic storage or semantic Conflict.
+
+Exact a770 native qualification separately passed macOS Debug/Release strict signing,
+arm64 iOS simulator and Darwin Go production/dev compilation. Its synthetic Dart-only
+incremental builds and restored-original builds both triggered Runner CodeSign and
+passed strict whole-app verification without re-signing workarounds or cache cleanup.

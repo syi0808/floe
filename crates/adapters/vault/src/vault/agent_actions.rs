@@ -188,6 +188,7 @@ fn invalid_record(error: AgentFailure) -> ActionStoreError {
         AgentFailure::Conflict => ActionStoreError::Conflict,
         AgentFailure::NotFound => ActionStoreError::NotFound,
         AgentFailure::StorageUnavailable => ActionStoreError::Unavailable,
+        AgentFailure::StorageBusy => ActionStoreError::StorageBusy,
         AgentFailure::VaultLocked => ActionStoreError::VaultLocked,
         AgentFailure::VaultUnavailable => ActionStoreError::Unavailable,
         AgentFailure::UnsupportedVersion => ActionStoreError::CorruptRecord,
@@ -200,6 +201,7 @@ fn invalid_record(error: AgentFailure) -> ActionStoreError {
 fn historical_action_error(error: AgentFailure) -> ActionStoreError {
     match error {
         AgentFailure::VaultLocked => ActionStoreError::VaultLocked,
+        AgentFailure::StorageBusy => ActionStoreError::StorageBusy,
         AgentFailure::StorageUnavailable | AgentFailure::VaultUnavailable => {
             ActionStoreError::Unavailable
         }
@@ -217,10 +219,11 @@ fn access_error(error: AgentFailure) -> ActionStoreError {
 
 fn sql_error(error: turso::Error) -> ActionStoreError {
     match error {
-        turso::Error::Busy(_) | turso::Error::BusySnapshot(_) | turso::Error::Constraint(_) => {
-            ActionStoreError::Conflict
-        }
-        _ => ActionStoreError::Unavailable,
+        turso::Error::Constraint(_) => ActionStoreError::Conflict,
+        other => match super::database_failure(other) {
+            AgentFailure::StorageBusy => ActionStoreError::StorageBusy,
+            _ => ActionStoreError::Unavailable,
+        },
     }
 }
 
@@ -288,7 +291,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(|failure| match failure {
                 crate::schema::SchemaFailure::Unsupported { .. }
                 | crate::schema::SchemaFailure::StoredCorrupt => ActionStoreError::CorruptRecord,
-                crate::schema::SchemaFailure::Busy => ActionStoreError::Conflict,
+                crate::schema::SchemaFailure::Busy => ActionStoreError::StorageBusy,
                 crate::schema::SchemaFailure::Unavailable
                 | crate::schema::SchemaFailure::InvalidDefinition => ActionStoreError::Unavailable,
             })?;
@@ -763,6 +766,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(|error| match error {
                 AgentFailure::Conflict => ActionStoreError::Conflict,
                 AgentFailure::StorageUnavailable => ActionStoreError::Unavailable,
+                AgentFailure::StorageBusy => ActionStoreError::StorageBusy,
                 AgentFailure::VaultLocked => ActionStoreError::VaultLocked,
                 AgentFailure::VaultUnavailable => ActionStoreError::Unavailable,
                 AgentFailure::UnsupportedVersion => ActionStoreError::CorruptRecord,
@@ -1844,14 +1848,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let DependencyCoverage::Dependent { dependencies } = coverage else {
             return Err(ActionStoreError::InvalidRecord);
         };
-        if dependencies.iter().any(|entry| entry.person_id() != person_id) {
+        if dependencies
+            .iter()
+            .any(|entry| entry.person_id() != person_id)
+        {
             return Err(ActionStoreError::InvalidRecord);
         }
         let mut connection = self.connection().map_err(access_error)?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
-            .await.map_err(sql_error)?;
-        let result = self.validate_current_action_coverage(&transaction, coverage).await;
+            .await
+            .map_err(sql_error)?;
+        let result = self
+            .validate_current_action_coverage(&transaction, coverage)
+            .await;
         self.finish_actions_transaction(transaction, result).await
     }
 

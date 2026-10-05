@@ -1,3 +1,4 @@
+use super::database_failure;
 use floe_agent_contract::{AgentFailure, CommandId, OwnerActor};
 use floe_experts::{
     AgentRegistry, BindingReplacementReceipt, BindingReviewDescriptor, BindingReviewRef,
@@ -117,11 +118,11 @@ pub(crate) async fn count_expert_command_admissions_on(
     let mut rows = connection
         .query("SELECT count(*) FROM agent_expert_command_admissions", ())
         .await
-        .map_err(storage)?;
+        .map_err(database_failure)?;
     let count = rows
         .next()
         .await
-        .map_err(storage)?
+        .map_err(database_failure)?
         .ok_or(AgentFailure::VaultUnavailable)?
         .get::<i64>(0)
         .map_err(storage)?;
@@ -144,11 +145,11 @@ pub(crate) async fn read_expert_command_admission_on(
             (command_id.as_uuid().to_string(),),
         )
         .await
-        .map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+        .map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         drop(rows);
-        let mut orphans=connection.query("SELECT command_id FROM agent_expert_binding_reviews WHERE command_id = ? UNION ALL SELECT command_id FROM agent_expert_registry_receipts WHERE command_id = ? UNION ALL SELECT command_id FROM agent_expert_binding_replacement_receipts WHERE command_id = ? UNION ALL SELECT command_id FROM agent_expert_binding_review_consumptions WHERE command_id = ? LIMIT 1",(command_id.as_uuid().to_string(),command_id.as_uuid().to_string(),command_id.as_uuid().to_string(),command_id.as_uuid().to_string())).await.map_err(storage)?;
-        if orphans.next().await.map_err(storage)?.is_some() {
+        let mut orphans=connection.query("SELECT command_id FROM agent_expert_binding_reviews WHERE command_id = ? UNION ALL SELECT command_id FROM agent_expert_registry_receipts WHERE command_id = ? UNION ALL SELECT command_id FROM agent_expert_binding_replacement_receipts WHERE command_id = ? UNION ALL SELECT command_id FROM agent_expert_binding_review_consumptions WHERE command_id = ? LIMIT 1",(command_id.as_uuid().to_string(),command_id.as_uuid().to_string(),command_id.as_uuid().to_string(),command_id.as_uuid().to_string())).await.map_err(database_failure)?;
+        if orphans.next().await.map_err(database_failure)?.is_some() {
             return Err(AgentFailure::VaultUnavailable);
         }
         return Ok(None);
@@ -216,11 +217,11 @@ pub(crate) async fn read_binding_review_on(
             (reference.id.to_string(),),
         )
         .await
-        .map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+        .map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         drop(rows);
-        let mut linked=connection.query("SELECT command_id FROM agent_expert_command_admissions WHERE family = 'binding_prepare' AND review_id = ? LIMIT 1",(reference.id.to_string(),)).await.map_err(storage)?;
-        if linked.next().await.map_err(storage)?.is_some() {
+        let mut linked=connection.query("SELECT command_id FROM agent_expert_command_admissions WHERE family = 'binding_prepare' AND review_id = ? LIMIT 1",(reference.id.to_string(),)).await.map_err(database_failure)?;
+        if linked.next().await.map_err(database_failure)?.is_some() {
             return Err(AgentFailure::VaultUnavailable);
         }
         return Err(AgentFailure::NotFound);
@@ -302,8 +303,8 @@ pub(crate) async fn read_registry_receipt_on(
             (command_id.as_uuid().to_string(),),
         )
         .await
-        .map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+        .map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Err(AgentFailure::VaultUnavailable);
     };
     let stored_person = parse_person_id(&row.get::<String>(0).map_err(storage)?)?;
@@ -388,8 +389,8 @@ pub(crate) async fn read_binding_replacement_for_review_on(
             (review_id.clone(),),
         )
         .await
-        .map_err(storage)?;
-    let Some(consumption_row) = consumption_rows.next().await.map_err(storage)? else {
+        .map_err(database_failure)?;
+    let Some(consumption_row) = consumption_rows.next().await.map_err(database_failure)? else {
         drop(consumption_rows);
         let mut admission_rows = connection
             .query(
@@ -397,8 +398,13 @@ pub(crate) async fn read_binding_replacement_for_review_on(
                 (review_id.clone(),),
             )
             .await
-            .map_err(storage)?;
-        if admission_rows.next().await.map_err(storage)?.is_some() {
+            .map_err(database_failure)?;
+        if admission_rows
+            .next()
+            .await
+            .map_err(database_failure)?
+            .is_some()
+        {
             return Err(AgentFailure::VaultUnavailable);
         }
         drop(admission_rows);
@@ -408,8 +414,13 @@ pub(crate) async fn read_binding_replacement_for_review_on(
                 (review_id,),
             )
             .await
-            .map_err(storage)?;
-        if orphan_rows.next().await.map_err(storage)?.is_some() {
+            .map_err(database_failure)?;
+        if orphan_rows
+            .next()
+            .await
+            .map_err(database_failure)?
+            .is_some()
+        {
             return Err(AgentFailure::VaultUnavailable);
         }
         return Ok(None);
@@ -472,8 +483,8 @@ async fn read_binding_replacement_for_command_on(
             (command_id.clone(),),
         )
         .await
-        .map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+        .map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Err(AgentFailure::VaultUnavailable);
     };
     let consumed_review_id = parse_uuid(&row.get::<String>(0).map_err(storage)?)?;
@@ -510,8 +521,8 @@ async fn read_binding_replacement_for_command_on(
             (consumed_review_id.to_string(),),
         )
         .await
-        .map_err(storage)?;
-    let Some(link) = link_rows.next().await.map_err(storage)? else {
+        .map_err(database_failure)?;
+    let Some(link) = link_rows.next().await.map_err(database_failure)? else {
         return Err(AgentFailure::VaultUnavailable);
     };
     if parse_command_id(&link.get::<String>(0).map_err(storage)?)? != admission.command_id

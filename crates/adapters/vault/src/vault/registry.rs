@@ -1,3 +1,4 @@
+use super::database_failure;
 use floe_experts::{AgentRegistry, RegistrySnapshot};
 
 use super::*;
@@ -36,7 +37,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 (integer(snapshot.revision)?, payload),
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         self.check_access()
     }
 
@@ -76,13 +77,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 
     pub(crate) fn registry_transaction_start_error(&self, error: turso::Error) -> AgentFailure {
-        match error {
-            turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::Conflict,
-            _ => {
-                self.unavailable.store(true, Ordering::Release);
-                AgentFailure::StorageUnavailable
-            }
+        let failure = database_failure(error);
+        if failure != AgentFailure::StorageBusy {
+            self.unavailable.store(true, Ordering::Release);
         }
+        failure
     }
 
     pub(crate) async fn update_registry(
@@ -93,7 +92,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         payload: String,
     ) -> Result<(), AgentFailure> {
         let changed = connection.execute("UPDATE agent_expert_registry SET revision = ?, payload = ? WHERE id = 1 AND revision = ?",
-            (integer(revision)?, payload, integer(previous)?)).await.map_err(storage)?;
+            (integer(revision)?, payload, integer(previous)?)).await.map_err(database_failure)?;
         if changed != 1 {
             return Err(AgentFailure::Conflict);
         }
@@ -150,11 +149,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         connection: &turso::Connection,
         id: Uuid,
     ) -> Result<AgentSession, AgentFailure> {
-        let mut rows = connection.query("SELECT revision, payload FROM agent_sessions WHERE id = ? AND length(CAST(payload AS BLOB)) <= 262144", [id.to_string()]).await.map_err(storage)?;
+        let mut rows = connection.query("SELECT revision, payload FROM agent_sessions WHERE id = ? AND length(CAST(payload AS BLOB)) <= 262144", [id.to_string()]).await.map_err(database_failure)?;
         let row = rows
             .next()
             .await
-            .map_err(storage)?
+            .map_err(database_failure)?
             .ok_or(AgentFailure::NotFound)?;
         let session: AgentSession =
             serde_json::from_str(&row.get::<String>(1).map_err(storage)?).map_err(unavailable)?;

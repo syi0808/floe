@@ -154,7 +154,7 @@ impl SchemaFailure {
                 StoreErrorCode::StoredDataCorrupt,
                 "local database contains corrupt stored data",
             ),
-            Self::Busy => StoreError::new(StoreErrorCode::Conflict, "local database is busy"),
+            Self::Busy => StoreError::new(StoreErrorCode::StorageBusy, "local database is busy"),
             Self::Unavailable => {
                 StoreError::new(StoreErrorCode::Storage, "local database is unavailable")
             }
@@ -168,7 +168,7 @@ impl SchemaFailure {
         match self {
             Self::Unsupported { .. } => floe_kernel::AgentFailure::UnsupportedVersion,
             Self::StoredCorrupt => floe_kernel::AgentFailure::VaultUnavailable,
-            Self::Busy => floe_kernel::AgentFailure::Conflict,
+            Self::Busy => floe_kernel::AgentFailure::StorageBusy,
             Self::Unavailable | Self::InvalidDefinition => {
                 floe_kernel::AgentFailure::StorageUnavailable
             }

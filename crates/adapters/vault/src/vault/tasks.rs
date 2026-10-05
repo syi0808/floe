@@ -1,3 +1,4 @@
+use super::database_failure;
 use floe_agent_contract::{
     AgentFailure, DependencyCoverage, JournalEntry, JournalEvent, MAX_OUTPUT_BYTES,
     TaskExecutionKey, TaskExecutionReceipt, TaskExecutionReceiptRef, TaskId, TaskSnapshot,
@@ -38,7 +39,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     (integer(next_generation)?, integer(current_generation)?),
                 )
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             if changed != 1 {
                 return Err(AgentFailure::Conflict);
             }
@@ -49,9 +50,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     (),
                 )
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             let mut task_ids = Vec::new();
-            while let Some(row) = rows.next().await.map_err(storage)? {
+            while let Some(row) = rows.next().await.map_err(database_failure)? {
                 task_ids.push(parse_task_id(&row.get::<String>(0).map_err(storage)?)?);
             }
             drop(rows);
@@ -130,11 +131,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let mut count = transaction
                 .query("SELECT count(*) FROM agent_tasks", ())
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             let rows = count
                 .next()
                 .await
-                .map_err(storage)?
+                .map_err(database_failure)?
                 .ok_or(AgentFailure::StorageUnavailable)?
                 .get::<i64>(0)
                 .map_err(storage)?;
@@ -493,8 +494,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 [task_id.as_uuid().to_string()],
             )
             .await
-            .map_err(storage)?;
-        let Some(row) = rows.next().await.map_err(storage)? else {
+            .map_err(database_failure)?;
+        let Some(row) = rows.next().await.map_err(database_failure)? else {
             drop(rows);
             let mut orphan = connection
                 .query(
@@ -502,8 +503,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     [task_id.as_uuid().to_string()],
                 )
                 .await
-                .map_err(storage)?;
-            if orphan.next().await.map_err(storage)?.is_some() {
+                .map_err(database_failure)?;
+            if orphan.next().await.map_err(database_failure)?.is_some() {
                 return Err(AgentFailure::StorageUnavailable);
             }
             return Ok(None);
@@ -521,7 +522,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             || row.get::<String>(2).map_err(storage)? != state_name(record.snapshot.state)
             || row.get::<i64>(3).map_err(storage)? != integer(record.aggregate_revision)?
             || row.get::<i64>(4).map_err(storage)? != integer(record.executor_generation)?
-            || rows.next().await.map_err(storage)?.is_some()
+            || rows.next().await.map_err(database_failure)?.is_some()
         {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -582,10 +583,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 [record.snapshot.task_id.as_uuid().to_string()],
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let execution = record.execution();
         let mut entries = Vec::new();
-        while let Some(row) = rows.next().await.map_err(storage)? {
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
             let task_id = row.get::<String>(0).map_err(storage)?;
             let execution_id = row.get::<String>(1).map_err(storage)?;
             let executor_generation = row.get::<i64>(2).map_err(storage)?;
@@ -654,15 +655,15 @@ async fn executor_generation_on(connection: &turso::Connection) -> Result<u64, A
             (),
         )
         .await
-        .map_err(storage)?;
+        .map_err(database_failure)?;
     let value = rows
         .next()
         .await
-        .map_err(storage)?
+        .map_err(database_failure)?
         .ok_or(AgentFailure::VaultUnavailable)?
         .get::<i64>(0)
         .map_err(storage)?;
-    if value < 0 || rows.next().await.map_err(storage)?.is_some() {
+    if value < 0 || rows.next().await.map_err(database_failure)?.is_some() {
         return Err(AgentFailure::VaultUnavailable);
     }
     Ok(value as u64)
@@ -689,7 +690,7 @@ async fn write_task(
             ),
         )
         .await
-        .map_err(storage)
+        .map_err(database_failure)
 }
 
 fn encode(record: &TaskRecord) -> Result<String, AgentFailure> {

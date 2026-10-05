@@ -361,8 +361,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 (),
             )
             .await
-            .map_err(storage)?;
-        if let Some(row) = rows.next().await.map_err(storage)? {
+            .map_err(database_failure)?;
+        if let Some(row) = rows.next().await.map_err(database_failure)? {
             let id =
                 Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
             let session = self.load(self.person_id, id).await?;
@@ -386,7 +386,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 (session.id.to_string(), payload),
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         Ok(session)
     }
 
@@ -395,13 +395,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let mut rows = connection
             .query("PRAGMA wal_checkpoint(TRUNCATE)", ())
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let row = rows
             .next()
             .await
-            .map_err(storage)?
+            .map_err(database_failure)?
             .ok_or(AgentFailure::StorageUnavailable)?;
-        if row.get::<i64>(0).map_err(storage)? != 0 || rows.next().await.map_err(storage)?.is_some()
+        if row.get::<i64>(0).map_err(storage)? != 0
+            || rows.next().await.map_err(database_failure)?.is_some()
         {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -413,10 +414,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(turso::transaction::TransactionBehavior::Deferred)
             .await
-            .map_err(|error| match error {
-                turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::Conflict,
-                _ => AgentFailure::StorageUnavailable,
-            })?;
+            .map_err(database_failure)?;
         let result = context_dependencies::validate_context_dependency_store(&transaction).await;
         self.finish_access_grant_transaction(transaction, result)
             .await
@@ -431,7 +429,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             self.unavailable.store(true, Ordering::Release);
             return Err(AgentFailure::VaultUnavailable);
         }
-        self.database.connect().map_err(storage)
+        self.database.connect().map_err(database_failure)
     }
 
     fn payload(&self, session: &AgentSession) -> Result<String, AgentFailure> {
@@ -484,11 +482,11 @@ impl<Keys: VaultKeyProvider> SessionStore for EncryptedAgentVault<Keys> {
                 [session_id.to_string()],
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let row = rows
             .next()
             .await
-            .map_err(storage)?
+            .map_err(database_failure)?
             .ok_or(AgentFailure::NotFound)?;
         let payload = row.get::<String>(1).map_err(storage)?;
         if payload.len() > AgentBudget::default().max_session_bytes {
@@ -549,10 +547,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(turso::transaction::TransactionBehavior::Immediate)
             .await
-            .map_err(|error| match error {
-                turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::Conflict,
-                _ => AgentFailure::StorageUnavailable,
-            })?;
+            .map_err(database_failure)?;
         let result = async {
             let candidate = session.clone();
             let stored = self.session_on(&transaction, session.id).await?;
@@ -627,7 +622,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     (revision, payload, session.id.to_string(), previous),
                 )
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             if changed != 1 {
                 return Err(AgentFailure::Conflict);
             }
@@ -698,6 +693,15 @@ fn lock_directory(directory: &Path, creating: bool) -> Result<File, AgentFailure
 
 fn unavailable(_: impl std::fmt::Debug) -> AgentFailure {
     AgentFailure::VaultUnavailable
+}
+
+// Contention is not a semantic rejection. Commit/rollback uncertainty is handled
+// by each transaction finisher and must not be reclassified as safe to retry.
+pub(crate) fn database_failure(error: turso::Error) -> AgentFailure {
+    match error {
+        turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::StorageBusy,
+        other => storage(other),
+    }
 }
 
 fn storage(_: impl std::fmt::Debug) -> AgentFailure {

@@ -1,3 +1,4 @@
+use super::database_failure;
 use floe_access::{DependencyCoverage, MAX_CONTEXT_DEPENDENCY_BYTES};
 use floe_agent_contract::AgentFailure;
 use turso::{Row, transaction::Transaction};
@@ -53,9 +54,9 @@ async fn validate_context_cleanup_store(
             [MAX_CONTEXT_CLEANUP_ROWS + 1],
         )
         .await
-        .map_err(storage)?;
+        .map_err(database_failure)?;
     let mut count = 0;
-    while let Some(row) = applied.next().await.map_err(storage)? {
+    while let Some(row) = applied.next().await.map_err(database_failure)? {
         count += 1;
         if count > MAX_CONTEXT_CLEANUP_ROWS {
             return Err(AgentFailure::BudgetExceeded);
@@ -68,9 +69,9 @@ async fn validate_context_cleanup_store(
             [MAX_CONTEXT_CLEANUP_SUPPRESSION_ROWS + 1],
         )
         .await
-        .map_err(storage)?;
+        .map_err(database_failure)?;
     let mut count = 0;
-    while let Some(row) = suppression.next().await.map_err(storage)? {
+    while let Some(row) = suppression.next().await.map_err(database_failure)? {
         count += 1;
         if count > MAX_CONTEXT_CLEANUP_SUPPRESSION_ROWS {
             return Err(AgentFailure::BudgetExceeded);
@@ -94,10 +95,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(turso::transaction::TransactionBehavior::Deferred)
             .await
-            .map_err(|error| match error {
-                turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::Conflict,
-                _ => AgentFailure::StorageUnavailable,
-            })?;
+            .map_err(database_failure)?;
         let result = validate_context_cleanup_store(&transaction, self.person_id).await;
         self.finish_access_grant_transaction(transaction, result)
             .await
@@ -111,10 +109,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(turso::transaction::TransactionBehavior::Immediate)
             .await
-            .map_err(|error| match error {
-                turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::Conflict,
-                _ => AgentFailure::StorageUnavailable,
-            })?;
+            .map_err(database_failure)?;
         let result = async {
             validate_context_cleanup_runtime(&transaction).await?;
             let items = self
@@ -156,10 +151,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 [cleanup_id.clone()],
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let (mut coverage_cursor, mut coverage_complete);
-        if let Some(row) = existing.next().await.map_err(storage)? {
-            if existing.next().await.map_err(storage)?.is_some()
+        if let Some(row) = existing.next().await.map_err(database_failure)? {
+            if existing.next().await.map_err(database_failure)?.is_some()
                 || row.get::<String>(4).map_err(storage)? != payload
             {
                 return Err(AgentFailure::VaultUnavailable);
@@ -177,11 +172,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     [self.person_id.to_string()],
                 )
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             let row = count
                 .next()
                 .await
-                .map_err(storage)?
+                .map_err(database_failure)?
                 .ok_or(AgentFailure::VaultUnavailable)?;
             let rows = row.get::<i64>(0).map_err(storage)?;
             let bytes = row.get::<i64>(1).map_err(storage)?;
@@ -202,7 +197,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     ),
                 )
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             coverage_cursor = 0;
             coverage_complete = false;
         }
@@ -226,7 +221,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     (coverage_cursor, i64::from(coverage_complete), cleanup_id.clone()),
                 )
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             if !coverage_complete {
                 return Ok(false);
             }
@@ -252,11 +247,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 (self.person_id.to_string(), cursor, limit),
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let mut last_cursor = cursor;
         let mut scanned = 0;
         let mut stopped_for_budget = false;
-        while let Some(row) = coverage.next().await.map_err(storage)? {
+        while let Some(row) = coverage.next().await.map_err(database_failure)? {
             let coverage_payload = row.get::<String>(3).map_err(storage)?;
             if coverage_payload.len() > MAX_CONTEXT_DEPENDENCY_BYTES {
                 return Err(AgentFailure::VaultUnavailable);
@@ -293,7 +288,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         ),
                     )
                     .await
-                    .map_err(storage)?;
+                    .map_err(database_failure)?;
             }
         }
         Ok((last_cursor, !stopped_for_budget && scanned < limit))

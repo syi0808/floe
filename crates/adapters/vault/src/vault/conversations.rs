@@ -1,3 +1,4 @@
+use super::database_failure;
 use floe_agent_contract::DataClass;
 use floe_agent_contract::{CommandId, DependencyCoverage, RunId};
 use floe_agent_contract::{EngineStep, JournalEvent};
@@ -84,7 +85,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     (integer(next_generation)?, integer(current_generation)?),
                 )
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             if changed != 1 {
                 return Err(AgentFailure::Conflict);
             }
@@ -113,7 +114,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let result = self.admit_conversation_turn_on(&transaction, request).await;
         self.finish_registry_transaction_checked(transaction, result)
             .await
@@ -166,8 +167,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 [request.command_id.as_uuid().to_string()],
             )
             .await
-            .map_err(storage)?;
-        if conflicting_command.next().await.map_err(storage)?.is_some() {
+            .map_err(database_failure)?;
+        if conflicting_command
+            .next()
+            .await
+            .map_err(database_failure)?
+            .is_some()
+        {
             return Err(AgentFailure::Conflict);
         }
         let executor_generation = self
@@ -265,11 +271,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let mut count = transaction
             .query("SELECT count(*) FROM agent_conversation_runs", ())
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let rows = count
             .next()
             .await
-            .map_err(storage)?
+            .map_err(database_failure)?
             .ok_or(AgentFailure::VaultUnavailable)?
             .get::<i64>(0)
             .map_err(storage)?;
@@ -282,7 +288,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         if matches!(request.mode, TurnMode::New) {
             transaction.execute("UPDATE agent_conversation_resume_requests SET state = 'superseded' WHERE session_id = ? AND person_id = ? AND state = 'pending'",
-                (session.id.to_string(), self.person_id.to_string())).await.map_err(storage)?;
+                (session.id.to_string(), self.person_id.to_string())).await.map_err(database_failure)?;
         }
         let previous_revision = session.revision;
         session.revision = session
@@ -315,7 +321,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 ),
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         if changed != 1 {
             return Err(AgentFailure::Conflict);
         }
@@ -371,7 +377,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 ),
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         if let Some(reference) = &resume {
             transaction
                 .execute(
@@ -385,7 +391,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     ),
                 )
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
         }
         self.check_access()?;
         Ok(VaultConversationAdmission::Created { record, session })
@@ -415,8 +421,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     [request.command_id.as_uuid().to_string()],
                 )
                 .await
-                .map_err(storage)?;
-            if let Some(row) = existing.next().await.map_err(storage)? {
+                .map_err(database_failure)?;
+            if let Some(row) = existing.next().await.map_err(database_failure)? {
                 if row.get::<String>(2).map_err(storage)? != "cancel_run" {
                     return Err(AgentFailure::Conflict);
                 }
@@ -458,11 +464,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let mut count = transaction
                 .query("SELECT count(*) FROM agent_conversation_commands", ())
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             let rows = count
                 .next()
                 .await
-                .map_err(storage)?
+                .map_err(database_failure)?
                 .ok_or(AgentFailure::VaultUnavailable)?
                 .get::<i64>(0)
                 .map_err(storage)?;
@@ -479,7 +485,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     ),
                 )
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             self.check_access()?;
             Ok(VaultConversationCancelAdmission::Created(
                 VaultConversationCancelReceipt {
@@ -546,7 +552,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     ),
                 )
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             if changed != 1 {
                 return Err(AgentFailure::Conflict);
             }
@@ -561,7 +567,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     ),
                 )
                 .await
-                .map_err(storage)?;
+                .map_err(database_failure)?;
             self.check_access()?;
             Ok(record.journal_revision)
         }
@@ -583,7 +589,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let result = self
             .finish_conversation_run_on(&transaction, run_id, expected_aggregate_revision, terminal)
             .await;
@@ -714,7 +720,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 ),
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         if changed != 1 {
             return Err(AgentFailure::Conflict);
         }
@@ -743,7 +749,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 (run_id.as_uuid().to_string(), digest),
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         self.enqueue_resume_on(transaction, &next).await?;
         self.check_access()?;
         Ok(next)
@@ -881,9 +887,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         connection: &turso::Connection,
         record: &RunRecord,
     ) -> Result<Vec<JournalEntry>, AgentFailure> {
-        let mut rows = connection.query("SELECT revision, kind, payload FROM agent_conversation_journal WHERE run_id = ? ORDER BY revision LIMIT 513", [record.run_id.as_uuid().to_string()]).await.map_err(storage)?;
+        let mut rows = connection.query("SELECT revision, kind, payload FROM agent_conversation_journal WHERE run_id = ? ORDER BY revision LIMIT 513", [record.run_id.as_uuid().to_string()]).await.map_err(database_failure)?;
         let mut entries = Vec::new();
-        while let Some(row) = rows.next().await.map_err(storage)? {
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
             let revision = u64::try_from(row.get::<i64>(0).map_err(storage)?)
                 .map_err(|_| AgentFailure::StorageUnavailable)?;
             let kind = row.get::<String>(1).map_err(storage)?;
@@ -956,9 +962,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 (run_id.as_uuid().to_string(),),
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let mut entries = Vec::new();
-        while let Some(row) = rows.next().await.map_err(storage)? {
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
             let revision = row.get::<i64>(0).map_err(storage)?;
             let kind = row.get::<String>(1).map_err(storage)?;
             let payload = row.get::<String>(2).map_err(storage)?;
@@ -1021,11 +1027,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
             validate_schema(&transaction).await?;
-            let mut receipts = transaction.query("SELECT person_id, session_id, expected_revision, result_revision FROM agent_conversation_recovery_commands WHERE command_id = ?", [command_id.as_uuid().to_string()]).await.map_err(storage)?;
-            if let Some(row) = receipts.next().await.map_err(storage)? {
+            let mut receipts = transaction.query("SELECT person_id, session_id, expected_revision, result_revision FROM agent_conversation_recovery_commands WHERE command_id = ?", [command_id.as_uuid().to_string()]).await.map_err(database_failure)?;
+            if let Some(row) = receipts.next().await.map_err(database_failure)? {
                 let revision = u64::try_from(row.get::<i64>(3).map_err(storage)?).map_err(|_| AgentFailure::StorageUnavailable)?;
                 if row.get::<String>(0).map_err(storage)? != person_id.to_string() || row.get::<String>(1).map_err(storage)? != session_id.to_string()
-                    || row.get::<i64>(2).map_err(storage)? != integer(expected_session_revision)? || receipts.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::Conflict); }
+                    || row.get::<i64>(2).map_err(storage)? != integer(expected_session_revision)? || receipts.next().await.map_err(database_failure)?.is_some() { return Err(AgentFailure::Conflict); }
                 return Ok(revision);
             }
             drop(receipts);
@@ -1056,11 +1062,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 }
                 return Err(AgentFailure::VaultUnavailable);
             }
-            let mut count = transaction.query("SELECT count(*) FROM agent_conversation_recovery_commands WHERE person_id = ?", [person_id.to_string()]).await.map_err(storage)?;
-            if count.next().await.map_err(storage)?.ok_or(AgentFailure::StorageUnavailable)?.get::<i64>(0).map_err(storage)? >= 4096 { return Err(AgentFailure::BudgetExceeded); }
+            let mut count = transaction.query("SELECT count(*) FROM agent_conversation_recovery_commands WHERE person_id = ?", [person_id.to_string()]).await.map_err(database_failure)?;
+            if count.next().await.map_err(database_failure)?.ok_or(AgentFailure::StorageUnavailable)?.get::<i64>(0).map_err(storage)? >= 4096 { return Err(AgentFailure::BudgetExceeded); }
             drop(count);
             transaction.execute("INSERT INTO agent_conversation_recovery_commands (command_id, person_id, session_id, expected_revision, result_revision) VALUES (?, ?, ?, ?, ?)",
-                (command_id.as_uuid().to_string(), person_id.to_string(), session_id.to_string(), integer(expected_session_revision)?, integer(session.revision)?)).await.map_err(storage)?;
+                (command_id.as_uuid().to_string(), person_id.to_string(), session_id.to_string(), integer(expected_session_revision)?, integer(session.revision)?)).await.map_err(database_failure)?;
             self.check_access()?;
             Ok(session.revision)
         }
@@ -1109,8 +1115,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 [origin_run_id.as_uuid().to_string()],
             )
             .await
-            .map_err(storage)?;
-        let Some(row) = rows.next().await.map_err(storage)? else {
+            .map_err(database_failure)?;
+        let Some(row) = rows.next().await.map_err(database_failure)? else {
             return Ok(None);
         };
         let child = RunId::from_uuid(
@@ -1118,7 +1124,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .map_err(|_| AgentFailure::VaultUnavailable)?,
         )
         .ok_or(AgentFailure::VaultUnavailable)?;
-        if rows.next().await.map_err(storage)?.is_some() {
+        if rows.next().await.map_err(database_failure)?.is_some() {
             return Err(AgentFailure::VaultUnavailable);
         }
         Ok(Some(child))
@@ -1137,10 +1143,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 [origin_run_id.as_uuid().to_string()],
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         let mut count = 0u64;
         let mut resolved = false;
-        while let Some(row) = rows.next().await.map_err(storage)? {
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
             count += 1;
             match row.get::<String>(0).map_err(storage)?.as_str() {
                 "resolved" => resolved = true,
@@ -1185,8 +1191,8 @@ async fn read_record(
     let mut rows = connection
         .query(query, [identifier])
         .await
-        .map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+        .map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
     let payload = row.get::<String>(8).map_err(storage)?;
@@ -1203,7 +1209,7 @@ async fn read_record(
         || row.get::<i64>(5).map_err(storage)? != integer(record.aggregate_revision)?
         || row.get::<i64>(6).map_err(storage)? != integer(record.journal_revision)?
         || row.get::<i64>(7).map_err(storage)? != integer(record.executor_generation)?
-        || rows.next().await.map_err(storage)?.is_some()
+        || rows.next().await.map_err(database_failure)?.is_some()
     {
         return Err(AgentFailure::VaultUnavailable);
     }
@@ -1225,15 +1231,15 @@ async fn executor_generation_on(connection: &turso::Connection) -> Result<u64, A
             (),
         )
         .await
-        .map_err(storage)?;
+        .map_err(database_failure)?;
     let value = rows
         .next()
         .await
-        .map_err(storage)?
+        .map_err(database_failure)?
         .ok_or(AgentFailure::VaultUnavailable)?
         .get::<i64>(0)
         .map_err(storage)?;
-    if value < 0 || rows.next().await.map_err(storage)?.is_some() {
+    if value < 0 || rows.next().await.map_err(database_failure)?.is_some() {
         return Err(AgentFailure::VaultUnavailable);
     }
     Ok(value as u64)
@@ -1259,7 +1265,7 @@ pub(super) async fn write_run(
             ),
         )
         .await
-        .map_err(storage)
+        .map_err(database_failure)
 }
 
 fn parse_run_id(value: &str) -> Result<RunId, AgentFailure> {
@@ -1356,8 +1362,8 @@ async fn terminal_receipt_on(
             [run_id.as_uuid().to_string()],
         )
         .await
-        .map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+        .map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
     let digest = row.get::<String>(0).map_err(storage)?;
@@ -1365,7 +1371,7 @@ async fn terminal_receipt_on(
         || !digest
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        || rows.next().await.map_err(storage)?.is_some()
+        || rows.next().await.map_err(database_failure)?.is_some()
     {
         return Err(AgentFailure::StorageUnavailable);
     }
@@ -1433,7 +1439,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         };
         let payload = serde_json::to_string(&pending).map_err(storage)?;
         transaction.execute("INSERT INTO agent_conversation_resume_requests (origin_run_id, person_id, session_id, state, child_run_id, payload) VALUES (?, ?, ?, ?, NULL, ?)",
-            (record.run_id.as_uuid().to_string(), self.person_id.to_string(), record.session_id.to_string(), state, payload)).await.map_err(storage)?;
+            (record.run_id.as_uuid().to_string(), self.person_id.to_string(), record.session_id.to_string(), state, payload)).await.map_err(database_failure)?;
         Ok(())
     }
     pub async fn pending_conversation_resume_requests(
@@ -1450,9 +1456,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::InvalidInput);
         }
         let connection = self.connection()?;
-        let mut rows = connection.query("SELECT origin_run_id FROM agent_conversation_resume_requests WHERE person_id = ? AND json_extract(payload, '$.device_id') = ? AND state = 'pending' AND origin_run_id > ? ORDER BY origin_run_id LIMIT ?", (self.person_id.to_string(), actor.device_id.clone(), after.map_or_else(String::new, |id| id.as_uuid().to_string()), limit as i64 + 1)).await.map_err(storage)?;
+        let mut rows = connection.query("SELECT origin_run_id FROM agent_conversation_resume_requests WHERE person_id = ? AND json_extract(payload, '$.device_id') = ? AND state = 'pending' AND origin_run_id > ? ORDER BY origin_run_id LIMIT ?", (self.person_id.to_string(), actor.device_id.clone(), after.map_or_else(String::new, |id| id.as_uuid().to_string()), limit as i64 + 1)).await.map_err(database_failure)?;
         let mut ids = Vec::new();
-        while let Some(row) = rows.next().await.map_err(storage)? {
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
             ids.push(parse_run_id(&row.get::<String>(0).map_err(storage)?)?);
         }
         drop(rows);
@@ -1524,7 +1530,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let session = self.session_on(&transaction, request.session_id).await?;
             if session.revision != request.expected_session_revision || session.active_turn.is_some() {
                 if transaction.execute("UPDATE agent_conversation_resume_requests SET state = 'superseded' WHERE origin_run_id = ? AND state = 'pending'",
-                    [origin.as_uuid().to_string()]).await.map_err(storage)? != 1 { return Err(AgentFailure::Conflict); }
+                    [origin.as_uuid().to_string()]).await.map_err(database_failure)? != 1 { return Err(AgentFailure::Conflict); }
                 return Ok(None);
             }
             self.check_access()?;
@@ -1564,7 +1570,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if floe_conversation::build_resume_required(&receipt, &group)?.as_ref() != Some(&persisted) { return Err(AgentFailure::Conflict); }
             let session = self.session_on(&transaction, persisted.session_id).await?;
             if session.revision != persisted.expected_session_revision || session.active_turn.is_some() {
-                let changed = transaction.execute("UPDATE agent_conversation_resume_requests SET state = 'superseded' WHERE origin_run_id = ? AND state = 'pending'", [persisted.origin_run_id.as_uuid().to_string()]).await.map_err(storage)?;
+                let changed = transaction.execute("UPDATE agent_conversation_resume_requests SET state = 'superseded' WHERE origin_run_id = ? AND state = 'pending'", [persisted.origin_run_id.as_uuid().to_string()]).await.map_err(database_failure)?;
                 if changed != 1 { return Err(AgentFailure::Conflict); }
                 self.check_access()?;
                 return Ok(None);
@@ -1572,7 +1578,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let admission = self.admit_conversation_turn_on(&transaction, request.child).await?;
             let child = match &admission { VaultConversationAdmission::Created { record, .. } | VaultConversationAdmission::Existing(record) | VaultConversationAdmission::Resumed(record) => record };
             let changed = transaction.execute("UPDATE agent_conversation_resume_requests SET state = 'claimed', child_run_id = ? WHERE origin_run_id = ? AND state = 'pending'",
-                (child.run_id.as_uuid().to_string(), persisted.origin_run_id.as_uuid().to_string())).await.map_err(storage)?;
+                (child.run_id.as_uuid().to_string(), persisted.origin_run_id.as_uuid().to_string())).await.map_err(database_failure)?;
             if changed != 1 { return Err(AgentFailure::Conflict); }
             self.check_access()?;
             Ok(Some(admission))
@@ -1587,8 +1593,8 @@ async fn resume_request_on(
     person: PersonId,
     origin: RunId,
 ) -> Result<Option<(ResumeRequired, String, Option<RunId>)>, AgentFailure> {
-    let mut rows = connection.query("SELECT person_id, session_id, state, child_run_id, payload FROM agent_conversation_resume_requests WHERE origin_run_id = ?", [origin.as_uuid().to_string()]).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+    let mut rows = connection.query("SELECT person_id, session_id, state, child_run_id, payload FROM agent_conversation_resume_requests WHERE origin_run_id = ?", [origin.as_uuid().to_string()]).await.map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
     let payload = row.get::<String>(4).map_err(storage)?;
@@ -1609,7 +1615,7 @@ async fn resume_request_on(
         || row.get::<String>(1).map_err(storage)? != pending.session_id.to_string()
         || !matches!(state.as_str(), "pending" | "claimed" | "superseded")
         || (state == "claimed") != child.is_some()
-        || rows.next().await.map_err(storage)?.is_some()
+        || rows.next().await.map_err(database_failure)?.is_some()
     {
         return Err(AgentFailure::StorageUnavailable);
     }
@@ -1639,18 +1645,18 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             if command_identity_used(&transaction, request.command_id.as_uuid()).await? { return Err(AgentFailure::Conflict); }
             if self.conversation_run_by_command_on(&transaction, request.command_id).await?.is_some() { return Err(AgentFailure::Conflict); }
-            let mut rows = transaction.query("SELECT 1 FROM agent_conversation_commands WHERE command_id = ?", [request.command_id.as_uuid().to_string()]).await.map_err(storage)?;
-            if rows.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::Conflict); }
+            let mut rows = transaction.query("SELECT 1 FROM agent_conversation_commands WHERE command_id = ?", [request.command_id.as_uuid().to_string()]).await.map_err(database_failure)?;
+            if rows.next().await.map_err(database_failure)?.is_some() { return Err(AgentFailure::Conflict); }
             drop(rows);
-            let mut rows = transaction.query("SELECT count(*) FROM agent_conversation_session_commands", ()).await.map_err(storage)?;
-            let count = rows.next().await.map_err(storage)?.ok_or(AgentFailure::StorageUnavailable)?.get::<i64>(0).map_err(storage)?;
+            let mut rows = transaction.query("SELECT count(*) FROM agent_conversation_session_commands", ()).await.map_err(database_failure)?;
+            let count = rows.next().await.map_err(database_failure)?.ok_or(AgentFailure::StorageUnavailable)?.get::<i64>(0).map_err(storage)?;
             if count < 0 || count >= MAX_COMMAND_ROWS { return Err(AgentFailure::BudgetExceeded); }
             drop(rows);
             let session = AgentSession::new(self.person_id);
             let receipt = floe_conversation::project_session_receipt(session.clone())?;
-            transaction.execute("INSERT INTO agent_sessions (id, revision, payload) VALUES (?, 0, ?)", (session.id.to_string(), self.payload(&session)?)).await.map_err(storage)?;
+            transaction.execute("INSERT INTO agent_sessions (id, revision, payload) VALUES (?, 0, ?)", (session.id.to_string(), self.payload(&session)?)).await.map_err(database_failure)?;
             transaction.execute("INSERT INTO agent_conversation_session_commands (command_id, person_id, session_id, initial_revision) VALUES (?, ?, ?, 0)",
-                (request.command_id.as_uuid().to_string(), self.person_id.to_string(), session.id.to_string())).await.map_err(storage)?;
+                (request.command_id.as_uuid().to_string(), self.person_id.to_string(), session.id.to_string())).await.map_err(database_failure)?;
             self.check_access()?;
             Ok(receipt)
         }.await;
@@ -1659,8 +1665,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
     pub async fn resume_conversation_session(&self) -> Result<Option<AgentSession>, AgentFailure> {
         let connection = self.connection()?;
-        let mut rows = connection.query("SELECT id FROM agent_sessions WHERE json_extract(payload, '$.scope') IS NULL AND json_extract(payload, '$.data_classes[0]') = 'personal' ORDER BY rowid DESC LIMIT 1", ()).await.map_err(storage)?;
-        let Some(row) = rows.next().await.map_err(storage)? else {
+        let mut rows = connection.query("SELECT id FROM agent_sessions WHERE json_extract(payload, '$.scope') IS NULL AND json_extract(payload, '$.data_classes[0]') = 'personal' ORDER BY rowid DESC LIMIT 1", ()).await.map_err(database_failure)?;
+        let Some(row) = rows.next().await.map_err(database_failure)? else {
             self.check_access()?;
             return Ok(None);
         };
@@ -1682,8 +1688,8 @@ async fn session_command_on(
     person_id: PersonId,
     command_id: CommandId,
 ) -> Result<Option<floe_conversation::SessionReceipt>, AgentFailure> {
-    let mut rows = connection.query("SELECT person_id, session_id, initial_revision FROM agent_conversation_session_commands WHERE command_id = ?", [command_id.as_uuid().to_string()]).await.map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+    let mut rows = connection.query("SELECT person_id, session_id, initial_revision FROM agent_conversation_session_commands WHERE command_id = ?", [command_id.as_uuid().to_string()]).await.map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
     if row.get::<String>(0).map_err(storage)? != person_id.to_string()
@@ -1698,7 +1704,7 @@ async fn session_command_on(
         session_revision: 0,
     };
     receipt.validate()?;
-    if rows.next().await.map_err(storage)?.is_some() {
+    if rows.next().await.map_err(database_failure)?.is_some() {
         return Err(AgentFailure::StorageUnavailable);
     }
     Ok(Some(receipt))
@@ -1722,8 +1728,8 @@ pub(super) async fn command_identity_used(
                 [table],
             )
             .await
-            .map_err(storage)?;
-        if exists.next().await.map_err(storage)?.is_none() {
+            .map_err(database_failure)?;
+        if exists.next().await.map_err(database_failure)?.is_none() {
             continue;
         }
         drop(exists);
@@ -1731,8 +1737,8 @@ pub(super) async fn command_identity_used(
         let mut rows = connection
             .query(&query, [command_id.to_string()])
             .await
-            .map_err(storage)?;
-        if rows.next().await.map_err(storage)?.is_some() {
+            .map_err(database_failure)?;
+        if rows.next().await.map_err(database_failure)?.is_some() {
             return Ok(true);
         }
     }

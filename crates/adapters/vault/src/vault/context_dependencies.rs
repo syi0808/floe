@@ -1,3 +1,4 @@
+use super::database_failure;
 use floe_access::{ContextDependencyError, DependencyCoverage, MAX_CONTEXT_DEPENDENCY_BYTES};
 use floe_agent_contract::AgentFailure;
 use floe_kernel::PersonId;
@@ -22,9 +23,9 @@ pub(super) async fn validate_context_dependency_store(
             [MAX_CONTEXT_DEPENDENCY_ROWS + 1],
         )
         .await
-        .map_err(storage)?;
+        .map_err(database_failure)?;
     let mut count = 0i64;
-    while let Some(row) = rows.next().await.map_err(storage)? {
+    while let Some(row) = rows.next().await.map_err(database_failure)? {
         count += 1;
         if count > MAX_CONTEXT_DEPENDENCY_ROWS
             || row.get::<i64>(3).map_err(storage)? != CONTEXT_DEPENDENCY_RECORD_VERSION
@@ -61,11 +62,11 @@ pub(super) async fn read_context_dependency_coverage(
             (person_id.to_string(), session_id.to_string(), turn_id.to_string()),
         )
         .await
-        .map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+        .map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(DependencyCoverage::Unknown);
     };
-    if rows.next().await.map_err(storage)?.is_some()
+    if rows.next().await.map_err(database_failure)?.is_some()
         || row.get::<i64>(0).map_err(storage)? != CONTEXT_DEPENDENCY_RECORD_VERSION
     {
         return Err(AgentFailure::VaultUnavailable);
@@ -109,11 +110,11 @@ pub(super) async fn merge_context_dependency_coverage(
                 (person_id.to_string(), session_id.to_string()),
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
     let quota = quota
         .next()
         .await
-        .map_err(storage)?
+        .map_err(database_failure)?
         .ok_or(AgentFailure::VaultUnavailable)?;
     let count = quota.get::<i64>(0).map_err(storage)?;
     let current_bytes = quota.get::<i64>(1).map_err(storage)?;
@@ -124,11 +125,11 @@ pub(super) async fn merge_context_dependency_coverage(
                 (person_id.to_string(), session_id.to_string(), turn_id.to_string()),
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
         existing
             .next()
             .await
-            .map_err(storage)?
+            .map_err(database_failure)?
             .ok_or(AgentFailure::VaultUnavailable)?
             .get::<i64>(0)
             .map_err(storage)?
@@ -153,7 +154,7 @@ pub(super) async fn merge_context_dependency_coverage(
             (CONTEXT_DEPENDENCY_RECORD_VERSION, String::from_utf8(payload.clone()).map_err(|_| AgentFailure::InvalidInput)?, person_id.to_string(), session_id.to_string(), turn_id.to_string()),
         )
         .await
-        .map_err(storage)?;
+        .map_err(database_failure)?;
     if changed == 0 {
         transaction
             .execute(
@@ -161,7 +162,7 @@ pub(super) async fn merge_context_dependency_coverage(
                 (person_id.to_string(), session_id.to_string(), turn_id.to_string(), CONTEXT_DEPENDENCY_RECORD_VERSION, String::from_utf8(payload).map_err(|_| AgentFailure::InvalidInput)?),
             )
             .await
-            .map_err(storage)?;
+            .map_err(database_failure)?;
     }
     Ok(merged)
 }
@@ -179,11 +180,11 @@ async fn read_context_dependency_row(
             (person_id.to_string(), session_id.to_string(), turn_id.to_string()),
         )
         .await
-        .map_err(storage)?;
-    let Some(row) = rows.next().await.map_err(storage)? else {
+        .map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
-    if rows.next().await.map_err(storage)?.is_some()
+    if rows.next().await.map_err(database_failure)?.is_some()
         || row.get::<i64>(0).map_err(storage)? != CONTEXT_DEPENDENCY_RECORD_VERSION
     {
         return Err(AgentFailure::VaultUnavailable);

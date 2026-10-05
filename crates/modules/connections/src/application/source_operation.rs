@@ -750,6 +750,9 @@ impl ConnectionsService {
             ) => Err(failure),
             Err(failure) => {
                 let reason = failure.into_failure();
+                if reason == AgentFailure::StorageBusy {
+                    return Err(ConnectionsCommandFailure::Indeterminate(reason));
+                }
                 match self
                     .sources
                     .reject_unadmitted_operation_command(identity, reason)
@@ -1161,6 +1164,7 @@ pub(super) fn source_error(error: SourceRepositoryError) -> AgentFailure {
     match error {
         SourceRepositoryError::Conflict => AgentFailure::Conflict,
         SourceRepositoryError::StorageUnavailable => AgentFailure::StorageUnavailable,
+        SourceRepositoryError::StorageBusy => AgentFailure::StorageBusy,
         SourceRepositoryError::Corrupt => AgentFailure::PolicyDenied,
     }
 }
