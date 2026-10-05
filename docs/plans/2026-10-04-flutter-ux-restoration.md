@@ -1594,3 +1594,15 @@ Day snapshot reads its mirror and inspects source metadata without acquiring eve
 then reprojects current display refs. Typed UUID decoders preserve the strings used
 for joins. The remaining empty-line formatting nit was removed. The later Dart
 read-generation/copy correction requires its own final Apple qualification.
+
+Exact69778234 qualification passed: macOS Debug23s/Release86s, strict deep signatures,
+profile getters2/1 and unsigned iOSSimulator arm64Debug29s; clean tree/lockfiles.
+Focused Opus re-review closed F1/F2 without a blocking regression. Root verified
+ConnectionsController assigns overview before its notification. Remaining copy
+polish is deliberately queued with the next presentation slice: SourceFenced must
+not imply an active updater (a repair fence can persist), SourceChanged should point
+to returning to Calendar rather than the Connections catalog Refresh, and new copy
+should join the localization catalog. Only English is currently shipped, so the
+review's mixed non-English locale scenario is not a currently supported runtime.
+These copy nits do not reopen the observed-generation fix. No additional review or
+build is needed solely for this evidence entry; no whole/live acceptance is claimed.
