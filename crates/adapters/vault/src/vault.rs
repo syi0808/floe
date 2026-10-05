@@ -315,10 +315,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.check_access()
     }
 
-    pub async fn create_session(&self) -> Result<AgentSession, AgentFailure> {
-        self.insert_session(AgentSession::new(self.person_id)).await
-    }
-
     /// The Session store Conversation drives, backed by this vault.
     pub fn governed_general_store(
         &self,
@@ -356,27 +352,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(coverage)
     }
 
-    pub async fn resume_session(&self) -> Result<AgentSession, AgentFailure> {
-        let connection = self.connection()?;
-        let mut rows = connection
-            .query(
-                "SELECT id FROM agent_sessions WHERE json_extract(payload, '$.scope') IS NULL AND json_extract(payload, '$.data_classes[0]') = 'personal' ORDER BY rowid DESC LIMIT 1",
-                (),
-            )
-            .await
-            .map_err(database_failure)?;
-        if let Some(row) = rows.next().await.map_err(database_failure)? {
-            let id =
-                Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
-            let session = self.load(self.person_id, id).await?;
-            if session.scope.is_some() || session.data_classes != [DataClass::Personal] {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            return Ok(session);
-        }
-        self.create_session().await
-    }
-
     pub(crate) async fn journal_transaction<'v, 'c>(
         &'v self,
         connection: &'c mut turso::Connection,
@@ -412,18 +387,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     pub fn check_access(&self) -> Result<(), AgentFailure> {
         self.connection().map(|_| ())
-    }
-
-    async fn insert_session(&self, session: AgentSession) -> Result<AgentSession, AgentFailure> {
-        let payload = self.payload(&session)?;
-        self.connection()?
-            .execute(
-                "INSERT INTO agent_sessions (id, revision, payload) VALUES (?, 0, ?)",
-                (session.id.to_string(), payload),
-            )
-            .await
-            .map_err(database_failure)?;
-        Ok(session)
     }
 
     pub async fn checkpoint(&self) -> Result<(), AgentFailure> {
