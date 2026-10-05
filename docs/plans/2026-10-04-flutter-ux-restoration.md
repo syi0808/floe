@@ -1901,3 +1901,20 @@ Analyzer remains 157 baseline infos, with no errors/warnings. Root inspected ren
 94eb6db final gate. Exact Apple build/signature qualification for this UI snapshot
 remains pending; full original/current screen comparison and live Calendar QA remain
 open.
+
+
+### Apple qualification checkpoint — bd3a9bd
+
+The isolated Mac qualified ffed002, 94eb6db and bd3a9bd separately. For each exact
+snapshot, macOS Debug/Release builds, strict bundle signatures and storage getters
+(Debug 2, Release 1) passed; unsigned arm64 iOS Simulator Debug passed. The worktree
+and lockfiles remained unchanged. macOS Release Runner is universal but embedded Floe
+dylibs are arm64-only, so Intel execution is not qualified. Native app/server/simulator
+launch, Keychain/private profiles and live provider data were not exercised.
+
+Normal reviewed cache-write escalation resolved the Flutter preflight sandbox error;
+no security settings were changed. Compiler/dead-code, Swift environment, destination
+selection and iOS sysroot warnings were nonfatal. A shell logging-wrapper error after
+one ffed002 Debug build did not rerun that build; its captured Flutter output and
+exit code confirmed success. This checkpoint closes the build-only gate for the
+source snapshot, not whole-screen parity or the outstanding live/recovery workflows.
