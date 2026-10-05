@@ -6,7 +6,7 @@ import 'conversation_observation.dart';
 
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' hide DiagnosticLevel;
 
 import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_client.dart';
