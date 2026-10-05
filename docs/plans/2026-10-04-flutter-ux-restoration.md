@@ -2292,3 +2292,66 @@ Final Apple qualification: exact5e7e3a801847aee5b387bd6769f3b6eb069489ff (tree6b
 Owned QA PID58813 exited normally after one SIGTERM and LaunchServices session66959 returned0. The new Debug PID64076/window appeared under retained session6819. UI permission diagnosis was corrected: AXIsProcessTrusted was false inside the sandbox, true through the supported reviewed helper execution. No permission was changed. Dedicated CUA tool absence alone did not establish inability to interact. A Floe-only Conversation navigation check is pending; no new server, pairing, source or model request is implied.
 
 Verification artifact availability changed after qualification: root's newer temporary workspace contents disappeared. All implementation and prior validation summaries were already on main; root re-cloned exactmain and recovered the latest disposable controller/runtime/Rust probe sources. The older external full110-check fixture tree, Linux SDK cache and raw root logs are not presently available. Historical pass results remain observed tool outcomes, but future full-suite replay requires restoring the fixture/toolchain environment or using independently qualified coverage. Mac qualification logs remain /private/tmp/floe-5e7e3a8-qualification/logs. Do not claim raw root artifacts remain readable.
+
+### Connected QA prerequisites and model failure classification (2026-10-05)
+
+One synthetic Conversation request reached an execution-limit pause without an
+assistant reply. Server availability, provider readiness and actual selected route
+were not established first. This is a failed observation, not a connected end-to-end
+test or evidence that a particular provider caused the pause. The existing Run and
+logs are preserved. The owner subsequently reported completing Codex OAuth setup;
+both server and client readiness still require observation before another request.
+
+Source review independently established two classification defects. Model input
+capacity errors can become BudgetExceeded, and a device-profile timeout can become
+the enclosing execution DeadlineExceeded. Both can offer an inappropriate budget
+continuation. The bounded correction adds ModelInputCapacityExceeded and
+LocalModelTimeout, without changing model selection, authority or accounting.
+Device timeout classification uses cancellation, canonical deadline and the
+generate-time provider-cap binding flag, for both native terminal reply shapes.
+Prepare observation semantics remain unchanged. Output/history-size BudgetExceeded
+producers remain explicitly outside this input-capacity slice.
+
+Terminal Run issues also require metadata-only logging at the three fenced client
+completion paths (new turn, linked Run and re-observed Run). Stored Session outcome
+barriers must not create repeated exception records during reload. Preserve genuine
+transport exceptions, multiple bounded issues, Run/Session/incident identity and
+client observation time; never log model input, output or credential values.
+
+Qualification order: review and combine the two disjoint implementation branches;
+run disposable probes and changed Rust/Swift/Flutter build gates on that snapshot;
+verify the live development server, model setup and paired client; then issue one
+fresh synthetic request with no personal sources or tools. Do not continue the old
+Run to qualify new failure semantics. No successful response is claimed yet.
+
+### Provider capability ownership: design work queued (2026-10-05)
+
+The owner rejects asking end users to declare structured-output or tool-proposal
+support. Currently dashboard checkboxes are persisted as PurposeModel capabilities,
+returned by ModelAccount and used in admission. A text-only diagnostic cannot prove
+the other capabilities. Removing the controls or enabling every flag would conceal
+the ownership defect rather than resolve it.
+
+The next design moves capability facts into Inference-owned resolution, with
+provider adapters supplying discovery/evidence. Keep user intent (provider, model,
+purpose and supported reasoning choices) separate from observed technical facts.
+Facts are scoped to provider, endpoint/transport, model identity and adapter version;
+an API model and the same named Codex OAuth model are not interchangeable evidence.
+Use documented provider discovery where available, a versioned curated catalog for
+documented omissions, and bounded synthetic feature checks where needed. A successful
+text response cannot upgrade JSON or tool support. Unknown is distinct from unsupported.
+
+Before implementation, define evidence precedence, expiry/invalidation, exact model
+alias matching, bounded probe budgets and activation semantics. Changed model,
+endpoint, account or adapter must invalidate stale capability evidence and change
+the pinned capability revision. Keep dynamic availability separate from model feature
+support. Preserve primary/fallback policy: missing feature support is not primary
+absence. Never accept user-submitted capability booleans as technical authority.
+
+UI target: login, model selection and purpose preferences, with readable readiness
+status rather than technical capability checkboxes. Unknown/custom endpoints should
+offer a bounded verification path, not ask users to guess. Execution must still
+validate actual output and authorization; metadata does not establish correctness or
+grant tool/source access. No capability discovery or verification request may send
+personal data. This section is a design commitment, not an implemented catalog or
+permission for unbounded paid probing.
