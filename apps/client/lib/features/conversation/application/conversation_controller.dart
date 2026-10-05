@@ -86,6 +86,7 @@ final class ConversationController extends ChangeNotifier {
   String? _lastConversationRunId;
   String? _observedRunId;
   AgentConversationTurnRequest? _conversationRun;
+  int _runUiGeneration = 0;
   late final VaultController vaultController;
   bool _sealed = false;
   int _adoptionEpoch = 0;
@@ -116,36 +117,41 @@ final class ConversationController extends ChangeNotifier {
   void _trackRunUi(
     AgentSession current, {
     required String? runId,
+    AppRunState? state,
     bool newTurn = false,
   }) {
     final previousRunId = _observedRunId ?? _runSession?.activeTurn;
     final firstPendingTurnSnapshot =
         _conversationRun != null && _observedRunId == null && runId != null;
-    if (newTurn ||
+    final transitioned =
+        newTurn ||
         (runId != null &&
             previousRunId != runId &&
-            !firstPendingTurnSnapshot)) {
+            !firstPendingTurnSnapshot);
+    if (transitioned) {
+      _runUiGeneration++;
       _stopRequested = false;
     }
     _runSession = current;
     _observedRunId = runId;
+    if (runId != null) {
+      progress = state == AppRunState.cancelling || _stopRequested
+          ? AgentProgress.stopping
+          : AgentProgress.model;
+    }
   }
 
   void _clearRunUi() {
+    if (_runSession != null || _observedRunId != null || _stopRequested) {
+      _runUiGeneration++;
+    }
     _runSession = null;
     _observedRunId = null;
     _stopRequested = false;
   }
 
-  bool _ownsStopTarget(
-    String? runId,
-    AgentConversationTurnRequest? request,
-  ) {
-    if (runId != null) {
-      return (_observedRunId ?? _runSession?.activeTurn) == runId;
-    }
-    return request != null && identical(_conversationRun, request);
-  }
+  bool _ownsStopOperation(int epoch, int generation) =>
+      _acceptsEpoch(epoch) && generation == _runUiGeneration;
 
   final Map<String, AgentInteractionSnapshot> _interactions = {};
   final Set<String> _interactionBusy = {};
@@ -397,7 +403,6 @@ final class ConversationController extends ChangeNotifier {
     final epoch = _adoptionEpoch;
     final observation = _observation;
     _trackRunUi(original, runId: receipt.runId);
-    progress = AgentProgress.model;
     _notify();
     try {
       final completion = await runtime.observeConversationRun(
@@ -406,7 +411,7 @@ final class ConversationController extends ChangeNotifier {
         observation: observation,
         onRun: (run) {
           if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
-          _trackRunUi(original, runId: run.runId);
+          _trackRunUi(original, runId: run.runId, state: run.state);
           _notify();
         },
       );
@@ -554,14 +559,13 @@ final class ConversationController extends ChangeNotifier {
     needsReload = false;
     if (accepted.activeTurn != null) {
       _trackRunUi(accepted, runId: accepted.activeTurn);
-      progress = AgentProgress.model;
       _notify();
       final completion = await _conversationRuntime.observeSessionRun(
         accepted,
         observation: observation,
         onRun: (run) {
           if (!_acceptsEpoch(epoch)) return;
-          _trackRunUi(accepted, runId: run.runId);
+          _trackRunUi(accepted, runId: run.runId, state: run.state);
           _notify();
         },
       );
@@ -676,10 +680,7 @@ final class ConversationController extends ChangeNotifier {
         observation: observation,
         onRun: (run) {
           if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
-          _trackRunUi(original, runId: run.runId);
-          progress = run.state == AppRunState.cancelling || _stopRequested
-              ? AgentProgress.stopping
-              : AgentProgress.model;
+          _trackRunUi(original, runId: run.runId, state: run.state);
           _notify();
         },
       );
@@ -717,6 +718,7 @@ final class ConversationController extends ChangeNotifier {
   Future<void> stop() async {
     final original = _runSession;
     final epoch = _adoptionEpoch;
+    final generation = _runUiGeneration;
     if (original == null || _stopRequested) return;
     final runId = _observedRunId ?? original.activeTurn;
     final request = _conversationRun;
@@ -727,7 +729,8 @@ final class ConversationController extends ChangeNotifier {
     try {
       if (runId != null) {
         final dispatched = await _conversationRuntime.cancelObservedRun(runId);
-        if (!dispatched && _ownsStopTarget(runId, null)) {
+        if (!_ownsStopOperation(epoch, generation)) return;
+        if (!dispatched) {
           _stopRequested = false;
           progress = AgentProgress.model;
           _notify();
@@ -736,8 +739,7 @@ final class ConversationController extends ChangeNotifier {
         await _conversationRuntime.cancelConversationTurn(request);
       }
     } on Object {
-      if (!_acceptsEpoch(epoch)) return;
-      if (!_ownsStopTarget(runId, request)) return;
+      if (!_ownsStopOperation(epoch, generation)) return;
       _stopRequested = false;
       failure = 'transport_unavailable';
       needsReload = true;
