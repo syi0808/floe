@@ -717,7 +717,7 @@ impl ConnectionsService {
         )
         .await
     }
-    async fn advance(
+    pub(super) async fn advance(
         &self,
         operation: &SourceOperationRecord,
         next_phase: SourceOperationPhase,
@@ -934,6 +934,20 @@ impl ConnectionsService {
         }
         if operation.kind == SourceOperationKind::ConnectionConfigure && abort_reason.is_none() {
             return Ok(operation);
+        }
+        if operation.kind == SourceOperationKind::ConnectionPresentation {
+            return match abort_reason {
+                Some(reason) => {
+                    self.advance(
+                        &operation,
+                        SourceOperationPhase::Aborted { reason },
+                        SourceOperationProof::Presentation,
+                        None,
+                    )
+                    .await
+                }
+                None => Ok(operation),
+            };
         }
         let identity = operation.identity();
         match self

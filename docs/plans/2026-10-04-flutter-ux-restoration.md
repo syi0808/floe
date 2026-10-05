@@ -1199,3 +1199,64 @@ outcome recovery, read-only integrity/latch differences and explicit in-process
 reopen UX remain separate availability work; this checkpoint does not claim them
 closed. No additional production code or permanent test suite was introduced by
 this qualification/documentation closure.
+
+### Next bounded cutover: source presentation without grant invalidation
+
+Root traced the rename path through SourceConnection, reviewed configuration,
+SourceOperationChange, the SQL successor/operation CAS, Context standing-source
+checks, Day inventory digests, and Actions/native final fences. SourceAuthority
+already distinguishes authority changes from label changes; the application loses
+that distinction by treating every changed successor as InvalidateSource.
+
+Chosen boundary: retain one Connections source record and its local CAS revision.
+Do not introduce a competing presentation database or bypass the durable command
+journal. Add an explicitly local presentation operation to the existing source
+operation owner. Its terminal proof is an owner-validated presentation successor,
+not a fabricated Access receipt. It may change display labels/group labels only;
+identity, selected handles, group identity, mode, native subject, lifecycle and
+SourceAuthority remain equal. A local revision still advances. Exact reviewed
+snapshots and in-flight Actions may therefore require fresh observation when their
+shown data changed, while standing Observe grants must remain untouched.
+
+Ordered file cutover:
+1. source.rs: expose a pure validated presentation-successor predicate so the
+   application and transaction validator use the same semantic classification.
+2. domain/source_operation.rs: represent the local presentation operation and
+   terminal phase/proof explicitly; validate its Reserved-to-terminal CAS and
+   reject grant proofs, authority changes, unrelated source or missing successor.
+   Local cancellation may terminate Reserved without an Access call.
+3. application/product.rs and source_operation.rs: classify the reviewed successor,
+   reserve the original immutable command, recheck native subject before local
+   completion, atomically apply successor plus terminal operation through the
+   existing repository, and settle the original product record. Recovery reloads
+   the same operation; cancellation must not invent grant commits or aborts.
+4. Keep source SQL writes on the existing shared uncertain-write guard/finisher.
+   No new storage table, external route, FFI command, grant scope or permission UI.
+5. Audit all source-operation phase/kind/proof matches and downstream label users.
+   Preserve Day calendar labels and exact resource/account identity. Document the
+   local revision versus SourceAuthority semantics at the current owner boundary.
+
+Disposable verification must cover preserved active Observe, unchanged source
+identity/authority, rejected resource/mode/account/subject expansion, exact replay,
+source/operation atomic commit, interruption/reopen, cancellation and conflict.
+The existing actual encrypted flow, Flutter fixtures and coherent Rust/Apple gates
+follow once this slice is structurally complete; permanent suites remain S3.
+
+The bounded implementation now extracts source successor execution/recovery from
+product.rs into private application/source_configuration.rs. Shared classification
+validates the complete successor and exact group identity; local presentation
+proofs cannot use grant phases or mutate authority. Existing SQL operation/source
+CAS supplies the atomic write and uncertainty fencing without a new table or public
+wire route. Two disposable probes passed for local commit/replay/reopen/cancellation
+and rejection of resource, mode, account and subject changes. These are owner/store
+probes, not yet a full active-Observe product workflow or live Calendar QA.
+
+Presentation slice local final gates passed after temporary probe removal:
+workspace/default examples/doctests, production and development FFI, architecture
+23-node/126-edge policy and diff checks, two actual encrypted Go/Rust pairing and
+restart cycles (one exact immutable Forget retry per cycle), product encryption and
+key-preserving startup diagnostics, session reopen, and all 61 external Flutter
+fixtures. The deliberate wrong-key probe emits an AES authentication failure before
+passing its refusal/preservation assertions; this is expected negative evidence.
+Apple exact-artifact qualification and the independent targeted review follow this
+commit. The active-Observe full product scenario and live Calendar remain unproved.

@@ -230,3 +230,12 @@ A non-Busy BEGIN failure conservatively retires the affected store until reopen,
 as does an abandoned armed BEGIN. A determinate Busy BEGIN leaves it usable.
 Read-only integrity errors retain their typed failure but do not all retire the
 entire Vault generation; callers must not infer a global latch from the error alone.
+
+Source presentation changes use the same Connections source journal but a distinct
+local terminal proof. The transaction validates the exact prior source and a
+label-only successor, then publishes its new local CAS revision and terminal
+operation together. No Access commit/abort receipt is manufactured. A reserved
+presentation operation may be locally cancelled; terminal commit and cancellation
+compete through one CAS. Standing Observe and SourceAuthority remain unchanged.
+Local revision and reservation changes still fence in-flight exact snapshots and
+Actions, so those may require fresh observation of the displayed source.

@@ -11,3 +11,5 @@ pub mod product;
 mod product_records;
 
 mod product_commands;
+
+mod source_configuration;

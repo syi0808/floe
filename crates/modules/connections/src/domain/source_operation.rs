@@ -36,11 +36,13 @@ pub enum SourceOperationKind {
     ConnectionDisconnect,
     ConnectionObservePause,
     ConnectionConfigure,
+    ConnectionPresentation,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "phase", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SourceOperationPhase {
     Reserved,
+    PresentationCommitted,
     GrantCommitted {
         receipt_id: Uuid,
         receipt_digest: [u8; 32],
@@ -76,7 +78,10 @@ pub enum SourceRepairReason {
 }
 impl SourceOperationPhase {
     pub fn holds_fence(&self) -> bool {
-        !matches!(self, Self::Completed { .. } | Self::Aborted { .. })
+        !matches!(
+            self,
+            Self::Completed { .. } | Self::PresentationCommitted | Self::Aborted { .. }
+        )
     }
     pub fn receipt_id(&self) -> Option<Uuid> {
         match self {
@@ -123,11 +128,23 @@ impl SourceOperationRecord {
                 self.kind,
                 SourceOperationKind::ConnectionReviewApply
                     | SourceOperationKind::ConnectionConfigure
+                    | SourceOperationKind::ConnectionPresentation
             ) != self.review.is_some()
             || self
                 .review
                 .as_ref()
                 .is_some_and(|review| review.validate().is_err())
+            || (self.kind == SourceOperationKind::ConnectionPresentation
+                && self.expected.revision.is_none())
+            || (self.kind == SourceOperationKind::ConnectionPresentation
+                && !matches!(
+                    self.phase,
+                    SourceOperationPhase::Reserved
+                        | SourceOperationPhase::PresentationCommitted
+                        | SourceOperationPhase::Aborted { .. }
+                ))
+            || (self.kind != SourceOperationKind::ConnectionPresentation
+                && matches!(self.phase, SourceOperationPhase::PresentationCommitted))
             || self.identity().validate().is_err()
         {
             return Err(SourceRepositoryError::Corrupt);
@@ -170,6 +187,8 @@ pub struct SourceOperationAdmission {
 }
 #[derive(Clone, Debug)]
 pub enum SourceOperationProof {
+    /// A local-only source transition; never an Access grant receipt.
+    Presentation,
     Committed(GrantCommitReceipt),
     Aborted(GrantAbortReceipt),
 }
@@ -183,6 +202,40 @@ pub struct SourceOperationChange {
     pub successor: Option<SourceConnection>,
 }
 impl SourceOperationChange {
+    fn validate_presentation(
+        &self,
+        current: &SourceOperationRecord,
+        source: Option<&SourceConnection>,
+    ) -> Result<SourceOperationRecord, SourceRepositoryError> {
+        if !matches!(self.proof, SourceOperationProof::Presentation)
+            || !matches!(current.phase, SourceOperationPhase::Reserved)
+        {
+            return Err(SourceRepositoryError::Conflict);
+        }
+        match (&self.next_phase, &self.successor) {
+            (SourceOperationPhase::PresentationCommitted, Some(successor)) => {
+                let source = source.ok_or(SourceRepositoryError::Conflict)?;
+                if !current.expected.matches(Some(source))
+                    || !source
+                        .is_presentation_successor(successor)
+                        .map_err(|_| SourceRepositoryError::Conflict)?
+                {
+                    return Err(SourceRepositoryError::Conflict);
+                }
+            }
+            (SourceOperationPhase::Aborted { .. }, None) => {}
+            _ => return Err(SourceRepositoryError::Conflict),
+        }
+        let mut next = current.clone();
+        next.phase = self.next_phase.clone();
+        next.revision = next
+            .revision
+            .checked_add(1)
+            .ok_or(SourceRepositoryError::Conflict)?;
+        next.validate()?;
+        Ok(next)
+    }
+
     pub fn validate(
         &self,
         current: &SourceOperationRecord,
@@ -196,7 +249,11 @@ impl SourceOperationChange {
         {
             return Err(SourceRepositoryError::Conflict);
         }
+        if current.kind == SourceOperationKind::ConnectionPresentation {
+            return self.validate_presentation(current, source);
+        }
         let committed = match &self.proof {
+            SourceOperationProof::Presentation => return Err(SourceRepositoryError::Conflict),
             SourceOperationProof::Committed(receipt) => {
                 if !current.matches_evidence(&receipt.reservation)
                     || receipt.commit_id.is_nil()

@@ -333,6 +333,25 @@ impl SourceConnection {
         Ok(())
     }
 
+    /// Classify a validated local successor without treating display text as permission.
+    /// Group identity is deliberately not presentation: a renamed account may keep
+    /// its handle, but moving a resource to another account is a different subject.
+    pub fn is_presentation_successor(&self, next: &Self) -> Result<bool, SourceConnectionError> {
+        self.validate_successor(next)?;
+        Ok(self.state == next.state
+            && self.resource_mode == next.resource_mode
+            && self.source_authority == next.source_authority
+            && self.native_subject_fingerprint == next.native_subject_fingerprint
+            && self
+                .resources
+                .iter()
+                .map(|r| (r.handle(), r.group().map(|g| &g.handle)))
+                .eq(next
+                    .resources
+                    .iter()
+                    .map(|r| (r.handle(), r.group().map(|g| &g.handle)))))
+    }
+
     pub fn person_id(&self) -> PersonId {
         self.person_id
     }
