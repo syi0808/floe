@@ -2226,3 +2226,31 @@ Do not broaden a fix merely to increase modularity metrics. Decompose oversized
 objects when a verified ownership/lifecycle problem requires it, and keep one
 canonical runtime path. No new module split or general agent rewrite is approved by
 this sequencing note alone; root must first define each concrete acceptance gate.
+
+### Session review closure integration (2026-10-05)
+
+The e823 implementation review completed with the typed admission/namespace/query
+and retained-ID design accepted in source. Root adjudicated the client findings:
+`canSend` does not depend on pending IDs, so the alleged permanent composer latch
+was overstated; stopped-admission projection cleanup still required correction.
+The Luna implementation removes bypass Vault creation/resume APIs, migrates the
+sole smoke caller, fixes re-observed Stop targeting/lifetime, bounds same-ID Busy
+retry and preserves a receipt/resync barrier when explicit cancellation fails.
+
+Root reviewed and integrated worker commits d50e5d0/e7c0500 as e666cf4/464ce36.
+Cloud implementation environment lacked Cargo and Flutter; no successful runtime
+checks are attributed to it. Root executed the cached integration gates:
+- four added Flutter interruption/cancellation probes passed; full external suite
+  now passes 105 checks;
+- four Rust Busy retry/identity/exhaustion probes passed through Cargo, with the
+  temporary test symlink removed immediately and the external source preserved;
+- final default Rust workspace/examples/doctests and development/production FFI
+  builds passed; Flutter analysis retains 157 baseline infos, no errors/warnings;
+- dependency checker and diff check pass. No permanent S3 suite was added.
+
+A separate e823 development Mac startup observation was inconclusive: pure storage
+getter was 2, the app process existed briefly then disappeared, and no explicit
+application error or unsupported-format outcome was captured. Launch-command
+lifetime is still being checked; do not label this an application crash. No reset,
+provider connection, server launch or live model request occurred. Updated native
+build qualification and focused review closure are pending for the integrated code.
