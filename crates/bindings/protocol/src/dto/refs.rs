@@ -73,6 +73,7 @@ typed_uuid_ref!(OperationRefDto);
 typed_uuid_ref!(IntegrationRefDto);
 typed_uuid_ref!(ConnectionsSourceRefDto);
 typed_uuid_ref!(ResourceRefDto);
+typed_uuid_ref!(ResourceGroupRefDto);
 typed_uuid_ref!(LaunchActionRefDto);
 
 /// Lowercase hexadecimal SHA-256 digest, represented by exactly 64 bytes.

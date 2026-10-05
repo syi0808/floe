@@ -130,7 +130,7 @@ func openIntegration(ctx context.Context, files *storage.Files, vault credential
 			query = "newer_than:30d -in:spam -in:trash"
 		}
 		var service *gmail.Service
-		scoped, e := files.Scope("connectors", r.ConnectionID)
+		scoped, e := files.Scope(r.ConnectionID)
 		if e != nil {
 			return out, e
 		}

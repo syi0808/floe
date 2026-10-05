@@ -192,3 +192,9 @@ Gateway Trust defines a five-minute maximum for the human enrollment ceremony, s
 Proposal preview is a pure Actions read. It returns the owner-derived title/schedule and eligible destinations for an unadmitted proposal, or the already-admitted Action snapshot after exact actor/receipt/artifact verification. Inspecting an existing Action never redispatches it and does not depend on its original grant remaining active. In addition to authenticated Task evidence, temporal bounds and current source fences, it checks current grant coverage through a read-only repository transaction using the same coverage validator as admission. This observation grants no write permission and does not reserve a later submission; admission and dispatch retain their atomic current-authority checks.
 
 At the EventKit boundary, receipt and target comparison use Foundation-normalized timezone identifiers, not raw alias spelling or offsets sampled at a single instant. After exact UTC endpoints and normalized zone identity match, the physical receipt retains the admitted display-zone spelling so its immutable effect digest remains stable. External revision fingerprints retain the actual native timezone observation. Create-marker recovery uses the same translation; it never rewrites stored intent or resubmits an uncertain write.
+
+Gateway database contention has a distinct StorageBusy outcome. Connections command
+settlement retains the exact request and resolves its durable outcome on retry; it
+never writes a negative receipt from contention. Already-known admission remains
+admitted. A Busy observation does not retire the Vault; semantic Conflict and
+commit/rollback uncertainty retain their separate recovery behavior.

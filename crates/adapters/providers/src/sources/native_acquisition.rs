@@ -49,4 +49,4 @@ impl LocalAcquisitionBrokers {
     }
 }
 
-pub use floe_native::{NativeSourceResource, PersonalAcquisitionMode};
+pub use floe_native::{NativeResourceGroup, NativeSourceResource, PersonalAcquisitionMode};

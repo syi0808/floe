@@ -54,7 +54,7 @@ pub fn agent_failure(failure: AgentFailure) -> ErrorDto {
     let code = match failure {
         AgentFailure::NotFound => ErrorCodeDto::NotFound,
         AgentFailure::Conflict => ErrorCodeDto::Conflict,
-        AgentFailure::StorageUnavailable => ErrorCodeDto::Storage,
+        AgentFailure::StorageUnavailable | AgentFailure::StorageBusy => ErrorCodeDto::Storage,
         AgentFailure::UnsupportedVersion => ErrorCodeDto::UnsupportedVersion,
         _ => ErrorCodeDto::Validation,
     };

@@ -48,7 +48,8 @@ pub fn project_conversation_failure(
         | F::BudgetExceeded
         | F::Stalled
         | F::StaleContext => AgentFailureCategory::UserConfiguration,
-        F::StorageUnavailable
+        F::StorageBusy
+        | F::StorageUnavailable
         | F::VaultLocked
         | F::ModelUnavailable
         | F::LocalModelUnavailable

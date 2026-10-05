@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:floe_client/l10n/app_localizations.dart';
+
+import 'resource_groups.dart';
+
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_badge.dart';
@@ -27,7 +31,6 @@ final class SourceConnectionPanel extends StatefulWidget {
 
 final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
   bool opening = false;
-  bool offeredInitialSelection = false;
 
   @override
   void initState() {
@@ -42,8 +45,7 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
   }
 
   void _offerInitialSelection() {
-    if (offeredInitialSelection ||
-        widget.source.selectedResources.isNotEmpty ||
+    if (widget.source.selectedResources.isNotEmpty ||
         !(widget.source.availability == 'available' ||
             (widget.controller.operation?.state == 'completed' &&
                 widget.controller.operation?.source?.sourceRef ==
@@ -51,14 +53,17 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
         !{'calendar', 'contacts'}.contains(widget.integration?.category) ||
         !widget.source.allowedActions.contains('configure'))
       return;
+    final source = widget.source;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted ||
-          offeredInitialSelection ||
           busy ||
+          widget.source.sourceRef != source.sourceRef ||
+          widget.source.revision != source.revision ||
           widget.source.selectedResources.isNotEmpty)
         return;
-      offeredInitialSelection = true;
-      _chooseResources();
+      if (widget.controller.claimInitialResourceSelection(widget.source)) {
+        _chooseResources();
+      }
     });
   }
 
@@ -76,6 +81,7 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
     if (!mounted) return;
     setState(() => opening = false);
     if (widget.source.sourceRef != source.sourceRef ||
+        widget.source.revision != source.revision ||
         review == null ||
         review.sourceRef != source.sourceRef ||
         review.sourceRevision != source.revision)
@@ -163,24 +169,37 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
           const SizedBox(height: FloeSpace.lg),
           Text(
             calendar
-                ? 'Connected calendars · ${source.selectedResources.length}'
+                ? AppLocalizations.of(context)
+                      .connectedCalendarCount(source.selectedResources.length)
                 : 'Selected resources · ${source.selectedResources.length}',
-            style: FloeType.title,
+            style: calendar ? FloeType.titleLarge : FloeType.title,
           ),
           const SizedBox(height: FloeSpace.sm),
-          for (final resource in source.selectedResources)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: FloeSpace.sm),
-              child: FloeIconText(
-                icon: Icon(
-                  calendar ? LucideIcons.calendar : LucideIcons.check,
-                  size: 16,
-                  color: FloePalette.primary500,
+          ConnectionResourceGroups(
+            columns: calendar,
+            ungroupedLabel: calendar
+                ? AppLocalizations.of(context).calendarAccountFallback
+                : 'Resources',
+            items: [
+              for (final resource in source.selectedResources)
+                (
+                  group: resource.group,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: FloeSpace.sm),
+                    child: FloeIconText(
+                      icon: Icon(
+                        calendar ? LucideIcons.calendar : LucideIcons.check,
+                        size: 15,
+                        color: FloePalette.primary500,
+                      ),
+                      text: resource.label,
+                      gap: 10,
+                      style: FloeType.bodySmall.copyWith(height: 1.7),
+                    ),
+                  ),
                 ),
-                text: resource.label,
-                style: FloeType.bodySmall,
-              ),
-            ),
+            ],
+          ),
           if (source.selectedResources.isEmpty)
             const Text('Choose what you want to connect.'),
           const SizedBox(height: FloeSpace.base),
@@ -271,7 +290,11 @@ final class _ResourceDialogState extends State<_ResourceDialog> {
                   ),
                 for (final choice in widget.review.permittedChoices)
                   FloeCheckboxTile(
-                    title: Text(choice.label),
+                    title: Text(
+                      choice.group == null
+                          ? choice.label
+                          : '${choice.group!.label} · ${choice.label}',
+                    ),
                     value: selected.contains(choice.resourceRef),
                     onChanged: widget.controller.busy || expired
                         ? null

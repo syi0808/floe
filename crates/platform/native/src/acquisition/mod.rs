@@ -19,7 +19,7 @@ pub use calendar::{
     CalendarSourceFailure, calendar_failure,
 };
 pub use personal::{
-    NativeSourceResource, PersonalAcquisitionMode, PersonalAcquisitionRequest,
+    NativeResourceGroup, NativeSourceResource, PersonalAcquisitionMode, PersonalAcquisitionRequest,
     PersonalAcquisitionResult, PersonalBroker, PersonalDomain, personal_failure,
 };
 

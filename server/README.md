@@ -100,4 +100,12 @@ malformed keys, failed initial creation, old plaintext profiles and wrong cipher
 fail closed. Nothing is automatically deleted, re-keyed or migrated. Use an explicitly
 selected fresh test profile for this format change and preserve any older profile
 with unresolved operations. At-rest encryption is not protection against a process
-running as the same unlocked user, whole-profile rollback, or plaintext in memory.
+running as the same unlocked user, rollback of individual valid ciphertext files or entire profiles, or plaintext in memory.
+
+Production Keychain runtime remains a separate qualification requirement: creation,
+rebuild with code changes, restart and explicit token retrieval must be exercised
+on macOS before claiming that the login-Keychain ACL admits successive builds.
+No weaker ACL, Data Protection switch or file-key fallback is used. Startup reports
+non-secret custody categories (locked/denied, busy, timeout, missing, malformed or
+root authentication failure). A failed read before first Put leaves no creation
+marker; an uncertain Put retains its initializing marker and key evidence.

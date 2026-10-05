@@ -884,3 +884,92 @@ Unknown/admitted responses never get a new identity. The intermittent Conflict's
 operational UX remains part of command-observation convergence, not silently counted
 as uninterrupted success. This final run completed without that conflict. Independent
 server-storage review and same-snapshot Apple/server-native builds remain pending.
+
+### Connections presentation metadata and observation correction
+
+Next root-owned slice restores account grouping from actual EventKit metadata. The
+native catalog must expose calendar title and an explicit source/account identifier
+and label; never split a concatenated display label. Connections retains optional
+resource-group presentation alongside its selected resource labels (ungrouped
+resources are a real state for other connectors). Product projections derive an
+opaque Person/Connection-scoped group reference, never exposing native identifiers
+or using a display group for read/processing/write authority. Reviewed choices and
+selected summaries carry the same safe group shape. Calendar detail restores baseline account columns/groups. The baseline selector
+uses flat checkbox rows, so preserve that layout and compose its visible account/title
+label from explicit metadata, with exact reviewed resource identities;
+freshness remains Day-owned and is not invented from account metadata.
+
+Also remove the fabricated overview-wide revision end-to-end. It is only the maximum
+of unrelated record/source revisions, not a monotonic aggregate version, and Flutter
+currently drops valid observations if that maximum falls. Keep per-item revision/CAS
+and client request-generation ordering. Initial empty Calendar/Contacts selection is
+a controller-lifetime presentation offer keyed by exact source identity, so widget
+recreation does not repeatedly reopen it. Neither change mutates grants or starts
+owner commands from a pure overview query. Future-calendar selection policy and the
+old global assistant Calendar preference remain separate unresolved semantics.
+
+### Storage review adjudication and corrective boundary
+
+Opus found no production fallback/key regeneration/purpose-binding defect. Its
+conditional Rust corruption-downgrade concern is not present: the actual pre-existing
+storage() maps every non-Busy database error to StorageUnavailable and the finisher
+latches both StorageUnavailable and VaultUnavailable. Duplicate/incomplete Busy
+handling and the resulting command semantics are real issues: finish_product_command
+can record a durable negative for a contention-originated Conflict. Replace that
+conflation with typed StorageBusy across the Gateway repository/Pairing boundary.
+Busy preserves the exact pending command without writing a rejection receipt or
+retiring the Vault. Semantic Conflict and commit/rollback uncertainty stay distinct.
+
+Gmail must retain its integrity/indeterminate-write fence, while a determinate
+filesystem failure such as ENOSPC must remain retryable rather than permanently
+blocking later cleanup. The storage codec distinguishes integrity failures. Separate
+per-logical-file write locks from the shared root lifetime lock; advertise root
+unavailability at Node admission and current Trust/configuration checks. Give Trust,
+Integrations, Inference and connector factories distinct root scopes. Trust creation
+requires the newly admitted root, so losing all Trust files cannot regenerate an
+identity inside an existing root. Read-only token retrieval enters only Trust scope.
+
+Production login-Keychain ACL behavior across changed Go binaries remains unqualified
+and requires an explicit Mac runtime ceremony; no signing purchase, weakened ACL,
+Data Protection switch or fallback is inferred. Preserve typed non-secret startup
+categories for locked/denied, busy/timeout, absent/malformed key and root integrity.
+Move the initial attempt marker to immediately before first Put, after successful
+read-only slot preflight: a locked/busy Get with no attempted mutation need not strand
+a new root. An uncertain Put still preserves its initializing marker and exact slot.
+The authenticated-file threat model excludes per-file as well as whole-profile
+rollback and same-user compromise. Existing marker/lock metadata is not claimed
+byte-identical, while user payloads and keys remain preserved on failed admission.
+
+Exact c5f8295c macOS Debug/Release, arm64 iOS simulator and both Darwin Go compilation
+gates passed. Pure profile getter/signature checks passed, with no execution of Go
+binaries, app/core, simulator or Keychain access. These builds predate the corrective
+changes above; native requalification follows the next coherent checkpoint.
+
+Corrective checkpoint verification: the full Rust workspace/default examples/doctest
+command, both production and development FFI builds, Go default and floe_dev race/vet
+commands, architecture boundary checker and diff checks passed. Existing repository
+suites remain removed under T0; these gates do not imply S3 reconstruction. Disposable
+owner probes verified Busy cannot create a negative receipt, a held same-process
+Vault writer permits exact-command retry after release, resource grouping preserves
+source authority, and native Calendar rejects incomplete account metadata. External
+Go probes verified scoped storage, missing Trust refusal, read-only token retrieval,
+non-stranding read-only custody failures, and retry/cleanup after a real pre-rename
+EFBIG without corrupting the prior ciphertext. Temporary probe code was preserved
+outside the repository and removed before final gates.
+
+Actual isolated Go/Rust encrypted pairing completed two enrollment/approval/Forget
+cycles with client and server restart, distinct issuer keys and stable administrator
+token. Naturally occurring Forget contention retried the identical envelope once
+and succeeded without a new command ID. Product encryption, missing/wrong key refusal
+and five typed startup diagnostics passed. An attempted separate-process Turso writer
+probe was rejected by the engine's process lock; it was not bypassed or counted as a
+pass. Contention injection instead used the same-process owner probe described above.
+
+All 58 external Flutter fixtures passed after retiring obsolete fixture expectations
+for local code-confirmation and generating the pairing projection from the current
+Rust/Go flow. Analyzer retains 157 pre-existing informational findings, no errors or
+warnings. Calendar groups were rendered and inspected at 390 and 1024 logical pixels
+with actual fonts/icons; the baseline flat selection dialog still saves exact
+resource references. This is partial R2 restoration, not full UI parity. Native Apple
+builds for this corrective checkpoint and production Keychain rebuild/restart runtime
+qualification remain outstanding. No live Mac app/server or user profile was touched.

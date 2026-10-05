@@ -260,7 +260,9 @@ func (index *Index) commit(next indexState) error {
 		return ErrInvalidInput
 	}
 	if err := index.files.Write(indexFileName, data); err != nil {
-		index.unavailable = true
+		if storage.IsIndeterminate(err) || errors.Is(err, storage.ErrIntegrity) {
+			index.unavailable = true
+		}
 		return err
 	}
 	index.state = next
@@ -312,5 +314,5 @@ func (index *Index) checkAvailable() error {
 	if index.unavailable {
 		return storage.ErrUnavailable
 	}
-	return nil
+	return index.files.Available()
 }

@@ -34,7 +34,7 @@ func main() {
 	if printToken {
 		token, err := node.AdministratorToken(context.Background(), directory)
 		if err != nil {
-			log.Fatal("Cannot read administrator token from the existing encrypted profile")
+			profileFailure(err, "Cannot read administrator token from the existing encrypted profile")
 		}
 		fmt.Println(token)
 		return
@@ -45,7 +45,7 @@ func main() {
 	}
 	server, err := node.New(node.Config{Directory: directory, Address: address})
 	if err != nil {
-		log.Fatal("Cannot start local server: verify the private profile, security state and loopback address")
+		profileFailure(err, "Cannot start local server: verify the private profile, security state and loopback address")
 	}
 	defer server.Close()
 	log.Printf("Local dashboard: http://%s/manage/", address)
@@ -68,4 +68,12 @@ func serve(handler http.Handler, address string) {
 		log.Fatal("Local server stopped unexpectedly")
 	}
 	<-done
+}
+
+func profileFailure(err error, message string) {
+	var issue *node.StorageFailure
+	if errors.As(err, &issue) {
+		log.Fatalf("%s (%s). Existing files and keys were preserved.", message, issue.Code())
+	}
+	log.Fatal(message)
 }

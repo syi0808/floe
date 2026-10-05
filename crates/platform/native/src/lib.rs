@@ -14,7 +14,7 @@ pub use acquisition::{
     AttentionAcquisitionResult, AttentionBroker, CalendarAcquisitionMode,
     CalendarAcquisitionRequest, CalendarAcquisitionResult, CalendarBroker, CalendarSourceFailure,
     CompletionOutcome, HostRegistration, MAX_ACQUISITION_DEADLINE_MS, MAX_ACQUISITION_PENDING,
-    NativeSourceResource, PersonalAcquisitionMode, PersonalAcquisitionRequest,
+    NativeResourceGroup, NativeSourceResource, PersonalAcquisitionMode, PersonalAcquisitionRequest,
     PersonalAcquisitionResult, PersonalBroker, PersonalDomain, attention_failure, calendar_failure,
     personal_failure,
 };

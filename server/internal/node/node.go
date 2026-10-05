@@ -52,7 +52,23 @@ func New(config Config) (*Node, error) {
 			storageRoot.Close()
 		}
 	}()
-	t, err := trust.Open(storageRoot.files)
+	trustFiles, err := storageRoot.files.Scope("trust")
+	if err != nil {
+		return nil, err
+	}
+	inferenceFiles, err := storageRoot.files.Scope("inference")
+	if err != nil {
+		return nil, err
+	}
+	integrationFiles, err := storageRoot.files.Scope("integrations")
+	if err != nil {
+		return nil, err
+	}
+	connectorFiles, err := storageRoot.files.Scope("connectors")
+	if err != nil {
+		return nil, err
+	}
+	t, err := trust.Open(trustFiles, storageRoot.fresh)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +83,7 @@ func New(config Config) (*Node, error) {
 		return nil, err
 	}
 	factory := providers.NewFactory(vault.Get, runtime)
-	configuration, err := inference.OpenConfiguration(context.Background(), storageRoot.files, model, t, vault, factory)
+	configuration, err := inference.OpenConfiguration(context.Background(), inferenceFiles, model, t, vault, factory)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +91,7 @@ func New(config Config) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	sources, err := integrations.New(context.Background(), storageRoot.files, t, vault, integrationFactories(storageRoot.files, vault, os.Getenv))
+	sources, err := integrations.New(context.Background(), integrationFiles, t, vault, integrationFactories(connectorFiles, vault, os.Getenv))
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +117,7 @@ func New(config Config) (*Node, error) {
 }
 func (n *Node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	n.mu.Lock()
-	if n.closed {
+	if n.closed || n.storage.files.Available() != nil {
 		n.mu.Unlock()
 		n.handler.ServeUnavailable(w)
 		return

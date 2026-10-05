@@ -529,6 +529,12 @@ fn pairing(value: owner::PairingSnapshot) -> AppWireResult<dto::PairingSnapshotD
         next_observation_after_ms: value.next_observation_after_ms.map(u64::from),
     })
 }
+fn resource_group(value: owner::ResourceGroupSummary) -> AppWireResult<dto::ResourceGroupDto> {
+    Ok(dto::ResourceGroupDto {
+        group_ref: dto::ResourceGroupRefDto::new(value.group_ref).ok_or_else(internal_error)?,
+        label: value.label,
+    })
+}
 fn source(value: owner::SourceSummary) -> AppWireResult<dto::SourceSummaryDto> {
     Ok(dto::SourceSummaryDto {
         source_ref: dto::ConnectionsSourceRefDto::new(value.source_ref)
@@ -555,6 +561,7 @@ fn source(value: owner::SourceSummary) -> AppWireResult<dto::SourceSummaryDto> {
                     resource_ref: dto::ResourceRefDto::new(resource.resource_ref)
                         .ok_or_else(internal_error)?,
                     label: resource.label,
+                    group: resource.group.map(resource_group).transpose()?,
                 })
             })
             .collect::<AppWireResult<_>>()?,
@@ -569,7 +576,6 @@ fn source(value: owner::SourceSummary) -> AppWireResult<dto::SourceSummaryDto> {
 }
 fn overview(value: owner::ConnectionsOverview) -> AppWireResult<dto::ConnectionsOverviewDto> {
     Ok(dto::ConnectionsOverviewDto {
-        revision: value.revision,
         gateways: value
             .gateways
             .into_iter()
@@ -740,6 +746,7 @@ fn source_review(value: owner::SourceReview) -> AppWireResult<dto::SourceReviewD
                     resource_ref: dto::ResourceRefDto::new(resource.resource_ref)
                         .ok_or_else(internal_error)?,
                     label: resource.label,
+                    group: resource.group.map(resource_group).transpose()?,
                     selected: resource.selected,
                 })
             })

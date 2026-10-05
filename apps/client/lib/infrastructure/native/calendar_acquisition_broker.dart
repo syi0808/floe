@@ -172,9 +172,19 @@ final class CalendarAcquisitionBroker {
         resources.any(
           (value) =>
               value is! Map ||
-              value.length != 2 ||
+              value.length != 4 ||
               value['handle'] is! String ||
               value['label'] is! String ||
+              value['group_handle'] is! String ||
+              value['group_label'] is! String ||
+              (value['group_handle'] as String).isEmpty ||
+              (value['group_handle'] as String).length > 512 ||
+              (value['group_label'] as String).isEmpty ||
+              (value['group_label'] as String).length > 256 ||
+              RegExp(r'[\x00-\x1f\x7f]')
+                  .hasMatch(value['group_handle'] as String) ||
+              RegExp(r'[\x00-\x1f\x7f]')
+                  .hasMatch(value['group_label'] as String) ||
               (value['handle'] as String).isEmpty ||
               (value['handle'] as String).length > 512 ||
               (value['label'] as String).isEmpty ||

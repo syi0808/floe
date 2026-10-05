@@ -28,8 +28,8 @@ pub use native_host::{
 pub use refs::{
     ActionRefDto, AssignmentRefDto, AttemptRefDto, CommandIdDto, ConnectionsSourceRefDto,
     DigestHex64Dto, GatewayRefDto, IntegrationRefDto, InteractionRefDto, LaunchActionRefDto,
-    MessageRefDto, OperationRefDto, RequestIdDto, ResourceRefDto, ReviewRefDto, RunRefDto,
-    SessionRefDto, TaskRefDto, UuidRefDto,
+    MessageRefDto, OperationRefDto, RequestIdDto, ResourceGroupRefDto, ResourceRefDto,
+    ReviewRefDto, RunRefDto, SessionRefDto, TaskRefDto, UuidRefDto,
 };
 mod knowledge;
 pub use knowledge::*;

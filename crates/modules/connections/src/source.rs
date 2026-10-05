@@ -10,14 +10,46 @@ const MAX_RESOURCES: usize = 4096;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ConnectionResourceGroup {
+    pub handle: ResourceHandle,
+    pub label: String,
+}
+impl ConnectionResourceGroup {
+    fn validate(&self) -> Result<(), SourceConnectionError> {
+        if self.handle.as_str().is_empty()
+            || self.handle.as_str() == "*"
+            || self.handle.as_str().len() > floe_context_contract::MAX_RESOURCE_HANDLE_BYTES
+            || self.handle.as_str().chars().any(char::is_control)
+            || self.label.is_empty()
+            || self.label.len() > MAX_RESOURCE_LABEL_BYTES
+            || self.label.chars().any(char::is_control)
+        {
+            return Err(SourceConnectionError::InvalidResource);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConnectionResource {
     handle: ResourceHandle,
     label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    group: Option<ConnectionResourceGroup>,
 }
 
 impl ConnectionResource {
-    pub fn new(handle: ResourceHandle, label: String) -> Result<Self, SourceConnectionError> {
-        let resource = Self { handle, label };
+    pub fn new(
+        handle: ResourceHandle,
+        label: String,
+        group: Option<ConnectionResourceGroup>,
+    ) -> Result<Self, SourceConnectionError> {
+        let resource = Self {
+            handle,
+            label,
+            group,
+        };
         resource.validate()?;
         Ok(resource)
     }
@@ -30,7 +62,14 @@ impl ConnectionResource {
         &self.label
     }
 
+    pub fn group(&self) -> Option<&ConnectionResourceGroup> {
+        self.group.as_ref()
+    }
+
     fn validate(&self) -> Result<(), SourceConnectionError> {
+        if let Some(group) = &self.group {
+            group.validate()?;
+        }
         if self.handle.as_str().is_empty()
             || self.handle.as_str() == "*"
             || self.handle.as_str().len() > floe_context_contract::MAX_RESOURCE_HANDLE_BYTES
@@ -488,8 +527,17 @@ fn normalize_resources(
     if resources.len() > MAX_RESOURCES {
         return Err(SourceConnectionError::InvalidResource);
     }
+    let mut groups = std::collections::BTreeMap::new();
     for resource in &resources {
         resource.validate()?;
+        if let Some(group) = &resource.group {
+            if groups
+                .insert(&group.handle, &group.label)
+                .is_some_and(|label| label != &group.label)
+            {
+                return Err(SourceConnectionError::InvalidResource);
+            }
+        }
     }
     resources.sort_by(|left, right| left.handle.cmp(&right.handle));
     if resources

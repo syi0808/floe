@@ -257,8 +257,12 @@ impl GatewayIntegrationAdapter {
             .source_resources
             .into_iter()
             .map(|handle| {
-                ConnectionResource::new(handle.clone(), handle.as_str().chars().take(200).collect())
-                    .map_err(|_| IntegrationError::InvalidResponse)
+                ConnectionResource::new(
+                    handle.clone(),
+                    handle.as_str().chars().take(200).collect(),
+                    None,
+                )
+                .map_err(|_| IntegrationError::InvalidResponse)
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(RemoteIntegrationSource {

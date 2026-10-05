@@ -21,7 +21,30 @@ const rootIdentityName = "storage-identity.json"
 const rootSealName = "storage-seal"
 const rootSealContent = "Floe encrypted server root v1\n"
 
-var errStorage = errors.New("server encrypted profile unavailable; existing data and keys were preserved")
+type StorageFailure struct{ code string }
+
+func (e *StorageFailure) Error() string {
+	return "server encrypted profile unavailable (" + e.code + "); existing data and keys were preserved"
+}
+func (e *StorageFailure) Code() string { return e.code }
+func storageFailure(code string) error { return &StorageFailure{code: code} }
+
+var errStorage = storageFailure("profile_invalid")
+
+func custodyFailure(err error) error {
+	switch {
+	case errors.Is(err, credentials.ErrLocked):
+		return storageFailure("key_locked_or_denied")
+	case errors.Is(err, credentials.ErrBusy):
+		return storageFailure("key_busy")
+	case errors.Is(err, context.DeadlineExceeded):
+		return storageFailure("key_timeout")
+	case errors.Is(err, context.Canceled):
+		return storageFailure("key_cancelled")
+	default:
+		return storageFailure("key_unavailable")
+	}
+}
 
 type rootIdentity struct {
 	Format  int    `json:"format"`
@@ -30,6 +53,7 @@ type rootIdentity struct {
 	State   string `json:"state"`
 }
 type admittedStorage struct {
+	fresh bool
 	files *storage.Files
 	lock  *os.File
 	once  sync.Once
@@ -54,11 +78,17 @@ func decodeRoot(data []byte) (rootIdentity, error) {
 	var id rootIdentity
 	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
-	if d.Decode(&id) != nil || d.Decode(new(any)) != io.EOF || id.Format != 1 || id.Profile != storageProfile || id.State != "ready" {
+	if d.Decode(&id) != nil || d.Decode(new(any)) != io.EOF || id.Format != 1 || id.Profile != storageProfile {
 		return id, errStorage
 	}
 	raw, err := hex.DecodeString(id.ID)
 	if err != nil || len(raw) != 32 || hex.EncodeToString(raw) != id.ID {
+		return id, errStorage
+	}
+	if id.State == "initializing" {
+		return id, storageFailure("creation_incomplete")
+	}
+	if id.State != "ready" {
 		return id, errStorage
 	}
 	return id, nil
@@ -140,10 +170,6 @@ func openStorage(ctx context.Context, directory string, vault credentials.Store,
 			return nil, errStorage
 		}
 		id = rootIdentity{Format: 1, ID: hex.EncodeToString(random), Profile: storageProfile, State: "initializing"}
-		encoded, _ := json.Marshal(id)
-		if createRootIdentity(path, encoded) != nil {
-			return nil, errStorage
-		}
 	} else {
 		if readErr != nil {
 			return nil, errStorage
@@ -155,11 +181,17 @@ func openStorage(ctx context.Context, directory string, vault credentials.Store,
 	}
 	value, err := vault.Get(ctx, rootSlot(id))
 	if err != nil {
-		return nil, errStorage
+		return nil, custodyFailure(err)
 	}
 	if fresh {
 		if value != "" {
-			return nil, errStorage
+			return nil, storageFailure("key_slot_occupied")
+		}
+		// Get was read-only. Reserve the durable attempt immediately before Put.
+		// A locked/busy preflight read cannot strand an untouched profile.
+		encoded, _ := json.Marshal(id)
+		if createRootIdentity(path, encoded) != nil {
+			return nil, storageFailure("creation_incomplete")
 		}
 		key := make([]byte, 32)
 		if _, e := rand.Read(key); e != nil {
@@ -167,17 +199,23 @@ func openStorage(ctx context.Context, directory string, vault credentials.Store,
 		}
 		value = hex.EncodeToString(key)
 		clear(key)
-		if vault.Put(ctx, rootSlot(id), value) != nil {
-			return nil, errStorage
+		if e := vault.Put(ctx, rootSlot(id), value); e != nil {
+			return nil, custodyFailure(e)
 		}
 		observed, e := vault.Get(ctx, rootSlot(id))
-		if e != nil || subtle.ConstantTimeCompare([]byte(observed), []byte(value)) != 1 {
-			return nil, errStorage
+		if e != nil {
+			return nil, custodyFailure(e)
 		}
+		if subtle.ConstantTimeCompare([]byte(observed), []byte(value)) != 1 {
+			return nil, storageFailure("key_readback_mismatch")
+		}
+	}
+	if value == "" {
+		return nil, storageFailure("key_missing")
 	}
 	key, err := hex.DecodeString(value)
 	if err != nil || len(key) != 32 || hex.EncodeToString(key) != value {
-		return nil, errStorage
+		return nil, storageFailure("key_malformed")
 	}
 	defer clear(key)
 	files, err := storage.NewFiles(directory, id.ID, key, writable)
@@ -201,12 +239,12 @@ func openStorage(ctx context.Context, directory string, vault credentials.Store,
 	}
 	seal, err := files.Read(rootSealName, 128)
 	if err != nil || string(seal) != rootSealContent {
-		return nil, errStorage
+		return nil, storageFailure("root_authentication_failed")
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	return &admittedStorage{files: files, lock: lock}, nil
+	return &admittedStorage{files: files, lock: lock, fresh: fresh}, nil
 }
 func infoSys(info os.FileInfo) (*syscall.Stat_t, bool) {
 	if info == nil {
@@ -227,7 +265,11 @@ func AdministratorToken(ctx context.Context, directory string) (string, error) {
 		return "", err
 	}
 	defer root.Close()
-	token, err := root.files.Read("admin-token", 1024)
+	trustFiles, err := root.files.Scope("trust")
+	if err != nil {
+		return "", errStorage
+	}
+	token, err := trustFiles.Read("admin-token", 1024)
 	if err != nil || len(token) < 32 {
 		return "", errStorage
 	}

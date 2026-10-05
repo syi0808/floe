@@ -83,6 +83,7 @@ impl PersonalSourceSpec {
                 ConnectionResource::new(
                     ResourceHandle::try_new(&handle).map_err(|_| AgentFailure::InvalidInput)?,
                     handle,
+                    None,
                 )
                 .map_err(|_| AgentFailure::InvalidInput)
             })

@@ -25,26 +25,41 @@ func PrivateDirectory(path string) error {
 	}
 	return nil
 }
-func ReadPrivate(path string, limit int64) ([]byte, error) {
+func openPrivate(path string, limit int64) (*os.File, error) {
 	if limit < 0 {
-		return nil, errors.New("invalid private file limit")
+		return nil, ErrIntegrity
 	}
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ELOOP) {
+			return nil, ErrIntegrity
+		}
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > limit || !ok || int(stat.Uid) != os.Geteuid() || stat.Nlink != 1 {
+		f.Close()
+		return nil, ErrIntegrity
+	}
+	return f, nil
+}
+func ReadPrivate(path string, limit int64) ([]byte, error) {
+	f, err := openPrivate(path, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > limit {
-		return nil, errors.New("invalid private file")
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || int(stat.Uid) != os.Geteuid() || stat.Nlink != 1 {
-		return nil, errors.New("invalid private file owner")
-	}
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
-	if err != nil || int64(len(data)) > limit {
-		return nil, errors.New("private file unavailable")
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, ErrIntegrity
 	}
 	return data, nil
 }

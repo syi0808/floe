@@ -94,11 +94,20 @@ pub enum ObserveState {
     Paused,
     ReviewRequired,
 }
+/// Read-only account/group presentation; never a source or resource authority.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceGroupSummary {
+    pub group_ref: Uuid,
+    pub label: String,
+}
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceSummary {
     pub resource_ref: Uuid,
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<ResourceGroupSummary>,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -116,7 +125,6 @@ pub struct SourceSummary {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionsOverview {
-    pub revision: u64,
     pub gateways: Vec<GatewaySummary>,
     pub integrations: Vec<IntegrationSummary>,
     pub sources: Vec<SourceSummary>,
@@ -147,6 +155,8 @@ pub struct PermittedResource {
     pub resource_ref: Uuid,
     pub label: String,
     pub selected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<ResourceGroupSummary>,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

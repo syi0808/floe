@@ -11,18 +11,22 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 const maxPayload = 16 * 1024 * 1024
 
 var envelope = []byte{'F', 'L', 'O', 'E', 0, 'E', 'N', 'C', 1}
 var ErrUnavailable = errors.New("encrypted storage unavailable")
+var ErrIntegrity = errors.New("encrypted storage integrity failure")
 
 type fileRoot struct {
-	mu                            sync.RWMutex
-	path, identity                string
-	aead                          cipher.AEAD
-	writable, unavailable, closed bool
+	mu               sync.RWMutex
+	path, identity   string
+	aead             cipher.AEAD
+	writable, closed bool
+	unavailable      atomic.Bool
+	writes           sync.Map
 }
 
 // Files is a scoped encrypted storage capability, not a schema or business owner.
@@ -61,7 +65,7 @@ func validPart(name string) bool {
 	return true
 }
 func (f *Files) ready(write bool) error {
-	if f == nil || f.root == nil || f.root.closed || f.root.unavailable || write && !f.root.writable {
+	if f == nil || f.root == nil || f.root.closed || f.root.unavailable.Load() || write && !f.root.writable {
 		return ErrUnavailable
 	}
 	if err := PrivateDirectory(f.root.path); err != nil {
@@ -114,12 +118,12 @@ func (f *Files) Read(name string, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	if len(data) < extra || !bytes.Equal(data[:len(envelope)], envelope) {
-		return nil, ErrUnavailable
+		return nil, ErrIntegrity
 	}
 	nonce := data[len(envelope) : len(envelope)+f.root.aead.NonceSize()]
 	plaintext, err := f.root.aead.Open(nil, nonce, data[len(envelope)+len(nonce):], f.aad(logical))
 	if err != nil || int64(len(plaintext)) > limit {
-		return nil, ErrUnavailable
+		return nil, ErrIntegrity
 	}
 	return plaintext, nil
 }
@@ -127,14 +131,21 @@ func (f *Files) Write(name string, data []byte) error {
 	if f == nil || f.root == nil {
 		return ErrUnavailable
 	}
-	f.root.mu.Lock()
-	defer f.root.mu.Unlock()
+	f.root.mu.RLock()
+	defer f.root.mu.RUnlock()
 	if err := f.ready(true); err != nil {
 		return err
 	}
 	logical, err := f.logical(name)
 	if err != nil || len(data) > maxPayload {
 		return ErrUnavailable
+	}
+	lock, _ := f.root.writes.LoadOrStore(logical, &sync.Mutex{})
+	writeLock := lock.(*sync.Mutex)
+	writeLock.Lock()
+	defer writeLock.Unlock()
+	if err := f.ready(true); err != nil {
+		return err
 	}
 	path := filepath.Join(f.root.path, filepath.FromSlash(logical))
 	prior, readErr := ReadPrivate(path, maxPayload+64)
@@ -144,11 +155,11 @@ func (f *Files) Write(name string, data []byte) error {
 	if readErr == nil {
 		extra := len(envelope) + f.root.aead.NonceSize() + f.root.aead.Overhead()
 		if len(prior) < extra || !bytes.Equal(prior[:len(envelope)], envelope) {
-			return ErrUnavailable
+			return ErrIntegrity
 		}
 		n := prior[len(envelope) : len(envelope)+f.root.aead.NonceSize()]
 		if _, err := f.root.aead.Open(nil, n, prior[len(envelope)+len(n):], f.aad(logical)); err != nil {
-			return ErrUnavailable
+			return ErrIntegrity
 		}
 	}
 	nonce := make([]byte, f.root.aead.NonceSize())
@@ -159,7 +170,7 @@ func (f *Files) Write(name string, data []byte) error {
 	encoded = f.root.aead.Seal(encoded, nonce, data, f.aad(logical))
 	err = WritePrivate(path, encoded)
 	if IsIndeterminate(err) {
-		f.root.unavailable = true
+		f.root.unavailable.Store(true)
 	}
 	return err
 }
@@ -176,7 +187,10 @@ func (f *Files) Exists(name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	_, err = ReadPrivate(filepath.Join(f.root.path, filepath.FromSlash(logical)), maxPayload+64)
+	file, err := openPrivate(filepath.Join(f.root.path, filepath.FromSlash(logical)), maxPayload+64)
+	if file != nil {
+		_ = file.Close()
+	}
 	if os.IsNotExist(err) {
 		return false, nil
 	}
@@ -186,8 +200,8 @@ func (f *Files) Scope(parts ...string) (*Files, error) {
 	if f == nil || f.root == nil {
 		return nil, ErrUnavailable
 	}
-	f.root.mu.Lock()
-	defer f.root.mu.Unlock()
+	f.root.mu.RLock()
+	defer f.root.mu.RUnlock()
 	if err := f.ready(false); err != nil {
 		return nil, err
 	}
@@ -206,12 +220,13 @@ func (f *Files) Scope(parts ...string) (*Files, error) {
 			if err == nil {
 				parent, e := os.Open(filepath.Dir(path))
 				if e != nil {
+					f.root.unavailable.Store(true)
 					return nil, e
 				}
 				e = parent.Sync()
 				closeErr := parent.Close()
 				if e != nil || closeErr != nil {
-					f.root.unavailable = true
+					f.root.unavailable.Store(true)
 					return nil, ErrUnavailable
 				}
 			}
@@ -235,4 +250,13 @@ func (f *Files) Close() {
 	defer f.root.mu.Unlock()
 	f.root.closed = true
 	f.root.aead = nil
+}
+
+func (f *Files) Available() error {
+	if f == nil || f.root == nil {
+		return ErrUnavailable
+	}
+	f.root.mu.RLock()
+	defer f.root.mu.RUnlock()
+	return f.ready(false)
 }

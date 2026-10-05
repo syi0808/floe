@@ -86,4 +86,8 @@ pub enum LocalContextPersonalAcquisitionModeDto {
 pub struct NativeSourceResourceDto {
     pub handle: String,
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_handle: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_label: Option<String>,
 }

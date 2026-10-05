@@ -163,7 +163,6 @@ impl GatewaySummaryDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionsOverviewDto {
-    pub revision: u64,
     pub gateways: Vec<GatewaySummaryDto>,
     pub integrations: Vec<IntegrationSummaryDto>,
     pub sources: Vec<SourceSummaryDto>,
@@ -171,9 +170,6 @@ pub struct ConnectionsOverviewDto {
 
 impl ConnectionsOverviewDto {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
-        if !valid_revision(self.revision) {
-            return Err("connections.overview.revision");
-        }
         unique_by(&self.gateways, |value| value.gateway_ref.get())?;
         unique_by(&self.integrations, |value| value.integration_ref.get())?;
         unique_by(&self.sources, |value| value.source_ref.get())?;
@@ -433,9 +429,27 @@ pub enum SourceActionDto {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct ResourceGroupDto {
+    pub group_ref: super::ResourceGroupRefDto,
+    pub label: String,
+}
+fn valid_resource_groups<'a>(groups: impl Iterator<Item = &'a ResourceGroupDto>) -> bool {
+    let mut labels = std::collections::BTreeMap::new();
+    groups.into_iter().all(|group| {
+        valid_source_text(&group.label, 256)
+            && labels
+                .insert(group.group_ref.get(), &group.label)
+                .is_none_or(|label| label == &group.label)
+    })
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SelectedResourceDto {
     pub resource_ref: super::ResourceRefDto,
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<ResourceGroupDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -468,6 +482,13 @@ impl SourceSummaryDto {
         {
             return Err("connections.source");
         }
+        if !valid_resource_groups(
+            self.selected_resources
+                .iter()
+                .filter_map(|value| value.group.as_ref()),
+        ) {
+            return Err("connections.source.groups");
+        }
         unique_by(&self.selected_resources, |value| value.resource_ref.get())?;
         if self
             .selected_resources
@@ -486,6 +507,8 @@ pub struct PermittedResourceChoiceDto {
     pub resource_ref: super::ResourceRefDto,
     pub label: String,
     pub selected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<ResourceGroupDto>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -614,6 +637,13 @@ impl SourceReviewDto {
             || !unique_values(&self.allowed_actions)
         {
             return Err("connections.source_review");
+        }
+        if !valid_resource_groups(
+            self.permitted_choices
+                .iter()
+                .filter_map(|value| value.group.as_ref()),
+        ) {
+            return Err("connections.source_review.groups");
         }
         unique_by(&self.permitted_choices, |choice| choice.resource_ref.get())?;
         if self

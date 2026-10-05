@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use floe_connections::{
-    ConnectionResource, NativeSetupObservation, NativeSetupRequest, NativeSetupState,
-    NativeSourceSetupPort, SourceCatalogObservation, SourceCatalogPort, SourceConnection,
+    ConnectionResource, ConnectionResourceGroup, NativeSetupObservation, NativeSetupRequest,
+    NativeSetupState, NativeSourceSetupPort, SourceCatalogObservation, SourceCatalogPort,
+    SourceConnection,
 };
 use floe_context::{NativeSubjectObservation, SourceMetadataTransport};
 use floe_context_contract::{CalendarProvider, ResourceHandle};
@@ -262,6 +263,7 @@ impl NativeSourceMetadataAdapter {
         validate_resources(vec![NativeSourceResource {
             handle: floe_access::ATTENTION_RESOURCE.into(),
             label: "Attention".into(),
+            group: None,
         }])
     }
 }
@@ -491,10 +493,31 @@ fn validate_resources(
             ConnectionResource::new(
                 ResourceHandle::try_new(resource.handle).map_err(|_| AgentFailure::InvalidInput)?,
                 resource.label,
+                resource
+                    .group
+                    .map(|group| {
+                        Ok::<_, AgentFailure>(ConnectionResourceGroup {
+                            handle: ResourceHandle::try_new(group.handle)
+                                .map_err(|_| AgentFailure::InvalidInput)?,
+                            label: group.label,
+                        })
+                    })
+                    .transpose()?,
             )
             .map_err(|_| AgentFailure::InvalidInput)
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let mut groups = std::collections::BTreeMap::new();
+    for resource in &resources {
+        if let Some(group) = resource.group() {
+            if groups
+                .insert(&group.handle, &group.label)
+                .is_some_and(|label| label != &group.label)
+            {
+                return Err(AgentFailure::InvalidInput);
+            }
+        }
+    }
     resources.sort_by(|left, right| left.handle().cmp(right.handle()));
     if resources
         .windows(2)

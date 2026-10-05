@@ -196,7 +196,7 @@ impl<K: VaultKeyProvider> EnrollmentSigner for VaultEnrollmentSigner<K> {
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(|_| PairingError::StorageUnavailable)?;
+                .map_err(|error| pairing_storage(gateway_database(error)))?;
             let result = async {
                 let now = chrono::Utc::now().timestamp_millis();
                 self.vault.advance_clock(&tx, now).await?;
@@ -363,6 +363,7 @@ pub(super) fn bounded_encode(value: &impl serde::Serialize) -> Result<String, Ag
 pub(super) fn pairing_storage(error: AgentFailure) -> PairingError {
     match error {
         AgentFailure::Conflict => PairingError::Conflict,
+        AgentFailure::StorageBusy => PairingError::StorageBusy,
         AgentFailure::PolicyDenied => PairingError::ChangedProducer,
         _ => PairingError::StorageUnavailable,
     }
@@ -1126,6 +1127,9 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
     ) -> BoxFuture<'a, Result<ConnectionsCommandResolution, AgentFailure>> {
         Box::pin(async move {
             identity.validate()?;
+            if reason == AgentFailure::StorageBusy {
+                return Err(AgentFailure::StorageBusy);
+            }
             if identity.person_id != self.person_id
                 || identity.journal != ConnectionsCommandJournal::Product
             {
@@ -1135,7 +1139,7 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(product_begin)?;
+                .map_err(gateway_database)?;
             let result = async {
                 let mut rows = tx.query("SELECT payload FROM connections_product_records WHERE record_ref=? OR (person_id=? AND command_id=?)",
                     (identity.record_ref.to_string(), identity.person_id.to_string(), identity.command_id.to_string())).await.map_err(gateway_database)?;
@@ -1244,7 +1248,7 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(product_begin)?;
+                .map_err(gateway_database)?;
             let result=async {
                 if command_rejection_on(&tx,receipt.person_id,receipt.command_id).await?.is_some() { return Err(AgentFailure::Conflict); }
                 let mut rows=tx.query("SELECT payload FROM connections_product_records WHERE record_ref=? OR (person_id=? AND command_id=?)",(receipt.record_ref.to_string(),receipt.person_id.to_string(),receipt.command_id.to_string())).await.map_err(gateway_database)?;
@@ -1278,7 +1282,7 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(product_begin)?;
+                .map_err(gateway_database)?;
             let result=async{
             if command_rejection_on(&tx, record.person_id, record.command_id).await?.is_some() {
                 return Err(AgentFailure::Conflict);
@@ -1308,7 +1312,7 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
-                .map_err(product_begin)?;
+                .map_err(gateway_database)?;
             let result=async{
             let mut rows=tx.query("SELECT payload FROM connections_product_records WHERE record_ref=? AND person_id=?",(record.record_ref.to_string(),record.person_id.to_string())).await.map_err(gateway_database)?;
             let current:ConnectionsRecord=bounded_decode(&rows.next().await.map_err(gateway_database)?.ok_or(AgentFailure::Conflict)?.get::<String>(0).map_err(storage)?)?;drop(rows);
@@ -1321,18 +1325,11 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
     }
 }
 
-fn product_begin(error: turso::Error) -> AgentFailure {
-    match error {
-        turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::Conflict,
-        other => storage(other),
-    }
-}
-
-// Contended reads/transactions are retryable conflicts, not integrity loss.
+// Contention is neither integrity loss nor a durable semantic rejection.
 // Failed commit/rollback retains the existing fail-closed latch in the finisher.
 pub(super) fn gateway_database(error: turso::Error) -> AgentFailure {
     match error {
-        turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::Conflict,
-        _ => AgentFailure::StorageUnavailable,
+        turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::StorageBusy,
+        other => storage(other),
     }
 }

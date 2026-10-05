@@ -16,6 +16,7 @@ pub enum PairingError {
     Conflict,
     CredentialUnavailable,
     StorageUnavailable,
+    StorageBusy,
     TransportUnavailable,
     Cancelled,
     DeadlineExceeded,

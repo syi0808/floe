@@ -122,7 +122,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 
     /// Loads immutable material only. Callers must prove the required live phase
-    /// in this same transaction before signing; historic recovery may read it.
+    /// in this same transaction before signing. Historical recovery reads public metadata only.
     pub(super) async fn enrollment_key_on(
         &self,
         connection: &Connection,

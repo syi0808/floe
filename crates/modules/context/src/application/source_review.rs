@@ -261,8 +261,12 @@ fn resource_handles(resources: &[ConnectionResource]) -> Result<Vec<String>, Age
     }
     let mut handles = Vec::with_capacity(resources.len());
     for resource in resources {
-        ConnectionResource::new(resource.handle().clone(), resource.label().to_owned())
-            .map_err(|_| AgentFailure::InvalidInput)?;
+        ConnectionResource::new(
+            resource.handle().clone(),
+            resource.label().to_owned(),
+            resource.group().cloned(),
+        )
+        .map_err(|_| AgentFailure::InvalidInput)?;
         handles.push(resource.handle().as_str().to_owned());
     }
     if handles.windows(2).any(|pair| pair[0] >= pair[1]) {

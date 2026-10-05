@@ -133,6 +133,8 @@ pub enum AgentFailure {
     NotFound,
     Conflict,
     StorageUnavailable,
+    /// Storage contention is retryable and is not a semantic command rejection.
+    StorageBusy,
     VaultUnavailable,
     VaultLocked,
     PolicyDenied,

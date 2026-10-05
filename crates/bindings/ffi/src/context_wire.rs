@@ -6,8 +6,8 @@ use crate::conversion::native::{
 };
 use floe_app::{
     AttentionCompletion, CalendarCompletion, NativeHostCommand, NativeHostKind, NativeHostQuery,
-    NativeHostRegistrationRef, NativeSourceResource, PersonalCompletion, attention_failure,
-    personal_failure,
+    NativeHostRegistrationRef, NativeResourceGroup, NativeSourceResource, PersonalCompletion,
+    attention_failure, personal_failure,
 };
 use floe_protocol::wire::{WireResult, invalid};
 use floe_protocol::{
@@ -58,9 +58,24 @@ fn resources(values: Vec<NativeSourceResourceDto>) -> WireResult<Vec<NativeSourc
         .map(|value| {
             text(&value.handle, 512, "resources.handle")?;
             text(&value.label, 256, "resources.label")?;
+            let group = match (value.group_handle, value.group_label) {
+                (None, None) => None,
+                (Some(handle), Some(label)) => {
+                    text(&handle, 512, "resources.group_handle")?;
+                    text(&label, 256, "resources.group_label")?;
+                    Some(NativeResourceGroup { handle, label })
+                }
+                _ => {
+                    return Err(invalid(
+                        "resources.group",
+                        "group identity and label must be complete",
+                    ));
+                }
+            };
             Ok(NativeSourceResource {
                 handle: value.handle,
                 label: value.label,
+                group,
             })
         })
         .collect()

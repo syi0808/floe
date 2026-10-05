@@ -16,7 +16,23 @@ final class ConnectionsController extends ChangeNotifier {
   }
   final VaultController vault;
   final ConnectionsGateway gateway;
+  // This is a collection of independently versioned owner observations, not a
+  // globally revisioned document. Request generations order presentation reads.
   ConnectionsOverview? overview;
+  final Set<SourceRef> _offeredResourceSelection = {};
+
+  /// Presentation-only, once per exact source for this app-lifetime controller.
+  /// Claim after a mounted view is ready to open, never during a query.
+  bool claimInitialResourceSelection(SourceSummary source) {
+    if (_disposed ||
+        busy ||
+        source.selectedResources.isNotEmpty ||
+        !source.allowedActions.contains('configure')) {
+      return false;
+    }
+    return _offeredResourceSelection.add(source.sourceRef);
+  }
+
   String? pairingAddress;
   PairingSnapshot? pairing;
   ConnectionOperationSnapshot? operation;
@@ -121,7 +137,6 @@ final class ConnectionsController extends ChangeNotifier {
     try {
       final value = await gateway.overview();
       if (_disposed || !ready || generation != _loadGeneration) return;
-      if (overview != null && value.revision < overview!.revision) return;
       overview = value;
       if (_pendingCommands.isEmpty) failure = null;
     } on Object catch (error) {

@@ -8,3 +8,5 @@ pub mod gateway_pairing;
 pub mod product;
 
 mod product_records;
+
+mod product_commands;

@@ -138,7 +138,8 @@ fn read_failure(error: PairingError) -> GatewayCredentialError {
         PairingError::DeadlineExceeded => GatewayCredentialError::Timeout,
         PairingError::RepairRequired | PairingError::Expired => GatewayCredentialError::Unverified,
         PairingError::Indeterminate => GatewayCredentialError::Indeterminate,
-        PairingError::CredentialUnavailable
+        PairingError::StorageBusy
+        | PairingError::CredentialUnavailable
         | PairingError::StorageUnavailable
         | PairingError::TransportUnavailable => GatewayCredentialError::Unavailable,
     }

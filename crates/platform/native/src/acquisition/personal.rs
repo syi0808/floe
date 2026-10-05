@@ -25,6 +25,27 @@ pub enum PersonalAcquisitionMode {
 pub struct NativeSourceResource {
     pub handle: String,
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<NativeResourceGroup>,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeResourceGroup {
+    pub handle: String,
+    pub label: String,
+}
+impl NativeSourceResource {
+    pub(crate) fn valid_metadata(&self) -> bool {
+        let text = |value: &str, max: usize| {
+            !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
+        };
+        text(&self.handle, 512)
+            && text(&self.label, 256)
+            && self
+                .group
+                .as_ref()
+                .is_none_or(|group| text(&group.handle, 512) && text(&group.label, 256))
+    }
 }
 
 /// How the host's reported failure reaches the waiter.
@@ -132,14 +153,10 @@ impl AcquisitionExchange for PersonalExchange {
         }
         if request.mode == PersonalAcquisitionMode::InspectCatalog {
             if response.resources.len() > 256
-                || response.resources.iter().any(|resource| {
-                    resource.handle.is_empty()
-                        || resource.handle.len() > 512
-                        || resource.handle.chars().any(char::is_control)
-                        || resource.label.is_empty()
-                        || resource.label.len() > 256
-                        || resource.label.chars().any(char::is_control)
-                })
+                || response
+                    .resources
+                    .iter()
+                    .any(|resource| !resource.valid_metadata())
                 || response
                     .resources
                     .iter()

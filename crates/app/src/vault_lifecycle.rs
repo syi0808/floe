@@ -86,6 +86,7 @@ pub(crate) fn project_failure(
         }
         AgentFailure::VaultUnavailable
         | AgentFailure::StorageUnavailable
+        | AgentFailure::StorageBusy
         | AgentFailure::Interrupted
         | AgentFailure::DeadlineExceeded
         | AgentFailure::Cancelled

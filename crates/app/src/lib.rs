@@ -85,9 +85,9 @@ pub use floe_provider_adapters::sources::native_acquisition::{
     AttentionAcquisitionMode, AttentionAcquisitionRequest, AttentionAcquisitionResult,
     CalendarAcquisitionMode, CalendarAcquisitionRequest, CalendarAcquisitionResult,
     CalendarSourceFailure, MAX_ACQUISITION_DEADLINE_MS, NativeCalendarBatch, NativeCalendarFailure,
-    NativeCalendarRecord, NativeEventSchedule, NativeSourceResource, PersonalAcquisitionMode,
-    PersonalAcquisitionRequest, PersonalAcquisitionResult, PersonalDomain, attention_failure,
-    personal_failure,
+    NativeCalendarRecord, NativeEventSchedule, NativeResourceGroup, NativeSourceResource,
+    PersonalAcquisitionMode, PersonalAcquisitionRequest, PersonalAcquisitionResult, PersonalDomain,
+    attention_failure, personal_failure,
 };
 pub use host::{AppHost, HostRequest};
 #[cfg(unix)]

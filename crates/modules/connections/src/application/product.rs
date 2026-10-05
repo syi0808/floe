@@ -204,8 +204,13 @@ impl ConnectionsService {
             Ok(summary)
         }
         .await;
-        self.finish_product_command(result, classify, command_identity)
-            .await
+        super::product_commands::settle_product_command(
+            self.products.as_ref(),
+            result,
+            classify,
+            command_identity,
+        )
+        .await
     }
     pub async fn overview(
         &self,
@@ -229,9 +234,7 @@ impl ConnectionsService {
             .find(|gateway| gateway.state != GatewayState::Forgotten)
             .map(|gateway| gateway.gateway_ref);
         let mut integrations = Vec::new();
-        let mut revision = 1u64;
         while let Some(record) = records.next().await? {
-            revision = revision.max(record.revision);
             match record.payload {
                 ConnectionsPayload::Integration(integration) => {
                     let current_target = match &integration.target {
@@ -266,11 +269,9 @@ impl ConnectionsService {
             .await
             .map_err(source_error)?
         {
-            revision = revision.max(source.revision());
             sources.push(self.source_summary(actor, &source, scope).await?)
         }
         Ok(ConnectionsOverview {
-            revision,
             gateways,
             integrations,
             sources,
@@ -474,8 +475,13 @@ impl ConnectionsService {
             Ok(summary)
         }
         .await;
-        self.finish_product_command(result, classify, command_identity)
-            .await
+        super::product_commands::settle_product_command(
+            self.products.as_ref(),
+            result,
+            classify,
+            command_identity,
+        )
+        .await
     }
     pub async fn inspect_integration_review(
         &self,
@@ -630,8 +636,13 @@ impl ConnectionsService {
             Ok(snapshot)
         }
         .await;
-        self.finish_product_command(result, classify, command_identity)
-            .await
+        super::product_commands::settle_product_command(
+            self.products.as_ref(),
+            result,
+            classify,
+            command_identity,
+        )
+        .await
     }
     pub async fn get_operation(
         &self,
@@ -743,8 +754,13 @@ impl ConnectionsService {
                 .await
         }
         .await;
-        self.finish_product_command(result, classify, command_identity)
-            .await
+        super::product_commands::settle_product_command(
+            self.products.as_ref(),
+            result,
+            classify,
+            command_identity,
+        )
+        .await
     }
     async fn observe_cancellation_admission(
         &self,
@@ -1073,6 +1089,7 @@ impl ConnectionsService {
                 permitted.push(PermittedResource {
                     resource_ref: reference,
                     label: resource.label().to_owned(),
+                    group: resource_group(actor.person_id, source.connection_id(), &resource)?,
                     selected: source
                         .resources()
                         .iter()
@@ -1150,8 +1167,13 @@ impl ConnectionsService {
             Ok(summary)
         }
         .await;
-        self.finish_product_command(result, classify, command_identity)
-            .await
+        super::product_commands::settle_product_command(
+            self.products.as_ref(),
+            result,
+            classify,
+            command_identity,
+        )
+        .await
     }
     pub async fn inspect_source_review(
         &self,
@@ -1315,8 +1337,13 @@ impl ConnectionsService {
             self.drive_source_configuration(actor, pending, scope).await
         }
         .await;
-        self.finish_product_command(result, classify, command_identity)
-            .await
+        super::product_commands::settle_product_command(
+            self.products.as_ref(),
+            result,
+            classify,
+            command_identity,
+        )
+        .await
     }
     async fn drive_source_configuration(
         &self,
@@ -1568,8 +1595,13 @@ impl ConnectionsService {
             self.project_observe(actor, review, scope).await
         }
         .await;
-        self.finish_product_command(result, classify, command_identity)
-            .await
+        super::product_commands::settle_product_command(
+            self.products.as_ref(),
+            result,
+            classify,
+            command_identity,
+        )
+        .await
     }
     pub async fn inspect_observe_review(
         &self,
@@ -1771,8 +1803,13 @@ impl ConnectionsService {
             Ok(action)
         }
         .await;
-        self.finish_product_command(result, classify, command_identity)
-            .await
+        super::product_commands::settle_product_command(
+            self.products.as_ref(),
+            result,
+            classify,
+            command_identity,
+        )
+        .await
     }
     fn operation_scope(&self, scope: &ExecutionScope) -> ExecutionScope {
         ExecutionScope::root(
@@ -1977,7 +2014,8 @@ impl ConnectionsService {
                 }
                 retry_delay = if matches!(
                     result,
-                    Err(PairingError::Indeterminate
+                    Err(PairingError::StorageBusy
+                        | PairingError::Indeterminate
                         | PairingError::TransportUnavailable
                         | PairingError::DeadlineExceeded)
                 ) {
@@ -2506,38 +2544,6 @@ impl ConnectionsService {
         record.validate()?;
         Ok(record)
     }
-    async fn finish_product_command<T>(
-        &self,
-        result: Result<T, AgentFailure>,
-        classify: fn(AgentFailure) -> ConnectionsCommandFailure,
-        identity: Option<ConnectionsCommandIdentity>,
-    ) -> Result<T, ConnectionsCommandFailure> {
-        match result {
-            Ok(value) => Ok(value),
-            Err(reason) => {
-                let failure = classify(reason);
-                let Some(identity) = identity else {
-                    return Err(failure);
-                };
-                if matches!(failure, ConnectionsCommandFailure::Admitted(_)) {
-                    return Err(failure);
-                }
-                match self
-                    .products
-                    .reject_unadmitted_command(identity, reason)
-                    .await
-                {
-                    Ok(ConnectionsCommandResolution::NotApplied(reason)) => {
-                        Err(ConnectionsCommandFailure::NotApplied(reason))
-                    }
-                    Ok(ConnectionsCommandResolution::Admitted) => {
-                        Err(ConnectionsCommandFailure::Admitted(reason))
-                    }
-                    Err(reason) => Err(ConnectionsCommandFailure::Indeterminate(reason)),
-                }
-            }
-        }
-    }
     async fn command(
         &self,
         actor: &OwnerActor,
@@ -2721,6 +2727,7 @@ impl ConnectionsService {
                         resource.handle(),
                     )?,
                     label: resource.label().to_owned(),
+                    group: resource_group(actor.person_id, source.connection_id(), &resource)?,
                 })
             })
             .collect::<Result<Vec<_>, AgentFailure>>()?;
@@ -2949,6 +2956,25 @@ pub fn source_ref(
 ) -> Result<Uuid, AgentFailure> {
     opaque_ref(b"floe.source.ref.v1", person, &connection.as_str())
 }
+fn resource_group(
+    person: PersonId,
+    connection: &floe_context_contract::ConnectionId,
+    resource: &crate::ConnectionResource,
+) -> Result<Option<crate::ResourceGroupSummary>, AgentFailure> {
+    resource
+        .group()
+        .map(|group| {
+            Ok(crate::ResourceGroupSummary {
+                group_ref: opaque_ref(
+                    b"floe.resource.group.ref.v1",
+                    person,
+                    &(connection.as_str(), group.handle.as_str()),
+                )?,
+                label: group.label.clone(),
+            })
+        })
+        .transpose()
+}
 fn resource_ref(
     person: PersonId,
     connection: &floe_context_contract::ConnectionId,
@@ -3029,6 +3055,7 @@ pub(crate) fn pairing_error(error: PairingError) -> AgentFailure {
         PairingError::Cancelled => AgentFailure::Cancelled,
         PairingError::DeadlineExceeded => AgentFailure::DeadlineExceeded,
         PairingError::InvalidInput => AgentFailure::InvalidInput,
+        PairingError::StorageBusy => AgentFailure::StorageBusy,
         PairingError::StorageUnavailable
         | PairingError::CredentialUnavailable
         | PairingError::Indeterminate => AgentFailure::StorageUnavailable,

@@ -122,7 +122,7 @@ func (c *Configuration) RequiredError() error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.configUnavailable {
+	if c.configUnavailable || c.files.Available() != nil {
 		return errors.New("inference persistence uncertain")
 	}
 	return nil

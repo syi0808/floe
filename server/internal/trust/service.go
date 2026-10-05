@@ -129,7 +129,7 @@ type Service struct {
 }
 
 func fail(category operation.Category, code string) error { return operation.Fail(category, code) }
-func Open(files *storage.Files) (*Service, error) {
+func Open(files *storage.Files, initialize bool) (*Service, error) {
 	if files == nil {
 		return nil, fail(operation.Unavailable, "trust_unavailable")
 	}
@@ -137,8 +137,11 @@ func Open(files *storage.Files) (*Service, error) {
 	data, err := files.Read("trust.json", 1<<20)
 	fresh := os.IsNotExist(err)
 	if fresh {
+		if !initialize {
+			return nil, fail(operation.Unavailable, "trust_recovery_required")
+		}
 		// Any partial prior identity/state is a recovery error, never permission to replace it.
-		for _, name := range []string{"state.json", "producer-identity.json", "admin-token", "inference.json", "integrations.json"} {
+		for _, name := range []string{"producer-identity.json", "admin-token"} {
 			if exists, e := files.Exists(name); e != nil || exists {
 				return nil, fail(operation.Unavailable, "trust_recovery_required")
 			}
@@ -258,7 +261,7 @@ func (s *Service) blocked(person string) bool {
 func (s *Service) RequiredSecurityError() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable || s.producer == nil {
+	if s.unavailable || s.files.Available() != nil || s.producer == nil {
 		return fail(operation.Unavailable, "trust_unavailable")
 	}
 	return nil
@@ -273,7 +276,7 @@ func (s *Service) AuthenticateBearer(ctx context.Context, bearer string) (Princi
 	hash := Digest(bearer)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable {
+	if s.unavailable || s.files.Available() != nil {
 		return Principal{}, fail(operation.Unavailable, "trust_unavailable")
 	}
 	for _, r := range s.state.Clients {
@@ -292,7 +295,7 @@ func (s *Service) AuthenticateBearer(ctx context.Context, bearer string) (Princi
 }
 func (s *Service) checkLocked(p Principal) error {
 	c, ok := s.state.Clients[p.client]
-	if s.unavailable {
+	if s.unavailable || s.files.Available() != nil {
 		return fail(operation.Unavailable, "trust_unavailable")
 	}
 	if p.owner != s || p.generation != s.state.Revision || !ok || c.PersonID != p.person || c.DeviceID != p.device {
@@ -345,7 +348,7 @@ func (s *Service) WithActiveIssuer(p Principal, id string, consume func(IssuerSn
 func (s *Service) ProducerMetadata() (ProducerMetadata, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable || s.producer == nil {
+	if s.unavailable || s.files.Available() != nil || s.producer == nil {
 		return ProducerMetadata{}, fail(operation.Unavailable, "producer_unavailable")
 	}
 	return s.metadataLocked(), nil
@@ -356,7 +359,7 @@ func (s *Service) metadataLocked() ProducerMetadata {
 func (s *Service) SignProducerChallenge(data []byte) ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable || s.producer == nil || len(data) > 65536 {
+	if s.unavailable || s.files.Available() != nil || s.producer == nil || len(data) > 65536 {
 		return nil, fail(operation.Unavailable, "producer_unavailable")
 	}
 	return s.producer.SignChallenge(data), nil
@@ -364,7 +367,7 @@ func (s *Service) SignProducerChallenge(data []byte) ([]byte, error) {
 func (s *Service) PreparePairing(person string) (uint64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable {
+	if s.unavailable || s.files.Available() != nil {
 		return 0, fail(operation.Unavailable, "trust_unavailable")
 	}
 	if !ValidID(person) {
@@ -392,7 +395,7 @@ func (s *Service) ActivatePairing(ctx context.Context, a PairingActivation) (Pai
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.unavailable {
+	if s.unavailable || s.files.Available() != nil {
 		return PairingCommit{}, fail(operation.Unavailable, "trust_unavailable")
 	}
 	if a.ExpectedRevision != s.state.Revision || len(s.state.Cleanup) != 0 {
@@ -456,7 +459,7 @@ func (s *Service) RevokeClient(ctx context.Context, id string) (RevocationReceip
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.unavailable {
+	if s.unavailable || s.files.Available() != nil {
 		return RevocationReceipt{}, fail(operation.Unavailable, "trust_unavailable")
 	}
 	c, ok := s.state.Clients[id]
@@ -492,7 +495,7 @@ func (s *Service) RevokeIssuer(ctx context.Context, id string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.unavailable {
+	if s.unavailable || s.files.Available() != nil {
 		return fail(operation.Unavailable, "trust_unavailable")
 	}
 	if _, ok := s.state.Issuers[id]; !ok {
@@ -511,7 +514,7 @@ func (s *Service) RevokeIssuer(ctx context.Context, id string) error {
 func (s *Service) PendingCleanup() ([]CleanupTicket, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable {
+	if s.unavailable || s.files.Available() != nil {
 		return nil, fail(operation.Unavailable, "trust_unavailable")
 	}
 	out := make([]CleanupTicket, 0, len(s.state.Cleanup))
@@ -527,7 +530,7 @@ func (s *Service) AcknowledgeCleanup(ctx context.Context, t CleanupTicket, r Cle
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.unavailable {
+	if s.unavailable || s.files.Available() != nil {
 		return fail(operation.Unavailable, "trust_unavailable")
 	}
 	current, ok := s.state.Cleanup[t.ID]
@@ -546,7 +549,7 @@ func (s *Service) AcknowledgeCleanup(ctx context.Context, t CleanupTicket, r Cle
 func (s *Service) Clients() ([]ClientSnapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable {
+	if s.unavailable || s.files.Available() != nil {
 		return nil, fail(operation.Unavailable, "trust_unavailable")
 	}
 	out := make([]ClientSnapshot, 0, len(s.state.Clients))
@@ -558,7 +561,7 @@ func (s *Service) Clients() ([]ClientSnapshot, error) {
 func (s *Service) Issuers() ([]IssuerSnapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable {
+	if s.unavailable || s.files.Available() != nil {
 		return nil, fail(operation.Unavailable, "trust_unavailable")
 	}
 	out := make([]IssuerSnapshot, 0, len(s.state.Issuers))
@@ -612,7 +615,7 @@ func (s *Service) InspectPairing(ctx context.Context, id, proof string) (Pairing
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable {
+	if s.unavailable || s.files.Available() != nil {
 		return PairingReadback{}, false, fail(operation.Unavailable, "trust_unavailable")
 	}
 	c, ok := s.state.Clients[id]

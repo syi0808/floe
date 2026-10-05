@@ -37,6 +37,10 @@ final class IntegrationRef extends ConnectionRef {
   IntegrationRef(super.value);
 }
 
+final class ResourceGroupRef extends ConnectionRef {
+  ResourceGroupRef(super.value);
+}
+
 final class ResourceRef extends ConnectionRef {
   ResourceRef(super.value);
 }
@@ -251,17 +255,53 @@ final class GatewaySummary {
   final OwnerFailure? failure;
 }
 
+final class ResourceGroup {
+  const ResourceGroup({required this.groupRef, required this.label});
+  factory ResourceGroup.fromJson(Object? value) {
+    final j = connectionObject(value, {'group_ref', 'label'}, {});
+    return ResourceGroup(
+      groupRef: ResourceGroupRef(_uuid(j['group_ref'])),
+      label: _text(j['label']),
+    );
+  }
+  final ResourceGroupRef groupRef;
+  final String label;
+}
+
+List<T> _consistentResourceGroups<T>(
+  List<T> values,
+  ResourceGroup? Function(T) groupOf,
+) {
+  final labels = <ResourceGroupRef, String>{};
+  for (final value in values) {
+    final group = groupOf(value);
+    if (group == null) continue;
+    final prior = labels[group.groupRef];
+    if (prior != null && prior != group.label) {
+      throw const FormatException('Inconsistent resource group');
+    }
+    labels[group.groupRef] = group.label;
+  }
+  return values;
+}
+
 final class ResourceSummary {
-  const ResourceSummary({required this.resourceRef, required this.label});
+  const ResourceSummary({
+    required this.resourceRef,
+    required this.label,
+    this.group,
+  });
   factory ResourceSummary.fromJson(Object? value) {
-    final j = connectionObject(value, {'resource_ref', 'label'}, {});
+    final j = connectionObject(value, {'resource_ref', 'label'}, {'group'});
     return ResourceSummary(
       resourceRef: ResourceRef(_uuid(j['resource_ref'])),
       label: _text(j['label']),
+      group: j['group'] == null ? null : ResourceGroup.fromJson(j['group']),
     );
   }
   final ResourceRef resourceRef;
   final String label;
+  final ResourceGroup? group;
 }
 
 final class ResourceChoice {
@@ -269,21 +309,24 @@ final class ResourceChoice {
     required this.resourceRef,
     required this.label,
     required this.selected,
+    this.group,
   });
   factory ResourceChoice.fromJson(Object? value) {
-    final j = connectionObject(value, {
-      'resource_ref',
-      'label',
-      'selected',
-    }, {});
+    final j = connectionObject(
+      value,
+      {'resource_ref', 'label', 'selected'},
+      {'group'},
+    );
     return ResourceChoice(
       resourceRef: ResourceRef(_uuid(j['resource_ref'])),
       label: _text(j['label']),
+      group: j['group'] == null ? null : ResourceGroup.fromJson(j['group']),
       selected: _boolean(j['selected']),
     );
   }
   final ResourceRef resourceRef;
   final String label;
+  final ResourceGroup? group;
   final bool selected;
 }
 
@@ -326,9 +369,9 @@ final class SourceSummary {
       lastObservedAt: j['last_observed_at'] == null
           ? null
           : _time(j['last_observed_at']),
-      selectedResources: _list(
-        j['selected_resources'],
-        ResourceSummary.fromJson,
+      selectedResources: _consistentResourceGroups(
+        _list(j['selected_resources'], ResourceSummary.fromJson),
+        (value) => value.group,
       ),
       observeState: _choice(j['observe_state'], {
         'disabled',
@@ -418,26 +461,22 @@ final class IntegrationSummary {
 
 final class ConnectionsOverview {
   const ConnectionsOverview({
-    required this.revision,
     required this.gateways,
     required this.integrations,
     required this.sources,
   });
   factory ConnectionsOverview.fromJson(Object? value) {
     final j = connectionObject(value, {
-      'revision',
       'gateways',
       'integrations',
       'sources',
     }, {});
     return ConnectionsOverview(
-      revision: _revision(j['revision']),
       gateways: _list(j['gateways'], GatewaySummary.fromJson),
       integrations: _list(j['integrations'], IntegrationSummary.fromJson),
       sources: _list(j['sources'], SourceSummary.fromJson),
     );
   }
-  final int revision;
   final List<GatewaySummary> gateways;
   final List<IntegrationSummary> integrations;
   final List<SourceSummary> sources;
@@ -650,7 +689,10 @@ final class SourceReview {
       sourceRef: SourceRef(_uuid(j['source_ref'])),
       sourceRevision: _revision(j['source_revision']),
       labels: _list(j['labels'], _text),
-      permittedChoices: _list(j['permitted_choices'], ResourceChoice.fromJson),
+      permittedChoices: _consistentResourceGroups(
+        _list(j['permitted_choices'], ResourceChoice.fromJson),
+        (value) => value.group,
+      ),
       processingDisclosure: ProcessingDisclosure.fromJson(
         j['processing_disclosure'],
         observe: false,

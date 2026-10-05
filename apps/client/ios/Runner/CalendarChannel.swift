@@ -214,12 +214,16 @@ final class CalendarChannel {
       throw AcquisitionFailure(code: "provider_unavailable")
     }
     let resources = try calendars.map { calendar -> [String: String] in
-      let label = "\(calendar.source.title) · \(calendar.title)"
+      let label = calendar.title ?? ""
+      let groupHandle = calendar.source.sourceIdentifier ?? ""
+      let groupLabel = calendar.source.title ?? ""
       guard !calendar.calendarIdentifier.isEmpty, calendar.calendarIdentifier.utf8.count <= 512,
             !label.isEmpty, label.utf8.count <= 256,
-            !label.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+            !groupHandle.isEmpty, groupHandle.utf8.count <= 512,
+            !groupLabel.isEmpty, groupLabel.utf8.count <= 256,
+            ![label, groupHandle, groupLabel].contains(where: { $0.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) })
       else { throw AcquisitionFailure(code: "provider_unavailable") }
-      return ["handle": calendar.calendarIdentifier, "label": label]
+      return ["handle": calendar.calendarIdentifier, "label": label, "group_handle": groupHandle, "group_label": groupLabel]
     }
     let subjects = try calendarIDs.map { identifier -> [String] in
       guard let calendar = calendars.first(where: { $0.calendarIdentifier == identifier }) else {

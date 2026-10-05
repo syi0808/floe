@@ -87,7 +87,22 @@ purpose and root identity are AEAD-bound. Semantic owners retain their schema,
 validation, transitions and indeterminate-write fences; they no longer concatenate
 raw private payload paths. Trust state/producer identity/admin token, integration
 journals, inference configuration and Gmail index are encrypted. Node releases its
-profile lease only after shutdown drains its owners. Explicit local administrator
+profile lease after owner shutdown and after the storage lifetime guard drains in-flight file I/O. Closed capabilities reject later writes. Explicit local administrator
 token retrieval opens an existing root read-only without starting owners or creating
 credentials. Public profile/identity markers, diagnostic logs and operator-supplied
 environment input remain outside the encrypted payload store.
+
+Each Gateway semantic owner receives a distinct storage scope; connector factories
+receive only the connectors subtree. Per-file write locks serialize replacement,
+while a shared lifetime guard fences Close. Indeterminate replacement makes the root unavailable to new Node admission and
+owner readiness checks. Integrity failures propagate to the semantic owner, which
+retains its fail-closed state.
+Determinate pre-replacement filesystem errors remain retryable. Trust may create its
+identity only in a newly admitted root; loss of all Trust files is not fresh creation.
+
+Connections resource grouping is presentation metadata retained from the source
+catalog. Native Calendar provides explicit account identity and label, separately
+from calendar title. Product projections derive opaque Person/Connection-scoped
+group references. Groups never grant authority or replace exact resource selections.
+The overview has no aggregate revision: each item retains its own CAS revision, and
+Flutter orders concurrent overview responses by request generation.

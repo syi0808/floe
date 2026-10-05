@@ -11,7 +11,8 @@ mod ports;
 mod source;
 
 pub use source::{
-    ConnectionResource, ResourceMode, SourceConnection, SourceConnectionError, SourceState,
+    ConnectionResource, ConnectionResourceGroup, ResourceMode, SourceConnection,
+    SourceConnectionError, SourceState,
 };
 
 pub use api::{CalendarConnectionRef, ConnectorCatalogObservation, project_calendar_connections};

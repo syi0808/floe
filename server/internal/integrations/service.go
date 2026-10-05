@@ -90,7 +90,7 @@ func (s *Service) check(p trust.Principal) error {
 	})
 }
 func (s *Service) readyLocked(person string) error {
-	if s.unavailable {
+	if s.unavailable || s.files.Available() != nil {
 		return operation.Fail(operation.Unavailable, "integrations_unavailable")
 	}
 	for _, c := range s.state.Cleanup {
@@ -190,7 +190,7 @@ func (s *Service) Start(ctx context.Context, p trust.Principal, id string, in Co
 	err = s.trust.WithCurrentPrincipal(p, func(trust.PrincipalSnapshot) error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.unavailable {
+		if s.unavailable || s.files.Available() != nil {
 			return operation.Fail(operation.Unavailable, "integrations_unavailable")
 		}
 		if prior, ok := s.state.Attempts[in.OperationID]; ok {
@@ -265,7 +265,7 @@ func (s *Service) Cancel(ctx context.Context, p trust.Principal, id, attemptID s
 	err := s.trust.WithCurrentPrincipal(p, func(trust.PrincipalSnapshot) error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.unavailable {
+		if s.unavailable || s.files.Available() != nil {
 			return operation.Fail(operation.Unavailable, "integrations_unavailable")
 		}
 		a, ok := s.state.Attempts[attemptID]
@@ -369,7 +369,7 @@ func (s *Service) Disconnect(ctx context.Context, p trust.Principal, id string, 
 	err := s.trust.WithCurrentPrincipal(p, func(trust.PrincipalSnapshot) error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.unavailable {
+		if s.unavailable || s.files.Available() != nil {
 			return operation.Fail(operation.Unavailable, "integrations_unavailable")
 		}
 		if prior, ok := s.state.Disconnects[in.OperationID]; ok {
@@ -445,7 +445,7 @@ func (s *Service) ApplyRevocation(ctx context.Context, t trust.CleanupTicket) er
 		return operation.Fail(operation.Conflict, "cleanup_conflict")
 	}
 	s.mu.Lock()
-	if s.unavailable {
+	if s.unavailable || s.files.Available() != nil {
 		s.mu.Unlock()
 		return operation.Fail(operation.Unavailable, "integrations_unavailable")
 	}

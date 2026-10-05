@@ -123,13 +123,10 @@ impl AcquisitionExchange for CalendarExchange {
             return CompletionOutcome::Accept;
         }
         if response.available_calendars.len() > 256
-            || response.available_calendars.iter().any(|resource| {
-                resource.handle.is_empty()
-                    || resource.handle.len() > 512
-                    || resource.label.is_empty()
-                    || resource.label.len() > 256
-                    || resource.label.chars().any(char::is_control)
-            })
+            || response
+                .available_calendars
+                .iter()
+                .any(|resource| !resource.valid_metadata() || resource.group.is_none())
             || response
                 .available_calendars
                 .iter()
