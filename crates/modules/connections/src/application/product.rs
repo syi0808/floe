@@ -1,7 +1,7 @@
 //! Product projections and commands live with Connections. App supplies admitted
 //! actors and wires ports; it never reconstructs reviewed source authority.
 use super::product_records::ProductRecordScan;
-use super::source_configuration::{SourceConfigurationOutcome, aborted_reason};
+use super::source_configuration::{SourceConfigurationOutcome, aborted_reason, terminal_outcome};
 use crate::*;
 use chrono::{Duration, Utc};
 use floe_access::{ReviewRef, SourceObserveStatus, SourceProcessingChoice};
@@ -1235,7 +1235,7 @@ impl ConnectionsService {
                     }
                     ConnectionsPayload::SourceConfiguration { .. } => {
                         match self
-                            .drive_source_configuration(actor, record, scope)
+                            .execute_source_configuration(actor, record, scope)
                             .await?
                         {
                             SourceConfigurationOutcome::Applied(summary) => Ok(summary),
@@ -1348,9 +1348,8 @@ impl ConnectionsService {
                 ))
                 .await?;
             classify = ConnectionsCommandFailure::Admitted;
-            self.spawn_source_configuration(actor.clone(), pending.clone(), scope)?;
             match self
-                .drive_source_configuration(actor, pending, scope)
+                .execute_source_configuration(actor, pending, scope)
                 .await?
             {
                 SourceConfigurationOutcome::Applied(summary) => Ok(summary),
@@ -2003,6 +2002,67 @@ impl ConnectionsService {
         }
         Ok(summary)
     }
+    async fn execute_source_configuration(
+        &self,
+        actor: &OwnerActor,
+        mut record: ConnectionsRecord,
+        scope: &ExecutionScope,
+    ) -> Result<SourceConfigurationOutcome, AgentFailure> {
+        let ConnectionsPayload::SourceConfiguration { operation_id, .. } = record.payload else {
+            return Err(AgentFailure::InvalidInput);
+        };
+        loop {
+            self.ensure_open()?;
+            check(actor, scope)?;
+            let current = self
+                .products
+                .load(actor.person_id, record.record_ref)
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            if current.person_id != record.person_id
+                || current.device_id != record.device_id
+                || current.command_id != record.command_id
+                || current.intent_digest != record.intent_digest
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            if !matches!(
+                current.payload,
+                ConnectionsPayload::SourceConfiguration { .. }
+            ) {
+                return terminal_outcome(current);
+            }
+            record = current;
+            if let Some(active) = NativeDriveLease::acquire(self.jobs_active.clone(), operation_id)?
+            {
+                self.register_job(operation_id, scope)?;
+                let mut handoff = SourceConfigurationForeground {
+                    lease: Some(JobLease {
+                        _active: active,
+                        cancellations: self.jobs_cancel.clone(),
+                        id: operation_id,
+                    }),
+                    service: self.clone(),
+                    actor: actor.clone(),
+                    pending: Some(record.clone()),
+                    scope: scope.clone(),
+                };
+                let result = self.drive_source_configuration(actor, record, scope).await;
+                if result.is_ok() {
+                    handoff.pending = None;
+                }
+                return result;
+            }
+            // Another driver owns this command. Observation is not a second drive
+            // and its timeout does not cancel the admitted background operation.
+            tokio::select! {
+                _ = scope.cancellation().cancelled() => return Err(AgentFailure::Cancelled),
+                _ = tokio::time::sleep_until(scope.deadline()) => return Err(AgentFailure::DeadlineExceeded),
+                _ = tokio::time::sleep(std::time::Duration::from_millis(25)) => {},
+            }
+        }
+    }
+
     async fn resume_source_configuration(
         &self,
         actor: &OwnerActor,
@@ -3138,4 +3198,28 @@ fn integration_source_matches(integration: &IntegrationRecord, source: &SourceCo
         && source.execution_owner_id() == &identity.execution_owner_id
         && source.source_authority() == identity.source_authority
         && source.state() != SourceState::Disconnected
+}
+
+/// Drop-safe handoff of an admitted command, after releasing the same lease used
+/// by recovery. This also covers the foreground future being abandoned mid-await.
+struct SourceConfigurationForeground {
+    lease: Option<JobLease>,
+    service: ConnectionsService,
+    actor: OwnerActor,
+    pending: Option<ConnectionsRecord>,
+    scope: ExecutionScope,
+}
+impl Drop for SourceConfigurationForeground {
+    fn drop(&mut self) {
+        drop(self.lease.take());
+        if let Some(record) = self.pending.take() {
+            if self.service.ensure_open().is_ok() && tokio::runtime::Handle::try_current().is_ok() {
+                let _ = self.service.spawn_source_configuration(
+                    self.actor.clone(),
+                    record,
+                    &self.scope,
+                );
+            }
+        }
+    }
 }

@@ -237,7 +237,8 @@ never publishes a presentation reservation fence. Exact command replay is checke
 first; then an unchanged source identity/scope may receive its label-only successor
 and terminal record atomically. A rejection is recorded in that same journal without
 changing the source, so it cannot overtake an uncertain positive commit. An active
-authority reservation returns Busy before either outcome is written.
+authority reservation is a semantic fence and rejects local settlement before either
+outcome is written; it is not classified as SQL Busy.
 
 No Access commit/abort receipt is manufactured. Standing Observe and SourceAuthority
 remain unchanged for labels; account identity changes advance SourceAuthority and
@@ -245,5 +246,14 @@ follow the authority-changing workflow. Local revision and journal watermark cha
 still invalidate in-flight exact snapshots/Actions. Completion projects the recorded
 historical successor rather than requiring it to remain the latest source forever.
 Known presentation rejection settles the product command as NotApplied. Foreground
-and recovery races use the same journal result and reload a winning terminal product
+and recovery share one per-command drive lease. Other foreground callers observe
+the existing result without driving again; interruption releases the lease before
+handing unfinished work to recovery. Completion reloads a winning terminal product
 record. Local commit has no separate user-visible cancellation stage.
+
+Authority configuration rejected before reservation uses the source journal's
+negative receipt to exclude future admission, then settles product NotApplied.
+Replays consult that receipt before re-observing mutable evidence. A Completed
+authority operation never invalidates grants again merely to render its result;
+current summary reads may still require Access availability. Owner shutdown closes
+new settlement and handoff admission.

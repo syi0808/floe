@@ -19,7 +19,9 @@ pub(super) fn aborted_reason(reason: SourceAbortReason) -> AgentFailure {
         }
     }
 }
-fn terminal_outcome(record: ConnectionsRecord) -> Result<SourceConfigurationOutcome, AgentFailure> {
+pub(super) fn terminal_outcome(
+    record: ConnectionsRecord,
+) -> Result<SourceConfigurationOutcome, AgentFailure> {
     match record.payload {
         ConnectionsPayload::SourceMutation { summary, .. } => {
             Ok(SourceConfigurationOutcome::Applied(summary))
@@ -28,6 +30,19 @@ fn terminal_outcome(record: ConnectionsRecord) -> Result<SourceConfigurationOutc
             SourceConfigurationOutcome::NotApplied(aborted_reason(reason)),
         ),
         _ => Err(AgentFailure::Conflict),
+    }
+}
+fn source_command_identity(
+    record: &ConnectionsRecord,
+    operation_id: uuid::Uuid,
+) -> ConnectionsCommandIdentity {
+    ConnectionsCommandIdentity {
+        journal: ConnectionsCommandJournal::SourceOperation,
+        record_ref: operation_id,
+        person_id: record.person_id,
+        device_id: record.device_id.clone(),
+        command_id: record.command_id,
+        intent_digest: record.intent_digest,
     }
 }
 impl ConnectionsService {
@@ -81,6 +96,25 @@ impl ConnectionsService {
                 .finish_source_configuration_record(record, payload)
                 .await;
         }
+        if let Some(reason) = self
+            .sources
+            .rejected_operation_command(source_command_identity(&record, operation_id))
+            .await
+            .map_err(source_error)?
+        {
+            if reason != AgentFailure::AccessReviewRequired {
+                return Err(AgentFailure::Conflict);
+            }
+            return self
+                .finish_source_configuration_record(
+                    record,
+                    ConnectionsPayload::SourceConfigurationAborted {
+                        source: descriptor.source,
+                        reason: SourceAbortReason::ReviewChanged,
+                    },
+                )
+                .await;
+        }
         let kind = SourceOperationKind::ConnectionConfigure;
         let operation = if let Some(operation) = self
             .sources
@@ -101,14 +135,18 @@ impl ConnectionsService {
                 .sources
                 .load(actor.person_id, descriptor.source.connection_id())
                 .await
-                .map_err(source_error)?
-                .ok_or(AgentFailure::Conflict)?;
-            if current != descriptor.source {
-                return Err(AgentFailure::Conflict);
+                .map_err(source_error)?;
+            if current.as_ref() != Some(&descriptor.source) {
+                return self
+                    .reject_unreserved_configuration(record, descriptor.source, operation_id)
+                    .await;
             }
+            let current = current.ok_or(AgentFailure::Conflict)?;
             if let Some(expected) = &descriptor.expected {
                 if &self.evidence.observe(actor, &current, scope).await? != expected {
-                    return Err(AgentFailure::Conflict);
+                    return self
+                        .reject_unreserved_configuration(record, descriptor.source, operation_id)
+                        .await;
                 }
             }
             self.reserve(
@@ -124,6 +162,18 @@ impl ConnectionsService {
             .0
             .record
         };
+        if matches!(operation.phase, SourceOperationPhase::Completed { .. }) {
+            let summary = self.source_summary(actor, &successor, scope).await?;
+            return self
+                .finish_source_configuration_record(
+                    record,
+                    ConnectionsPayload::SourceMutation {
+                        source: successor,
+                        summary,
+                    },
+                )
+                .await;
+        }
         let receipt = match self
             .access
             .receipt(
@@ -198,6 +248,37 @@ impl ConnectionsService {
         )
         .await
     }
+    async fn reject_unreserved_configuration(
+        &self,
+        record: ConnectionsRecord,
+        source: SourceConnection,
+        operation_id: uuid::Uuid,
+    ) -> Result<SourceConfigurationOutcome, AgentFailure> {
+        self.ensure_open()?;
+        let identity = source_command_identity(&record, operation_id);
+        // The source journal's negative receipt atomically closes future reserve.
+        // Absence observed before this transaction would not be sufficient.
+        match self
+            .sources
+            .reject_unadmitted_operation_command(identity, AgentFailure::AccessReviewRequired)
+            .await
+            .map_err(source_error)?
+        {
+            ConnectionsCommandResolution::NotApplied(_) => {
+                self.finish_source_configuration_record(
+                    record,
+                    ConnectionsPayload::SourceConfigurationAborted {
+                        source,
+                        reason: SourceAbortReason::ReviewChanged,
+                    },
+                )
+                .await
+            }
+            // A prior delivery admitted first. Rejoin its real operation on retry.
+            ConnectionsCommandResolution::Admitted => Err(AgentFailure::StorageBusy),
+        }
+    }
+
     async fn settle_source_presentation(
         &self,
         actor: &OwnerActor,
@@ -229,6 +310,14 @@ impl ConnectionsService {
             }
             return Ok(existing);
         }
+        if self
+            .sources
+            .source_is_fenced(actor.person_id, successor.connection_id())
+            .await
+            .map_err(source_error)?
+        {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
         let decision = match self
             .evidence
             .inspect_selection(actor, successor, successor.resources(), scope)
@@ -245,6 +334,8 @@ impl ConnectionsService {
             ) => SourcePresentationDecision::Reject(SourceAbortReason::ReviewChanged),
             Err(error) => return Err(error),
         };
+        self.ensure_open()?;
+        check(actor, scope)?;
         self.sources
             .settle_presentation(SourceOperationReservation { record: requested }, decision)
             .await
@@ -256,6 +347,7 @@ impl ConnectionsService {
         mut record: ConnectionsRecord,
         payload: ConnectionsPayload,
     ) -> Result<SourceConfigurationOutcome, AgentFailure> {
+        self.ensure_open()?;
         let previous = record.revision;
         record.revision = record
             .revision

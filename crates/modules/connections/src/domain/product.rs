@@ -634,14 +634,9 @@ impl ConnectionsRecord {
                 ConnectionsPayload::SourceMutation { source, .. },
             ) if successor == source => {}
             (
-                ConnectionsPayload::SourceConfiguration {
-                    descriptor,
-                    successor,
-                    ..
-                },
+                ConnectionsPayload::SourceConfiguration { descriptor, .. },
                 ConnectionsPayload::SourceConfigurationAborted { source, .. },
-            ) if source == &descriptor.source
-                && source.is_presentation_successor(successor) == Ok(true) => {}
+            ) if source == &descriptor.source => {}
             (ConnectionsPayload::Integration(old), ConnectionsPayload::Integration(new))
                 if old.integration_ref == new.integration_ref
                     && old.target == new.target

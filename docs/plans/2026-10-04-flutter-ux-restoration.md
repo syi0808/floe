@@ -1305,3 +1305,36 @@ removed: workspace/default examples/doctests, production/development FFI, archit
 server/client restart, product encryption and key refusal diagnostics, session reopen,
 and all 61 external Flutter fixtures. Exact Apple artifacts and a focused closure
 review of the one-transaction settlement are still required for this new snapshot.
+
+#### Driver ownership and authority-settlement follow-through
+
+The 13b0dab review closed the atomic presentation path but found that unconditional
+background spawn made the older authority driver's race frequent. Replace parallel
+foreground/background execution with the same per-command job lease: a foreground
+owner drives once, another observer only reads, and an interrupted/erroring foreground
+releases its lease before handing unfinished work to recovery. A dropped foreground
+future uses the same handoff; shutdown prevents new handoffs. Recheck owner admission
+before local settlement/product CAS. Completed authority operations skip further
+Access invalidation and settle their historical result.
+
+A durable source fence is semantic, not SQL Busy. Inspect it cheaply before native
+observation and return a non-retried conflict if it appears at the transaction edge;
+only actual storage contention retains the rapid Busy retry. Pre-reservation authority
+drift settles through the existing source-journal negative command receipt, which
+atomically excludes a concurrent/prior positive reservation, then the same terminal
+product NotApplied result. Never infer that rejection solely from a prior read of
+operation absence. Existing genuine authority operations retain their receipt protocol.
+
+Five disposable source/store probes passed, including semantic-fence refusal without
+a new row and a definitive negative authority admission excluding a future reserve.
+One lease primitive probe passed for foreground/recovery exclusivity and release;
+this is not a full fake-provider cancellation workflow. Temporary probe modules were
+archived/removed. Root additionally traced replay after a negative receipt succeeds
+but product settlement fails: the driver consults the existing negative receipt
+before mutable evidence, so recovered evidence cannot resurrect the command.
+
+Driver-ownership follow-through final local gate passed after removing probes:
+workspace/default examples/doctests, both FFI profiles, architecture/diff checks,
+actual encrypted two-cycle pairing/Forget/restart, product encryption/key refusal
+and session reopen, and all 61 external Flutter fixtures. Exact Apple artifact
+qualification and targeted N1–N5 closure review remain pending for this snapshot.

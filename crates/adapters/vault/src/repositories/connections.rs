@@ -373,7 +373,7 @@ impl SourceOperationRepository for TursoStore {
                 }
                 let id = requested.expected.source.connection_id();
                 if fenced_on(&connection, requested.expected.source.person_id(), &id).await? {
-                    return Err(SourceRepositoryError::StorageBusy);
+                    return Err(SourceRepositoryError::Conflict);
                 }
                 let source = source_on(&connection, &id).await?;
                 let (terminal, successor) = request.settle_presentation(source.as_ref(), decision)?;
