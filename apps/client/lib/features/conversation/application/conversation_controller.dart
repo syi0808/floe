@@ -105,11 +105,46 @@ final class ConversationController extends ChangeNotifier {
     loadingEarlier = false;
     _interactionBusy.clear();
     _busy = false;
+    _clearRunUi();
+    _conversationRun = null;
+    progress = AgentProgress.idle;
+  }
+
+  /// Keep the Stop target attached to the Run the UI currently observes.
+  /// A Stop requested while a new turn is still awaiting its first Run
+  /// snapshot belongs to that pending admission and survives its first ID.
+  void _trackRunUi(
+    AgentSession current, {
+    required String? runId,
+    bool newTurn = false,
+  }) {
+    final previousRunId = _observedRunId ?? _runSession?.activeTurn;
+    final firstPendingTurnSnapshot =
+        _conversationRun != null && _observedRunId == null && runId != null;
+    if (newTurn ||
+        (runId != null &&
+            previousRunId != runId &&
+            !firstPendingTurnSnapshot)) {
+      _stopRequested = false;
+    }
+    _runSession = current;
+    _observedRunId = runId;
+  }
+
+  void _clearRunUi() {
     _runSession = null;
     _observedRunId = null;
-    _conversationRun = null;
     _stopRequested = false;
-    progress = AgentProgress.idle;
+  }
+
+  bool _ownsStopTarget(
+    String? runId,
+    AgentConversationTurnRequest? request,
+  ) {
+    if (runId != null) {
+      return (_observedRunId ?? _runSession?.activeTurn) == runId;
+    }
+    return request != null && identical(_conversationRun, request);
   }
 
   final Map<String, AgentInteractionSnapshot> _interactions = {};
@@ -361,7 +396,7 @@ final class ConversationController extends ChangeNotifier {
   ) async {
     final epoch = _adoptionEpoch;
     final observation = _observation;
-    _runSession = original;
+    _trackRunUi(original, runId: receipt.runId);
     progress = AgentProgress.model;
     _notify();
     try {
@@ -371,7 +406,7 @@ final class ConversationController extends ChangeNotifier {
         observation: observation,
         onRun: (run) {
           if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
-          _observedRunId = run.runId;
+          _trackRunUi(original, runId: run.runId);
           _notify();
         },
       );
@@ -386,8 +421,7 @@ final class ConversationController extends ChangeNotifier {
       }
     } finally {
       if (!_disposed && epoch == _adoptionEpoch) {
-        _runSession = null;
-        _observedRunId = null;
+        _clearRunUi();
       }
     }
   }
@@ -497,8 +531,7 @@ final class ConversationController extends ChangeNotifier {
       }
     } finally {
       if (!_disposed && epoch == _adoptionEpoch) {
-        _runSession = null;
-        _observedRunId = null;
+        _clearRunUi();
         _end();
         progress = AgentProgress.idle;
         _notify();
@@ -520,8 +553,7 @@ final class ConversationController extends ChangeNotifier {
     if (!_acceptsEpoch(epoch)) return;
     needsReload = false;
     if (accepted.activeTurn != null) {
-      _runSession = accepted;
-      _stopRequested = false;
+      _trackRunUi(accepted, runId: accepted.activeTurn);
       progress = AgentProgress.model;
       _notify();
       final completion = await _conversationRuntime.observeSessionRun(
@@ -529,7 +561,7 @@ final class ConversationController extends ChangeNotifier {
         observation: observation,
         onRun: (run) {
           if (!_acceptsEpoch(epoch)) return;
-          _observedRunId = run.runId;
+          _trackRunUi(accepted, runId: run.runId);
           _notify();
         },
       );
@@ -566,8 +598,7 @@ final class ConversationController extends ChangeNotifier {
       }
     } finally {
       if (!_disposed && epoch == _adoptionEpoch) {
-        _runSession = null;
-        _observedRunId = null;
+        _clearRunUi();
         _end();
         progress = AgentProgress.idle;
         _notify();
@@ -623,10 +654,9 @@ final class ConversationController extends ChangeNotifier {
       retryOf: retryOf,
     );
     _conversationRun = request;
-    _runSession = original;
+    _trackRunUi(original, runId: null, newTurn: true);
     _lastConversationText = normalized;
     _begin();
-    _stopRequested = false;
     _clearFailure();
     progress = AgentProgress.model;
     _notify();
@@ -646,7 +676,7 @@ final class ConversationController extends ChangeNotifier {
         observation: observation,
         onRun: (run) {
           if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
-          _observedRunId = run.runId;
+          _trackRunUi(original, runId: run.runId);
           progress = run.state == AppRunState.cancelling || _stopRequested
               ? AgentProgress.stopping
               : AgentProgress.model;
@@ -654,7 +684,7 @@ final class ConversationController extends ChangeNotifier {
         },
       );
       if (_acceptsEpoch(epoch) && session?.id == original.id) {
-        _runSession = null;
+        _clearRunUi();
         if (_acceptSession(completion.session) == null) return;
         _lastConversationRunId = completion.run.runId;
         needsReload = false;
@@ -676,7 +706,7 @@ final class ConversationController extends ChangeNotifier {
     } finally {
       if (!_disposed && epoch == _adoptionEpoch) {
         _conversationRun = null;
-        _runSession = null;
+        _clearRunUi();
         _end();
         progress = AgentProgress.idle;
         _notify();
@@ -696,15 +726,22 @@ final class ConversationController extends ChangeNotifier {
     _notify();
     try {
       if (runId != null) {
-        await _conversationRuntime.cancelObservedRun(runId);
+        final dispatched = await _conversationRuntime.cancelObservedRun(runId);
+        if (!dispatched && _ownsStopTarget(runId, null)) {
+          _stopRequested = false;
+          progress = AgentProgress.model;
+          _notify();
+        }
       } else if (request != null) {
         await _conversationRuntime.cancelConversationTurn(request);
       }
     } on Object {
       if (!_acceptsEpoch(epoch)) return;
+      if (!_ownsStopTarget(runId, request)) return;
       _stopRequested = false;
       failure = 'transport_unavailable';
       needsReload = true;
+      progress = AgentProgress.model;
       _notify();
     }
   }
