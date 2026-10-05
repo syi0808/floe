@@ -1467,3 +1467,27 @@ passed for the defensive post-observation scope check. No permanent tests or dat
 reset were added. Native settings navigation and actual OS status on the user's
 running app remain unverified; exact Apple compilation/signature qualification is
 next. iOS layout remains unchanged, and hosted Calendar never gets the macOS card.
+
+#### System access review closure
+
+Independent Opus source review of 033f312 found no blocking or serious delta defect.
+Root accepted the bounded presentation findings: re-observe OS metadata when an
+admitted owner command settles, keep the last observed badge visible during refresh,
+stop an invalidated loading indicator on deactivation, and clear Settings-navigation
+failure feedback when permission no longer needs recovery (including late failure).
+The native status method now maps one authorization snapshot rather than reading it
+twice. No permission, grant, source or persistence owner changed.
+
+Root verified the omitted service discriminator: product.rs derives AppleCalendar
+only from Device + calendar.event_kit; Gateway bindings are Hosted. The Dart parser
+preserves that enum and detail lookup joins integration.source.sourceRef, not labels.
+An unlinked source intentionally lacks a fabricated integration identity/card; full
+unavailable-catalog/orphan-source UX remains part of the broader screen-state matrix.
+Actual Settings pane navigation and OS lifecycle remain live-runtime evidence gaps.
+
+All 74 disposable Flutter fixtures pass after the review fixes, including command
+settlement without focus change, retained badge across interrupted reads, and late
+Settings failure after permission recovery. Analyzer remains 157 baseline infos,
+zero errors/warnings. Rust inputs are unchanged from the prior qualified slice.
+Apple qualification of 033f312 runs separately; these later Dart/Swift edits require
+qualification of their own final source snapshot before claiming native acceptance.

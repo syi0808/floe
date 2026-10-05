@@ -60,6 +60,9 @@ final class _CalendarSystemAccessCardState
       _openingSettings = false;
       _settingsFailed = false;
       if (_active) unawaited(_inspect());
+    } else if (!oldWidget.enabled && widget.enabled && _active) {
+      // An admitted connection command may have changed OS permission.
+      unawaited(_inspect());
     }
   }
 
@@ -70,6 +73,7 @@ final class _CalendarSystemAccessCardState
     } else {
       // A late pre-resume observation cannot overwrite a new OS status.
       ++_generation;
+      if (_loading) setState(() => _loading = false);
     }
   }
 
@@ -89,8 +93,13 @@ final class _CalendarSystemAccessCardState
     setState(() {
       _status = status;
       _loading = false;
+      if (!_needsSettings) _settingsFailed = false;
     });
   }
+
+  bool get _needsSettings =>
+      _status == CalendarSystemAccess.denied ||
+      _status == CalendarSystemAccess.writeOnly;
 
   Future<void> _openSettings() async {
     if (_openingSettings || !widget.enabled) return;
@@ -113,7 +122,7 @@ final class _CalendarSystemAccessCardState
     }
     setState(() {
       _openingSettings = false;
-      _settingsFailed = failed;
+      _settingsFailed = failed && _needsSettings;
     });
     // Opening Settings is not proof of permission. Resume observes the OS again.
   }
@@ -158,7 +167,7 @@ final class _CalendarSystemAccessCardState
               const Expanded(
                 child: Text('System access', style: FloeType.controlLabel),
               ),
-              if (_loading)
+              if (_loading && _status == null)
                 const SizedBox(
                   width: 16,
                   height: 16,
@@ -180,8 +189,7 @@ final class _CalendarSystemAccessCardState
               height: 1.5,
             ),
           ),
-          if (_status == CalendarSystemAccess.denied ||
-              _status == CalendarSystemAccess.writeOnly) ...[
+          if (_needsSettings) ...[
             const SizedBox(height: FloeSpace.sm),
             Align(
               alignment: AlignmentDirectional.centerStart,

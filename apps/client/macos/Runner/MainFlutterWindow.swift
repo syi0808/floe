@@ -71,8 +71,10 @@ final class CalendarBridge {
       }
       // Authorization metadata only: no calendar enumeration and no permission prompt.
       let status = EKEventStore.authorizationStatus(for: .event)
-      if canRead { result("allowed"); return }
-      if #available(macOS 14.0, *), status == .writeOnly { result("write_only"); return }
+      if #available(macOS 14.0, *) {
+        if status == .fullAccess { result("allowed"); return }
+        if status == .writeOnly { result("write_only"); return }
+      } else if status == .authorized { result("allowed"); return }
       switch status {
       case .notDetermined: result("not_requested")
       case .denied: result("denied")
