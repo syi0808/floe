@@ -30,11 +30,15 @@ static DEVICE_MODEL: floe_native::ByteCall =
         #[cfg(not(target_os = "macos"))]
         bundle_parents: floe_native::BUNDLE_SIBLING,
     });
-fn invoke(command: &DeviceModelCommand) -> Result<DeviceModelReply, AgentFailure> {
+fn encode_command(command: &DeviceModelCommand) -> Result<Vec<u8>, AgentFailure> {
     let input = serde_json::to_vec(command).map_err(|_| AgentFailure::InvalidInput)?;
     if input.len() > MAX_DEVICE_REQUEST_BYTES {
-        return Err(AgentFailure::BudgetExceeded);
+        return Err(AgentFailure::ModelInputCapacityExceeded);
     }
+    Ok(input)
+}
+fn invoke(command: &DeviceModelCommand) -> Result<DeviceModelReply, AgentFailure> {
+    let input = encode_command(command)?;
     let output = DEVICE_MODEL
         .call(&input, MAX_DEVICE_RESPONSE_BYTES)
         .map_err(|error| match error {
@@ -56,6 +60,7 @@ fn failure(failure: DeviceModelFailure) -> AgentFailure {
         DeviceModelFailure::Cancelled => AgentFailure::Cancelled,
         DeviceModelFailure::PolicyDenied => AgentFailure::PolicyDenied,
         DeviceModelFailure::QuotaExceeded | DeviceModelFailure::Busy => AgentFailure::QuotaExceeded,
+        DeviceModelFailure::InputCapacityExceeded => AgentFailure::ModelInputCapacityExceeded,
         DeviceModelFailure::BudgetExceeded => AgentFailure::BudgetExceeded,
         DeviceModelFailure::Conflict => AgentFailure::Conflict,
         DeviceModelFailure::NotFound => AgentFailure::NotFound,
@@ -225,7 +230,7 @@ impl PreparedDeviceTransport {
     fn render_request(
         &self,
         request: &CanonicalModelRequest,
-    ) -> Result<DeviceModelRequest, AgentFailure> {
+    ) -> Result<(DeviceModelRequest, bool), AgentFailure> {
         request.validate()?;
         match self.protection {
             SessionProtection::KeyUnavailable => return Err(AgentFailure::VaultUnavailable),
@@ -262,13 +267,17 @@ impl PreparedDeviceTransport {
             })
             .collect::<Result<Vec<_>, AgentFailure>>()?;
         let input = json!({"messages":encoded["messages"]});
-        let milliseconds = request
+        let remaining_milliseconds = request
             .deadline
             .saturating_duration_since(Instant::now())
             .as_millis();
-        if milliseconds == 0 {
+        if remaining_milliseconds == 0 {
             return Err(AgentFailure::DeadlineExceeded);
         }
+        let provider_capped = is_provider_capped(
+            remaining_milliseconds,
+            self.profile.limits.max_deadline_milliseconds,
+        );
         let native = DeviceModelRequest {
             operation_id: request.attempt_id,
             binding_id: self.profile.binding_id.clone(),
@@ -284,19 +293,46 @@ impl PreparedDeviceTransport {
             max_output_bytes: request
                 .max_output_bytes
                 .min(self.profile.limits.max_output_bytes),
-            deadline_milliseconds: milliseconds
+            deadline_milliseconds: remaining_milliseconds
                 .min(self.profile.limits.max_deadline_milliseconds as u128)
                 as u32,
         };
         self.profile
             .validate_request(&native)
             .map_err(|_| AgentFailure::InvalidInput)?;
-        Ok(native)
+        Ok((native, provider_capped))
+    }
+}
+fn is_provider_capped(remaining_whole_milliseconds: u128, provider_max_milliseconds: u32) -> bool {
+    remaining_whole_milliseconds > u128::from(provider_max_milliseconds)
+}
+fn generate_failure(
+    reason: DeviceModelFailure,
+    cancellation: &floe_execution::Cancellation,
+    deadline: Instant,
+    provider_capped: bool,
+) -> AgentFailure {
+    if reason != DeviceModelFailure::DeadlineExceeded {
+        return failure(reason);
+    }
+    if cancellation.is_cancelled() {
+        AgentFailure::Cancelled
+    } else if deadline <= Instant::now() {
+        AgentFailure::DeadlineExceeded
+    } else if provider_capped {
+        AgentFailure::LocalModelTimeout
+    } else {
+        AgentFailure::DeadlineExceeded
     }
 }
 impl PreparedModelTransport for PreparedDeviceTransport {
     fn validate_request(&self, request: &CanonicalModelRequest) -> Result<(), AgentFailure> {
-        self.render_request(request).map(|_| ())
+        let (native, _) = self.render_request(request)?;
+        encode_command(&DeviceModelCommand::Start {
+            schema_version: DEVICE_MODEL_VERSION,
+            request: native,
+        })
+        .map(|_| ())
     }
     fn dispatch_target(&self) -> floe_access::ModelDispatchTarget {
         floe_access::ModelDispatchTarget::Device
@@ -313,7 +349,7 @@ impl PreparedModelTransport for PreparedDeviceTransport {
             ) {
                 return Err(AgentFailure::PolicyDenied);
             }
-            let native = self.render_request(&request)?;
+            let (native, provider_capped) = self.render_request(&request)?;
             let _lease = NativeLease(request.attempt_id);
             let mut command = DeviceModelCommand::Start {
                 schema_version: DEVICE_MODEL_VERSION,
@@ -340,7 +376,14 @@ impl PreparedModelTransport for PreparedDeviceTransport {
                         operation_id: Some(operation_id),
                         failure: reason,
                         ..
-                    } if operation_id == request.attempt_id => return Err(failure(reason)),
+                    } if operation_id == request.attempt_id => {
+                        return Err(generate_failure(
+                            reason,
+                            &request.cancellation,
+                            request.deadline,
+                            provider_capped,
+                        ));
+                    }
                     DeviceModelReply::Done { response, .. } => {
                         response
                             .validate_envelope(&native)
@@ -353,7 +396,7 @@ impl PreparedModelTransport for PreparedDeviceTransport {
                             response
                                 .validate_output(&native)
                                 .map_err(|_| AgentFailure::LocalModelInvalidOutput)?;
-                            decode_output(response.output, &request)
+                            decode_output(response.output, &request, provider_capped)
                         });
                         return Ok(CanonicalModelResponse { output, usage });
                     }
@@ -366,6 +409,7 @@ impl PreparedModelTransport for PreparedDeviceTransport {
 fn decode_output(
     output: DeviceModelOutput,
     request: &CanonicalModelRequest,
+    provider_capped: bool,
 ) -> Result<Vec<ModelStep>, AgentFailure> {
     let step = match output {
         DeviceModelOutput::Text { text } => ModelStep::Answer {
@@ -392,7 +436,14 @@ fn decode_output(
                 error
             }
         })?,
-        DeviceModelOutput::Failure { failure: reason } => return Err(failure(reason)),
+        DeviceModelOutput::Failure { failure: reason } => {
+            return Err(generate_failure(
+                reason,
+                &request.cancellation,
+                request.deadline,
+                provider_capped,
+            ));
+        }
     };
     Ok(vec![step])
 }

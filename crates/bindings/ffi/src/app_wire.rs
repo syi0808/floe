@@ -419,6 +419,7 @@ pub(crate) fn agent_failure(failure: AgentFailure) -> AppWireErrorDto {
         | AgentFailure::VaultLocked
         | AgentFailure::ModelUnavailable
         | AgentFailure::LocalModelUnavailable
+        | AgentFailure::LocalModelTimeout
         | AgentFailure::ServerModelUnavailable
         | AgentFailure::ServerModelTimeout
         | AgentFailure::ServerModelRequestRejected
@@ -427,6 +428,7 @@ pub(crate) fn agent_failure(failure: AgentFailure) -> AppWireErrorDto {
         | AgentFailure::CapabilityUnavailable
         | AgentFailure::StaleContext
         | AgentFailure::BudgetExceeded
+        | AgentFailure::ModelInputCapacityExceeded
         | AgentFailure::Cancelled
         | AgentFailure::DeadlineExceeded
         | AgentFailure::Interrupted => AppWireErrorCodeDto::Unavailable,

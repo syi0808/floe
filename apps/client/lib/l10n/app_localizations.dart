@@ -208,6 +208,12 @@ abstract class AppLocalizations {
   /// **'This response reached its limit. You can send another message.'**
   String get agentConversationBudget;
 
+  /// No description provided for @agentModelInputCapacityExceeded.
+  ///
+  /// In en, this message translates to:
+  /// **'The model request, including the conversation context Floe sends, exceeded an input limit. Floe did not retry it.'**
+  String get agentModelInputCapacityExceeded;
+
   /// No description provided for @agentConnectedSource.
   ///
   /// In en, this message translates to:
@@ -513,6 +519,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The on-device model could not run. Check that it is ready, then try again.'**
   String get agentLocalModelUnavailable;
+
+  /// No description provided for @agentLocalModelTimeout.
+  ///
+  /// In en, this message translates to:
+  /// **'The on-device model reached its time limit. Floe did not retry the request.'**
+  String get agentLocalModelTimeout;
 
   /// No description provided for @agentLocalModelInvalidOutput.
   ///

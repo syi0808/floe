@@ -580,6 +580,7 @@ class _AgentPanelState extends State<AgentPanel> {
             ? strings.agentConnectedUnavailable
             : strings.agentFailure,
       'local_model_unavailable' => strings.agentLocalModelUnavailable,
+      'local_model_timeout' => strings.agentLocalModelTimeout,
       'server_model_unavailable' => strings.agentServerModelUnavailable,
       'server_model_timeout' => strings.agentServerModelTimeout,
       'server_model_request_rejected' =>
@@ -608,6 +609,8 @@ class _AgentPanelState extends State<AgentPanel> {
             : strings.agentConnectedUnavailable,
       'budget_exceeded' ||
       'deadline_exceeded' => strings.agentConversationBudget,
+      'model_input_capacity_exceeded' =>
+        strings.agentModelInputCapacityExceeded,
       _ => strings.agentFailure,
     };
     if (failure != null) return failure;

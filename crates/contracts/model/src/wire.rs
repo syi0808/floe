@@ -145,6 +145,7 @@ pub enum DeviceModelFailure {
     Cancelled,
     PolicyDenied,
     QuotaExceeded,
+    InputCapacityExceeded,
     BudgetExceeded,
     Busy,
     Conflict,

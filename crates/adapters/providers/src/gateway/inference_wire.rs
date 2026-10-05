@@ -146,7 +146,7 @@ fn map_failure(
         (409, "capability_changed" | "purpose_not_configured" | "purpose_disabled") => {
             (O::InvalidInventory, F::PolicyDenied)
         }
-        (413, "body_too_large") => (O::InvalidInventory, F::BudgetExceeded),
+        (413, "body_too_large") => (O::InvalidInventory, F::ModelInputCapacityExceeded),
         (429, "model_busy" | "quota_exceeded") => (O::QuotaExceeded, F::QuotaExceeded),
         (502, "invalid_output") => (O::InvalidInventory, F::ServerModelInvalidOutput),
         (502, "request_rejected") => (O::TransportUnavailable, F::ServerModelRequestRejected),

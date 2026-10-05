@@ -46,6 +46,7 @@ pub fn project_conversation_failure(
         | F::CredentialExpired
         | F::AccessReviewRequired
         | F::BudgetExceeded
+        | F::ModelInputCapacityExceeded
         | F::Stalled
         | F::StaleContext => AgentFailureCategory::UserConfiguration,
         F::StorageBusy
@@ -53,6 +54,7 @@ pub fn project_conversation_failure(
         | F::VaultLocked
         | F::ModelUnavailable
         | F::LocalModelUnavailable
+        | F::LocalModelTimeout
         | F::ServerModelUnavailable
         | F::ServerModelTimeout
         | F::ServerModelRequestRejected
@@ -76,6 +78,12 @@ pub fn project_conversation_failure(
             vec![AgentFailureSafeAction::ReopenVault],
         ),
         F::VaultLocked => (true, true, ConversationRecovery::Unlock, vec![]),
+        F::ModelInputCapacityExceeded => (
+            false,
+            false,
+            ConversationRecovery::None,
+            vec![AgentFailureSafeAction::ExportDiagnostics],
+        ),
         _ => (false, false, ConversationRecovery::None, vec![]),
     };
     ConversationFailure {

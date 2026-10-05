@@ -197,8 +197,11 @@ impl PreparedGatewayTransport {
     fn render_request(&self, request: &CanonicalModelRequest) -> Result<Vec<u8>, AgentFailure> {
         request.validate()?;
         let instructions = request.envelope.stable_instructions.render();
-        if instructions.trim().is_empty() || instructions.len() > 9_216 {
-            return Err(AgentFailure::BudgetExceeded);
+        if instructions.trim().is_empty() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        if instructions.len() > 9_216 {
+            return Err(AgentFailure::ModelInputCapacityExceeded);
         }
         let input = crate::models::agent_codec::encode_agent_input(&request)?;
         let mut classes = request
@@ -226,7 +229,7 @@ impl PreparedGatewayTransport {
         }))
         .map_err(|_| AgentFailure::InvalidInput)?;
         if body.len() > inference_wire::MAX_REQUEST_BYTES {
-            return Err(AgentFailure::BudgetExceeded);
+            return Err(AgentFailure::ModelInputCapacityExceeded);
         }
         Ok(body)
     }
