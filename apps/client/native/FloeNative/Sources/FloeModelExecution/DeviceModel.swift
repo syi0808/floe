@@ -392,6 +392,7 @@ public enum DeviceModelFailure: String, Error, Sendable, Equatable, Codable {
   case cancelled
   case policyDenied = "policy_denied"
   case quotaExceeded = "quota_exceeded"
+  case inputCapacityExceeded = "input_capacity_exceeded"
   case budgetExceeded = "budget_exceeded"
   case busy
   case conflict

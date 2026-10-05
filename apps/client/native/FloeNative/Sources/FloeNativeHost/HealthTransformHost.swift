@@ -491,6 +491,7 @@ final class HealthTransformHost: @unchecked Sendable {
             case .cancelled: return .cancelled
             case .policyDenied: return .policyDenied
             case .quotaExceeded, .budgetExceeded: return .modelUnavailable
+            case .inputCapacityExceeded: return .modelUnavailable
             case .busy: return .busy
             case .conflict: return .conflict
             case .notFound: return .notFound

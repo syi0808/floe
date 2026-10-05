@@ -73,6 +73,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'This response reached its limit. You can send another message.';
 
   @override
+  String get agentModelInputCapacityExceeded =>
+      'The model request, including the conversation context Floe sends, exceeded an input limit. Floe did not retry it.';
+
+  @override
   String get agentConnectedSource => 'Calendar evidence';
 
   @override
@@ -232,6 +236,10 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get agentLocalModelUnavailable =>
       'The on-device model could not run. Check that it is ready, then try again.';
+
+  @override
+  String get agentLocalModelTimeout =>
+      'The on-device model reached its time limit. Floe did not retry the request.';
 
   @override
   String get agentLocalModelInvalidOutput =>

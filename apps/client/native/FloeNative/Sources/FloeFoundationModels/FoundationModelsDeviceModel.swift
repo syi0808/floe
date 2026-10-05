@@ -271,7 +271,7 @@ public struct FoundationModelsDeviceModel: DeviceModel, Sendable {
       case .concurrentRequests:
         failure = .busy
       case .exceededContextWindowSize:
-        failure = .budgetExceeded
+        failure = .inputCapacityExceeded
       default:
         failure = .unavailable
       }
