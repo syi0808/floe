@@ -1678,3 +1678,92 @@ receipt/source rejection; positive drift terminalization; negative transport/can
 cases retaining fences; product-write response loss/restart; duplicate replay after
 later source changes; no automatic grant recovery; and typed Flutter acknowledgement
 that clears uncertainty without claiming the requested selection was saved.
+
+Further root inspection before implementation: inspect_selection currently returns
+AccessReviewRequired for malformed/unstable before/after evidence as well as other
+native failures. Therefore generic AccessReviewRequired is insufficient proof for
+terminal disconnection; initially only a successful validated stable fingerprint
+that differs from the reviewed candidate can use the rejection path. All errors
+remain uncertain until a later stable observation or an explicitly designed recovery.
+
+Configuration finalization also needs its own owner path: complete_committed rechecks
+the old configured source subject after the candidate has been checked. A deselected
+old resource can drift while the reviewed new selection is unchanged. After the
+committed all-grant invalidation, the final decision must use the reviewed candidate
+plus exact original source CAS, not require obsolete selected resources to recover.
+Do not add a generic skip-validation flag. A configure-specific finalization step
+must preserve the pre-invalidation old-source proof and the post-invalidation
+candidate proof, allowing an existing configure SourceChanged repair to settle only
+when its stored original source, receipt and reviewed candidate are still exact.
+Other operation kinds retain their existing finalization checks. This remains a
+proposal requiring adversarial review and owner-level failure probes, not a runtime
+change or claim that all source repair kinds can now finish.
+
+#### Recovery design adjudication
+
+The independent design review rejected the disconnected-successor proposal. Root
+accepts that correction: InvalidateSource leaves non-revoked Paused/review-required
+grants, whereas the normal disconnect protocol revokes them. An automatic source
+Disconnect here would strand those grants across native re-setup and widen recovery
+into a second Access effect. The rejected proposal above is design history only;
+it must not be implemented.
+
+Chosen rejection outcome: keep the exact stored original source unchanged. Add a
+configure-only terminal ConfigurationRejectedAfterInvalidation receipt, non-fenced,
+with no successor. Require the original stored source expectation inside the CAS,
+matching InvalidateSource proof, and an allowed predecessor. Record GrantCommitted
+and its receipt digest first; do not jump directly from Reserved to rejection.
+Re-check the stored digest when leaving GrantCommitted. SourceChanged repair is not
+evidence: settling it requires fresh positive candidate evidence and an exact source
+match. Transport/malformed/denied/unstable/cancelled evidence leaves the fence held.
+
+Add a candidate probe before reservation so known pre-effect drift uses the existing
+atomic negative receipt instead of invalidating sharing unnecessarily. Add explicit
+journal-terminal, product-terminal, resume and operation-snapshot branches; replay
+a terminal outcome before any native/Access I/O. Map the operation to a real terminal
+failed state with NewReview, not Running or Cancelled. Handle a proven source-journal
+Aborted outcome as the existing pre-effect product rejection where applicable.
+
+The product acknowledgement must distinguish Configured from NotSavedReviewRequired.
+The latter is a successful settled delivery of a partially effective command, never
+NotApplied. It can carry a stable source reference rather than re-querying mutable
+live grant/source state merely to acknowledge historical completion. Flutter removes
+only the exact pending command, closes the obsolete selection review and reports
+that selection was not saved and source sharing needs review. It does not reconnect,
+reactivate a grant or submit another command. Preserve uncertain commands across
+view disposal/read failures and make repeated identical repair observations no-ops.
+
+The separate configure-specific success finalization question (candidate continuity
+versus obsolete original selection after all-grant invalidation) remains under root
+review before code changes. It must not silently become a generic validation bypass.
+
+Focused follow-up accepted configure-only finalization under these explicit checks:
+actor/record/command binding; operation review equals descriptor review; operation
+expectation equals the original configuration expectation; canonical Access receipt
+validates and fully equals that expectation (including resources/fingerprint/no
+Gateway); stored source equals the full original descriptor; fresh candidate proof;
+post-proof open/scope checks; then the existing atomic successor/journal CAS. The
+old selection is not probed after invalidation. Guard generic complete_committed
+against Configure so there is only one configure finalizer. A configure-only
+SourceChanged repair may complete or reject with fresh candidate evidence and an
+exact stored source, never by treating its reason as proof. Other kinds remain
+unchanged. Digest comparison on exit from GrantCommitted is required.
+
+Root confirmed the additional dependencies: source reservation rejects a held fence
+inside its transaction; Access invalidation validates exhaustive non-revoked grant
+mutations. A reviewed SourceReview digest binds original source, expectation, catalog
+resources/digest and expiry. Configure intent binds that review reference and selected
+opaque resource references. The candidate fingerprint is captured before the first
+immutable product insert; it is not directly an incoming command-hash field. Preserve
+first-write replay and strengthen SourceConfiguration validation to reconstruct the
+successor from its persisted reviewed selection plus captured fingerprint. Do not
+pretend the request digest by itself proves arbitrary successor payloads.
+
+Implementation sequence: (1) owner domain terminal/result and validators; (2) one
+configure driver/finalizer with early terminal replay and pre/post candidate proofs;
+(3) product replay/recovery projections and typed protocol/FFI; (4) Dart gateway,
+controller settlement and selection-dialog feedback; (5) disposable atomicity,
+uncertainty, old-selection drift, foreign proof, replay and UI scenarios; (6) coherent
+Rust/FFI/Flutter/Apple gates and one independent implementation review. The existing
+UI copy nits can be localized in this same bounded presentation change, avoiding a
+separate build cycle for each string. No runtime recovery change has landed yet.
