@@ -1491,3 +1491,12 @@ Settings failure after permission recovery. Analyzer remains 157 baseline infos,
 zero errors/warnings. Rust inputs are unchanged from the prior qualified slice.
 Apple qualification of 033f312 runs separately; these later Dart/Swift edits require
 qualification of their own final source snapshot before claiming native acceptance.
+
+Exact e1af9e42 Apple qualification completed in the isolated Mac checkout: macOS
+Debug (16s) and Release (35s) builds, strict deep signatures and pure storage-profile
+getters (2/1) passed; unsigned iOS Simulator arm64 Debug (27s) passed. Worktree and
+lockfiles remained clean. Nonfatal iOS Swift-driver sysroot/Rust warnings remain.
+Release Runner is universal but embedded Floe libraries are arm64 only; Intel remains
+unqualified. No app/server/simulator launch or private profile/Keychain access took
+place. The earlier 033f312 Debug/Release builds passed, but its remaining checks were
+superseded by the final snapshot rather than duplicated.
