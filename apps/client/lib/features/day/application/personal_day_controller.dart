@@ -32,6 +32,7 @@ final class PersonalDayController extends ChangeNotifier {
   String? errorMessage;
   bool commandPending = false;
   int _loadGeneration = 0;
+  int _observedGeneration = -1;
   bool _disposed = false;
   String? _refreshCommandId;
   DayQuery? _refreshQuery;
@@ -40,6 +41,15 @@ final class PersonalDayController extends ChangeNotifier {
   CompletedDayRefresh? lastRefreshAcknowledgement;
 
   DayQuery get query => _query;
+
+  /// Only the latest successful read can decorate another feature's source rows.
+  /// Retained Day content after a read failure is not current correlation evidence.
+  DayCalendarCoverage? get calendarCoverage =>
+      !_disposed &&
+          loadState == DayLoadState.ready &&
+          _observedGeneration == _loadGeneration
+      ? snapshot?.calendarCoverage
+      : null;
 
   bool _automaticActive = false;
   Timer? _automaticTimer;
@@ -139,6 +149,7 @@ final class PersonalDayController extends ChangeNotifier {
         );
       }
       snapshot = result;
+      _observedGeneration = generation;
       loadState = DayLoadState.ready;
     } on Object catch (error) {
       if (_disposed) return;
@@ -319,6 +330,7 @@ final class PersonalDayController extends ChangeNotifier {
       );
       if (_disposed || displayGeneration != _loadGeneration) return;
       snapshot = current;
+      _observedGeneration = displayGeneration;
       loadState = DayLoadState.ready;
     } on _CurrentDayUnavailable catch (error) {
       if (_disposed || displayGeneration != _loadGeneration) return;

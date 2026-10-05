@@ -1562,3 +1562,35 @@ enum spelling and an old exact-label assertion; fixtures were corrected for the 
 multiline detail without changing selection/authority assertions. Native Apple
 qualification and independent review of this snapshot remain pending. Full live
 collection/reconfiguration acceptance and whole-screen restoration remain open.
+
+#### Collection detail review closure
+
+Exact 5150ad47 Apple qualification passed: macOS Debug35s/Release87s, strict deep
+signatures and storage getters2/1; unsigned iOS Simulator arm64Debug29s; clean tree
+and lockfiles. Intel/live runtime limits remain unchanged. GitHub returned no status
+entries for this commit, not an independent CI pass.
+
+Opus found two concrete presentation defects. Root confirmed that a failed same-date
+Day read retains the old snapshot with loadState=ready, so the original screen guard
+could reattach pre-configuration coverage. PersonalDayController now records which
+read generation produced its current snapshot and exposes coverage only for the
+latest successfully observed generation. Clearing an error or starting an unrelated
+command cannot resurrect old correlation evidence. Day retains its prior content
+for its own fallback display; no retained command or stored receipt is erased.
+
+SourceChanged and SourceFenced now receive status-specific neutral wording rather
+than claiming a failed acquisition. A first failed acquisition with no successful
+read no longer claims saved data exists. All79 disposable Flutter fixtures pass,
+including failed re-query followed by error dismissal and successful re-read, plus
+source-change/first-failure copy. The initial new fake-async probe did not advance the
+existing 500ms minimum-visibility timer; it was corrected to advance time, without
+altering production loading behavior. Analyzer remains157 baseline infos.
+
+Root checked the conditional findings: Settings hosts Connections only with
+showServices=false; it has no calendar detail to decorate. Repo-wide searches found
+no old Day hash or Connections helper callers; Action destinations do not join on
+Day calendarRef. Source owner inventory builds calendar_id from resource.handle;
+Day snapshot reads its mirror and inspects source metadata without acquiring events,
+then reprojects current display refs. Typed UUID decoders preserve the strings used
+for joins. The remaining empty-line formatting nit was removed. The later Dart
+read-generation/copy correction requires its own final Apple qualification.

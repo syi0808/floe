@@ -39,4 +39,3 @@ fn reference(domain: &[u8], person: PersonId, value: Value) -> Uuid {
     bytes[8] = (bytes[8] & 63) | 128;
     Uuid::from_bytes(bytes)
 }
-

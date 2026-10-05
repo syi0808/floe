@@ -99,8 +99,17 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
       return '${resource.label}\nCollection status unavailable';
     }
     final lines = <String>[resource.label];
-    if (coverage.failure != null) {
-      lines.add(strings.couldNotCollectEventsShowingTheLast);
+    if (coverage.failure case final failure?) {
+      lines.add(switch (failure) {
+        DayCalendarFailure.source_changed =>
+          'Source changed; collection status needs refreshing.',
+        DayCalendarFailure.source_fenced =>
+          'Collection is unavailable while this source is being updated.',
+        _ =>
+          coverage.lastSuccessAt == null
+              ? 'Could not collect events.'
+              : strings.couldNotCollectEventsShowingTheLast,
+      });
     }
     if (coverage.lastSuccessAt case final success?) {
       final timestamp = DateFormat.yMMMd(strings.localeName)

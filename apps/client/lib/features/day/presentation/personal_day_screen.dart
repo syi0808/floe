@@ -261,9 +261,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       return ConnectorScreen(
         controller: widget.connectionsController,
         initialSourceRef: selectedConnectionSource,
-        calendarCoverage: controller.loadState == DayLoadState.ready
-            ? controller.snapshot?.calendarCoverage
-            : null,
+        calendarCoverage: controller.calendarCoverage,
       );
     }
     if (destination == _DestinationView.settings) {
