@@ -1097,19 +1097,13 @@ final class ConversationController extends ChangeNotifier {
 final class _SessionOutcomeBarrier extends AgentVaultException {
   const _SessionOutcomeBarrier(
     super.failure, {
-    super.requestId,
-    super.stage,
-    super.metadata,
     super.recoveryAction,
-    super.affectedRefs,
     super.correlationRequestId,
-    super.retryableOverride,
     super.domain,
     super.category,
     super.reasonCode,
     super.safeActions,
     super.incidentId,
-    super.retryPolicy,
     super.reloadRequired,
     super.sealSession,
     super.ownerFailure,
