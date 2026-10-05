@@ -2355,3 +2355,35 @@ validate actual output and authorization; metadata does not establish correctnes
 grant tool/source access. No capability discovery or verification request may send
 personal data. This section is a design commitment, not an implemented catalog or
 permission for unbounded paid probing.
+
+### macOS-first stabilization checkpoint (2026-10-05)
+
+The owner explicitly deferred iOS builds and horizontal platform expansion. The
+current acceptance target is the integrated Rust core, Go development server and
+macOS Flutter client. Earlier iOS evidence is retained but is not a prerequisite
+for this stabilization work; do not start further iOS qualification.
+
+Reviewed diagnostics and model-failure changes are published on main at 570ed606
+(tree 2a435766c44eda8f7ada5a58be3f15f45c6c7c68). Qualification found and corrected
+a Flutter DiagnosticLevel import collision, then six unused forwarding parameters
+in the private stored-outcome barrier type. Exact final snapshot passes nine
+disposable Flutter diagnostics checks, macOS Debug build/strict signature/storage
+getter 2, and Go floe_dev compilation. Flutter analysis has zero errors, zero
+warnings and 157 pre-existing infos; the default command exits 1 for fatal infos,
+while --no-fatal-infos passes with identical counts. This is not a zero-info report.
+
+Unchanged Rust inputs reuse the 3d068d8 workspace all-target check, eleven narrow
+Rust probes and development/production FFI builds. Two Swift probes passed, and
+localization generation matched tracked output. The 0d8043b macOS Release build
+and strict signature passed before the final unused-parameter removal; do not
+represent that older Release artifact as the exact 570ed606 binary. No permanent
+S3 tests or replay of the lost historical 110-check suite is claimed.
+
+Live QA has not sent a model request for the final snapshot. The owner completed
+server OAuth setup and later stopped the server; root owns restarting both server
+and client using the existing development data, with no reset or migration. Initial
+client preflight checked a naked home Application Support path, but Flutter obtains
+the app-specific support directory and Debug runs sandboxed. Verify the established
+container/bundle-specific profile before treating a missing marker as missing data.
+No profile should be copied or newly created to work around an incorrectly resolved
+path. Connected provider readiness and a fresh synthetic response remain open gates.
