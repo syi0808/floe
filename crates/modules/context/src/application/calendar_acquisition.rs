@@ -511,7 +511,7 @@ fn calendar_source_version(
         .iter()
         .map(|resource| CalendarSelection {
             calendar_id: resource.handle().as_str().to_owned(),
-            calendar_name: resource.label().to_owned(),
+            calendar_name: resource.qualified_label(),
         })
         .collect::<Vec<_>>();
     calendars.sort_by(|left, right| left.calendar_id.cmp(&right.calendar_id));

@@ -54,22 +54,40 @@ func New(config Config) (*Node, error) {
 	}()
 	trustFiles, err := storageRoot.files.Scope("trust")
 	if err != nil {
-		return nil, err
+		if storageRoot.fresh {
+			return nil, storageFailure("creation_incomplete")
+		}
+		return nil, storageFailure("owner_storage_unavailable")
 	}
 	inferenceFiles, err := storageRoot.files.Scope("inference")
 	if err != nil {
-		return nil, err
+		if storageRoot.fresh {
+			return nil, storageFailure("creation_incomplete")
+		}
+		return nil, storageFailure("owner_storage_unavailable")
 	}
 	integrationFiles, err := storageRoot.files.Scope("integrations")
 	if err != nil {
-		return nil, err
+		if storageRoot.fresh {
+			return nil, storageFailure("creation_incomplete")
+		}
+		return nil, storageFailure("owner_storage_unavailable")
 	}
 	connectorFiles, err := storageRoot.files.Scope("connectors")
 	if err != nil {
-		return nil, err
+		if storageRoot.fresh {
+			return nil, storageFailure("creation_incomplete")
+		}
+		return nil, storageFailure("owner_storage_unavailable")
 	}
 	t, err := trust.Open(trustFiles, storageRoot.fresh)
 	if err != nil {
+		if storageRoot.fresh {
+			return nil, storageFailure("creation_incomplete")
+		}
+		return nil, storageFailure("trust_unavailable")
+	}
+	if err := storageRoot.publishReady(); err != nil {
 		return nil, err
 	}
 	runtime := codexauth.New(vault)

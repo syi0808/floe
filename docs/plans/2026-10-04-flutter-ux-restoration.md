@@ -991,3 +991,64 @@ informational findings, no errors/warnings. The 390/1024 screenshots were re-ren
 and inspected with the actual fonts/icons. No Rust/Go/native inputs changed after
 the preceding full gate; Apple application rebuild remains pending for this UI-only
 checkpoint. No system permission claim or old read-only pill was reintroduced.
+
+### Second storage review: root adjudication and next corrective order
+
+The exact 38e review confirms the Gateway/Pairing Busy fix and Go lock/scope/write
+corrections, but identifies adjacent gaps that root verified in source:
+
+1. Root Ready is published before first Trust persistence. Delay publication until
+   Trust bootstrap succeeds, preserving initializing evidence on failure; distinguish
+   the owner-scoped layout explicitly and reject older layout before making scopes.
+2. Access and other Vault SQL boundaries still conflate Busy with semantic Conflict.
+   Audit the real owner paths rather than claim crate-wide closure from Gateway-only
+   tests. Assistant signing also rejects its own previously committed operation after
+   a lost post-commit acknowledgement; exact replay needs current-authority validation
+   and immutable request matching, not a new request identity.
+3. Calendar title-only metadata reaches Day's calendar_name projections outside the
+   group-aware Connections views. Preserve account-qualified presentation there too.
+   The pure SourceConnection transition advances source authority only for resource
+   handle/policy/fingerprint/state changes. However, the application still routes any
+   changed metadata through ConnectionConfigure and invalidate_source; this broader
+   workflow remains open and the domain-only probe does not prove Observe retention.
+4. Native Calendar must explicitly handle an absent EventKit source without a crash.
+   Missing/ambiguous account metadata stays unavailable, never assigned to a fabricated
+   account. Catalog failure must not silently shrink the allowed set.
+
+Production Keychain runtime remains unqualified. The credentials adapter does impose
+its own deadline, which must be verified before accepting the review's conditional
+unbounded-wait allegation. Preserve raw evidence and do not broaden runtime QA.
+
+Verified additional review details: Actions' live EventKit destination projection
+already composes account and calendar titles; the confirmed missing qualification
+is in the two Day calendar-name projections. The Keychain observer has a three-second
+deadline and retains its native mutation lane until readback, so an unbounded caller
+wait is not present. Native ACL behavior itself remains unqualified.
+
+### Incremental macOS signing dependency correction
+
+Exact 0386 UI-only builds compiled, and each nested App.framework verified alone,
+but the enclosing app seal still referenced the preceding framework. Both build
+logs contain Flutter framework signing and no Runner CodeSign task; exact 38e native
+change logs contain the enclosing CodeSign task and passed strict verification.
+Declare the actual embedded App.framework and FlutterMacOS.framework outputs on
+the existing Flutter embed phase so Xcode can order and invalidate enclosing signing
+from the build graph. Preserve Xcode's configured identity/entitlements and normal
+signing owner; no post-hoc deep re-sign or cache clean. This hypothesis requires
+strict verification after both the initial build and a second Dart-only incremental
+build with unchanged Swift/Rust/project inputs.
+
+Reference: Apple's Run Script guidance requires declared input/output dependencies:
+https://developer.apple.com/documentation/xcode/running-custom-scripts-during-a-build
+
+Bootstrap/label checkpoint: isolated probes passed for interrupted-before-Trust
+initializing state, typed old-layout refusal before scope creation, no key replacement,
+read-only token/restart, and cached Trust becoming unavailable after detected ciphertext
+corruption. Account-qualified labels preserve punctuation and the existing 256-byte
+Day bound; overlong combined labels are rejected, never truncated into ambiguity.
+Rust workspace/doctests, both FFI builds, Go default/dev race/vet, architecture/diff
+gates and the two-cycle actual encrypted pairing/restart + product-encryption/startup
+diagnostics passed. Temporary probes were archived outside the repository before
+final gates. Apple source guards and the incremental signing dependency change still
+require the next native qualification; broader Busy/assistant replay and metadata-only
+configuration workflow findings remain open.

@@ -130,7 +130,7 @@ func (c *Configuration) RequiredError() error {
 
 func (c *Configuration) save(state configurationState) error {
 	err := writeConfigurationState(c.files, state)
-	if storage.IsIndeterminate(err) {
+	if storage.IsIndeterminate(err) || errors.Is(err, storage.ErrIntegrity) {
 		c.configUnavailable = true
 		c.engine.DenyConfiguration()
 	}

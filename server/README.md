@@ -109,3 +109,10 @@ No weaker ACL, Data Protection switch or file-key fallback is used. Startup repo
 non-secret custody categories (locked/denied, busy, timeout, missing, malformed or
 root authentication failure). A failed read before first Put leaves no creation
 marker; an uncertain Put retains its initializing marker and key evidence.
+
+The current encrypted root layout is owner-scoped (format 2). Older encrypted or
+plaintext profiles are not migrated or reset: an older layout is refused as
+`unsupported_layout` before owner directories are created. Fresh creation keeps
+its `initializing` marker through the first durable Trust identity/token/state write.
+Only then does composition publish Ready. An interrupted bootstrap reports
+`creation_incomplete` and preserves its key and files for deliberate local recovery.

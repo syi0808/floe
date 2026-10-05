@@ -19,7 +19,8 @@ import (
 
 const rootIdentityName = "storage-identity.json"
 const rootSealName = "storage-seal"
-const rootSealContent = "Floe encrypted server root v1\n"
+const rootLayout = 2 // Owner-scoped authenticated payloads.
+const rootSealContent = "Floe encrypted server root owner-scoped v2\n"
 
 type StorageFailure struct{ code string }
 
@@ -53,10 +54,12 @@ type rootIdentity struct {
 	State   string `json:"state"`
 }
 type admittedStorage struct {
-	fresh bool
-	files *storage.Files
-	lock  *os.File
-	once  sync.Once
+	fresh        bool
+	identity     rootIdentity
+	identityPath string
+	files        *storage.Files
+	lock         *os.File
+	once         sync.Once
 }
 
 func (r *admittedStorage) Close() {
@@ -78,8 +81,11 @@ func decodeRoot(data []byte) (rootIdentity, error) {
 	var id rootIdentity
 	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
-	if d.Decode(&id) != nil || d.Decode(new(any)) != io.EOF || id.Format != 1 || id.Profile != storageProfile {
+	if d.Decode(&id) != nil || d.Decode(new(any)) != io.EOF || id.Profile != storageProfile {
 		return id, errStorage
+	}
+	if id.Format != rootLayout {
+		return id, storageFailure("unsupported_layout")
 	}
 	raw, err := hex.DecodeString(id.ID)
 	if err != nil || len(raw) != 32 || hex.EncodeToString(raw) != id.ID {
@@ -169,7 +175,7 @@ func openStorage(ctx context.Context, directory string, vault credentials.Store,
 		if _, e := rand.Read(random); e != nil {
 			return nil, errStorage
 		}
-		id = rootIdentity{Format: 1, ID: hex.EncodeToString(random), Profile: storageProfile, State: "initializing"}
+		id = rootIdentity{Format: rootLayout, ID: hex.EncodeToString(random), Profile: storageProfile, State: "initializing"}
 	} else {
 		if readErr != nil {
 			return nil, errStorage
@@ -231,11 +237,6 @@ func openStorage(ctx context.Context, directory string, vault credentials.Store,
 		if files.Write(rootSealName, []byte(rootSealContent)) != nil {
 			return nil, errStorage
 		}
-		id.State = "ready"
-		encoded, _ := json.Marshal(id)
-		if storage.WritePrivate(path, encoded) != nil {
-			return nil, errStorage
-		}
 	}
 	seal, err := files.Read(rootSealName, 128)
 	if err != nil || string(seal) != rootSealContent {
@@ -244,8 +245,32 @@ func openStorage(ctx context.Context, directory string, vault credentials.Store,
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	return &admittedStorage{files: files, lock: lock, fresh: fresh}, nil
+	return &admittedStorage{files: files, lock: lock, fresh: fresh, identity: id, identityPath: path}, nil
 }
+
+// Ready means the root seal and the first complete Trust identity are durable.
+// Only Node composition can publish it, before exposing any owner to requests.
+func (r *admittedStorage) publishReady() error {
+	if !r.fresh {
+		return nil
+	}
+	if r.files.Available() != nil {
+		return storageFailure("creation_incomplete")
+	}
+	identity := r.identity
+	identity.State = "ready"
+	encoded, err := json.Marshal(identity)
+	if err != nil {
+		return storageFailure("creation_incomplete")
+	}
+	if err := storage.WritePrivate(r.identityPath, encoded); err != nil {
+		return storageFailure("creation_incomplete")
+	}
+	r.identity = identity
+	r.fresh = false
+	return nil
+}
+
 func infoSys(info os.FileInfo) (*syscall.Stat_t, bool) {
 	if info == nil {
 		return nil, false

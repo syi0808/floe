@@ -724,8 +724,10 @@ private func nativeSubjectFingerprint(_ store: EKEventStore, _ identifiers: [Str
     guard let calendar = store.calendar(withIdentifier: identifier) else {
       throw NativeFailure("provider_unavailable")
     }
-    return [calendar.calendarIdentifier, calendar.source.sourceIdentifier,
-            String(calendar.source.sourceType.rawValue)]
+    let calendarSource: EKSource? = calendar.source
+    guard let calendarSource else { throw NativeFailure("provider_unavailable") }
+    return [calendar.calendarIdentifier, calendarSource.sourceIdentifier,
+            String(calendarSource.sourceType.rawValue)]
   }
   let canonical: [String: Any] = ["permission_class": permissionClass, "subjects": tuples]
   let bytes = try JSONSerialization.data(withJSONObject: canonical, options: [.sortedKeys])
@@ -1071,9 +1073,11 @@ private func actionDestinations(_ request: [String: Any]) throws -> [String: Any
           calendar.calendarIdentifier == identifier else {
       throw NativeFailure("provider_unavailable")
     }
+    let calendarSource: EKSource? = calendar.source
+    guard let calendarSource else { throw NativeFailure("provider_unavailable") }
     return [
       "calendar_id": calendar.calendarIdentifier,
-      "calendar_name": "\(calendar.source.title) · \(calendar.title)",
+      "calendar_name": "\(calendarSource.title) · \(calendar.title)",
       "can_modify": calendar.allowsContentModifications && !calendar.isSubscribed
     ]
   }

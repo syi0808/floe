@@ -242,7 +242,7 @@ func (s *Service) persist(st diskState) error {
 		return fail(operation.Internal, "trust_unavailable")
 	}
 	err = s.files.Write("trust.json", data)
-	if storage.IsIndeterminate(err) {
+	if storage.IsIndeterminate(err) || errors.Is(err, storage.ErrIntegrity) {
 		s.unavailable = true
 	}
 	if err != nil {

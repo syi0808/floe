@@ -62,6 +62,15 @@ impl ConnectionResource {
         &self.label
     }
 
+    /// Unambiguous presentation for consumers without a separate group header.
+    /// Never used as a resource identity or an authority input.
+    pub fn qualified_label(&self) -> String {
+        match &self.group {
+            Some(group) => format!("{} · {}", group.label, self.label),
+            None => self.label.clone(),
+        }
+    }
+
     pub fn group(&self) -> Option<&ConnectionResourceGroup> {
         self.group.as_ref()
     }
@@ -76,6 +85,7 @@ impl ConnectionResource {
             || self.handle.as_str().chars().any(char::is_control)
             || self.label.is_empty()
             || self.label.len() > MAX_RESOURCE_LABEL_BYTES
+            || self.qualified_label().len() > MAX_RESOURCE_LABEL_BYTES
             || self.label.chars().any(char::is_control)
         {
             return Err(SourceConnectionError::InvalidResource);

@@ -245,9 +245,11 @@ final class CalendarBridge {
       throw AcquisitionFailure(code: "provider_unavailable")
     }
     let resources = try calendars.map { calendar -> [String: String] in
+      let calendarSource: EKSource? = calendar.source
+      guard let calendarSource else { throw AcquisitionFailure(code: "provider_unavailable") }
       let label = calendar.title ?? ""
-      let groupHandle = calendar.source.sourceIdentifier ?? ""
-      let groupLabel = calendar.source.title ?? ""
+      let groupHandle = calendarSource.sourceIdentifier ?? ""
+      let groupLabel = calendarSource.title ?? ""
       guard !calendar.calendarIdentifier.isEmpty, calendar.calendarIdentifier.utf8.count <= 512,
             !label.isEmpty, label.utf8.count <= 256,
             !groupHandle.isEmpty, groupHandle.utf8.count <= 512,
@@ -260,7 +262,9 @@ final class CalendarBridge {
       guard let calendar = calendars.first(where: { $0.calendarIdentifier == identifier }) else {
         throw AcquisitionFailure(code: "calendar_unavailable")
       }
-      return [calendar.calendarIdentifier, calendar.source.sourceIdentifier, String(calendar.source.sourceType.rawValue)]
+      let calendarSource: EKSource? = calendar.source
+      guard let calendarSource else { throw AcquisitionFailure(code: "provider_unavailable") }
+      return [calendar.calendarIdentifier, calendarSource.sourceIdentifier, String(calendarSource.sourceType.rawValue)]
     }
     let payload: [String: Any] = ["permission_class": permissionClass, "subjects": subjects]
     let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])

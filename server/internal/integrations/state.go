@@ -168,7 +168,7 @@ func (s *Service) persist(st diskState) error {
 		return err
 	}
 	err = s.files.Write("integrations.json", data)
-	if storage.IsIndeterminate(err) {
+	if storage.IsIndeterminate(err) || errors.Is(err, storage.ErrIntegrity) {
 		s.unavailable = true
 	}
 	if err != nil {

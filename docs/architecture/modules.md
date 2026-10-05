@@ -81,6 +81,9 @@ provider owns the purpose-separated root-key slot: production OS keyring, explic
 development private-file custody. A create-only identity/attempt marker and
 authenticated root seal distinguish fresh creation from an existing unavailable
 profile; missing keys and old plaintext never authorize replacement or migration.
+The owner-scoped root layout is explicitly versioned. Ready is published only after
+first Trust persistence succeeds; interruption before that retains initializing
+evidence and reports creation_incomplete, never regenerating identity or keys.
 
 The storage adapter provides scoped authenticated file capabilities. Logical file
 purpose and root identity are AEAD-bound. Semantic owners retain their schema,
@@ -104,5 +107,7 @@ Connections resource grouping is presentation metadata retained from the source
 catalog. Native Calendar provides explicit account identity and label, separately
 from calendar title. Product projections derive opaque Person/Connection-scoped
 group references. Groups never grant authority or replace exact resource selections.
+Day projections without a group header use the account-qualified resource label,
+within their existing display bounds; group-aware views retain the separate title.
 The overview has no aggregate revision: each item retains its own CAS revision, and
 Flutter orders concurrent overview responses by request generation.
