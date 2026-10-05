@@ -2176,3 +2176,53 @@ Exact-commit Apple builds and implementation adversarial review remain pending.
 No live app, provider, model or personal-data scenario is qualified by these checks.
 After this bounded correction, prioritize representative request-to-result agent
 scenarios alongside remaining UI parity instead of widening architecture cleanup.
+
+Exact runtime commit e823759612ddd02b2f444495a2423584678a3a5b (tree
+ ee95b6000f36ac9715cb28f25ecc1863ef83c0fa) subsequently passed isolated Mac
+qualification: Debug/Release builds, strict signatures, storage getters 2/1, and
+unsigned arm64 iOS Simulator Debug. Source and lockfiles remained clean. Release
+Runner is universal but bundled Floe libraries remain arm64; Intel is not qualified.
+Logs: `/private/tmp/floe-e823759-qualification/logs/`. No live app/server/simulator
+launch, Keychain access or provider scenario was performed. Implementation review
+is still pending; native build success is not product acceptance.
+
+### Delivery control and next product gates (2026-10-05)
+
+The user now assigns bounded implementation to gpt-6-luna (max/fast); root owns
+system-level design, priority, review adjudication and integration. Opus is an
+adversarial reviewer, not the final design authority. Implementers receive the
+semantic owner, constraints, changed surface and observable acceptance conditions.
+Independent work may run in parallel; a shared contract is settled before callers
+are split. A code or native-build pass is not a completed user scenario.
+
+Current rough whole-restoration/refactoring estimate remains approximately 60%.
+This is a scope estimate, not a measured task-success score. Future short updates
+should include whole-scope estimate, newly completed evidence and next blocker/gate.
+
+After the bounded Session review closure, prioritize these product gates:
+1. Conversation lifecycle: start/reload/stop/reopen and uncertain responses, with
+   exact command identity and no duplicate effect. Finish current corrections first.
+2. Scheduling intent: explicit dates, Korean relative dates and changed follow-up
+   constraints select the intended evidence range. Source inspection found the
+   Schedule Program currently pins its tool range before reasoning using a parser
+   that recognizes ISO dates/English 'this week', otherwise today. Manager may rewrite
+   dates, but there is no enforced normalization contract. Treat this as an intent-to-
+   tool contract issue, not an invitation to add more keyword substitutions.
+3. Reviewable action: an ordinary scheduling request can yield a justified proposal,
+   approval leads to a visible durable execution outcome, and restarts do not strand
+   approved work or repeat uncertain external effects. Current Schedule proposal
+   generation is gated by exact '/focus' and a fixed one-hour window; Actions persists
+   Approved before spawning while activation explicitly skips Approved. These are
+   separate capability and execution-delivery questions requiring root adjudication.
+4. UI parity: retain the accepted pre-refactor interaction and connection-card flows;
+   compare visible state transitions, not only widget snapshots. Backend state must
+   not force new user ceremony without a product reason.
+5. Integrated development acceptance: exercise the native app/server/dashboard on
+   isolated development data with logs preserved. Model/provider success, OS rights
+   and external write outcomes need their own evidence. No whole-product completion
+   claim follows from build/signature/getter success alone.
+
+Do not broaden a fix merely to increase modularity metrics. Decompose oversized
+objects when a verified ownership/lifecycle problem requires it, and keep one
+canonical runtime path. No new module split or general agent rewrite is approved by
+this sequencing note alone; root must first define each concrete acceptance gate.
