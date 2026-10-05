@@ -43,8 +43,12 @@ abstract interface class ConversationRuntimeGateway {
     required ConversationObservation observation,
   });
 
+  /// Requests explicit cancellation and reports uncertainty when admission or
+  /// a positive Start receipt cannot be established for this turn.
   Future<void> cancelConversationTurn(AgentConversationTurnRequest request);
-  Future<void> cancelObservedRun(String runId);
+  /// Returns true only after a cancellation command for a known active Run
+  /// receives and validates its positive receipt.
+  Future<bool> cancelObservedRun(String runId);
   Future<ConversationTurnCompletion> observeSessionRun(
     AgentSession session, {
     required void Function(AppRunSnapshot run) onRun,
@@ -189,7 +193,15 @@ final class NativeConversationRuntimeGateway
         );
       }
       receiptSettled = true;
-      if (active.cancelRequested) await _cancel(active);
+      if (active.cancelRequested) {
+        // The Stop caller observes this failure. Keep the admitted Run's
+        // observation alive so its terminal state can still be reconciled.
+        try {
+          await _cancel(active);
+        } on Object {
+          // _cancel retains the exact command identity for an explicit retry.
+        }
+      }
       return await _observeReceipt(
         receipt,
         request.session,
@@ -200,12 +212,15 @@ final class NativeConversationRuntimeGateway
       if (!active.receiptReady.isCompleted) active.receiptReady.complete();
       // A stopped observer cannot leave this command's old projection available
       // to the next epoch. Seal before releasing its activity slot.
-      if (active.commandId != null &&
-          (!receiptSettled || observation.stopped)) {
-        readModel.sealForResync();
+      try {
+        if (active.commandId != null &&
+            (!receiptSettled || observation.stopped)) {
+          readModel.sealForResync();
+        }
+      } finally {
+        if (identical(_active, active)) _active = null;
+        if (!active.finished.isCompleted) active.finished.complete();
       }
-      if (identical(_active, active)) _active = null;
-      if (!active.finished.isCompleted) active.finished.complete();
     }
   }
 
@@ -368,31 +383,44 @@ final class NativeConversationRuntimeGateway
     AgentConversationTurnRequest request,
   ) async {
     final active = _active;
-    if (active == null || !identical(active.request, request)) return;
+    if (active == null || !identical(active.request, request)) {
+      throw StateError('Conversation turn admission is unresolved.');
+    }
     active.cancelRequested = true;
     await active.receiptReady.future;
-    if (active.receipt != null) await _cancel(active);
+    if (active.receipt == null) {
+      throw StateError('Conversation turn admission is unresolved.');
+    }
+    await _cancel(active);
   }
 
   @override
-  Future<void> cancelObservedRun(String runId) async {
+  Future<bool> cancelObservedRun(String runId) async {
     final run = readModel.conversation.runs[runId];
-    if (run == null || run.state.terminal) return;
+    if (run == null || run.state.terminal) return false;
     final command = _client.prepareCancelRun(runId);
     final receipt = await _submitCancel(command);
     if (receipt.runId != runId || receipt.runtimeEpoch != run.runtimeEpoch) {
       throw const FormatException('Observed Run cancellation mismatch.');
     }
+    return true;
   }
 
   Future<void> _cancel(_ActiveConversationTurn active) async {
     final receipt = active.receipt!;
     active.cancelCommand ??= _client.prepareCancelRun(receipt.runId);
-    active.cancelFuture ??= _submitCancel(active.cancelCommand!);
-    final cancellation = await active.cancelFuture!;
-    if (cancellation.runId != receipt.runId ||
-        cancellation.runtimeEpoch != receipt.runtimeEpoch) {
-      throw const FormatException('Conversation cancellation mismatch.');
+    final future = active.cancelFuture ??= _submitCancel(active.cancelCommand!);
+    try {
+      final cancellation = await future;
+      if (cancellation.runId != receipt.runId ||
+          cancellation.runtimeEpoch != receipt.runtimeEpoch) {
+        throw const FormatException('Conversation cancellation mismatch.');
+      }
+    } on Object {
+      // Keep the prepared command (and ID) for a later user retry. A waiter
+      // from an older attempt must not clear a newer Future.
+      if (identical(active.cancelFuture, future)) active.cancelFuture = null;
+      rethrow;
     }
   }
 

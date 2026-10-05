@@ -101,12 +101,18 @@ driver reconciles Runs; the screen re-reads the exact Session and observes its R
 Client adoption epochs and monotonic Session revisions prevent obsolete responses
 from replacing current state. Stopping an observation or disposing a screen does
 not cancel a Run. Already handed-off bounded turn admission settles with its original
-identity; a replacement load waits for this handshake before reading. If that
-observation stopped, it honors any explicit cancellation already requested, seals the
-shared read model before releasing its activity slot, and never adopts the receipt
-into a newer epoch. Re-observation can Stop the Session's activeTurn before the first
-Run event arrives. Detached query completions cannot publish stale client state.
-Actual cancellation remains an explicit owner command.
+identity; a replacement load waits for this handshake before reading. A user Stop
+is a separate explicit owner command: for a newly submitted Start, unresolved
+admission cannot claim cancellation, so Cancel waits for a positive Start receipt.
+An already-admitted Run can be cancelled directly. If the observation stopped, an
+explicit Stop already requested is honored after that receipt, the shared read model
+is sealed before releasing the activity slot, and the receipt is never adopted into
+a newer epoch. Re-observation can Stop the Session's activeTurn before the first Run
+event arrives. A cancellation transport failure does not abandon an admitted Run's
+active observation; the Stop caller gets the failure. For a Run owned by an active
+turn admission, an explicit retry retains that Cancel identity. A Stop for a Run
+that is no longer known active sends no command and restores the UI's non-stopping
+state. Detached query completions cannot publish stale client state.
 
 ## Provenance and coverage travel with evidence
 
