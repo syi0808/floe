@@ -218,6 +218,13 @@ impl ConnectionsService {
                     .reject_unreserved_configuration(record, descriptor.source, operation_id)
                     .await;
             }
+            // Native reads may span the review deadline. Recheck at the effect
+            // admission boundary, not only before those reads began.
+            if descriptor.summary.expires_at <= chrono::Utc::now() {
+                return self
+                    .reject_unreserved_configuration(record, descriptor.source, operation_id)
+                    .await;
+            }
             self.reserve(
                 actor,
                 record.command_id,

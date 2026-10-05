@@ -1584,7 +1584,7 @@ read no longer claims saved data exists. All79 disposable Flutter fixtures pass,
 including failed re-query followed by error dismissal and successful re-read, plus
 source-change/first-failure copy. The initial new fake-async probe did not advance the
 existing 500ms minimum-visibility timer; it was corrected to advance time, without
-altering production loading behavior. Analyzer remains157 baseline infos.
+altering production loading behavior. Analyzer remains 157 baseline infos.
 
 Root checked the conditional findings: Settings hosts Connections only with
 showServices=false; it has no calendar detail to decorate. Repo-wide searches found
@@ -1793,8 +1793,8 @@ multiple evidence-error cases, late cancellation, original-resource non-observat
 receipt/source mismatches, lost terminal reply and product binding); a real Vault
 transaction/reopen/replay probe passed with unchanged original source and released
 fence. Probes were archived outside the repository and removed before the final gate.
-All82 disposable Flutter fixtures passed, including typed non-save settlement and
-same-ID retry after a lost result. Analyzer remains157 baseline infos, no warnings or
+All 82 disposable Flutter fixtures passed, including typed non-save settlement and
+same-ID retry after a lost result. Analyzer remains 157 baseline infos, no warnings or
 errors. Default Rust workspace/examples/doctests, both FFI storage builds, architecture
 23nodes/126edges and diff passed. Fresh synthetic ABI/Vault create-unlock/session
 start-resume and Connections projection smoke passed. No user data was reset.
@@ -1839,8 +1839,35 @@ Explicit review dispositions and limits:
   original stored source, not arbitrary candidate-selection errors.
 
 Disposable checks so far: eight owner/finalizer cases, one real Context selection
-ordering case, and all84 Flutter fixtures passed. Analyzer remains157 baseline infos
+ordering case, and all 84 Flutter fixtures passed. Analyzer remains 157 baseline infos
 with no errors/warnings. Temporary Rust probe attachments have been removed. Default Rust workspace/examples/doctests, both FFI storage builds, architecture
 23 nodes/126 edges and diff checks passed. Exact Apple qualification and focused
 review closure for these corrections remain pending; e15f463's passing Apple
 results do not qualify new code.
+
+
+#### Focused correction review closure
+
+The independent ffed002 source review closed the ten requested findings and found no
+blocking regression in that correction. Root verified the conditional external facts:
+ResourceHandle derives Ord over String; the actual native calendar adapter accepts
+an original Pending source (admission already uses this shape); and AppWireErrorDto
+converts to AppCommandFailure::Indeterminate after effects. There is no central
+AppCommandResultDto validator to integrate instead of the explicit nested check.
+
+One recommended edge correction is applied: review expiry is checked again after
+native reads immediately before reservation. The guarded negative receipt remains
+the single no-effect settlement path. Caller-supplied template wording is narrowed.
+The defensive abort path continues to use Cancelled when only an Access abort receipt
+survives; the receipt does not retain an abort reason. If an abort first appears in
+the post-invalidation receipt read, the next same-ID recovery settles it. This bounded
+extra recovery turn and the broader persistent-evidence limitation remain explicit;
+no current configure command initiates that Access abort path.
+
+ffed002 Apple qualification is still in progress after environment preflight issues;
+no passing result for the expiry follow-up is inferred from earlier builds.
+
+The expiry follow-up passed the default Rust workspace/examples/doctests, both FFI
+storage builds, architecture 23 nodes/126 edges and diff checks. Flutter inputs are
+unchanged from the 84-fixture/analyzer qualification. Exact Apple follow-up remains
+pending; no live OS/provider test is inferred from build-only qualification.

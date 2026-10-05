@@ -297,11 +297,12 @@ Reviewed selection references retain their incoming order only for command inten
 correlation. Connections resolves the references once into a unique handle-sorted
 candidate resource list. Admission, pre-reservation recheck and finalization pass
 that candidate with the same original source/revision to the evidence port. The
-finalizer independently checks the normalized operation against its reviewed
-reservation template. A Configure operation cannot move from Reserved directly to
+finalizer checks the normalized operation against the caller's reviewed reservation
+template. A Configure operation cannot move from Reserved directly to
 RepairRequired; its committed receipt digest must first be pinned. A canonical Access
 abort while Reserved settles the source journal without mutation. An expired review
-that has not reserved uses the guarded renew-review rejection before any effect.
+that has not reserved uses the guarded renew-review rejection before any effect;
+expiry is checked again after native reads immediately before reservation.
 
 An evidence error that persists after invalidation can still leave a fenced command:
 there is no synthesized negative native proof or automatic disconnect/reset. In
