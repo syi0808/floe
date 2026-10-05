@@ -190,27 +190,33 @@ final class AppWireConnectionsGateway implements ConnectionsGateway {
   );
 
   @override
-  Future<SourceSummary> configureSource({
+  Future<SourceConfigurationResult> configureSource({
     required String commandId,
     required SourceRef sourceRef,
     required SourceReviewRef reviewRef,
     required List<ResourceRef> selectedResourceRefs,
     required int expectedRevision,
-  }) => _invoke(
-    commandId,
-    'connections.source.configure',
-    {
-      'source_ref': sourceRef.value,
-      'review_ref': reviewRef.toJson(),
-      'selected_resource_refs': selectedResourceRefs
-          .map((ref) => ref.value)
-          .toList(growable: false),
-      'expected_revision': expectedRevision,
-    },
-    'connections.source',
-    'source',
-    SourceSummary.fromJson,
-  );
+  }) async {
+    final result = await _invoke(
+      commandId,
+      'connections.source.configure',
+      {
+        'source_ref': sourceRef.value,
+        'review_ref': reviewRef.toJson(),
+        'selected_resource_refs': selectedResourceRefs
+            .map((ref) => ref.value)
+            .toList(growable: false),
+        'expected_revision': expectedRevision,
+      },
+      'connections.source_configuration',
+      'configuration',
+      SourceConfigurationResult.fromJson,
+    );
+    if (result.sourceRef != sourceRef) {
+      throw const FormatException('Configuration returned a different source.');
+    }
+    return result;
+  }
 
   @override
   Future<ConnectionOperationSnapshot> disconnectSource({

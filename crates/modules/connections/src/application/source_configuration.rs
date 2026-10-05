@@ -8,7 +8,7 @@ use floe_execution::ExecutionScope;
 use floe_kernel::{AgentFailure, OwnerActor};
 
 pub(super) enum SourceConfigurationOutcome {
-    Applied(SourceSummary),
+    Settled(SourceConfigurationResult),
     NotApplied(AgentFailure),
 }
 pub(super) fn aborted_reason(reason: SourceAbortReason) -> AgentFailure {
@@ -24,7 +24,19 @@ pub(super) fn terminal_outcome(
 ) -> Result<SourceConfigurationOutcome, AgentFailure> {
     match record.payload {
         ConnectionsPayload::SourceMutation { summary, .. } => {
-            Ok(SourceConfigurationOutcome::Applied(summary))
+            Ok(SourceConfigurationOutcome::Settled(
+                SourceConfigurationResult::Configured { source: summary },
+            ))
+        }
+        ConnectionsPayload::SourceConfigurationRejectedAfterInvalidation { source, .. } => {
+            Ok(SourceConfigurationOutcome::Settled(
+                SourceConfigurationResult::NotSavedReviewRequired {
+                    source_ref: floe_context_contract::source_display_ref(
+                        record.person_id,
+                        source.connection_id(),
+                    ),
+                },
+            ))
         }
         ConnectionsPayload::SourceConfigurationAborted { reason, .. } => Ok(
             SourceConfigurationOutcome::NotApplied(aborted_reason(reason)),
@@ -65,6 +77,7 @@ impl ConnectionsService {
     ) -> Result<SourceConfigurationOutcome, AgentFailure> {
         self.ensure_open()?;
         check(actor, scope)?;
+        record.validate()?;
         if record.person_id != actor.person_id || record.device_id != actor.device_id {
             return Err(AgentFailure::PolicyDenied);
         }
@@ -127,17 +140,31 @@ impl ConnectionsService {
                 .await;
         }
         let kind = SourceOperationKind::ConnectionConfigure;
+        let expected = configuration_expectation(&descriptor, &successor)?;
+        let (template, _) = prepare_source_reservation(
+            actor,
+            record.command_id,
+            record.intent_digest,
+            Some(descriptor.summary.review_ref.clone()),
+            expected.clone(),
+            kind.clone(),
+        )
+        .map_err(ConnectionsCommandFailure::into_failure)?;
+        if template.operation_id != operation_id {
+            return Err(AgentFailure::Conflict);
+        }
+
         let operation = if let Some(operation) = self
             .sources
             .load_operation(operation_id)
             .await
             .map_err(source_error)?
         {
-            if operation.device_id != actor.device_id
-                || operation.command_id != record.command_id
-                || operation.request_digest != record.intent_digest
-                || operation.kind != kind
-            {
+            operation.validate().map_err(source_error)?;
+            let mut initial = operation.clone();
+            initial.phase = SourceOperationPhase::Reserved;
+            initial.revision = 1;
+            if initial != template {
                 return Err(AgentFailure::Conflict);
             }
             operation
@@ -165,6 +192,23 @@ impl ConnectionsService {
             }
             self.ensure_open()?;
             check(actor, scope)?;
+            // A delayed/replayed product intent must not invalidate grants for a
+            // candidate already known to have changed before reservation.
+            let candidate = self
+                .evidence
+                .inspect_selection(actor, &successor, successor.resources(), scope)
+                .await;
+            self.ensure_open()?;
+            check(actor, scope)?;
+            let candidate = candidate?;
+            if !floe_access::valid_subject_fingerprint(&candidate) {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            if Some(candidate.as_str()) != successor.native_subject_fingerprint() {
+                return self
+                    .reject_unreserved_configuration(record, descriptor.source, operation_id)
+                    .await;
+            }
             self.reserve(
                 actor,
                 record.command_id,
@@ -186,6 +230,32 @@ impl ConnectionsService {
                     ConnectionsPayload::SourceMutation {
                         source: successor,
                         summary,
+                    },
+                )
+                .await;
+        }
+        // These immutable outcomes do not depend on later native or grant state.
+        if let SourceOperationPhase::ConfigurationRejectedAfterInvalidation { receipt_id } =
+            operation.phase
+        {
+            return self
+                .finish_source_configuration_record(
+                    record,
+                    ConnectionsPayload::SourceConfigurationRejectedAfterInvalidation {
+                        source: descriptor.source,
+                        operation_id,
+                        receipt_id,
+                    },
+                )
+                .await;
+        }
+        if let SourceOperationPhase::Aborted { reason } = operation.phase {
+            return self
+                .finish_source_configuration_record(
+                    record,
+                    ConnectionsPayload::SourceConfigurationAborted {
+                        source: descriptor.source,
+                        reason,
                     },
                 )
                 .await;
@@ -234,25 +304,45 @@ impl ConnectionsService {
                 }
             }
         };
-        if receipt.kind != floe_access::GrantCommitKind::InvalidateSource {
+        receipt.validate()?;
+        if receipt.kind != floe_access::GrantCommitKind::InvalidateSource
+            || !operation.matches_evidence(&receipt.reservation)
+            || receipt.reservation.source != expected
+            || expected.gateway.is_some()
+        {
             return Err(AgentFailure::Conflict);
         }
-        if !matches!(operation.phase, SourceOperationPhase::Completed { .. }) {
-            // Prove the exact candidate subject again after durable grant
-            // invalidation. If it drifted the source stays fenced for repair.
-            let actual = self
-                .evidence
-                .inspect_selection(actor, &successor, successor.resources(), scope)
-                .await?;
-            if Some(actual.as_str()) != successor.native_subject_fingerprint() {
-                return Err(AgentFailure::AccessReviewRequired);
-            }
-            let completed = self
-                .complete_committed(actor, operation, receipt, Some(successor.clone()), scope)
-                .await?;
-            if !matches!(completed.phase, SourceOperationPhase::Completed { .. }) {
-                return Err(AgentFailure::AccessReviewRequired);
-            }
+        let completed = super::source_configuration_finalization::finalize(
+            self.sources.as_ref(),
+            self.evidence.as_ref(),
+            self.closed.as_ref(),
+            actor,
+            super::source_configuration_finalization::ConfigurationFinalization {
+                expected: &expected,
+                original: &descriptor.source,
+                successor: &successor,
+                operation,
+                receipt,
+            },
+            scope,
+        )
+        .await?;
+        if let SourceOperationPhase::ConfigurationRejectedAfterInvalidation { receipt_id } =
+            completed.phase
+        {
+            return self
+                .finish_source_configuration_record(
+                    record,
+                    ConnectionsPayload::SourceConfigurationRejectedAfterInvalidation {
+                        source: descriptor.source,
+                        operation_id,
+                        receipt_id,
+                    },
+                )
+                .await;
+        }
+        if !matches!(completed.phase, SourceOperationPhase::Completed { .. }) {
+            return Err(AgentFailure::Conflict);
         }
         // The source journal is the durable effect receipt. Later source changes
         // cannot undo this exact command's historical result.

@@ -96,18 +96,16 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
         .singleOrNull;
     final strings = AppLocalizations.of(context);
     if (coverage == null) {
-      return '${resource.label}\nCollection status unavailable';
+      return '${resource.label}\n${strings.collectionStatusUnavailable}';
     }
     final lines = <String>[resource.label];
     if (coverage.failure case final failure?) {
       lines.add(switch (failure) {
-        DayCalendarFailure.source_changed =>
-          'Source changed; collection status needs refreshing.',
-        DayCalendarFailure.source_fenced =>
-          'Collection is unavailable while this source is being updated.',
+        DayCalendarFailure.source_changed => strings.collectionSourceChanged,
+        DayCalendarFailure.source_fenced => strings.collectionSourcePaused,
         _ =>
           coverage.lastSuccessAt == null
-              ? 'Could not collect events.'
+              ? strings.collectionFailedWithoutSavedData
               : strings.couldNotCollectEventsShowingTheLast,
       });
     }
@@ -214,6 +212,15 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
             ),
           ),
           const SizedBox(height: FloeSpace.lg),
+          if (widget.controller.lastConfigurationResult
+              case SourceConfigurationNotSaved(:final sourceRef)
+              when sourceRef == source.sourceRef) ...[
+            FloeInfoNote(
+              text: AppLocalizations.of(context)
+                  .configurationNotSavedNeedsReview,
+            ),
+            const SizedBox(height: FloeSpace.lg),
+          ],
           if (CalendarSystemAccessCard.appliesTo(widget.integration)) ...[
             CalendarSystemAccessCard(
               gateway: widget.controller.calendarSystemAccess,
@@ -391,7 +398,9 @@ final class _ResourceDialogState extends State<_ResourceDialog> {
                       widget.review,
                       selected.toList(growable: false),
                     );
-                    if (context.mounted && confirmed) Navigator.pop(context);
+                    if (context.mounted && confirmed != null) {
+                      Navigator.pop(context);
+                    }
                   },
             child: const Text('Save'),
           ),

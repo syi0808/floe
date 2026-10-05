@@ -265,3 +265,29 @@ are re-admitted before reservation or Access invalidation. Before reservation, a
 AccessReviewRequired observation is definitive subject drift and uses the guarded
 negative receipt; transport, storage, cancellation and other permission failures
 remain pending rather than becoming invented negative outcomes.
+
+### Settled configuration after grant invalidation
+
+Configure has one dedicated finalization path, scoped to source storage, native
+candidate evidence and the Connections lifetime. The immutable reviewed product
+record binds its selected resources and captured candidate fingerprint. Before
+reservation, a fresh candidate mismatch gets the existing no-effect rejection.
+After a canonical InvalidateSource receipt, all live grants remain paused and require
+review. A matching candidate may complete under the original stored-source CAS;
+obsolete deselected native resources are not probed again. Other source operation
+kinds retain their original finalization checks.
+
+A stable positive candidate mismatch after invalidation settles as
+ConfigurationRejectedAfterInvalidation, with the original source unchanged and the
+source fence released atomically with the journal outcome. Generic native errors,
+malformed/unstable evidence, cancellation, a changed stored source or mismatched
+receipt do not qualify. The receipt ID/digest, operation, review and exact expectation
+remain checked; no grant is restored and no source is implicitly disconnected.
+Terminal replay reconstructs its product acknowledgement without reacquiring native
+evidence. Repeating an identical repair observation does not advance its revision.
+
+The configure command returns Configured or NotSavedReviewRequired as settled
+business outcomes. The latter is not a no-effect NotApplied error: Access invalidation
+already happened. Flutter settles only that exact pending command and closes the
+obsolete review, showing historical non-save feedback rather than reporting Save
+success. A later source review is a new explicit intent, not an automatic retry.

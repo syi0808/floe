@@ -104,6 +104,7 @@ final class ConnectionsController extends ChangeNotifier {
       if (!ready) {
         overview = null;
         sourceReview = null;
+        lastConfigurationResult = null;
         observeReview = null;
         integrationReview = null;
         _integrationRevision = null;
@@ -126,6 +127,7 @@ final class ConnectionsController extends ChangeNotifier {
 
   bool _disposed = false;
   int _loadGeneration = 0;
+  SourceConfigurationResult? lastConfigurationResult;
   Timer? _pairingObservation;
   Timer? _operationObservation;
   final Map<String, _PendingCommand> _pendingCommands = {};
@@ -413,17 +415,17 @@ final class ConnectionsController extends ChangeNotifier {
     return prepared;
   }
 
-  Future<bool> configureSource(
+  Future<SourceConfigurationResult?> configureSource(
     SourceReview review,
     List<ResourceRef> selected,
   ) async {
     final selection = List<ResourceRef>.unmodifiable(selected);
-    var confirmed = false;
+    SourceConfigurationResult? settled;
     await _command(
       'configureSource:${review.sourceRef.value}',
       'source configuration',
       (id) async {
-        await gateway.configureSource(
+        final result = await gateway.configureSource(
           commandId: id,
           sourceRef: review.sourceRef,
           reviewRef: review.reviewRef,
@@ -432,11 +434,12 @@ final class ConnectionsController extends ChangeNotifier {
         );
         if (_acceptCommandResult) {
           sourceReview = null;
-          confirmed = true;
+          settled = result;
+          lastConfigurationResult = result;
         }
       },
     );
-    return confirmed;
+    return settled;
   }
 
   Future<ObserveReview?> prepareObserve(

@@ -316,6 +316,13 @@ pub struct IntegrationRecord {
     pub revision: u64,
     pub descriptor: IntegrationDescriptor,
 }
+/// Settled delivery: selection saved, or sharing invalidated without saving it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SourceConfigurationResult {
+    Configured { source: SourceSummary },
+    NotSavedReviewRequired { source_ref: Uuid },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceReviewDescriptor {
@@ -324,6 +331,23 @@ pub struct SourceReviewDescriptor {
     pub expected: Option<SourceExpectation>,
     pub resources: Vec<(Uuid, ConnectionResource)>,
     pub catalog_digest: [u8; 32],
+}
+impl SourceReviewDescriptor {
+    pub(crate) fn review_digest(&self) -> Result<[u8; 32], AgentFailure> {
+        use sha2::{Digest, Sha256};
+        Ok(Sha256::digest(
+            serde_json::to_vec(&(
+                self.summary.review_ref.id,
+                &self.source,
+                &self.expected,
+                &self.resources,
+                self.catalog_digest,
+                self.summary.expires_at,
+            ))
+            .map_err(|_| AgentFailure::InvalidInput)?,
+        )
+        .into())
+    }
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -374,6 +398,11 @@ pub enum ConnectionsPayload {
         selected_resources: Vec<Uuid>,
         successor: SourceConnection,
         operation_id: Uuid,
+    },
+    SourceConfigurationRejectedAfterInvalidation {
+        source: SourceConnection,
+        operation_id: Uuid,
+        receipt_id: Uuid,
     },
     SourceConfigurationAborted {
         source: SourceConnection,
@@ -453,6 +482,9 @@ impl ConnectionsRecord {
                     return Err(AgentFailure::InvalidInput);
                 }
                 value.summary.review_ref.validate()?;
+                if value.review_digest()? != value.summary.review_ref.digest {
+                    return Err(AgentFailure::InvalidInput);
+                }
                 if let Some(expected) = &value.expected {
                     expected.validate()?;
                 } else if value.source.state() != crate::SourceState::Pending {
@@ -486,13 +518,93 @@ impl ConnectionsRecord {
             }
             ConnectionsPayload::SourceConfiguration {
                 descriptor,
+                selected_resources,
                 successor,
-                ..
+                operation_id,
             } => {
                 descriptor
                     .source
                     .validate_successor(successor)
                     .map_err(|_| AgentFailure::InvalidInput)?;
+                descriptor.summary.review_ref.validate()?;
+                if descriptor.review_digest()? != descriptor.summary.review_ref.digest {
+                    return Err(AgentFailure::InvalidInput);
+                }
+                if descriptor.source.person_id() != self.person_id
+                    || descriptor.summary.source_revision != descriptor.source.revision()
+                    || descriptor.summary.source_ref
+                        != floe_context_contract::source_display_ref(
+                            self.person_id,
+                            descriptor.source.connection_id(),
+                        )
+                    || operation_id.is_nil()
+                    || selected_resources.is_empty()
+                    || selected_resources.len() > 256
+                    || selected_resources
+                        .iter()
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len()
+                        != selected_resources.len()
+                {
+                    return Err(AgentFailure::InvalidInput);
+                }
+                let selected = selected_resources
+                    .iter()
+                    .map(|id| {
+                        let mut matches = descriptor
+                            .resources
+                            .iter()
+                            .filter(|(reference, _)| reference == id);
+                        let resource = matches.next().ok_or(AgentFailure::InvalidInput)?.1.clone();
+                        if matches.next().is_some() {
+                            return Err(AgentFailure::InvalidInput);
+                        }
+                        Ok(resource)
+                    })
+                    .collect::<Result<Vec<_>, AgentFailure>>()?;
+                let mut rebuilt = descriptor.source.clone();
+                rebuilt
+                    .configure_reviewed_native(
+                        descriptor.source.revision(),
+                        descriptor.source.resource_mode(),
+                        selected,
+                        successor
+                            .native_subject_fingerprint()
+                            .ok_or(AgentFailure::InvalidInput)?
+                            .to_owned(),
+                    )
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+                if rebuilt != *successor {
+                    return Err(AgentFailure::InvalidInput);
+                }
+                use sha2::{Digest, Sha256};
+                let canonical_intent: [u8; 32] = Sha256::digest(
+                    serde_json::to_vec(&(
+                        "source_configure",
+                        descriptor.summary.source_ref,
+                        &descriptor.summary.review_ref,
+                        selected_resources,
+                        descriptor.source.revision(),
+                    ))
+                    .map_err(|_| AgentFailure::InvalidInput)?,
+                )
+                .into();
+                if canonical_intent != self.intent_digest {
+                    return Err(AgentFailure::InvalidInput);
+                }
+            }
+            ConnectionsPayload::SourceConfigurationRejectedAfterInvalidation {
+                source,
+                operation_id,
+                receipt_id,
+            } => {
+                source.validate().map_err(|_| AgentFailure::InvalidInput)?;
+                if source.person_id() != self.person_id
+                    || operation_id.is_nil()
+                    || receipt_id.is_nil()
+                {
+                    return Err(AgentFailure::InvalidInput);
+                }
             }
             ConnectionsPayload::SourceConfigurationAborted { source, .. } => {
                 source.validate().map_err(|_| AgentFailure::InvalidInput)?;
@@ -637,6 +749,18 @@ impl ConnectionsRecord {
                 ConnectionsPayload::SourceConfiguration { descriptor, .. },
                 ConnectionsPayload::SourceConfigurationAborted { source, .. },
             ) if source == &descriptor.source => {}
+            (
+                ConnectionsPayload::SourceConfiguration {
+                    descriptor,
+                    operation_id: expected,
+                    ..
+                },
+                ConnectionsPayload::SourceConfigurationRejectedAfterInvalidation {
+                    source,
+                    operation_id,
+                    ..
+                },
+            ) if source == &descriptor.source && operation_id == expected => {}
             (ConnectionsPayload::Integration(old), ConnectionsPayload::Integration(new))
                 if old.integration_ref == new.integration_ref
                     && old.target == new.target

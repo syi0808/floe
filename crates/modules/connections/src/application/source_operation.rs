@@ -552,7 +552,8 @@ impl ConnectionsService {
         successor: Option<SourceConnection>,
         scope: &ExecutionScope,
     ) -> Result<SourceOperationRecord, AgentFailure> {
-        if operation.device_id != actor.device_id
+        if operation.kind == SourceOperationKind::ConnectionConfigure
+            || operation.device_id != actor.device_id
             || operation.expected.source.person_id() != actor.person_id
             || !operation.matches_evidence(&receipt.reservation)
         {

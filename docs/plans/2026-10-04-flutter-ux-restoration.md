@@ -1767,3 +1767,40 @@ uncertainty, old-selection drift, foreign proof, replay and UI scenarios; (6) co
 Rust/FFI/Flutter/Apple gates and one independent implementation review. The existing
 UI copy nits can be localized in this same bounded presentation change, avoiding a
 separate build cycle for each string. No runtime recovery change has landed yet.
+
+#### Configure recovery implementation checkpoint
+
+Implemented the chosen no-successor post-invalidation rejection and configure-only
+candidate finalization. The private finalizer receives only source storage, source
+evidence and the shared owner lifetime. It records/validates the committed digest,
+checks the full original source and receipt expectation, and never re-observes the
+obsolete original selection. A positive mismatch releases only this source fence;
+errors, malformed evidence, cancelled/closed scope, foreign receipt or changed source
+retain it. Generic finalization rejects Configure; identical repair CASes are no-ops.
+
+SourceReview digest calculation is now one owner method. Persisted configure records
+validate that reviewed resources, selected references, canonical successor and intent
+digest agree. The source journal's new terminal is replayed before native/Access I/O;
+product replay/resume and operation snapshots recognize it explicitly. The wire
+returns the new typed configuration result; existing no-effect failures keep their
+original disposition. Dart verifies the returned source reference, settles the exact
+request and shows non-save feedback while closing its obsolete selection dialog.
+New collection/error copy now lives in the localization catalog, and persistent
+fences no longer claim an active update is running.
+
+Local qualification: six disposable owner-finalization tests passed (including
+multiple evidence-error cases, late cancellation, original-resource non-observation,
+receipt/source mismatches, lost terminal reply and product binding); a real Vault
+transaction/reopen/replay probe passed with unchanged original source and released
+fence. Probes were archived outside the repository and removed before the final gate.
+All82 disposable Flutter fixtures passed, including typed non-save settlement and
+same-ID retry after a lost result. Analyzer remains157 baseline infos, no warnings or
+errors. Default Rust workspace/examples/doctests, both FFI storage builds, architecture
+23nodes/126edges and diff passed. Fresh synthetic ABI/Vault create-unlock/session
+start-resume and Connections projection smoke passed. No user data was reset.
+
+These are bounded synthetic/source qualifications. A complete real native
+configuration/Access-grant lifecycle, exact Apple bundle qualification and independent
+implementation review remain pending. The broader original-source drift that cannot
+produce stable candidate evidence remains fenced; this does not claim to solve every
+repair state, every permission-loss path or the full Connections dependency split.

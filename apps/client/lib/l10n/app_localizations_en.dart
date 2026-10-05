@@ -837,6 +837,23 @@ class AppLocalizationsEn extends AppLocalizations {
   String get lastSuccessfulRead => 'Last successful read';
 
   @override
+  String get collectionStatusUnavailable => 'Collection status unavailable';
+
+  @override
+  String get collectionSourceChanged =>
+      'Source changed. Collection status will be checked when Calendar refreshes.';
+
+  @override
+  String get collectionSourcePaused => 'Collection is paused for this source.';
+
+  @override
+  String get collectionFailedWithoutSavedData => 'Could not collect events.';
+
+  @override
+  String get configurationNotSavedNeedsReview =>
+      'The selection wasn\'t saved. The previous selection was kept. Review this source before sharing it with Floe.';
+
+  @override
   String get refreshSelectedDay => 'Refresh selected day';
 
   @override

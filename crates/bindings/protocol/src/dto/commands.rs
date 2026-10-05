@@ -423,6 +423,10 @@ pub enum AppCommandResultDto {
     },
     #[serde(rename = "connections.source")]
     ConnectionsSource { source: super::SourceSummaryDto },
+    #[serde(rename = "connections.source_configuration")]
+    ConnectionsSourceConfiguration {
+        configuration: super::SourceConfigurationResultDto,
+    },
     #[serde(rename = "connections.source_review")]
     ConnectionsSourceReview { review: super::SourceReviewDto },
     #[serde(rename = "connections.observe_review")]

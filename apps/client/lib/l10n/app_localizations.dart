@@ -1582,6 +1582,36 @@ abstract class AppLocalizations {
   /// **'Last successful read'**
   String get lastSuccessfulRead;
 
+  /// No description provided for @collectionStatusUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Collection status unavailable'**
+  String get collectionStatusUnavailable;
+
+  /// No description provided for @collectionSourceChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'Source changed. Collection status will be checked when Calendar refreshes.'**
+  String get collectionSourceChanged;
+
+  /// No description provided for @collectionSourcePaused.
+  ///
+  /// In en, this message translates to:
+  /// **'Collection is paused for this source.'**
+  String get collectionSourcePaused;
+
+  /// No description provided for @collectionFailedWithoutSavedData.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not collect events.'**
+  String get collectionFailedWithoutSavedData;
+
+  /// No description provided for @configurationNotSavedNeedsReview.
+  ///
+  /// In en, this message translates to:
+  /// **'The selection wasn\'t saved. The previous selection was kept. Review this source before sharing it with Floe.'**
+  String get configurationNotSavedNeedsReview;
+
   /// No description provided for @refreshSelectedDay.
   ///
   /// In en, this message translates to:

@@ -13,3 +13,5 @@ mod product_records;
 mod product_commands;
 
 mod source_configuration;
+
+mod source_configuration_finalization;

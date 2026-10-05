@@ -52,7 +52,7 @@ abstract interface class ConnectionsGateway {
   Future<SourceReview> inspectSourceReview({
     required SourceReviewRef reviewRef,
   });
-  Future<SourceSummary> configureSource({
+  Future<SourceConfigurationResult> configureSource({
     required String commandId,
     required SourceRef sourceRef,
     required SourceReviewRef reviewRef,

@@ -1128,7 +1128,7 @@ impl ConnectionsService {
                     }
                 })
                 .collect();
-            let mut summary = SourceReview {
+            let summary = SourceReview {
                 review_ref: ReviewRef {
                     id,
                     revision: 1,
@@ -1144,21 +1144,15 @@ impl ConnectionsService {
                 expires_at: Utc::now() + Duration::minutes(15),
                 allowed_actions: vec![ConnectionAction::Configure],
             };
-            summary.review_ref.digest = digest(&(
-                id,
-                &source,
-                &expected,
-                &resources,
-                catalog.catalog_digest,
-                summary.expires_at,
-            ))?;
-            let descriptor = SourceReviewDescriptor {
-                summary: summary.clone(),
+            let mut descriptor = SourceReviewDescriptor {
+                summary,
                 source,
                 expected,
                 resources,
                 catalog_digest: catalog.catalog_digest,
             };
+            descriptor.summary.review_ref.digest = descriptor.review_digest()?;
+            let summary = descriptor.summary.clone();
             classify = ConnectionsCommandFailure::Indeterminate;
             self.products
                 .insert(record(
@@ -1206,11 +1200,11 @@ impl ConnectionsService {
         selected_resources: Vec<Uuid>,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<SourceSummary, ConnectionsCommandFailure> {
+    ) -> Result<SourceConfigurationResult, ConnectionsCommandFailure> {
         let mut classify: fn(AgentFailure) -> ConnectionsCommandFailure =
             ConnectionsCommandFailure::NotAdmitted;
         let mut command_identity = None;
-        let result: Result<SourceSummary, AgentFailure> = async {
+        let result: Result<SourceConfigurationResult, AgentFailure> = async {
             self.ensure_open()?;
             check(actor, scope)?;
             let intent = digest(&(
@@ -1232,7 +1226,15 @@ impl ConnectionsService {
             if let Some(record) = self.command(actor, id, command_id, intent).await? {
                 classify = ConnectionsCommandFailure::Admitted;
                 return match record.payload.clone() {
-                    ConnectionsPayload::SourceMutation { summary, .. } => Ok(summary),
+                    ConnectionsPayload::SourceMutation { summary, .. } => {
+                        Ok(SourceConfigurationResult::Configured { source: summary })
+                    }
+                    ConnectionsPayload::SourceConfigurationRejectedAfterInvalidation {
+                        source,
+                        ..
+                    } => Ok(SourceConfigurationResult::NotSavedReviewRequired {
+                        source_ref: source_display_ref(actor.person_id, source.connection_id()),
+                    }),
                     ConnectionsPayload::SourceConfigurationAborted { reason, .. } => {
                         classify = ConnectionsCommandFailure::NotApplied;
                         Err(aborted_reason(reason))
@@ -1242,7 +1244,7 @@ impl ConnectionsService {
                             .execute_source_configuration(actor, record, scope)
                             .await?
                         {
-                            SourceConfigurationOutcome::Applied(summary) => Ok(summary),
+                            SourceConfigurationOutcome::Settled(result) => Ok(result),
                             SourceConfigurationOutcome::NotApplied(reason) => {
                                 classify = ConnectionsCommandFailure::NotApplied;
                                 Err(reason)
@@ -1328,7 +1330,7 @@ impl ConnectionsService {
                         },
                     ))
                     .await?;
-                return Ok(summary);
+                return Ok(SourceConfigurationResult::Configured { source: summary });
             }
             let operation_id = super::source_operation::derived_id(
                 b"floe.source.operation.v1",
@@ -1356,7 +1358,7 @@ impl ConnectionsService {
                 .execute_source_configuration(actor, pending, scope)
                 .await?
             {
-                SourceConfigurationOutcome::Applied(summary) => Ok(summary),
+                SourceConfigurationOutcome::Settled(result) => Ok(result),
                 SourceConfigurationOutcome::NotApplied(reason) => {
                     classify = ConnectionsCommandFailure::NotApplied;
                     Err(reason)
@@ -2091,7 +2093,8 @@ impl ConnectionsService {
                 .await
                 .map(|_| ()),
             ConnectionsPayload::SourceMutation { .. }
-            | ConnectionsPayload::SourceConfigurationAborted { .. } => Ok(()),
+            | ConnectionsPayload::SourceConfigurationAborted { .. }
+            | ConnectionsPayload::SourceConfigurationRejectedAfterInvalidation { .. } => Ok(()),
             _ => Err(AgentFailure::InvalidInput),
         }
     }
@@ -2815,6 +2818,11 @@ impl ConnectionsService {
                 ConnectionOperationState::Completed,
                 ConnectionRecovery::None,
                 None,
+            ),
+            SourceOperationPhase::ConfigurationRejectedAfterInvalidation { .. } => (
+                ConnectionOperationState::Failed,
+                ConnectionRecovery::NewReview,
+                Some(ConnectionFailureReason::IdentityChanged),
             ),
             SourceOperationPhase::Aborted { .. } => (
                 ConnectionOperationState::Cancelled,

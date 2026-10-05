@@ -885,3 +885,15 @@ fn unique_by<T, K: Eq + std::hash::Hash>(
         Err("connections.references")
     }
 }
+
+/// A settled configuration may have invalidated sharing without saving selection.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "outcome", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SourceConfigurationResultDto {
+    Configured {
+        source: SourceSummaryDto,
+    },
+    NotSavedReviewRequired {
+        source_ref: super::ConnectionsSourceRefDto,
+    },
+}

@@ -43,6 +43,9 @@ pub enum SourceOperationKind {
 pub enum SourceOperationPhase {
     Reserved,
     PresentationCommitted,
+    ConfigurationRejectedAfterInvalidation {
+        receipt_id: Uuid,
+    },
     GrantCommitted {
         receipt_id: Uuid,
         receipt_digest: [u8; 32],
@@ -80,12 +83,16 @@ impl SourceOperationPhase {
     pub fn holds_fence(&self) -> bool {
         !matches!(
             self,
-            Self::Completed { .. } | Self::PresentationCommitted | Self::Aborted { .. }
+            Self::Completed { .. }
+                | Self::PresentationCommitted
+                | Self::Aborted { .. }
+                | Self::ConfigurationRejectedAfterInvalidation { .. }
         )
     }
     pub fn receipt_id(&self) -> Option<Uuid> {
         match self {
-            Self::GrantCommitted { receipt_id, .. }
+            Self::ConfigurationRejectedAfterInvalidation { receipt_id }
+            | Self::GrantCommitted { receipt_id, .. }
             | Self::CleaningUp { receipt_id, .. }
             | Self::Completed { receipt_id }
             | Self::RepairRequired { receipt_id, .. } => Some(*receipt_id),
@@ -145,6 +152,10 @@ impl SourceOperationRecord {
                 ))
             || (self.kind != SourceOperationKind::ConnectionPresentation
                 && matches!(self.phase, SourceOperationPhase::PresentationCommitted))
+            || (matches!(
+                self.phase,
+                SourceOperationPhase::ConfigurationRejectedAfterInvalidation { .. }
+            ) && self.kind != SourceOperationKind::ConnectionConfigure)
             || self.identity().validate().is_err()
         {
             return Err(SourceRepositoryError::Corrupt);
@@ -255,6 +266,19 @@ impl SourceOperationChange {
                         return Err(SourceRepositoryError::Conflict);
                     }
                 }
+                if current.kind == SourceOperationKind::ConnectionConfigure {
+                    if let SourceOperationPhase::GrantCommitted { receipt_digest, .. } =
+                        current.phase
+                    {
+                        if receipt
+                            .digest()
+                            .map_err(|_| SourceRepositoryError::Corrupt)?
+                            != receipt_digest
+                        {
+                            return Err(SourceRepositoryError::Conflict);
+                        }
+                    }
+                }
                 true
             }
             SourceOperationProof::Aborted(receipt) => {
@@ -306,6 +330,21 @@ impl SourceOperationChange {
                     },
                     SourceOperationPhase::CleaningUp { .. },
                 ) => true,
+                (
+                    SourceOperationPhase::GrantCommitted { .. }
+                    | SourceOperationPhase::RepairRequired {
+                        reason: SourceRepairReason::SourceChanged,
+                        ..
+                    },
+                    SourceOperationPhase::ConfigurationRejectedAfterInvalidation { .. },
+                ) if current.kind == SourceOperationKind::ConnectionConfigure => true,
+                (
+                    SourceOperationPhase::RepairRequired {
+                        reason: SourceRepairReason::SourceChanged,
+                        ..
+                    },
+                    SourceOperationPhase::Completed { .. },
+                ) if current.kind == SourceOperationKind::ConnectionConfigure => true,
                 (_, SourceOperationPhase::RepairRequired { .. }) => true,
                 _ => false,
             };
@@ -321,6 +360,13 @@ impl SourceOperationChange {
                     | SourceOperationKind::ConnectionDisconnect
             )
             && self.successor.is_none()
+        {
+            return Err(SourceRepositoryError::Conflict);
+        }
+        if matches!(
+            self.next_phase,
+            SourceOperationPhase::ConfigurationRejectedAfterInvalidation { .. }
+        ) && self.successor.is_some()
         {
             return Err(SourceRepositoryError::Conflict);
         }
@@ -344,6 +390,10 @@ impl SourceOperationChange {
                     && next.source_authority() == self.expected_source.authority => {}
                 _ => return Err(SourceRepositoryError::Conflict),
             }
+        }
+        // A repeated observation of the same repair receipt is not new state.
+        if self.next_phase == current.phase && self.successor.is_none() {
+            return Ok(current.clone());
         }
         let mut next = current.clone();
         next.phase = self.next_phase.clone();

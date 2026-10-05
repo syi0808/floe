@@ -130,3 +130,9 @@ collection timestamps/failures and cache-source inspection. Flutter composition 
 pass that immutable Day coverage into Connections detail; exact identity joins show
 historical collection facts, never infer permission or current synchronization from
 labels. Connections does not acquire events or maintain a second collection clock.
+
+Configure finalization is a private Connections workflow with only the source
+repository, source evidence and shared owner lifetime capabilities. It does not
+receive pairing, Gateway, integration or product-store dependencies. The broader
+Connections service still coordinates admission/replay; this bounded extraction is
+not a claim that all source workflows have been decomposed.

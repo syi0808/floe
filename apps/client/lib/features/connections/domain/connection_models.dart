@@ -941,3 +941,38 @@ final class ConnectionOperationSnapshot {
   final OwnerFailure? failure;
   final int? nextObservationAfterMs;
 }
+
+sealed class SourceConfigurationResult {
+  const SourceConfigurationResult();
+  SourceRef get sourceRef;
+  factory SourceConfigurationResult.fromJson(Object? value) {
+    final initial = connectionObject(
+      value,
+      {'outcome'},
+      {'source', 'source_ref'},
+    );
+    switch (initial['outcome']) {
+      case 'configured':
+        final row = connectionObject(value, {'outcome', 'source'}, {});
+        return ConfiguredSource(SourceSummary.fromJson(row['source']));
+      case 'not_saved_review_required':
+        final row = connectionObject(value, {'outcome', 'source_ref'}, {});
+        return SourceConfigurationNotSaved(SourceRef(_uuid(row['source_ref'])));
+      default:
+        throw const FormatException('Unknown source configuration outcome.');
+    }
+  }
+}
+
+final class ConfiguredSource extends SourceConfigurationResult {
+  const ConfiguredSource(this.source);
+  final SourceSummary source;
+  @override
+  SourceRef get sourceRef => source.sourceRef;
+}
+
+final class SourceConfigurationNotSaved extends SourceConfigurationResult {
+  const SourceConfigurationNotSaved(this.sourceRef);
+  @override
+  final SourceRef sourceRef;
+}

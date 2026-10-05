@@ -540,6 +540,7 @@ impl SourceOperationRepository for TursoStore {
             let current = operation_on(&connection, change.operation_id).await?.ok_or(SourceRepositoryError::Conflict)?;
             let source = source_on(&connection, &current.expected.source.connection_id()).await?;
             let next = change.validate(&current, source.as_ref())?;
+            if next == current { return Ok(current); }
             if let Some(successor) = &change.successor {
                 let payload = serde_json::to_string(successor).map_err(|_| SourceRepositoryError::Corrupt)?;
                 if payload.len() > MAX_SOURCE_PAYLOAD_BYTES { return Err(SourceRepositoryError::Corrupt); }
