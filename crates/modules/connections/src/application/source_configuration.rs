@@ -169,6 +169,15 @@ impl ConnectionsService {
             }
             operation
         } else {
+            self.ensure_open()?;
+            check(actor, scope)?;
+            if descriptor.summary.expires_at <= chrono::Utc::now() {
+                // An expired review uses the same durable renew-review rejection;
+                // neither a reservation nor an Access effect has occurred.
+                return self
+                    .reject_unreserved_configuration(record, descriptor.source, operation_id)
+                    .await;
+            }
             let current = self
                 .sources
                 .load(actor.person_id, descriptor.source.connection_id())
@@ -196,7 +205,7 @@ impl ConnectionsService {
             // candidate already known to have changed before reservation.
             let candidate = self
                 .evidence
-                .inspect_selection(actor, &successor, successor.resources(), scope)
+                .inspect_selection(actor, &descriptor.source, successor.resources(), scope)
                 .await;
             self.ensure_open()?;
             check(actor, scope)?;
@@ -272,8 +281,30 @@ impl ConnectionsService {
             .await?
         {
             Some(floe_access::GrantOperationReceipt::Committed(receipt)) => receipt,
-            Some(floe_access::GrantOperationReceipt::Aborted(_)) => {
-                return Err(AgentFailure::Conflict);
+            Some(floe_access::GrantOperationReceipt::Aborted(receipt)) => {
+                if !matches!(operation.phase, SourceOperationPhase::Reserved) {
+                    return Err(AgentFailure::Conflict);
+                }
+                self.ensure_open()?;
+                check(actor, scope)?;
+                self.advance(
+                    &operation,
+                    SourceOperationPhase::Aborted {
+                        reason: SourceAbortReason::Cancelled,
+                    },
+                    SourceOperationProof::Aborted(receipt),
+                    None,
+                )
+                .await?;
+                return self
+                    .finish_source_configuration_record(
+                        record,
+                        ConnectionsPayload::SourceConfigurationAborted {
+                            source: descriptor.source,
+                            reason: SourceAbortReason::Cancelled,
+                        },
+                    )
+                    .await;
             }
             None => {
                 let evidence = floe_access::SourceReservationEvidence {
@@ -318,6 +349,7 @@ impl ConnectionsService {
             self.closed.as_ref(),
             actor,
             super::source_configuration_finalization::ConfigurationFinalization {
+                template: &template,
                 expected: &expected,
                 original: &descriptor.source,
                 successor: &successor,
@@ -428,7 +460,7 @@ impl ConnectionsService {
         }
         let decision = match self
             .evidence
-            .inspect_selection(actor, successor, successor.resources(), scope)
+            .inspect_selection(actor, &descriptor.source, successor.resources(), scope)
             .await
         {
             Ok(actual) if Some(actual.as_str()) == successor.native_subject_fingerprint() => {

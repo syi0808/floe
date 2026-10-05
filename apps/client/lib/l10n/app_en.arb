@@ -262,6 +262,7 @@
   "collectionSourcePaused": "Collection is paused for this source.",
   "collectionFailedWithoutSavedData": "Could not collect events.",
   "configurationNotSavedNeedsReview": "The selection wasn't saved. The previous selection was kept. Review this source before sharing it with Floe.",
+  "configurationNotSavedInitialSelection": "The selection wasn't saved. Choose a fresh selection before sharing this source with Floe.",
   "refreshSelectedDay": "Refresh selected day",
   "reconnectOrChange": "Reconnect or change",
   "manageAccess": "Manage access",

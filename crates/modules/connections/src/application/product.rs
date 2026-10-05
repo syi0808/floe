@@ -1207,13 +1207,12 @@ impl ConnectionsService {
         let result: Result<SourceConfigurationResult, AgentFailure> = async {
             self.ensure_open()?;
             check(actor, scope)?;
-            let intent = digest(&(
-                "source_configure",
+            let intent = configure_intent_digest(
                 source_ref,
                 &reference,
                 &selected_resources,
                 expected_revision,
-            ))?;
+            )?;
             let id = command_ref(actor.person_id, command_id);
             command_identity = Some(ConnectionsCommandIdentity {
                 journal: crate::ConnectionsCommandJournal::Product,
@@ -1281,27 +1280,7 @@ impl ConnectionsService {
             if !catalog.catalog_complete || catalog.catalog_digest != descriptor.catalog_digest {
                 return Err(AgentFailure::Conflict);
             }
-            if selected_resources.is_empty()
-                || selected_resources.len() > 256
-                || selected_resources
-                    .iter()
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .len()
-                    != selected_resources.len()
-            {
-                return Err(AgentFailure::InvalidInput);
-            }
-            let resources = selected_resources
-                .iter()
-                .map(|id| {
-                    descriptor
-                        .resources
-                        .iter()
-                        .find(|(reference, _)| reference == id)
-                        .map(|(_, resource)| resource.clone())
-                        .ok_or(AgentFailure::PolicyDenied)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+            let resources = descriptor.resolve_selection(&selected_resources)?;
             let fingerprint = self
                 .evidence
                 .inspect_selection(actor, &source, &resources, scope)
@@ -2822,7 +2801,7 @@ impl ConnectionsService {
             SourceOperationPhase::ConfigurationRejectedAfterInvalidation { .. } => (
                 ConnectionOperationState::Failed,
                 ConnectionRecovery::NewReview,
-                Some(ConnectionFailureReason::IdentityChanged),
+                Some(ConnectionFailureReason::Rejected),
             ),
             SourceOperationPhase::Aborted { .. } => (
                 ConnectionOperationState::Cancelled,

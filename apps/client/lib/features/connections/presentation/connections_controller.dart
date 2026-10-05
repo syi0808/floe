@@ -104,7 +104,7 @@ final class ConnectionsController extends ChangeNotifier {
       if (!ready) {
         overview = null;
         sourceReview = null;
-        lastConfigurationResult = null;
+        _configurationNotices.clear();
         observeReview = null;
         integrationReview = null;
         _integrationRevision = null;
@@ -127,7 +127,9 @@ final class ConnectionsController extends ChangeNotifier {
 
   bool _disposed = false;
   int _loadGeneration = 0;
-  SourceConfigurationResult? lastConfigurationResult;
+  final Map<SourceRef, SourceConfigurationNotice> _configurationNotices = {};
+  SourceConfigurationNotice? configurationNoticeFor(SourceRef source) =>
+      _configurationNotices[source];
   Timer? _pairingObservation;
   Timer? _operationObservation;
   final Map<String, _PendingCommand> _pendingCommands = {};
@@ -435,7 +437,15 @@ final class ConnectionsController extends ChangeNotifier {
         if (_acceptCommandResult) {
           sourceReview = null;
           settled = result;
-          lastConfigurationResult = result;
+          if (result is SourceConfigurationNotSaved) {
+            _configurationNotices[review.sourceRef] = SourceConfigurationNotice(
+              hadSelection: review.permittedChoices.any(
+                (choice) => choice.selected,
+              ),
+            );
+          } else {
+            _configurationNotices.remove(review.sourceRef);
+          }
         }
       },
     );
@@ -481,6 +491,7 @@ final class ConnectionsController extends ChangeNotifier {
         );
         if (_acceptCommandResult) {
           observeReview = null;
+          _configurationNotices.remove(review.sourceRef);
           confirmed = true;
         }
       },
@@ -498,6 +509,7 @@ final class ConnectionsController extends ChangeNotifier {
         enabled: false,
         expectedRevision: value.revision,
       );
+      if (_acceptCommandResult) _configurationNotices.remove(value.sourceRef);
     },
   );
 
@@ -512,6 +524,7 @@ final class ConnectionsController extends ChangeNotifier {
           expectedRevision: value.revision,
         ),
       );
+      if (_acceptCommandResult) _configurationNotices.remove(value.sourceRef);
       if (_acceptCommandResult)
         operationLabel = value.displayLabels.join(' · ');
     },
@@ -641,4 +654,10 @@ final class _PendingCommand {
   final String label;
   final Future<void> Function() action;
   bool wasUncertain = false;
+}
+
+/// Feedback from one settled selection intent, not current sharing authority.
+final class SourceConfigurationNotice {
+  const SourceConfigurationNotice({required this.hadSelection});
+  final bool hadSelection;
 }

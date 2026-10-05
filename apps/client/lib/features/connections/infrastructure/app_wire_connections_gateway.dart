@@ -196,27 +196,21 @@ final class AppWireConnectionsGateway implements ConnectionsGateway {
     required SourceReviewRef reviewRef,
     required List<ResourceRef> selectedResourceRefs,
     required int expectedRevision,
-  }) async {
-    final result = await _invoke(
-      commandId,
-      'connections.source.configure',
-      {
-        'source_ref': sourceRef.value,
-        'review_ref': reviewRef.toJson(),
-        'selected_resource_refs': selectedResourceRefs
-            .map((ref) => ref.value)
-            .toList(growable: false),
-        'expected_revision': expectedRevision,
-      },
-      'connections.source_configuration',
-      'configuration',
-      SourceConfigurationResult.fromJson,
-    );
-    if (result.sourceRef != sourceRef) {
-      throw const FormatException('Configuration returned a different source.');
-    }
-    return result;
-  }
+  }) => _invoke(
+    commandId,
+    'connections.source.configure',
+    {
+      'source_ref': sourceRef.value,
+      'review_ref': reviewRef.toJson(),
+      'selected_resource_refs': selectedResourceRefs
+          .map((ref) => ref.value)
+          .toList(growable: false),
+      'expected_revision': expectedRevision,
+    },
+    'connections.source_configuration',
+    'configuration',
+    SourceConfigurationResult.fromJson,
+  );
 
   @override
   Future<ConnectionOperationSnapshot> disconnectSource({
@@ -338,6 +332,7 @@ final class AppWireConnectionsGateway implements ConnectionsGateway {
           decoded.operationRef.value,
         ),
         SourceSummary() => ('source_ref', decoded.sourceRef.value),
+        SourceConfigurationResult() => ('source_ref', decoded.sourceRef.value),
         SourceReview() => ('source_ref', decoded.sourceRef.value),
         ObserveReview() => ('source_ref', decoded.sourceRef.value),
         IntegrationReview() => (

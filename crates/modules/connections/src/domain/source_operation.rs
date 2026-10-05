@@ -345,6 +345,11 @@ impl SourceOperationChange {
                     },
                     SourceOperationPhase::Completed { .. },
                 ) if current.kind == SourceOperationKind::ConnectionConfigure => true,
+                (SourceOperationPhase::Reserved, SourceOperationPhase::RepairRequired { .. })
+                    if current.kind == SourceOperationKind::ConnectionConfigure =>
+                {
+                    false
+                }
                 (_, SourceOperationPhase::RepairRequired { .. }) => true,
                 _ => false,
             };

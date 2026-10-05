@@ -1612,6 +1612,12 @@ abstract class AppLocalizations {
   /// **'The selection wasn\'t saved. The previous selection was kept. Review this source before sharing it with Floe.'**
   String get configurationNotSavedNeedsReview;
 
+  /// No description provided for @configurationNotSavedInitialSelection.
+  ///
+  /// In en, this message translates to:
+  /// **'The selection wasn\'t saved. Choose a fresh selection before sharing this source with Floe.'**
+  String get configurationNotSavedInitialSelection;
+
   /// No description provided for @refreshSelectedDay.
   ///
   /// In en, this message translates to:

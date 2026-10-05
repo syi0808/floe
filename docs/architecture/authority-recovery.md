@@ -261,9 +261,9 @@ new settlement and handoff admission.
 Foreground ownership registers a directional child cancellation scope: owner shutdown
 may cancel the drive without cancelling the caller or an enclosing Run, while caller
 cancellation still reaches the drive. After native observation the owner and scope
-are re-admitted before reservation or Access invalidation. Before reservation, an
-AccessReviewRequired observation is definitive subject drift and uses the guarded
-negative receipt; transport, storage, cancellation and other permission failures
+are re-admitted before reservation or Access invalidation. Before reservation, AccessReviewRequired from the original stored-source
+observation is definitive subject drift and uses the guarded negative receipt;
+a candidate-selection error is not positive mismatch evidence; transport, storage, cancellation and other permission failures
 remain pending rather than becoming invented negative outcomes.
 
 ### Settled configuration after grant invalidation
@@ -291,3 +291,31 @@ business outcomes. The latter is not a no-effect NotApplied error: Access invali
 already happened. Flutter settles only that exact pending command and closes the
 obsolete review, showing historical non-save feedback rather than reporting Save
 success. A later source review is a new explicit intent, not an automatic retry.
+
+
+Reviewed selection references retain their incoming order only for command intent
+correlation. Connections resolves the references once into a unique handle-sorted
+candidate resource list. Admission, pre-reservation recheck and finalization pass
+that candidate with the same original source/revision to the evidence port. The
+finalizer independently checks the normalized operation against its reviewed
+reservation template. A Configure operation cannot move from Reserved directly to
+RepairRequired; its committed receipt digest must first be pinned. A canonical Access
+abort while Reserved settles the source journal without mutation. An expired review
+that has not reserved uses the guarded renew-review rejection before any effect.
+
+An evidence error that persists after invalidation can still leave a fenced command:
+there is no synthesized negative native proof or automatic disconnect/reset. In
+particular, removing selected calendars or denying OS access is not equivalent to a
+successful candidate inspection with a different fingerprint. Recovery of that
+condition requires a separately designed owner contract. Reserved operations with no
+Access receipt can still invalidate before the next candidate inspection; an extra
+pre-effect inspection/abort policy is not currently implemented.
+
+Review dismissal is client presentation, not durable consumption of the server-side
+review record. Same-phase repair idempotence applies to source operations generally;
+authority observation is fenced by operation/reservation identity and generation,
+not by an increment on every repeated repair observation. Flutter's historical
+non-save feedback is keyed by source, distinguishes initial configuration from
+reconfiguration, and clears after that source's later successful configure, sharing
+review/pause or disconnect. Wire validation and source correlation failures after a
+possibly committed command remain Indeterminate and preserve its command identity.

@@ -332,7 +332,65 @@ pub struct SourceReviewDescriptor {
     pub resources: Vec<(Uuid, ConnectionResource)>,
     pub catalog_digest: [u8; 32],
 }
+pub(crate) fn configure_intent_digest(
+    source_ref: Uuid,
+    reference: &ReviewRef,
+    selected: &[Uuid],
+    revision: u64,
+) -> Result<[u8; 32], AgentFailure> {
+    use sha2::{Digest, Sha256};
+    Ok(Sha256::digest(
+        serde_json::to_vec(&(
+            "source_configure",
+            source_ref,
+            reference,
+            selected,
+            revision,
+        ))
+        .map_err(|_| AgentFailure::InvalidInput)?,
+    )
+    .into())
+}
+
 impl SourceReviewDescriptor {
+    /// Client ref order is intent correlation; native evidence needs handle order.
+    pub(crate) fn resolve_selection(
+        &self,
+        references: &[Uuid],
+    ) -> Result<Vec<ConnectionResource>, AgentFailure> {
+        if references.is_empty()
+            || references.len() > 256
+            || references
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != references.len()
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut resources = references
+            .iter()
+            .map(|id| {
+                let mut matches = self
+                    .resources
+                    .iter()
+                    .filter(|(reference, _)| reference == id);
+                let resource = matches.next().ok_or(AgentFailure::InvalidInput)?.1.clone();
+                if matches.next().is_some() {
+                    return Err(AgentFailure::InvalidInput);
+                }
+                Ok(resource)
+            })
+            .collect::<Result<Vec<_>, AgentFailure>>()?;
+        resources.sort_by(|left, right| left.handle().cmp(right.handle()));
+        if resources
+            .windows(2)
+            .any(|pair| pair[0].handle() >= pair[1].handle())
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(resources)
+    }
     pub(crate) fn review_digest(&self) -> Result<[u8; 32], AgentFailure> {
         use sha2::{Digest, Sha256};
         Ok(Sha256::digest(
@@ -548,20 +606,7 @@ impl ConnectionsRecord {
                 {
                     return Err(AgentFailure::InvalidInput);
                 }
-                let selected = selected_resources
-                    .iter()
-                    .map(|id| {
-                        let mut matches = descriptor
-                            .resources
-                            .iter()
-                            .filter(|(reference, _)| reference == id);
-                        let resource = matches.next().ok_or(AgentFailure::InvalidInput)?.1.clone();
-                        if matches.next().is_some() {
-                            return Err(AgentFailure::InvalidInput);
-                        }
-                        Ok(resource)
-                    })
-                    .collect::<Result<Vec<_>, AgentFailure>>()?;
+                let selected = descriptor.resolve_selection(selected_resources)?;
                 let mut rebuilt = descriptor.source.clone();
                 rebuilt
                     .configure_reviewed_native(
@@ -577,18 +622,12 @@ impl ConnectionsRecord {
                 if rebuilt != *successor {
                     return Err(AgentFailure::InvalidInput);
                 }
-                use sha2::{Digest, Sha256};
-                let canonical_intent: [u8; 32] = Sha256::digest(
-                    serde_json::to_vec(&(
-                        "source_configure",
-                        descriptor.summary.source_ref,
-                        &descriptor.summary.review_ref,
-                        selected_resources,
-                        descriptor.source.revision(),
-                    ))
-                    .map_err(|_| AgentFailure::InvalidInput)?,
-                )
-                .into();
+                let canonical_intent = configure_intent_digest(
+                    descriptor.summary.source_ref,
+                    &descriptor.summary.review_ref,
+                    selected_resources,
+                    descriptor.source.revision(),
+                )?;
                 if canonical_intent != self.intent_digest {
                     return Err(AgentFailure::InvalidInput);
                 }

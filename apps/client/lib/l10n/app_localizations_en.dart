@@ -854,6 +854,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'The selection wasn\'t saved. The previous selection was kept. Review this source before sharing it with Floe.';
 
   @override
+  String get configurationNotSavedInitialSelection =>
+      'The selection wasn\'t saved. Choose a fresh selection before sharing this source with Floe.';
+
+  @override
   String get refreshSelectedDay => 'Refresh selected day';
 
   @override

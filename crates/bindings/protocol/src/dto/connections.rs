@@ -897,3 +897,12 @@ pub enum SourceConfigurationResultDto {
         source_ref: super::ConnectionsSourceRefDto,
     },
 }
+
+impl SourceConfigurationResultDto {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        match self {
+            Self::Configured { source } => source.validate(),
+            Self::NotSavedReviewRequired { .. } => Ok(()),
+        }
+    }
+}

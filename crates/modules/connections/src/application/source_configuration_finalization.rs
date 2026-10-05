@@ -8,6 +8,7 @@ use floe_kernel::{AgentFailure, OwnerActor};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) struct ConfigurationFinalization<'a> {
+    pub template: &'a SourceOperationRecord,
     pub expected: &'a floe_access::SourceExpectation,
     pub original: &'a SourceConnection,
     pub successor: &'a SourceConnection,
@@ -24,6 +25,7 @@ pub(super) async fn finalize(
     scope: &ExecutionScope,
 ) -> Result<SourceOperationRecord, AgentFailure> {
     let ConfigurationFinalization {
+        template,
         expected,
         original,
         successor,
@@ -39,6 +41,14 @@ pub(super) async fn finalize(
     check_live()?;
     receipt.validate()?;
     operation.validate().map_err(source_error)?;
+    template.validate().map_err(source_error)?;
+    let mut admitted = operation.clone();
+    admitted.phase = SourceOperationPhase::Reserved;
+    admitted.revision = 1;
+    if admitted != *template {
+        return Err(AgentFailure::Conflict);
+    }
+
     original
         .validate_successor(successor)
         .map_err(|_| AgentFailure::Conflict)?;
@@ -93,7 +103,7 @@ pub(super) async fn finalize(
     // The old selection's native subject is deliberately not consulted: all of
     // its grants are paused and the reviewed candidate owns the next source fact.
     let candidate = evidence
-        .inspect_selection(actor, successor, successor.resources(), scope)
+        .inspect_selection(actor, original, successor.resources(), scope)
         .await;
     check_live()?;
     let candidate = candidate?;

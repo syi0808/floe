@@ -212,12 +212,14 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
             ),
           ),
           const SizedBox(height: FloeSpace.lg),
-          if (widget.controller.lastConfigurationResult
-              case SourceConfigurationNotSaved(:final sourceRef)
-              when sourceRef == source.sourceRef) ...[
+          if (widget.controller.configurationNoticeFor(source.sourceRef)
+              case final notice?) ...[
             FloeInfoNote(
-              text: AppLocalizations.of(context)
-                  .configurationNotSavedNeedsReview,
+              text: notice.hadSelection
+                  ? AppLocalizations.of(context)
+                        .configurationNotSavedNeedsReview
+                  : AppLocalizations.of(context)
+                        .configurationNotSavedInitialSelection,
             ),
             const SizedBox(height: FloeSpace.lg),
           ],

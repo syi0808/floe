@@ -1800,7 +1800,47 @@ errors. Default Rust workspace/examples/doctests, both FFI storage builds, archi
 start-resume and Connections projection smoke passed. No user data was reset.
 
 These are bounded synthetic/source qualifications. A complete real native
-configuration/Access-grant lifecycle, exact Apple bundle qualification and independent
-implementation review remain pending. The broader original-source drift that cannot
+configuration/Access-grant lifecycle remains pending. The exact e15f463 Apple bundle
+qualification passed; its independent implementation review identified corrections
+recorded below. The broader original-source drift that cannot
 produce stable candidate evidence remains fenced; this does not claim to solve every
 repair state, every permission-loss path or the full Connections dependency split.
+
+
+#### Configure recovery implementation review corrections
+
+The independent e15f463 review found a real multiple-selection ordering defect:
+Context requires ascending unique native handles, but admission used client reference
+order. The owner now resolves a canonical resource list for both admission and record
+validation, with one shared intent digest implementation. All candidate inspections
+receive the original source plus that canonical list. A disposable probe using the
+actual Context evidence adapter rejected raw reversed handles and accepted the
+canonical selection across all three inspection positions.
+
+Additional corrections close Reserved-to-Repair digest-pin bypass, canonical Access
+abort settlement, unreserved expired-review rejection, finalizer-local reviewed
+template binding, nested configuration DTO validation, and source correlation inside
+the gateway's diagnostic/Indeterminate boundary. Historical Flutter feedback is now
+per source, distinguishes an initially empty selection, and clears on that source's
+successful configure/Observe/pause/disconnect. Positive candidate mismatch is
+reported as Rejected rather than IdentityChanged.
+
+Explicit review dispositions and limits:
+- Persistent candidate evidence errors after invalidation still retain the fence;
+  deleted calendars and OS permission loss are not stable positive mismatch proof.
+  This is an open recovery design item, not a claimed completed repair path.
+- An extra candidate probe/Access abort for Reserved-without-receipt is deferred;
+  the existing invalidation-before-final-inspection window is documented.
+- Closing the obsolete review is client-only. Server-side review tombstones or
+  one-shot consumption were not introduced.
+- Same-phase repair CAS idempotence applies to all source operation kinds. Source
+  authority watermarking does not depend on repeated repair revision increments.
+- The earlier definitive AccessReviewRequired treatment concerns observation of the
+  original stored source, not arbitrary candidate-selection errors.
+
+Disposable checks so far: eight owner/finalizer cases, one real Context selection
+ordering case, and all84 Flutter fixtures passed. Analyzer remains157 baseline infos
+with no errors/warnings. Temporary Rust probe attachments have been removed. Default Rust workspace/examples/doctests, both FFI storage builds, architecture
+23 nodes/126 edges and diff checks passed. Exact Apple qualification and focused
+review closure for these corrections remain pending; e15f463's passing Apple
+results do not qualify new code.

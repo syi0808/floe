@@ -49,6 +49,8 @@ pub trait SourceReviewEvidence: Send + Sync {
         source: &'a SourceConnection,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<SourceExpectation, AgentFailure>>;
+    /// Probe the prospective, canonical handle-ordered selection against the
+    /// unchanged original source snapshot. No persisted successor is implied.
     fn inspect_selection<'a>(
         &'a self,
         actor: &'a OwnerActor,

@@ -185,34 +185,23 @@ pub(crate) async fn command(
             selected_resource_refs,
             expected_revision,
         } => R::ConnectionsSourceConfiguration {
-            configuration: match service
-                .configure_source(
-                    actor,
-                    command_id,
-                    source_ref.get(),
-                    review_in(review_ref).map_err(AppCommandFailure::NotAdmitted)?,
-                    selected_resource_refs
-                        .into_iter()
-                        .map(|value| value.get())
-                        .collect(),
-                    expected_revision,
-                    scope,
-                )
-                .await
-                .map_err(command_failure)?
-            {
-                owner::SourceConfigurationResult::Configured { source: value } => {
-                    dto::SourceConfigurationResultDto::Configured {
-                        source: source(value)?,
-                    }
-                }
-                owner::SourceConfigurationResult::NotSavedReviewRequired { source_ref } => {
-                    dto::SourceConfigurationResultDto::NotSavedReviewRequired {
-                        source_ref: dto::ConnectionsSourceRefDto::new(source_ref)
-                            .ok_or_else(internal_error)?,
-                    }
-                }
-            },
+            configuration: configuration(
+                service
+                    .configure_source(
+                        actor,
+                        command_id,
+                        source_ref.get(),
+                        review_in(review_ref).map_err(AppCommandFailure::NotAdmitted)?,
+                        selected_resource_refs
+                            .into_iter()
+                            .map(|value| value.get())
+                            .collect(),
+                        expected_revision,
+                        scope,
+                    )
+                    .await
+                    .map_err(command_failure)?,
+            )?,
         },
         C::ConnectionsDisconnect {
             source_ref,
@@ -546,6 +535,26 @@ fn resource_group(value: owner::ResourceGroupSummary) -> AppWireResult<dto::Reso
         label: value.label,
     })
 }
+fn configuration(
+    value: owner::SourceConfigurationResult,
+) -> AppWireResult<dto::SourceConfigurationResultDto> {
+    let result = match value {
+        owner::SourceConfigurationResult::Configured { source: value } => {
+            dto::SourceConfigurationResultDto::Configured {
+                source: source(value)?,
+            }
+        }
+        owner::SourceConfigurationResult::NotSavedReviewRequired { source_ref } => {
+            dto::SourceConfigurationResultDto::NotSavedReviewRequired {
+                source_ref: dto::ConnectionsSourceRefDto::new(source_ref)
+                    .ok_or_else(internal_error)?,
+            }
+        }
+    };
+    result.validate().map_err(|_| internal_error())?;
+    Ok(result)
+}
+
 fn source(value: owner::SourceSummary) -> AppWireResult<dto::SourceSummaryDto> {
     Ok(dto::SourceSummaryDto {
         source_ref: dto::ConnectionsSourceRefDto::new(value.source_ref)
