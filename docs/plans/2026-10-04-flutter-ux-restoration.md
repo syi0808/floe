@@ -1918,3 +1918,96 @@ selection and iOS sysroot warnings were nonfatal. A shell logging-wrapper error 
 one ffed002 Debug build did not rerun that build; its captured Flutter output and
 exit code confirmed success. This checkpoint closes the build-only gate for the
 source snapshot, not whole-screen parity or the outstanding live/recovery workflows.
+
+### Next command-observation slice: Conversation sessions (design, not implemented)
+
+Direct tracing after the Calendar checkpoint confirmed two distinct defects in
+AppWireConversationGateway. A disposable transport probe reproduced both: an
+explicit Indeterminate `unavailable` error loses the retained Start identity, so a
+retry generates a different command ID; a Resume query after a timeout submits the
+retained Start before reading. These are synthetic boundary reproductions, not a
+claim about the user's current live conversation failure. `_acceptSession` also has
+no same-session revision regression guard. The existing read-only history path is
+already separate and must stay that way.
+
+A Dart-only disposition fix would expose another owner limitation rather than close
+the workflow: Session Start/Recover currently return AgentFailure and the wire maps
+all owner errors conservatively to Indeterminate. Positive Start and Recover receipts
+are durable, but a deterministic rejected Recover (for example a stale revision) has
+no durable negative receipt. Keeping its immutable ID forever is safer than losing
+it, but is not a complete recovery policy. Do not classify Conflict or storage errors
+as NotApplied merely by their error names or by a successful rollback.
+
+Proposed completed topology for adversarial review:
+
+1. **Conversation owns session command resolution.** Keep the public Start and
+   business Recover intents distinct. Introduce one canonical owner-defined session
+   command record binding Person, command ID, command kind and exact immutable intent,
+   with Started/Recovered/Rejected outcomes. Positive outcomes keep their original
+   receipt semantics; Rejected is a durable no-effect decision. A shared canonical
+   digest/record validator must be used by all admission, replay and storage paths.
+2. **One Vault session-command journal.** Replace the two current positive-only
+   session/recovery command tables with the canonical journal in the current encrypted
+   schema, rather than add another competing recovery path. Admission reads an exact
+   existing record first. Under the same immediate writer transaction it excludes
+   command identities used by Run/Cancel/Interaction owners, checks the current
+   session, and commits either the business effect plus positive receipt or the
+   negative receipt. A rollback, lost commit acknowledgement, abandoned transaction,
+   schema/integrity failure or unavailable store is never a negative receipt. Preserve
+   the existing checked writer-lifetime and uncertain-commit latch. Keep bounded
+   command storage and replay existing receipts before applying capacity checks.
+3. **Disposition comes from the owner.** A typed session-command failure distinguishes
+   rejection before admission, committed negative resolution, and uncertainty.
+   Validation/admission refusal cannot clear a previously uncertain client attempt;
+   only matching durable negative or positive acknowledgement can do that. Reading a
+   current Session after a successful command can fail; that remains Admitted or
+   Indeterminate, never NotApplied. The FFI maps these cases directly and does not
+   guess admission from AgentFailure. Other Conversation commands remain unchanged.
+4. **Pure session queries.** Resume, Get and Earlier call only ownerQuery and have no
+   shared command busy lock. They never submit or clear a retained command. The
+   gateway exposes explicit completion of its retained session command separately
+   from the business Recover command. It retains immutable kind/Person/payload/ID,
+   classifies matching outcomes by disposition, and cannot silently replace a pending
+   different intent. A nullable Resume observation alone cannot permit a second Start.
+5. **Controller orchestration.** Existing load/reload/new-conversation/recovery actions
+   explicitly settle a retained command before an action that depends on it. A retry
+   of uncertain Start adopts its resulting Session instead of starting another one.
+   A deliberately requested new conversation after completing a different prior
+   Recover remains a distinct new intent. Carry a typed resolution kind if needed;
+   do not guess from Session fields. Read-only observation remains independent.
+   Reject same-session revision regressions before replacing messages/read-model
+   state. Vault generation changes and disposal suppress stale UI adoption while
+   preserving unresolved command identities; neither becomes Run cancellation.
+
+Ordered file cutover:
+- `conversation/domain` defines canonical intent/result/record and typed command
+  failure; `ports/session_repository.rs` and the recovery method in
+  `ports/conversation_repository.rs` carry the verified resolution contract.
+- `application/session.rs`, `application/coordinator.rs` and `application/service.rs`
+  validate/replay that owner contract and preserve effect-vs-projection classification.
+- `vault/schema/encrypted.rs`, `vault/conversations.rs` and
+  `repositories/conversation.rs` replace the positive-only journal paths atomically.
+  Audit every command-identity collision check, including Run/Cancel/Interactions;
+  there must be one current session command journal and no legacy fallback decoder.
+- `ffi/conversation_wire.rs` and `ffi/app_wire.rs` preserve typed disposition.
+- Dart `agent_conversation_gateway.dart`, `app_wire_conversation_gateway.dart` and
+  `conversation_controller.dart` separate observation from explicit retained-command
+  recovery and adopt monotonically correlated snapshots. Existing runtime read
+  callbacks must remain queries. Do not turn business session Recover into a generic
+  transport acknowledgement or add a second controller authority.
+
+Verification before publication: reversed reply order, read while command pending,
+loss after positive/negative commit, first NotAdmitted versus later NotAdmitted,
+unknown/malformed output, wrong Person/session/kind/digest, stale Recover revision,
+command identity occupied by another Conversation operation, busy/rollback/reopen,
+Vault generation/disposal and no duplicate Start. Use a real isolated Vault journal
+probe as well as disposable Flutter transport/controller cases. Then run coherent
+Rust/FFI/Flutter/Apple gates; no provider/model call is required for this boundary.
+
+This is a real stored meaning/schema change in pre-stable development. It requires
+an explicitly fresh isolated development profile for qualification. Do not auto-reset
+or migrate an existing user profile, change key custody, or delete uncertain records.
+Notify the user of the compatibility boundary before asking them to run that future
+snapshot. The currently published Calendar snapshot remains unaffected while this
+proposal is reviewed. Actions Approved-work pickup and broad workflow decomposition
+remain subsequent slices, not hidden additions to this change.
