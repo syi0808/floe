@@ -863,14 +863,11 @@ final class ConversationController extends ChangeNotifier {
       if (ownerFailure.reloadRequired || ownerFailure.sealSession) {
         // Preserve the owner's barrier through callers that would otherwise
         // mark a successful session read as ready to send a new turn.
-        throw AgentVaultException.fromAppWire(
-          ownerFailure.reason,
-          ownerFailure: ownerFailure,
-        );
+        throw _SessionOutcomeBarrier.fromOwnerFailure(ownerFailure);
       }
     } else if (saved.lastOutcome?.issue case final issue?) {
       _fail(issue.reason, reloadRequired: true);
-      throw AgentVaultException(issue.reason, reloadRequired: true);
+      throw _SessionOutcomeBarrier(issue.reason, reloadRequired: true);
     }
   }
 
@@ -1025,7 +1022,7 @@ final class ConversationController extends ChangeNotifier {
     StackTrace stackTrace, {
     String? sessionId,
   }) {
-    if (_isSessionOutcomeBarrier(error)) return;
+    if (error is _SessionOutcomeBarrier) return;
     final vaultError = error is AgentVaultException ? error : null;
     final owner = _ownerFailure(error);
     AppDiagnostics.error(
@@ -1051,8 +1048,8 @@ final class ConversationController extends ChangeNotifier {
   void _recordTerminalIssue(AppRunSnapshot run, String sessionId) {
     if (!run.state.terminal ||
         run.sessionId != sessionId ||
-        !_diagnosticUuid(sessionId) ||
-        !_diagnosticUuid(run.runId)) {
+        _diagnosticUuid(sessionId) == null ||
+        _diagnosticUuid(run.runId) == null) {
       return;
     }
     for (final issue in run.report?.issues ?? const <AppWireIssue>[]) {
@@ -1080,28 +1077,6 @@ final class ConversationController extends ChangeNotifier {
     }
   }
 
-  bool _isSessionOutcomeBarrier(Object error) {
-    // Applying a stored Session outcome throws this typed barrier; it is not a
-    // fresh exception observation to append on every ordinary reload.
-    if (error is! AgentVaultException) return false;
-    final issue = session?.lastOutcome?.issue;
-    if (issue == null || error.failure != issue.reason) return false;
-    final owner = issue.ownerFailure;
-    if (owner != null) return identical(error.ownerFailure, owner);
-    return error.ownerFailure == null &&
-        error.reloadRequired == true &&
-        error.requestId == null &&
-        error.stage == null &&
-        error.metadata.isEmpty &&
-        error.domain == null &&
-        error.category == null &&
-        error.reasonCode == null &&
-        error.safeActions.isEmpty &&
-        error.incidentId == null &&
-        error.retryPolicy == null &&
-        error.correlationRequestId == null;
-  }
-
   String? _diagnosticToken(String? value) =>
       value != null && RegExp(r'^[a-zA-Z0-9_.:-]{1,128}$').hasMatch(value)
       ? value
@@ -1115,4 +1090,43 @@ final class ConversationController extends ChangeNotifier {
           ).hasMatch(value)
       ? value
       : null;
+}
+
+/// Marks only Session outcomes turned into a local admission/recovery barrier.
+/// Gateway AgentVaultExceptions remain ordinary reportable exceptions.
+final class _SessionOutcomeBarrier extends AgentVaultException {
+  const _SessionOutcomeBarrier(
+    super.failure, {
+    super.requestId,
+    super.stage,
+    super.metadata,
+    super.recoveryAction,
+    super.affectedRefs,
+    super.correlationRequestId,
+    super.retryableOverride,
+    super.domain,
+    super.category,
+    super.reasonCode,
+    super.safeActions,
+    super.incidentId,
+    super.retryPolicy,
+    super.reloadRequired,
+    super.sealSession,
+    super.ownerFailure,
+  });
+
+  factory _SessionOutcomeBarrier.fromOwnerFailure(OwnerFailure owner) =>
+      _SessionOutcomeBarrier(
+        owner.reason,
+        ownerFailure: owner,
+        recoveryAction: owner.recovery,
+        domain: owner.domain,
+        category: owner.category,
+        reasonCode: owner.reason,
+        safeActions: owner.safeActions.toList(growable: false),
+        incidentId: owner.incidentId,
+        correlationRequestId: owner.correlationId,
+        reloadRequired: owner.reloadRequired,
+        sealSession: owner.sealSession,
+      );
 }
