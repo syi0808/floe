@@ -332,6 +332,74 @@ async fn finish_source_transaction<T>(
 }
 
 impl SourceOperationRepository for TursoStore {
+    fn settle_presentation<'a>(
+        &'a self,
+        request: SourceOperationReservation,
+        decision: floe_connections::SourcePresentationDecision,
+    ) -> BoxFuture<'a, Result<SourceOperationRecord, SourceRepositoryError>> {
+        Box::pin(async move {
+            request.record.validate()?;
+            if request.record.kind != floe_connections::SourceOperationKind::ConnectionPresentation
+                || request.record.phase != SourceOperationPhase::Reserved
+                || request.record.revision != 1
+            {
+                return Err(SourceRepositoryError::Conflict);
+            }
+            let mut writer = self
+                .source_write_guard()
+                .map_err(source_connection_failure)?;
+            let connection = self.connection().await.map_err(source_connection_failure)?;
+            begin_source_transaction(&mut writer, &connection).await?;
+            let result = async {
+                let requested = &request.record;
+                let mut rows = connection.query(
+                    "SELECT operation_id,command_id,person_id,connection_id,revision,fence,payload FROM source_operations WHERE operation_id=? OR (person_id=? AND command_id=?)",
+                    (requested.operation_id.to_string(), requested.expected.source.person_id().to_string(), requested.command_id.to_string()),
+                ).await.map_err(source_database_failure)?;
+                if let Some(row) = rows.next().await.map_err(source_database_failure)? {
+                    let existing = decode_operation(&row)?;
+                    if rows.next().await.map_err(source_database_failure)?.is_some() || existing.phase.holds_fence() {
+                        return Err(SourceRepositoryError::Conflict);
+                    }
+                    let mut initial = existing.clone();
+                    initial.phase = SourceOperationPhase::Reserved;
+                    initial.revision = 1;
+                    if initial != *requested { return Err(SourceRepositoryError::Conflict); }
+                    return Ok(existing);
+                }
+                drop(rows);
+                if source_command_rejection_on(&connection, requested.expected.source.person_id(), requested.command_id).await?.is_some() {
+                    return Err(SourceRepositoryError::Conflict);
+                }
+                let id = requested.expected.source.connection_id();
+                if fenced_on(&connection, requested.expected.source.person_id(), &id).await? {
+                    return Err(SourceRepositoryError::StorageBusy);
+                }
+                let source = source_on(&connection, &id).await?;
+                let (terminal, successor) = request.settle_presentation(source.as_ref(), decision)?;
+                if let Some(successor) = successor {
+                    let payload = serde_json::to_string(&successor).map_err(|_| SourceRepositoryError::Corrupt)?;
+                    if payload.len() > MAX_SOURCE_PAYLOAD_BYTES { return Err(SourceRepositoryError::Corrupt); }
+                    let changed = connection.execute(
+                        "UPDATE source_connections SET revision=?,payload=? WHERE connection_id=? AND person_id=? AND revision=?",
+                        (successor.revision() as i64, payload, id.as_str(), successor.person_id().to_string(), requested.expected.revision.ok_or(SourceRepositoryError::Conflict)? as i64),
+                    ).await.map_err(source_database_failure)?;
+                    if changed != 1 { return Err(SourceRepositoryError::Conflict); }
+                }
+                let payload = serde_json::to_string(&terminal).map_err(|_| SourceRepositoryError::Corrupt)?;
+                if payload.len() > MAX_OPERATION_BYTES { return Err(SourceRepositoryError::Corrupt); }
+                let changed = connection.execute(
+                    "INSERT OR IGNORE INTO source_operations(operation_id,command_id,person_id,connection_id,revision,fence,payload) VALUES(?,?,?,?,1,0,?)",
+                    (terminal.operation_id.to_string(), terminal.command_id.to_string(), terminal.expected.source.person_id().to_string(), id.as_str(), payload),
+                ).await.map_err(source_database_failure)?;
+                if changed != 1 { return Err(SourceRepositoryError::Conflict); }
+                Ok(terminal)
+            }.await;
+            let outcome = finish_source_transaction(self, &connection, result).await;
+            writer.settled();
+            outcome
+        })
+    }
     fn rejected_operation_command<'a>(
         &'a self,
         identity: floe_connections::ConnectionsCommandIdentity,
@@ -412,7 +480,8 @@ impl SourceOperationRepository for TursoStore {
                 .map_err(source_connection_failure)?;
             let requested = request.record;
             requested.validate()?;
-            if requested.revision != 1 || requested.phase != SourceOperationPhase::Reserved {
+            if requested.revision != 1 || requested.phase != SourceOperationPhase::Reserved
+                || requested.kind == floe_connections::SourceOperationKind::ConnectionPresentation {
                 return Err(SourceRepositoryError::Conflict);
             }
             let connection = self.connection().await.map_err(source_connection_failure)?;

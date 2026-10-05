@@ -534,61 +534,8 @@ impl ConnectionsService {
         kind: SourceOperationKind,
     ) -> Result<(SourceOperationAdmission, SourceReservationEvidence), ConnectionsCommandFailure>
     {
-        if command_id.is_nil() {
-            return Err(ConnectionsCommandFailure::NotAdmitted(
-                AgentFailure::InvalidInput,
-            ));
-        }
-        actor
-            .validate()
-            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
-        source
-            .validate()
-            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
-        if source.source.person_id() != actor.person_id {
-            return Err(ConnectionsCommandFailure::NotAdmitted(
-                AgentFailure::PolicyDenied,
-            ));
-        }
-        let operation_id = derived_id(
-            b"floe.source.operation.v1",
-            source.source.person_id(),
-            command_id,
-        );
-        let reservation_id = derived_id(
-            b"floe.source.reservation.v1",
-            source.source.person_id(),
-            operation_id,
-        );
-        let reservation = SourceReservationEvidence {
-            device_id: actor.device_id.clone(),
-            operation_id,
-            command_id,
-            request_digest: digest,
-            reservation_id,
-            reservation_generation: 1,
-            source: source.clone(),
-        };
-        reservation
-            .validate()
-            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
-        let record = SourceOperationRecord {
-            device_id: actor.device_id.clone(),
-            operation_id,
-            command_id,
-            request_digest: digest,
-            reservation_id,
-            reservation_generation: 1,
-            expected: SourceOperationExpectation {
-                source: source.source,
-                revision: source.revision,
-                authority: source.authority,
-            },
-            review,
-            kind,
-            phase: SourceOperationPhase::Reserved,
-            revision: 1,
-        };
+        let (record, reservation) =
+            prepare_source_reservation(actor, command_id, digest, review, source, kind)?;
         let admission = self
             .sources
             .reserve(SourceOperationReservation { record })
@@ -936,18 +883,8 @@ impl ConnectionsService {
             return Ok(operation);
         }
         if operation.kind == SourceOperationKind::ConnectionPresentation {
-            return match abort_reason {
-                Some(reason) => {
-                    self.advance(
-                        &operation,
-                        SourceOperationPhase::Aborted { reason },
-                        SourceOperationProof::Presentation,
-                        None,
-                    )
-                    .await
-                }
-                None => Ok(operation),
-            };
+            // Current presentation commands never persist a Reserved row.
+            return Err(AgentFailure::Conflict);
         }
         let identity = operation.identity();
         match self
@@ -1208,4 +1145,70 @@ pub(super) fn derived_id(domain: &[u8], person: floe_kernel::PersonId, id: Uuid)
     bytes[6] = (bytes[6] & 15) | 64;
     bytes[8] = (bytes[8] & 63) | 128;
     Uuid::from_bytes(bytes)
+}
+
+pub(super) fn prepare_source_reservation(
+    actor: &OwnerActor,
+    command_id: Uuid,
+    digest: [u8; 32],
+    review: Option<ReviewRef>,
+    source: SourceExpectation,
+    kind: SourceOperationKind,
+) -> Result<(SourceOperationRecord, SourceReservationEvidence), ConnectionsCommandFailure> {
+    if command_id.is_nil() {
+        return Err(ConnectionsCommandFailure::NotAdmitted(
+            AgentFailure::InvalidInput,
+        ));
+    }
+    actor
+        .validate()
+        .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+    source
+        .validate()
+        .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+    if source.source.person_id() != actor.person_id {
+        return Err(ConnectionsCommandFailure::NotAdmitted(
+            AgentFailure::PolicyDenied,
+        ));
+    }
+    let operation_id = derived_id(
+        b"floe.source.operation.v1",
+        source.source.person_id(),
+        command_id,
+    );
+    let reservation_id = derived_id(
+        b"floe.source.reservation.v1",
+        source.source.person_id(),
+        operation_id,
+    );
+    let reservation = SourceReservationEvidence {
+        device_id: actor.device_id.clone(),
+        operation_id,
+        command_id,
+        request_digest: digest,
+        reservation_id,
+        reservation_generation: 1,
+        source: source.clone(),
+    };
+    reservation
+        .validate()
+        .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+    let record = SourceOperationRecord {
+        device_id: actor.device_id.clone(),
+        operation_id,
+        command_id,
+        request_digest: digest,
+        reservation_id,
+        reservation_generation: 1,
+        expected: SourceOperationExpectation {
+            source: source.source,
+            revision: source.revision,
+            authority: source.authority,
+        },
+        review,
+        kind,
+        phase: SourceOperationPhase::Reserved,
+        revision: 1,
+    };
+    Ok((record, reservation))
 }

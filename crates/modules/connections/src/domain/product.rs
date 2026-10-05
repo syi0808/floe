@@ -375,6 +375,10 @@ pub enum ConnectionsPayload {
         successor: SourceConnection,
         operation_id: Uuid,
     },
+    SourceConfigurationAborted {
+        source: SourceConnection,
+        reason: crate::SourceAbortReason,
+    },
     SourceMutation {
         source: SourceConnection,
         summary: SourceSummary,
@@ -489,6 +493,12 @@ impl ConnectionsRecord {
                     .source
                     .validate_successor(successor)
                     .map_err(|_| AgentFailure::InvalidInput)?;
+            }
+            ConnectionsPayload::SourceConfigurationAborted { source, .. } => {
+                source.validate().map_err(|_| AgentFailure::InvalidInput)?;
+                if source.person_id() != self.person_id {
+                    return Err(AgentFailure::InvalidInput);
+                }
             }
             ConnectionsPayload::SourceMutation { source, summary } => {
                 source.validate().map_err(|_| AgentFailure::InvalidInput)?;
@@ -623,6 +633,15 @@ impl ConnectionsRecord {
                 ConnectionsPayload::SourceConfiguration { successor, .. },
                 ConnectionsPayload::SourceMutation { source, .. },
             ) if successor == source => {}
+            (
+                ConnectionsPayload::SourceConfiguration {
+                    descriptor,
+                    successor,
+                    ..
+                },
+                ConnectionsPayload::SourceConfigurationAborted { source, .. },
+            ) if source == &descriptor.source
+                && source.is_presentation_successor(successor) == Ok(true) => {}
             (ConnectionsPayload::Integration(old), ConnectionsPayload::Integration(new))
                 if old.integration_ref == new.integration_ref
                     && old.target == new.target

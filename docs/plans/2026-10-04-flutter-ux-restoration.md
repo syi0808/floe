@@ -1260,3 +1260,48 @@ fixtures. The deliberate wrong-key probe emits an AES authentication failure bef
 passing its refusal/preservation assertions; this is expected negative evidence.
 Apple exact-artifact qualification and the independent targeted review follow this
 commit. The active-Observe full product scenario and live Calendar remain unproved.
+
+#### Review correction: remove the presentation reservation window
+
+Exact 5663561 Apple artifacts passed, but the independent review confirmed that a
+presentation Reserved fence could survive a failed native observation, and that
+aborted/superseded product commands could remain pending. Supersede the two-step
+presentation plan above: observe outside SQL, then atomically settle the original
+presentation command and source successor in the source journal. Presentation must
+never publish a durable Reserved row. Positive and negative outcomes share the same
+writer admission so a concurrent rejection cannot overtake a committed effect.
+The Access-coordinated authority workflow keeps its reservation protocol.
+
+Delete the local Presentation proof/Reserved-to-terminal CAS path. Introduce one
+owner-defined settle_presentation repository command: exact replay first; reject
+while another source operation is fenced; otherwise validate current source CAS
+and write either PresentationCommitted with its successor or Aborted with no source
+change in the same transaction. Native observation cannot hold a source fence.
+A terminal product rejection projects NotApplied; a terminal source commit settles
+from its historical recorded successor even if a newer source mutation has occurred.
+Foreground and recovery races reload the winning immutable product result. Start a
+leased recovery job for every admitted source configuration, before foreground drive.
+Group identity joins the same scope identity comparison used for SourceAuthority.
+No compatibility path for old in-flight development records or automatic reset.
+
+The atomic local path replaces the presentation proof/CAS route, rather than keeping
+both. Three disposable probes passed: atomic apply/reopen and exact replay after a
+newer rename; reject/apply races returning the first settled outcome; no source fence
+on local completion/rejection; authority-resource/account/subject/mode changes
+rejected; and an active authority reservation returning Busy without adding a row
+or changing its watermark. Group-only identity changes now advance SourceAuthority.
+Temporary probes were archived and removed. Generic authority completion must still
+prove Completed, not RepairRequired, before historical product settlement. Full
+active-Observe product workflow/live Calendar behavior remain outside these probes.
+
+A fourth disposable check passed for rejecting foreign/absent source identity even
+on the negative settlement path, preventing a false journal watermark for another
+source. The current source identity must exist and match before either local
+outcome is written; revision drift may produce a known same-source rejection.
+
+Atomic-presentation local final qualification passed after all temporary probes were
+removed: workspace/default examples/doctests, production/development FFI, architecture
+23-node/126-edge policy, diff check, actual encrypted two-cycle pairing/Forget and
+server/client restart, product encryption and key refusal diagnostics, session reopen,
+and all 61 external Flutter fixtures. Exact Apple artifacts and a focused closure
+review of the one-transaction settlement are still required for this new snapshot.

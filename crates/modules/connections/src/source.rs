@@ -311,8 +311,18 @@ impl SourceConnection {
             || self
                 .resources
                 .iter()
-                .map(ConnectionResource::handle)
-                .ne(next.resources.iter().map(ConnectionResource::handle))
+                .map(|resource| {
+                    (
+                        resource.handle(),
+                        resource.group().map(|group| &group.handle),
+                    )
+                })
+                .ne(next.resources.iter().map(|resource| {
+                    (
+                        resource.handle(),
+                        resource.group().map(|group| &group.handle),
+                    )
+                }))
             || self.native_subject_fingerprint != next.native_subject_fingerprint
             || self.state != next.state;
         let expected_authority = if scope_changed {
@@ -401,8 +411,18 @@ impl SourceConnection {
             || self
                 .resources
                 .iter()
-                .map(ConnectionResource::handle)
-                .ne(resources.iter().map(ConnectionResource::handle));
+                .map(|resource| {
+                    (
+                        resource.handle(),
+                        resource.group().map(|group| &group.handle),
+                    )
+                })
+                .ne(resources.iter().map(|resource| {
+                    (
+                        resource.handle(),
+                        resource.group().map(|group| &group.handle),
+                    )
+                }));
         self.advance(scope_changed)?;
         self.resource_mode = resource_mode;
         self.resources = resources;
@@ -461,8 +481,18 @@ impl SourceConnection {
             || self
                 .resources
                 .iter()
-                .map(ConnectionResource::handle)
-                .ne(resources.iter().map(ConnectionResource::handle))
+                .map(|resource| {
+                    (
+                        resource.handle(),
+                        resource.group().map(|group| &group.handle),
+                    )
+                })
+                .ne(resources.iter().map(|resource| {
+                    (
+                        resource.handle(),
+                        resource.group().map(|group| &group.handle),
+                    )
+                }))
             || self.native_subject_fingerprint.as_deref() != Some(&fingerprint)
             || self.state != SourceState::Ready;
         self.advance(source_changed)?;

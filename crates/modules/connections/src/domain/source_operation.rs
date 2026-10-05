@@ -187,8 +187,6 @@ pub struct SourceOperationAdmission {
 }
 #[derive(Clone, Debug)]
 pub enum SourceOperationProof {
-    /// A local-only source transition; never an Access grant receipt.
-    Presentation,
     Committed(GrantCommitReceipt),
     Aborted(GrantAbortReceipt),
 }
@@ -202,40 +200,6 @@ pub struct SourceOperationChange {
     pub successor: Option<SourceConnection>,
 }
 impl SourceOperationChange {
-    fn validate_presentation(
-        &self,
-        current: &SourceOperationRecord,
-        source: Option<&SourceConnection>,
-    ) -> Result<SourceOperationRecord, SourceRepositoryError> {
-        if !matches!(self.proof, SourceOperationProof::Presentation)
-            || !matches!(current.phase, SourceOperationPhase::Reserved)
-        {
-            return Err(SourceRepositoryError::Conflict);
-        }
-        match (&self.next_phase, &self.successor) {
-            (SourceOperationPhase::PresentationCommitted, Some(successor)) => {
-                let source = source.ok_or(SourceRepositoryError::Conflict)?;
-                if !current.expected.matches(Some(source))
-                    || !source
-                        .is_presentation_successor(successor)
-                        .map_err(|_| SourceRepositoryError::Conflict)?
-                {
-                    return Err(SourceRepositoryError::Conflict);
-                }
-            }
-            (SourceOperationPhase::Aborted { .. }, None) => {}
-            _ => return Err(SourceRepositoryError::Conflict),
-        }
-        let mut next = current.clone();
-        next.phase = self.next_phase.clone();
-        next.revision = next
-            .revision
-            .checked_add(1)
-            .ok_or(SourceRepositoryError::Conflict)?;
-        next.validate()?;
-        Ok(next)
-    }
-
     pub fn validate(
         &self,
         current: &SourceOperationRecord,
@@ -250,10 +214,9 @@ impl SourceOperationChange {
             return Err(SourceRepositoryError::Conflict);
         }
         if current.kind == SourceOperationKind::ConnectionPresentation {
-            return self.validate_presentation(current, source);
+            return Err(SourceRepositoryError::Conflict);
         }
         let committed = match &self.proof {
-            SourceOperationProof::Presentation => return Err(SourceRepositoryError::Conflict),
             SourceOperationProof::Committed(receipt) => {
                 if !current.matches_evidence(&receipt.reservation)
                     || receipt.commit_id.is_nil()
@@ -390,5 +353,57 @@ impl SourceOperationChange {
             .ok_or(SourceRepositoryError::Conflict)?;
         next.validate()?;
         Ok(next)
+    }
+}
+
+/// Native observation is complete before this local-only storage decision.
+#[derive(Clone, Debug)]
+pub enum SourcePresentationDecision {
+    Apply(SourceConnection),
+    Reject(SourceAbortReason),
+}
+impl SourceOperationReservation {
+    pub fn settle_presentation(
+        &self,
+        source: Option<&SourceConnection>,
+        decision: SourcePresentationDecision,
+    ) -> Result<(SourceOperationRecord, Option<SourceConnection>), SourceRepositoryError> {
+        self.record.validate()?;
+        if self.record.kind != SourceOperationKind::ConnectionPresentation
+            || self.record.revision != 1
+            || self.record.phase != SourceOperationPhase::Reserved
+        {
+            return Err(SourceRepositoryError::Conflict);
+        }
+        let current = source.ok_or(SourceRepositoryError::Conflict)?;
+        if current.person_id() != self.record.expected.source.person_id()
+            || current.connector_id() != self.record.expected.source.connector()
+            || *current.connection_id() != self.record.expected.source.connection_id()
+            || current.execution_owner_id() != self.record.expected.source.execution_owner()
+        {
+            return Err(SourceRepositoryError::Conflict);
+        }
+        let mut record = self.record.clone();
+        let successor = match decision {
+            SourcePresentationDecision::Apply(next) => {
+                if self.record.expected.matches(Some(current))
+                    && current.is_presentation_successor(&next) == Ok(true)
+                {
+                    record.phase = SourceOperationPhase::PresentationCommitted;
+                    Some(next)
+                } else {
+                    record.phase = SourceOperationPhase::Aborted {
+                        reason: SourceAbortReason::ReviewChanged,
+                    };
+                    None
+                }
+            }
+            SourcePresentationDecision::Reject(reason) => {
+                record.phase = SourceOperationPhase::Aborted { reason };
+                None
+            }
+        };
+        record.validate()?;
+        Ok((record, successor))
     }
 }

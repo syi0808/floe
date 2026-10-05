@@ -1,19 +1,42 @@
 //! Reviewed source successor execution and recovery. Presentation-only updates
 //! commit locally; authority changes retain the Access invalidation protocol.
 use super::product::native_source;
-use super::source_operation::{check, source_error};
+use super::source_operation::{check, prepare_source_reservation, source_error};
 use crate::*;
 use floe_context_contract::GrantSourceBinding;
 use floe_execution::ExecutionScope;
 use floe_kernel::{AgentFailure, OwnerActor};
 
+pub(super) enum SourceConfigurationOutcome {
+    Applied(SourceSummary),
+    NotApplied(AgentFailure),
+}
+pub(super) fn aborted_reason(reason: SourceAbortReason) -> AgentFailure {
+    match reason {
+        SourceAbortReason::Cancelled => AgentFailure::Cancelled,
+        SourceAbortReason::ReviewChanged | SourceAbortReason::ReviewExpired => {
+            AgentFailure::AccessReviewRequired
+        }
+    }
+}
+fn terminal_outcome(record: ConnectionsRecord) -> Result<SourceConfigurationOutcome, AgentFailure> {
+    match record.payload {
+        ConnectionsPayload::SourceMutation { summary, .. } => {
+            Ok(SourceConfigurationOutcome::Applied(summary))
+        }
+        ConnectionsPayload::SourceConfigurationAborted { reason, .. } => Ok(
+            SourceConfigurationOutcome::NotApplied(aborted_reason(reason)),
+        ),
+        _ => Err(AgentFailure::Conflict),
+    }
+}
 impl ConnectionsService {
     pub(super) async fn drive_source_configuration(
         &self,
         actor: &OwnerActor,
-        mut record: ConnectionsRecord,
+        record: ConnectionsRecord,
         scope: &ExecutionScope,
-    ) -> Result<SourceSummary, AgentFailure> {
+    ) -> Result<SourceConfigurationOutcome, AgentFailure> {
         self.ensure_open()?;
         check(actor, scope)?;
         if record.person_id != actor.person_id || record.device_id != actor.device_id {
@@ -28,15 +51,37 @@ impl ConnectionsService {
         else {
             return Err(AgentFailure::InvalidInput);
         };
+        if descriptor.source.person_id() != actor.person_id
+            || successor.person_id() != actor.person_id
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
         let presentation_only = descriptor
             .source
             .is_presentation_successor(&successor)
             .map_err(|_| AgentFailure::Conflict)?;
-        let kind = if presentation_only {
-            SourceOperationKind::ConnectionPresentation
-        } else {
-            SourceOperationKind::ConnectionConfigure
-        };
+        if presentation_only {
+            let operation = self
+                .settle_source_presentation(actor, &record, &descriptor, &successor, scope)
+                .await?;
+            let payload = match operation.phase {
+                SourceOperationPhase::PresentationCommitted => ConnectionsPayload::SourceMutation {
+                    summary: self.source_summary(actor, &successor, scope).await?,
+                    source: successor,
+                },
+                SourceOperationPhase::Aborted { reason } => {
+                    ConnectionsPayload::SourceConfigurationAborted {
+                        source: descriptor.source,
+                        reason,
+                    }
+                }
+                _ => return Err(AgentFailure::Conflict),
+            };
+            return self
+                .finish_source_configuration_record(record, payload)
+                .await;
+        }
+        let kind = SourceOperationKind::ConnectionConfigure;
         let operation = if let Some(operation) = self
             .sources
             .load_operation(operation_id)
@@ -79,104 +124,167 @@ impl ConnectionsService {
             .0
             .record
         };
-        if presentation_only {
-            if !matches!(operation.phase, SourceOperationPhase::PresentationCommitted) {
-                if !matches!(operation.phase, SourceOperationPhase::Reserved) {
-                    return Err(AgentFailure::Conflict);
-                }
-                let actual = self
-                    .evidence
-                    .inspect_selection(actor, &successor, successor.resources(), scope)
-                    .await?;
-                if Some(actual.as_str()) != successor.native_subject_fingerprint() {
-                    return Err(AgentFailure::AccessReviewRequired);
-                }
-                self.advance(
-                    &operation,
-                    SourceOperationPhase::PresentationCommitted,
-                    SourceOperationProof::Presentation,
-                    Some(successor.clone()),
-                )
-                .await?;
-            }
-        } else {
-            let receipt = match self
-                .access
-                .receipt(
-                    actor,
-                    floe_access::GrantReceiptQuery {
-                        identity: operation.identity(),
-                    },
-                    scope,
-                )
-                .await?
-            {
-                Some(floe_access::GrantOperationReceipt::Committed(receipt)) => receipt,
-                Some(floe_access::GrantOperationReceipt::Aborted(_)) => {
-                    return Err(AgentFailure::Conflict);
-                }
-                None => {
-                    let evidence = floe_access::SourceReservationEvidence {
-                        device_id: operation.device_id.clone(),
-                        operation_id: operation.operation_id,
-                        command_id: operation.command_id,
-                        request_digest: operation.request_digest,
-                        reservation_id: operation.reservation_id,
-                        reservation_generation: operation.reservation_generation,
-                        source: configuration_expectation(&descriptor, &successor)?,
-                    };
-                    let result = self.access.invalidate_source(actor, evidence, scope).await;
-                    match self
-                        .access
-                        .receipt(
-                            actor,
-                            floe_access::GrantReceiptQuery {
-                                identity: operation.identity(),
-                            },
-                            scope,
-                        )
-                        .await?
-                    {
-                        Some(floe_access::GrantOperationReceipt::Committed(receipt)) => receipt,
-                        _ => return Err(result.err().unwrap_or(AgentFailure::StorageUnavailable)),
-                    }
-                }
-            };
-            if receipt.kind != floe_access::GrantCommitKind::InvalidateSource {
+        let receipt = match self
+            .access
+            .receipt(
+                actor,
+                floe_access::GrantReceiptQuery {
+                    identity: operation.identity(),
+                },
+                scope,
+            )
+            .await?
+        {
+            Some(floe_access::GrantOperationReceipt::Committed(receipt)) => receipt,
+            Some(floe_access::GrantOperationReceipt::Aborted(_)) => {
                 return Err(AgentFailure::Conflict);
             }
-            if !matches!(operation.phase, SourceOperationPhase::Completed { .. }) {
-                // Prove the exact candidate subject again after durable grant
-                // invalidation. If it drifted the source stays fenced for repair.
-                let actual = self
-                    .evidence
-                    .inspect_selection(actor, &successor, successor.resources(), scope)
-                    .await?;
-                if Some(actual.as_str()) != successor.native_subject_fingerprint() {
-                    return Err(AgentFailure::AccessReviewRequired);
+            None => {
+                let evidence = floe_access::SourceReservationEvidence {
+                    device_id: operation.device_id.clone(),
+                    operation_id: operation.operation_id,
+                    command_id: operation.command_id,
+                    request_digest: operation.request_digest,
+                    reservation_id: operation.reservation_id,
+                    reservation_generation: operation.reservation_generation,
+                    source: configuration_expectation(&descriptor, &successor)?,
+                };
+                let result = self.access.invalidate_source(actor, evidence, scope).await;
+                match self
+                    .access
+                    .receipt(
+                        actor,
+                        floe_access::GrantReceiptQuery {
+                            identity: operation.identity(),
+                        },
+                        scope,
+                    )
+                    .await?
+                {
+                    Some(floe_access::GrantOperationReceipt::Committed(receipt)) => receipt,
+                    _ => return Err(result.err().unwrap_or(AgentFailure::StorageUnavailable)),
                 }
-                self.complete_committed(actor, operation, receipt, Some(successor.clone()), scope)
-                    .await?;
             }
-        }
-        let source = self
-            .sources
-            .load(actor.person_id, successor.connection_id())
-            .await
-            .map_err(source_error)?
-            .ok_or(AgentFailure::Conflict)?;
-        if source != successor {
+        };
+        if receipt.kind != floe_access::GrantCommitKind::InvalidateSource {
             return Err(AgentFailure::Conflict);
         }
-        let summary = self.source_summary(actor, &source, scope).await?;
-        let previous = record.revision;
-        record.revision += 1;
-        record.payload = ConnectionsPayload::SourceMutation {
-            source,
-            summary: summary.clone(),
+        if !matches!(operation.phase, SourceOperationPhase::Completed { .. }) {
+            // Prove the exact candidate subject again after durable grant
+            // invalidation. If it drifted the source stays fenced for repair.
+            let actual = self
+                .evidence
+                .inspect_selection(actor, &successor, successor.resources(), scope)
+                .await?;
+            if Some(actual.as_str()) != successor.native_subject_fingerprint() {
+                return Err(AgentFailure::AccessReviewRequired);
+            }
+            let completed = self
+                .complete_committed(actor, operation, receipt, Some(successor.clone()), scope)
+                .await?;
+            if !matches!(completed.phase, SourceOperationPhase::Completed { .. }) {
+                return Err(AgentFailure::AccessReviewRequired);
+            }
+        }
+        // The source journal is the durable effect receipt. Later source changes
+        // cannot undo this exact command's historical result.
+        let summary = self.source_summary(actor, &successor, scope).await?;
+        self.finish_source_configuration_record(
+            record,
+            ConnectionsPayload::SourceMutation {
+                source: successor,
+                summary,
+            },
+        )
+        .await
+    }
+    async fn settle_source_presentation(
+        &self,
+        actor: &OwnerActor,
+        record: &ConnectionsRecord,
+        descriptor: &SourceReviewDescriptor,
+        successor: &SourceConnection,
+        scope: &ExecutionScope,
+    ) -> Result<SourceOperationRecord, AgentFailure> {
+        let (requested, _) = prepare_source_reservation(
+            actor,
+            record.command_id,
+            record.intent_digest,
+            Some(descriptor.summary.review_ref.clone()),
+            configuration_expectation(descriptor, successor)?,
+            SourceOperationKind::ConnectionPresentation,
+        )
+        .map_err(ConnectionsCommandFailure::into_failure)?;
+        if let Some(existing) = self
+            .sources
+            .load_operation(requested.operation_id)
+            .await
+            .map_err(source_error)?
+        {
+            let mut initial = existing.clone();
+            initial.phase = SourceOperationPhase::Reserved;
+            initial.revision = 1;
+            if initial != requested || existing.phase.holds_fence() {
+                return Err(AgentFailure::Conflict);
+            }
+            return Ok(existing);
+        }
+        let decision = match self
+            .evidence
+            .inspect_selection(actor, successor, successor.resources(), scope)
+            .await
+        {
+            Ok(actual) if Some(actual.as_str()) == successor.native_subject_fingerprint() => {
+                SourcePresentationDecision::Apply(successor.clone())
+            }
+            Ok(_)
+            | Err(
+                AgentFailure::AccessReviewRequired
+                | AgentFailure::PolicyDenied
+                | AgentFailure::CapabilityDenied,
+            ) => SourcePresentationDecision::Reject(SourceAbortReason::ReviewChanged),
+            Err(error) => return Err(error),
         };
-        self.products.compare_and_swap(previous, record).await?;
-        Ok(summary)
+        self.sources
+            .settle_presentation(SourceOperationReservation { record: requested }, decision)
+            .await
+            .map_err(source_error)
+    }
+
+    async fn finish_source_configuration_record(
+        &self,
+        mut record: ConnectionsRecord,
+        payload: ConnectionsPayload,
+    ) -> Result<SourceConfigurationOutcome, AgentFailure> {
+        let previous = record.revision;
+        record.revision = record
+            .revision
+            .checked_add(1)
+            .ok_or(AgentFailure::Conflict)?;
+        record.payload = payload;
+        match self
+            .products
+            .compare_and_swap(previous, record.clone())
+            .await
+        {
+            Ok(stored) => terminal_outcome(stored),
+            Err(AgentFailure::Conflict) => {
+                let winner = self
+                    .products
+                    .load(record.person_id, record.record_ref)
+                    .await?
+                    .ok_or(AgentFailure::Conflict)?;
+                if winner.person_id != record.person_id
+                    || winner.device_id != record.device_id
+                    || winner.command_id != record.command_id
+                    || winner.intent_digest != record.intent_digest
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                terminal_outcome(winner)
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 

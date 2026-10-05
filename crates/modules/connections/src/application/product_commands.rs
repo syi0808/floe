@@ -14,7 +14,10 @@ pub(super) async fn settle_product_command<T>(
         Ok(value) => Ok(value),
         Err(reason) => {
             let failure = classify(reason);
-            if matches!(failure, ConnectionsCommandFailure::Admitted(_)) {
+            if matches!(
+                failure,
+                ConnectionsCommandFailure::Admitted(_) | ConnectionsCommandFailure::NotApplied(_)
+            ) {
                 return Err(failure);
             }
             // No inference about earlier attempts is possible from a busy read.

@@ -52,6 +52,12 @@ pub trait SourceOperationRepository: Send + Sync {
         identity: crate::ConnectionsCommandIdentity,
         reason: floe_kernel::AgentFailure,
     ) -> BoxFuture<'a, Result<crate::ConnectionsCommandResolution, SourceRepositoryError>>;
+    /// Atomically publish a local presentation result, never a durable Reserved fence.
+    fn settle_presentation<'a>(
+        &'a self,
+        request: SourceOperationReservation,
+        decision: crate::SourcePresentationDecision,
+    ) -> BoxFuture<'a, Result<SourceOperationRecord, SourceRepositoryError>>;
     fn reserve<'a>(
         &'a self,
         request: SourceOperationReservation,

@@ -231,11 +231,19 @@ as does an abandoned armed BEGIN. A determinate Busy BEGIN leaves it usable.
 Read-only integrity errors retain their typed failure but do not all retire the
 entire Vault generation; callers must not infer a global latch from the error alone.
 
-Source presentation changes use the same Connections source journal but a distinct
-local terminal proof. The transaction validates the exact prior source and a
-label-only successor, then publishes its new local CAS revision and terminal
-operation together. No Access commit/abort receipt is manufactured. A reserved
-presentation operation may be locally cancelled; terminal commit and cancellation
-compete through one CAS. Standing Observe and SourceAuthority remain unchanged.
-Local revision and reservation changes still fence in-flight exact snapshots and
-Actions, so those may require fresh observation of the displayed source.
+Source presentation changes use a single local settlement transaction in the
+Connections source journal. Native observation happens before this transaction and
+never publishes a presentation reservation fence. Exact command replay is checked
+first; then an unchanged source identity/scope may receive its label-only successor
+and terminal record atomically. A rejection is recorded in that same journal without
+changing the source, so it cannot overtake an uncertain positive commit. An active
+authority reservation returns Busy before either outcome is written.
+
+No Access commit/abort receipt is manufactured. Standing Observe and SourceAuthority
+remain unchanged for labels; account identity changes advance SourceAuthority and
+follow the authority-changing workflow. Local revision and journal watermark changes
+still invalidate in-flight exact snapshots/Actions. Completion projects the recorded
+historical successor rather than requiring it to remain the latest source forever.
+Known presentation rejection settles the product command as NotApplied. Foreground
+and recovery races use the same journal result and reload a winning terminal product
+record. Local commit has no separate user-visible cancellation stage.

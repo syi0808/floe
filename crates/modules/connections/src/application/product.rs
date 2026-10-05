@@ -1,6 +1,7 @@
 //! Product projections and commands live with Connections. App supplies admitted
 //! actors and wires ports; it never reconstructs reviewed source authority.
 use super::product_records::ProductRecordScan;
+use super::source_configuration::{SourceConfigurationOutcome, aborted_reason};
 use crate::*;
 use chrono::{Duration, Utc};
 use floe_access::{ReviewRef, SourceObserveStatus, SourceProcessingChoice};
@@ -1228,8 +1229,21 @@ impl ConnectionsService {
                 classify = ConnectionsCommandFailure::Admitted;
                 return match record.payload.clone() {
                     ConnectionsPayload::SourceMutation { summary, .. } => Ok(summary),
+                    ConnectionsPayload::SourceConfigurationAborted { reason, .. } => {
+                        classify = ConnectionsCommandFailure::NotApplied;
+                        Err(aborted_reason(reason))
+                    }
                     ConnectionsPayload::SourceConfiguration { .. } => {
-                        self.drive_source_configuration(actor, record, scope).await
+                        match self
+                            .drive_source_configuration(actor, record, scope)
+                            .await?
+                        {
+                            SourceConfigurationOutcome::Applied(summary) => Ok(summary),
+                            SourceConfigurationOutcome::NotApplied(reason) => {
+                                classify = ConnectionsCommandFailure::NotApplied;
+                                Err(reason)
+                            }
+                        }
                     }
                     _ => Err(AgentFailure::Conflict),
                 };
@@ -1334,7 +1348,17 @@ impl ConnectionsService {
                 ))
                 .await?;
             classify = ConnectionsCommandFailure::Admitted;
-            self.drive_source_configuration(actor, pending, scope).await
+            self.spawn_source_configuration(actor.clone(), pending.clone(), scope)?;
+            match self
+                .drive_source_configuration(actor, pending, scope)
+                .await?
+            {
+                SourceConfigurationOutcome::Applied(summary) => Ok(summary),
+                SourceConfigurationOutcome::NotApplied(reason) => {
+                    classify = ConnectionsCommandFailure::NotApplied;
+                    Err(reason)
+                }
+            }
         }
         .await;
         super::product_commands::settle_product_command(
@@ -1998,7 +2022,8 @@ impl ConnectionsService {
                 .drive_source_configuration(actor, record, scope)
                 .await
                 .map(|_| ()),
-            ConnectionsPayload::SourceMutation { .. } => Ok(()),
+            ConnectionsPayload::SourceMutation { .. }
+            | ConnectionsPayload::SourceConfigurationAborted { .. } => Ok(()),
             _ => Err(AgentFailure::InvalidInput),
         }
     }
