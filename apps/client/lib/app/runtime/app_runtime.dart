@@ -1,3 +1,4 @@
+import 'package:floe_client/infrastructure/native/calendar_system_access_gateway.dart';
 import 'package:floe_client/features/connections/presentation/connections_controller.dart';
 import 'package:floe_client/features/vault/application/vault_controller.dart';
 import 'package:floe_client/features/experts/application/agent_registry_controller.dart';
@@ -72,6 +73,7 @@ final class AppRuntime {
   late final connectionsController = ConnectionsController(
     connections,
     vault: vaultController,
+    calendarSystemAccess: const EventKitSystemAccessGateway(),
   );
   late final vaultController = VaultController(
     gateway: vault,

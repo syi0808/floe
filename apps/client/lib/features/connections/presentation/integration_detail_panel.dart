@@ -1,3 +1,4 @@
+import 'calendar_system_access_card.dart';
 import 'service_presentation.dart';
 
 import 'package:floe_client/l10n/app_localizations.dart';
@@ -28,6 +29,13 @@ final class IntegrationDetailPanel extends StatelessWidget {
           ),
         ),
         const SizedBox(height: FloeSpace.lg),
+        if (CalendarSystemAccessCard.appliesTo(integration)) ...[
+          CalendarSystemAccessCard(
+            gateway: controller.calendarSystemAccess,
+            enabled: !controller.busy,
+          ),
+          const SizedBox(height: FloeSpace.lg),
+        ],
         if (integration.capabilities.contains('prepare_review'))
           FloeButton.filled(
             onPressed: controller.busy

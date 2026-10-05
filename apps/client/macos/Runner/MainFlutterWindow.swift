@@ -63,7 +63,29 @@ final class CalendarBridge {
   }
 
   func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    let noArguments = call.arguments == nil || call.arguments is NSNull
     switch call.method {
+    case "inspectSystemAccess":
+      guard noArguments else {
+        result(FlutterError(code: "invalid_input", message: "No arguments expected.", details: nil)); return
+      }
+      // Authorization metadata only: no calendar enumeration and no permission prompt.
+      let status = EKEventStore.authorizationStatus(for: .event)
+      if canRead { result("allowed"); return }
+      if #available(macOS 14.0, *), status == .writeOnly { result("write_only"); return }
+      switch status {
+      case .notDetermined: result("not_requested")
+      case .denied: result("denied")
+      case .restricted: result("restricted")
+      default: result("unavailable")
+      }
+    case "openSystemAccessSettings":
+      guard noArguments,
+            let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") else {
+        result(FlutterError(code: "invalid_input", message: "Invalid settings navigation.", details: nil)); return
+      }
+      // Opening settings never changes authorization or grants Floe source access.
+      result(NSWorkspace.shared.open(url))
     case "readAcquisition":
       guard let arguments = call.arguments as? [String: Any] else {
         result(failure("invalid_input")); return

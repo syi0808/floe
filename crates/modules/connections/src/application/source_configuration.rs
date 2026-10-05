@@ -154,10 +154,10 @@ impl ConnectionsService {
             }
             let current = current.ok_or(AgentFailure::Conflict)?;
             if let Some(expected) = &descriptor.expected {
-                if !reviewed_subject_continues(
-                    self.evidence.observe(actor, &current, scope).await,
-                    expected,
-                )? {
+                let observation = self.evidence.observe(actor, &current, scope).await;
+                self.ensure_open()?;
+                check(actor, scope)?;
+                if !reviewed_subject_continues(observation, expected)? {
                     return self
                         .reject_unreserved_configuration(record, descriptor.source, operation_id)
                         .await;

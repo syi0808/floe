@@ -14,7 +14,8 @@ that every earlier open item is still open or that the entire restoration is don
   encrypted client/server pairing/restart is qualified; full current app acceptance
   is not inferred from those probes.
 - **R2:** service cards/count, stable identity/copy, account grouping, selected-resource
-  and permission dialogs are implemented. Actual OS access projection, Day-owned
+  and permission dialogs are implemented. The macOS OS-access card is now implemented
+  through a status-only native port; live OS verification remains separate. Day-owned
   freshness detail, future-calendar policy/global assistant preference and full
   source/workflow dependency decomposition remain open.
 - **R3:** drag-to-move, acknowledged composer close and automatic Day freshness are
@@ -1430,3 +1431,39 @@ its macOS/iOS implementation, composition injection and baseline card/resume sta
 keep actual permission requests in the admitted native setup flow. No such new port
 or UI implementation has landed yet. Day freshness is a separate Day-owned join,
 not something to manufacture from this permission badge or source local revision.
+
+#### System access card cutover
+
+Restore the baseline macOS-only Calendar System access card in both connected and
+unconnected native Calendar detail. Introduce one narrow Flutter application port
+for OS authorization observation and explicit settings navigation; its native
+MethodChannel adapter returns only an authorization enum, never calendar names,
+events, Floe grant state or a permission request. AppRuntime constructs the adapter
+and injects the required capability into the presentation controller; the card owns
+only mounted/resume/read-generation and navigation feedback. Do not add Rust grant
+or query commands, infer permission from SourceReady, or restore old direct calendar
+listing. Actual permission requests remain the existing admitted setup path.
+
+Files: a Connections application port, a native infrastructure adapter, a dedicated
+CalendarSystemAccessCard, the two detail widgets, ConnectionsController constructor,
+AppRuntime composition, and macOS CalendarBridge method dispatch. Keep iOS's existing
+layout unchanged (the baseline card is macOS-only), and do not extend Android. Strict
+native status decoding, missing plugin/unavailable, stale response, resume/disposal,
+settings click/no automatic grant, hosted-service exclusion and narrow/wide rendering
+are the disposable qualification matrix. Preserve existing logs and accepted removed
+Read-only/source diagnostic UI. Also apply the pending defensive post-observation
+scope check before classifying a source rejection in this Connections slice.
+
+System-access slice local qualification: all 71 external Flutter fixtures pass,
+including ten new status/resume/disposal/settings/target/render cases. Analyzer has
+the same 157 informational baseline findings and no errors/warnings. Narrow (390)
+and desktop (1024) standalone and connected-detail renders were inspected with real
+fonts; no overflow or unintended grant action occurred. The first extra rendering
+fixture stalled on font I/O inside fake-async; font loading was moved to setUpAll
+and the final full run passed. No production workaround was used for that fixture.
+
+Rust workspace/default examples/doctests, both FFI profiles, architecture/diff checks
+passed for the defensive post-observation scope check. No permanent tests or data
+reset were added. Native settings navigation and actual OS status on the user's
+running app remain unverified; exact Apple compilation/signature qualification is
+next. iOS layout remains unchanged, and hosted Calendar never gets the macOS card.

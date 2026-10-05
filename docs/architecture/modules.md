@@ -111,3 +111,12 @@ Day projections without a group header use the account-qualified resource label,
 within their existing display bounds; group-aware views retain the separate title.
 The overview has no aggregate revision: each item retains its own CAS revision, and
 Flutter orders concurrent overview responses by request generation.
+
+The macOS Calendar System access card observes only OS authorization through a
+narrow Flutter application port, implemented at the native MethodChannel boundary.
+AppRuntime injects that port; the card owns read generations, resume observation and
+explicit settings-navigation feedback. Neither inspection nor opening System Settings
+enumerates calendars, requests permission, configures a source or changes Observe.
+Source setup still owns permission requests through its admitted native broker path.
+This preserves the baseline macOS card without adding it to iOS or treating stored
+source readiness as evidence of current OS permission.

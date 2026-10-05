@@ -1,3 +1,5 @@
+import 'package:floe_client/features/connections/application/calendar_system_access_gateway.dart';
+
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -10,12 +12,17 @@ import 'package:floe_client/features/conversation/application/agent_request_id.d
 
 /// Owns presentation and observation only. Rust owns every lifecycle transition.
 final class ConnectionsController extends ChangeNotifier {
-  ConnectionsController(this.gateway, {required this.vault}) {
+  ConnectionsController(
+    this.gateway, {
+    required this.vault,
+    required this.calendarSystemAccess,
+  }) {
     vault.addListener(_readinessChanged);
     _readinessChanged();
   }
   final VaultController vault;
   final ConnectionsGateway gateway;
+  final CalendarSystemAccessGateway calendarSystemAccess;
   // This is a collection of independently versioned owner observations, not a
   // globally revisioned document. Request generations order presentation reads.
   ConnectionsOverview? overview;

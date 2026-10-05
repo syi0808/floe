@@ -1,3 +1,4 @@
+import 'calendar_system_access_card.dart';
 import 'service_presentation.dart';
 
 import 'package:flutter/material.dart';
@@ -171,6 +172,13 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
             ),
           ),
           const SizedBox(height: FloeSpace.lg),
+          if (CalendarSystemAccessCard.appliesTo(widget.integration)) ...[
+            CalendarSystemAccessCard(
+              gateway: widget.controller.calendarSystemAccess,
+              enabled: !busy,
+            ),
+            const SizedBox(height: FloeSpace.lg),
+          ],
           Text(
             calendar
                 ? AppLocalizations.of(context)
